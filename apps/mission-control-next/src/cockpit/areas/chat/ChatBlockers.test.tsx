@@ -29,6 +29,11 @@ let container: HTMLDivElement;
 let client: QueryClient;
 
 beforeEach(() => {
+  window.history.replaceState(
+    { retained: true },
+    "",
+    "/chat?keep=yes&workspaceId=stale&sessionId=stale&approvalId=stale&runId=run%2Fcontext&shell=cockpit&shellScope=visit#receipt",
+  );
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -75,7 +80,8 @@ describe("Chat blockers", () => {
                 userInputPending: false,
                 onApprovePending,
                 onDenyPending: vi.fn(),
-                onSubmitUserInput: vi.fn(), onRefreshThread: vi.fn(),
+                onSubmitUserInput: vi.fn(),
+                onRefreshThread: vi.fn(),
               } satisfies Pick<
                 MissionThreadedActiveSessionSurfaceProps,
                 | "pendingApproval"
@@ -95,14 +101,30 @@ describe("Chat blockers", () => {
     );
     expect(container.textContent).toContain("Tool invoke");
     expect(container.textContent).toContain("Which path?");
-    const hrefs = [...container.querySelectorAll("a")].map((anchor) => anchor.getAttribute("href"));
-    expect(hrefs).toEqual([
-      "/ops/approvals?approvalId=approval%2F1&shell=classic&shellScope=visit",
-      "/chat?sessionId=session%2F1&shell=classic&shellScope=visit",
-    ]);
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
+    const anchors = [...container.querySelectorAll("a")];
+    expect(anchors).toHaveLength(2);
+    for (const [label, pathname, approvalId] of [
+      ["Inspect persisted approval", "/inbox", "approval/1"],
+      ["Open this conversation in Chat", "/chat", null],
+    ] as const) {
+      const anchor = anchors.find((link) => link.textContent === label)!;
+      expect(anchor).toBeDefined();
+      const target = new URL(anchor.href);
+      expect(target.pathname).toBe(pathname);
+      expect(target.searchParams.get("approvalId")).toBe(approvalId);
+      expect(target.searchParams.get("workspaceId")).toBe("default");
+      expect(target.searchParams.get("sessionId")).toBe("session/1");
+      expect(target.searchParams.get("runId")).toBe("run/context");
+      expect(target.searchParams.get("keep")).toBe("yes");
+      expect(target.searchParams.get("shell")).toBe("cockpit");
+      expect(target.searchParams.has("shellScope")).toBe(false);
+      expect(target.hash).toBe("#receipt");
+    }
+    await vi.waitFor(() =>
+      expect(
+        [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval"),
+      ).toBeDefined(),
+    );
     const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
     await act(async () => review?.click());
     expect(onApprovePending).not.toHaveBeenCalled();
@@ -133,7 +155,8 @@ describe("Chat blockers", () => {
                 userInputPending: false,
                 onApprovePending: vi.fn(),
                 onDenyPending: vi.fn(),
-                onSubmitUserInput: vi.fn(), onRefreshThread: vi.fn(),
+                onSubmitUserInput: vi.fn(),
+                onRefreshThread: vi.fn(),
               } as unknown as Parameters<typeof ChatBlockers>[0]["props"]
             }
           />
@@ -149,9 +172,25 @@ describe("Chat blockers", () => {
     );
     expect(api.fetchApprovals).not.toHaveBeenCalled();
     expect(client.getQueryData(["approvals", "record", "default", "approval/1"])).toBeTruthy();
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
+    const nativeRecord = [...container.querySelectorAll("a")].find(
+      (link) => link.textContent === "Inspect persisted approval",
+    )!;
+    expect(nativeRecord).toBeDefined();
+    const recordTarget = new URL(nativeRecord.href);
+    expect(recordTarget.pathname).toBe("/inbox");
+    expect(recordTarget.searchParams.get("approvalId")).toBe("approval/1");
+    expect(recordTarget.searchParams.get("workspaceId")).toBe("default");
+    expect(recordTarget.searchParams.get("sessionId")).toBe("session/1");
+    expect(recordTarget.searchParams.get("runId")).toBe("run/context");
+    expect(recordTarget.searchParams.get("keep")).toBe("yes");
+    expect(recordTarget.hash).toBe("#receipt");
+    expect(recordTarget.searchParams.get("shell")).toBe("cockpit");
+    expect(recordTarget.searchParams.has("shellScope")).toBe(false);
+    await vi.waitFor(() =>
+      expect(
+        [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval"),
+      ).toBeDefined(),
+    );
     const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
     await act(async () => review?.click());
     await vi.waitFor(() => expect(document.body.textContent).toContain("rm -rf build"));
@@ -181,7 +220,8 @@ describe("Chat blockers", () => {
                 userInputPending: false,
                 onApprovePending: vi.fn(),
                 onDenyPending: vi.fn(),
-                onSubmitUserInput: vi.fn(), onRefreshThread: vi.fn(),
+                onSubmitUserInput: vi.fn(),
+                onRefreshThread: vi.fn(),
               } as unknown as Parameters<typeof ChatBlockers>[0]["props"]
             }
           />
@@ -198,6 +238,11 @@ describe("Chat blockers", () => {
     expect(api.fetchApprovals).not.toHaveBeenCalled();
     expect(client.getQueryData(["approvals", "record", "default", "approval/1"])).toBeTruthy();
     expect(container.textContent).toContain("Critical infra");
+    await vi.waitFor(() =>
+      expect(
+        [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval"),
+      ).toBeDefined(),
+    );
     const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
     await act(async () => review?.click());
     await vi.waitFor(() => expect(document.body.textContent).toContain("kubectl delete ns prod"));
@@ -221,7 +266,8 @@ it("uses the Inbox decision owner for a low-risk Chat action and retains its rec
     api.fetchApproval.mockResolvedValue({ ...record, status: "approved" });
     return { approval: { ...record, status: "approved" }, effects: [] };
   });
-  const oldAction = vi.fn(); const refresh = vi.fn();
+  const oldAction = vi.fn();
+  const refresh = vi.fn();
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -234,7 +280,8 @@ it("uses the Inbox decision owner for a low-risk Chat action and retains its rec
               userInputPending: false,
               pendingUserInput: null,
               onApprovePending: oldAction,
-              onDenyPending: oldAction, onRefreshThread: refresh,
+              onDenyPending: oldAction,
+              onRefreshThread: refresh,
               onSubmitUserInput: vi.fn(),
             } as Parameters<typeof ChatBlockers>[0]["props"]
           }
@@ -242,31 +289,51 @@ it("uses the Inbox decision owner for a low-risk Chat action and retains its rec
       </QueryClientProvider>,
     ),
   );
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  });
+  await vi.waitFor(() =>
+    expect(
+      [...container.querySelectorAll("button")].find((button) => button.textContent === "Approve once")?.disabled,
+    ).toBe(false),
+  );
   const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent === "Approve once")!;
   expect(button.disabled).toBe(false);
   await act(async () => button.click());
   expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("safe-new", "approve");
   expect(api.fetchApproval).toHaveBeenCalledWith("safe-new", { workspaceId: "default" });
-  expect(oldAction).not.toHaveBeenCalled(); expect(refresh).toHaveBeenCalledTimes(1);
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  });
+  expect(oldAction).not.toHaveBeenCalled();
+  expect(refresh).toHaveBeenCalledTimes(1);
+  await vi.waitFor(() => expect(container.textContent).toContain("Decision recorded"));
   expect(container.textContent).toContain("Decision recorded");
   expect(container.textContent).not.toContain("Work completed");
 });
 
 it("keeps a persisted settled decision visible while its canonical record is refetched", async () => {
-  const record = { approvalId: "settled", kind: "tool_invoke", status: "approved", riskLevel: "safe", payload: {}, createdAt: "2026-10-01T00:00:00Z" };
+  const record = {
+    approvalId: "settled",
+    kind: "tool_invoke",
+    status: "approved",
+    riskLevel: "safe",
+    payload: {},
+    createdAt: "2026-10-01T00:00:00Z",
+  };
   api.fetchApproval.mockResolvedValue(record);
   api.fetchApprovalReplay.mockResolvedValue({ approval: record, effects: [] });
-  const props = { pendingApproval: { approvalId: "settled", riskLevel: "safe" }, selectedSessionId: "s", onRefreshThread: vi.fn() } as unknown as Parameters<typeof ChatBlockers>[0]["props"];
-  await act(async () => root.render(<QueryClientProvider client={client}><ChatBlockers props={props} /></QueryClientProvider>));
+  const props = {
+    pendingApproval: { approvalId: "settled", riskLevel: "safe" },
+    selectedSessionId: "s",
+    onRefreshThread: vi.fn(),
+  } as unknown as Parameters<typeof ChatBlockers>[0]["props"];
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers props={props} />
+      </QueryClientProvider>,
+    ),
+  );
   await vi.waitFor(() => expect(container.textContent).toContain("Decision recorded"));
   api.fetchApproval.mockImplementation(() => new Promise(() => {}));
-  await act(async () => { void client.invalidateQueries({ queryKey: ["approvals", "record"] }); });
+  await act(async () => {
+    void client.invalidateQueries({ queryKey: ["approvals", "record"] });
+  });
   expect(container.textContent).toContain("Decision recorded");
   expect(container.textContent).not.toContain("Checking the current approval");
   expect(container.textContent).not.toContain("Approve once");

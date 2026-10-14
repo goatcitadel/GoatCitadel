@@ -2,15 +2,21 @@ import type { HealthSummaryResponse } from "@goatcitadel/mission-control-shared/
 import type { StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import type { BackupTrustState } from "./backup-trust";
 
-/**
- * `/ops/runtime` itself now lands on System › Health, which is where these checks are shown. Detailed runtime
- * controls and backup records still belong to Classic Ops › Runtime, so inspection names Classic explicitly
- * instead of pointing the page back at itself.
- */
-export const CLASSIC_RUNTIME_INSPECT_PATH = "/ops/runtime?shell=classic";
+/** Full runtime controls and backup records use the existing native runtime owner inside Cockpit. */
+export const RUNTIME_INSPECT_PATH = "/system/runtime";
+export const BACKUP_INSPECT_PATH = "/system/runtime#ops-runtime-backups";
 
 export interface HealthCheck {
-  id: "gateway" | "database" | "service" | "backups" | "models" | "channels" | "integrations" | "updates" | "remote_workers";
+  id:
+    | "gateway"
+    | "database"
+    | "service"
+    | "backups"
+    | "models"
+    | "channels"
+    | "integrations"
+    | "updates"
+    | "remote_workers";
   title: string;
   detail: string;
   status: { label: string; tone: StatusTone };
@@ -20,35 +26,58 @@ export interface HealthCheck {
 }
 
 export function backupHealthCheck(trust: BackupTrustState | undefined, hasRecord: boolean): HealthCheck {
-  const base = { id: "backups", title: "Backups", inspectPath: CLASSIC_RUNTIME_INSPECT_PATH } as const;
+  const base = { id: "backups", title: "Backups", inspectPath: BACKUP_INSPECT_PATH } as const;
   // Manifest existence and exact-record verification are independent observations.
   if (hasRecord && trust === "none") trust = "unknown";
   switch (trust) {
     case "verified":
-      return { ...base, status: { label: "Verified", tone: "done" },
-        detail: "The latest backup passed exact-byte and restore-contract verification. A full restore is not proven here." };
+      return {
+        ...base,
+        status: { label: "Verified", tone: "done" },
+        detail:
+          "The latest backup passed exact-byte and restore-contract verification. A full restore is not proven here.",
+      };
     case "stale":
-      return { ...base, status: { label: "Stale", tone: "waiting" },
-        detail: "The latest verified backup is more than a day old or has no valid creation time." };
+      return {
+        ...base,
+        status: { label: "Stale", tone: "waiting" },
+        detail: "The latest verified backup is more than a day old or has no valid creation time.",
+      };
     case "failed":
-      return { ...base, status: { label: "Verification failed", tone: "failed" },
-        detail: "The latest backup failed exact-byte or restore-contract verification." };
+      return {
+        ...base,
+        status: { label: "Verification failed", tone: "failed" },
+        detail: "The latest backup failed exact-byte or restore-contract verification.",
+      };
     case "none":
-      return { ...base, notSetUp: true, status: { label: "No backup yet", tone: "neutral" },
-        detail: "No backup has been published yet. Back up now creates a host-wide snapshot through the Gateway. Scheduling and offline restore remain separate operator workflows." };
+      return {
+        ...base,
+        notSetUp: true,
+        status: { label: "No backup yet", tone: "neutral" },
+        detail:
+          "No backup has been published yet. Back up now creates a host-wide snapshot through the Gateway. Scheduling and offline restore remain separate operator workflows.",
+      };
     default:
       return hasRecord
-        ? { ...base, status: { label: "Not verified yet", tone: "neutral" },
-            detail: "A backup record exists, but its verification has not been read yet." }
-        : { ...base, notSetUp: true, status: { label: "No backup yet", tone: "neutral" },
-            detail: "No backup record was returned by the health summary." };
+        ? {
+            ...base,
+            status: { label: "Not verified yet", tone: "neutral" },
+            detail: "A backup record exists, but its verification has not been read yet.",
+          }
+        : {
+            ...base,
+            notSetUp: true,
+            status: { label: "No backup yet", tone: "neutral" },
+            detail: "No backup record was returned by the health summary.",
+          };
   }
 }
 
 export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: BackupTrustState): HealthCheck[] {
   const database = health.database;
   const daemon = health.daemonStatus;
-  const diagnosticIssues = daemon.diagnostics?.filter((item) => item.severity === "critical" || item.severity === "warn") ?? [];
+  const diagnosticIssues =
+    daemon.diagnostics?.filter((item) => item.severity === "critical" || item.severity === "warn") ?? [];
   const hasCriticalDiagnostic = diagnosticIssues.some((item) => item.severity === "critical");
 
   return [
@@ -57,7 +86,7 @@ export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: 
       title: "Gateway",
       detail: "The health summary is responding.",
       status: { label: "Responding", tone: "done" },
-      inspectPath: CLASSIC_RUNTIME_INSPECT_PATH,
+      inspectPath: RUNTIME_INSPECT_PATH,
     },
     {
       id: "database",
@@ -76,7 +105,7 @@ export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: 
           : database.issues.length
             ? { label: "Needs review", tone: "waiting" }
             : { label: "Reachable", tone: "done" },
-      inspectPath: CLASSIC_RUNTIME_INSPECT_PATH,
+      inspectPath: RUNTIME_INSPECT_PATH,
     },
     {
       id: "service",
@@ -95,7 +124,7 @@ export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: 
           : diagnosticIssues.length
             ? { label: "Needs review", tone: "waiting" }
             : { label: "Running", tone: "done" },
-      inspectPath: CLASSIC_RUNTIME_INSPECT_PATH,
+      inspectPath: RUNTIME_INSPECT_PATH,
     },
     backupHealthCheck(backupTrust, Boolean(health.backups.latest)),
   ];
@@ -103,10 +132,11 @@ export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: 
 
 export function summarizeHealthChecks(checks: readonly HealthCheck[]): { label: string; tone: StatusTone } {
   const problems = checks.filter((check) => check.status.tone === "failed" || check.status.tone === "waiting");
-  if (problems.length) return {
-    label: `${problems.length} ${problems.length === 1 ? "system check needs" : "system checks need"} review`,
-    tone: problems.some((check) => check.status.tone === "failed") ? "failed" : "waiting",
-  };
+  if (problems.length)
+    return {
+      label: `${problems.length} ${problems.length === 1 ? "system check needs" : "system checks need"} review`,
+      tone: problems.some((check) => check.status.tone === "failed") ? "failed" : "waiting",
+    };
   if (!checks.length || checks.some((check) => check.status.tone === "neutral" && !check.notSetUp)) {
     return { label: "Some system checks lack live proof", tone: "neutral" };
   }
@@ -118,5 +148,15 @@ export function healthOverviewState(checks: readonly HealthCheck[]) {
   const problems = checks.filter((check) => check.status.tone === "failed" || check.status.tone === "waiting");
   const unknown = checks.filter((check) => check.status.tone === "neutral" && !check.notSetUp);
   const kind = problems.length ? "problems" : unknown.length || !checks.length ? "incomplete" : "clear";
-  return { kind, problems, unknown, heading: kind === "problems" ? "Needs attention" : kind === "incomplete" ? "Some checks cannot be verified yet" : "Available checks report no problems" };
+  return {
+    kind,
+    problems,
+    unknown,
+    heading:
+      kind === "problems"
+        ? "Needs attention"
+        : kind === "incomplete"
+          ? "Some checks cannot be verified yet"
+          : "Available checks report no problems",
+  };
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { editor as MonacoEditorNamespace } from "monaco-editor";
-import { shouldRenderMonacoRuntime } from "./monaco-runtime";
+import { observeMonacoTheme, resolveMonacoTheme, shouldRenderMonacoRuntime } from "./monaco-runtime";
 import { loadMonacoEditorRuntime, normalizeMonacoLoaderLanguage, type MonacoEditorApiModule } from "./monaco-loader";
 
 interface MonacoDiffEditorProps {
@@ -14,13 +14,6 @@ interface MonacoDiffEditorProps {
 
 const WORKBENCH_DIFF_FONT_SIZE = 12;
 const WORKBENCH_DIFF_LINE_HEIGHT = 18;
-
-function resolveMonacoTheme(): "vs" | "vs-dark" {
-  if (typeof document === "undefined") {
-    return "vs-dark";
-  }
-  return document.querySelector(".theme-citadel-light") ? "vs" : "vs-dark";
-}
 
 export function MonacoDiffEditor({
   original,
@@ -63,13 +56,14 @@ export function MonacoDiffEditor({
       return undefined;
     }
     let disposed = false;
+    let stopTheme: (() => void) | undefined;
 
     void loadMonacoEditorRuntime(latestInputRef.current.language).then((monaco) => {
       if (disposed || !containerRef.current) {
         return;
       }
       monacoRef.current = monaco;
-      monaco.editor.setTheme(resolveMonacoTheme());
+      stopTheme = observeMonacoTheme((theme) => monaco.editor.setTheme(theme));
       editorRef.current = monaco.editor.createDiffEditor(containerRef.current, {
         automaticLayout: true,
         fontSize: WORKBENCH_DIFF_FONT_SIZE,
@@ -88,6 +82,7 @@ export function MonacoDiffEditor({
 
     return () => {
       disposed = true;
+      stopTheme?.();
       originalModelRef.current?.dispose();
       modifiedModelRef.current?.dispose();
       editorRef.current?.dispose();

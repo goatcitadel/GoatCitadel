@@ -136,3 +136,38 @@ it("refreshes Chat when linked execution or approval-wait identity changes at th
   await refresh(state("completed", "completed", "run-b", "completed", "wait-b"));
   expect(notify).toHaveBeenCalledTimes(3);
 });
+
+it("keeps settlement inspection in native history while preserving scoped conversation/run/query/fragment context", async () => {
+  const prior = window.location.href;
+  const priorState = window.history.state;
+  try {
+    window.history.replaceState(
+      { retained: "state" },
+      "",
+      "/chat?workspaceId=stale&approvalId=stale&sessionId=session%2Fone&runId=original%3Atwo&keep=yes&shell=classic&shellScope=visit#receipt",
+    );
+    mocks.read.mockResolvedValue(state("completed", "completed"));
+    const notify = vi.fn();
+    await render(notify);
+    await waitForRefresh(false);
+    const link = [...container.querySelectorAll("a")].find(
+      (item) => item.textContent?.trim() === "Inspect decision and execution record",
+    )!;
+    expect(link).toBeDefined();
+    const target = new URL(link.href);
+    expect(target.pathname).toBe("/inbox");
+    expect(target.searchParams.get("approvalId")).toBe("approval-a");
+    expect(target.searchParams.get("workspaceId")).toBe("default");
+    expect(target.searchParams.get("sessionId")).toBe("session/one");
+    expect(target.searchParams.get("runId")).toBe("original:two");
+    expect(target.searchParams.get("keep")).toBe("yes");
+    expect(target.searchParams.get("shell")).toBe("cockpit");
+    expect(target.searchParams.has("shellScope")).toBe(false);
+    expect(target.hash).toBe("#receipt");
+    expect(container.textContent).toContain("Original linked work: completed");
+    expect(notify).toHaveBeenCalled();
+    expect(window.history.state).toEqual({ retained: "state" });
+  } finally {
+    window.history.replaceState(priorState, "", prior);
+  }
+});

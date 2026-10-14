@@ -1,7 +1,17 @@
 import { createElement, useLayoutEffect, useRef, useState } from "react";
 import { canonicalJsonString } from "@goatcitadel/contracts";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import { DraftLeaveDialog, useDraftLeave, type DraftLeaveDialogProps } from "../features/native-routes/library/DraftLeaveDialog";
+import {
+  getGatewayAccessRevision,
+  getGatewayCallerScopeRevision,
+  subscribeGatewayAccessChange,
+  subscribeGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  DraftLeaveDialog,
+  useDraftLeave,
+  type DraftLeaveDialogProps,
+} from "../features/native-routes/library/DraftLeaveDialog";
 import { switchShell, type ShellPreference } from "../shell-preference";
 import { SHELL_NAVIGATION_EVENTS } from "./shell-transition";
 
@@ -41,20 +51,29 @@ export function useShellHandoff(scope: unknown) {
       cancelReview.current();
       setFeedback({ identity: view.identity, epoch: view.epoch, opening: false, error: null });
     };
+    // These existing custody publishers invalidate even a same-batch caller away/back before React re-renders.
+    const unsubscribeAccess = subscribeGatewayAccessChange(invalidate);
+    const unsubscribeCaller = subscribeGatewayCallerScope(invalidate);
     for (const event of SHELL_NAVIGATION_EVENTS) window.addEventListener(event, invalidate);
     return () => {
       view.mounted = false;
       view.epoch++;
       review.current = null;
       controller.current?.abort();
+      unsubscribeAccess();
+      unsubscribeCaller();
       for (const event of SHELL_NAVIGATION_EVENTS) window.removeEventListener(event, invalidate);
     };
   }, [identity]);
-  function requestTransition(transition: (options: { isCurrent: () => boolean; signal: AbortSignal }) => Promise<unknown> | void) {
+  function requestTransition(
+    transition: (options: { isCurrent: () => boolean; signal: AbortSignal }) => Promise<unknown> | void,
+  ) {
     if (controller.current || review.current || leave.dialogProps.open) return;
     const epoch = live.current.epoch,
       origin = window.location.href,
-      installation = renderedInstallation;
+      installation = renderedInstallation,
+      accessRevision = getGatewayAccessRevision(),
+      callerRevision = getGatewayCallerScopeRevision();
     const current = () =>
       live.current.mounted &&
       scopeToken.current === renderedScope &&
@@ -63,6 +82,8 @@ export function useShellHandoff(scope: unknown) {
       live.current.identity === identity &&
       live.current.epoch === epoch &&
       getGatewayApiBaseUrl() === installation &&
+      getGatewayAccessRevision() === accessRevision &&
+      getGatewayCallerScopeRevision() === callerRevision &&
       window.location.href === origin;
     if (!current()) return;
     const pending = { isCurrent: current };
@@ -73,7 +94,9 @@ export function useShellHandoff(scope: unknown) {
       const attempt = new AbortController();
       controller.current = attempt;
       setFeedback({ identity, epoch, opening: true, error: null });
-      void (async () => { await transition({ isCurrent: current, signal: attempt.signal }); })()
+      void (async () => {
+        await transition({ isCurrent: current, signal: attempt.signal });
+      })()
         .catch(() => {
           if (current())
             setFeedback({
@@ -86,8 +109,10 @@ export function useShellHandoff(scope: unknown) {
         .finally(() => {
           if (controller.current !== attempt) return;
           controller.current = null;
-          if (live.current.mounted) setFeedback((value) =>
-            value.identity === identity && value.epoch === epoch ? { ...value, opening: false } : value);
+          if (live.current.mounted)
+            setFeedback((value) =>
+              value.identity === identity && value.epoch === epoch ? { ...value, opening: false } : value,
+            );
         });
     });
   }

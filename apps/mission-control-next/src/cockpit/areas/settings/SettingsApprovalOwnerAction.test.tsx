@@ -10,6 +10,7 @@ import {
 import { useSessionDraft, __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetFormDirtyRegistryForTests } from "../../../features/native-routes/library/use-form-dirty";
 import { Dialog } from "../../ui/Dialog";
+import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 
 const state = vi.hoisted(() => ({
   installation: "http://gateway-a",
@@ -35,13 +36,18 @@ function View({ plan }: { plan: ChangePlanRecord }) {
     label: "Unsent tool grant",
     onSave: state.save,
   });
-  return <SettingsApprovalOwnerAction plan={plan} owner="llama-setup" workspaceId="workspace-a" />;
+  return (
+    <CockpitNavigationProvider>
+      <SettingsApprovalOwnerAction plan={plan} owner="llama-setup" workspaceId="workspace-a" />
+    </CockpitNavigationProvider>
+  );
 }
 const plan = () => awaitingLlamaApproval(llamaPlanFixture());
 const click = () => view.root.findByType("a").props.onClick({ button: 0, preventDefault: vi.fn() });
 const action = (label: string) =>
   view.root
-    .findByType(Dialog)
+    .findAllByType(Dialog)
+    .find((item) => item.props.open)!
     .findAllByType("button")
     .find((item) => item.children.join("") === label)!.props.onClick;
 beforeEach(() => {
@@ -51,12 +57,17 @@ beforeEach(() => {
   state.installation = "http://gateway-a";
   state.workspace = "workspace-a";
   state.open.mockResolvedValue("cancelled");
-  window.history.replaceState(null, "", "/settings/advanced?shell=cockpit#llamacpp-setup");
+  window.history.replaceState(
+    null,
+    "",
+    "/settings/advanced?source=settings&runId=run%2Fone&sessionId=session%3Aone&shell=cockpit#llamacpp-setup",
+  );
 });
 afterEach(async () => {
   await act(async () => view?.unmount());
   __resetSessionDraftsForTests();
   __resetFormDirtyRegistryForTests();
+  vi.restoreAllMocks();
 });
 
 describe("Settings approval handoff with actual draft registry", () => {
@@ -66,20 +77,28 @@ describe("Settings approval handoff with actual draft registry", () => {
     });
     await act(async () => draft.setValue({ text: "Unsent" }));
     const document = window.document;
+    const nativeNavigation = vi.spyOn(window.history, "pushState");
     await act(async () => click());
     expect(state.open).not.toHaveBeenCalled();
+    expect(nativeNavigation).not.toHaveBeenCalled();
     await act(async () => action("Cancel")());
     expect(draft.isDirty).toBe(true);
+    expect(window.location.pathname).toBe("/settings/advanced");
     await act(async () => click());
     await act(async () => action("Keep draft and close")());
-    expect(state.open).toHaveBeenCalledExactlyOnceWith(
-      "classic",
-      expect.objectContaining({
-        href: "/ops/approvals?approvalId=approval-1&shell=classic&shellScope=visit",
-        isCurrent: expect.any(Function),
-        signal: expect.any(AbortSignal),
-      }),
-    );
+    expect(state.open).not.toHaveBeenCalled();
+    expect(nativeNavigation).toHaveBeenCalledOnce();
+    expect(window.location.pathname).toBe("/inbox");
+    const target = new URL(window.location.href);
+    expect(target.pathname).toBe("/inbox");
+    expect(target.searchParams.getAll("approvalId")).toEqual(["approval-1"]);
+    expect(target.searchParams.get("source")).toBe("settings");
+    expect(target.searchParams.get("runId")).toBe("run/one");
+    expect(target.searchParams.get("sessionId")).toBe("session:one");
+    expect(target.searchParams.get("workspaceId")).toBe("workspace-a");
+    expect(target.searchParams.get("shell")).toBe("cockpit");
+    expect(target.searchParams.has("shellScope")).toBe(false);
+    expect(target.hash).toBe("#llamacpp-setup");
     expect(state.save).not.toHaveBeenCalled();
     expect(draft.value.text).toBe("Unsent");
     expect(window.document).toBe(document);
@@ -88,17 +107,21 @@ describe("Settings approval handoff with actual draft registry", () => {
     await act(async () => {
       view = create(<View plan={plan()} />);
     });
+    const nativeNavigation = vi.spyOn(window.history, "pushState");
     await act(async () => draft.setValue({ text: "Discard this draft" }));
     await act(async () => click());
     await act(async () => action("Discard changes")());
     expect(draft.value.text).toBe("Saved");
     expect(draft.isDirty).toBe(false);
-    expect(state.open).toHaveBeenCalledOnce();
+    expect(state.open).not.toHaveBeenCalled();
+    expect(nativeNavigation).toHaveBeenCalledOnce();
+    expect(window.location.pathname).toBe("/inbox");
     expect(state.save).not.toHaveBeenCalled();
   });
   it.each(["revision", "workspace", "installation", "navigation"])(
     "withholds retained Save/Discard/Keep after %s ABA",
     async (change) => {
+      const nativeNavigation = vi.spyOn(window.history, "pushState");
       const original = plan();
       await act(async () => {
         view = create(<View plan={original} />);
@@ -117,7 +140,11 @@ describe("Settings approval handoff with actual draft registry", () => {
           window.dispatchEvent(new Event("popstate"));
         });
         await act(async () => {
-          window.history.replaceState(null, "", "/settings/advanced?shell=cockpit#llamacpp-setup");
+          window.history.replaceState(
+            null,
+            "",
+            "/settings/advanced?source=settings&runId=run%2Fone&sessionId=session%3Aone&shell=cockpit#llamacpp-setup",
+          );
           window.dispatchEvent(new Event("popstate"));
         });
       } else {
@@ -134,6 +161,7 @@ describe("Settings approval handoff with actual draft registry", () => {
         oldKeep();
       });
       expect(state.open).not.toHaveBeenCalled();
+      expect(nativeNavigation).not.toHaveBeenCalled();
       expect(state.save).not.toHaveBeenCalled();
       expect(draft.value.text).toBe("Unsent");
       expect(draft.isDirty).toBe(true);
@@ -143,10 +171,12 @@ describe("Settings approval handoff with actual draft registry", () => {
     await act(async () => {
       view = create(<View plan={plan()} />);
     });
+    const nativeNavigation = vi.spyOn(window.history, "pushState");
     const oldClick = view.root.findByType("a").props.onClick;
     state.installation = "http://gateway-b";
     await act(async () => oldClick({ button: 0, preventDefault: vi.fn() }));
     expect(state.open).not.toHaveBeenCalled();
+    expect(nativeNavigation).not.toHaveBeenCalled();
   });
   it("offers no action for a foreign owner or a mismatched current receipt", async () => {
     const original = plan();

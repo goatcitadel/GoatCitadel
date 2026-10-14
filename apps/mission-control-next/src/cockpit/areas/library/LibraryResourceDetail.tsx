@@ -14,6 +14,9 @@ import {
 import { readLibraryResource, type ResourcePreview } from "./library-resource-preview";
 import { LibraryFileDownload } from "./LibraryFileDownload";
 import { LibraryArtifactDownload } from "./LibraryArtifactDownload";
+import { readArtifactRunId } from "../../../features/native-routes/library/artifact-run-link";
+import { formatArtifactProvenance } from "../../../features/native-routes/shared/native-helpers";
+import { useCockpitRoute } from "../../app/use-cockpit-route";
 
 export function LibraryResourceDetail({
   resource,
@@ -26,7 +29,36 @@ export function LibraryResourceDetail({
 }) {
   const access = useLibraryOperation(JSON.stringify(["resource-preview", workspaceId, citadelId]));
   const isCurrent = access.current;
-  const [preview, setPreview] = useState<{ binding: string; data?: ResourcePreview; error?: string }>();
+  const route = useCockpitRoute();
+  const recordedRunId = resource.kind === "artifacts" ? readArtifactRunId(resource.item) : undefined;
+  const runId = typeof recordedRunId === "string" && recordedRunId.trim() ? recordedRunId : undefined;
+  const artifactHref = (pathname: string, source = true) => {
+    if (resource.kind !== "artifacts") return pathname;
+    const item = resource.item,
+      params = new URLSearchParams(route.search);
+    params.delete("shell");
+    params.delete("shellScope");
+    params.set("workspaceId", workspaceId);
+    params.set("citadelId", citadelId);
+    params.set("artifactId", item.artifactId);
+    if (source) {
+      params.set("sessionId", item.sessionId);
+      params.set("turnId", item.turnId);
+    } else {
+      params.delete("sessionId");
+      params.delete("turnId");
+    }
+    if (item.projectId) params.set("projectId", item.projectId);
+    else params.delete("projectId");
+    if (source && runId) params.set("runId", runId);
+    else params.delete("runId");
+    return pathname + "?" + params + route.hash;
+  };
+  const [preview, setPreview] = useState<{
+    binding: string;
+    data?: ResourcePreview;
+    error?: string;
+  }>();
   const binding = JSON.stringify([access.identity, workspaceId, citadelId, resourceBinding(resource)]);
   const generation = useRef(0);
   useEffect(() => {
@@ -36,7 +68,8 @@ export function LibraryResourceDetail({
         if (generation.current === token && isCurrent()) setPreview({ binding, data });
       })
       .catch((cause: unknown) => {
-        if (generation.current === token && isCurrent()) setPreview({ binding, error: describeApiError(cause).summary });
+        if (generation.current === token && isCurrent())
+          setPreview({ binding, error: describeApiError(cause).summary });
       });
     return () => {
       generation.current += 1;
@@ -47,9 +80,18 @@ export function LibraryResourceDetail({
     <div className="grid min-w-0 gap-3">
       <h3 className="break-words font-display text-lg font-semibold text-fg">{resourceTitle(resource)}</h3>
       <p className="text-sm text-fg-secondary">{resourceDescription(resource)}</p>
-      <TechnicalDetails label="Exact resource timestamps"><p>{resource.kind === "files" ? resource.item.modifiedAt : resource.item.createdAt}</p></TechnicalDetails>
+      <TechnicalDetails label="Exact resource timestamps">
+        <p>{resource.kind === "files" ? resource.item.modifiedAt : resource.item.createdAt}</p>
+      </TechnicalDetails>
       {resource.kind === "files" ? <LibraryFileDownload key={binding} file={resource.item} /> : null}
-      {resource.kind === "artifacts" ? <LibraryArtifactDownload key={binding} artifact={resource.item} workspaceId={workspaceId} citadelId={citadelId} /> : null}
+      {resource.kind === "artifacts" ? (
+        <LibraryArtifactDownload
+          key={binding}
+          artifact={resource.item}
+          workspaceId={workspaceId}
+          citadelId={citadelId}
+        />
+      ) : null}
       {!active ? (
         <p role="status" className="text-sm text-fg-muted">
           Loading resource preview…
@@ -75,13 +117,44 @@ export function LibraryResourceDetail({
         <summary>Resource identity</summary>
         <code className="mt-2 block break-all font-mono">{resourceId(resource)}</code>
       </details>
+      {resource.kind === "artifacts" ? (
+        <TechnicalDetails label="Artifact provenance">
+          <pre className="whitespace-pre-wrap break-all">{formatArtifactProvenance(resource.item)}</pre>
+        </TechnicalDetails>
+      ) : null}
       {resource.kind === "artifacts" && resource.item.workspaceId === workspaceId ? (
-        <NativeOwnerLink scope={binding}
-          className="text-sm font-medium text-accent hover:underline"
-          href={`/chat?sessionId=${encodeURIComponent(resource.item.sessionId)}&shell=cockpit`}
-        >
-          Open artifact conversation
-        </NativeOwnerLink>
+        <>
+          <NativeOwnerLink
+            scope={binding}
+            className="text-sm font-medium text-accent hover:underline"
+            href={artifactHref("/chat")}
+          >
+            Open artifact conversation
+          </NativeOwnerLink>
+          <NativeOwnerLink
+            scope={binding}
+            className="text-sm font-medium text-accent hover:underline"
+            href={artifactHref("/library/artifacts")}
+          >
+            Reopen exact artifact
+          </NativeOwnerLink>
+          <NativeOwnerLink
+            scope={binding}
+            className="text-sm font-medium text-accent hover:underline"
+            href={artifactHref("/chat", false)}
+          >
+            Use artifact in Chat
+          </NativeOwnerLink>
+          {runId ? (
+            <NativeOwnerLink
+              scope={binding}
+              className="text-sm font-medium text-accent hover:underline"
+              href={artifactHref("/work/runs/" + encodeURIComponent(runId))}
+            >
+              Open artifact run
+            </NativeOwnerLink>
+          ) : null}
+        </>
       ) : null}
     </div>
   );

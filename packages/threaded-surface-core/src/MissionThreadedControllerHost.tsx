@@ -1,4 +1,5 @@
 import { WorkspaceChannelPlanReview } from "./chat/WorkspaceChannelPlanReview";
+import { detectComposerPaletteTrigger } from "./chat/composer-palette";
 import { createChatActiveSessionPresentation } from "./chat/controller/createChatActiveSessionPresentation";
 import { createChatChangePlanReceipt } from "./chat/controller/createChatChangePlanReceipt";
 import { createChatContextDockProps } from "./chat/controller/createChatContextDockProps";
@@ -154,6 +155,7 @@ export function MissionThreadedControllerHost({
   onNavigateSurface,
   onResolvedModeChange,
   renderSurface,
+  secondaryEvidenceEnabled,
   coworkViewModelFactory,
 }: MissionThreadedControllerHostProps) {
   const selection = useChatSessionSelection({ initialModeOverride });
@@ -215,6 +217,12 @@ export function MissionThreadedControllerHost({
   const notices = useChatNoticesAndPresetRefresh({ setLocalNotices, coordination, presetCatalog });
   const { pushLocalNotice } = notices;
   const session = useChatSessionComposition({
+    catalogEvidenceEnabled:
+      secondaryEvidenceEnabled === undefined ||
+      secondaryEvidenceEnabled ||
+      composerPaletteGlobalOpen ||
+      detectComposerPaletteTrigger(draft) !== null,
+    secondaryEvidenceEnabled,
     workspaceId,
     selection,
     deferredSearch,
@@ -277,6 +285,7 @@ export function MissionThreadedControllerHost({
     changePlanState,
   });
   const execution = useChatOutboundComposition({
+    workspaceId,
     selection,
     session,
     selectedTurnId,
@@ -407,6 +416,7 @@ export function MissionThreadedControllerHost({
   const { recordChangePlanResult } = actions;
 
   const composer = useChatComposerInteractionComposition({
+    deferVoiceReadiness: secondaryEvidenceEnabled !== undefined,
     workspaceId,
     surfaceRuntime,
     selectedTurnId,
@@ -678,5 +688,15 @@ export function MissionThreadedControllerHost({
     planOAuth: actions.planOAuth,
     sessionControls: session.sessionControls,
   });
-  return <><WorkspaceChannelPlanReview workspaceId={workspaceId} routeSearch={routeSearch} onReturnToChannels={onReturnToChannels} onOpenApprovals={onOpenApprovals} />{frame}</>;
+  return (
+    <>
+      <WorkspaceChannelPlanReview
+        workspaceId={workspaceId}
+        routeSearch={routeSearch}
+        onReturnToChannels={onReturnToChannels}
+        onOpenApprovals={onOpenApprovals}
+      />
+      {frame}
+    </>
+  );
 }

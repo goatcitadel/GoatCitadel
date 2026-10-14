@@ -1,13 +1,13 @@
 import { RiskBadge } from "../../ui/RiskBadge";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useState } from "react";
-import { ApprovalDecisionBar } from "../inbox/ApprovalDecisionBar";
-import { ApprovalSettlement } from "../inbox/ApprovalSettlement";
+import { ChatApprovalRenderer } from "./ChatApprovalRenderer";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
 import { ChatPendingQuestion } from "./ChatPendingQuestion";
@@ -28,6 +28,7 @@ type Blockers = Pick<
 export function ChatBlockers({ props }: { props: Blockers }) {
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
+  const { search, hash } = useCockpitRoute();
   const pendingApproval = props.pendingApproval;
   const approvalId = pendingApproval?.approvalId;
   const [receipt, setReceipt] = useState<{ scope: string; message: string }>();
@@ -58,9 +59,17 @@ export function ChatBlockers({ props }: { props: Blockers }) {
       : pendingApproval;
   const input = props.pendingUserInput;
   const expiry = approvalExpiryLabel(approval?.expiresAt);
-  const chatHref = props.selectedSessionId
-    ? `/chat?sessionId=${encodeURIComponent(props.selectedSessionId)}&shell=classic`
-    : "/chat?shell=classic";
+  function continuationHref(destination: "/chat" | "/inbox", selectedApprovalId?: string) {
+    const parameters = new URLSearchParams(search);
+    parameters.set("workspaceId", workspaceId);
+    if (props.selectedSessionId) parameters.set("sessionId", props.selectedSessionId);
+    else parameters.delete("sessionId");
+    if (selectedApprovalId) parameters.set("approvalId", selectedApprovalId);
+    else parameters.delete("approvalId");
+    parameters.delete("shell");
+    parameters.delete("shellScope");
+    return `${destination}?${parameters}${hash}`;
+  }
   return (
     <>
       {approval ? (
@@ -91,37 +100,30 @@ export function ChatBlockers({ props }: { props: Blockers }) {
           ) : null}
           {expiry ? <p className="mt-2 text-xs text-fg-muted">{expiry}</p> : null}
           {notice ? <p role="status">{notice}</p> : null}
-          {reviewedApproval?.status === "pending" ? (
-            <ApprovalDecisionBar
-              approval={reviewedApproval}
-              workspaceId={workspaceId}
-              sessionId={props.selectedSessionId ?? undefined}
-              checking={recordQuery.isFetching || recordQuery.isError || props.approvalPending}
-              onResolved={(message) => {
-                setReceipt({ scope: noticeScope, message });
-                void recordQuery.refetch();
-                props.onRefreshThread();
-              }}
-              onInvalidated={() => { void recordQuery.refetch(); props.onRefreshThread(); }}
-            />
-          ) : (
-            <p role="status">
-              {reviewedApproval
-                ? "Decision recorded. Check follow-on work below."
-                : recordQuery.isPending
-                  ? "Checking the current approval…"
-                  : "Current approval unavailable. Open the persisted record before deciding."}
-            </p>
-          )}
-          {reviewedApproval && reviewedApproval.status !== "pending" ? (
-            <ApprovalSettlement approval={reviewedApproval} workspaceId={workspaceId} />
-          ) : null}
-          <ClassicOwnerLink
-            href={`/ops/approvals?approvalId=${encodeURIComponent(approval.approvalId)}&shell=classic`}
-            scope={JSON.stringify([props.selectedSessionId, approval.approvalId])}
-            className="mt-2 inline-block font-medium text-accent hover:underline"
-            label="Inspect persisted approval"
+          <ChatApprovalRenderer
+            approvalId={approval.approvalId}
+            approval={reviewedApproval}
+            workspaceId={workspaceId}
+            sessionId={props.selectedSessionId ?? undefined}
+            recordPending={recordQuery.isPending}
+            checking={recordQuery.isFetching || recordQuery.isError || props.approvalPending}
+            onResolved={(message) => {
+              setReceipt({ scope: noticeScope, message });
+              void recordQuery.refetch();
+              props.onRefreshThread();
+            }}
+            onInvalidated={() => {
+              void recordQuery.refetch();
+              props.onRefreshThread();
+            }}
           />
+          <NativeOwnerLink
+            href={continuationHref("/inbox", approval.approvalId)}
+            scope={noticeScope}
+            className="mt-2 inline-block font-medium text-accent hover:underline"
+          >
+            Inspect persisted approval
+          </NativeOwnerLink>
         </section>
       ) : null}
       {input ? (
@@ -132,12 +134,13 @@ export function ChatBlockers({ props }: { props: Blockers }) {
             pending={props.userInputPending}
             onSubmit={props.onSubmitUserInput}
           />
-          <ClassicOwnerLink
-            href={chatHref}
-            scope={JSON.stringify([props.selectedSessionId, input.promptId])}
+          <NativeOwnerLink
+            href={continuationHref("/chat")}
+            scope={JSON.stringify([workspaceId, props.selectedSessionId, input.promptId])}
             className="mt-2 inline-block text-xs font-medium text-accent hover:underline"
-            label="Open this question in the classic view"
-          />
+          >
+            Open this conversation in Chat
+          </NativeOwnerLink>
         </>
       ) : null}
     </>

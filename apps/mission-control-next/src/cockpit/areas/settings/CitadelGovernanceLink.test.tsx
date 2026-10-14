@@ -8,11 +8,15 @@ import {
   useFormDirty,
 } from "../../../features/native-routes/library/use-form-dirty";
 import { CitadelGovernanceLink } from "./CitadelGovernanceLink";
+import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 
-const open = vi.hoisted(() => vi.fn<typeof import("../../../shell-preference").switchShell>());
-vi.mock("../../../shell-preference", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../shell-preference")>()),
-  switchShell: open,
+const open = vi.hoisted(() => vi.fn<typeof import("../../app/cockpit-history").commitCockpitNavigation>());
+vi.mock("../../app/cockpit-history", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../app/cockpit-history")>()),
+  commitCockpitNavigation: open,
+}));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
+  useUiPreferences: () => ({ activeCitadelId: "one", activeWorkspaceId: "workspace" }),
 }));
 vi.mock("../../ui/Dialog", () => ({
   Dialog: ({ open, title, children }: { open: boolean; title: string; children: ReactNode }) =>
@@ -38,7 +42,9 @@ async function render(scope = "one", dirty = false) {
   await act(async () => {
     const tree = (
       <StrictMode>
-        <Harness scope={scope} dirty={dirty} />
+        <CockpitNavigationProvider>
+          <Harness scope={scope} dirty={dirty} />
+        </CockpitNavigationProvider>
       </StrictMode>
     );
     if (view) view.update(tree);
@@ -62,8 +68,12 @@ async function click(label: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   __resetFormDirtyRegistryForTests();
-  window.history.replaceState(null, "", "/settings/citadel?shell=cockpit");
-  open.mockResolvedValue("cancelled");
+  window.history.replaceState(
+    { retained: true },
+    "",
+    "/settings/citadel?keep=yes&citadelId=stale&workspaceId=stale&sessionId=carried&shell=cockpit#source",
+  );
+  open.mockReturnValue(true);
   save.mockResolvedValue(false);
 });
 afterEach(async () => {
@@ -77,20 +87,22 @@ describe("native Citadel governance handoff", () => {
     await render();
     const event = await clickLink();
     expect(event.preventDefault).toHaveBeenCalledOnce();
-    expect(open).toHaveBeenCalledExactlyOnceWith(
-      "classic",
-      expect.objectContaining({
-        href: "/library/citadel-overview?shell=classic&shellScope=visit",
-        isCurrent: expect.any(Function),
-        signal: expect.any(AbortSignal),
-      }),
-    );
-    expect(open.mock.calls[0]![1].isCurrent()).toBe(true);
+    expect(open).toHaveBeenCalledExactlyOnceWith(link().props.href);
+    const target = new URL(link().props.href, window.location.origin);
+    expect(target.pathname).toBe("/library/citadel-overview");
+    expect(target.searchParams.get("citadelId")).toBe("one");
+    expect(target.searchParams.get("workspaceId")).toBe("workspace");
+    expect(target.searchParams.get("sessionId")).toBe("carried");
+    expect(target.searchParams.get("keep")).toBe("yes");
+    expect(target.searchParams.get("shell")).toBe("cockpit");
+    expect(target.searchParams.has("shellScope")).toBe(false);
+    expect(target.hash).toBe("#source");
+    expect(window.history.state.retained).toBe(true);
   });
   it("keeps normal modified-click link behavior", async () => {
     await render();
     const event = await clickLink({ ctrlKey: true });
-    expect(link().props.href).toBe("/library/citadel-overview?shell=classic&shellScope=visit");
+    expect(new URL(link().props.href, window.location.origin).searchParams.get("shell")).toBe("cockpit");
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(open).not.toHaveBeenCalled();
   });
@@ -138,29 +150,30 @@ describe("native Citadel governance handoff", () => {
     expect(save).not.toHaveBeenCalled();
     expect(getDirtySectionKeys()).toContain("citadel:two:edit");
   });
-  it("admits one pending import and cancels it when its initiating view unmounts", async () => {
-    let resolve!: (value: Awaited<ReturnType<typeof open>>) => void;
-    open.mockImplementation(
-      () =>
-        new Promise((done) => {
-          resolve = done;
-        }),
-    );
-    await render();
+  it("holds one native draft review and rejects retained controls after its initiating view unmounts", async () => {
+    await render("one", true);
     await clickLink();
     await clickLink();
-    expect(open).toHaveBeenCalledOnce();
-    const options = open.mock.calls[0]![1];
-    expect(options.isCurrent()).toBe(true);
+    expect(view!.root.findAllByProps({ role: "dialog" })).toHaveLength(1);
+    expect(open).not.toHaveBeenCalled();
+    const staleKeep = button("Keep draft and close").props.onClick,
+      staleDiscard = button("Discard changes").props.onClick;
+    expect(getDirtySectionKeys()).toContain("citadel:two:edit");
     await act(async () => view!.unmount());
     view = undefined;
-    expect(options.signal).toBeInstanceOf(AbortSignal);
-    expect(options.signal?.aborted).toBe(true);
-    expect(options.isCurrent()).toBe(false);
-    await act(async () => resolve("cancelled"));
+    await act(async () => {
+      staleKeep();
+      staleDiscard();
+    });
+    expect(open).not.toHaveBeenCalled();
+    expect(discard).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/settings/citadel");
   });
-  it("reports a failed import locally and allows a new attempt", async () => {
-    open.mockRejectedValueOnce(new Error("Chunk unavailable"));
+  it("reports a rejected native commit locally and permits a fresh current request", async () => {
+    open.mockImplementationOnce(() => {
+      throw new Error("Transition unavailable");
+    });
     await render();
     await clickLink();
     expect(view!.root.findByProps({ role: "alert" }).children.join("")).toContain("drafts are still available");

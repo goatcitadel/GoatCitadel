@@ -65,7 +65,9 @@ it("optional background input preserves the composer while required input and ap
 
 function composerProps(overrides: Partial<ComposerProps> = {}): ComposerProps {
   return {
-    queueItems: [], onResumeAll: vi.fn(), onRemoveQueuedItem: vi.fn(),
+    queueItems: [],
+    onResumeAll: vi.fn(),
+    onRemoveQueuedItem: vi.fn(),
     draft: "Hello",
     onDraftChange: vi.fn(),
     onSend: vi.fn(),
@@ -248,6 +250,11 @@ describe("cockpit text composer", () => {
     await act(async () =>
       (container.querySelector('button[aria-label="Model and reasoning options"]') as HTMLButtonElement).click(),
     );
+    await vi.waitFor(() => {
+      const button = document.body.querySelector<HTMLButtonElement>('button[aria-label="Open personality settings"]');
+      expect(button).toBeInstanceOf(HTMLButtonElement);
+      expect(button?.disabled).toBe(false);
+    });
     const button = document.body.querySelector('button[aria-label="Open personality settings"]') as HTMLButtonElement;
     expect(button.textContent?.trim()).toBe("Personality");
     await act(async () => button.click());
@@ -302,6 +309,11 @@ describe("cockpit text composer", () => {
     await act(async () =>
       (container.querySelector('button[aria-label="Model and reasoning options"]') as HTMLButtonElement).click(),
     );
+    await vi.waitFor(() => {
+      const select = document.body.querySelector<HTMLSelectElement>('select[aria-label="Model"]');
+      expect(select).toBeInstanceOf(HTMLSelectElement);
+      expect(select?.disabled).toBe(false);
+    });
     const select = document.body.querySelector('select[aria-label="Model"]') as HTMLSelectElement;
     await act(async () => {
       select.value = "model-b";
@@ -328,7 +340,9 @@ describe("cockpit text composer", () => {
   });
 
   it("applies an uncommitted command suggestion on Enter and sends a committed command", async () => {
-    const commandSuggestions = [{ key: "status", command: "/status", description: "Show status", applyValue: "/status" }];
+    const commandSuggestions = [
+      { key: "status", command: "/status", description: "Show status", applyValue: "/status" },
+    ];
     const partial = composerProps({ draft: "/stat", commandSuggestions });
     await act(async () => root.render(<ChatTextComposer props={partial} />));
     expect(sendButton().disabled).toBe(true);
@@ -504,12 +518,21 @@ it("keeps governed external-control recovery actions available while send is loc
 });
 
 it("submits a running turn only through the shared queue admission and preserves blockers", async () => {
-  const props = composerProps({ draft: "Next request", sending: true, hasActiveStream: true, canSend: false, canSendWhileRunning: true, midTurnDisposition: "queue" });
+  const props = composerProps({
+    draft: "Next request",
+    sending: true,
+    hasActiveStream: true,
+    canSend: false,
+    canSendWhileRunning: true,
+    midTurnDisposition: "queue",
+  });
   await act(async () => root.render(<ChatTextComposer props={props} />));
   const queue = [...container.querySelectorAll("button")].find((button) => button.textContent === "Queue message")!;
   expect(queue.disabled).toBe(false);
   await act(async () => queue.click());
   expect(props.onSend).toHaveBeenCalledOnce();
-  await act(async () => root.render(<ChatTextComposer props={{ ...props, pendingApproval: { approvalId: "waiting" } as never }} />));
+  await act(async () =>
+    root.render(<ChatTextComposer props={{ ...props, pendingApproval: { approvalId: "waiting" } as never }} />),
+  );
   expect(queue.disabled).toBe(true);
 });

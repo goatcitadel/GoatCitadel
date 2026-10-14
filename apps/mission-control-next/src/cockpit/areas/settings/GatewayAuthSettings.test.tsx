@@ -178,18 +178,23 @@ it.each([false, true])(
     if (foreign) {
       await vi.waitFor(() => expect(JSON.stringify(renderer.toJSON())).toContain("outcome is uncertain"));
       expect(
-        renderer.root.findAllByType("a").filter((node) => node.props["aria-label"] === "Review required approval"),
+        renderer.root.findAllByType("a").filter((node) => node.children.join("") === "Review required approval"),
       ).toHaveLength(0);
     } else {
       await vi.waitFor(() =>
         expect(
-          renderer.root.findAllByType("a").some((node) => node.props["aria-label"] === "Review required approval"),
+          renderer.root.findAllByType("a").some((node) => node.children.join("") === "Review required approval"),
         ).toBe(true),
       );
       const ownerLink = renderer.root
         .findAllByType("a")
-        .find((node) => node.props["aria-label"] === "Review required approval")!;
-      expect(ownerLink.props.href).toBe("/ops/approvals?approvalId=approval-1&shell=classic&shellScope=visit");
+        .find((node) => node.children.join("") === "Review required approval")!;
+      const destination = new URL(ownerLink.props.href, "http://cockpit.invalid");
+      expect(destination.pathname).toBe("/inbox");
+      expect(destination.searchParams.get("workspaceId")).toBe("default");
+      expect(destination.searchParams.get("shell")).toBe("cockpit");
+      expect(destination.searchParams.getAll("approvalId")).toEqual(["approval-1"]);
+      expect(destination.searchParams.has("shellScope")).toBe(false);
       expect(api.fetchChangePlan).toHaveBeenCalledWith(plan.planId, { workspaceId: "default" });
     }
     expect(api.navigate).not.toHaveBeenCalled();

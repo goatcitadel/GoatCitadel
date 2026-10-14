@@ -45,6 +45,14 @@ export function buildShellSwitchUrl(href: string, shell: ShellPreference, sessio
   const next = new URL(href);
   next.searchParams.delete("shellScope");
   if (shell === "classic") {
+    // The same Classic Costs owner backs both native views; retain only the explicit overview return.
+    if (next.pathname === "/system/spend") next.searchParams.set("cockpitReturnView", "spend-overview");
+    else if (
+      next.pathname === "/system/spend/details" &&
+      next.searchParams.getAll("cockpitReturnView").length === 1 &&
+      next.searchParams.getAll("cockpitReturnView")[0] === "spend-overview"
+    )
+      next.searchParams.delete("cockpitReturnView");
     // The fallback may carry the query its Classic owner needs (for example `?view=browser-sessions`).
     const fallback = new URL(classicFallbackPath(next.pathname), next.origin);
     next.pathname = fallback.pathname;
@@ -103,6 +111,7 @@ export function classicFallbackPath(pathname: string): string {
   const [, segment, detail, record] = pathname.split("/");
   if (segment === "inbox") return "/ops/approvals";
   if (segment === "work") return detail === "schedules" ? "/ops/schedules" : "/ops/kanban";
+  if (pathname === "/system/runtime/workers") return "/ops/workers";
   if (segment === "system") return (detail && classicSystemViews[detail]) || "/ops/runtime";
   if (segment === "chat" && detail === "projects") {
     const projectId = record ? decodedSegment(record) : null;

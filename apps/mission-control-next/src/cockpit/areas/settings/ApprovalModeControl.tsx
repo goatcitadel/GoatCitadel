@@ -12,7 +12,9 @@ import { useApprovalModeControl } from "./use-approval-mode-control";
 import { ApprovedSettingsContinuation } from "./ApprovedSettingsContinuation";
 import { settingsChangeIsConfirmed } from "../../../features/native-routes/settings/use-settings-change";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 
 export function ApprovalModeControl() {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
@@ -28,6 +30,11 @@ export function ApprovalModeEditor({
   safeOnly?: boolean;
 }) {
   const { settings, ready, current, draft, change, uncertain, review, notice, locked, restricted } = control;
+  const route = useCockpitRoute();
+  const parameters = new URLSearchParams(route.search);
+  parameters.delete("shell");
+  parameters.delete("shellScope");
+  const recoveryHref = `/settings/safety${parameters.size ? `?${parameters}` : ""}#approval-mode`;
   const approval = change.change?.receipt.requiredAction;
   const confirmed = settingsChangeIsConfirmed(change.change);
   return (
@@ -144,11 +151,12 @@ export function ApprovalModeEditor({
               Refresh approval change
             </Button>
             {approval?.kind === "approval" && !confirmed ? (
-              <ClassicOwnerLink
-                className="text-accent hover:underline"
-                href={`/ops/approvals?shell=classic${approval.approvalId ? `&approvalId=${encodeURIComponent(approval.approvalId)}` : ""}`}
-                scope={JSON.stringify([draft.key, change.change.receipt.planId, approval.approvalId])}
-                label="Review required approval"
+              <SettingsApprovalOwnerAction
+                plan={change.change.plan}
+                receipt={change.change.receipt}
+                owner="tool-approval"
+                workspaceId="default"
+                viewIdentity={draft.key}
               />
             ) : null}
           </div>
@@ -172,11 +180,12 @@ export function ApprovalModeEditor({
         </p>
       ) : null}
       {uncertain || change.change?.blocking ? (
-        <ClassicOwnerLink
-          href="/settings/tools?shell=classic"
-          scope="approval-mode"
-          label="Inspect tool settings activity"
-        />
+        <NativeOwnerLink
+          href={recoveryHref}
+          scope={[draft.key, change.change?.receipt.planId, change.change?.receipt.revision]}
+        >
+          Inspect tool settings activity
+        </NativeOwnerLink>
       ) : null}
       <ConfirmModal
         open={Boolean(review)}

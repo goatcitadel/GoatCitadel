@@ -12,6 +12,7 @@ import { __resetSessionDraftsForTests } from "../../../features/native-routes/li
 import { __resetCredentialInputsForTests } from "../../../features/native-routes/settings/credential-input-owner";
 import { __resetProviderConnectionAttemptsForTests, readProviderConnectionAttempt } from "./provider-connection-state";
 import { ProviderConnectionSettings } from "./ProviderConnectionSettings";
+import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { freshReadsActive } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 
 const api = vi.hoisted(() => ({
@@ -495,42 +496,65 @@ describe("cockpit provider connection editing", () => {
     expect(container.textContent).toContain("outcome is uncertain");
   });
 
-  it("retains an unknown mutation lock across remounts and read-only refresh", async () => {
-    await render();
-    await editEndpoint();
-    await click("Review endpoint change");
-    api.confirmChangePlan.mockRejectedValue(new Error("lost response"));
-    await act(async () => dialog.onConfirm(dialog.plan!));
-    const retained = readProviderConnectionAttempt("provider-a");
-    await act(async () => {
-      container
-        .querySelector<HTMLAnchorElement>('a[href="/settings/providers?shell=classic&shellScope=visit"]')!
-        .click();
-    });
-    expect(switchShellMock).not.toHaveBeenCalled();
-    const keep = [...document.querySelectorAll("button")].find((item) => item.textContent === "Keep draft and close");
-    expect(keep).toBeDefined();
-    await act(async () => {
-      keep!.click();
-    });
-    expect(switchShellMock).toHaveBeenCalledExactlyOnceWith(
-      "classic",
-      expect.objectContaining({
-        href: "/settings/providers?shell=classic&shellScope=visit",
-        isCurrent: expect.any(Function),
-        signal: expect.any(AbortSignal),
-      }),
+  it("retains an unknown mutation lock across native inspection, remounts and read-only refresh", async () => {
+    const original = window.location.href,
+      state = window.history.state;
+    window.history.replaceState(
+      { retained: "unknown-confirmation" },
+      "",
+      "/settings/models?workspaceId=foreign&runId=carried-run&sessionId=carried-session&extra=one&extra=two#providers",
     );
-    expect(switchShellMock.mock.calls[0]![1].isCurrent()).toBe(true);
-    expect(readProviderConnectionAttempt("provider-a")).toBe(retained);
-    act(() => root.unmount());
-    root = createRoot(container);
-    await render();
-    await click("Refresh connection change");
-    expect(container.textContent).toContain("outcome is uncertain");
-    expect(button("Review endpoint change").disabled).toBe(true);
-    expect(button("Review current step")).toBeUndefined();
-    expect(api.confirmChangePlan).toHaveBeenCalledTimes(1);
+    try {
+      await act(async () =>
+        root.render(
+          <CockpitNavigationProvider>
+            <ProviderConnectionSettings />
+          </CockpitNavigationProvider>,
+        ),
+      );
+      await editEndpoint();
+      await click("Review endpoint change");
+      api.confirmChangePlan.mockRejectedValue(new Error("lost response"));
+      await act(async () => dialog.onConfirm(dialog.plan!));
+      const retained = readProviderConnectionAttempt("provider-a");
+      const link = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
+        (item) => item.textContent === "Inspect current connection plan in Inbox",
+      )!;
+      const target = new URL(link.href);
+      expect(target.pathname).toBe("/inbox");
+      expect(target.searchParams.get("item")).toBe("change_plan:connection-plan");
+      expect(target.searchParams.get("workspaceId")).toBe("default");
+      expect(target.searchParams.get("runId")).toBe("carried-run");
+      expect(target.searchParams.get("sessionId")).toBe("carried-session");
+      expect(target.searchParams.getAll("extra")).toEqual(["one", "two"]);
+      expect(target.hash).toBe("#providers");
+      const push = vi.spyOn(window.history, "pushState");
+      await act(async () => link.click());
+      expect(push).not.toHaveBeenCalled();
+      expect(switchShellMock).not.toHaveBeenCalled();
+      const keep = [...document.querySelectorAll("button")].find((item) => item.textContent === "Keep draft and close");
+      expect(keep).toBeDefined();
+      await act(async () => keep!.click());
+      expect(push).toHaveBeenCalledOnce();
+      expect(window.location.pathname).toBe(target.pathname);
+      expect(window.location.search).toBe(target.search);
+      expect(window.location.hash).toBe(target.hash);
+      expect(window.history.state.goatcitadelNavigationPosition).toEqual(expect.any(Number));
+      expect(readProviderConnectionAttempt("provider-a")).toBe(retained);
+      expect(switchShellMock).not.toHaveBeenCalled();
+      act(() => root.unmount());
+      root = createRoot(container);
+      await render();
+      await click("Refresh connection change");
+      expect(container.textContent).toContain("outcome is uncertain");
+      expect(button("Review endpoint change").disabled).toBe(true);
+      expect(button("Review current step")).toBeUndefined();
+      expect(api.createChangePlan).toHaveBeenCalledOnce();
+      expect(api.confirmChangePlan).toHaveBeenCalledTimes(1);
+      expect(api.submitChangePlanProviderSecret).not.toHaveBeenCalled();
+    } finally {
+      window.history.replaceState(state, "", original);
+    }
   });
 
   it("settles a lost confirmation from the Gateway's attempt record and the canonical plan", async () => {
@@ -787,5 +811,193 @@ describe("cockpit provider connection editing", () => {
     expect(container.textContent).not.toContain("outcome is uncertain");
     expect(button("Review current step").disabled).toBe(false);
     expect(readProviderConnectionAttempt("provider-a")?.plan?.target.expectedRevision).toBe(5);
+  });
+  it("opens its exact installation approval natively only after the existing dirty-draft review", async () => {
+    const create = api.createChangePlan.getMockImplementation()!;
+    const approvalId = "provider approval /?#";
+    api.createChangePlan.mockImplementationOnce(async (input) => {
+      const generated = await create(input);
+      currentPlan = {
+        ...generated,
+        adapter: { adapterId: "provider-connection", version: 5 },
+        status: "awaiting_approval",
+        approvalRefs: [approvalId],
+        requiredAction: {
+          kind: "approval",
+          actionId: "approval-action",
+          actionNonce: "approval-nonce",
+          title: "Review provider connection",
+          risk: "danger",
+          approvalId,
+        },
+      };
+      return currentPlan;
+    });
+    window.history.replaceState(
+      { retained: "provider-context" },
+      "",
+      "/settings/models?source=settings&runId=run%2Fone&sessionId=session%3Aone&shell=cockpit#providers",
+    );
+    await act(async () =>
+      root.render(
+        <CockpitNavigationProvider>
+          <ProviderConnectionSettings />
+        </CockpitNavigationProvider>,
+      ),
+    );
+    await editEndpoint();
+    await click("Review endpoint change");
+    const link = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (item) => item.textContent === "Review required approval",
+    )!;
+    expect(link).toBeDefined();
+    const target = new URL(link.href);
+    expect(target.pathname).toBe("/inbox");
+    expect(target.searchParams.getAll("approvalId")).toEqual([approvalId]);
+    expect(target.searchParams.get("workspaceId")).toBe("default");
+    expect(target.searchParams.get("runId")).toBe("run/one");
+    expect(target.searchParams.get("sessionId")).toBe("session:one");
+    expect(target.hash).toBe("#providers");
+    const before = window.location.href,
+      state = window.history.state;
+    const push = vi.spyOn(window.history, "pushState");
+    await act(async () => link.click());
+    expect(push).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Unsaved changes");
+    const leave = document.querySelector('[role="dialog"]')!;
+    await act(async () =>
+      [...leave.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent === "Cancel")!.click(),
+    );
+    expect(window.location.href).toBe(before);
+    expect(window.history.state).toEqual(state);
+    expect(push).not.toHaveBeenCalled();
+    expect(api.createChangePlan).toHaveBeenCalledOnce();
+    expect(api.confirmChangePlan).not.toHaveBeenCalled();
+    expect(api.submitChangePlanProviderSecret).not.toHaveBeenCalled();
+    expect(switchShellMock).not.toHaveBeenCalled();
+    await act(async () => link.click());
+    const keep = document.querySelector('[role="dialog"]')!;
+    await act(async () =>
+      [...keep.querySelectorAll<HTMLButtonElement>("button")]
+        .find((item) => item.textContent === "Keep draft and close")!
+        .click(),
+    );
+    expect(push).toHaveBeenCalledOnce();
+    expect(window.location.pathname).toBe(target.pathname);
+    expect(window.location.search).toBe(target.search);
+    expect(window.location.hash).toBe(target.hash);
+    expect(api.createChangePlan).toHaveBeenCalledOnce();
+    expect(api.confirmChangePlan).not.toHaveBeenCalled();
+    expect(api.submitChangePlanProviderSecret).not.toHaveBeenCalled();
+    expect(switchShellMock).not.toHaveBeenCalled();
+  });
+  it("offers recent native activity for an unknown create without inventing a plan or releasing its lock", async () => {
+    const original = window.location.href,
+      state = window.history.state;
+    window.history.replaceState(
+      { retained: "provider-unknown" },
+      "",
+      "/settings/models?workspaceId=stale&planId=other&approvalId=unrelated&item=other&providerId=old&resourceId=old&runId=carried-run&sessionId=carried-session&extra=one&extra=two&shell=classic&shellScope=visit#providers",
+    );
+    try {
+      await act(async () =>
+        root.render(
+          <CockpitNavigationProvider>
+            <ProviderConnectionSettings />
+          </CockpitNavigationProvider>,
+        ),
+      );
+      await editEndpoint();
+      api.createChangePlan.mockRejectedValueOnce(new Error("lost creation response"));
+      await click("Review endpoint change");
+      const retained = readProviderConnectionAttempt("provider-a");
+      expect(retained?.uncertain).toBe(true);
+      expect(retained?.plan).toBeUndefined();
+      const link = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
+        (item) => item.textContent === "Inspect recent Gateway activity",
+      )!;
+      const target = new URL(link.href);
+      expect(target.pathname).toBe("/system/activity");
+      expect(target.searchParams.get("workspaceId")).toBe("stale");
+      expect(target.searchParams.get("providerId")).toBe("provider-a");
+      expect(target.searchParams.get("resourceId")).toBe("provider-a");
+      expect(target.searchParams.get("runId")).toBe("carried-run");
+      expect(target.searchParams.get("sessionId")).toBe("carried-session");
+      expect(target.searchParams.getAll("extra")).toEqual(["one", "two"]);
+      for (const key of ["item", "planId", "approvalId", "shellScope"])
+        expect(target.searchParams.has(key)).toBe(false);
+      expect(target.searchParams.get("shell")).toBe("cockpit");
+      expect(target.hash).toBe("#providers");
+      const push = vi.spyOn(window.history, "pushState");
+      await act(async () => link.click());
+      expect(push).not.toHaveBeenCalled();
+      const leave = document.querySelector('[role="dialog"]')!;
+      await act(async () =>
+        [...leave.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent === "Cancel")!.click(),
+      );
+      expect(readProviderConnectionAttempt("provider-a")).toBe(retained);
+      expect(button("Review endpoint change").disabled).toBe(true);
+      expect(api.createChangePlan).toHaveBeenCalledOnce();
+      expect(api.fetchChangePlan).not.toHaveBeenCalled();
+      expect(api.confirmChangePlan).not.toHaveBeenCalled();
+      expect(api.submitChangePlanProviderSecret).not.toHaveBeenCalled();
+      expect(switchShellMock).not.toHaveBeenCalled();
+    } finally {
+      window.history.replaceState(state, "", original);
+    }
+  });
+
+  it("preserves exact manual-plan context in native Inbox without repeating its owner action", async () => {
+    const original = window.location.href,
+      state = window.history.state,
+      create = api.createChangePlan.getMockImplementation()!;
+    window.history.replaceState(
+      { retained: "provider-manual" },
+      "",
+      "/settings/models?workspaceId=foreign&providerId=wrong&resourceId=wrong&planId=wrong&item=wrong&approvalId=unrelated&runId=run%2Fone&sessionId=carried&extra=one&extra=two&shell=cockpit&shellScope=visit#providers",
+    );
+    try {
+      api.createChangePlan.mockImplementationOnce(async (input) => {
+        const plan = await create(input);
+        currentPlan = {
+          ...plan,
+          planId: "connection plan /?#",
+          status: "manual_required",
+          requiredAction: undefined,
+        };
+        return currentPlan;
+      });
+      await render();
+      await editEndpoint();
+      await click("Review endpoint change");
+      const retained = readProviderConnectionAttempt("provider-a");
+      expect(retained?.plan).toBe(currentPlan);
+      expect(retained?.uncertain).toBe(false);
+      expect(currentPlan.origin).toEqual({ surface: "settings", workspaceId: "default", actorId: "operator" });
+      const link = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
+        (item) => item.textContent === "Inspect current connection plan in Inbox",
+      )!;
+      const target = new URL(link.href);
+      expect(target.pathname).toBe("/inbox");
+      expect(target.searchParams.getAll("item")).toEqual(["change_plan:connection plan /?#"]);
+      expect(target.searchParams.getAll("planId")).toEqual(["connection plan /?#"]);
+      expect(target.searchParams.getAll("workspaceId")).toEqual(["default"]);
+      expect(target.searchParams.get("providerId")).toBe("provider-a");
+      expect(target.searchParams.get("resourceId")).toBe("provider-a");
+      expect(target.searchParams.get("sessionId")).toBe("carried");
+      expect(target.searchParams.has("turnId")).toBe(false);
+      expect(target.searchParams.get("runId")).toBe("run/one");
+      expect(target.searchParams.getAll("extra")).toEqual(["one", "two"]);
+      expect(target.searchParams.has("approvalId")).toBe(false);
+      expect(target.searchParams.has("shellScope")).toBe(false);
+      expect(target.hash).toBe("#providers");
+      expect(readProviderConnectionAttempt("provider-a")).toBe(retained);
+      expect(button("Review current step")).toBeUndefined();
+      expect(api.createChangePlan).toHaveBeenCalledOnce();
+      expect(api.confirmChangePlan).not.toHaveBeenCalled();
+      expect(api.submitChangePlanProviderSecret).not.toHaveBeenCalled();
+    } finally {
+      window.history.replaceState(state, "", original);
+    }
   });
 });

@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ToolGrantSettings } from "./ToolGrantSettings";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
+import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
+import { SHELL_HISTORY_POSITION } from "../../../app/shell-transition";
 import {
   awaitingLlamaApproval,
   llamaPlanFixture,
@@ -49,16 +51,18 @@ async function render(withApproval = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => {
     view = create(
-      <QueryClientProvider client={client}>
-        <ToolGrantSettings workspaceId="workspace-a" />
-        {withApproval ? (
-          <SettingsApprovalOwnerAction
-            owner="llama-setup"
-            workspaceId="workspace-a"
-            plan={awaitingLlamaApproval(llamaPlanFixture())}
-          />
-        ) : null}
-      </QueryClientProvider>,
+      <CockpitNavigationProvider>
+        <QueryClientProvider client={client}>
+          <ToolGrantSettings workspaceId="workspace-a" />
+          {withApproval ? (
+            <SettingsApprovalOwnerAction
+              owner="llama-setup"
+              workspaceId="workspace-a"
+              plan={awaitingLlamaApproval(llamaPlanFixture())}
+            />
+          ) : null}
+        </QueryClientProvider>
+      </CockpitNavigationProvider>,
     );
   });
   await act(async () => {
@@ -72,7 +76,11 @@ beforeEach(() => {
   __resetFormDirtyRegistryForTests();
   viewState.installation = "http://gateway-a";
   viewState.open.mockResolvedValue("cancelled");
-  window.history.replaceState(null, "", "/settings/safety?shell=cockpit#tool-grants");
+  window.history.replaceState(
+    { evidence: "grant-owner-handoff" },
+    "",
+    "/settings/safety?source=tool-grants&runId=run-grant&sessionId=session-grant&shell=cockpit#tool-grants",
+  );
   api.fetchToolCatalog.mockResolvedValue({ items: [] });
   api.fetchToolGrants.mockResolvedValue({ items: [] });
 });
@@ -81,6 +89,7 @@ afterEach(async () => {
   view = undefined;
   __resetSessionDraftsForTests();
   __resetFormDirtyRegistryForTests();
+  vi.restoreAllMocks();
 });
 it("shows exact editable labels and reviews a global scope without sending a grant on cancel", async () => {
   await render();
@@ -122,30 +131,69 @@ it("keeps separate unsent drafts for the same workspace/tool across installation
   expect(api.revokeToolGrant).not.toHaveBeenCalled();
 });
 
+async function readyDecision(label: string) {
+  await vi.waitFor(() => expect(button(label)).toBeDefined());
+  await act(async () => button(label).props.onClick());
+}
+function historyEntry() {
+  return { href: window.location.href, state: structuredClone(window.history.state) };
+}
+async function expectHistoryTraversal(
+  source: ReturnType<typeof historyEntry>,
+  destination: ReturnType<typeof historyEntry>,
+  dirty: boolean,
+) {
+  await act(async () => window.history.back());
+  if (dirty) await readyDecision("Keep draft and close");
+  await vi.waitFor(() => expect(window.location.href).toBe(source.href));
+  expect(window.history.state).toEqual(source.state);
+  await act(async () => window.history.forward());
+  if (dirty) await readyDecision("Keep draft and close");
+  await vi.waitFor(() => expect(window.location.href).toBe(destination.href));
+  expect(window.history.state).toEqual(destination.state);
+}
+function expectNativeApproval() {
+  const destination = new URL(window.location.href);
+  expect(destination.pathname).toBe("/inbox");
+  expect(destination.searchParams.get("workspaceId")).toBe("workspace-a");
+  expect(destination.searchParams.get("source")).toBe("tool-grants");
+  expect(destination.searchParams.get("runId")).toBe("run-grant");
+  expect(destination.searchParams.get("sessionId")).toBe("session-grant");
+  expect(destination.searchParams.get("shell")).toBe("cockpit");
+  expect(destination.searchParams.getAll("approvalId")).toEqual(["approval-1"]);
+  expect(destination.searchParams.has("shellScope")).toBe(false);
+  expect(destination.hash).toBe("#tool-grants");
+  expect(window.history.state).toEqual({ [SHELL_HISTORY_POSITION]: expect.any(Number) });
+  return historyEntry();
+}
 it.each(["Keep draft and close", "Discard changes"])(
   "guards the actual grant draft before an exact approval owner handoff: %s",
   async (decision) => {
     await render(true);
+    const sourceEntry = historyEntry();
+    expect(sourceEntry.state).toMatchObject({ evidence: "grant-owner-handoff" });
     await act(async () => input("Tool pattern").props.onChange({ target: { value: "session.status" } }));
+    const nativeNavigation = vi.spyOn(window.history, "pushState");
     const click = () =>
       view!.root
         .findAllByType("a")
-        .find((item) => item.props["aria-label"] === "Review required approval")!
+        .find((item) => item.children.join("") === "Review required approval")!
         .props.onClick({ button: 0, preventDefault: vi.fn() });
     await act(async () => click());
     expect(viewState.open).not.toHaveBeenCalled();
-    await act(async () => button("Cancel").props.onClick());
+    expect(nativeNavigation).not.toHaveBeenCalled();
+    await readyDecision("Cancel");
+    expect(nativeNavigation).not.toHaveBeenCalled();
+    expect(window.location.href).toBe(sourceEntry.href);
+    expect(window.history.state).toEqual(sourceEntry.state);
     expect(input("Tool pattern").props.value).toBe("session.status");
     await act(async () => click());
-    await act(async () => button(decision).props.onClick());
-    expect(viewState.open).toHaveBeenCalledExactlyOnceWith(
-      "classic",
-      expect.objectContaining({
-        href: "/ops/approvals?approvalId=approval-1&shell=classic&shellScope=visit",
-        isCurrent: expect.any(Function),
-        signal: expect.any(AbortSignal),
-      }),
-    );
+    await readyDecision(decision);
+    expect(viewState.open).not.toHaveBeenCalled();
+    expect(nativeNavigation).toHaveBeenCalledOnce();
+    const destinationEntry = expectNativeApproval();
+    await expectHistoryTraversal(sourceEntry, destinationEntry, decision === "Keep draft and close");
+    expect(nativeNavigation).toHaveBeenCalledOnce();
     expect(input("Tool pattern").props.value).toBe(decision === "Discard changes" ? "" : "session.status");
     expect(api.createToolGrant).not.toHaveBeenCalled();
     expect(api.revokeToolGrant).not.toHaveBeenCalled();
@@ -155,19 +203,28 @@ it.each(["Keep draft and close", "Discard changes"])(
 it("retains an unconfirmed grant write and its input across the guarded handoff and remount", async () => {
   api.createToolGrant.mockRejectedValue(new Error("transport ended after dispatch"));
   await render(true);
+  const sourceEntry = historyEntry();
+  expect(sourceEntry.state).toMatchObject({ evidence: "grant-owner-handoff" });
   await act(async () => input("Tool pattern").props.onChange({ target: { value: "session.status" } }));
   await act(async () => button("Review new grant").props.onClick());
   await act(async () => button("Create reviewed grant").props.onClick());
   expect(api.createToolGrant).toHaveBeenCalledOnce();
   expect(button("Review new grant").props.disabled).toBe(true);
+  const nativeNavigation = vi.spyOn(window.history, "pushState");
   await act(async () =>
     view!.root
       .findAllByType("a")
-      .find((item) => item.props["aria-label"] === "Review required approval")!
+      .find((item) => item.children.join("") === "Review required approval")!
       .props.onClick({ button: 0, preventDefault: vi.fn() }),
   );
-  await act(async () => button("Keep draft and close").props.onClick());
-  expect(viewState.open).toHaveBeenCalledOnce();
+  await readyDecision("Keep draft and close");
+  expect(viewState.open).not.toHaveBeenCalled();
+  expect(nativeNavigation).toHaveBeenCalledOnce();
+  const destinationEntry = expectNativeApproval();
+  await expectHistoryTraversal(sourceEntry, destinationEntry, true);
+  expect(nativeNavigation).toHaveBeenCalledOnce();
+  expect(api.createToolGrant).toHaveBeenCalledOnce();
+  expect(api.revokeToolGrant).not.toHaveBeenCalled();
   await act(async () => view!.unmount());
   await render(true);
   expect(input("Tool pattern").props.value).toBe("session.status");

@@ -1,3 +1,5 @@
+import * as workbenchFacade from "./chat.js";
+import * as workbenchOperations from "./chat-workbench-operations.js";
 import { describe, expect, it, vi } from "vitest";
 import { fetchChatSessionWorkbench, fetchChatSessionWorkbenchFile, fetchChatSessionWorkbenchTree } from "./chat.js";
 
@@ -11,7 +13,9 @@ describe("workbench preview reads", () => {
     await fetchChatSessionWorkbenchTree("session/a", { preview: true });
     expect(mocks.request).toHaveBeenLastCalledWith("/api/v1/chat/sessions/session%2Fa/workbench/tree?preview=true");
     await fetchChatSessionWorkbenchFile("session/a", "a & b.txt", { preview: true });
-    expect(mocks.request).toHaveBeenLastCalledWith("/api/v1/chat/sessions/session%2Fa/workbench/file?path=a+%26+b.txt&preview=true");
+    expect(mocks.request).toHaveBeenLastCalledWith(
+      "/api/v1/chat/sessions/session%2Fa/workbench/file?path=a+%26+b.txt&preview=true",
+    );
     await fetchChatSessionWorkbench("session/a");
     expect(mocks.request).toHaveBeenLastCalledWith("/api/v1/chat/sessions/session%2Fa/workbench");
     await fetchChatSessionWorkbenchTree("session/a");
@@ -19,4 +23,19 @@ describe("workbench preview reads", () => {
     await fetchChatSessionWorkbenchFile("session/a", "a & b.txt");
     expect(mocks.request).toHaveBeenLastCalledWith("/api/v1/chat/sessions/session%2Fa/workbench/file?path=a+%26+b.txt");
   });
+});
+
+it("keeps the existing public workbench action functions identical to the canonical operation owner", () => {
+  for (const name of [
+    "createChatSessionWorkbenchWorktree",
+    "saveChatSessionWorkbenchFile",
+    "previewChatSessionWorkbenchFileOperation",
+    "runChatSessionWorkbenchFileOperation",
+    "runChatSessionWorkbenchCommand",
+    "applyChatSessionWorkbenchPatch",
+    "exportChatSessionWorkbenchPatch",
+    "revertChatSessionWorkbenchFile",
+    "revertChatSessionWorkbenchChanges",
+  ] as const)
+    expect(workbenchFacade[name]).toBe(workbenchOperations[name]);
 });

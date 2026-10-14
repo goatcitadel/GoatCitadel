@@ -144,8 +144,16 @@ describe("classic and native llama.cpp setup", () => {
       expect(view.host.textContent).toContain("Awaiting approval");
       expect(view.button("Approve and apply")).toBeUndefined();
       if (native) {
-        const link = view.host.querySelector<HTMLAnchorElement>('a[aria-label="Open approval details"]');
-        expect(link?.getAttribute("href")).toBe("/ops/approvals?approvalId=approval-1&shell=classic&shellScope=visit");
+        const link = [...view.host.querySelectorAll<HTMLAnchorElement>("a")].find(
+          (item) => item.textContent === "Open approval details",
+        );
+        expect(link).toBeDefined();
+        const destination = new URL(link!.href);
+        expect(destination.pathname).toBe("/inbox");
+        expect(destination.searchParams.get("workspaceId")).toBe("default");
+        expect(destination.searchParams.get("shell")).toBe("cockpit");
+        expect(destination.searchParams.getAll("approvalId")).toEqual(["approval-1"]);
+        expect(destination.searchParams.has("shellScope")).toBe(false);
         expect(navigate).not.toHaveBeenCalled();
       } else {
         await view.click("Open approval details");

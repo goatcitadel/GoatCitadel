@@ -1,7 +1,6 @@
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { LibraryLinkedArtifact } from "./LibraryLinkedArtifact";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -11,6 +10,7 @@ import { EmptyState } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
 import { LibraryResourceDetail } from "./LibraryResourceDetail";
 import { LibraryFileUpload } from "./LibraryFileUpload";
+import { LibraryFileTemplates } from "./LibraryFileTemplates";
 import { LibraryNotesWorkspace } from "./LibraryNotesWorkspace";
 import { LibraryMemoryWorkspace } from "./LibraryMemoryWorkspace";
 import {
@@ -22,12 +22,24 @@ import {
   type ResourceKind,
 } from "./library-resources";
 
-const TITLES = { memory: "Memory", notes: "Notes", files: "Files", artifacts: "Artifacts" } as const;
+const TITLES = {
+  memory: "Memory",
+  notes: "Notes",
+  files: "Files",
+  artifacts: "Artifacts",
+} as const;
 export function LibraryResources({
-  kind, workspaceId, citadelId,
-}: { kind: ResourceKind; workspaceId: string; citadelId: string }) {
+  kind,
+  workspaceId,
+  citadelId,
+}: {
+  kind: ResourceKind;
+  workspaceId: string;
+  citadelId: string;
+}) {
   if (kind === "notes") return <LibraryNotesWorkspace key={workspaceId} workspaceId={workspaceId} />;
-  if (kind === "memory") return <LibraryMemoryWorkspace key={workspaceId} workspaceId={workspaceId} citadelId={citadelId} />;
+  if (kind === "memory")
+    return <LibraryMemoryWorkspace key={workspaceId} workspaceId={workspaceId} citadelId={citadelId} />;
   return <LibraryResourceDirectory kind={kind} workspaceId={workspaceId} citadelId={citadelId} />;
 }
 
@@ -42,8 +54,10 @@ function LibraryResourceDirectory({
 }) {
   const route = useCockpitRoute();
   const params = new URLSearchParams(route.search);
-  const projectId = kind === "artifacts" ? params.get("projectId") ?? undefined : undefined;
-  const artifactId = kind === "artifacts" ? params.get("artifactId") ?? undefined : undefined;
+  const projectId = kind === "artifacts" ? (params.get("projectId") ?? undefined) : undefined;
+  const artifactId = kind === "artifacts" ? (params.get("artifactId") ?? undefined) : undefined;
+  const sourceSurface = params.get("sourceSurface") ?? "all";
+  const sourceAvailable = ["all", "chat", "cowork", "code"].includes(sourceSurface);
   const access = useProjectAccess(JSON.stringify([workspaceId, citadelId]));
   const [draftQuery, setDraftQuery] = useState("");
   const [query, setQuery] = useState("");
@@ -51,9 +65,37 @@ function LibraryResourceDirectory({
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
   const [selected, setSelected] = useState<string>();
   const resourceQuery = useQuery({
-    queryKey: ["library", "resources", kind, workspaceId, citadelId, access.identity, projectId, query, status, cursors.at(-1)],
-    queryFn: () => loadLibraryResources({ kind, workspaceId, citadelId, projectId, query, status, cursor: cursors.at(-1) }),
+    queryKey: [
+      "library",
+      "resources",
+      kind,
+      workspaceId,
+      citadelId,
+      access.identity,
+      projectId,
+      query,
+      status,
+      cursors.at(-1),
+      ...(kind === "artifacts" ? [sourceSurface] : []),
+    ],
+    queryFn: () => {
+      if (kind === "artifacts" && !sourceAvailable)
+        throw new Error("Choose a supported recorded artifact source before reading this directory.");
+      return loadLibraryResources({
+        kind,
+        workspaceId,
+        citadelId,
+        projectId,
+        query,
+        status,
+        cursor: cursors.at(-1),
+        ...(kind === "artifacts" && sourceSurface !== "all" && sourceAvailable
+          ? { sourceSurface: sourceSurface as "chat" | "cowork" | "code" }
+          : {}),
+      });
+    },
     staleTime: 0,
+    enabled: kind !== "artifacts" || sourceAvailable,
   });
   // The last good directory window (and an open preview) stays while it is read again.
   const view = recordView(resourceQuery);
@@ -82,7 +124,7 @@ function LibraryResourceDirectory({
         </div>
         <Button
           size="sm"
-          disabled={resourceQuery.isFetching}
+          disabled={resourceQuery.isFetching || (kind === "artifacts" && !sourceAvailable)}
           onClick={() => {
             reset();
             void resourceQuery.refetch();
@@ -91,9 +133,22 @@ function LibraryResourceDirectory({
           Refresh {TITLES[kind].toLowerCase()}
         </Button>
       </header>
-      {artifactId ? <LibraryLinkedArtifact key={JSON.stringify([access.identity, projectId, artifactId])} artifactId={artifactId} projectId={projectId} workspaceId={workspaceId} citadelId={citadelId} /> : null}
+      {artifactId ? (
+        <LibraryLinkedArtifact
+          key={JSON.stringify([access.identity, projectId, artifactId])}
+          artifactId={artifactId}
+          projectId={projectId}
+          workspaceId={workspaceId}
+          citadelId={citadelId}
+        />
+      ) : null}
       {projectId ? <p className="break-all text-sm">Project artifact scope: {projectId}</p> : null}
-      {kind === "files" ? <LibraryFileUpload workspaceId={workspaceId} citadelId={citadelId} /> : null}
+      {kind === "files" ? (
+        <>
+          <LibraryFileUpload workspaceId={workspaceId} citadelId={citadelId} />
+          <LibraryFileTemplates workspaceId={workspaceId} citadelId={citadelId} />
+        </>
+      ) : null}
       <form
         className="flex flex-wrap items-end gap-2"
         onSubmit={(event) => {
@@ -130,9 +185,44 @@ function LibraryResourceDirectory({
             </select>
           </label>
         ) : null}
+        {kind === "artifacts" ? (
+          <label className="text-sm text-fg-secondary">
+            Recorded source
+            <select
+              className="mt-1 block min-h-10 rounded-md border border-line bg-raised px-2 text-fg"
+              value={sourceSurface}
+              onChange={(event) => {
+                if (!access.current()) return;
+                reset();
+                const next = new URLSearchParams(route.search);
+                next.set("shell", "cockpit");
+                next.delete("shellScope");
+                if (event.target.value === "all") next.delete("sourceSurface");
+                else next.set("sourceSurface", event.target.value);
+                route.navigate(route.pathname + (next.size ? "?" + next : "") + route.hash);
+              }}
+            >
+              <option value="all">All recorded sources</option>
+              <option value="chat">Conversation</option>
+              <option value="cowork">Planning history</option>
+              <option value="code">Code history</option>
+              {!sourceAvailable ? (
+                <option value={sourceSurface} disabled>
+                  Unsupported recorded source
+                </option>
+              ) : null}
+            </select>
+          </label>
+        ) : null}
         <Button type="submit">Apply filter</Button>
       </form>
-      {view.phase === "loading" ? (
+      {kind === "artifacts" && !sourceAvailable ? (
+        <EmptyState
+          title="Artifact source filter unavailable"
+          description="Choose a supported recorded source to inspect this artifact directory."
+        />
+      ) : null}
+      {view.phase === "loading" && (kind !== "artifacts" || sourceAvailable) ? (
         <p role="status" className="text-sm text-fg-muted">
           Loading {TITLES[kind].toLowerCase()}…
         </p>
@@ -217,12 +307,6 @@ function LibraryResourceDirectory({
           ) : null}
         </>
       ) : null}
-      <ClassicOwnerLink
-        className="text-sm font-medium text-accent hover:underline"
-        href={`/library/${kind}?shell=classic`}
-        scope={JSON.stringify([workspaceId, citadelId, kind])}
-        label={`Open ${TITLES[kind].toLowerCase()} management`}
-      />
       <Sheet
         open={Boolean(selection)}
         onOpenChange={(open) => {

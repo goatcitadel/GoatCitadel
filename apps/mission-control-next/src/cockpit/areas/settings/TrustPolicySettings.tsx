@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { resolveCockpitContinuation } from "../../app/cockpit-compatibility";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { useTrustPolicySnapshot } from "../../../features/native-routes/settings/use-trust-policy-snapshot";
 import { buildTrustPolicyRows } from "../../../features/native-routes/settings/trust-policy-rows";
 import {
@@ -28,12 +28,12 @@ const PAGE_SIZE = 48;
 const fieldClass = "mt-1 block min-h-11 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg";
 const OWNER_LINKS: Record<string, string> = {
   "Settings / Permissions": "/settings/safety#permission-profile",
-  "Settings / Tools": "/settings/tools?shell=classic",
+  "Settings / Tools": "/settings/safety#approval-mode",
   "Settings / MCP": "/settings/connections#mcp-servers",
-  "Settings / Add-ons": "/settings/addons?shell=classic",
-  "Library / Capabilities": "/library/capabilities?shell=classic",
+  "Settings / Add-ons": "/settings/connections#addons",
+  "Library / Capabilities": "/library?shell=cockpit",
   "Library / Skills": "/library?type=skill&shell=cockpit",
-  "Ops / Approvals": "/ops/approvals?shell=classic",
+  "Ops / Approvals": "/inbox?view=history&shell=cockpit",
 };
 
 export function TrustPolicySettings() {
@@ -50,7 +50,11 @@ export function TrustPolicySettings() {
     [rows, search, statusFilter, kindFilter],
   );
   const selected = rows.find((row) => row.id === selectedId);
-  const ownerHref = selected && OWNER_LINKS[selected.owner ?? ""];
+  const destination = selected && OWNER_LINKS[selected.owner ?? ""];
+  const owner = destination
+    ? resolveCockpitContinuation(destination, { search: window.location.search, hash: window.location.hash })
+    : undefined;
+  const ownerHref = owner?.kind === "native" ? owner.href : undefined;
   return (
     <section
       id="trust-policy"
@@ -213,26 +217,12 @@ export function TrustPolicySettings() {
         {selected && data ? (
           <>
             <TrustEvidenceDetail row={selected} />
-            {ownerHref?.includes("shell=classic") ? (
-              <ClassicOwnerLink
-                href={ownerHref}
-                scope={selected.id}
-                label={`Open ${selected.owner} in detailed settings`}
-                className="mt-4 inline-block text-sm font-medium text-accent hover:underline"
-              />
-            ) : ownerHref ? (
+            {ownerHref ? (
               <a
                 href={ownerHref}
                 className="mt-4 inline-block text-sm font-medium text-accent hover:underline"
                 onClick={(event) => {
-                  if (
-                    event.button !== 0 ||
-                    event.metaKey ||
-                    event.ctrlKey ||
-                    event.shiftKey ||
-                    event.altKey
-                  )
-                    return;
+                  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                   event.preventDefault();
                   setSelectedId(null);
                   navigate(ownerHref);

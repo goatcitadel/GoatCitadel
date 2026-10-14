@@ -5,7 +5,12 @@ import {
   applyArchitectureServiceAllowances,
   readArchitectureServiceAllowances,
 } from "./architecture-service-allowances.mjs";
-import { compareArchitectureMetrics, countDependencyMemberAccesses, countHostMemberAccesses, readArchitectureMetricsBaseline } from "./architecture-metrics.mjs";
+import {
+  compareArchitectureMetrics,
+  countDependencyMemberAccesses,
+  countHostMemberAccesses,
+  readArchitectureMetricsBaseline,
+} from "./architecture-metrics.mjs";
 
 const baseline = await readArchitectureMetricsBaseline();
 const document = await readArchitectureServiceAllowances();
@@ -15,7 +20,10 @@ test("native settlement integration preserves the original protected protocol ow
   const path = "apps/gateway/src/services/remote-worker-assignment-execution-protocol-service.ts";
   const source = await fs.readFile(new URL(`../../../${path}`, import.meta.url), "utf8");
   assert.ok(countDependencyMemberAccesses(source, path) <= baseline.dependencyMemberAccessesByFile[path]);
-  assert.ok(!document.entries.some(item => item.path === path), "Existing owner cannot receive a new-service allowance");
+  assert.ok(
+    !document.entries.some((item) => item.path === path),
+    "Existing owner cannot receive a new-service allowance",
+  );
 });
 
 test("reviewed new owner gets only its explicit allowance without changing the baseline", () => {
@@ -117,7 +125,10 @@ test("cockpit Inbox allowance retains raw coupling within its reviewed limits", 
     measured.totalDependencyMemberAccesses - baseline.totalDependencyMemberAccesses,
   );
   assert.deepEqual(comparison.regressions, []);
-  assert.deepEqual(comparison.newServiceAllowances.find((item) => item.path === path), reviewed);
+  assert.deepEqual(
+    comparison.newServiceAllowances.find((item) => item.path === path),
+    reviewed,
+  );
 });
 
 test("cockpit allowance rejects exhausted caps, neighboring steps, and existing owners", () => {
@@ -130,8 +141,11 @@ test("cockpit allowance rejects exhausted caps, neighboring steps, and existing 
     const measured = applyArchitectureServiceAllowances(baseline, document);
     measured[perFile][reviewed.path]++;
     measured[total]++;
-    assert.ok(compareArchitectureMetrics(measured, baseline, document).regressions
-      .some((message) => message.includes(reviewed.path)));
+    assert.ok(
+      compareArchitectureMetrics(measured, baseline, document).regressions.some((message) =>
+        message.includes(reviewed.path),
+      ),
+    );
   }
   for (const planStep of [
     "mission-control-cockpit",
@@ -192,8 +206,11 @@ test("Phase 0d child allowance fails exhaustion, unreviewed neighboring steps an
     const measured = applyArchitectureServiceAllowances(baseline, document);
     measured[perFile][reviewed.path]++;
     measured[total]++;
-    assert.ok(compareArchitectureMetrics(measured, baseline, document).regressions
-      .some((message) => message.includes(reviewed.path)));
+    assert.ok(
+      compareArchitectureMetrics(measured, baseline, document).regressions.some((message) =>
+        message.includes(reviewed.path),
+      ),
+    );
   }
   for (const planStep of [
     "mission-control-cockpit:phase-0",
@@ -219,12 +236,16 @@ test("Phase 0d child allowance fails exhaustion, unreviewed neighboring steps an
 
 test("inherited setup registration admits exactly the reviewed owners with unchanged previous limits", async () => {
   const reviewed = document.entries.filter((item) => item.planStep === "llama-cpp-setup:settings-owner");
-  assert.deepEqual(reviewed.map((item) => [item.path, item.maxDependencyMemberAccesses, item.maxHostCallbacks]), [
-    ["apps/gateway/src/services/llama-cpp-setup-selection-service.ts", 5, 0],
-    ["apps/gateway/src/services/llama-cpp-setup-service.ts", 11, 0],
-  ]);
+  assert.deepEqual(
+    reviewed.map((item) => [item.path, item.maxDependencyMemberAccesses, item.maxHostCallbacks]),
+    [
+      ["apps/gateway/src/services/llama-cpp-setup-selection-service.ts", 5, 0],
+      ["apps/gateway/src/services/llama-cpp-setup-service.ts", 11, 0],
+    ],
+  );
   const previous = applyArchitectureServiceAllowances(baseline, {
-    ...document, entries: document.entries.filter((item) => item.planStep !== "llama-cpp-setup:settings-owner"),
+    ...document,
+    entries: document.entries.filter((item) => item.planStep !== "llama-cpp-setup:settings-owner"),
   });
   const effective = applyArchitectureServiceAllowances(baseline, document);
   for (const item of reviewed) {
@@ -251,8 +272,11 @@ test("setup registration rejects other paths, misleading steps, existing owners 
       const measured = applyArchitectureServiceAllowances(baseline, document);
       measured[perFile][item.path]++;
       measured[total]++;
-      assert.ok(compareArchitectureMetrics(measured, baseline, document).regressions
-        .some((message) => message.includes(item.path)));
+      assert.ok(
+        compareArchitectureMetrics(measured, baseline, document).regressions.some((message) =>
+          message.includes(item.path),
+        ),
+      );
     }
     for (const patch of [
       { path: "apps/gateway/src/services/unreviewed-setup-owner.ts" },
@@ -275,11 +299,14 @@ test("setup registration rejects other paths, misleading steps, existing owners 
 
 test("Phase 0d registers only the three reviewed extraction paths and fixed measured caps", async () => {
   const reviewed = document.entries.filter((item) => item.planStep === "mission-control-cockpit:phase-0d");
-  assert.deepEqual(reviewed.map((item) => [item.path, item.maxDependencyMemberAccesses, item.maxHostCallbacks]), [
-    ["apps/gateway/src/services/orchestration-phase-child-service.ts", 7, 6],
-    ["apps/gateway/src/services/orchestration-phase-harvest-service.ts", 5, 0],
-    ["apps/gateway/src/services/runtime-llama-setup-change.ts", 11, 0],
-  ]);
+  assert.deepEqual(
+    reviewed.map((item) => [item.path, item.maxDependencyMemberAccesses, item.maxHostCallbacks]),
+    [
+      ["apps/gateway/src/services/orchestration-phase-child-service.ts", 7, 6],
+      ["apps/gateway/src/services/orchestration-phase-harvest-service.ts", 5, 0],
+      ["apps/gateway/src/services/runtime-llama-setup-change.ts", 11, 0],
+    ],
+  );
   for (const item of reviewed) {
     const source = await fs.readFile(new URL(`../../../${item.path}`, import.meta.url), "utf8");
     assert.ok(source.trimEnd().split(/\r?\n/u).length <= 400);
@@ -306,8 +333,40 @@ test("Phase 0d registers only the three reviewed extraction paths and fixed meas
       const measured = applyArchitectureServiceAllowances(baseline, document);
       measured[perFile][item.path]++;
       measured[total]++;
-      assert.ok(compareArchitectureMetrics(measured, baseline, document).regressions
-        .some((message) => message.includes(item.path)));
+      assert.ok(
+        compareArchitectureMetrics(measured, baseline, document).regressions.some((message) =>
+          message.includes(item.path),
+        ),
+      );
     }
+  }
+});
+test("Cockpit artifact/report owners preserve existing ceilings and have exact reviewed new-owner allowances", async () => {
+  const owners = [
+    ["apps/gateway/src/services/dashboard-readers.ts", 0, 1],
+    ["apps/gateway/src/services/html-artifact-critique-service.ts", 0, 7],
+    ["apps/gateway/src/services/html-artifact-render-service.ts", 0, 11],
+    ["apps/gateway/src/services/chat-artifact-renders-route-service.ts", 0, 3],
+    ["apps/gateway/src/services/gateway-route-composition-artifact-renders.ts", 0, 7],
+    ["apps/gateway/src/services/prompt-pack/focused-report-readers.ts", 0, 5],
+  ];
+  for (const [path, host, dependency] of owners) {
+    const reviewed = document.entries.find((entry) => entry.path === path);
+    assert.ok(reviewed);
+    assert.equal(reviewed.maxHostCallbacks, host);
+    assert.equal(reviewed.maxDependencyMemberAccesses, dependency);
+    assert.ok(!document.existingServicePaths.includes(path));
+    const source = await fs.readFile(new URL("../../../" + path, import.meta.url), "utf8");
+    assert.ok(countHostMemberAccesses(source, path) <= host);
+    assert.ok(countDependencyMemberAccesses(source, path) <= dependency);
+  }
+  for (const [path, cap] of [
+    ["apps/gateway/src/services/gateway-route-composition-chat.ts", 141],
+    ["apps/gateway/src/services/prompt-pack-service.ts", 240],
+  ]) {
+    assert.equal(baseline.dependencyMemberAccessesByFile[path], cap);
+    assert.ok(!document.entries.some((entry) => entry.path === path));
+    const source = await fs.readFile(new URL("../../../" + path, import.meta.url), "utf8");
+    assert.ok(countDependencyMemberAccesses(source, path) <= cap);
   }
 });

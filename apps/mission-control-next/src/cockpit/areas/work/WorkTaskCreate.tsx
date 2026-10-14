@@ -6,7 +6,8 @@ import { taskCreateDraftKey } from "../../../features/native-routes/ops/work-for
 import { useQueryClient } from "@tanstack/react-query";
 import type { TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { useTaskCreate } from "../../../features/native-routes/ops/use-task-create";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { readCockpitLocation } from "../../app/cockpit-back-guard";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
@@ -24,16 +25,28 @@ export function WorkTaskCreate({
   onCreated: (task: TaskRecord) => void;
   accessAvailable?: boolean;
 }) {
+  const { search, hash } = typeof window === "undefined" ? { search: "", hash: "" } : readCockpitLocation();
+  const recoveryParams = new URLSearchParams(search);
+  recoveryParams.set("workspaceId", workspaceId);
+  recoveryParams.delete("taskId");
+  recoveryParams.delete("shell");
+  recoveryParams.delete("shellScope");
+  const recoveryHref = "/work" + "?" + recoveryParams + hash;
   const client = useQueryClient();
   const { activeCitadelId } = useUiPreferences();
   const empty = { title: "", description: "", priority: "normal" as TaskRecord["priority"] };
   const editor = useSessionDraft(
-    taskCreateDraftKey(getGatewayApiBaseUrl(), workspaceId, activeCitadelId), empty, undefined,
+    taskCreateDraftKey(getGatewayApiBaseUrl(), workspaceId, activeCitadelId),
+    empty,
+    undefined,
     { label: "New task" },
   );
   const { title, description, priority } = editor.value;
-  const control = useTaskCreate({ workspaceId, viewIdentity: activeCitadelId, draft: editor.value,
-    onRecorded: (_task, submitted) => editor.acceptSaved(empty, undefined, submitted) ? empty : undefined,
+  const control = useTaskCreate({
+    workspaceId,
+    viewIdentity: activeCitadelId,
+    draft: editor.value,
+    onRecorded: (_task, submitted) => (editor.acceptSaved(empty, undefined, submitted) ? empty : undefined),
   });
   const { locked, uncertain, message } = control;
   const edit: typeof editor.setValue = (update) => {
@@ -57,7 +70,9 @@ export function WorkTaskCreate({
     <section aria-label="New task" className="grid gap-3 rounded-lg border border-line-strong bg-raised p-4">
       <div>
         <h2 className="font-display text-lg font-semibold text-fg">New task</h2>
-        <p className="text-sm text-fg-secondary">Add an operator task to this workspace. Creating a task does not start a runtime run.</p>
+        <p className="text-sm text-fg-secondary">
+          Add an operator task to this workspace. Creating a task does not start a runtime run.
+        </p>
       </div>
       {message ? (
         <p
@@ -68,7 +83,13 @@ export function WorkTaskCreate({
         </p>
       ) : null}
       {uncertain ? (
-        <ClassicOwnerLink href="/ops/kanban?shell=classic" scope={workspaceId} label="Review tasks in the classic view" />
+        <NativeOwnerLink
+          href={recoveryHref}
+          scope={workspaceId}
+          className="inline-block text-sm text-accent hover:underline"
+        >
+          Inspect workspace tasks
+        </NativeOwnerLink>
       ) : null}
       <form onSubmit={submit} className="grid gap-3">
         <label className="grid gap-1 text-sm text-fg-secondary">

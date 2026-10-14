@@ -291,6 +291,8 @@ function cleanupLiveVoiceConnection(connection: LiveVoiceConnection | null): voi
 }
 
 export function useChatMultimodalControls(input: {
+  /** Native disclosures request readiness on intent; compatibility callers retain eager reads. */
+  deferVoiceReadiness?: boolean;
   providerOptions: ChatModelProviderOption[];
   selectedProviderId?: string;
   preferredImageProviderId?: string;
@@ -332,6 +334,10 @@ export function useChatMultimodalControls(input: {
   const liveVoiceConnectionRef = useRef<LiveVoiceConnection | null>(null);
   const liveVoiceStartRef = useRef<PendingLiveVoiceStart | null>(null);
   const primedSessionIdRef = useRef<string | null>(null);
+  const [mediaReadinessRequested, setMediaReadinessRequested] = useState(false);
+  const onMediaControlsOpenChange = useCallback((open: boolean) => {
+    if (open) setMediaReadinessRequested(true);
+  }, []);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
   const [voiceRuntime, setVoiceRuntime] = useState<VoiceRuntimeStatus | null>(null);
   const [voiceBusy, setVoiceBusy] = useState(false);
@@ -436,12 +442,16 @@ export function useChatMultimodalControls(input: {
         : "Voice runtime ready"
       : voiceRuntime?.readiness === "broken"
         ? "Voice runtime needs repair"
-        : "Voice runtime unavailable";
+        : voiceRuntime
+          ? "Voice runtime unavailable"
+          : "Voice readiness not confirmed";
   const voiceUnavailableReason = voiceInputAvailable
     ? null
-    : voiceRuntime?.readiness === "broken"
-      ? "Voice runtime is installed but incomplete. Repair it in Configure > Runtime."
-      : "Voice runtime is not ready yet. Install a local voice model in Configure > Runtime.";
+    : !voiceRuntime
+      ? "Voice readiness has not been confirmed yet."
+      : voiceRuntime.readiness === "broken"
+        ? "Voice runtime is installed but incomplete. Repair it in Configure > Runtime."
+        : "Voice runtime is not ready yet. Install a local voice model in Configure > Runtime.";
 
   const refreshVoiceState = useCallback(async () => {
     try {
@@ -455,8 +465,8 @@ export function useChatMultimodalControls(input: {
   }, []);
 
   useEffect(() => {
-    void refreshVoiceState();
-  }, [refreshVoiceState]);
+    if (!input.deferVoiceReadiness || mediaReadinessRequested) void refreshVoiceState();
+  }, [input.deferVoiceReadiness, mediaReadinessRequested, refreshVoiceState]);
 
   useEffect(
     () => () => {
@@ -906,6 +916,7 @@ export function useChatMultimodalControls(input: {
   );
 
   return {
+    onMediaControlsOpenChange,
     audioInputRef,
     voiceBusy,
     liveVoiceActive,

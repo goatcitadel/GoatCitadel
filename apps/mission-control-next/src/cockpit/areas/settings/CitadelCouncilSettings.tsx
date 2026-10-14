@@ -2,13 +2,25 @@ import { useId } from "react";
 import { useCitadelCouncil } from "../../../features/native-routes/library/use-citadel-council";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { CitadelAccessReview } from "./CitadelAccessReview";
 
 export function CitadelCouncilSettings({ citadelId }: { citadelId: string }) {
   const c = useCitadelCouncil(citadelId),
     selectId = useId(),
     review = c.review;
+  const { search, hash } = useCockpitRoute();
+  const { activeWorkspaceId } = useUiPreferences();
+  const agentParameters = new URLSearchParams(search);
+  agentParameters.set("citadelId", citadelId);
+  if (activeWorkspaceId) agentParameters.set("workspaceId", activeWorkspaceId);
+  if (c.selectedSeat?.agentId) agentParameters.set("agentId", c.selectedSeat.agentId);
+  else agentParameters.delete("agentId");
+  agentParameters.delete("view");
+  agentParameters.delete("shell");
+  agentParameters.delete("shellScope");
   const notice = (
     <>
       {c.access.error ? (
@@ -171,7 +183,12 @@ export function CitadelCouncilSettings({ citadelId }: { citadelId: string }) {
           >
             Review seat removal
           </Button>
-          <ClassicOwnerLink href="/library/agents?shell=classic" scope={citadelId} label="Open agent catalog" />
+          <NativeOwnerLink
+            href={`/library/agents?${agentParameters}${hash}`}
+            scope={[citadelId, c.selectedSeat?.assignmentId, c.selectedSeat?.agentId]}
+          >
+            Open agent catalog
+          </NativeOwnerLink>
         </div>
       </Dialog>
       <Dialog

@@ -1,7 +1,12 @@
 import { resolveCockpitCompatibility } from "./cockpit-compatibility";
 import { SHELL_HISTORY_POSITION, SHELL_NAVIGATION_EVENTS } from "../../app/shell-transition";
-import { buildSettingsIndex } from "../areas/settings/settings-index";
-import { COCKPIT_LOCATION_EVENT, afterCockpitSheetsClose, nextCockpitPosition, readCockpitLocation } from "./cockpit-back-guard";
+import { buildSettingsDestinations } from "../areas/settings/settings-destinations";
+import {
+  COCKPIT_LOCATION_EVENT,
+  afterCockpitSheetsClose,
+  nextCockpitPosition,
+  readCockpitLocation,
+} from "./cockpit-back-guard";
 import type { CockpitNavigationOptions } from "./cockpit-navigation-context";
 
 export { COCKPIT_LOCATION_EVENT };
@@ -54,7 +59,7 @@ export function retainsSettingsPage(from: string, to: string): boolean {
   const target = new URL(targetHref, "http://cockpit.invalid");
   if (source.pathname !== target.pathname || source.search !== target.search || source.hash === target.hash)
     return false;
-  const page = buildSettingsIndex().find((candidate) => source.pathname === `/settings/${candidate.id}`);
+  const page = buildSettingsDestinations().find((candidate) => source.pathname === `/settings/${candidate.id}`);
   return Boolean(
     page &&
     page.entries.some((entry) => {
@@ -67,7 +72,11 @@ export function retainsSettingsPage(from: string, to: string): boolean {
 }
 
 /** Internal commit for current reviewed frame/link capabilities and bound canonical Chat synchronization. */
-export function commitCockpitNavigation(href: string, options?: CockpitNavigationOptions, isCurrent: () => boolean = () => true): boolean {
+export function commitCockpitNavigation(
+  href: string,
+  options?: CockpitNavigationOptions,
+  isCurrent: () => boolean = () => true,
+): boolean {
   if (!isCurrent()) return false;
   const destination = cockpitHref(href);
   if (!destination) return false;

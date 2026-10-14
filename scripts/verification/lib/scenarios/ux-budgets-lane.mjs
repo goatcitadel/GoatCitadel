@@ -1,3 +1,4 @@
+import { runCockpitPerformanceProof } from "./cockpit-performance-proof.mjs";
 import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 import { selectCockpitOwnerProofs } from "./ux-budget-owner-proofs.mjs";
 import { CHAT_VIEWPORTS, UX_BUDGET_ENFORCEMENT_DEFAULTS } from "./ux-budget-measurements.mjs";
@@ -65,6 +66,7 @@ export async function runUxBudgetsLane(context, options = {}, deps) {
     const fixture = await seedMissionControlNextFixture(stack.gatewayUrl, { runtimeRoot: stack.runtimeRoot });
     browser = await chromium.launch({ headless: true });
 
+    if (options.performanceOnly) { await runCockpitPerformanceProof({ context, browser, stack, fixture, deps, startupDiagnosticOnly:options.startupDiagnosticOnly === true }); return; }
     if (options.ownerControlsOnly) {
       const proof = {
         context,

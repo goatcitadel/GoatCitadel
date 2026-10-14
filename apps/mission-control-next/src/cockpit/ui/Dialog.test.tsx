@@ -29,6 +29,7 @@ describe("Dialog", () => {
     });
     const dialog = document.body.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
+    expect(dialog?.getAttribute("aria-modal")).toBe("true");
     expect(dialog?.textContent).toContain("Command palette");
     expect(dialog?.querySelector('button[aria-label="Close dialog"]')).not.toBeNull();
   });

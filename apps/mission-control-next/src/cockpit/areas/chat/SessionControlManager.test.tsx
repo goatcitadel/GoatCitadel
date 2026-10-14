@@ -5,6 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import type { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { SessionControlManager } from "./SessionControlManager";
+import * as clientCore from "@goatcitadel/mission-control-shared/api/client-core";
+import {
+  getGatewayCallerScope,
+  setGatewayCallerScope,
+  notifyGatewayAccessChanged,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 
 const NOW = "2026-07-14T12:00:00.000Z";
 const operator = (generation = 1) => ({
@@ -269,3 +275,79 @@ describe("cockpit session control", () => {
     expect(button("Review handoff")).toBeUndefined();
   });
 });
+
+it.each(["workspace", "session"])(
+  "withholds mismatched canonical %s control and private controller fields",
+  async (field) => {
+    status.value.data = {
+      control: {
+        ...external(),
+        ...(field === "workspace" ? { workspaceId: "foreign" } : { sessionId: "foreign" }),
+        boundExternalController: { ...external().boundExternalController, clientInstanceId: "PRIVATE FOREIGN CLIENT" },
+      },
+      pendingRequests: [],
+    };
+    await act(async () => root.render(<SessionControlManager sessionId="session-a" workspaceId="workspace-a" />));
+    expect(container.textContent).toContain("No control actions are available");
+    expect(container.textContent).not.toContain("PRIVATE FOREIGN CLIENT");
+    expect(button("Review revoke")).toBeUndefined();
+    expect(api.revokeSessionControl).not.toHaveBeenCalled();
+  },
+);
+it("sends nothing when the fresh canonical pre-dispatch read belongs to another workspace", async () => {
+  status.value.data = { control: external(), pendingRequests: [] };
+  api.fetchSessionControlDetail.mockResolvedValue({
+    control: { ...external(), workspaceId: "foreign" },
+    pendingRequests: [],
+  });
+  await act(async () => root.render(<SessionControlManager sessionId="session-a" workspaceId="workspace-a" />));
+  await click("Review revoke");
+  await confirm();
+  expect(api.revokeSessionControl).not.toHaveBeenCalled();
+  expect(container.textContent).toContain(
+    "The control state does not match this session and workspace, so nothing was sent.",
+  );
+});
+it.each(["session", "workspace", "caller", "gateway", "access"])(
+  "invalidates the reviewed action across a %s change while its canonical read is pending",
+  async (change) => {
+    let resolveRead!: (value: unknown) => void;
+    api.fetchSessionControlDetail.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRead = resolve;
+      }),
+    );
+    status.value.data = { control: external(), pendingRequests: [] };
+    const caller = getGatewayCallerScope();
+    let gatewaySpy: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      await act(async () => root.render(<SessionControlManager sessionId="session-a" workspaceId="workspace-a" />));
+      await click("Review revoke");
+      await act(async () => {
+        modal!.onConfirm();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        if (change === "gateway")
+          gatewaySpy = vi.spyOn(clientCore, "getGatewayApiBaseUrl").mockReturnValue("http://different-gateway.invalid");
+        else if (change === "caller") setGatewayCallerScope(caller + ":different");
+        else if (change === "access") notifyGatewayAccessChanged();
+        else
+          root.render(
+            <SessionControlManager
+              sessionId={change === "session" ? "session-b" : "session-a"}
+              workspaceId={change === "workspace" ? "workspace-b" : "workspace-a"}
+            />,
+          );
+      });
+      await act(async () => {
+        resolveRead({ control: external(), pendingRequests: [] });
+        await Promise.resolve();
+      });
+      expect(api.revokeSessionControl).not.toHaveBeenCalled();
+    } finally {
+      gatewaySpy?.mockRestore();
+      await act(async () => setGatewayCallerScope(caller));
+    }
+  },
+);

@@ -79,8 +79,13 @@ function candidateListResponse() {
 let latest: ExternalSourceAttachmentsState | null = null;
 const pushLocalNotice = vi.fn();
 
-function Harness(props: { sessionId?: string | null; sessionIncarnationId?: string | null }) {
+function Harness(props: {
+  deferCandidates?: boolean;
+  sessionId?: string | null;
+  sessionIncarnationId?: string | null;
+}) {
   latest = useExternalSourceAttachments({
+    deferCandidates: props.deferCandidates,
     workspaceId: "workspace-1",
     sessionId: props.sessionId === undefined ? "session-1" : props.sessionId,
     sessionIncarnationId: props.sessionIncarnationId,
@@ -116,14 +121,26 @@ describe("useExternalSourceAttachments", () => {
   it("admits only one source mutation at a time and refreshes its receipt", async () => {
     apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([], "incarnation-1"));
     let resolveFirst!: () => void;
-    apiMocks.attachExternalSourceToSession.mockImplementationOnce(() => new Promise<void>(resolve => { resolveFirst = resolve; }));
+    apiMocks.attachExternalSourceToSession.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
     const renderer = await renderHarness();
     let first!: Promise<boolean>;
-    await act(async () => { first = latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "first" }); });
-    await act(async () => { expect(await latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "second" })).toBe(false); });
+    await act(async () => {
+      first = latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "first" });
+    });
+    await act(async () => {
+      expect(await latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "second" })).toBe(false);
+    });
     expect(apiMocks.attachExternalSourceToSession).toHaveBeenCalledTimes(1);
     expect(latest!.busyAttachmentId).toBe("attach:first");
-    await act(async () => { resolveFirst(); expect(await first).toBe(true); });
+    await act(async () => {
+      resolveFirst();
+      expect(await first).toBe(true);
+    });
     expect(apiMocks.fetchExternalSessionAttachments).toHaveBeenCalledTimes(2);
     expect(latest!.busyAttachmentId).toBeNull();
     act(() => renderer.unmount());
@@ -446,26 +463,39 @@ describe("useExternalSourceAttachments", () => {
 });
 
 it.each([401, 403])("explains authoritative access failure %s without automatic retry", async (status) => {
- apiMocks.fetchExternalSessionAttachments.mockRejectedValue(new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/chat/sessions/session-1/external-source-attachments", status }));
- const renderer = await renderHarness();
- expect(latest!.error).toContain("Settings > Access");
- expect(latest!.canMutate).toBe(false);
- expect(apiMocks.fetchExternalSessionAttachments).toHaveBeenCalledTimes(1);
- renderer.unmount();
+  apiMocks.fetchExternalSessionAttachments.mockRejectedValue(
+    new ApiRequestError("Denied", {
+      kind: "http",
+      method: "GET",
+      path: "/api/v1/chat/sessions/session-1/external-source-attachments",
+      status,
+    }),
+  );
+  const renderer = await renderHarness();
+  expect(latest!.error).toContain("Settings > Access");
+  expect(latest!.canMutate).toBe(false);
+  expect(apiMocks.fetchExternalSessionAttachments).toHaveBeenCalledTimes(1);
+  renderer.unmount();
 });
 
 it("keeps source changes available after the Gateway refuses one and shows its summary", async () => {
   apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([attachment("a1")], "incarnation-1"));
   apiMocks.detachExternalSourceAttachment
-    .mockRejectedValueOnce(new ApiRequestError("API error 409", { kind: "http", method: "DELETE", path: "/x", status: 409 }))
+    .mockRejectedValueOnce(
+      new ApiRequestError("API error 409", { kind: "http", method: "DELETE", path: "/x", status: 409 }),
+    )
     .mockResolvedValue({ disposition: "detached" });
   const renderer = await renderHarness();
-  await act(async () => { expect(await latest!.detach("a1")).toBe(false); });
+  await act(async () => {
+    expect(await latest!.detach("a1")).toBe(false);
+  });
   expect(latest!.canMutate).toBe(true);
   expect(latest!.error).toContain("This changed somewhere else");
   expect(latest!.error).not.toContain("uncertain");
   expect(pushLocalNotice).toHaveBeenCalledWith(expect.stringContaining("This changed somewhere else"), "warning");
-  await act(async () => { expect(await latest!.detach("a1")).toBe(true); });
+  await act(async () => {
+    expect(await latest!.detach("a1")).toBe(true);
+  });
   expect(apiMocks.detachExternalSourceAttachment).toHaveBeenCalledTimes(2);
   expect(latest!.error).toBeNull();
   act(() => renderer.unmount());
@@ -473,17 +503,25 @@ it("keeps source changes available after the Gateway refuses one and shows its s
 
 it("dismisses a lost-response lock only on explicit request", async () => {
   apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([attachment("a1")], "incarnation-1"));
-  apiMocks.detachExternalSourceAttachment.mockRejectedValueOnce(new Error("Lost response")).mockResolvedValue({ disposition: "detached" });
+  apiMocks.detachExternalSourceAttachment
+    .mockRejectedValueOnce(new Error("Lost response"))
+    .mockResolvedValue({ disposition: "detached" });
   const renderer = await renderHarness();
-  await act(async () => { expect(await latest!.detach("a1")).toBe(false); });
+  await act(async () => {
+    expect(await latest!.detach("a1")).toBe(false);
+  });
   expect(latest!.canMutate).toBe(false);
   expect(latest!.error).toContain("uncertain");
   expect(latest!.error).toContain("reloaded");
   expect(latest!.error).not.toContain("refreshing does not settle");
-  await act(async () => { expect(latest!.dismissUncertainOperation()).toBe(true); });
+  await act(async () => {
+    expect(latest!.dismissUncertainOperation()).toBe(true);
+  });
   expect(latest!.canMutate).toBe(true);
   expect(latest!.error).toBeNull();
-  await act(async () => { expect(await latest!.detach("a1")).toBe(true); });
+  await act(async () => {
+    expect(await latest!.detach("a1")).toBe(true);
+  });
   expect(apiMocks.detachExternalSourceAttachment).toHaveBeenCalledTimes(2);
   act(() => renderer.unmount());
 });
@@ -492,14 +530,63 @@ it("retains uncertain source attempts across remount and refreshed incarnation",
   apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([attachment("a1")], "incarnation-1"));
   apiMocks.detachExternalSourceAttachment.mockRejectedValue(new Error("Lost response"));
   let renderer = await renderHarness();
-  await act(async () => { expect(await latest!.detach("a1")).toBe(false); });
+  await act(async () => {
+    expect(await latest!.detach("a1")).toBe(false);
+  });
   act(() => renderer.unmount());
-  apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([attachment("a1", { revision: 2 })], "incarnation-2"));
+  apiMocks.fetchExternalSessionAttachments.mockResolvedValue(
+    listResponse([attachment("a1", { revision: 2 })], "incarnation-2"),
+  );
   renderer = await renderHarness();
   expect(latest!.canMutate).toBe(false);
   expect(latest!.error).toContain("uncertain");
-  await act(async () => { expect(await latest!.detach("a1")).toBe(false); await latest!.reload(); });
+  await act(async () => {
+    expect(await latest!.detach("a1")).toBe(false);
+    await latest!.reload();
+  });
   expect(latest!.canMutate).toBe(false);
   expect(apiMocks.detachExternalSourceAttachment).toHaveBeenCalledTimes(1);
   act(() => renderer.unmount());
+});
+
+describe("native candidate discovery intent", () => {
+  it("reads attachment authority at startup and candidates only once the picker opens without clearing selection", async () => {
+    apiMocks.fetchExternalSessionAttachments.mockResolvedValue(
+      listResponse([attachment("attached-1")], "incarnation-1"),
+    );
+    apiMocks.fetchExternalSourceAttachmentCandidates.mockResolvedValue(candidateListResponse());
+    const renderer = await renderHarness({ deferCandidates: true });
+    expect(apiMocks.fetchExternalSessionAttachments).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchExternalSourceAttachmentCandidates).not.toHaveBeenCalled();
+    expect(latest!.canMutate).toBe(true);
+    act(() => latest!.toggleSelection("attached-1"));
+    await act(async () => latest!.loadCandidates());
+    expect(apiMocks.fetchExternalSourceAttachmentCandidates).toHaveBeenCalledTimes(1);
+    expect(latest!.candidates).toHaveLength(1);
+    expect(latest!.selectedAttachmentIds).toEqual(["attached-1"]);
+    await act(async () => latest!.loadCandidates());
+    expect(apiMocks.fetchExternalSourceAttachmentCandidates).toHaveBeenCalledTimes(1);
+    await act(async () => renderer.unmount());
+  });
+});
+
+it("resets candidate discovery and retained selection for a newly selected session", async () => {
+  apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([attachment("first")], "incarnation-1"));
+  apiMocks.fetchExternalSourceAttachmentCandidates.mockResolvedValue(candidateListResponse());
+  const renderer = await renderHarness({ deferCandidates: true });
+  await act(async () => latest!.loadCandidates());
+  act(() => latest!.toggleSelection("first"));
+  const next = attachment("second", { sessionId: "session-2" });
+  apiMocks.fetchExternalSessionAttachments.mockResolvedValue({
+    ...listResponse([next], "incarnation-2"),
+    sessionId: "session-2",
+  });
+  await act(async () => renderer.update(<Harness deferCandidates sessionId="session-2" />));
+  expect(latest!.selectedAttachmentIds).toEqual([]);
+  expect(latest!.candidates).toEqual([]);
+  expect(apiMocks.fetchExternalSourceAttachmentCandidates).toHaveBeenCalledTimes(1);
+  await act(async () => latest!.loadCandidates());
+  expect(apiMocks.fetchExternalSourceAttachmentCandidates).toHaveBeenLastCalledWith("session-2", "workspace-1", 100);
+  expect(apiMocks.fetchExternalSourceAttachmentCandidates).toHaveBeenCalledTimes(2);
+  await act(async () => renderer.unmount());
 });

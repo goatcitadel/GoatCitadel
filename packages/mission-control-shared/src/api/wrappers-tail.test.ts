@@ -150,6 +150,18 @@ describe("shared API wrapper tail coverage", () => {
       approvals.fetchApprovals({ status: "pending", workspaceId: "workspace-a" }),
       "/api/v1/approvals?status=pending&workspaceId=workspace-a",
     );
+    await expectCall(
+      approvals.fetchApprovals({
+        workspaceId: " ws ",
+        runId: " run/one ",
+        sessionId: " session:two ",
+        status: "approved",
+        cursor: "opaque",
+        limit: 100,
+      }),
+      "/api/v1/approvals?status=approved&limit=100&cursor=opaque&workspaceId=ws&runId=run%2Fone&sessionId=session%3Atwo",
+    );
+    await expectCall(approvals.fetchApprovals({ runId: " ", sessionId: " " }), "/api/v1/approvals");
     await expectCall(approvals.resolveApproval("approval/1", "approve"), "/api/v1/approvals/approval%2F1/resolve", {
       method: "POST",
     });
@@ -239,10 +251,14 @@ describe("shared API wrapper tail coverage", () => {
       method: "POST",
     });
     await expectCall(mcp.fetchMcpServer("server/1"), "/api/v1/mcp/servers/server%2F1", { cache: "no-store" });
-    await expectCall(mcp.updateMcpServer("server/1", { enabled: true, expectedRevision: "a".repeat(64) }), "/api/v1/mcp/servers/server%2F1", {
-      method: "PATCH",
-      body: JSON.stringify({ enabled: true, expectedRevision: "a".repeat(64) }),
-    });
+    await expectCall(
+      mcp.updateMcpServer("server/1", { enabled: true, expectedRevision: "a".repeat(64) }),
+      "/api/v1/mcp/servers/server%2F1",
+      {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: true, expectedRevision: "a".repeat(64) }),
+      },
+    );
     await expectCall(
       mcp.updateMcpServerPolicy("server/1", { blockedToolPatterns: ["write*"], expectedRevision: "a".repeat(64) }),
       "/api/v1/mcp/servers/server%2F1/policy",
@@ -250,7 +266,10 @@ describe("shared API wrapper tail coverage", () => {
         method: "PATCH",
       },
     );
-    await expectCall(mcp.deleteMcpServer("server/1", "a".repeat(64)), "/api/v1/mcp/servers/server%2F1", { method: "DELETE", body: JSON.stringify({ expectedRevision: "a".repeat(64) }) });
+    await expectCall(mcp.deleteMcpServer("server/1", "a".repeat(64)), "/api/v1/mcp/servers/server%2F1", {
+      method: "DELETE",
+      body: JSON.stringify({ expectedRevision: "a".repeat(64) }),
+    });
     await expectCall(mcp.connectMcpServer("server/1"), "/api/v1/mcp/servers/server%2F1/connect", { method: "POST" });
     await expectCall(mcp.disconnectMcpServer("server/1"), "/api/v1/mcp/servers/server%2F1/disconnect", {
       method: "POST",
@@ -271,8 +290,16 @@ describe("shared API wrapper tail coverage", () => {
       method: "POST",
     });
     const review = { expectedRevision: "a".repeat(64), expectedConnectionRevision: null };
-    await expectCall(mcp.connectReviewedMcpServer("server/1", review), "/api/v1/mcp/servers/server%2F1/connect-reviewed", { method: "POST", body: JSON.stringify(review) });
-    await expectCall(mcp.disconnectReviewedMcpServer("server/1", review), "/api/v1/mcp/servers/server%2F1/disconnect-reviewed", { method: "POST", body: JSON.stringify(review) });
+    await expectCall(
+      mcp.connectReviewedMcpServer("server/1", review),
+      "/api/v1/mcp/servers/server%2F1/connect-reviewed",
+      { method: "POST", body: JSON.stringify(review) },
+    );
+    await expectCall(
+      mcp.disconnectReviewedMcpServer("server/1", review),
+      "/api/v1/mcp/servers/server%2F1/disconnect-reviewed",
+      { method: "POST", body: JSON.stringify(review) },
+    );
 
     await expectCall(operatorsAgentsFiles.fetchOperators(), "/api/v1/operators");
     await expectCall(operatorsAgentsFiles.fetchAgents("all", 10), "/api/v1/agents?view=all&limit=10");
@@ -353,10 +380,14 @@ describe("shared API wrapper tail coverage", () => {
       body: JSON.stringify({ expectedRevision: 17, budgetMode: "saver" }),
     });
     await expectCall(settings.fetchPersonalities(), "/api/v1/personalities");
-    await expectCall(settings.createPersonality({ expectedRevision: "a".repeat(64), label: "Calm" }), "/api/v1/personalities", {
-      method: "POST",
-      body: JSON.stringify({ expectedRevision: "a".repeat(64), label: "Calm" }),
-    });
+    await expectCall(
+      settings.createPersonality({ expectedRevision: "a".repeat(64), label: "Calm" }),
+      "/api/v1/personalities",
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision: "a".repeat(64), label: "Calm" }),
+      },
+    );
     await expectCall(
       settings.updatePersonality("personality/1", { expectedRevision: "a".repeat(64), label: "Sharp" }),
       "/api/v1/personalities/personality%2F1",
@@ -365,10 +396,14 @@ describe("shared API wrapper tail coverage", () => {
         body: JSON.stringify({ expectedRevision: "a".repeat(64), label: "Sharp" }),
       },
     );
-    await expectCall(settings.deletePersonality("personality/1", "a".repeat(64)), "/api/v1/personalities/personality%2F1", {
-      method: "DELETE",
-      body: JSON.stringify({ expectedRevision: "a".repeat(64) }),
-    });
+    await expectCall(
+      settings.deletePersonality("personality/1", "a".repeat(64)),
+      "/api/v1/personalities/personality%2F1",
+      {
+        method: "DELETE",
+        body: JSON.stringify({ expectedRevision: "a".repeat(64) }),
+      },
+    );
     await expectCall(settings.setDefaultPersonality("personality/1", "a".repeat(64)), "/api/v1/personalities/default", {
       method: "PATCH",
       body: JSON.stringify({ personalityId: "personality/1", expectedRevision: "a".repeat(64) }),
@@ -389,7 +424,10 @@ describe("shared API wrapper tail coverage", () => {
     await expectCall(system.verifyBackup("backup.zip"), "/api/v1/admin/backups/verify", { method: "POST" });
     await expectCall(system.fetchCostSummary(), "/api/v1/costs/summary?scope=day");
     await expectCall(system.fetchCostSummary("agent"), "/api/v1/costs/summary?scope=agent");
-    await expectCall(system.fetchModelUsageEvents("workspace/a", "2026-10-01T00:00:00Z", "2026-10-06T00:00:00Z"), "/api/v1/ops/workspaces/workspace%2Fa/model-usage?from=2026-10-01T00%3A00%3A00Z&to=2026-10-06T00%3A00%3A00Z&limit=50");
+    await expectCall(
+      system.fetchModelUsageEvents("workspace/a", "2026-10-01T00:00:00Z", "2026-10-06T00:00:00Z"),
+      "/api/v1/ops/workspaces/workspace%2Fa/model-usage?from=2026-10-01T00%3A00%3A00Z&to=2026-10-06T00%3A00%3A00Z&limit=50",
+    );
     await expectCall(system.runCheaper(), "/api/v1/costs/run-cheaper", { method: "POST" });
     await expectCall(system.fetchRealtimeEvents(20, " cursor "), "/api/v1/events?limit=20&cursor=cursor");
     await expectCall(system.fetchDashboardState(), "/api/v1/dashboard/state");

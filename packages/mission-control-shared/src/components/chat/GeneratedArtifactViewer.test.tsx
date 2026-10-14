@@ -3,7 +3,13 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { GeneratedArtifactViewer, hardenMermaidSvg, isSafeSvgLinkTarget } from "./GeneratedArtifactViewer";
+import {
+  GeneratedArtifactViewer,
+  GeneratedArtifactActionsContext,
+  hardenMermaidSvg,
+  isSafeSvgLinkTarget,
+} from "./GeneratedArtifactViewer";
+import { GeneratedArtifactActionsContext as ArtifactActionsLeaf } from "./GeneratedArtifactActionsContext";
 
 describe("isSafeSvgLinkTarget", () => {
   it("allows fragment, http(s), mailto, and relative targets", () => {
@@ -115,3 +121,51 @@ it.each(["text", "code", "mermaid", "html"] as const)(
     }
   },
 );
+
+describe("artifact action context owner identity", () => {
+  it.each([
+    ["legacy", GeneratedArtifactActionsContext],
+    ["leaf", ArtifactActionsLeaf],
+  ] as const)(
+    "keeps the same public context and executes the host-supplied %s provider action",
+    async (_name, Context) => {
+      expect(GeneratedArtifactActionsContext).toBe(ArtifactActionsLeaf);
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = createRoot(host);
+      const artifact = {
+        artifactId: "context-owned",
+        title: "Exact artifact",
+        kind: "text",
+        content: "source bytes",
+        version: 1,
+        sourceSurface: "chat",
+        createdAt: "2026-10-13T00:00:00Z",
+      } as ChatGeneratedArtifactRecord;
+      const onAction = vi.fn();
+      const renderAction = vi.fn((record: ChatGeneratedArtifactRecord) => (
+        <button type="button" onClick={() => onAction(record.artifactId)}>
+          Critique {record.title}
+        </button>
+      ));
+      try {
+        await act(async () =>
+          root.render(
+            <Context.Provider value={renderAction}>
+              <GeneratedArtifactViewer artifact={artifact} />
+            </Context.Provider>,
+          ),
+        );
+        expect(renderAction).toHaveBeenCalledWith(artifact);
+        const action = host.querySelector<HTMLButtonElement>(".generated-artifact-actions button")!;
+        expect(action.textContent).toBe("Critique Exact artifact");
+        await act(async () => action.click());
+        expect(onAction).toHaveBeenCalledExactlyOnceWith("context-owned");
+        expect(host.querySelector('[role="region"]')?.textContent).toBe(artifact.content);
+      } finally {
+        await act(async () => root.unmount());
+        host.remove();
+      }
+    },
+  );
+});

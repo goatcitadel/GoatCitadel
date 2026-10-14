@@ -25,7 +25,7 @@ import { Button } from "../../ui/Button";
 import { Field } from "../../ui/Field";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { readCockpitLocation } from "../../app/cockpit-back-guard";
 
 type ExportPlatform = "Activepieces" | "n8n";
 const EXPORT_PLATFORMS: readonly ExportPlatform[] = ["Activepieces", "n8n"];
@@ -37,15 +37,16 @@ type ExportResult = {
 
 export function WorkAutomation() {
   const { activeWorkspaceId } = useUiPreferences();
-  return (
-    <AutomationWorkspace
-      key={activeWorkspaceId ?? "default"}
-      workspaceId={activeWorkspaceId ?? "default"}
-    />
-  );
+  return <AutomationWorkspace key={activeWorkspaceId ?? "default"} workspaceId={activeWorkspaceId ?? "default"} />;
 }
 function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
   const { activeCitadelId } = useUiPreferences();
+  const location = typeof window === "undefined" ? { search: "", hash: "" } : readCockpitLocation();
+  const scheduleParams = new URLSearchParams(location.search);
+  scheduleParams.set("workspaceId", workspaceId);
+  scheduleParams.delete("shell");
+  scheduleParams.delete("shellScope");
+  const scheduleHref = "/work/schedules?" + scheduleParams + location.hash;
   const workspaceName = useWorkspaceName(activeCitadelId, workspaceId);
   const base = getGatewayApiBaseUrl();
   const editor = useSessionDraft(
@@ -105,15 +106,11 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
         if (!current()) return;
         setExports((current) => ({ ...current, [platform]: { identity, platform, value } }));
         if (value.validation.status === "blocked") {
-          setMessage(
-            `${platform} export is blocked. Review the validation checks before importing.`,
-          );
+          setMessage(`${platform} export is blocked. Review the validation checks before importing.`);
           return;
         }
         if (!navigator.clipboard?.writeText) {
-          setMessage(
-            "Template generated; clipboard is unavailable. Export content remains in Technical details.",
-          );
+          setMessage("Template generated; clipboard is unavailable. Export content remains in Technical details.");
           return;
         }
         await navigator.clipboard.writeText(value.content);
@@ -141,9 +138,8 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
       <h1 className="font-display text-xl font-semibold text-fg">Automation Designer</h1>
       <p className="text-sm text-fg-secondary">
         Draft a reviewable recipe for <span title={workspaceId}>{workspaceName ?? `workspace ${workspaceId}`}</span>.
-        Preview and template export do not
-        create a schedule, activate capabilities, import into an external service, or prove
-        execution. Gateway governance still applies.
+        Preview and template export do not create a schedule, activate capabilities, import into an external service, or
+        prove execution. Gateway governance still applies.
       </p>
       {(Object.keys(labels) as (keyof typeof labels)[]).map((key) => (
         <Field key={key} label={labels[key]}>
@@ -175,9 +171,11 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
           <h2 className="font-display text-lg font-semibold text-fg">{preview.recipe.name}</h2>
           <p>{preview.recipe.goal}</p>
           <p>
-            Timing intent: {preview.recipe.scheduleIntent ?? "Not specified"}. Limits:{" "}
-            {preview.estimatedLimits.maxRuntimeMinutes} minutes,{" "}
-            {preview.estimatedLimits.maxIterations} iterations.
+            {"Timing intent: "}
+            {preview.recipe.scheduleIntent ?? "Not specified"}
+            {". Limits:"} {preview.estimatedLimits.maxRuntimeMinutes}
+            {" minutes,"} {preview.estimatedLimits.maxIterations}
+            {" iterations."}
           </p>
           <p>
             Missing capabilities:{" "}
@@ -199,7 +197,7 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
               Copy n8n template
             </Button>
           </div>
-          <NativeOwnerLink scope={[workspaceId, preview.plan.planId]} href="/work/schedules">
+          <NativeOwnerLink scope={[workspaceId, preview.plan.planId]} href={scheduleHref}>
             Open schedule controls
           </NativeOwnerLink>
           <TechnicalDetails>
@@ -209,40 +207,34 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
       ) : null}
       {EXPORT_PLATFORMS.map((platform) => exports[platform]).map((exported) =>
         exported?.identity === identity ? (
-        <section key={exported.platform} className="grid gap-2 rounded-md border border-line p-3">
-          <h2 className="font-medium text-fg">
-            {exported.platform} export validation: {exported.value.validation.status}
-          </h2>
-          <p>
-            Native import compatibility: {exported.value.validation.nativeImportCompatibility}.
-            Operator import required; no webhook trigger.
-          </p>
-          <ul>
-            {formatWorkflowTemplateExportProofItems(exported.platform, exported.value).map(
-              (item, index) => (
+          <section key={exported.platform} className="grid gap-2 rounded-md border border-line p-3">
+            <h2 className="font-medium text-fg">
+              {exported.platform} export validation: {exported.value.validation.status}
+            </h2>
+            <p>
+              Native import compatibility: {exported.value.validation.nativeImportCompatibility}. Operator import
+              required; no webhook trigger.
+            </p>
+            <ul>
+              {formatWorkflowTemplateExportProofItems(exported.platform, exported.value).map((item, index) => (
                 <li key={index}>
                   <>
-                    <span className="font-medium">
-                      {item.title.replace("copied artifact", "generated artifact")}
-                    </span>
+                    <span className="font-medium">{item.title.replace("copied artifact", "generated artifact")}</span>
                     <p>{item.meta}</p>
                     <p>{item.body}</p>
                   </>
                 </li>
-              ),
-            )}
-          </ul>
-          <TechnicalDetails label="Export content">
-            <pre className="overflow-auto">{exported.value.content}</pre>
-          </TechnicalDetails>
-        </section>
+              ))}
+            </ul>
+            <TechnicalDetails label="Export content">
+              <pre className="overflow-auto">{exported.value.content}</pre>
+            </TechnicalDetails>
+          </section>
         ) : null,
       )}
-      <ClassicOwnerLink
-        href="/ops/schedules?shell=classic"
-        scope={workspaceId}
-        label="Classic schedule and automation fallback"
-      />
+      <NativeOwnerLink href={scheduleHref} scope={workspaceId}>
+        Browse schedules
+      </NativeOwnerLink>
     </section>
   );
 }

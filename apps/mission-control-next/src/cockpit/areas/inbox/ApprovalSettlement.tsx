@@ -6,7 +6,8 @@ import { useProjectAccess } from "../../../features/native-routes/projects/use-p
 import { readApprovalFollowOn } from "./approval-follow-on";
 import { approvalDecisionMessage, approvalResolutionLine } from "./approval-settlement";
 import { Button } from "../../ui/Button";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 
 export function ApprovalSettlement({
@@ -19,6 +20,14 @@ export function ApprovalSettlement({
   onFollowOnChange?: () => void;
 }) {
   const access = useProjectAccess(workspaceId);
+  const route = useCockpitRoute();
+  const decisionParams = new URLSearchParams(route.search);
+  decisionParams.set("approvalId", approval.approvalId);
+  decisionParams.set("workspaceId", workspaceId);
+  decisionParams.set("view", "history");
+  decisionParams.delete("shell");
+  decisionParams.delete("shellScope");
+  const decisionHref = `/inbox?${decisionParams}${route.hash}`;
   const query = useQuery({
     queryKey: ["approval-settlement", workspaceId, approval.approvalId, access.identity],
     queryFn: () => readApprovalFollowOn(approval, workspaceId, access.current),
@@ -104,11 +113,9 @@ export function ApprovalSettlement({
         Refresh follow-on work
       </Button>
       <div className="pt-3">
-        <ClassicOwnerLink
-          href={`/ops/approvals?approvalId=${encodeURIComponent(approval.approvalId)}&shell=classic`}
-          scope={JSON.stringify([access.identity, approval.approvalId])}
-          label="Inspect decision and execution record"
-        />
+        <NativeOwnerLink href={decisionHref} scope={JSON.stringify([access.identity, approval.approvalId])}>
+          Inspect decision and execution record
+        </NativeOwnerLink>
       </div>
     </section>
   );

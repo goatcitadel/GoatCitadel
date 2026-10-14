@@ -17,6 +17,7 @@ import { useChatStreamPreferences } from "./useChatStreamPreferences";
 import { useChatSubmissionComposition } from "./useChatSubmissionComposition";
 
 type Input = {
+  workspaceId: string;
   selection: Pick<ReturnType<typeof useChatSessionSelection>, "selectedSessionId">;
   session: Pick<
     ReturnType<typeof useChatSessionComposition>,
@@ -68,6 +69,7 @@ type Input = {
 
 /** Composes outbound and approval owners, publishing execution and blocker refs before restoration runs. */
 export function useChatOutboundComposition({
+  workspaceId,
   selection,
   session,
   selectedTurnId,
@@ -133,6 +135,7 @@ export function useChatOutboundComposition({
   const { setSpecialistSuggestions } = contextActions;
 
   const outbound = useChatOutboundExecution({
+    workspaceId,
     sessionConfig: {
       surfaceMode: submission.outboundSurfaceMode,
       selectedSessionId: selection.selectedSessionId,

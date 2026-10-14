@@ -43,6 +43,8 @@ import {
  * after the send succeeds (failed/aborted sends retain the selection).
  */
 export interface UseExternalSourceAttachmentsInput {
+  /** Native picker discovery is optional; attachment/incarnation authority still loads immediately. */
+  deferCandidates?: boolean;
   workspaceId: string;
   sessionId: string | null;
   /**
@@ -81,6 +83,7 @@ export interface ExternalSourceAttachmentsState {
   /** Effective session incarnation (freshest list-carried value, else the host seam); null until known. */
   sessionIncarnationId: string | null;
   reload: () => Promise<void>;
+  loadCandidates: () => Promise<void>;
   toggleSelection: (attachmentId: string) => void;
   clearSelection: () => void;
   attach: (seed: ExternalSourceAttachInputSeed) => Promise<boolean>;
@@ -102,7 +105,13 @@ function describeAttachmentLabel(attachment: ExternalSessionAttachmentRecord): s
 export function useExternalSourceAttachments(input: UseExternalSourceAttachmentsInput): ExternalSourceAttachmentsState {
   const { workspaceId, sessionId, pushLocalNotice } = input;
   const attempt = useScopedOperation(JSON.stringify(["external-attachments", workspaceId, sessionId]));
-  const { current: currentAccess, identity: accessIdentity, locked: operationLocked, run: runOperation, dismissUncertain } = attempt;
+  const {
+    current: currentAccess,
+    identity: accessIdentity,
+    locked: operationLocked,
+    run: runOperation,
+    dismissUncertain,
+  } = attempt;
   const hostSessionIncarnationId = input.sessionIncarnationId ?? null;
   const [loadedIdentity, setLoadedIdentity] = useState<string>();
   const liveScope = loadedIdentity === accessIdentity && currentAccess();
@@ -119,6 +128,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
   // updates it; a session switch or capability absence resets it to null so a
   // stale value can never authorize a mutation on the wrong session.
   const [listSessionIncarnationId, setListSessionIncarnationId] = useState<string | null>(null);
+  const candidateIntentRef = useRef(!input.deferCandidates);
   const loadSequenceRef = useRef(0);
   const scopeGenerationRef = useRef(0);
   const mutationSequenceRef = useRef(0);
@@ -147,6 +157,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
         const next = current.filter((id) => liveIds.has(id));
         return next.length === current.length ? current : next;
       });
+      if (!candidateIntentRef.current) return;
       try {
         const candidateList = await fetchExternalSourceAttachmentCandidates(sessionId, workspaceId, 100);
         if (loadSequenceRef.current !== loadId || !currentAccess()) {
@@ -163,7 +174,9 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
           setCandidatesSupported(false);
         } else {
           setCandidatesSupported(true);
-          setError(describeApiError(candidateError, "Eligible imported external items are unavailable right now.").summary);
+          setError(
+            describeApiError(candidateError, "Eligible imported external items are unavailable right now.").summary,
+          );
         }
       }
     } catch (loadError) {
@@ -189,7 +202,14 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
     }
   }, [sessionId, workspaceId, accessIdentity, currentAccess]);
 
+  const loadCandidates = useCallback(async () => {
+    if (candidateIntentRef.current || !sessionId || !currentAccess()) return;
+    candidateIntentRef.current = true;
+    await reload();
+  }, [currentAccess, reload, sessionId]);
+
   useEffect(() => {
+    candidateIntentRef.current = !input.deferCandidates;
     scopeGenerationRef.current += 1;
     loadSequenceRef.current += 1;
     setLoadedIdentity(undefined);
@@ -211,7 +231,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       scopeGenerationRef.current += 1;
       loadSequenceRef.current += 1;
     };
-  }, [reload, sessionId]);
+  }, [reload, sessionId, input.deferCandidates]);
 
   const toggleSelection = useCallback(
     (attachmentId: string) => {
@@ -238,7 +258,13 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
   // takes precedence over the host seam; the seam remains a fallback for
   // runtimes whose list response does not carry the field yet.
   const sessionIncarnationId = listSessionIncarnationId ?? hostSessionIncarnationId;
-  const canMutate = liveScope && supported === true && Boolean(sessionId) && Boolean(sessionIncarnationId) && !operationLocked && currentAccess();
+  const canMutate =
+    liveScope &&
+    supported === true &&
+    Boolean(sessionId) &&
+    Boolean(sessionIncarnationId) &&
+    !operationLocked &&
+    currentAccess();
 
   const runMutation = useCallback(
     async (
@@ -253,14 +279,24 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       const isCurrent = () => scopeGenerationRef.current === scope && currentAccess();
       setBusyAttachmentId(busyKey);
       try {
-        const completed = await runOperation(sessionIncarnationId ?? "missing", async () => { if (!isCurrent()) throw new Error("The source conversation changed."); }, async () => { await operation(isCurrent); return true; });
+        const completed = await runOperation(
+          sessionIncarnationId ?? "missing",
+          async () => {
+            if (!isCurrent()) throw new Error("The source conversation changed.");
+          },
+          async () => {
+            await operation(isCurrent);
+            return true;
+          },
+        );
         if (!completed) return false;
         if (isCurrent()) await reload();
         return true;
       } catch (mutationError) {
         if (!isCurrent()) return false;
         // The shared operation owner rethrows a user-facing error; classify the Gateway cause behind it.
-        const cause = mutationError instanceof Error && mutationError.cause !== undefined ? mutationError.cause : mutationError;
+        const cause =
+          mutationError instanceof Error && mutationError.cause !== undefined ? mutationError.cause : mutationError;
         if (isExternalSourceCapabilityAbsent(cause)) {
           setSupported(false);
           setAttachments([]);
@@ -278,7 +314,10 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
         pushLocalNotice?.(failureNotice + " Outcome is uncertain; no automatic retry will run.", "warning");
         return false;
       } finally {
-        if (isCurrent() && mutationSequenceRef.current === mutation) { mutationActiveRef.current = false; setBusyAttachmentId(null); }
+        if (isCurrent() && mutationSequenceRef.current === mutation) {
+          mutationActiveRef.current = false;
+          setBusyAttachmentId(null);
+        }
       }
     },
     [pushLocalNotice, reload, currentAccess, operationLocked, runOperation, sessionIncarnationId],
@@ -419,7 +458,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
     () => ({
       supported,
       loading,
-      error: operationLocked ? attempt.attempt?.message ?? error : error,
+      error: operationLocked ? (attempt.attempt?.message ?? error) : error,
       attachments: liveScope ? attachments : [],
       candidates: liveScope ? candidates : [],
       candidatesSupported,
@@ -428,6 +467,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       canMutate,
       sessionIncarnationId,
       reload,
+      loadCandidates,
       toggleSelection,
       clearSelection,
       attach,
@@ -438,7 +478,9 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       handleOutboundExternalContextSent,
     }),
     [
-      liveScope, operationLocked, attempt.attempt?.message,
+      liveScope,
+      operationLocked,
+      attempt.attempt?.message,
       supported,
       loading,
       error,
@@ -450,6 +492,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       canMutate,
       sessionIncarnationId,
       reload,
+      loadCandidates,
       toggleSelection,
       clearSelection,
       attach,

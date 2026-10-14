@@ -51,6 +51,13 @@ vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   }),
 }));
 
+async function ready() {
+  await act(async () => {
+    await import("./CommandPaletteView");
+  });
+  await vi.waitFor(() => expect(document.querySelector("[cmdk-input]")).not.toBeNull());
+}
+
 let root: Root;
 let container: HTMLDivElement;
 
@@ -74,7 +81,7 @@ afterEach(() => {
 });
 
 describe("CommandPalette", () => {
-  it("shows each source still searching on its own, keeping other groups", () => {
+  it("shows each source still searching on its own, keeping other groups", async () => {
     controls.search.groups = [
       { id: "threads", label: "Conversations", items: [], coverage: "", searching: true },
       {
@@ -85,31 +92,35 @@ describe("CommandPalette", () => {
       },
     ];
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    await ready();
     const threads = document.querySelector<HTMLElement>('section[aria-label="Conversations search coverage"]')!;
     expect(threads.textContent).toContain("Searching…");
     expect(threads.textContent).not.toContain("No matches");
     expect(document.body.textContent).toContain("Needle note");
   });
-  it("keeps the last known Gateway default while it is read again and beside a failed read", () => {
+  it("keeps the last known Gateway default while it is read again and beside a failed read", async () => {
     controls.read = { isFetching: true, isError: false, dataUpdatedAt: Date.now() };
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    await ready();
     expect(document.body.textContent).toContain("Gateway default: local / recorded-model.");
     expect(document.body.textContent).not.toContain("Reading Gateway default…");
     controls.read = { isFetching: false, isError: true, dataUpdatedAt: Date.now() };
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    await ready();
     expect(document.body.textContent).toContain(
       "Gateway default: local / recorded-model. Showing the last version from",
     );
   });
 
-  it("names the workspace instead of printing its id", () => {
+  it("names the workspace instead of printing its id", async () => {
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    await ready();
     const text = document.querySelector('[role="dialog"]')!.textContent ?? "";
     expect(text).toContain("Workspace: Research.");
     expect(text).not.toContain("workspace-a");
   });
 
-  it("does not replay a confirmed creation that was already opened before this palette open", () => {
+  it("does not replay a confirmed creation that was already opened before this palette open", async () => {
     const opened = {
       state: "confirmed",
       message: "Conversation created and independently verified.",
@@ -119,20 +130,23 @@ describe("CommandPalette", () => {
     controls.attempt = opened;
     act(() => root.render(<CommandPalette open={false} onOpenChange={() => undefined} />));
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    await ready();
     expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain("Conversation created");
     controls.attempt = { ...opened, sessionId: "s2" };
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    await ready();
     expect(document.querySelector('[role="dialog"]')!.textContent).toContain("Conversation created");
   });
 
-  it("keeps an unconfirmed creation visible so it is never retried blindly", () => {
+  it("keeps an unconfirmed creation visible so it is never retried blindly", async () => {
     controls.attempt = { state: "unknown", message: "Creation outcome is unconfirmed.", mode: "chat" };
     act(() => root.render(<CommandPalette open={false} onOpenChange={() => undefined} />));
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    await ready();
     expect(document.querySelector('[role="dialog"]')!.textContent).toContain("Creation outcome is unconfirmed.");
   });
 
-  it.each(["Enter", " "])("keeps disclosure activation %j separate from the selected New chat command", (key) => {
+  it.each(["Enter", " "])("keeps disclosure activation %j separate from the selected New chat command", async (key) => {
     controls.search.groups = [
       {
         id: "threads",
@@ -144,6 +158,7 @@ describe("CommandPalette", () => {
     act(() => {
       root.render(<CommandPalette open onOpenChange={() => undefined} />);
     });
+    await ready();
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
     const selected = dialog.querySelector<HTMLElement>('[cmdk-item][aria-selected="true"]')!;
     expect(selected.textContent).toMatch(/^New chat/);
@@ -199,6 +214,7 @@ describe("CommandPalette", () => {
     act(() => {
       root.render(<CommandPalette open onOpenChange={() => undefined} />);
     });
+    await ready();
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
     const report = await axe.run(dialog, { runOnly: ["aria-required-children", "aria-required-parent"] });
     expect(report.violations.map(({ id, nodes }) => ({ id, nodes: nodes.map(({ html }) => html) }))).toEqual([]);
@@ -217,10 +233,11 @@ describe("CommandPalette", () => {
     expect(controls.navigate).toHaveBeenCalledWith("/chat?shell=cockpit&sessionId=session-a");
   });
 
-  it("uses the real cmdk input label while keeping the dialog name distinct", () => {
+  it("uses the real cmdk input label while keeping the dialog name distinct", async () => {
     act(() => {
       root.render(<CommandPalette open onOpenChange={() => undefined} />);
     });
+    await ready();
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
     const input = dialog?.querySelector<HTMLInputElement>('input[role="combobox"][cmdk-input]');
     expect(dialog).not.toBeNull();
@@ -235,16 +252,24 @@ describe("CommandPalette", () => {
     expect(dialogLabel).not.toBe(inputLabel);
   });
 
-  it("hides command groups with no match instead of stacking empty headings above a record hit", () => {
+  it("hides command groups with no match instead of stacking empty headings above a record hit", async () => {
     controls.search.groups = [
       {
         id: "library",
         label: "Library capabilities",
         coverage: "Bounded window.",
-        items: [{ id: "c1", label: "Schedules capability", description: "Capability", target: { href: "/library/capabilities" } }],
+        items: [
+          {
+            id: "c1",
+            label: "Schedules capability",
+            description: "Capability",
+            target: { href: "/library/capabilities" },
+          },
+        ],
       },
     ];
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    await ready();
     const input = document.querySelector<HTMLInputElement>("[cmdk-input]")!;
     act(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "sched");
@@ -258,14 +283,19 @@ describe("CommandPalette", () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "theme");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    expect([...document.querySelectorAll("[cmdk-group-heading]")].map((node) => node.textContent)).toContain("Preferences");
-    expect([...document.querySelectorAll("[cmdk-group-heading]")].map((node) => node.textContent)).not.toContain("Commands");
+    expect([...document.querySelectorAll("[cmdk-group-heading]")].map((node) => node.textContent)).toContain(
+      "Preferences",
+    );
+    expect([...document.querySelectorAll("[cmdk-group-heading]")].map((node) => node.textContent)).not.toContain(
+      "Commands",
+    );
   });
 
-  it("offers all areas and the classic view", () => {
+  it("offers all areas and the classic view", async () => {
     act(() => {
       root.render(<CommandPalette open onOpenChange={() => undefined} />);
     });
+    await ready();
     const body = document.body.textContent ?? "";
     for (const label of [
       "Go to Chat",
@@ -283,11 +313,12 @@ describe("CommandPalette", () => {
     expect(body).toContain("New chat");
   });
 
-  it("dispatches explicit owner actions and preserves the guarded classic handoff", () => {
+  it("dispatches explicit owner actions and preserves the guarded classic handoff", async () => {
     const close = vi.fn();
     act(() => {
       root.render(<CommandPalette open onOpenChange={close} />);
     });
+    await ready();
     const click = (text: string) => {
       const item = [...document.querySelectorAll<HTMLElement>("[cmdk-item]")].find((node) =>
         node.textContent?.startsWith(text),

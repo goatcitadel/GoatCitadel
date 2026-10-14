@@ -59,6 +59,7 @@ const control = (selector: string) => container.querySelector(selector);
 async function openOptions() {
   const trigger = control('button[aria-label="Model and reasoning options"]') as HTMLButtonElement;
   await act(async () => trigger.click());
+  await vi.waitFor(() => expect(document.querySelector('select[aria-label="Provider"]')).not.toBeNull());
 }
 const effortSelect = () => document.querySelector('select[aria-label="Thinking effort"]') as HTMLSelectElement;
 
@@ -71,7 +72,7 @@ describe("Chat composer controls", () => {
     expect(control('select[aria-label="Web search"]')).not.toBeNull();
     const trigger = control('button[aria-label="Model and reasoning options"]') as HTMLButtonElement;
     expect(trigger).not.toBeNull();
-    await act(async () => trigger.click());
+    await openOptions();
     expect(document.querySelector('select[aria-label="Provider"]')).not.toBeNull();
     expect(document.querySelector('select[aria-label="Thinking effort"]')).not.toBeNull();
     const plan = [...container.querySelectorAll("button")].find((button) => button.textContent === "Plan off")!;
@@ -93,28 +94,49 @@ describe("Chat composer controls", () => {
   });
 });
 
-it.each([[["high"], "extended"], [["xhigh"], "deep"], [["low", "medium", "high"], "minimal"]] as const)("offers only advertised effort values for %j and retains incompatible saved effort", async (catalog, supportedValue) => {
-  const input = props({ currentThinkingLevel: "off" });
-  await act(async () => root.render(<ChatComposerControls props={input} reasoningEfforts={[...catalog]} />));
-  await openOptions();
-  const select = effortSelect();
-  expect(select.value).toBe("off");
-  expect(select.selectedOptions[0]?.disabled).toBe(true);
-  expect(select.selectedOptions[0]?.textContent).toContain("current, unsupported");
-  expect([...select.options].filter((option) => !option.disabled).map((option) => option.value)).not.toContain("off");
-  await act(async () => { select.value = supportedValue; select.dispatchEvent(new Event("change", { bubbles: true })); });
-  expect(input.onSetThinkingLevel).toHaveBeenCalledExactlyOnceWith(supportedValue);
-});
+it.each([
+  [["high"], "extended"],
+  [["xhigh"], "deep"],
+  [["low", "medium", "high"], "minimal"],
+] as const)(
+  "offers only advertised effort values for %j and retains incompatible saved effort",
+  async (catalog, supportedValue) => {
+    const input = props({ currentThinkingLevel: "off" });
+    await act(async () => root.render(<ChatComposerControls props={input} reasoningEfforts={[...catalog]} />));
+    await openOptions();
+    const select = effortSelect();
+    expect(select.value).toBe("off");
+    expect(select.selectedOptions[0]?.disabled).toBe(true);
+    expect(select.selectedOptions[0]?.textContent).toContain("current, unsupported");
+    expect([...select.options].filter((option) => !option.disabled).map((option) => option.value)).not.toContain("off");
+    await act(async () => {
+      select.value = supportedValue;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(input.onSetThinkingLevel).toHaveBeenCalledExactlyOnceWith(supportedValue);
+  },
+);
 it("offers every thinking level with a support note when the catalog lists no efforts", async () => {
   const input = props({ currentThinkingLevel: "standard" });
   await act(async () => root.render(<ChatComposerControls props={input} />));
   await openOptions();
   const select = effortSelect();
   expect(select.disabled).toBe(false);
-  expect([...select.options].map((option) => option.value)).toEqual(["off", "minimal", "standard", "extended", "deep", "max", "ultra"]);
+  expect([...select.options].map((option) => option.value)).toEqual([
+    "off",
+    "minimal",
+    "standard",
+    "extended",
+    "deep",
+    "max",
+    "ultra",
+  ]);
   expect([...select.options].some((option) => option.disabled)).toBe(false);
   expect(select.closest("label")?.textContent).toContain("support unverified");
-  await act(async () => { select.value = "deep"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  await act(async () => {
+    select.value = "deep";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
   expect(input.onSetThinkingLevel).toHaveBeenCalledExactlyOnceWith("deep");
 });
 it("only offers Off when none is advertised and preserves the saved value across a model switch", async () => {
@@ -122,8 +144,11 @@ it("only offers Off when none is advertised and preserves the saved value across
   await act(async () => root.render(<ChatComposerControls props={input} reasoningEfforts={["none", "high"]} />));
   await openOptions();
   expect([...effortSelect().options].map((option) => option.value)).toEqual(["off", "extended"]);
-  await act(async () => root.render(<ChatComposerControls props={{ ...input, selectedModel: "other" }} reasoningEfforts={["xhigh"]} />));
+  await act(async () =>
+    root.render(<ChatComposerControls props={{ ...input, selectedModel: "other" }} reasoningEfforts={["xhigh"]} />),
+  );
   const select = effortSelect();
-  expect(select.value).toBe("extended"); expect(select.selectedOptions[0]?.disabled).toBe(true);
+  expect(select.value).toBe("extended");
+  expect(select.selectedOptions[0]?.disabled).toBe(true);
   expect(input.onSetThinkingLevel).not.toHaveBeenCalled();
 });

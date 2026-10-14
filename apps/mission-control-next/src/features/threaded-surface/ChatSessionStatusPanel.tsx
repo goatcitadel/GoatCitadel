@@ -1,6 +1,6 @@
 import type { ChatSessionStatusSection } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { StatusChip } from "../native-routes/primitives";
+import { StatusChip } from "../native-routes/primitives/StatusChip";
 
 type PanelState = NonNullable<MissionThreadedActiveSessionSurfaceProps["sessionStatusPanel"]>;
 

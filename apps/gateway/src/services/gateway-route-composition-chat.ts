@@ -1,3 +1,4 @@
+import { composeChatArtifactRenderDependencies } from "./gateway-route-composition-artifact-renders.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { CHAT_ROUTED_CONTEXT_TOOL_NAMES, NotFoundError } from "@goatcitadel/contracts";
@@ -7,8 +8,6 @@ import * as chatAttachmentService from "./chat-attachment-service.js";
 import * as chatCommandService from "./chat-command-service.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
 import * as chatHistoryService from "./chat-history-service.js";
-import * as htmlArtifactCritiqueService from "./html-artifact-critique-service.js";
-import * as htmlArtifactRenderService from "./html-artifact-render-service.js";
 import { logger } from "@goatcitadel/gateway-core";
 
 /** Critique turns dispatched from the artifact route, tracked until each settles. */
@@ -160,48 +159,13 @@ export function composeChatRouteDependencies(
       chatAttachmentService.readChatAttachmentContent(chatAttachmentHost, attachmentId),
     uploadChatAttachment: (input) => chatAttachmentService.uploadChatAttachment(chatAttachmentHost, input),
   };
-  const htmlArtifactRenderDependencies: htmlArtifactRenderService.HtmlArtifactRenderDependencies = {
-    config: gateway.config,
-    storage: gateway.storage,
-    getChatGeneratedArtifact: (artifactId, options) =>
-      chatGeneratedArtifactService.getChatGeneratedArtifact(ChatGeneratedArtifactDependencies, artifactId, options),
-    uploadChatAttachment: (input) => chatAttachmentService.uploadChatAttachment(chatAttachmentHost, input),
-  };
-  const htmlArtifactCritiqueDependencies: htmlArtifactCritiqueService.HtmlArtifactCritiqueDependencies = {
-    getChatGeneratedArtifact: htmlArtifactRenderDependencies.getChatGeneratedArtifact,
-    renderChatGeneratedArtifact: (artifactId, workspaceId) =>
-      htmlArtifactRenderService.renderChatGeneratedArtifact(htmlArtifactRenderDependencies, artifactId, workspaceId),
-    routePreflight: (sessionId, input) => gateway.chatTurnRuntime.routePreflight(sessionId, input),
-    providerSupportsVision: (providerId) =>
-      gateway.llmService
-        .listProviders()
-        .some((provider) => provider.providerId === providerId && provider.capabilities?.vision === true),
-    sendChatTurn: async (sessionId, input, turnIdentity, authenticatedOperator) =>
-      await gateway.chatTurnRuntime.agentSendChatMessage(
-        sessionId,
-        await gateway.resolveChatRunVariableInput(sessionId, input),
-        {
-          turnIdentity,
-          ...(authenticatedOperator ? { authenticatedOperator: authenticatedOperator as never } : {}),
-        },
-      ),
-    backgroundTasks: artifactCritiqueTasks,
-    log: artifactCritiqueLog,
-  };
-  const chatArtifactRenders: GatewayRouteServiceDependencies["chatArtifactRenders"] = {
-    renderChatGeneratedArtifact: (artifactId, workspaceId) =>
-      htmlArtifactRenderService.renderChatGeneratedArtifact(htmlArtifactRenderDependencies, artifactId, workspaceId),
-    listChatArtifactRenders: (artifactId, workspaceId) =>
-      htmlArtifactRenderService.listChatArtifactRenders(htmlArtifactRenderDependencies, artifactId, workspaceId),
-    critiqueChatGeneratedArtifact: (artifactId, workspaceId, actor, authenticatedOperator) =>
-      htmlArtifactCritiqueService.critiqueChatGeneratedArtifact(
-        htmlArtifactCritiqueDependencies,
-        artifactId,
-        workspaceId,
-        actor,
-        authenticatedOperator,
-      ),
-  };
+  const chatArtifactRenders = composeChatArtifactRenderDependencies(
+    gateway,
+    ChatGeneratedArtifactDependencies,
+    chatAttachmentHost,
+    artifactCritiqueTasks,
+    artifactCritiqueLog,
+  );
   const chatSessions: GatewayRouteServiceDependencies["chatSessions"] = {
     archiveChatSession: (sessionId, expectedRevision) =>
       chatSessionService.archiveChatSession(ChatSessionDependencies, sessionId, expectedRevision),

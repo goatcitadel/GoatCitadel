@@ -14,7 +14,6 @@ import {
 import { queryKeys } from "../../data/query-keys";
 import { durableRunWorkspaceId } from "../../data/durable-run-scope";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -30,7 +29,7 @@ import { formattedWorkTime } from "./work-format";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 
 export function WorkRunDetail({ runId }: { runId: string }) {
-  const { navigate } = useCockpitRoute();
+  const { navigate, search, hash } = useCockpitRoute();
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
   const trace = useQuery({
@@ -49,6 +48,22 @@ export function WorkRunDetail({ runId }: { runId: string }) {
       ? `${formatCostUsd(recordedCost)}+`
       : "Unknown";
   const ownerScope = JSON.stringify([workspaceId, runId]);
+  const runContextParams = new URLSearchParams(search);
+  runContextParams.set("workspaceId", workspaceId);
+  runContextParams.set("runId", runId);
+  if (sessionId) runContextParams.set("sessionId", sessionId);
+  else runContextParams.delete("sessionId");
+  runContextParams.delete("approvalId");
+  runContextParams.delete("shell");
+  runContextParams.delete("shellScope");
+  const approvalHistoryParams = new URLSearchParams(runContextParams);
+  approvalHistoryParams.set("view", "history");
+  const approvalHistoryHref = `/inbox?${approvalHistoryParams}${hash}`;
+  function approvalRecordHref(approvalId: string) {
+    const parameters = new URLSearchParams(approvalHistoryParams);
+    parameters.set("approvalId", approvalId);
+    return `/inbox?${parameters}${hash}`;
+  }
   return (
     <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
       <a
@@ -104,19 +119,20 @@ export function WorkRunDetail({ runId }: { runId: string }) {
                 <NativeOwnerLink
                   scope={[workspaceId, runId, sessionId]}
                   className="font-medium text-accent"
-                  href={`/chat?sessionId=${encodeURIComponent(sessionId)}&shell=cockpit`}
+                  href={`/chat?${runContextParams}${hash}`}
                 >
                   Open this conversation in Chat
                 </NativeOwnerLink>{" "}
                 for its conversation context.{" "}
               </>
             ) : null}
-            <ClassicOwnerLink
+            <NativeOwnerLink
               className="font-medium text-accent"
-              href="/ops/runtime?shell=classic"
+              href={`/system?${runContextParams}${hash}`}
               scope={ownerScope}
-              label="Open the classic runtime view"
-            />{" "}
+            >
+              Open runtime health in System
+            </NativeOwnerLink>{" "}
             to inspect host runtime status. Run controls and recorded errors are available here.
           </p>
           <WorkRunControls runId={runId} />
@@ -173,12 +189,9 @@ export function WorkRunDetail({ runId }: { runId: string }) {
           <section className="rounded-lg border border-line bg-raised p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-display text-lg font-semibold text-fg">Approvals</h2>
-              <ClassicOwnerLink
-                className="text-sm text-accent"
-                href="/ops/approvals?shell=classic"
-                scope={ownerScope}
-                label="Open approvals in the classic view"
-              />
+              <NativeOwnerLink className="text-sm text-accent" href={approvalHistoryHref} scope={ownerScope}>
+                Open approval history
+              </NativeOwnerLink>
             </div>
             {data.approvals.state !== "available" || data.approvals.missingIds?.length ? (
               <p className="mt-2 text-sm text-fg-muted">
@@ -199,7 +212,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
                       <span className="text-fg">{humanizeToken(approval.kind)}</span>
                       <NativeOwnerLink
                         scope={[workspaceId, runId, approval.approvalId]}
-                        href={`/inbox?approvalId=${encodeURIComponent(approval.approvalId)}`}
+                        href={approvalRecordHref(approval.approvalId)}
                       >
                         Review linked decision
                       </NativeOwnerLink>

@@ -1,0 +1,208 @@
+import type {
+  AuthSettingsUpdateInput,
+  AuthRuntimeSettings,
+  DeviceAccessGrantListResponse,
+  DeviceAccessGrantRevokeResponse,
+  GatewayInstallTokenResolution,
+  LlmProviderConfig,
+  LlmProviderRequestConfig,
+  OnboardingBootstrapInput,
+  OnboardingBootstrapResult,
+  PersonalityCatalogResponse,
+  PersonalityCatalogMutationInput,
+} from "@goatcitadel/contracts";
+
+import type { OnboardingCompleteResponse, RuntimeSettingsResponse } from "./types.js";
+
+import { request } from "./client-core.js";
+
+export async function fetchDeviceAccessGrants(
+  view: "active" | "all" = "active",
+): Promise<DeviceAccessGrantListResponse> {
+  return request<DeviceAccessGrantListResponse>(`/api/v1/auth/devices?view=${encodeURIComponent(view)}`);
+}
+
+export async function revokeDeviceAccessGrant(grantId: string): Promise<DeviceAccessGrantRevokeResponse> {
+  return request<DeviceAccessGrantRevokeResponse>(`/api/v1/auth/devices/${encodeURIComponent(grantId)}/revoke`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function bootstrapOnboarding(input: OnboardingBootstrapInput): Promise<OnboardingBootstrapResult> {
+  return request<OnboardingBootstrapResult>("/api/v1/onboarding/bootstrap", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function completeOnboarding(completedBy?: string): Promise<OnboardingCompleteResponse> {
+  return request<OnboardingCompleteResponse>("/api/v1/onboarding/complete", {
+    method: "POST",
+    body: JSON.stringify({
+      completedBy,
+    }),
+  });
+}
+
+export async function resolveGatewayInstallToken(input?: {
+  token?: string;
+  generateWhenMissing?: boolean;
+  persistToEnv?: boolean;
+}): Promise<GatewayInstallTokenResolution> {
+  return request<GatewayInstallTokenResolution>("/api/v1/auth/install-token", {
+    method: "POST",
+    body: JSON.stringify(input ?? {}),
+  });
+}
+
+export async function patchSettings(input: {
+  expectedRevision: number;
+  deploymentProfile?: "local_dev" | "trusted_local" | "remote_hardened";
+  toolApprovalMode?: "approve_all" | "approve_risky" | "bypass";
+  budgetMode?: "saver" | "balanced" | "power";
+  readAccessMode?: "roots_only" | "approval_required" | "full_disk";
+  networkAllowlist?: string[];
+  auth?: AuthSettingsUpdateInput;
+  llm?: {
+    activeProviderId?: string;
+    activeModel?: string;
+    utilityProviderId?: string;
+    utilityModel?: string;
+    upsertProvider?: {
+      providerId: string;
+      label?: string;
+      baseUrl?: string;
+      apiStyle?:
+        | "openai-chat-completions"
+        | "openai-responses"
+        | "openai-codex-responses"
+        | "anthropic-messages"
+        | "bedrock-messages";
+      authMode?: LlmProviderConfig["authMode"];
+      defaultModel?: string;
+      apiKey?: string;
+      apiKeyEnv?: string;
+      googleCloud?: LlmProviderConfig["googleCloud"];
+      capabilities?: LlmProviderConfig["capabilities"];
+      request?: LlmProviderRequestConfig;
+      headers?: Record<string, string>;
+    };
+  };
+  memory?: {
+    enabled?: boolean;
+    qmdEnabled?: boolean;
+    qmdApplyToChat?: boolean;
+    qmdApplyToOrchestration?: boolean;
+    qmdMaxContextTokens?: number;
+    qmdMinPromptChars?: number;
+    qmdCacheTtlSeconds?: number;
+    qmdDistillerProviderId?: string;
+    qmdDistillerModel?: string;
+  };
+  web?: {
+    firecrawl?: {
+      enabled?: boolean;
+      baseUrl?: string;
+      apiKeyEnv?: string;
+      timeoutMs?: number;
+      defaultReadBackend?: "native" | "firecrawl";
+      fallbackToNative?: boolean;
+    };
+  };
+  mesh?: {
+    enabled?: boolean;
+    mode?: "lan" | "wan" | "tailnet";
+    nodeId?: string;
+    mdns?: boolean;
+    staticPeers?: string[];
+    requireMtls?: boolean;
+    tailnetEnabled?: boolean;
+  };
+  npu?: {
+    enabled?: boolean;
+    autoStart?: boolean;
+    sidecarUrl?: string;
+  };
+  llamaCpp?: {
+    enabled?: boolean;
+    autoStart?: boolean;
+    baseUrl?: string;
+    command?: string;
+    extraArgs?: string[];
+    modelsRootPath?: string;
+    modelPath?: string;
+    alias?: string;
+    ctxSize?: number | null;
+    threads?: number | null;
+    gpuLayers?: number | null;
+    parallel?: number | null;
+    batchSize?: number | null;
+    ubatchSize?: number | null;
+    flashAttention?: boolean | null;
+  };
+  features?: Partial<RuntimeSettingsResponse["features"]>;
+}): Promise<RuntimeSettingsResponse> {
+  return request<RuntimeSettingsResponse>("/api/v1/settings", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function patchGatewayAuthSettings(
+  input: AuthSettingsUpdateInput & {
+    expectedRevision: number;
+  },
+): Promise<
+  AuthRuntimeSettings & {
+    revision: number;
+    changePlanReceipt?: NonNullable<RuntimeSettingsResponse["changePlanReceipt"]>;
+  }
+> {
+  return request("/api/v1/auth/settings", {
+    method: "PATCH",
+    cache: "no-store",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchPersonalities(): Promise<PersonalityCatalogResponse> {
+  return request<PersonalityCatalogResponse>("/api/v1/personalities");
+}
+
+export async function createPersonality(input: PersonalityCatalogMutationInput): Promise<PersonalityCatalogResponse> {
+  return request<PersonalityCatalogResponse>("/api/v1/personalities", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updatePersonality(
+  personalityId: string,
+  input: PersonalityCatalogMutationInput,
+): Promise<PersonalityCatalogResponse> {
+  return request<PersonalityCatalogResponse>(`/api/v1/personalities/${encodeURIComponent(personalityId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deletePersonality(
+  personalityId: string,
+  expectedRevision: string,
+): Promise<PersonalityCatalogResponse> {
+  return request<PersonalityCatalogResponse>(`/api/v1/personalities/${encodeURIComponent(personalityId)}`, {
+    method: "DELETE",
+    body: JSON.stringify({ expectedRevision }),
+  });
+}
+
+export async function setDefaultPersonality(
+  personalityId: string,
+  expectedRevision: string,
+): Promise<PersonalityCatalogResponse> {
+  return request<PersonalityCatalogResponse>("/api/v1/personalities/default", {
+    method: "PATCH",
+    body: JSON.stringify({ personalityId, expectedRevision }),
+  });
+}

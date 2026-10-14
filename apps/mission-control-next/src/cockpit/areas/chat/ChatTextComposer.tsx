@@ -1,6 +1,7 @@
+import type { ComposerProps } from "./ChatTextComposer.types";
+export type { ComposerProps } from "./ChatTextComposer.types";
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
 import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
-import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { useCockpitShellSwitch } from "../../app/use-cockpit-shell-switch";
 import { Button } from "../../ui/Button";
 import { ChatComposerControls } from "./ChatComposerControls";
@@ -14,77 +15,10 @@ import { SessionControlBanner } from "../../../features/threaded-surface/Session
 import { useAutoGrowTextarea } from "../../../features/threaded-surface/useAutoGrowTextarea";
 import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
 import { ExternalSourceStrip } from "../../../features/threaded-surface/ThreadedExternalSourceStrip";
-import { ChatMediaControls, type ChatMediaProps } from "./ChatMediaControls";
+import { ChatMediaControls } from "./ChatMediaControls";
 import type { ChatCompletionReasoningEffort } from "@goatcitadel/contracts";
 import { ChatLegacyInputNotice } from "./ChatLegacyInputNotice";
 import { Dialog } from "../../ui/Dialog";
-
-export type ComposerProps = ChatMediaProps & Pick<
-  MissionThreadedActiveSessionSurfaceProps,
-  | "queueItems" | "onResumeAll" | "onRemoveQueuedItem" | "midTurnDisposition"
-  | "externalSourceControls" | "onOpenLibraryImports"
-  | "attachmentUpload"
-  | "draft"
-  | "onDraftChange"
-  | "onSend"
-  | "onStopActiveTurn"
-  | "canSend" | "canSendWhileRunning"
-  | "sending"
-  | "hasActiveStream"
-  | "isStopPending"
-  | "historicalReadOnly"
-  | "onReturnToLatest"
-  | "sessionControlBanner"
-  | "pendingApproval"
-  | "pendingUserInput"
-  | "pendingAttachments"
-  | "editingTurnId"
-  | "onCancelEdit"
-  | "runVariablePanel"
-  | "composerPalette"
-  | "routeBoundaryAckRequired"
-  | "routeBoundaryAcknowledged"
-  | "composerRef"
-  | "selectedSessionId"
-  | "profileDependentAdmissionBlockReason"
-  | "routePreflight"
-  | "routePreflightError"
-  | "routePreflightLoading"
-  | "providerOptions"
-  | "selectedProviderId"
-  | "selectedModel"
-  | "modelSwitchDisabled"
-  | "onRequestProviderChange"
-  | "onRequestModelChange"
-  | "currentThinkingLevel"
-  | "onSetThinkingLevel"
-  | "activePersonality"
-  | "onOpenPersonalitiesSettings"
-  | "planningMode"
-  | "onTogglePlanningMode"
-  | "currentWebMode"
-  | "onSetWebMode"
-  | "currentReviewDepth"
-  | "onToggleReviewMode"
-  | "onRemoveAttachment"
-  | "fileInputRef"
-  | "onAttachFiles"
-  | "onUploadFiles"
-  | "onAcknowledgeRouteBoundary"
-  | "commandSuggestions"
-  | "commandIndex"
-  | "onApplyDraftCommand"
-  | "onComposerKeyDown"
-  | "onComposerPaste"
-  | "onDragEnter"
-  | "onDragOver"
-  | "onDragLeave"
-  | "onDrop"
-  | "isDragActive"
-  | "chatTimerPanel"
-  | "sessionStatusPanel"
-  | "projectSwitchContext"
->;
 
 const REASON_ID = "cockpit-chat-send-reason";
 /** Short route checks are not worth announcing; only a check that outlasts this delay is shown. */
@@ -157,15 +91,18 @@ export function ChatTextComposer({
     !props.historicalReadOnly &&
     !props.sessionControlBanner;
   const admitted = props.canSend || Boolean(props.hasActiveStream && props.canSendWhileRunning);
-  const block = gatewayUnavailable ? GATEWAY_UNAVAILABLE_BLOCK : localReady ? null : composerSendBlock({ ...props, canSend: admitted });
+  const block = gatewayUnavailable
+    ? GATEWAY_UNAVAILABLE_BLOCK
+    : localReady
+      ? null
+      : composerSendBlock({ ...props, canSend: admitted });
   const routeChecking = block?.kind === "route-checking";
   // The controller performs a fresh, authoritative preflight before dispatch. Let an explicit
   // send start that path while the display preflight is still debouncing this draft.
   const routeCheckingSend = routeChecking && !props.sending && !props.hasActiveStream;
   const canSubmit = Boolean(
     localReady ||
-    (Boolean(props.draft.trim() || props.pendingAttachments.length) &&
-      ((admitted && !block) || routeCheckingSend)),
+    (Boolean(props.draft.trim() || props.pendingAttachments.length) && ((admitted && !block) || routeCheckingSend)),
   );
   // A route check that settles quickly never flashes or re-announces its hint.
   const showRouteHint = useSettled(routeChecking, ROUTE_CHECK_HINT_DELAY_MS);
@@ -189,7 +126,11 @@ export function ChatTextComposer({
       if (isImeEnter(event) || (event.shiftKey && !event.ctrlKey && !event.metaKey)) return;
       event.preventDefault();
       // A committed command (`/help`, `/help args`) sends; only a partial token applies the highlighted suggestion.
-      if (props.commandSuggestions.length && !localReady && !committedCommandDraft(props.draft, props.commandSuggestions)) {
+      if (
+        props.commandSuggestions.length &&
+        !localReady &&
+        !committedCommandDraft(props.draft, props.commandSuggestions)
+      ) {
         const selected = props.commandSuggestions[props.commandIndex];
         if (selected) {
           if (props.composerPalette?.enabled) selectPaletteItem(selected);
@@ -223,7 +164,13 @@ export function ChatTextComposer({
             </button>
           </div>
         ) : null}
-        <ChatLegacyInputNotice workspaceId={props.projectSwitchContext?.workspaceId} sessionId={props.selectedSessionId} draft={props.draft} onRestore={props.onDraftChange} disabled={props.historicalReadOnly || props.sending || Boolean(props.sessionControlBanner)} />
+        <ChatLegacyInputNotice
+          workspaceId={props.projectSwitchContext?.workspaceId}
+          sessionId={props.selectedSessionId}
+          draft={props.draft}
+          onRestore={props.onDraftChange}
+          disabled={props.historicalReadOnly || props.sending || Boolean(props.sessionControlBanner)}
+        />
         <ChatRunVariables panel={props.runVariablePanel} />
         <ChatComposerPalette props={props} onSelect={selectPaletteItem} />
         {projectReview.notice ? (
@@ -248,13 +195,36 @@ export function ChatTextComposer({
             </Button>
           </div>
         </Dialog>
-        {props.externalSourceControls ? <ExternalSourceStrip controls={props.externalSourceControls}
-          disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)} openAttachFormToken={externalSourceOpenToken}
-          onOpenLibrary={props.onOpenLibraryImports} onRestoreFocus={() => props.composerRef.current?.focus()} /> : null}
-        <ChatQueueBar items={props.queueItems ?? []} title="Queued messages" onResumeAll={props.onResumeAll} onRemove={props.onRemoveQueuedItem} />
-        <ChatComposerControls props={props.attachmentUpload?.pending ? { ...props, sending: false } : props} reasoningEfforts={reasoningEfforts} />
-        {props.attachmentUpload?.pending ? <p role="status" className="text-sm text-fg-secondary">Uploading {props.attachmentUpload.pending} attachment(s)…</p> : null}
-        {props.attachmentUpload?.error ? <p role="status" className="text-sm text-status-failed">Attachment upload failed: {props.attachmentUpload.error}. Select the file again to retry.</p> : null}
+        {props.externalSourceControls ? (
+          <ExternalSourceStrip
+            controls={props.externalSourceControls}
+            disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
+            openAttachFormToken={externalSourceOpenToken}
+            onOpenLibrary={props.onOpenLibraryImports}
+            onRestoreFocus={() => props.composerRef.current?.focus()}
+          />
+        ) : null}
+        <ChatQueueBar
+          items={props.queueItems ?? []}
+          title="Queued messages"
+          onResumeAll={props.onResumeAll}
+          onRemove={props.onRemoveQueuedItem}
+        />
+        <ChatComposerControls
+          props={props.attachmentUpload?.pending ? { ...props, sending: false } : props}
+          reasoningEfforts={reasoningEfforts}
+          scopeKey={props.selectedSessionId ?? ""}
+        />
+        {props.attachmentUpload?.pending ? (
+          <p role="status" className="text-sm text-fg-secondary">
+            Uploading {props.attachmentUpload.pending} attachment(s)…
+          </p>
+        ) : null}
+        {props.attachmentUpload?.error ? (
+          <p role="status" className="text-sm text-status-failed">
+            Attachment upload failed: {props.attachmentUpload.error}. Select the file again to retry.
+          </p>
+        ) : null}
         <ChatMediaControls props={props} />
         <label htmlFor="cockpit-chat-draft" className="sr-only">
           Message
@@ -267,7 +237,9 @@ export function ChatTextComposer({
           aria-autocomplete="list"
           aria-expanded={props.commandSuggestions.length > 0}
           aria-controls={props.commandSuggestions.length ? "cockpit-composer-suggestions" : undefined}
-          aria-activedescendant={props.commandSuggestions[props.commandIndex] ? `cockpit-suggestion-${props.commandIndex}` : undefined}
+          aria-activedescendant={
+            props.commandSuggestions[props.commandIndex] ? `cockpit-suggestion-${props.commandIndex}` : undefined
+          }
           value={capture?.summary ?? props.draft}
           readOnly={Boolean(capture)}
           disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
@@ -280,7 +252,30 @@ export function ChatTextComposer({
           placeholder="Message GoatCitadel…"
           className="cockpit-chat-draft mt-2 block min-h-10 w-full resize-y rounded-md border border-line bg-canvas px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60"
         />
-        {capture ? <section aria-label="Review captured workflow" className="my-3 space-y-2 rounded-md border border-line p-3 text-sm"><p>Review the captured task before sending. Sending generates instructions; saving and activation have separate reviews.</p><details><summary>Captured task and result</summary><p className="whitespace-pre-wrap">{capture.request}</p><p className="whitespace-pre-wrap">{capture.result}</p></details><Button type="button" variant="secondary" disabled={props.sending || props.historicalReadOnly || Boolean(props.sessionControlBanner)} onClick={() => props.onDraftChange("")}>Clear captured workflow</Button></section> : null}
+        {capture ? (
+          <section
+            aria-label="Review captured workflow"
+            className="my-3 space-y-2 rounded-md border border-line p-3 text-sm"
+          >
+            <p>
+              Review the captured task before sending. Sending generates instructions; saving and activation have
+              separate reviews.
+            </p>
+            <details>
+              <summary>Captured task and result</summary>
+              <p className="whitespace-pre-wrap">{capture.request}</p>
+              <p className="whitespace-pre-wrap">{capture.result}</p>
+            </details>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={props.sending || props.historicalReadOnly || Boolean(props.sessionControlBanner)}
+              onClick={() => props.onDraftChange("")}
+            >
+              Clear captured workflow
+            </Button>
+          </section>
+        ) : null}
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
           <p className="min-w-0 text-xs text-fg-muted">
             <button
@@ -300,9 +295,11 @@ export function ChatTextComposer({
               Open classic view
             </button>
           </p>
-          {props.hasActiveStream ? <Button type="submit" variant="primary" size="sm" disabled={!canSubmit}>
-            {props.midTurnDisposition === "steer" ? "Steer response" : "Queue message"}
-          </Button> : null}
+          {props.hasActiveStream ? (
+            <Button type="submit" variant="primary" size="sm" disabled={!canSubmit}>
+              {props.midTurnDisposition === "steer" ? "Steer response" : "Queue message"}
+            </Button>
+          ) : null}
           {props.hasActiveStream ? (
             <Button
               type="button"
@@ -310,7 +307,10 @@ export function ChatTextComposer({
               size="sm"
               className="max-sm:h-11 max-sm:px-4"
               disabled={props.isStopPending}
-              onClick={() => { props.onStopActiveTurn(); props.composerRef.current?.focus(); }}
+              onClick={() => {
+                props.onStopActiveTurn();
+                props.composerRef.current?.focus();
+              }}
             >
               {props.isStopPending ? "Stopping…" : "Stop response"}
             </Button>
@@ -330,30 +330,32 @@ export function ChatTextComposer({
             </Button>
           )}
         </div>
-        {localReady ? (
-          <p role="status" className="mt-2 text-xs text-fg-secondary">
-            {command === "/schedule"
-              ? "Open Work schedules to review and create a scheduled job."
-              : command === "/timer"
-                ? "Open a reminder that stays with this conversation."
-                : "Read the current session state from the Gateway."}{" "}
-            Nothing is sent to the model.
-          </p>
-        ) : null}
-        {visibleReason ? (
-          <div
-            id={REASON_ID}
-            role="status"
-            className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-secondary"
-          >
-            <p className="min-w-0">{visibleReason.message}</p>
-            {visibleReason.kind === "historical" && props.onReturnToLatest ? (
-              <Button size="sm" onClick={props.onReturnToLatest}>
-                Back to latest
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
+        <div className="mt-2 min-h-5">
+          {localReady ? (
+            <p role="status" className="text-xs text-fg-secondary">
+              {command === "/schedule"
+                ? "Open Work schedules to review and create a scheduled job."
+                : command === "/timer"
+                  ? "Open a reminder that stays with this conversation."
+                  : "Read the current session state from the Gateway."}{" "}
+              Nothing is sent to the model.
+            </p>
+          ) : null}
+          {visibleReason ? (
+            <div
+              id={REASON_ID}
+              role="status"
+              className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-secondary"
+            >
+              <p className="min-w-0">{visibleReason.message}</p>
+              {visibleReason.kind === "historical" && props.onReturnToLatest ? (
+                <Button size="sm" onClick={props.onReturnToLatest}>
+                  Back to latest
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
       {shellSwitch.feedback}
     </form>

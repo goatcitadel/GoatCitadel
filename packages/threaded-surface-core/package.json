@@ -5,6 +5,9 @@
   "goatcitadelOwner": "mission-control",
   "private": true,
   "type": "module",
+  "sideEffects": [
+    "**/*.test-support.js"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -19,6 +22,10 @@
     "./work-trust": {
       "types": "./dist/chat/work-trust.d.ts",
       "default": "./dist/chat/work-trust.js"
+    },
+    "./chat-error-copy": {
+      "types": "./dist/chat/chat-error-copy.d.ts",
+      "default": "./dist/chat/chat-error-copy.js"
     }
   },
   "files": [

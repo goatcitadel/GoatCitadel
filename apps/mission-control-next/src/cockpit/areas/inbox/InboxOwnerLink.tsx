@@ -1,67 +1,81 @@
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { ArrowUpRight } from "lucide-react";
-import { useCockpitRoute } from "../../app/use-cockpit-route";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { resolveCockpitContinuation } from "../../app/cockpit-compatibility";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 
 export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem; workspaceId: string }) {
-  const { navigate } = useCockpitRoute();
   const className = "inline-flex min-h-9 items-center gap-1 text-sm font-medium text-accent hover:underline";
-  // The projection supplies relative owner destinations; it does not grant actions.
   if (!item.href.startsWith("/") || item.href.startsWith("//")) return null;
-  const destination = new URL(item.href, "http://cockpit.invalid");
-  if (destination.origin !== "http://cockpit.invalid") return null;
-  const area =
-    destination.pathname === "/work" || destination.pathname.startsWith("/work/")
-      ? "Work"
-      : item.kind === "approval"
-        ? "Approvals"
-        : item.source.sessionId
-          ? "Chat"
-          : item.kind === "memory_proposal" ||
-              item.kind === "document_proposal" ||
-              item.kind === "capability_proposal" ||
-              item.kind === "improvement_proposal"
-            ? "Library"
-            : "Ops";
-  if (item.kind === "approval" && item.source.approvalId && destination.pathname === "/ops/approvals" && !destination.searchParams.has("view")) {
-    destination.pathname = "/inbox";
-    destination.searchParams.set("approvalId", item.source.approvalId);
-    destination.searchParams.set("workspaceId", item.source.workspaceId);
-    destination.searchParams.set("shell", "cockpit");
-    destination.searchParams.delete("shellScope");
+  let destination: URL;
+  try {
+    destination = new URL(item.href, "http://cockpit.invalid");
+    if (
+      destination.origin !== "http://cockpit.invalid" ||
+      destination.pathname !== item.href.split(/[?#]/u, 1)[0] ||
+      /[\\\r\n]/u.test(item.href)
+    )
+      return null;
+  } catch {
+    return null;
   }
-  const href = destination.pathname + destination.search + destination.hash;
-  const classic = destination.searchParams.get("shell") === "classic";
-  // Unported owner destinations remain explicit Classic handoffs.
-  const label = classic ? `Open in classic ${area}` : `Open in ${area}`;
-  const content = (
-    <>
-      {label}
-      <ArrowUpRight aria-hidden="true" className="size-4" />
-    </>
-  );
-  return classic ? (
-    <ClassicOwnerLink
-      href={href}
-      scope={JSON.stringify([workspaceId, item.id])}
-      label={label}
-      inboxOwner
+  const carried = new URLSearchParams(window.location.search);
+  let area = "Ops";
+  if (item.kind === "approval" && item.source.approvalId) {
+    destination.pathname = "/inbox/approvals/" + encodeURIComponent(item.source.approvalId);
+    destination.searchParams.set("approvalId", item.source.approvalId);
+    destination.searchParams.delete("item");
+    carried.delete("item");
+    area = "Approvals";
+  } else if (item.kind === "task_deliverable" && item.source.taskId) {
+    destination.pathname = "/work/tasks/" + encodeURIComponent(item.source.taskId);
+    destination.searchParams.set("taskId", item.source.taskId);
+    area = "Work";
+  } else if (["failed_run", "dead_letter", "completed_background_run"].includes(item.kind) && item.source.runId) {
+    destination.pathname = "/work/runs/" + encodeURIComponent(item.source.runId);
+    destination.searchParams.set("runId", item.source.runId);
+    area = "Work";
+  } else if (
+    [
+      "user_input",
+      "change_plan",
+      "memory_proposal",
+      "document_proposal",
+      "capability_proposal",
+      "improvement_proposal",
+    ].includes(item.kind)
+  ) {
+    // These native detail owners re-read the exact canonical record before offering any action.
+    destination.pathname = "/inbox";
+    destination.searchParams.set("item", item.id);
+    // A linked-item selector replaces a previously selected approval, not its unrelated page context.
+    destination.searchParams.delete("approvalId");
+    carried.delete("approvalId");
+    area = "Inbox";
+  } else if (destination.pathname === "/work" || destination.pathname.startsWith("/work/")) area = "Work";
+  for (const key of ["sessionId", "turnId", "runId", "taskId"] as const) {
+    const value = item.source[key];
+    if (value !== undefined) destination.searchParams.set(key, value);
+  }
+  const owner = resolveCockpitContinuation(destination.pathname + destination.search + destination.hash, {
+    search: carried.toString(),
+    hash: window.location.hash,
+    workspaceId: item.source.workspaceId,
+  });
+  if (owner.kind !== "native")
+    return (
+      <span role="status" className="text-xs text-fg-muted">
+        Source owner unavailable
+      </span>
+    );
+  return (
+    <NativeOwnerLink
+      href={owner.href}
+      scope={[workspaceId, item.source.workspaceId, item.id]}
       className={className}
-    >
-      {content}
-    </ClassicOwnerLink>
-  ) : (
-    <a
-      href={href}
       data-inbox-owner
-      className={className}
-      onClick={(event) => {
-        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-        event.preventDefault();
-        navigate(href);
-      }}
     >
-      {content}
-    </a>
+      Open in {area}
+      <ArrowUpRight aria-hidden="true" className="size-4" />
+    </NativeOwnerLink>
   );
 }

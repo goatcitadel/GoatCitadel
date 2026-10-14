@@ -1,14 +1,33 @@
-import { Children, type ReactNode } from "react";
-import { resolveCockpitCompatibility } from "../../app/cockpit-compatibility";
+import type { ReactNode } from "react";
+import { resolveCockpitContinuation } from "../../app/cockpit-compatibility";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 
-/** Route coverage decides the owner; unsupported runtime controls keep their governed fallback. */
-export function SystemOwnerLink({ href, scope, children }: { href: string; scope: unknown; children: ReactNode }) {
-  const owner = resolveCockpitCompatibility(href);
-  const className = "mt-2 inline-block text-sm font-medium text-accent hover:underline";
-  if (owner.kind === "missing") return <span className="text-xs text-fg-muted">Source owner unavailable</span>;
-  return owner.kind === "native"
-    ? <NativeOwnerLink href={owner.href} scope={scope} className={className}>{children}</NativeOwnerLink>
-    : <ClassicOwnerLink href={owner.href} scope={JSON.stringify(scope)} className={className} label={`${Children.toArray(children).join("")} in Classic`} />;
+/** Existing source actions remain at their native owner; unavailable destinations stay explicit. */
+export function SystemOwnerLink({
+  href,
+  scope,
+  children,
+  className,
+}: {
+  href: string;
+  scope: unknown;
+  children: ReactNode;
+  className?: string;
+}) {
+  const owner = resolveCockpitContinuation(href, { search: window.location.search, hash: window.location.hash });
+  if (owner.kind !== "native")
+    return (
+      <span role="status" className="text-xs text-fg-muted">
+        Source owner unavailable
+      </span>
+    );
+  return (
+    <NativeOwnerLink
+      href={owner.href}
+      scope={scope}
+      className={className ?? "mt-2 inline-block text-sm font-medium text-accent hover:underline"}
+    >
+      {children}
+    </NativeOwnerLink>
+  );
 }

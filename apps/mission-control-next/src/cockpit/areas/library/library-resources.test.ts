@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatGeneratedArtifactRecord, MemoryItemRecord, NoteRecord } from "@goatcitadel/contracts";
-import { loadLibraryResources, resourceDescription, resourceId, type ResourceQuery } from "./library-resources";
+import {
+  loadLibraryResources,
+  resourceDescription,
+  resourceId,
+  resourceTitle as publicResourceTitle,
+  type LibraryResource,
+  type ResourceQuery,
+} from "./library-resources";
+import { resourceTitle } from "./resource-title";
 import { readLibraryResource, RESOURCE_PREVIEW_BYTES } from "./library-resource-preview";
 
 const api = vi.hoisted(() => ({
@@ -11,8 +19,12 @@ const api = vi.hoisted(() => ({
   artifact: vi.fn(),
   file: vi.fn(),
 }));
-vi.mock("@goatcitadel/mission-control-shared/api/memory", () => ({ fetchMemoryItems: api.memory }));
-vi.mock("@goatcitadel/mission-control-shared/api/personal-ops", () => ({ listNotes: api.notes }));
+vi.mock("@goatcitadel/mission-control-shared/api/memory", () => ({
+  fetchMemoryItems: api.memory,
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/personal-ops", () => ({
+  listNotes: api.notes,
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
   fetchChatGeneratedArtifacts: api.artifacts,
   fetchChatGeneratedArtifact: api.artifact,
@@ -70,9 +82,20 @@ const artifact = (): ChatGeneratedArtifactRecord => ({
 beforeEach(() => vi.resetAllMocks());
 
 it("forwards project artifact scope and withholds records from another project", async () => {
-  api.artifacts.mockResolvedValue({ items: [{ ...artifact(), projectId: "mine-project" }, { ...artifact(), artifactId: "foreign", projectId: "other-project" }] });
-  const page = await loadLibraryResources({ ...query, kind: "artifacts", projectId: "mine-project" });
-  expect(api.artifacts).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "mine", projectId: "mine-project" }));
+  api.artifacts.mockResolvedValue({
+    items: [
+      { ...artifact(), projectId: "mine-project" },
+      { ...artifact(), artifactId: "foreign", projectId: "other-project" },
+    ],
+  });
+  const page = await loadLibraryResources({
+    ...query,
+    kind: "artifacts",
+    projectId: "mine-project",
+  });
+  expect(api.artifacts).toHaveBeenCalledWith(
+    expect.objectContaining({ workspaceId: "mine", projectId: "mine-project" }),
+  );
   expect(page.items).toHaveLength(1);
   expect(resourceId(page.items[0]!)).toContain("artifact");
 });
@@ -90,7 +113,10 @@ describe("scoped native Library owner reads", () => {
       total: 5,
       nextCursor: "opaque-next",
     });
-    const page = await loadLibraryResources({ ...query, cursor: "opaque-current" });
+    const page = await loadLibraryResources({
+      ...query,
+      cursor: "opaque-current",
+    });
     expect(api.memory).toHaveBeenCalledExactlyOnceWith({
       workspaceId: "mine",
       query: "",
@@ -110,14 +136,22 @@ describe("scoped native Library owner reads", () => {
         ...Array.from({ length: 105 }, (_, index) => note(`mine-${index}`)),
       ],
     });
-    const page = await loadLibraryResources({ ...query, kind: "notes", status: "archived" });
-    expect(api.notes).toHaveBeenCalledExactlyOnceWith("mine", { lifecycleStatus: "archived" });
+    const page = await loadLibraryResources({
+      ...query,
+      kind: "notes",
+      status: "archived",
+    });
+    expect(api.notes).toHaveBeenCalledExactlyOnceWith("mine", {
+      lifecycleStatus: "archived",
+    });
     expect(page.items).toHaveLength(100);
     expect(page.items.every((entry) => resourceId(entry).startsWith("mine-"))).toBe(true);
     expect(page.coverage).toContain("Narrow the filter");
   });
   it("never labels installation files as workspace-owned or sends ignored scope parameters", async () => {
-    api.files.mockResolvedValue({ items: [{ relativePath: "notes/test.md", size: 3, modifiedAt: "now" }] });
+    api.files.mockResolvedValue({
+      items: [{ relativePath: "notes/test.md", size: 3, modifiedAt: "now" }],
+    });
     const page = await loadLibraryResources({ ...query, kind: "files" });
     expect(api.files).toHaveBeenCalledExactlyOnceWith(".", 100);
     expect(page.coverage).toContain("shared across workspaces");
@@ -132,7 +166,11 @@ describe("scoped native Library owner reads", () => {
       ],
     });
     const page = await loadLibraryResources({ ...query, kind: "artifacts" });
-    expect(api.artifacts).toHaveBeenCalledExactlyOnceWith({ workspaceId: "mine", citadelId: "personal", limit: 100 });
+    expect(api.artifacts).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "mine",
+      citadelId: "personal",
+      limit: 100,
+    });
     expect(page.items.map(resourceId)).toEqual(["artifact"]);
     expect(page.coverage).toContain("Older records may not be shown");
   });
@@ -140,7 +178,11 @@ describe("scoped native Library owner reads", () => {
 
 describe("explicit bounded Library previews", () => {
   it.each(["relativePath", "size", "modifiedAt"])("withholds file content when %s changed", async (field) => {
-    const item = { relativePath: "notes/test.md", size: 4, modifiedAt: "2026-09-30" };
+    const item = {
+      relativePath: "notes/test.md",
+      size: 4,
+      modifiedAt: "2026-09-30",
+    };
     api.file.mockResolvedValue({
       ...item,
       [field]: field === "size" ? 5 : "changed",
@@ -153,10 +195,19 @@ describe("explicit bounded Library previews", () => {
     expect(api.file).toHaveBeenCalledExactlyOnceWith("notes/test.md");
   });
   it("never downloads a known oversized file and refuses binary content", async () => {
-    const item = { relativePath: "large.txt", size: RESOURCE_PREVIEW_BYTES + 1, modifiedAt: "now" };
+    const item = {
+      relativePath: "large.txt",
+      size: RESOURCE_PREVIEW_BYTES + 1,
+      modifiedAt: "now",
+    };
     await expect(readLibraryResource({ kind: "files", item }, "mine", "personal")).rejects.toThrow("128 KiB");
     expect(api.file).not.toHaveBeenCalled();
-    api.file.mockResolvedValue({ ...item, size: 4, encoding: "base64", content: "abcd" });
+    api.file.mockResolvedValue({
+      ...item,
+      size: 4,
+      encoding: "base64",
+      content: "abcd",
+    });
     await expect(
       readLibraryResource({ kind: "files", item: { ...item, size: 4 } }, "mine", "personal"),
     ).rejects.toThrow("plain text");
@@ -168,7 +219,11 @@ describe("explicit bounded Library previews", () => {
       "changed after listing",
     );
     api.artifact.mockResolvedValue({
-      item: { ...item, content: "[redacted]", publicProjection: { contentRedacted: true } },
+      item: {
+        ...item,
+        content: "[redacted]",
+        publicProjection: { contentRedacted: true },
+      },
     });
     const preview = await readLibraryResource({ kind: "artifacts", item }, "mine", "personal");
     expect(api.artifact).toHaveBeenLastCalledWith("artifact", "mine", "personal");
@@ -177,10 +232,94 @@ describe("explicit bounded Library previews", () => {
   it("bounds owner-supplied note content by UTF-8 bytes", async () => {
     await expect(
       readLibraryResource(
-        { kind: "notes", item: { ...note("oversized"), body: "🙂".repeat(RESOURCE_PREVIEW_BYTES / 2) } },
+        {
+          kind: "notes",
+          item: {
+            ...note("oversized"),
+            body: "🙂".repeat(RESOURCE_PREVIEW_BYTES / 2),
+          },
+        },
         "mine",
         "personal",
       ),
     ).rejects.toThrow("128 KiB");
   });
 });
+
+it("preserves the existing public resourceTitle binding as the pure leaf used by the palette", () => {
+  expect(publicResourceTitle).toBe(resourceTitle);
+});
+it.each(["memory", "notes", "files", "artifacts"] as const)(
+  "preserves the exact title and 300-character bound for %s without a resource read",
+  (kind) => {
+    const value = "界".repeat(301);
+    const resource: LibraryResource =
+      kind === "files"
+        ? {
+            kind,
+            item: { relativePath: value, size: 0, modifiedAt: "2026-10-13" },
+          }
+        : kind === "memory"
+          ? { kind, item: { ...memory("m"), title: value } }
+          : kind === "notes"
+            ? { kind, item: { ...note("n"), title: value } }
+            : { kind, item: { ...artifact(), title: value } };
+    expect(resourceTitle(resource)).toBe(value.slice(0, 300));
+    expect(publicResourceTitle(resource)).toBe(resourceTitle(resource));
+    expect(Object.values(api).every((call) => call.mock.calls.length === 0)).toBe(true);
+  },
+);
+
+it("preserves historical source filtering without normalizing records through another conversation surface", async () => {
+  api.artifacts.mockResolvedValue({
+    items: [
+      { ...artifact(), artifactId: "chat", sourceSurface: "chat" },
+      { ...artifact(), artifactId: "plan", sourceSurface: "cowork" },
+      { ...artifact(), artifactId: "code", sourceSurface: "code" },
+      {
+        ...artifact(),
+        artifactId: "foreign",
+        sourceSurface: "code",
+        workspaceId: "other",
+      },
+    ],
+  });
+  const page = await loadLibraryResources({
+    ...query,
+    kind: "artifacts",
+    sourceSurface: "code",
+  });
+  expect(page.items.map(resourceId)).toEqual(["code"]);
+  expect(api.artifacts).toHaveBeenCalledExactlyOnceWith({
+    workspaceId: "mine",
+    citadelId: "personal",
+    limit: 100,
+  });
+  expect(page.coverage).toContain("filtering applies to this returned window");
+  expect(page.coverage).toContain("Older records may not be shown");
+});
+it.each(["session", "turn", "project", "hash"] as const)(
+  "finds artifact %s provenance within the scoped returned window",
+  async (field) => {
+    const item = {
+      ...artifact(),
+      projectId: "project-specific",
+      contentHash: "a".repeat(64),
+    };
+    api.artifacts.mockResolvedValue({
+      items: [item, { ...item, artifactId: "foreign", workspaceId: "other" }],
+    });
+    const value = {
+      session: "session",
+      turn: "turn",
+      project: "project-specific",
+      hash: "a".repeat(64),
+    }[field]!;
+    const page = await loadLibraryResources({
+      ...query,
+      kind: "artifacts",
+      query: value,
+    });
+    expect(page.items.map(resourceId)).toEqual(["artifact"]);
+  },
+);

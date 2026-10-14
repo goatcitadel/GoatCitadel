@@ -2,7 +2,11 @@ import type { ChatCitationRecord, ChatMode, ChatTurnTraceRecord } from "./chat.j
 import type { ChatMemoryMode, ChatThinkingLevel, ChatWebMode } from "./chat.js";
 import type { RunVariableEvidence, RunVariableSchema } from "./run-variables.js";
 
-export type { PromptPackExportFormat, PromptPackExportRecord, PromptPackPromptfooImportPreviewResponse } from "./prompt-pack-interop.js";
+export type {
+  PromptPackExportFormat,
+  PromptPackExportRecord,
+  PromptPackPromptfooImportPreviewResponse,
+} from "./prompt-pack-interop.js";
 
 export type PromptPackToolTier = "no-tools" | "implicit-tools" | "explicit-tools";
 
@@ -445,6 +449,12 @@ export interface PromptPackAutoScoreBatchResult {
 }
 
 export interface PromptPackReportRecord {
+  /** Optional exact-record inspection; default report and latest summary stay unchanged. */
+  focusedRun?: {
+    run: PromptPackRunRecord;
+    test: PromptPackTestRecord;
+    assessment: PromptPackLatestAssessmentRecordV2;
+  };
   pack: PromptPackRecord;
   tests: PromptPackTestRecord[];
   runs: PromptPackRunRecord[];

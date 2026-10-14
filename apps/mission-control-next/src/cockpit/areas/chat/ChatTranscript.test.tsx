@@ -16,7 +16,9 @@ import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-in
 
 const viewport = vi.hoisted(() => ({
   preview: null as { turnId: string; visibleText: string } | null,
-  virtualMounts: 0, virtualDataCount: 0, initialIndex: 0,
+  virtualMounts: 0,
+  virtualDataCount: 0,
+  initialIndex: 0,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (importOriginal) => ({
@@ -58,7 +60,9 @@ vi.mock("react-virtuoso", () => ({
     scrollerRef?: Ref<HTMLDivElement>;
     initialTopMostItemIndex?: number;
   }) => {
-    viewport.virtualMounts++; viewport.virtualDataCount = data.length; viewport.initialIndex = initialTopMostItemIndex ?? 0;
+    viewport.virtualMounts++;
+    viewport.virtualDataCount = data.length;
+    viewport.initialIndex = initialTopMostItemIndex ?? 0;
     const Footer = components.Footer;
     const EmptyPlaceholder = components.EmptyPlaceholder;
     return (
@@ -116,7 +120,10 @@ function renderWithProviders(node: ReactNode) {
   root.render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
 }
 beforeEach(() => {
-  viewport.preview = null; viewport.virtualMounts = 0; viewport.virtualDataCount = 0; viewport.initialIndex = 0;
+  viewport.preview = null;
+  viewport.virtualMounts = 0;
+  viewport.virtualDataCount = 0;
+  viewport.initialIndex = 0;
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -157,7 +164,12 @@ describe("ChatTranscript", () => {
       ),
     );
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await import("./ChatApprovalRendererBody");
+    });
+    await vi.waitFor(() => {
+      const allow = [...container.querySelectorAll("button")].find((button) => button.textContent === "Approve once");
+      expect(allow).toBeDefined();
+      expect(allow!.disabled).toBe(false);
     });
     const allow = [...container.querySelectorAll("button")].find((button) => button.textContent === "Approve once");
     expect(allow).toBeDefined();
@@ -280,11 +292,14 @@ describe("ChatTranscript", () => {
     vi.stubGlobal("cancelAnimationFrame", cancelFrame);
     const onBottomStateChange = vi.fn();
     const recorded = turn("boundary-home", true);
-    const render = async (followOutput: boolean) => act(async () => renderWithProviders(
-      <InspectorProvider>
-        <ChatTranscript props={{ ...sessionProps([recorded]), followOutput, onBottomStateChange }} />
-      </InspectorProvider>,
-    ));
+    const render = async (followOutput: boolean) =>
+      act(async () =>
+        renderWithProviders(
+          <InspectorProvider>
+            <ChatTranscript props={{ ...sessionProps([recorded]), followOutput, onBottomStateChange }} />
+          </InspectorProvider>,
+        ),
+      );
     await render(true);
     const scroller = container.querySelector<HTMLElement>("[data-transcript-scroller]")!;
     const scrollIntoView = vi.fn();
@@ -318,11 +333,14 @@ describe("ChatTranscript", () => {
     vi.stubGlobal("cancelAnimationFrame", () => {});
     const onBottomStateChange = vi.fn();
     const first = turn("boundary-end-first", true);
-    const render = async (turns: ChatThreadTurnRecord[]) => act(async () => renderWithProviders(
-      <InspectorProvider>
-        <ChatTranscript props={{ ...sessionProps(turns), followOutput: false, onBottomStateChange }} />
-      </InspectorProvider>,
-    ));
+    const render = async (turns: ChatThreadTurnRecord[]) =>
+      act(async () =>
+        renderWithProviders(
+          <InspectorProvider>
+            <ChatTranscript props={{ ...sessionProps(turns), followOutput: false, onBottomStateChange }} />
+          </InspectorProvider>,
+        ),
+      );
     await render([first]);
     const scroller = container.querySelector<HTMLElement>("[data-transcript-scroller]")!;
     Object.defineProperties(scroller, {
@@ -333,7 +351,9 @@ describe("ChatTranscript", () => {
     await act(async () => scroller.dispatchEvent(new Event("scroll")));
     await render([first, turn("boundary-end-second", true)]);
     expect(container.textContent).toContain("2 new messages");
-    const scrollIntoView = vi.fn(() => { scroller.scrollTop = 800; });
+    const scrollIntoView = vi.fn(() => {
+      scroller.scrollTop = 800;
+    });
     container.querySelector<HTMLElement>('div[aria-hidden="true"].h-px')!.scrollIntoView = scrollIntoView;
     onBottomStateChange.mockClear();
     scroller.focus();
@@ -350,16 +370,31 @@ describe("ChatTranscript", () => {
   it.each(["Home", "End"])("preserves descendant pending-question %s behavior, draft and focus", async (key) => {
     vi.stubGlobal("requestAnimationFrame", () => 1);
     vi.stubGlobal("cancelAnimationFrame", () => {});
-    const onBottomStateChange = vi.fn(), onSubmitUserInput = vi.fn();
-    await act(async () => renderWithProviders(
-      <InspectorProvider>
-        <ChatTranscript props={{
-          ...sessionProps([turn("boundary-question", true)]), followOutput: false, onBottomStateChange,
-          pendingUserInput: { promptId: "boundary-question", turnId: "boundary-question", kind: "text", title: "Note", question: "What should be retained?", required: true },
-          userInputPending: false, onSubmitUserInput,
-        }} />
-      </InspectorProvider>,
-    ));
+    const onBottomStateChange = vi.fn(),
+      onSubmitUserInput = vi.fn();
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript
+            props={{
+              ...sessionProps([turn("boundary-question", true)]),
+              followOutput: false,
+              onBottomStateChange,
+              pendingUserInput: {
+                promptId: "boundary-question",
+                turnId: "boundary-question",
+                kind: "text",
+                title: "Note",
+                question: "What should be retained?",
+                required: true,
+              },
+              userInputPending: false,
+              onSubmitUserInput,
+            }}
+          />
+        </InspectorProvider>,
+      ),
+    );
     const scroller = container.querySelector<HTMLElement>("[data-transcript-scroller]")!;
     Object.defineProperties(scroller, {
       scrollHeight: { configurable: true, value: 1000 },
@@ -371,7 +406,8 @@ describe("ChatTranscript", () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Retain this answer");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    input.focus(); input.setSelectionRange(6, 6);
+    input.focus();
+    input.setSelectionRange(6, 6);
     const scrollIntoView = vi.fn();
     container.querySelector<HTMLElement>('div[aria-hidden="true"].h-px')!.scrollIntoView = scrollIntoView;
     onBottomStateChange.mockClear();
@@ -387,33 +423,41 @@ describe("ChatTranscript", () => {
     expect(onSubmitUserInput).not.toHaveBeenCalled();
   });
 
-  it.each(["Home", "End"].flatMap(key => ["altKey", "ctrlKey", "metaKey", "shiftKey"].map(modifier => ({ key, modifier }))))(
-    "preserves modified outer $modifier+$key browser behavior", async ({ key, modifier }) => {
-      vi.stubGlobal("requestAnimationFrame", () => 1);
-      vi.stubGlobal("cancelAnimationFrame", () => {});
-      const onBottomStateChange = vi.fn();
-      await act(async () => renderWithProviders(
-        <InspectorProvider><ChatTranscript props={{ ...sessionProps([turn("modified-boundary", true)]), followOutput: false, onBottomStateChange }} /></InspectorProvider>,
-      ));
-      const scroller = container.querySelector<HTMLElement>("[data-transcript-scroller]")!;
-      Object.defineProperties(scroller, {
-        scrollHeight: { configurable: true, value: 1000 },
-        clientHeight: { configurable: true, value: 200 },
-        scrollTop: { configurable: true, writable: true, value: 350 },
-      });
-      const scrollIntoView = vi.fn();
-      container.querySelector<HTMLElement>('div[aria-hidden="true"].h-px')!.scrollIntoView = scrollIntoView;
-      onBottomStateChange.mockClear();
-      scroller.focus();
-      const event = new KeyboardEvent("keydown", { key, [modifier]: true, bubbles: true, cancelable: true });
-      await act(async () => scroller.dispatchEvent(event));
-      expect(event.defaultPrevented).toBe(false);
-      expect(scroller.scrollTop).toBe(350);
-      expect(document.activeElement).toBe(scroller);
-      expect(scrollIntoView).not.toHaveBeenCalled();
-      expect(onBottomStateChange).not.toHaveBeenCalled();
-    },
-  );
+  it.each(
+    ["Home", "End"].flatMap((key) =>
+      ["altKey", "ctrlKey", "metaKey", "shiftKey"].map((modifier) => ({ key, modifier })),
+    ),
+  )("preserves modified outer $modifier+$key browser behavior", async ({ key, modifier }) => {
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const onBottomStateChange = vi.fn();
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript
+            props={{ ...sessionProps([turn("modified-boundary", true)]), followOutput: false, onBottomStateChange }}
+          />
+        </InspectorProvider>,
+      ),
+    );
+    const scroller = container.querySelector<HTMLElement>("[data-transcript-scroller]")!;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, writable: true, value: 350 },
+    });
+    const scrollIntoView = vi.fn();
+    container.querySelector<HTMLElement>('div[aria-hidden="true"].h-px')!.scrollIntoView = scrollIntoView;
+    onBottomStateChange.mockClear();
+    scroller.focus();
+    const event = new KeyboardEvent("keydown", { key, [modifier]: true, bubbles: true, cancelable: true });
+    await act(async () => scroller.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(false);
+    expect(scroller.scrollTop).toBe(350);
+    expect(document.activeElement).toBe(scroller);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(onBottomStateChange).not.toHaveBeenCalled();
+  });
   it("retains disclosure and focus by turn and tool ID through insertion and canonical refresh", async () => {
     const recorded = turn("retained", true);
     const first = {
@@ -566,8 +610,12 @@ describe("ChatTranscript", () => {
         ),
       );
     await render(props);
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() => {
+      const review = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Review approval",
+      );
+      expect(review).toBeDefined();
+      expect(review!.disabled).toBe(false);
     });
     await act(async () =>
       [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval")!.click(),
@@ -763,7 +811,9 @@ describe("ChatTranscript", () => {
         </InspectorProvider>,
       ),
     );
-    await act(async () => { await vi.dynamicImportSettled(); });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     expect(container.textContent).toContain("Use another model");
     const review = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Review and confirm",
@@ -789,6 +839,13 @@ describe("ChatTranscript", () => {
         .querySelector('button[aria-label="More message actions"]')
         ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
     );
+    await vi.waitFor(() => {
+      const item = [...document.querySelectorAll('[role="menuitem"]')].find(
+        (candidate) => candidate.textContent === "Run details",
+      );
+      expect(item).toBeInstanceOf(HTMLElement);
+      expect(item?.getAttribute("data-disabled")).toBeNull();
+    });
     await act(async () =>
       [...document.querySelectorAll('[role="menuitem"]')]
         .find((item) => item.textContent === "Run details")
@@ -830,7 +887,9 @@ describe("ChatTranscript", () => {
         </InspectorProvider>,
       ),
     );
-    await act(async () => { await vi.dynamicImportSettled(); });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     expect(container.textContent).toContain("OpenCode report");
     expect(container.textContent).toContain("1 reported file");
     expect(container.textContent).toContain("Reported files");
@@ -997,7 +1056,11 @@ it("offers starters only after an editable empty conversation has loaded", async
 
 function NoticePreferenceToggle() {
   const { setShowTechnicalDetails } = useUiPreferences();
-  return <button onClick={() => setShowTechnicalDetails(false)}>Hide notice identifiers</button>;
+  return (
+    <button type="button" onClick={() => setShowTechnicalDetails(false)}>
+      Hide notice identifiers
+    </button>
+  );
 }
 
 it.each(["neutral", "warning"] as const)(
@@ -1061,37 +1124,76 @@ it.each(["neutral", "warning"] as const)(
   },
 );
 
-it.each([0, 1, 99, 100])("shows %s selected-path turns in the plain transcript without mounting optional virtualization", async count => {
-  const records = Array.from({ length: count }, (_, index) => turn("plain-" + index, true));
-  await act(async () => renderWithProviders(<InspectorProvider><ChatTranscript props={sessionProps(records)} /></InspectorProvider>));
-  expect(viewport.virtualMounts).toBe(0);
-  expect(container.querySelectorAll("[data-turn-id]")).toHaveLength(count);
-  expect(container.querySelector('[data-virtuoso-scroller]')).toBeNull();
-  expect(container.querySelector('[data-follow-output="false"]')?.className).toContain("overflow-y-auto");
-});
+it.each([0, 1, 99, 100])(
+  "shows %s selected-path turns in the plain transcript without mounting optional virtualization",
+  async (count) => {
+    const records = Array.from({ length: count }, (_, index) => turn("plain-" + index, true));
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript props={sessionProps(records)} />
+        </InspectorProvider>,
+      ),
+    );
+    expect(viewport.virtualMounts).toBe(0);
+    expect(container.querySelectorAll("[data-turn-id]")).toHaveLength(count);
+    expect(container.querySelector("[data-virtuoso-scroller]")).toBeNull();
+    expect(container.querySelector('[data-follow-output="false"]')?.className).toContain("overflow-y-auto");
+  },
+);
 it("hands all 1000 canonical turns to optional virtualization and starts a pinned conversation at its actual tail", async () => {
   const records = Array.from({ length: 1000 }, (_, index) => turn("long-" + index, true));
-  await act(async () => renderWithProviders(<InspectorProvider><ChatTranscript props={sessionProps(records)} /></InspectorProvider>));
-  await act(async () => { await import("react-virtuoso"); });
-  expect(viewport.virtualDataCount).toBe(1000); expect(viewport.initialIndex).toBe(999);
+  await act(async () =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={sessionProps(records)} />
+      </InspectorProvider>,
+    ),
+  );
+  await act(async () => {
+    await import("react-virtuoso");
+  });
+  expect(viewport.virtualDataCount).toBe(1000);
+  expect(viewport.initialIndex).toBe(999);
   expect(container.querySelectorAll("[data-turn-id]").length).toBeLessThan(100);
   expect(container.textContent).toContain("Assistant long-999");
   expect(container.querySelector('[data-follow-output="false"]')).not.toBeNull();
 });
 it("preserves the reader's disclosure, focus and scroll anchor when a short transcript grows into a virtual viewport", async () => {
   const records = Array.from({ length: 1000 }, (_, index) => turn("anchor-" + index, true));
-  records[99]!.toolRuns = [{ toolRunId: "retained-tool", turnId: records[99]!.turnId, sessionId: "session-1", toolName: "session.status", status: "blocked", error: "Denied by policy" } as never];
-  const render = (count: number) => renderWithProviders(<InspectorProvider><ChatTranscript props={{ ...sessionProps(records.slice(0, count)), followOutput: false }} /></InspectorProvider>);
+  records[99]!.toolRuns = [
+    {
+      toolRunId: "retained-tool",
+      turnId: records[99]!.turnId,
+      sessionId: "session-1",
+      toolName: "session.status",
+      status: "blocked",
+      error: "Denied by policy",
+    } as never,
+  ];
+  const render = (count: number) =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={{ ...sessionProps(records.slice(0, count)), followOutput: false }} />
+      </InspectorProvider>,
+    );
   await act(async () => render(100));
   const oldRow = container.querySelector<HTMLElement>('[data-turn-id="anchor-99"]')!;
   const disclosure = oldRow.querySelector<HTMLDetailsElement>('details[aria-label="Tool activity for this turn"]')!;
-  disclosure.open = true; disclosure.querySelector("summary")!.focus();
+  disclosure.open = true;
+  disclosure.querySelector("summary")!.focus();
   const oldScroller = container.querySelector<HTMLElement>('[data-follow-output="false"]')!;
   oldScroller.scrollTop = 123;
   vi.spyOn(oldRow, "getBoundingClientRect").mockReturnValue({ top: 0, bottom: 50 } as DOMRect);
-  await act(async () => render(1000)); await act(async () => { await import("react-virtuoso"); });
-  expect(viewport.initialIndex).toBe(99); expect(viewport.virtualDataCount).toBe(1000);
-  const newDisclosure = container.querySelector<HTMLDetailsElement>('[data-turn-id="anchor-99"] details[aria-label="Tool activity for this turn"]')!;
+  await act(async () => render(1000));
+  await act(async () => {
+    await import("react-virtuoso");
+  });
+  expect(viewport.initialIndex).toBe(99);
+  expect(viewport.virtualDataCount).toBe(1000);
+  const newDisclosure = container.querySelector<HTMLDetailsElement>(
+    '[data-turn-id="anchor-99"] details[aria-label="Tool activity for this turn"]',
+  )!;
   expect(newDisclosure.open).toBe(true);
   expect(document.activeElement).toBe(newDisclosure.querySelector("summary"));
   expect(container.querySelector<HTMLElement>("[data-transcript-scroller]")!.scrollTop).toBe(123);

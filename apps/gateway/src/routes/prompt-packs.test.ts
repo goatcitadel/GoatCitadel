@@ -210,3 +210,62 @@ describe("prompt-pack routes", () => {
     expect(importBuiltinPromptPack).toHaveBeenCalledWith("security-red-team-v6");
   });
 });
+
+describe("focused prompt-pack report GET", () => {
+  it("retains default call shape and forwards exact canonical run/session focus", async () => {
+    const getPromptPackReport = vi.fn(async () => ({ focusedRun: { run: { runId: "run/one" } } }));
+    const app = Fastify();
+    app.decorate("services", { promptPacks: { getPromptPackReport } } as never);
+    await app.register(promptPackRoutes);
+    try {
+      expect((await app.inject({ method: "GET", url: "/api/v1/prompt-packs/pack/report" })).statusCode).toBe(200);
+      expect(getPromptPackReport).toHaveBeenLastCalledWith("pack");
+      const result = await app.inject({
+        method: "GET",
+        url: "/api/v1/prompt-packs/pack/report?runId=run%2Fone&sessionId=session%3Aone",
+      });
+      expect(result.statusCode).toBe(200);
+      expect(getPromptPackReport).toHaveBeenLastCalledWith("pack", { runId: "run/one", sessionId: "session:one" });
+      expect(result.json().focusedRun.run.runId).toBe("run/one");
+    } finally {
+      await app.close();
+    }
+  });
+  it.each([
+    "?runId=",
+    "?runId=%20",
+    "?sessionId=s",
+    "?runId=a&runId=b",
+    "?runId=a&sessionId=",
+    "?runId=" + "x".repeat(257),
+    "?runId=a&sessionId=" + "x".repeat(257),
+  ])("rejects malformed focus %s before owner reads", async (query) => {
+    const getPromptPackReport = vi.fn();
+    const app = Fastify();
+    app.decorate("services", { promptPacks: { getPromptPackReport } } as never);
+    await app.register(promptPackRoutes);
+    try {
+      expect((await app.inject({ method: "GET", url: "/api/v1/prompt-packs/pack/report" + query })).statusCode).toBe(
+        400,
+      );
+      expect(getPromptPackReport).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+  it("returns the existing explicit not-found outcome without a default-report retry", async () => {
+    const getPromptPackReport = vi.fn(async () => {
+      throw new Error("Requested run is unavailable");
+    });
+    const app = Fastify();
+    app.decorate("services", { promptPacks: { getPromptPackReport } } as never);
+    await app.register(promptPackRoutes);
+    try {
+      const result = await app.inject({ method: "GET", url: "/api/v1/prompt-packs/pack/report?runId=missing" });
+      expect(result.statusCode).toBe(404);
+      expect(getPromptPackReport).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+    }
+  });
+});

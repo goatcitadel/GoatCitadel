@@ -17,6 +17,7 @@ export function useChatDockWorkbenchController(input: {
   messageMode: ChatMode;
   workbenchEnabled?: boolean;
   selectedSessionId: string | null;
+  workspaceId?: string;
   selectedSession: { projectId?: string | null } | null;
   selectedTurn: ChatThreadResponse["turns"][number] | null;
   thread: ChatThreadResponse | null;
@@ -65,6 +66,7 @@ export function useChatDockWorkbenchController(input: {
     revertWorkbenchAll,
   } = useChatWorkbench({
     sessionId: input.selectedSessionId,
+    workspaceId: input.workspaceId,
     // The canonical host loads specialist file evidence when its owning panel opens.
     enabled: Boolean(input.selectedSession) && input.workbenchEnabled !== false,
   });

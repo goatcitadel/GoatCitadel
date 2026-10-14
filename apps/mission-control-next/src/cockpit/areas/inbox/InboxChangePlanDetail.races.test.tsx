@@ -263,13 +263,32 @@ describe("Inbox confirmation lifecycle", () => {
 
 describe("Inbox Settings continuation reuse", () => {
   it("explicitly continues only an exact approved Settings plan through the shared owner hook", async () => {
+    window.history.replaceState(
+      { retained: true },
+      "",
+      "/inbox?workspaceId=old&citadelId=retained&runId=run%2Fone&sessionId=session%3Aone&keep=yes&shell=cockpit#approval-recovery",
+    );
     data = fixture("awaiting_approval");
     await render();
     expect(api.respondToChangePlan).not.toHaveBeenCalled();
     expect(host.textContent).toContain("does not prove the settings were saved");
-    expect(
-      host.querySelector('a[href="/ops/approvals?shell=classic&approvalId=approval-a&shellScope=visit"]'),
-    ).not.toBeNull();
+    const link = [...host.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (candidate) => new URL(candidate.href).searchParams.get("approvalId") === "approval-a",
+    );
+    expect(link).not.toBeNull();
+    const target = new URL(link!.href);
+    expect(target.pathname).toBe("/inbox");
+    expect(target.searchParams.getAll("approvalId")).toEqual(["approval-a"]);
+    expect(target.searchParams.get("workspaceId")).toBe(data.plan.origin.workspaceId);
+    expect(target.searchParams.get("citadelId")).toBe("retained");
+    expect(target.searchParams.get("runId")).toBe("run/one");
+    expect(target.searchParams.get("sessionId")).toBe("session:one");
+    expect(target.searchParams.get("keep")).toBe("yes");
+    expect(target.searchParams.get("shell")).toBe("cockpit");
+    expect(target.searchParams.has("shellScope")).toBe(false);
+    expect(target.hash).toBe("#approval-recovery");
+    expect(window.history.state).toEqual({ retained: true });
+    expect(api.respondToChangePlan).not.toHaveBeenCalled();
     await click("Continue approved change");
     expect(api.respondToChangePlan).toHaveBeenCalledExactlyOnceWith(
       "plan-a",

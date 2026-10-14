@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -13,13 +13,22 @@ function stubFetch() {
 }
 
 describe("reads by id", () => {
+  let fetchMock: ReturnType<typeof stubFetch>;
+  let fetchApproval: (typeof import("./approvals"))["fetchApproval"];
+  let fetchTraceMemoryCandidate: (typeof import("./memory"))["fetchTraceMemoryCandidate"];
+  let fetchDurableDeadLetter: (typeof import("./durable"))["fetchDurableDeadLetter"];
+  let fetchDocumentPatchProposal: (typeof import("./chat"))["fetchDocumentPatchProposal"];
+
+  beforeEach(async () => {
+    fetchMock = stubFetch();
+    ({ fetchApproval } = await import("./approvals"));
+    ({ fetchTraceMemoryCandidate } = await import("./memory"));
+    ({ fetchDurableDeadLetter } = await import("./durable"));
+    ({ fetchDocumentPatchProposal } = await import("./chat"));
+  });
+
   it("address one record, keep workspace scope and forward cancellation", async () => {
-    const fetchMock = stubFetch();
     const controller = new AbortController();
-    const { fetchApproval } = await import("./approvals");
-    const { fetchTraceMemoryCandidate } = await import("./memory");
-    const { fetchDurableDeadLetter } = await import("./durable");
-    const { fetchDocumentPatchProposal } = await import("./chat");
 
     await fetchApproval("approval/1", { workspaceId: "ws-a", signal: controller.signal });
     await fetchTraceMemoryCandidate("candidate-1", { workspaceId: "ws-a" });

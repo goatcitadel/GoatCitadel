@@ -56,6 +56,7 @@ afterEach(() => {
   client.clear();
   container.remove();
   vi.clearAllMocks();
+  window.history.replaceState(null, "", "/");
 });
 
 async function render(record = task(), workspaceId = "workspace-a"): Promise<void> {
@@ -116,15 +117,31 @@ describe("cockpit task details editor", () => {
   });
 
   it("locks another request after an unconfirmed edit outcome", async () => {
+    window.history.replaceState(
+      { evidence: "retained-task-recovery" },
+      "",
+      "/work?workspaceId=old-workspace&citadelId=current-citadel&runId=run-a&sessionId=session-a&filter=retained&taskId=obsolete&shell=cockpit&shellScope=visit#task-evidence",
+    );
     vi.mocked(updateTask).mockRejectedValue(new Error("Response lost"));
     await render();
     await changeTitle("Updated title");
     await click("Save task details");
     await vi.waitFor(() => expect(container.textContent).toContain("task action outcome is unconfirmed"));
     expect(container.querySelector<HTMLInputElement>("input")).toBeNull();
-    expect(
-      container.querySelector('a[href="/ops/kanban?taskId=task-a&shell=classic&shellScope=visit"]'),
-    ).not.toBeNull();
+    const recovery = container.querySelector<HTMLAnchorElement>('a[href^="/work/tasks/task-a?"]');
+    expect(recovery).not.toBeNull();
+    const destination = new URL(recovery!.href);
+    expect(destination.pathname).toBe("/work/tasks/task-a");
+    expect(destination.searchParams.get("workspaceId")).toBe("workspace-a");
+    expect(destination.searchParams.get("citadelId")).toBe("current-citadel");
+    expect(destination.searchParams.get("runId")).toBe("run-a");
+    expect(destination.searchParams.get("sessionId")).toBe("session-a");
+    expect(destination.searchParams.get("filter")).toBe("retained");
+    expect(destination.searchParams.get("taskId")).toBeNull();
+    expect(destination.searchParams.get("shell")).toBe("cockpit");
+    expect(destination.searchParams.get("shellScope")).toBeNull();
+    expect(destination.hash).toBe("#task-evidence");
+    expect(window.history.state).toMatchObject({ evidence: "retained-task-recovery" });
     await act(async () => root.render(null));
     await render();
     expect(container.textContent).toContain("task action outcome is unconfirmed");

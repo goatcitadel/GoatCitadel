@@ -2,7 +2,10 @@ import { SystemOwnerLink } from "./SystemOwnerLink";
 import { HealthBackupAction } from "./HealthBackupAction";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
-import { getGatewayAccessRevision, subscribeGatewayAccessChange } from "@goatcitadel/mission-control-shared/api/client-core";
+import {
+  getGatewayAccessRevision,
+  subscribeGatewayAccessChange,
+} from "@goatcitadel/mission-control-shared/api/client-core";
 import {
   Archive,
   Cable,
@@ -66,10 +69,18 @@ function HealthCard({
         <StatusBadge status={check.status} />
       </div>
       <p className="mt-2 text-sm leading-relaxed text-fg-secondary">{check.detail}</p>
-      <SystemOwnerLink href={check.id === "remote_workers" ? "/system/diagnostics" : check.inspectPath} scope={[workspaceId, check.id]}>
+      <SystemOwnerLink
+        href={check.id === "remote_workers" ? "/system/runtime/workers" : check.inspectPath}
+        scope={[workspaceId, check.id]}
+      >
         Review {check.title.toLowerCase()}
       </SystemOwnerLink>
-      {check.id === "remote_workers" ? <p className="mt-2 text-xs text-fg-muted">Diagnostics show available worker evidence; worker management is not supplied here.</p> : null}
+      {check.id === "remote_workers" ? (
+        <p className="mt-2 text-xs text-fg-muted">
+          Inspect worker records, assignment evidence and spending budgets. Enrollment and containment recovery remain
+          under their existing runtime authority.
+        </p>
+      ) : null}
       {check.id === "backups" ? <HealthBackupAction readAvailable={backupReadAvailable} onRefresh={onRefresh} /> : null}
       {check.id === "models" ? <HealthLocalRuntimeActions workspaceId={workspaceId} onRefresh={onRefresh} /> : null}
     </article>
@@ -81,7 +92,11 @@ export function HealthOverview() {
   const workspaceId = activeWorkspaceId ?? "default";
   const desktopUpdates = useDesktopUpdates();
   const client = useQueryClient();
-  const accessRevision = useSyncExternalStore(subscribeGatewayAccessChange, getGatewayAccessRevision, getGatewayAccessRevision);
+  const accessRevision = useSyncExternalStore(
+    subscribeGatewayAccessChange,
+    getGatewayAccessRevision,
+    getGatewayAccessRevision,
+  );
   const health = useQuery({
     queryKey: [...queryKeys.health(workspaceId), ...healthQueryScope(client, workspaceId, accessRevision)],
     queryFn: ({ queryKey }) => loadSystemHealthSources(workspaceId, client.getQueryData<SystemHealthSources>(queryKey)),
@@ -114,7 +129,11 @@ export function HealthOverview() {
             </p>
           ) : null}
         </div>
-        <Button size="sm" onClick={() => void health.refetch()} disabled={health.isFetching || (health.isError && error.retryable === false)}>
+        <Button
+          size="sm"
+          onClick={() => void health.refetch()}
+          disabled={health.isFetching || (health.isError && error.retryable === false)}
+        >
           <RefreshCw aria-hidden="true" className="size-4" /> Refresh
         </Button>
       </header>
@@ -142,8 +161,12 @@ export function HealthOverview() {
                 {unavailable.map(([name, source]) => (
                   <li key={name}>
                     {name.replaceAll("_", " ")}: {source.state === "unavailable" ? source.detail : "Unknown"}
-                    {source.state === "unavailable" && source.lastKnown ? ` Retained observation is stale; last observed ${source.lastKnown.observedAt ? new Date(source.lastKnown.observedAt).toLocaleString() : "at an unavailable time"}.` : ""}
-                    {source.state === "unavailable" && source.retryable === false ? " This source will be checked again after Gateway access or workspace scope changes; other sources continue refreshing." : ""}
+                    {source.state === "unavailable" && source.lastKnown
+                      ? ` Retained observation is stale; last observed ${source.lastKnown.observedAt ? new Date(source.lastKnown.observedAt).toLocaleString() : "at an unavailable time"}.`
+                      : ""}
+                    {source.state === "unavailable" && source.retryable === false
+                      ? " This source will be checked again after Gateway access or workspace scope changes; other sources continue refreshing."
+                      : ""}
                   </li>
                 ))}
               </ul>
@@ -163,7 +186,12 @@ export function HealthOverview() {
                     <span className="text-sm text-fg">
                       <strong>{check.title}:</strong> {check.detail}
                     </span>
-                    <SystemOwnerLink href={check.id === "remote_workers" ? "/system/diagnostics" : check.inspectPath} scope={[workspaceId, check.id]}>Review {check.title.toLowerCase()}</SystemOwnerLink>
+                    <SystemOwnerLink
+                      href={check.id === "remote_workers" ? "/system/runtime/workers" : check.inspectPath}
+                      scope={[workspaceId, check.id]}
+                    >
+                      Review {check.title.toLowerCase()}
+                    </SystemOwnerLink>
                   </li>
                 ))}
               </ul>
@@ -178,10 +206,18 @@ export function HealthOverview() {
             )}
           </section>
 
-          {unknown.length ? <section aria-label="Checks awaiting evidence" className="rounded-lg border border-line bg-sunken p-4">
-            <h2 className="font-display text-lg font-semibold text-fg">Checks awaiting evidence</h2>
-            <ul className="mt-3 space-y-2">{unknown.map((check) => <li key={check.id} className="text-sm text-fg-secondary"><strong>{check.title}:</strong> {check.detail}</li>)}</ul>
-          </section> : null}
+          {unknown.length ? (
+            <section aria-label="Checks awaiting evidence" className="rounded-lg border border-line bg-sunken p-4">
+              <h2 className="font-display text-lg font-semibold text-fg">Checks awaiting evidence</h2>
+              <ul className="mt-3 space-y-2">
+                {unknown.map((check) => (
+                  <li key={check.id} className="text-sm text-fg-secondary">
+                    <strong>{check.title}:</strong> {check.detail}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
 
           <section aria-labelledby="system-checks-title">
             <h2 id="system-checks-title" className="mb-3 font-display text-lg font-semibold text-fg">
@@ -189,10 +225,18 @@ export function HealthOverview() {
             </h2>
             <div className="grid gap-3 sm:grid-cols-2">
               {checks.map((check) => (
-                <HealthCard key={check.id} check={check} workspaceId={workspaceId} backupReadAvailable={sources.summary.state === "current" && !health.isFetching} onRefresh={() => Promise.all([
-                  client.invalidateQueries({ queryKey: queryKeys.healthAll() }),
-                  client.invalidateQueries({ queryKey: queryKeys.inboxAll() }),
-                ])} />
+                <HealthCard
+                  key={check.id}
+                  check={check}
+                  workspaceId={workspaceId}
+                  backupReadAvailable={sources.summary.state === "current" && !health.isFetching}
+                  onRefresh={() =>
+                    Promise.all([
+                      client.invalidateQueries({ queryKey: queryKeys.healthAll() }),
+                      client.invalidateQueries({ queryKey: queryKeys.inboxAll() }),
+                    ])
+                  }
+                />
               ))}
             </div>
           </section>

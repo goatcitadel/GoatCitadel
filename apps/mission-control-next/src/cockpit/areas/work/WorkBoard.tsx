@@ -5,7 +5,6 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { humanizeToken, presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { WindowedRecordList } from "../../ui/WindowedRecordList";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { AREA_PAGE } from "../../ui/area-layout";
@@ -52,13 +51,12 @@ export function WorkBoard() {
         workspaceId,
       )
     : null;
-  const taskBoard =
-    tasks.data
-      ? projectWorkTasks(
-          tasks.data.pages.flatMap((page) => page.items),
-          workspaceId,
-        )
-      : null;
+  const taskBoard = tasks.data
+    ? projectWorkTasks(
+        tasks.data.pages.flatMap((page) => page.items),
+        workspaceId,
+      )
+    : null;
   const loadedTasks = taskBoard ? Object.values(taskBoard).flat() : [];
   const taskView = recordView(tasks);
   const runView = recordView(runs);
@@ -115,8 +113,30 @@ export function WorkBoard() {
       </header>
       <WorkWaitingDecisions workspaceId={workspaceId} />
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Search loaded work">{props => <input {...props} value={search} onChange={event => setSearch(event.target.value)} className="rounded-md border border-line bg-sunken p-2 text-fg" />}</Field>
-        <Field label="Record type">{props => <select {...props} value={kind} onChange={event => setKind(event.target.value)} className="rounded-md border border-line bg-sunken p-2 text-fg"><option value="all">Tasks and runtime runs</option><option value="task">Operator tasks</option><option value="run">Runtime runs</option></select>}</Field>
+        <Field label="Search loaded work">
+          {(props) => (
+            <input
+              {...props}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              className="rounded-md border border-line bg-sunken p-2 text-fg"
+            />
+          )}
+        </Field>
+        <Field label="Record type">
+          {(props) => (
+            <select
+              {...props}
+              value={kind}
+              onChange={(event) => setKind(event.target.value)}
+              className="rounded-md border border-line bg-sunken p-2 text-fg"
+            >
+              <option value="all">Tasks and runtime runs</option>
+              <option value="task">Operator tasks</option>
+              <option value="run">Runtime runs</option>
+            </select>
+          )}
+        </Field>
       </div>
       {selecting ? (
         <WorkTaskBulkActions
@@ -181,69 +201,117 @@ export function WorkBoard() {
                   <p className="text-xs text-fg-muted">{column.description}</p>
                 </div>
                 <span className="text-sm tabular-nums text-fg-secondary">
-                  {workColumnStatus(taskView, taskBoard?.[column.id].length, "tasks")} · {workColumnStatus(runView, board?.[column.id].length, "runs")}
+                  {workColumnStatus(taskView, taskBoard?.[column.id].length, "tasks")}
+                  {" · "}
+                  {workColumnStatus(runView, board?.[column.id].length, "runs")}
                 </span>
               </div>
-              {(["task", "run"] as const).filter(recordKind => kind === "all" || kind === recordKind).map(recordKind => <section key={recordKind} aria-label={recordKind === "task" ? "Operator tasks" : "Runtime runs"}>
-                <h3 className="mb-2 text-xs font-semibold text-fg-secondary">{recordKind === "task" ? "Operator tasks" : "Runtime runs"}</h3>
-              <WindowedRecordList
-                label={column.title + " records"}
-                items={[
-                  ...(taskBoard?.[column.id] ?? []).map((task) => ({
-                    kind: "task" as const,
-                    key: "task:" + task.taskId,
-                    task,
-                  })),
-                  ...(board?.[column.id] ?? []).map((run) => ({ kind: "run" as const, key: "run:" + run.runId, run })),
-                ].filter(item => item.kind === recordKind && (item.kind === "task" ? `${item.task.title} ${item.task.status} ${item.task.description ?? ""}` : `${workRunTitle(item.run)} ${item.run.status} ${item.run.lastError ?? ""}`).toLowerCase().includes(search.trim().toLowerCase())).slice(0, column.id === "done" ? 25 : undefined)}
-                itemKey={(item) => item.key}
-              >
-                {(item) => {
-                  if (item.kind === "task") {
-                    const task = item.task;
-                    const path = `/work/tasks/${encodeURIComponent(task.taskId)}`;
-                    if (selecting)
-                      return (
-                        <label key={`task:${task.taskId}`} className={`${CARD} flex min-h-11 cursor-pointer items-start gap-2`}>
-                          <input
-                            type="checkbox"
-                            className="mt-0.5 size-5 shrink-0"
-                            checked={selectedIds.has(task.taskId)}
-                            onChange={() => toggle(task.taskId)}
-                          />
-                          <span className="min-w-0">
-                            <span className="text-xs font-semibold text-accent">Operator task · {humanizeToken(task.status)}</span>
-                            <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">{task.title}</span>
-                          </span>
-                        </label>
-                      );
-                    return (
-                      <a key={`task:${task.taskId}`} href={path} onClick={open(path)} className={CARD}>
-                        <span className="text-xs font-semibold text-accent">Operator task · {humanizeToken(task.status)}</span>
-                        <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">{task.title}</span>
-                        <span className="mt-2 block text-xs text-fg-muted">
-                          Updated {formattedWorkTime(task.updatedAt)}
-                        </span>
-                      </a>
-                    );
-                  }
-                  const run = item.run;
-                  const path = `/work/runs/${encodeURIComponent(run.runId)}`;
-                  return (
-                    <a key={`run:${run.runId}`} href={path} onClick={open(path)} className={CARD}>
-                      <span className="text-xs font-semibold text-accent">Runtime run</span>
-                      <span className="line-clamp-3 text-sm font-medium text-fg">{workRunTitle(run)}</span>
-                      <span className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                        <StatusBadge status={presentRunStatus(run.status)} />
-                        <span className="text-xs text-fg-muted">{formattedWorkTime(run.updatedAt)}</span>
-                      </span>
-                      {run.lastError || run.recoverySummary ? <span className="mt-2 block text-xs text-status-failed">{run.lastError ?? run.recoverySummary}</span> : null}
-                    </a>
-                  );
-                }}
-              </WindowedRecordList>
-              </section>)}
-              {column.id === "done" ? <p className="mt-2 text-xs text-fg-muted">Overview shows up to 25 matching tasks and 25 matching runs. <NativeOwnerLink href="/work/history" scope={workspaceId}>Open run history</NativeOwnerLink> or <NativeOwnerLink href="/work/kanban" scope={workspaceId}>all loaded task actions</NativeOwnerLink> for older records.</p> : null}
+              {(["task", "run"] as const)
+                .filter((recordKind) => kind === "all" || kind === recordKind)
+                .map((recordKind) => (
+                  <section key={recordKind} aria-label={recordKind === "task" ? "Operator tasks" : "Runtime runs"}>
+                    <h3 className="mb-2 text-xs font-semibold text-fg-secondary">
+                      {recordKind === "task" ? "Operator tasks" : "Runtime runs"}
+                    </h3>
+                    <WindowedRecordList
+                      label={column.title + " records"}
+                      items={[
+                        ...(taskBoard?.[column.id] ?? []).map((task) => ({
+                          kind: "task" as const,
+                          key: "task:" + task.taskId,
+                          task,
+                        })),
+                        ...(board?.[column.id] ?? []).map((run) => ({
+                          kind: "run" as const,
+                          key: "run:" + run.runId,
+                          run,
+                        })),
+                      ]
+                        .filter(
+                          (item) =>
+                            item.kind === recordKind &&
+                            (item.kind === "task"
+                              ? `${item.task.title} ${item.task.status} ${item.task.description ?? ""}`
+                              : `${workRunTitle(item.run)} ${item.run.status} ${item.run.lastError ?? ""}`
+                            )
+                              .toLowerCase()
+                              .includes(search.trim().toLowerCase()),
+                        )
+                        .slice(0, column.id === "done" ? 25 : undefined)}
+                      itemKey={(item) => item.key}
+                    >
+                      {(item) => {
+                        if (item.kind === "task") {
+                          const task = item.task;
+                          const path = `/work/tasks/${encodeURIComponent(task.taskId)}`;
+                          if (selecting)
+                            return (
+                              <label
+                                key={`task:${task.taskId}`}
+                                className={`${CARD} flex min-h-11 cursor-pointer items-start gap-2`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="mt-0.5 size-5 shrink-0"
+                                  checked={selectedIds.has(task.taskId)}
+                                  onChange={() => toggle(task.taskId)}
+                                />
+                                <span className="min-w-0">
+                                  <span className="text-xs font-semibold text-accent">
+                                    Operator task · {humanizeToken(task.status)}
+                                  </span>
+                                  <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">
+                                    {task.title}
+                                  </span>
+                                </span>
+                              </label>
+                            );
+                          return (
+                            <a key={`task:${task.taskId}`} href={path} onClick={open(path)} className={CARD}>
+                              <span className="text-xs font-semibold text-accent">
+                                Operator task · {humanizeToken(task.status)}
+                              </span>
+                              <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">{task.title}</span>
+                              <span className="mt-2 block text-xs text-fg-muted">
+                                Updated {formattedWorkTime(task.updatedAt)}
+                              </span>
+                            </a>
+                          );
+                        }
+                        const run = item.run;
+                        const path = `/work/runs/${encodeURIComponent(run.runId)}`;
+                        return (
+                          <a key={`run:${run.runId}`} href={path} onClick={open(path)} className={CARD}>
+                            <span className="text-xs font-semibold text-accent">Runtime run</span>
+                            <span className="line-clamp-3 text-sm font-medium text-fg">{workRunTitle(run)}</span>
+                            <span className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                              <StatusBadge status={presentRunStatus(run.status)} />
+                              <span className="text-xs text-fg-muted">{formattedWorkTime(run.updatedAt)}</span>
+                            </span>
+                            {run.lastError || run.recoverySummary ? (
+                              <span className="mt-2 block text-xs text-status-failed">
+                                {run.lastError ?? run.recoverySummary}
+                              </span>
+                            ) : null}
+                          </a>
+                        );
+                      }}
+                    </WindowedRecordList>
+                  </section>
+                ))}
+              {column.id === "done" ? (
+                <p className="mt-2 text-xs text-fg-muted">
+                  {"Overview shows up to 25 matching tasks and 25 matching runs. "}
+                  <NativeOwnerLink href="/work/history" scope={workspaceId}>
+                    Open run history
+                  </NativeOwnerLink>
+                  {" or "}
+                  <NativeOwnerLink href="/work/kanban" scope={workspaceId}>
+                    all loaded task actions
+                  </NativeOwnerLink>
+                  {" for older records."}
+                </p>
+              ) : null}
               {!runs.isError && !tasks.isError && !board?.[column.id].length && !taskBoard?.[column.id].length ? (
                 <p className="text-xs text-fg-muted">No recent work in this state.</p>
               ) : null}
@@ -266,16 +334,6 @@ export function WorkBoard() {
           {tasks.isFetchingNextPage ? "Loading tasks…" : "Load more tasks"}
         </Button>
       ) : null}
-      <p className="text-sm text-fg-muted">
-        Open a task or run for owner evidence and available controls. Additional recovery options remain in the{" "}
-        <ClassicOwnerLink
-          className="font-medium text-accent underline-offset-2 hover:underline"
-          href="/ops/kanban?shell=classic"
-          scope={workspaceId}
-          label="classic Kanban view"
-        />
-        .
-      </p>
     </section>
   );
 }

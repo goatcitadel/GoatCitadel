@@ -10,8 +10,6 @@ import {
   useDeviceAccessRevocation,
 } from "../../../features/native-routes/settings/use-device-access-revocation";
 import { GatewayAuthSettings } from "./GatewayAuthSettings";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
-import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { Button } from "../../ui/Button";
 import { DeviceContinuityChecks } from "./DeviceContinuityChecks";
 
@@ -138,11 +136,6 @@ export function DeviceAccessSettings() {
           Revoking a grant also revokes its companion sessions and bound session controls. The device must be approved
           again to regain access.
         </p>
-        <ClassicOwnerLink
-          href="/settings/access?shell=classic"
-          scope={getGatewayApiBaseUrl()}
-          label="Desktop and mobile continuity"
-        />
         <ConfirmModal
           open={Boolean(review)}
           danger

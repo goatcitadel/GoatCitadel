@@ -1,5 +1,5 @@
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
-import { type ComposerPaletteItem } from "../composer-palette";
+import type { ComposerPaletteItem } from "../composer-palette";
 import { type PendingAttachmentDocumentMode } from "../mission-threaded-controller-helpers";
 import type { MissionControlActiveSessionSurfaceProps } from "../MissionControlActiveSessionSurface";
 import { useChatCapabilityProfileInspection } from "../useChatCapabilityProfileInspection";
@@ -192,8 +192,10 @@ export function createChatComposerContextProps({
     externalSourceControls:
       externalSourceAttachments.supported === true
         ? {
-            contextInclusionEnabled: sessionData.settings?.chatFeatureAvailability?.explicitContext === true && !editingTurnId,
+            contextInclusionEnabled:
+              sessionData.settings?.chatFeatureAvailability?.explicitContext === true && !editingTurnId,
             attachments: externalSourceAttachments.attachments,
+            onLoadCandidates: externalSourceAttachments.loadCandidates,
             candidates: externalSourceAttachments.candidates,
             candidatesSupported: externalSourceAttachments.candidatesSupported,
             loading: externalSourceAttachments.loading,
@@ -202,8 +204,13 @@ export function createChatComposerContextProps({
             canMutate: externalSourceAttachments.canMutate && !historicalModeActive,
             error: externalSourceAttachments.error,
             onToggleSelect: (attachmentId) => {
-              if (!blockHistoricalMutation() && (externalSourceAttachments.selectedAttachmentIds.includes(attachmentId) ||
-                (sessionData.settings?.chatFeatureAvailability?.explicitContext === true && !editingTurnId && externalSourceAttachments.canMutate))) {
+              if (
+                !blockHistoricalMutation() &&
+                (externalSourceAttachments.selectedAttachmentIds.includes(attachmentId) ||
+                  (sessionData.settings?.chatFeatureAvailability?.explicitContext === true &&
+                    !editingTurnId &&
+                    externalSourceAttachments.canMutate))
+              ) {
                 toggleSelection(attachmentId);
               }
             },

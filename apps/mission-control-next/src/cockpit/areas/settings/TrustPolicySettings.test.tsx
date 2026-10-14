@@ -42,6 +42,7 @@ async function select(index: number, value: string) {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  window.history.replaceState(null, "", "/settings/safety?shell=cockpit");
   vi.stubGlobal(
     "fetch",
     vi.fn(() => Promise.reject(new Error("Unexpected Trust mutation or transport"))),
@@ -137,6 +138,33 @@ describe("native Trust evidence", () => {
       detail.querySelector<HTMLAnchorElement>('a[href="/library?type=skill&shell=cockpit"]')!.click(),
     );
     expect(api.navigate).toHaveBeenCalledExactlyOnceWith("/library?type=skill&shell=cockpit");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("carries native owner scope, query and fragment context without authorizing a mutation", async () => {
+    window.history.replaceState(
+      { retained: "history" },
+      "",
+      "/settings/safety?citadelId=citadel-a&workspaceId=workspace-a&runId=run-a&sessionId=session-a&keep=one&keep=two&shell=cockpit#old-evidence",
+    );
+    await render();
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Inspect trust evidence Recorded skill"]')!.click(),
+    );
+    const link = container.querySelector<HTMLAnchorElement>('[role="dialog"] a')!;
+    const target = new URL(link.href);
+    expect(target.pathname).toBe("/library");
+    expect(target.searchParams.get("workspaceId")).toBe("workspace-a");
+    expect(target.searchParams.get("citadelId")).toBe("citadel-a");
+    expect(target.searchParams.get("runId")).toBe("run-a");
+    expect(target.searchParams.get("sessionId")).toBe("session-a");
+    expect(target.searchParams.getAll("keep")).toEqual(["one", "two"]);
+    expect(target.searchParams.get("type")).toBe("skill");
+    expect(target.hash).toBe("#old-evidence");
+    expect(target.searchParams.get("shell")).toBe("cockpit");
+    const stateBefore = structuredClone(window.history.state);
+    await act(async () => link.click());
+    expect(api.navigate).toHaveBeenCalledExactlyOnceWith(link.getAttribute("href"));
+    expect(window.history.state).toEqual(stateBefore);
     expect(fetch).not.toHaveBeenCalled();
   });
   it("labels partial sources and replaces old posture with unavailable evidence after a failed refresh", async () => {

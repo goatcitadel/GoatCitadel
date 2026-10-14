@@ -101,7 +101,7 @@ describe("inspector", () => {
     expect(container.querySelector('[aria-label="Inspector: Conversation"]')).toBeNull();
   });
 
-  it("uses an accessible bottom sheet for the phone inspector", () => {
+  it("uses an accessible bottom sheet for the phone inspector", async () => {
     vi.stubGlobal("matchMedia", (media: string) => ({
       media,
       matches: media === "(width < 640px)",
@@ -117,7 +117,14 @@ describe("inspector", () => {
       );
     });
     act(() => api.open({ title: "Run", body: <p>Steps</p> }));
-    expect(document.querySelector('.cockpit-sheet [role="region"][aria-label="Inspector: Run"]')?.textContent).toContain("Steps");
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector('.cockpit-sheet [role="region"][aria-label="Inspector: Run"]')?.textContent,
+      ).toContain("Steps"),
+    );
+    expect(
+      document.querySelector('.cockpit-sheet [role="region"][aria-label="Inspector: Run"]')?.textContent,
+    ).toContain("Steps");
     expect(document.querySelectorAll('.cockpit-sheet [role="dialog"]').length).toBeLessThanOrEqual(1);
     expect(container.querySelector("aside.cockpit-inspector")).toBeNull();
   });
@@ -231,7 +238,7 @@ describe("inspector", () => {
     expect(container.querySelector("aside")).toBeNull();
   });
 
-  it("leaves the inspector intact when a newer modal is the top layer", () => {
+  it("leaves the inspector intact when a newer modal is the top layer", async () => {
     vi.stubGlobal("matchMedia", (media: string) => ({
       media,
       matches: media === "(width < 640px)" || media === "(width < 1024px)",
@@ -254,6 +261,11 @@ describe("inspector", () => {
     act(() => {
       api.open({ title: "Run", body: <p>Current run evidence</p> });
     });
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector('.cockpit-sheet [role="region"][aria-label="Inspector: Run"]')?.textContent,
+      ).toContain("Current run evidence"),
+    );
     act(() => {
       root.render(render(true));
     });

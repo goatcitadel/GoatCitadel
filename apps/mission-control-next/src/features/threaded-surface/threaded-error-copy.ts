@@ -2,7 +2,7 @@ import {
   describeChatUiError,
   type ChatErrorSource,
   type ChatUiErrorDescriptor,
-} from "../../../../../packages/threaded-surface-core/src/chat/chat-error-copy";
+} from "@goatcitadel/threaded-surface-core/chat-error-copy";
 
 export type ThreadedUiErrorDescriptor = ChatUiErrorDescriptor;
 

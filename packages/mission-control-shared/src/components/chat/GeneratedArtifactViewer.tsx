@@ -1,15 +1,10 @@
-import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useContext, useEffect, useId, useMemo, useState } from "react";
 import type { ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { StatusChip } from "../StatusChip";
 import { AssistantMessageRenderer } from "./AssistantMessageRenderer";
 
-/**
- * Host-supplied actions rendered under an artifact (the cockpit shell provides render and
- * critique controls). Hosts that provide nothing get the viewer unchanged.
- */
-export const GeneratedArtifactActionsContext = createContext<
-  ((artifact: ChatGeneratedArtifactRecord) => ReactNode) | null
->(null);
+import { GeneratedArtifactActionsContext } from "./GeneratedArtifactActionsContext";
+export { GeneratedArtifactActionsContext } from "./GeneratedArtifactActionsContext";
 
 function formatArtifactTimestamp(value: string): string {
   const parsed = new Date(value);

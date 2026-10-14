@@ -179,6 +179,7 @@ export function useChatSurfaceComposition({
     coordination.lastSpecialistSuggestionSyncKeyRef,
   ]);
   const workbenchController = useChatDockWorkbenchController({
+    workspaceId,
     workbenchEnabled: workbenchRequested,
     messageMode: surfaceState.messageMode,
     selectedSessionId: selection.selectedSessionId,
@@ -320,14 +321,20 @@ export function useChatSurfaceComposition({
         session.documentContext.pendingDocumentContextRefs.length === 0)) &&
     (!routeBoundaryAckRequired || submission.currentRouteBoundaryAcknowledged);
   const canSend = composerAdmissionReady && !sending;
-  const canSendWhileRunning = composerAdmissionReady && sending && Boolean(coordination.activeStreamRef.current) && !submission.orchestration.editingTurnId;
+  const canSendWhileRunning =
+    composerAdmissionReady &&
+    sending &&
+    Boolean(coordination.activeStreamRef.current) &&
+    !submission.orchestration.editingTurnId;
   const profileDependentAdmissionBlockReason = oneShotContext.modelCouncilEnabled
     ? "Model council is temporarily unavailable. Turn Council off to send."
     : oneShotContext.workspaceSnapshotRequest
       ? "Workspace snapshots are temporarily unavailable. Remove the snapshot to send."
-      : (!session.explicitContextEnabled || submission.orchestration.editingTurnId) && session.externalSourceAttachments.selectedAttachmentIds.length > 0
+      : (!session.explicitContextEnabled || submission.orchestration.editingTurnId) &&
+          session.externalSourceAttachments.selectedAttachmentIds.length > 0
         ? "Routed external sources are temporarily unavailable. Clear the source selection to send."
-        : (!session.explicitContextEnabled || submission.orchestration.editingTurnId) && session.documentContext.pendingDocumentContextRefs.length > 0
+        : (!session.explicitContextEnabled || submission.orchestration.editingTurnId) &&
+            session.documentContext.pendingDocumentContextRefs.length > 0
           ? "Routed documents are temporarily unavailable. Remove the document selection to send."
           : undefined;
   const blockHistoricalMutation = useCallback(() => {

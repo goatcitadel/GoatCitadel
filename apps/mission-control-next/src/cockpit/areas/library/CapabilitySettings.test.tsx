@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // @vitest-environment happy-dom
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
+import { useSessionDraft, __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { CapabilityCatalogEntry, SkillListItem } from "@goatcitadel/contracts";
@@ -9,7 +10,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CapabilitySettings } from "./CapabilitySettings";
 import { __resetCapabilitySkillAttemptsForTests } from "./use-capability-skill-state";
 
-vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({ fetchCapabilityProposal: vi.fn(async () => { throw new Error("Unavailable"); }) }));
+vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({
+  fetchCapabilityProposal: vi.fn(async () => {
+    throw new Error("Unavailable");
+  }),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/skills", () => ({ fetchSkills: vi.fn(), updateSkillState: vi.fn() }));
 const scope = vi.hoisted(() => ({ activeWorkspaceId: "workspace-a", activeCitadelId: "citadel-a" }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => scope }));
@@ -78,14 +83,17 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
-  container.remove(); client.clear();
+  container.remove();
+  client.clear();
 });
 
 function renderSettings(onRefresh = vi.fn<() => void>(), selectedItem = item, selectedSkill = skill, strict = false) {
   const view = (
-    <QueryClientProvider client={client}><CockpitNavigationProvider>
-      <CapabilitySettings item={selectedItem} skillsKnown skill={selectedSkill} onRefresh={onRefresh} />
-    </CockpitNavigationProvider></QueryClientProvider>
+    <QueryClientProvider client={client}>
+      <CockpitNavigationProvider>
+        <CapabilitySettings item={selectedItem} skillsKnown skill={selectedSkill} onRefresh={onRefresh} />
+      </CockpitNavigationProvider>
+    </QueryClientProvider>
   );
   act(() => root.render(strict ? <StrictMode>{view}</StrictMode> : view));
   return onRefresh;
@@ -113,28 +121,27 @@ describe("Library skill state requests", () => {
     expect(updateSkillState).not.toHaveBeenCalled();
   });
 
-  it("uses a scoped shared classic handoff without erasing an uncertain skill attempt", async () => {
+  it("uses an exact native capability owner without erasing an uncertain skill attempt", async () => {
     vi.mocked(updateSkillState).mockRejectedValue(new Error("Connection lost"));
     renderSettings();
     await act(async () => button("Request disable").click());
     await act(async () => button("Confirm request").click());
     renderSettings(vi.fn(), { ...item, kind: "proposal", proposalId: "proposal-a" });
     const link = container.querySelector<HTMLAnchorElement>("a")!;
-    expect(link.getAttribute("href")).toBe("/library/curator?shell=classic&shellScope=visit");
+    const target = new URL(link.href);
+    expect(target.pathname).toBe("/library/proposal/skill%3Areview");
+    expect(target.searchParams.get("workspaceId")).toBe("workspace-a");
+    expect(target.searchParams.get("type")).toBe("proposal");
+    expect(target.searchParams.get("shell")).toBe("cockpit");
+    const documentBefore = window.document;
     await act(async () => link.click());
-    expect(switchShell).toHaveBeenCalledExactlyOnceWith(
-      "classic",
-      expect.objectContaining({
-        href: "/library/curator?shell=classic&shellScope=visit",
-        isCurrent: expect.any(Function),
-        signal: expect.any(AbortSignal),
-      }),
-    );
-    const [, options] = switchShell.mock.calls[0]!;
-    expect(options.isCurrent()).toBe(true);
+    await vi.waitFor(() => expect(window.location.pathname).toBe("/library/proposal/skill%3Areview"));
+    expect(window.document).toBe(documentBefore);
+    expect(switchShell).not.toHaveBeenCalled();
     scope.activeCitadelId = "citadel-b";
     renderSettings(vi.fn(), { ...item, kind: "proposal", proposalId: "proposal-a" });
-    expect(options.isCurrent()).toBe(false);
+    expect(scope.activeCitadelId).toBe("citadel-b");
+    expect(updateSkillState).toHaveBeenCalledOnce();
     act(() => root.render(null));
     renderSettings();
     expect(container.textContent).toContain("Request outcome is uncertain");
@@ -319,3 +326,51 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+it("revokes a pending native capability continuation after a Citadel-scope ABA without touching the draft or skill", async () => {
+  __resetSessionDraftsForTests();
+  let draft!: ReturnType<typeof useSessionDraft<{ text: string }>>;
+  function DraftOwner() {
+    draft = useSessionDraft("native-capability-continuation", { text: "saved" }, 1, {
+      label: "Capability inspection draft",
+    });
+    return null;
+  }
+  const continuationItem: CapabilityCatalogEntry = {
+    ...item,
+    kind: "proposal",
+    capabilityId: "proposal:proposal-a",
+    proposalId: "proposal-a",
+    callable: false,
+  };
+  const view = () => (
+    <QueryClientProvider client={client}>
+      <CockpitNavigationProvider>
+        <DraftOwner />
+        <CapabilitySettings item={continuationItem} skillsKnown skill={skill} onRefresh={vi.fn()} />
+      </CockpitNavigationProvider>
+    </QueryClientProvider>
+  );
+  await act(async () => root.render(view()));
+  await act(async () => draft.setValue({ text: "unsaved" }));
+  await act(async () => container.querySelector("a")!.click());
+  let oldKeep: HTMLButtonElement | undefined;
+  await vi.waitFor(() => {
+    oldKeep = [...document.querySelectorAll("button")].find((button) => button.textContent === "Keep draft and close");
+    expect(oldKeep).toBeDefined();
+  });
+  expect(window.location.pathname).toBe("/library");
+  scope.activeCitadelId = "citadel-b";
+  await act(async () => root.render(view()));
+  scope.activeCitadelId = "citadel-a";
+  await act(async () => root.render(view()));
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  await act(async () => oldKeep!.click());
+  expect(window.location.pathname + window.location.search).toBe("/library?shell=cockpit");
+  expect(draft.value.text).toBe("unsaved");
+  expect(draft.isDirty).toBe(true);
+  expect(updateSkillState).not.toHaveBeenCalled();
+  expect(switchShell).not.toHaveBeenCalled();
+  await act(async () => root.render(null));
+  __resetSessionDraftsForTests();
+});

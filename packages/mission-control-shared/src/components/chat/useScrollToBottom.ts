@@ -96,12 +96,19 @@ export function useScrollToBottom<
     const scroller = scrollRef.current;
     if (!scroller) return;
     const top = scroller.getBoundingClientRect().top;
-    const blocks = scroller.querySelectorAll<HTMLElement>("[data-turn-id] p, [data-turn-id] li, [data-turn-id] pre, [data-turn-id] tr, [data-turn-id] summary");
-    const element = Array.from(blocks.length ? blocks : scroller.querySelectorAll<HTMLElement>("[data-turn-id]"))
-      .find((block) => block.getBoundingClientRect().bottom > top);
+    const blocks = scroller.querySelectorAll<HTMLElement>(
+      "[data-turn-id] p, [data-turn-id] li, [data-turn-id] pre, [data-turn-id] tr, [data-turn-id] summary",
+    );
+    const element = Array.from(blocks.length ? blocks : scroller.querySelectorAll<HTMLElement>("[data-turn-id]")).find(
+      (block) => block.getBoundingClientRect().bottom > top,
+    );
     readingAnchorRef.current = element ? { element, top: element.getBoundingClientRect().top - top } : null;
   }, []);
-  const unreadRef = useRef({ sessionId: signals.sessionId, previous: [] as readonly string[], unread: new Set<string>() });
+  const unreadRef = useRef({
+    sessionId: signals.sessionId,
+    previous: [] as readonly string[],
+    unread: new Set<string>(),
+  });
   const [newMessageCount, setNewMessageCount] = useState(0);
   useLayoutEffect(() => {
     const ids = signals.conversationMessageIds ?? [];
@@ -242,8 +249,7 @@ export function useScrollToBottom<
       return;
     }
     let active = true;
-    const ownsElements = () => active &&
-      scrollRef.current === scrollElement && threadEndRef.current === endElement;
+    const ownsElements = () => active && scrollRef.current === scrollElement && threadEndRef.current === endElement;
     const pinToThreadEnd = () => {
       if (!ownsElements() || !followingRef.current) return;
       endElement.scrollIntoView({ block: "end", behavior: "auto" });
@@ -257,7 +263,7 @@ export function useScrollToBottom<
       }
       // Coalesce layout observations with the already pending content frame.
       if (scrollFrameRef.current !== null) return;
-      let frame: number | undefined;
+      let frame: number | undefined = undefined;
       let completed = false;
       frame = requestAnimationFrame(() => {
         completed = true;
@@ -270,9 +276,7 @@ export function useScrollToBottom<
       if (!completed) scrollFrameRef.current = frame;
     };
     schedulePin();
-    const observer = typeof ResizeObserver === "function"
-      ? new ResizeObserver(schedulePin)
-      : null;
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(schedulePin) : null;
     // The viewport can resize too; descendants expose deferred content growth.
     observer?.observe(scrollElement);
     for (const child of Array.from(scrollElement.children)) observer?.observe(child);

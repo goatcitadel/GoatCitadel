@@ -1,4 +1,5 @@
 import { FocusedDetail } from "../shared/FocusedDetail";
+import { readArtifactRunId } from "./artifact-run-link";
 import { DetailInspector } from "../../../components/DetailInspector";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Download, FileText, RefreshCw, Waypoints, Workflow } from "lucide-react";
@@ -27,7 +28,10 @@ import {
   LibrarySelectableList,
 } from "../shared/library-primitives";
 
-const ArtifactViewer = lazy(async () => ({ default: (await import("@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer")).GeneratedArtifactViewer }));
+const ArtifactViewer = lazy(async () => ({
+  default: (await import("@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer"))
+    .GeneratedArtifactViewer,
+}));
 
 export function LibraryArtifactsSection({
   activeCitadelId,
@@ -37,7 +41,13 @@ export function LibraryArtifactsSection({
 }: NativeRoutePagesProps) {
   const [detailOpen, setDetailOpen] = useState(Boolean(route.artifactId));
   const [metadataOpen, setMetadataOpen] = useState(false);
-  useEffect(() => { if (route.artifactId) { setSelectedArtifactId(route.artifactId); setDetailOpen(true); setMetadataOpen(false); } }, [route.artifactId]);
+  useEffect(() => {
+    if (route.artifactId) {
+      setSelectedArtifactId(route.artifactId);
+      setDetailOpen(true);
+      setMetadataOpen(false);
+    }
+  }, [route.artifactId]);
   const [selectedArtifactId, setSelectedArtifactId] = useState("");
   const [surfaceFilter, setSurfaceFilter] = useState<ChatGeneratedArtifactRecord["sourceSurface"] | "all">("all");
   const [search, setSearch] = useState("");
@@ -97,256 +107,296 @@ export function LibraryArtifactsSection({
     <LibrarySectionShell loading={loading && !data} error={error} onRetry={reload}>
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <div className="mc-next-calm-directory">
-        {!detailOpen ? <NativeCard
-          title="Generated artifacts"
-          subtitle="Actual artifact records, not just a folder listing."
-          stats={[
-            { label: "Visible", value: String(visibleArtifacts.length) },
-            { label: "Citadel", value: activeCitadelId ?? "legacy", technical: true },
-            { label: "Workspace", value: activeWorkspaceId, technical: true },
-            { label: "Project", value: route.projectId ? "Scoped" : "All" },
-          ]}
-        >
-          <div className="mc-next-settings-field-grid">
-            <label className="mc-next-settings-field span-2">
-              <span>Filter artifacts</span>
-              <input
-                className="mc-next-settings-input"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search title or kind"
-              />
-            </label>
-          </div>
-          <LibraryFilterBar
-            options={[
-              { id: "all", label: "All" },
-              { id: "chat", label: "Conversation" },
-              { id: "cowork", label: "Plan" },
-              { id: "code", label: "Build" },
+        {!detailOpen ? (
+          <NativeCard
+            title="Generated artifacts"
+            subtitle="Actual artifact records, not just a folder listing."
+            stats={[
+              { label: "Visible", value: String(visibleArtifacts.length) },
+              {
+                label: "Citadel",
+                value: activeCitadelId ?? "legacy",
+                technical: true,
+              },
+              { label: "Workspace", value: activeWorkspaceId, technical: true },
+              { label: "Project", value: route.projectId ? "Scoped" : "All" },
             ]}
-            value={surfaceFilter}
-            onChange={(value) => setSurfaceFilter(value as typeof surfaceFilter)}
-          />
-          <LibrarySelectableList
-            items={visibleArtifacts.map((item) => ({
-              id: item.artifactId,
-              title: item.title,
-              meta: item.sourceSurface,
-              body: `${item.kind} · v${item.version} · ${
-                item.projectId ? `project ${item.projectId}` : "unscoped"
-              } · ${formatDateTime(item.updatedAt)}`,
-            }))}
-            selectedId={selectedArtifactId}
-            onSelect={(id) => { setSelectedArtifactId(id); setDetailOpen(true); setMetadataOpen(false); }}
-            emptyLabel="No generated artifacts match the current filter."
-          />
-          <LibraryButtonRow>
-            <button type="button" className="mc-next-settings-filter" onClick={() => void reload()}>
-              <RefreshCw size={16} />
-              Refresh
-            </button>
-          </LibraryButtonRow>
-        </NativeCard> : null}
-        <div className="mc-next-settings-stack">
-          {detailOpen ? <FocusedDetail title={selectedArtifact?.title ?? "Artifact unavailable"} onClose={() => { setDetailOpen(false); setMetadataOpen(false); }}><NativeCard
-            title={selectedArtifact?.title ?? "Artifact detail"}
-            subtitle={
-              selectedArtifact
-                ? `${selectedArtifact.kind} from ${selectedArtifact.sourceSurface}`
-                : "Select an artifact to inspect it."
-            }
           >
-            {selectedArtifact ? (
-              <>
+            <div className="mc-next-settings-field-grid">
+              <label className="mc-next-settings-field span-2">
+                <span>Filter artifacts</span>
+                <input
+                  className="mc-next-settings-input"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search title or kind"
+                />
+              </label>
+            </div>
+            <LibraryFilterBar
+              options={[
+                { id: "all", label: "All" },
+                { id: "chat", label: "Conversation" },
+                { id: "cowork", label: "Plan" },
+                { id: "code", label: "Build" },
+              ]}
+              value={surfaceFilter}
+              onChange={(value) => setSurfaceFilter(value as typeof surfaceFilter)}
+            />
+            <LibrarySelectableList
+              items={visibleArtifacts.map((item) => ({
+                id: item.artifactId,
+                title: item.title,
+                meta: item.sourceSurface,
+                body: `${item.kind} · v${item.version} · ${
+                  item.projectId ? `project ${item.projectId}` : "unscoped"
+                } · ${formatDateTime(item.updatedAt)}`,
+              }))}
+              selectedId={selectedArtifactId}
+              onSelect={(id) => {
+                setSelectedArtifactId(id);
+                setDetailOpen(true);
+                setMetadataOpen(false);
+              }}
+              emptyLabel="No generated artifacts match the current filter."
+            />
+            <LibraryButtonRow>
+              <button type="button" className="mc-next-settings-filter" onClick={() => void reload()}>
+                <RefreshCw size={16} />
+                Refresh
+              </button>
+            </LibraryButtonRow>
+          </NativeCard>
+        ) : null}
+        <div className="mc-next-settings-stack">
+          {detailOpen ? (
+            <FocusedDetail
+              title={selectedArtifact?.title ?? "Artifact unavailable"}
+              onClose={() => {
+                setDetailOpen(false);
+                setMetadataOpen(false);
+              }}
+            >
+              <NativeCard
+                title={selectedArtifact?.title ?? "Artifact detail"}
+                subtitle={
+                  selectedArtifact
+                    ? `${selectedArtifact.kind} from ${selectedArtifact.sourceSurface}`
+                    : "Select an artifact to inspect it."
+                }
+              >
+                {selectedArtifact ? (
+                  <>
+                    <LibraryButtonRow>
+                      <NativeButton variant="outline" onClick={() => downloadArtifact(selectedArtifact)}>
+                        <Download size={16} />
+                        Download artifact
+                      </NativeButton>
+                      <NativeButton
+                        variant="default"
+                        onClick={() =>
+                          navigate({
+                            area: "chat",
+                            sessionId: selectedArtifact.sessionId,
+                            ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                            turnId: selectedArtifact.turnId,
+                            artifactId: selectedArtifact.artifactId,
+                            theme: route.theme,
+                          })
+                        }
+                      >
+                        <Workflow size={16} />
+                        Open source thread
+                      </NativeButton>
+                      <NativeButton
+                        variant="secondary"
+                        onClick={() =>
+                          navigate({
+                            area: "library",
+                            section: "artifacts",
+                            artifactId: selectedArtifact.artifactId,
+                            ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                            theme: route.theme,
+                          })
+                        }
+                      >
+                        <FileText size={16} />
+                        Reopen artifact
+                      </NativeButton>
+                      {selectedArtifactRunId ? (
+                        <NativeButton
+                          variant="secondary"
+                          onClick={() =>
+                            navigate({
+                              area: "ops",
+                              section: "sessions",
+                              view: "run-detail",
+                              runId: selectedArtifactRunId,
+                              artifactId: selectedArtifact.artifactId,
+                              sessionId: selectedArtifact.sessionId,
+                              turnId: selectedArtifact.turnId,
+                              ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                              theme: route.theme,
+                            })
+                          }
+                        >
+                          <Waypoints size={16} />
+                          Open run detail
+                        </NativeButton>
+                      ) : null}
+                    </LibraryButtonRow>
 
-
-                <LibraryButtonRow>
-                  <NativeButton variant="outline" onClick={() => downloadArtifact(selectedArtifact)}>
-                    <Download size={16} />
-                    Download artifact
-                  </NativeButton>
-                  <NativeButton
-                    variant="default"
-                    onClick={() =>
-                      navigate({
-                        area: "chat",
-                        sessionId: selectedArtifact.sessionId,
-                        ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
-                        turnId: selectedArtifact.turnId,
-                        artifactId: selectedArtifact.artifactId,
-                        theme: route.theme,
-                      })
-                    }
-                  >
-                    <Workflow size={16} />
-                    Open source thread
-                  </NativeButton>
-                  <NativeButton
-                    variant="secondary"
-                    onClick={() =>
-                      navigate({
-                        area: "library",
-                        section: "artifacts",
-                        artifactId: selectedArtifact.artifactId,
-                        ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
-                        theme: route.theme,
-                      })
-                    }
-                  >
-                    <FileText size={16} />
-                    Reopen artifact
-                  </NativeButton>
-                  {selectedArtifactRunId ? (
-                    <NativeButton
-                      variant="secondary"
-                      onClick={() =>
-                        navigate({
-                          area: "ops",
-                          section: "sessions",
-                          view: "run-detail",
-                          runId: selectedArtifactRunId,
-                          artifactId: selectedArtifact.artifactId,
-                          sessionId: selectedArtifact.sessionId,
-                          turnId: selectedArtifact.turnId,
-                          ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
-                          theme: route.theme,
-                        })
-                      }
-                    >
-                      <Waypoints size={16} />
-                      Open run detail
+                    <NativeButton variant="outline" onClick={() => setMetadataOpen(true)}>
+                      Provenance and versions
                     </NativeButton>
-                  ) : null}
-                </LibraryButtonRow>
-
-                <NativeButton variant="outline" onClick={() => setMetadataOpen(true)}>Provenance and versions</NativeButton>
-                <Suspense fallback={<p role="status">Loading artifact viewer…</p>}><ArtifactViewer artifact={selectedArtifact} /></Suspense>
-                <DetailInspector open={metadataOpen} title="Provenance and versions" onClose={() => setMetadataOpen(false)}><LibraryMetricGrid
-                  items={[
-                    {
-                      label: "Kind",
-                      value: selectedArtifact.kind,
-                      meta: (
-                        <span className="mc-next-identifier-stack">
-                          <span>v{selectedArtifact.version}</span>
-                          <IdentifierChip value={selectedArtifact.artifactId} label="Artifact" />
-                        </span>
-                      ),
-                    },
-                    { label: "Project", value: selectedArtifact.projectId ?? "Unscoped", meta: "Artifact binding" },
-                    {
-                      label: "Provider",
-                      value: selectedArtifact.providerId ?? "Unknown",
-                      meta: selectedArtifact.model ?? "No model metadata",
-                    },
-                    {
-                      label: "Session",
-                      value: "Bound",
-                      meta: (
-                        <span className="mc-next-identifier-stack">
-                          <IdentifierChip value={selectedArtifact.sessionId} label="Session" />
-                          <IdentifierChip value={selectedArtifact.turnId} label="Turn" />
-                        </span>
-                      ),
-                    },
-                    { label: "Updated", value: formatDateTime(selectedArtifact.updatedAt), meta: "Artifact timestamp" },
-                  ]}
-                />
-<LibraryActionCardGrid
-                  items={[
-                    {
-                      id: "viewer",
-                      label: "Viewer",
-                      value: describeArtifactViewer(selectedArtifact.kind),
-                      description:
-                        selectedArtifact.kind === "markdown" || selectedArtifact.kind === "text"
-                          ? "Preview below is readable content with provenance kept nearby."
-                          : "Preview below stays raw until a richer type-specific renderer exists.",
-                      meta: selectedArtifact.kind,
-                      tone:
-                        selectedArtifact.kind === "markdown" || selectedArtifact.kind === "text" ? "success" : "info",
-                    },
-                    {
-                      id: "timeline",
-                      label: "Timeline",
-                      value: `v${selectedArtifact.version}`,
-                      description: `${formatDateTime(selectedArtifact.createdAt)} -> ${formatDateTime(
-                        selectedArtifact.updatedAt,
-                      )}`,
-                      meta: selectedArtifact.supersedesArtifactId
-                        ? `Supersedes ${selectedArtifact.supersedesArtifactId}`
-                        : "No previous version linked.",
-                      tone: selectedArtifact.supersedesArtifactId ? "info" : "neutral",
-                    },
-                    {
-                      id: "validation",
-                      label: "Validation",
-                      value: selectedArtifactValidationStatus ?? "Not recorded",
-                      description:
-                        selectedArtifactValidationStatus === "passed"
-                          ? "Artifact carries a passing validation status."
-                          : "No validation status is attached to this artifact record yet.",
-                      meta: selectedArtifact.contentHash ? `hash ${selectedArtifact.contentHash}` : "No content hash",
-                      tone: selectedArtifactValidationStatus === "passed" ? "success" : "warning",
-                    },
-                    {
-                      id: "source-session",
-                      label: "Source session",
-                      value: selectedArtifact.sourceSurface,
-                      description: `${selectedArtifact.sessionId} · turn ${selectedArtifact.turnId}`,
-                      actionLabel: "Open thread",
-                      onClick: () =>
-                        navigate({
-                          area: selectedArtifact.sourceSurface,
-                          sessionId: selectedArtifact.sessionId,
-                          ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
-                          turnId: selectedArtifact.turnId,
-                          artifactId: selectedArtifact.artifactId,
-                          theme: route.theme,
-                        }),
-                      tone: "info",
-                    },
-                    {
-                      id: "use-chat",
-                      label: "Use in Chat",
-                      value: "Discuss",
-                      description: "Open Chat with the artifact id carried in the route for follow-up context.",
-                      actionLabel: "Chat",
-                      onClick: () =>
-                        navigate({
-                          area: "chat",
-                          artifactId: selectedArtifact.artifactId,
-                          ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
-                          theme: route.theme,
-                        }),
-                      tone: "neutral",
-                    },
-                    {
-                      id: "use-chat-review",
-                      label: "Review in Chat",
-                      value: "Review",
-                      description: "Open Chat with this artifact selected as evidence.",
-                      actionLabel: "Chat",
-                      onClick: () =>
-                        navigate({
-                          area: "chat",
-                          artifactId: selectedArtifact.artifactId,
-                          ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
-                          theme: route.theme,
-                        }),
-                      tone: "neutral",
-                    },
-                  ]}
-                />
-<LibraryCodeBlock label="Artifact provenance">
-                  {formatArtifactProvenance(selectedArtifact)}
-                </LibraryCodeBlock></DetailInspector>
-              </>
-            ) : (
-              <LibraryEmptyState label="Select an artifact to inspect it." />
-            )}
-          </NativeCard></FocusedDetail> : null}
+                    <Suspense fallback={<p role="status">Loading artifact viewer…</p>}>
+                      <ArtifactViewer artifact={selectedArtifact} />
+                    </Suspense>
+                    <DetailInspector
+                      open={metadataOpen}
+                      title="Provenance and versions"
+                      onClose={() => setMetadataOpen(false)}
+                    >
+                      <LibraryMetricGrid
+                        items={[
+                          {
+                            label: "Kind",
+                            value: selectedArtifact.kind,
+                            meta: (
+                              <span className="mc-next-identifier-stack">
+                                <span>v{selectedArtifact.version}</span>
+                                <IdentifierChip value={selectedArtifact.artifactId} label="Artifact" />
+                              </span>
+                            ),
+                          },
+                          {
+                            label: "Project",
+                            value: selectedArtifact.projectId ?? "Unscoped",
+                            meta: "Artifact binding",
+                          },
+                          {
+                            label: "Provider",
+                            value: selectedArtifact.providerId ?? "Unknown",
+                            meta: selectedArtifact.model ?? "No model metadata",
+                          },
+                          {
+                            label: "Session",
+                            value: "Bound",
+                            meta: (
+                              <span className="mc-next-identifier-stack">
+                                <IdentifierChip value={selectedArtifact.sessionId} label="Session" />
+                                <IdentifierChip value={selectedArtifact.turnId} label="Turn" />
+                              </span>
+                            ),
+                          },
+                          {
+                            label: "Updated",
+                            value: formatDateTime(selectedArtifact.updatedAt),
+                            meta: "Artifact timestamp",
+                          },
+                        ]}
+                      />
+                      <LibraryActionCardGrid
+                        items={[
+                          {
+                            id: "viewer",
+                            label: "Viewer",
+                            value: describeArtifactViewer(selectedArtifact.kind),
+                            description:
+                              selectedArtifact.kind === "markdown" || selectedArtifact.kind === "text"
+                                ? "Preview below is readable content with provenance kept nearby."
+                                : "Preview below stays raw until a richer type-specific renderer exists.",
+                            meta: selectedArtifact.kind,
+                            tone:
+                              selectedArtifact.kind === "markdown" || selectedArtifact.kind === "text"
+                                ? "success"
+                                : "info",
+                          },
+                          {
+                            id: "timeline",
+                            label: "Timeline",
+                            value: `v${selectedArtifact.version}`,
+                            description: `${formatDateTime(selectedArtifact.createdAt)} -> ${formatDateTime(
+                              selectedArtifact.updatedAt,
+                            )}`,
+                            meta: selectedArtifact.supersedesArtifactId
+                              ? `Supersedes ${selectedArtifact.supersedesArtifactId}`
+                              : "No previous version linked.",
+                            tone: selectedArtifact.supersedesArtifactId ? "info" : "neutral",
+                          },
+                          {
+                            id: "validation",
+                            label: "Validation",
+                            value: selectedArtifactValidationStatus ?? "Not recorded",
+                            description:
+                              selectedArtifactValidationStatus === "passed"
+                                ? "Artifact carries a passing validation status."
+                                : "No validation status is attached to this artifact record yet.",
+                            meta: selectedArtifact.contentHash
+                              ? `hash ${selectedArtifact.contentHash}`
+                              : "No content hash",
+                            tone: selectedArtifactValidationStatus === "passed" ? "success" : "warning",
+                          },
+                          {
+                            id: "source-session",
+                            label: "Source session",
+                            value: selectedArtifact.sourceSurface,
+                            description: `${selectedArtifact.sessionId} · turn ${selectedArtifact.turnId}`,
+                            actionLabel: "Open thread",
+                            onClick: () =>
+                              navigate({
+                                area: selectedArtifact.sourceSurface,
+                                sessionId: selectedArtifact.sessionId,
+                                ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                                turnId: selectedArtifact.turnId,
+                                artifactId: selectedArtifact.artifactId,
+                                theme: route.theme,
+                              }),
+                            tone: "info",
+                          },
+                          {
+                            id: "use-chat",
+                            label: "Use in Chat",
+                            value: "Discuss",
+                            description: "Open Chat with the artifact id carried in the route for follow-up context.",
+                            actionLabel: "Chat",
+                            onClick: () =>
+                              navigate({
+                                area: "chat",
+                                artifactId: selectedArtifact.artifactId,
+                                ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                                theme: route.theme,
+                              }),
+                            tone: "neutral",
+                          },
+                          {
+                            id: "use-chat-review",
+                            label: "Review in Chat",
+                            value: "Review",
+                            description: "Open Chat with this artifact selected as evidence.",
+                            actionLabel: "Chat",
+                            onClick: () =>
+                              navigate({
+                                area: "chat",
+                                artifactId: selectedArtifact.artifactId,
+                                ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                                theme: route.theme,
+                              }),
+                            tone: "neutral",
+                          },
+                        ]}
+                      />
+                      <LibraryCodeBlock label="Artifact provenance">
+                        {formatArtifactProvenance(selectedArtifact)}
+                      </LibraryCodeBlock>
+                    </DetailInspector>
+                  </>
+                ) : (
+                  <LibraryEmptyState label="Select an artifact to inspect it." />
+                )}
+              </NativeCard>
+            </FocusedDetail>
+          ) : null}
         </div>
       </div>
     </LibrarySectionShell>
@@ -408,21 +458,8 @@ function describeArtifactViewer(kind: ChatGeneratedArtifactRecord["kind"]) {
 }
 
 function readArtifactValidationStatus(artifact: ChatGeneratedArtifactRecord) {
-  const record = artifact as ChatGeneratedArtifactRecord & { validationStatus?: string };
-  return record.validationStatus;
-}
-
-function readArtifactRunId(artifact: ChatGeneratedArtifactRecord): string | undefined {
   const record = artifact as ChatGeneratedArtifactRecord & {
-    runId?: string;
-    durableRunId?: string;
-    trace?: { durable?: { runId?: string }; durableRunId?: string; runId?: string };
+    validationStatus?: string;
   };
-  return (
-    record.runId ??
-    record.durableRunId ??
-    record.trace?.durable?.runId ??
-    record.trace?.durableRunId ??
-    record.trace?.runId
-  );
+  return record.validationStatus;
 }

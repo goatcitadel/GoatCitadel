@@ -50,6 +50,9 @@ interface PromptPacksWorkbenchPageProps {
   variant?: "library" | "ops";
   navigate?: (route: AppRoute, options?: { replace?: boolean }) => void;
   initialPackId?: string;
+  initialRunId?: string;
+  initialSessionId?: string;
+  initialDetailTab?: "review" | "assessment";
 }
 
 export function PromptPacksWorkbenchPage({
@@ -57,11 +60,24 @@ export function PromptPacksWorkbenchPage({
   variant = "library",
   navigate,
   initialPackId,
+  initialRunId,
+  initialSessionId,
+  initialDetailTab,
 }: PromptPacksWorkbenchPageProps) {
-  const [detailOpen, setDetailOpen] = useState(false);
-  const [detailTab, setDetailTab] = useState<"prompt" | "output" | "assessment" | "review" | "evidence">("prompt");
+  const [detailOpen, setDetailOpen] = useState(Boolean(initialRunId));
+  const [detailTab, setDetailTab] = useState<"prompt" | "output" | "assessment" | "review" | "evidence">(
+    initialDetailTab ?? (initialRunId ? "output" : "prompt"),
+  );
   const leave = useDraftLeave();
-  const state = usePromptPacksWorkbenchState({ variant: variant ?? "library", navigate, initialPackId, workspaceId, reviewOpen: detailOpen });
+  const state = usePromptPacksWorkbenchState({
+    variant: variant ?? "library",
+    navigate,
+    initialPackId,
+    initialRunId,
+    initialSessionId,
+    workspaceId,
+    reviewOpen: detailOpen,
+  });
 
   if (state.initialLoading) {
     return (
@@ -80,29 +96,31 @@ export function PromptPacksWorkbenchPage({
 
   return (
     <section className="mc-prompt-packs" data-variant={variant}>
-      {!detailOpen ? <PromptPacksHero
-        isOpsVariant={state.isOpsVariant}
-        title={state.title}
-        subtitle={state.subtitle}
-        summaryCards={state.summaryCards}
-        passRate={state.report?.summary.passRate}
-        passThreshold={state.passThreshold}
-        hasReport={!!state.report}
-        error={state.error}
-        success={state.success}
-        activeRun={state.activeRun}
-        selectedPackId={state.selectedPackId}
-        testsLength={state.tests.length}
-        running={state.running}
-        benchmarkActive={state.benchmarkActive}
-        autoScoring={state.autoScoring}
-        unscoredCompletedCount={state.unscoredCompletedCount}
-        isRefreshing={state.isRefreshing}
-        onRunNext={() => void state.runNext()}
-        onRunAll={() => void state.runAll()}
-        onAutoScoreUnscored={() => void state.autoScoreUnscored()}
-        onRefresh={() => void state.load({ background: true })}
-      /> : null}
+      {!detailOpen ? (
+        <PromptPacksHero
+          isOpsVariant={state.isOpsVariant}
+          title={state.title}
+          subtitle={state.subtitle}
+          summaryCards={state.summaryCards}
+          passRate={state.report?.summary.passRate}
+          passThreshold={state.passThreshold}
+          hasReport={!!state.report}
+          error={state.error}
+          success={state.success}
+          activeRun={state.activeRun}
+          selectedPackId={state.selectedPackId}
+          testsLength={state.tests.length}
+          running={state.running}
+          benchmarkActive={state.benchmarkActive}
+          autoScoring={state.autoScoring}
+          unscoredCompletedCount={state.unscoredCompletedCount}
+          isRefreshing={state.isRefreshing}
+          onRunNext={() => void state.runNext()}
+          onRunAll={() => void state.runAll()}
+          onAutoScoreUnscored={() => void state.autoScoreUnscored()}
+          onRefresh={() => void state.load({ background: true })}
+        />
+      ) : null}
 
       <PromptPacksStatusRow
         activeRun={state.activeRun}
@@ -111,195 +129,253 @@ export function PromptPacksWorkbenchPage({
         isFallbackRefreshing={state.isFallbackRefreshing}
       />
 
-      {!detailOpen ? <section className="mc-pp-command-deck" aria-label="Prompt pack setup">
-        <PromptPackLibraryPanel
-          isOpsVariant={state.isOpsVariant}
-          packs={state.packs}
-          selectedPackId={state.selectedPackId}
-          compact
-          onSelectPack={(id) => leave.request(() => state.selectPack(id))}
-        />
-
-        <NativeDisclosureCard id="prompt-pack-run-settings" title="Run settings"><RunSettingsPanel
-          isOpsVariant={state.isOpsVariant}
-          providerOptions={state.providerOptions}
-          selectedProviderId={state.selectedProviderId}
-          selectedModel={state.selectedModel}
-          reuseLastModel={state.reuseLastModel}
-          autoScoreOnRun={state.autoScoreOnRun}
-          executionStyle={state.executionStyle}
-          lastSuccessfulModel={state.lastSuccessfulModel}
-          selectedRunModel={state.selectedRunModel}
-          executionStyleDescription={state.executionStyleDescription}
-          onSelectProvider={state.setSelectedProviderId}
-          onSelectModel={state.setSelectedModel}
-          onSetReuseLastModel={state.setReuseLastModel}
-          onSetAutoScoreOnRun={state.setAutoScoreOnRun}
-          onSetExecutionStyle={state.setExecutionStyle}
-        /></NativeDisclosureCard>
-
-        <div className="mc-pp-command-secondary">
-          <AdvancedQualityOpsPanel
-            retuneEnabled={state.retuneEnabled}
-            benchmarkTestCodes={state.benchmarkTestCodes}
-            benchmarkProvidersInput={state.benchmarkProvidersInput}
+      {!detailOpen ? (
+        <section className="mc-pp-command-deck" aria-label="Prompt pack setup">
+          <PromptPackLibraryPanel
+            isOpsVariant={state.isOpsVariant}
+            packs={state.packs}
             selectedPackId={state.selectedPackId}
-            running={state.running}
-            benchmarkPending={state.benchmarkPending}
-            benchmarkActive={state.benchmarkActive}
-            benchmarkStopping={state.benchmarkStopping}
-            benchmarkRunId={state.benchmarkRunId}
-            regressionPending={state.regressionPending}
-            regressionRunId={state.regressionRunId}
-            exporting={state.exporting}
-            latestSavedLogPath={state.latestSavedLogPath}
-            resetClearRuns={state.resetClearRuns}
-            resetClearScores={state.resetClearScores}
-            confirmResetArmed={state.confirmResetArmed}
-            resetting={state.resetting}
-            exportInfo={state.exportInfo}
-            retuneCampaign={state.retuneCampaign}
-            retuneRepeatCount={state.retuneRepeatCount}
-            retuneHypothesis={state.retuneHypothesis}
-            retunePending={state.retunePending}
-            onSetBenchmarkTestCodes={state.setBenchmarkTestCodes}
-            onSetBenchmarkProvidersInput={state.setBenchmarkProvidersInput}
-            onRunBenchmark={() => void state.runBenchmark()}
-            onStopBenchmark={() => void state.stopBenchmark()}
-            onRefreshBenchmark={state.refreshBenchmark}
-            onRunRegression={() => void state.runRegression()}
-            onRefreshRegression={state.refreshRegression}
-            onExportReport={() => void state.exportReport()}
-            onCopyExportPath={() => void state.copyExportPath()}
-            onSetResetClearRuns={state.setResetClearRuns}
-            onSetResetClearScores={state.setResetClearScores}
-            onArmResetConfirm={() => state.setConfirmResetArmed(true)}
-            onConfirmResetPack={() => void state.confirmResetPack()}
-            onCancelResetConfirm={() => state.setConfirmResetArmed(false)}
-            onSetRetuneRepeatCount={state.setRetuneRepeatCount}
-            onSetRetuneHypothesis={state.setRetuneHypothesis}
-            onCreateRetuneCampaign={() => void state.createRetuneCampaign()}
-            onMeasureRetuneNoise={() => void state.measureRetuneNoise()}
-            onRunRetuneCandidate={() => void state.runRetuneCandidate()}
-            onRefreshRetuneCampaign={() => void state.refreshRetuneCampaign()}
-            onCancelRetuneCampaign={() => void state.cancelRetune()}
-            onDispositionRetunePass={(passId, disposition) => void state.dispositionRetunePass(passId, disposition)}
+            compact
+            onSelectPack={(id) => leave.request(() => state.selectPack(id))}
           />
 
-          {!state.isOpsVariant ? (
-            <ImportPackPanel
-              dirty={state.importDirty}
-              importText={state.importText}
-              importing={state.importing}
-              onSetImportText={state.setImportText}
-              onImport={() => void state.handleImport()}
+          <NativeDisclosureCard id="prompt-pack-run-settings" title="Run settings">
+            <RunSettingsPanel
+              isOpsVariant={state.isOpsVariant}
+              providerOptions={state.providerOptions}
+              selectedProviderId={state.selectedProviderId}
+              selectedModel={state.selectedModel}
+              reuseLastModel={state.reuseLastModel}
+              autoScoreOnRun={state.autoScoreOnRun}
+              executionStyle={state.executionStyle}
+              lastSuccessfulModel={state.lastSuccessfulModel}
+              selectedRunModel={state.selectedRunModel}
+              executionStyleDescription={state.executionStyleDescription}
+              onSelectProvider={state.setSelectedProviderId}
+              onSelectModel={state.setSelectedModel}
+              onSetReuseLastModel={state.setReuseLastModel}
+              onSetAutoScoreOnRun={state.setAutoScoreOnRun}
+              onSetExecutionStyle={state.setExecutionStyle}
             />
-          ) : null}
-        </div>
-      </section> : null}
+          </NativeDisclosureCard>
+
+          <div className="mc-pp-command-secondary">
+            <AdvancedQualityOpsPanel
+              retuneEnabled={state.retuneEnabled}
+              benchmarkTestCodes={state.benchmarkTestCodes}
+              benchmarkProvidersInput={state.benchmarkProvidersInput}
+              selectedPackId={state.selectedPackId}
+              running={state.running}
+              benchmarkPending={state.benchmarkPending}
+              benchmarkActive={state.benchmarkActive}
+              benchmarkStopping={state.benchmarkStopping}
+              benchmarkRunId={state.benchmarkRunId}
+              regressionPending={state.regressionPending}
+              regressionRunId={state.regressionRunId}
+              exporting={state.exporting}
+              latestSavedLogPath={state.latestSavedLogPath}
+              resetClearRuns={state.resetClearRuns}
+              resetClearScores={state.resetClearScores}
+              confirmResetArmed={state.confirmResetArmed}
+              resetting={state.resetting}
+              exportInfo={state.exportInfo}
+              retuneCampaign={state.retuneCampaign}
+              retuneRepeatCount={state.retuneRepeatCount}
+              retuneHypothesis={state.retuneHypothesis}
+              retunePending={state.retunePending}
+              onSetBenchmarkTestCodes={state.setBenchmarkTestCodes}
+              onSetBenchmarkProvidersInput={state.setBenchmarkProvidersInput}
+              onRunBenchmark={() => void state.runBenchmark()}
+              onStopBenchmark={() => void state.stopBenchmark()}
+              onRefreshBenchmark={state.refreshBenchmark}
+              onRunRegression={() => void state.runRegression()}
+              onRefreshRegression={state.refreshRegression}
+              onExportReport={() => void state.exportReport()}
+              onCopyExportPath={() => void state.copyExportPath()}
+              onSetResetClearRuns={state.setResetClearRuns}
+              onSetResetClearScores={state.setResetClearScores}
+              onArmResetConfirm={() => state.setConfirmResetArmed(true)}
+              onConfirmResetPack={() => void state.confirmResetPack()}
+              onCancelResetConfirm={() => state.setConfirmResetArmed(false)}
+              onSetRetuneRepeatCount={state.setRetuneRepeatCount}
+              onSetRetuneHypothesis={state.setRetuneHypothesis}
+              onCreateRetuneCampaign={() => void state.createRetuneCampaign()}
+              onMeasureRetuneNoise={() => void state.measureRetuneNoise()}
+              onRunRetuneCandidate={() => void state.runRetuneCandidate()}
+              onRefreshRetuneCampaign={() => void state.refreshRetuneCampaign()}
+              onCancelRetuneCampaign={() => void state.cancelRetune()}
+              onDispositionRetunePass={(passId, disposition) => void state.dispositionRetunePass(passId, disposition)}
+            />
+
+            {!state.isOpsVariant ? (
+              <ImportPackPanel
+                dirty={state.importDirty}
+                importText={state.importText}
+                importing={state.importing}
+                onSetImportText={state.setImportText}
+                onImport={() => void state.handleImport()}
+              />
+            ) : null}
+          </div>
+        </section>
+      ) : null}
 
       <div className="mc-pp-layout mc-next-prompt-directory">
-        {!detailOpen ? <PromptPackTestsColumn
-          selectedPackName={state.selectedPack?.name}
-          testsLength={state.tests.length}
-          filteredTests={state.filteredTests}
-          testResultFilter={state.testResultFilter}
-          testOutcomeSummary={state.testOutcomeSummary}
-          latestRunByTest={state.latestRunByTest}
-          latestAssessmentByTest={state.latestAssessmentByTest}
-          selectedTestId={state.selectedTestId}
-          activeRun={state.activeRun}
-          running={state.running}
-          onSetTestResultFilter={state.setTestResultFilter}
-          hasDraft={state.hasReviewDraft}
-          onSelectTest={(id) => leave.request(() => { state.setSelectedTestId(id); setDetailTab("prompt"); setDetailOpen(true); }, [state.reviewDraftKey])}
-          onRunOne={(test) => void state.runOne(test, "single")}
-        /> : null}
+        {!detailOpen ? (
+          <PromptPackTestsColumn
+            selectedPackName={state.selectedPack?.name}
+            testsLength={state.tests.length}
+            filteredTests={state.filteredTests}
+            testResultFilter={state.testResultFilter}
+            testOutcomeSummary={state.testOutcomeSummary}
+            latestRunByTest={state.latestRunByTest}
+            latestAssessmentByTest={state.latestAssessmentByTest}
+            selectedTestId={state.selectedTestId}
+            activeRun={state.activeRun}
+            running={state.running}
+            onSetTestResultFilter={state.setTestResultFilter}
+            hasDraft={state.hasReviewDraft}
+            onSelectTest={(id) =>
+              leave.request(() => {
+                state.selectTest(id);
+                setDetailTab("prompt");
+                setDetailOpen(true);
+              }, [state.reviewDraftKey])
+            }
+            onRunOne={(test) => void state.runOne(test, "single")}
+          />
+        ) : null}
 
-        {detailOpen ? <FocusedDetail title={state.selectedTest?.title ?? "Test details"} onClose={() => leave.request(() => setDetailOpen(false), [state.reviewDraftKey])}><section className="mc-pp-detail">
-          {state.error ? <NoticeBanner tone="error" message={state.error} /> : null}{state.success ? <NoticeBanner tone="success" message={state.success} /> : null}
-          {state.selectedTest ? (
-            <>
-              <PromptPackDetailHeader
-                selectedTest={state.selectedTest}
-                selectedRun={state.selectedRun}
-                selectedAssessment={state.selectedAssessment}
-                selectedCategory={state.selectedCategory}
-                selectedRunModelUsage={state.selectedRunModelUsage}
-                selectedRunLink={state.selectedRunLink}
-                hasNavigate={Boolean(navigate)}
-                activeRun={state.activeRun}
-                running={state.running}
-                executionStyle={state.executionStyle}
-                onRunSelected={() => state.selectedTest && void state.runOne(state.selectedTest, "single")}
-                onOpenSelectedRun={state.openSelectedRun}
-                onCopySelectedRunLink={() => void state.copySelectedRunLink()}
-              />
-
-              <div className="mc-next-view-tabs" role="group" aria-label="Test details">{([ ["prompt", "Prompt"], ["output", "Output"], ["assessment", "Assessment"], ["review", state.reviewDirty ? "Review · Unsaved" : "Review"], ["evidence", "Evidence"] ] as const).map(([id, label]) => <NativeButton key={id} variant="ghost" aria-pressed={detailTab === id} onClick={() => setDetailTab(id)}>{label}</NativeButton>)}</div>
-              {state.reviewRevisionConflict ? <div><NoticeBanner tone="warning" message="Your review draft belongs to an earlier run. Inspect the current output before applying it." /><NativeButton variant="outline" onClick={state.confirmReviewRevision}>Apply draft to current run</NativeButton></div> : null}
-              <div className="mc-pp-merged-evidence">
-                {detailTab === "prompt" ? <PromptTab
-                  selectedTest={state.selectedTest}
-                  selectedPlaceholders={state.selectedPlaceholders}
-                  selectedMissingPlaceholders={state.selectedMissingPlaceholders}
-                  placeholderValues={state.placeholderValues}
-                  runVariableSchema={state.selectedPack?.runVariableSchema}
-                  runVariableBindings={state.runVariableBindings}
-                  selectedDiagnosticMetadata={state.selectedDiagnosticMetadata}
-                  onPlaceholderChange={(key, value) =>
-                    state.setPlaceholderValues((current) => ({
-                      ...current,
-                      [key]: value,
-                    }))
-                  }
-                  onRunVariableChange={state.setRunVariableBindings}
-                /> : null}
-
-                {detailTab === "output" ? <OutputTab
-                  selectedRun={state.selectedRun}
-                  selectedRunModelUsage={state.selectedRunModelUsage}
-                  executionStyle={state.executionStyle}
-                /> : null}
-
-                {detailTab === "assessment" ? <AssessmentTab selectedAssessment={state.selectedAssessment} /> : null}
-
-                {detailTab === "review" ? <ReviewTab
-                  v2UiEnabled={state.v2UiEnabled}
-                  scoreDraft={state.scoreDraft}
-                  draftWeightedScore={state.draftWeightedScore}
-                  draftVerdict={state.draftVerdict}
-                  completedDraftDimensions={state.completedDraftDimensions}
-                  selectedRun={state.selectedRun}
-                  savingScore={state.savingScore}
-                  autoScoring={state.autoScoring}
-                  onSetScoreDraft={state.setScoreDraft}
-                  onSubmitScore={() => void state.submitScore()}
-                  onAutoScoreSelected={() => void state.autoScoreSelected()}
-                /> : null}
-
-                {detailTab === "evidence" ? <div>
-
-                  <InsightsTab
-                    report={state.report}
-                    testOutcomeSummary={state.testOutcomeSummary}
-                    passThreshold={state.passThreshold}
-                    trendSeries={state.trendSeries}
-                    benchmarkStatus={state.benchmarkStatus}
-                    regressionStatus={state.regressionStatus}
-                    retuneEnabled={state.retuneEnabled}
-                    retuneCampaign={state.retuneCampaign}
+        {detailOpen ? (
+          <FocusedDetail
+            title={state.selectedTest?.title ?? "Test details"}
+            onClose={() => leave.request(() => setDetailOpen(false), [state.reviewDraftKey])}
+          >
+            <section className="mc-pp-detail">
+              {state.error ? <NoticeBanner tone="error" message={state.error} /> : null}
+              {state.success ? <NoticeBanner tone="success" message={state.success} /> : null}
+              {state.selectedTest ? (
+                <>
+                  <PromptPackDetailHeader
+                    selectedTest={state.selectedTest}
+                    selectedRun={state.selectedRun}
+                    selectedAssessment={state.selectedAssessment}
+                    selectedCategory={state.selectedCategory}
+                    selectedRunModelUsage={state.selectedRunModelUsage}
+                    selectedRunLink={state.selectedRunLink}
+                    hasNavigate={Boolean(navigate)}
+                    activeRun={state.activeRun}
+                    running={state.running}
+                    executionStyle={state.executionStyle}
+                    onRunSelected={() => state.selectedTest && void state.runOne(state.selectedTest, "single")}
+                    onOpenSelectedRun={state.openSelectedRun}
+                    onCopySelectedRunLink={() => void state.copySelectedRunLink()}
                   />
-                </div> : null}
-              </div>
-            </>
-          ) : (
-            <EmptyState
-              title="Select a test"
-              description="Pick a test from the list to inspect the prompt, output, scoring, and review controls."
-            />
-          )}
-        </section></FocusedDetail> : null}
+
+                  <div className="mc-next-view-tabs" role="group" aria-label="Test details">
+                    {(
+                      [
+                        ["prompt", "Prompt"],
+                        ["output", "Output"],
+                        ["assessment", "Assessment"],
+                        ["review", state.reviewDirty ? "Review · Unsaved" : "Review"],
+                        ["evidence", "Evidence"],
+                      ] as const
+                    ).map(([id, label]) => (
+                      <NativeButton
+                        key={id}
+                        variant="ghost"
+                        aria-pressed={detailTab === id}
+                        onClick={() => setDetailTab(id)}
+                      >
+                        {label}
+                      </NativeButton>
+                    ))}
+                  </div>
+                  {state.reviewRevisionConflict ? (
+                    <div>
+                      <NoticeBanner
+                        tone="warning"
+                        message="Your review draft belongs to an earlier run. Inspect the current output before applying it."
+                      />
+                      <NativeButton variant="outline" onClick={state.confirmReviewRevision}>
+                        Apply draft to current run
+                      </NativeButton>
+                    </div>
+                  ) : null}
+                  <div className="mc-pp-merged-evidence">
+                    {detailTab === "prompt" ? (
+                      <PromptTab
+                        selectedTest={state.selectedTest}
+                        selectedPlaceholders={state.selectedPlaceholders}
+                        selectedMissingPlaceholders={state.selectedMissingPlaceholders}
+                        placeholderValues={state.placeholderValues}
+                        runVariableSchema={state.selectedPack?.runVariableSchema}
+                        runVariableBindings={state.runVariableBindings}
+                        selectedDiagnosticMetadata={state.selectedDiagnosticMetadata}
+                        onPlaceholderChange={(key, value) =>
+                          state.setPlaceholderValues((current) => ({
+                            ...current,
+                            [key]: value,
+                          }))
+                        }
+                        onRunVariableChange={state.setRunVariableBindings}
+                      />
+                    ) : null}
+
+                    {detailTab === "output" ? (
+                      <OutputTab
+                        selectedRun={state.selectedRun}
+                        selectedRunModelUsage={state.selectedRunModelUsage}
+                        executionStyle={state.executionStyle}
+                      />
+                    ) : null}
+
+                    {detailTab === "assessment" ? (
+                      <AssessmentTab selectedAssessment={state.selectedAssessment} />
+                    ) : null}
+
+                    {detailTab === "review" ? (
+                      <ReviewTab
+                        v2UiEnabled={state.v2UiEnabled}
+                        scoreDraft={state.scoreDraft}
+                        draftWeightedScore={state.draftWeightedScore}
+                        draftVerdict={state.draftVerdict}
+                        completedDraftDimensions={state.completedDraftDimensions}
+                        selectedRun={state.selectedRun}
+                        savingScore={state.savingScore}
+                        autoScoring={state.autoScoring}
+                        onSetScoreDraft={state.setScoreDraft}
+                        onSubmitScore={() => void state.submitScore()}
+                        onAutoScoreSelected={() => void state.autoScoreSelected()}
+                      />
+                    ) : null}
+
+                    {detailTab === "evidence" ? (
+                      <div>
+                        <InsightsTab
+                          report={state.report}
+                          testOutcomeSummary={state.testOutcomeSummary}
+                          passThreshold={state.passThreshold}
+                          trendSeries={state.trendSeries}
+                          benchmarkStatus={state.benchmarkStatus}
+                          regressionStatus={state.regressionStatus}
+                          retuneEnabled={state.retuneEnabled}
+                          retuneCampaign={state.retuneCampaign}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              ) : (
+                <EmptyState
+                  title="Select a test"
+                  description="Pick a test from the list to inspect the prompt, output, scoring, and review controls."
+                />
+              )}
+            </section>
+          </FocusedDetail>
+        ) : null}
       </div>
       {leave.dialog}
     </section>

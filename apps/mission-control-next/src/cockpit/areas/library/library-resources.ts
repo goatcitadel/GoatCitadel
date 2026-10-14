@@ -9,11 +9,16 @@ import { listNotes } from "@goatcitadel/mission-control-shared/api/personal-ops"
 import { fetchChatGeneratedArtifacts } from "@goatcitadel/mission-control-shared/api/chat";
 import { fetchFilesList } from "@goatcitadel/mission-control-shared/api/operators-agents-files";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+export { resourceTitle } from "./resource-title";
 
 export const RESOURCE_KINDS = ["memory", "notes", "files", "artifacts"] as const;
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 export const RESOURCE_LIMIT = 100;
-export type FileResource = { relativePath: string; size: number; modifiedAt: string };
+export type FileResource = {
+  relativePath: string;
+  size: number;
+  modifiedAt: string;
+};
 export type LibraryResource =
   | { kind: "memory"; item: MemoryItemRecord }
   | { kind: "notes"; item: NoteRecord }
@@ -32,6 +37,7 @@ export interface ResourceQuery {
   status: string;
   cursor?: string;
   projectId?: string;
+  sourceSurface?: ChatGeneratedArtifactRecord["sourceSurface"];
   /** Checked between reads; the Library owners themselves take no signal. */
   signal?: AbortSignal;
 }
@@ -59,9 +65,6 @@ export function resourceId(resource: LibraryResource) {
     case "artifacts":
       return resource.item.artifactId;
   }
-}
-export function resourceTitle(resource: LibraryResource) {
-  return (resource.kind === "files" ? resource.item.relativePath : resource.item.title).slice(0, 300);
 }
 export function resourceDescription(resource: LibraryResource) {
   switch (resource.kind) {
@@ -128,7 +131,14 @@ export async function loadLibraryResources(input: ResourceQuery): Promise<Resour
     );
     return {
       items: scoped
-        .filter((item) => !text || `${item.title} ${item.kind}`.toLowerCase().includes(text))
+        .filter(
+          (item) =>
+            (!input.sourceSurface || item.sourceSurface === input.sourceSurface) &&
+            (!text ||
+              `${item.title} ${item.kind} ${item.sessionId} ${item.turnId} ${item.projectId ?? ""} ${item.contentHash ?? ""}`
+                .toLowerCase()
+                .includes(text)),
+        )
         .slice(0, RESOURCE_LIMIT)
         .map((item) => ({ kind, item })),
       coverage: `Up to ${RESOURCE_LIMIT} recent workspace artifacts; filtering applies to this returned window. Older records may not be shown. ${scoped.length !== response.items.length ? "Records without this workspace binding were withheld." : ""}`,

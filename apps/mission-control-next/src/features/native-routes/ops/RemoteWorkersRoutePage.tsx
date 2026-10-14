@@ -184,7 +184,7 @@ function ControlsCard({ item }: { item: RemoteWorkerRegistryItem }) {
         </dl>
       ) : (
         <p className="mc-next-remote-workers__unavailable">
-          No containment control is recorded. Rotation, quarantine, and revoke stay under live authority in Ops.
+          No containment control is recorded. This inspector does not enroll, rotate, quarantine or revoke workers.
         </p>
       )}
     </section>
@@ -335,11 +335,21 @@ function ReconciliationCard({ reconciliation }: { reconciliation: RemoteWorkerRe
   );
 }
 
-export function RemoteWorkersRoutePage(props: NativeRoutePagesProps) {
-  return <RemoteWorkersWorkspaceRoutePage key={props.activeWorkspaceId} {...props} />;
+export interface RemoteWorkersRoutePageProps extends NativeRoutePagesProps {
+  /** Optional canonical native bookmark selection. Legacy callers keep their existing empty selection. */
+  initialWorkerId?: string;
+  initialAssignmentId?: string;
+}
+export function RemoteWorkersRoutePage(props: RemoteWorkersRoutePageProps) {
+  return (
+    <RemoteWorkersWorkspaceRoutePage
+      key={JSON.stringify([props.activeWorkspaceId, props.initialWorkerId, props.initialAssignmentId])}
+      {...props}
+    />
+  );
 }
 
-function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
+function RemoteWorkersWorkspaceRoutePage(props: RemoteWorkersRoutePageProps) {
   const workspaceId = props.activeWorkspaceId;
   const registry = useRemoteWorkerRegistry(workspaceId);
   const leave = useDraftLeave();
@@ -350,7 +360,7 @@ function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
       setWorkerPanel(panel);
     });
   useSessionDraftVersion();
-  const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
+  const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(props.initialWorkerId ?? null);
   const [detailScope, setDetailScope] = useState<{ workspaceId: string; workerId: string } | null>(null);
   const [detail, setDetail] = useState<RemoteWorkerRegistryDetail | null>(null);
   const [assignments, setAssignments] = useState<RemoteWorkerAssignmentPage | null>(null);
@@ -454,14 +464,14 @@ function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
     assignmentPageCount.current = 1;
     setMoreAssignmentsBusy(false);
     setMoreAssignmentsError(null);
-    setExpandedAssignment(null);
+    setExpandedAssignment(selectedWorkerId === props.initialWorkerId ? (props.initialAssignmentId ?? null) : null);
     setWorkerPanel(null);
     setEventPages({});
     void loadDetail(selectedWorkerId);
     return () => {
       detailSequenceRef.current += 1;
     };
-  }, [selectedWorkerId, loadDetail]);
+  }, [selectedWorkerId, loadDetail, props.initialWorkerId, props.initialAssignmentId]);
 
   // Synced-ref pattern: the realtime effect below reads the freshest reload
   // callbacks and selection without re-subscribing on every render.
@@ -768,7 +778,15 @@ function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
                     </div>
                   ))}
                 {!visibleAssignments?.items.some((assignment) => assignment.assignmentId === expandedAssignment) ? (
-                  <p>Assignment evidence is loading or unavailable.</p>
+                  <>
+                    <p>Assignment evidence is loading or unavailable.</p>
+                    {props.initialAssignmentId === expandedAssignment && visibleAssignments ? (
+                      <p>
+                        The linked assignment is not in the loaded records. Close this panel and load more assignments
+                        to inspect older evidence; no other assignment is selected.
+                      </p>
+                    ) : null}
+                  </>
                 ) : null}
               </DetailInspector>
             </FocusedDetail>

@@ -32,6 +32,8 @@ import { useChatScopedErrors } from "./useChatScopedErrors";
 import { useChatSessionSelection } from "./useChatSessionSelection";
 
 type Input = {
+  catalogEvidenceEnabled?: boolean;
+  secondaryEvidenceEnabled?: boolean;
   workspaceId: NonNullable<MissionThreadedControllerHostProps["workspaceId"]>;
   selection: ReturnType<typeof useChatSessionSelection>;
   deferredSearch: string;
@@ -69,6 +71,8 @@ type Input = {
 
 /** Composes session reads, scope-bound lifecycle, controls and context owners in their original hook order. */
 export function useChatSessionComposition({
+  catalogEvidenceEnabled,
+  secondaryEvidenceEnabled,
   workspaceId,
   selection,
   deferredSearch,
@@ -106,6 +110,8 @@ export function useChatSessionComposition({
   // Citadel is presentation currency; creation admission remains installation/workspace owned.
   const { activeCitadelId: viewIdentity } = useUiPreferences();
   const sessionData = useChatSessionData({
+    secondaryEnabled: secondaryEvidenceEnabled,
+    catalogEnabled: catalogEvidenceEnabled,
     workspaceId,
     viewIdentity,
     historyView: selection.historyView,
@@ -189,7 +195,14 @@ export function useChatSessionComposition({
     applyFetchedThreadRef: coordination.applyFetchedThreadRef,
     messageMutationVersionRef: coordination.messageMutationVersionRef,
   });
-  useChatHistoricalRoute({ routeSearch, workspaceId, viewIdentity, selectedSession: threadController.selectedSession, openHistoricalWindow: sessionData.openHistoricalWindow, returnToLatest: sessionData.returnToLatest });
+  useChatHistoricalRoute({
+    routeSearch,
+    workspaceId,
+    viewIdentity,
+    selectedSession: threadController.selectedSession,
+    openHistoricalWindow: sessionData.openHistoricalWindow,
+    returnToLatest: sessionData.returnToLatest,
+  });
   const sessionStatus = useChatSessionStatus({
     sessionId: selection.selectedSessionId,
     workspaceId: threadController.selectedSession?.workspaceId ?? workspaceId,
@@ -289,6 +302,7 @@ export function useChatSessionComposition({
   // exactly when the server supplies the value and stay disabled fail-closed
   // when it is genuinely absent — the host passes no incarnation of its own.
   const externalSourceAttachments = useExternalSourceAttachments({
+    deferCandidates: secondaryEvidenceEnabled !== undefined,
     workspaceId: threadController.selectedSession?.workspaceId ?? workspaceId,
     sessionId:
       threadController.selectedSession?.lifecycleStatus === "active"
@@ -300,6 +314,7 @@ export function useChatSessionComposition({
   const { handleOutboundExternalContextSent } = externalSourceAttachments;
 
   const documentContext = useChatDocuments({
+    readEnabled: secondaryEvidenceEnabled,
     workspaceId,
     selectedSession: threadController.selectedSession,
     selectedSessionId: selection.selectedSessionId,

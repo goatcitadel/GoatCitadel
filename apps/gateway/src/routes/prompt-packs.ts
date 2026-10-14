@@ -23,6 +23,25 @@ const promptPackParamsSchema = z.object({
   packId: z.string().min(1),
 });
 
+const promptPackReportQuerySchema = z
+  .object({
+    runId: z
+      .string()
+      .min(1)
+      .max(256)
+      .refine((value) => value.trim().length > 0)
+      .optional(),
+    sessionId: z
+      .string()
+      .min(1)
+      .max(256)
+      .refine((value) => value.trim().length > 0)
+      .optional(),
+  })
+  .refine((value) => !value.sessionId || Boolean(value.runId), {
+    message: "Session-focused inspection requires a run.",
+  });
+
 const promptPackBuiltinParamsSchema = z.object({
   packKey: z.string().min(1),
 });
@@ -435,8 +454,17 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
+    const query = promptPackReportQuerySchema.safeParse(request.query ?? {});
+    if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
     try {
-      return reply.send(await promptPacks.getPromptPackReport(params.data.packId));
+      return reply.send(
+        await (query.data.runId
+          ? promptPacks.getPromptPackReport(params.data.packId, {
+              runId: query.data.runId,
+              ...(query.data.sessionId ? { sessionId: query.data.sessionId } : {}),
+            })
+          : promptPacks.getPromptPackReport(params.data.packId)),
+      );
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }

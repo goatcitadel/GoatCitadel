@@ -50,7 +50,7 @@ export function Sidebar({
   onToggleCollapsed?: () => void;
 }) {
   const shellSwitch = useCockpitShellSwitch();
-  const { area: current, navigate } = useCockpitRoute();
+  const { area: current, pathname, search, hash, navigate } = useCockpitRoute();
   const preload = useCockpitPreload();
   const { activeCitadelId, activeWorkspaceId, theme, setTheme } = useUiPreferences();
   const workspaces = useQuery({
@@ -164,10 +164,14 @@ export function Sidebar({
           <span className={collapsed ? "sr-only" : ""}>{healthStatus.label}</span>
         </a>
       )}
-      <div data-stream-state={streamState} aria-label={stream.ariaLabel} className={`flex items-center gap-2 py-1.5 text-xs text-fg-muted ${collapsed ? "flex-col" : "px-2"}`}>
+      <div
+        data-stream-state={streamState}
+        aria-label={stream.ariaLabel}
+        className={`flex items-center gap-2 py-1.5 text-xs text-fg-muted ${collapsed ? "flex-col" : "px-2"}`}
+      >
         <span aria-hidden="true" className={`size-2 rounded-full ${stream.tone}`} />
         <span className={collapsed ? "sr-only" : "flex-1"}>{stream.label}</span>
-        <Menu>
+        <Menu scopeKey={JSON.stringify([activeCitadelId, activeWorkspaceId, pathname, search, hash])}>
           <MenuTrigger
             aria-label="Settings and account"
             className="rounded-md p-1 text-fg-muted hover:bg-sunken"

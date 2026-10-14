@@ -17,6 +17,8 @@ import {
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkSchedules } from "./WorkSchedules";
+import { WorkArea } from "./WorkArea";
+import { fetchObserveRunTrace } from "@goatcitadel/mission-control-shared/api/durable";
 import { CockpitNavigationContext } from "../../app/cockpit-navigation-context";
 import { commitCockpitNavigation } from "../../app/cockpit-history";
 import {
@@ -43,6 +45,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/cron", () => ({
   fetchCronReviewQueue: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/settings", () => ({ fetchSettings: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/durable", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/durable")>()),
+  fetchObserveRunTrace: vi.fn(),
+}));
 vi.mock("../../../features/native-routes/ops/schedule-id", () => ({
   createScheduleJobId: () => "new-schedule-id",
 }));
@@ -428,6 +434,11 @@ describe("Work schedules", () => {
   });
 
   it("locks further actions after an unconfirmed mutation outcome", async () => {
+    window.history.replaceState(
+      { evidence: "schedule-record-recovery" },
+      "",
+      "/work/schedules?workspaceId=default&citadelId=current-citadel&runId=run-linked&sessionId=session-linked&filter=retained&shell=cockpit&shellScope=visit#schedule-evidence",
+    );
     vi.mocked(runCronJobNow).mockRejectedValue(new Error("Response lost"));
     await render();
     await review();
@@ -448,9 +459,47 @@ describe("Work schedules", () => {
     );
     expect(actionButtons).toHaveLength(3);
     expect(actionButtons.every((button) => button.disabled)).toBe(true);
+    const recovery = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => link.textContent === "Inspect current schedule record",
+    );
+    expect(recovery).toBeDefined();
+    const destination = new URL(recovery!.href);
+    expect(destination.pathname).toBe("/work/schedules");
+    expect(destination.searchParams.get("jobId")).toBe("job-a");
+    expect(destination.searchParams.get("workspaceId")).toBe("default");
+    expect(destination.searchParams.get("citadelId")).toBe("current-citadel");
+    expect(destination.searchParams.get("runId")).toBe("run-linked");
+    expect(destination.searchParams.get("sessionId")).toBe("session-linked");
+    expect(destination.searchParams.get("filter")).toBe("retained");
+    expect(destination.searchParams.get("shell")).toBe("cockpit");
+    expect(destination.searchParams.has("shellScope")).toBe(false);
+    expect(destination.hash).toBe("#schedule-evidence");
+    await act(async () => root.render(null));
+    window.history.replaceState(window.history.state, "", destination.pathname + destination.search + destination.hash);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <WorkArea />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).toContain("Daily review"),
+    );
+    expect(container.querySelector("h1")?.textContent).toBe("Schedules");
+    expect(fetchCronJob).toHaveBeenCalledWith("job-a", { signal: expect.any(AbortSignal) });
+    expect(fetchObserveRunTrace).not.toHaveBeenCalled();
     expect(
-      container.querySelector<HTMLAnchorElement>('a[href="/ops/schedules?shell=classic&shellScope=visit"]'),
-    ).not.toBeNull();
+      [...container.querySelectorAll<HTMLButtonElement>("button")]
+        .filter((button) => ["Run now", "Pause", "Delete schedule…"].includes(button.textContent?.trim() ?? ""))
+        .every((button) => button.disabled),
+    ).toBe(true);
+    expect(runCronJobNow).toHaveBeenCalledTimes(1);
+    expect(createCronJob).not.toHaveBeenCalled();
+    expect(deleteCronJob).not.toHaveBeenCalled();
+    expect(window.location.search).toBe(destination.search);
+    expect(window.location.hash).toBe("#schedule-evidence");
+    expect(window.history.state).toMatchObject({ evidence: "schedule-record-recovery" });
   });
 
   it("names schedule deletion plainly and offers Pause instead", async () => {
@@ -512,6 +561,74 @@ describe("Work schedules", () => {
 });
 
 describe("retained schedule creation input", () => {
+  it("inspects the native schedule list after an uncertain create without selecting an unrelated job or unlocking retry", async () => {
+    window.history.replaceState(
+      { evidence: "schedule-create-recovery" },
+      "",
+      "/work/schedules?workspaceId=default&citadelId=current-citadel&jobId=job-a&runId=run-linked&sessionId=session-linked&filter=retained&shell=cockpit&shellScope=visit#schedule-evidence",
+    );
+    vi.mocked(createCronJob).mockRejectedValue(new Error("Response lost"));
+    await render();
+    await click("New schedule");
+    const input = container.querySelector<HTMLInputElement>('form input[maxlength="100"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "Unconfirmed schedule");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click("Create schedule");
+    await vi.waitFor(() => expect(container.textContent).toContain("create outcome is unconfirmed"));
+    expect(createCronJob).toHaveBeenCalledTimes(1);
+    expect(input.disabled).toBe(true);
+    const recovery = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => link.textContent === "Inspect current schedules",
+    );
+    expect(recovery).toBeDefined();
+    const destination = new URL(recovery!.href);
+    expect(destination.pathname).toBe("/work/schedules");
+    expect(destination.searchParams.has("jobId")).toBe(false);
+    expect(destination.searchParams.get("workspaceId")).toBe("default");
+    expect(destination.searchParams.get("citadelId")).toBe("current-citadel");
+    expect(destination.searchParams.get("runId")).toBe("run-linked");
+    expect(destination.searchParams.get("sessionId")).toBe("session-linked");
+    expect(destination.searchParams.get("filter")).toBe("retained");
+    expect(destination.searchParams.get("shell")).toBe("cockpit");
+    expect(destination.searchParams.has("shellScope")).toBe(false);
+    expect(destination.hash).toBe("#schedule-evidence");
+    const reads = vi.mocked(fetchCronJob).mock.calls.length;
+    await act(async () => root.render(null));
+    window.history.replaceState(window.history.state, "", destination.pathname + destination.search + destination.hash);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <WorkArea />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.textContent).toContain("Daily review"));
+    expect(container.querySelector("h1")?.textContent).toBe("Schedules");
+    const recoveryDetail = container.querySelector('[aria-label="Schedule detail"]');
+    expect(recoveryDetail?.querySelector("h2")?.textContent).toBe("Select a schedule");
+    expect(recoveryDetail?.querySelectorAll("button")).toHaveLength(0);
+    expect(fetchCronJob).toHaveBeenCalledTimes(reads);
+    expect(fetchObserveRunTrace).not.toHaveBeenCalled();
+    await click("New schedule");
+    const retained = container.querySelector<HTMLInputElement>('form input[maxlength="100"]')!;
+    expect(retained.value).toBe("Unconfirmed schedule");
+    expect(retained.disabled).toBe(true);
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent === "Create schedule",
+      )?.disabled,
+    ).toBe(true);
+    expect(createCronJob).toHaveBeenCalledTimes(1);
+    expect(runCronJobNow).not.toHaveBeenCalled();
+    expect(pauseCronJob).not.toHaveBeenCalled();
+    expect(startCronJob).not.toHaveBeenCalled();
+    expect(deleteCronJob).not.toHaveBeenCalled();
+    expect(window.location.search).toBe(destination.search);
+    expect(window.location.hash).toBe("#schedule-evidence");
+    expect(window.history.state).toMatchObject({ evidence: "schedule-create-recovery" });
+  });
   it("keeps unsent input across unmount and discards without a Gateway request", async () => {
     await render();
     await click("New schedule");

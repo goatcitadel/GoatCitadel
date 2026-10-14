@@ -1,11 +1,10 @@
-import { Command } from "cmdk";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchLlmConfig } from "@goatcitadel/mission-control-shared/api/platform";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { buildSettingsIndex } from "../areas/settings/settings-index";
-import { resourceTitle } from "../areas/library/library-resources";
+import { resourceTitle } from "../areas/library/resource-title";
 import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
 import { COCKPIT_AREAS } from "./routes";
@@ -15,18 +14,32 @@ import { useCommandPaletteSearch } from "./use-command-palette-search";
 import { useCommandNewChat } from "./use-command-new-chat";
 import { useWorkspaceName } from "../data/use-workspace-name";
 import { lastVersionNote, recordView } from "../data/record-view";
+import { useCommandPaletteViewCode } from "./use-command-palette-view-code";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import {
-  CommandPaletteCoverage,
-  CommandPaletteResults,
-  PALETTE_ITEM_CLASS,
-  PaletteResourcePreview,
-} from "./CommandPaletteResults";
+  chatSessionCreationBlocked,
+  chatSessionCreationKey,
+  readChatSessionCreation,
+} from "@goatcitadel/mission-control-shared/state/chat-session-creation";
 import type { PaletteObject } from "./command-palette-search";
 
 const SETTINGS = buildSettingsIndex({ discovery: true }).flatMap((page) => page.entries);
 const DESTINATIONS = [
-  ...COCKPIT_AREAS.map(entry => ({ ...entry, terms: entry.area === "inbox" ? "approvals attention decisions" : entry.area === "system" ? "health diagnostics status operations" : entry.label })),
-  { area: "settings", label: "Settings", path: "/settings/general", terms: "settings preferences account configuration" },
+  ...COCKPIT_AREAS.map((entry) => ({
+    ...entry,
+    terms:
+      entry.area === "inbox"
+        ? "approvals attention decisions"
+        : entry.area === "system"
+          ? "health diagnostics status operations"
+          : entry.label,
+  })),
+  {
+    area: "settings",
+    label: "Settings",
+    path: "/settings/general",
+    terms: "settings preferences account configuration",
+  },
 ];
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -34,6 +47,17 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const { navigate, requestTransition } = useCockpitRoute();
   const inspector = useInspector();
   const { theme, setTheme, density, setDensity, activeWorkspaceId, activeCitadelId } = useUiPreferences();
+  const viewCode = useCommandPaletteViewCode(
+    open,
+    activeWorkspaceId,
+    activeCitadelId,
+    () =>
+      !activeWorkspaceId ||
+      !chatSessionCreationBlocked(
+        readChatSessionCreation(chatSessionCreationKey(getGatewayApiBaseUrl(), activeWorkspaceId)),
+      ),
+  );
+  const View = viewCode.View;
   const [query, setQuery] = useState("");
   const scope = { workspaceId: activeWorkspaceId, citadelId: activeCitadelId };
   const search = useCommandPaletteSearch(open, scope, query);
@@ -77,20 +101,75 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       ? newChat.attempt
       : undefined;
   const matches = (text: string) => text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
-  const destinations = DESTINATIONS.filter(entry => matches(`Go to ${entry.label} ${entry.terms}`));
-  const settingsMatches = SETTINGS.filter(entry => matches(`settings ${entry.label} ${entry.searchTerms}`));
+  const destinations = DESTINATIONS.filter((entry) => matches(`Go to ${entry.label} ${entry.terms}`));
+  const settingsMatches = SETTINGS.filter((entry) => matches(`settings ${entry.label} ${entry.searchTerms}`));
   const commandMatches = matches("New chat conversation") || matches("Choose default model provider models switch");
-  const preferenceMatches = matches("Switch theme light dark") || matches("Switch density comfortable compact") || matches("Switch to classic Mission Control");
-  const noMatches = Boolean(query.trim()) && !commandMatches && !preferenceMatches && !destinations.length && !settingsMatches.length && !search.groups.some(group => group.items.length) && !search.loading;
+  const preferenceMatches =
+    matches("Switch theme light dark") ||
+    matches("Switch density comfortable compact") ||
+    matches("Switch to classic Mission Control");
+  const noMatches =
+    Boolean(query.trim()) &&
+    !commandMatches &&
+    !preferenceMatches &&
+    !destinations.length &&
+    !settingsMatches.length &&
+    !search.groups.some((group) => group.items.length) &&
+    !search.loading;
+  const onNewChat = () => {
+    requestTransition(async (review) => {
+      await newChat.create({
+        isCurrent: review.isCurrent,
+        onCreated: (sessionId) => {
+          if (review.navigate(`/chat?${new URLSearchParams({ shell: "cockpit", sessionId })}`)) {
+            onOpenChange(false);
+          }
+        },
+      });
+    });
+  };
+  const onChooseModel = () => run(() => navigate("/settings/models?shell=cockpit#providers"));
+  const onTheme = () => run(() => setTheme(theme === "dark" ? "light" : "dark"));
+  const onDensity = () => run(() => setDensity(density === "compact" ? "comfortable" : "compact"));
+  const onClassic = () => run(shellSwitch.request);
+  const onDestination = (path: string) => run(() => navigate(`${path}?shell=cockpit`));
+  const onSetting = (href: string) => run(() => navigate(href));
+  const creationNotice = visibleAttempt ? (
+    <div role="status" className="mb-2 px-3 text-sm text-fg-secondary">
+      <p>{visibleAttempt.message}</p>
+      {visibleAttempt.state === "confirmed" && visibleAttempt.sessionId ? (
+        <Button
+          ref={viewCode.createdRef}
+          data-palette-created="true"
+          size="sm"
+          onClick={() =>
+            run(() =>
+              navigate(`/chat?${new URLSearchParams({ shell: "cockpit", sessionId: visibleAttempt.sessionId! })}`),
+            )
+          }
+        >
+          Open created conversation
+        </Button>
+      ) : null}
+    </div>
+  ) : null;
+  const modelSummary = currentConfig
+    ? `Gateway default: ${currentConfig.activeProviderId} / ${currentConfig.activeModel}.${configAge ? ` ${configAge}` : ""}`
+    : config.isError
+      ? "Gateway default unavailable."
+      : "Reading Gateway default…";
   function selectObject(item: PaletteObject) {
     run(() => {
       if ("href" in item.target) navigate(item.target.href);
-      else
+      else {
+        const PaletteResourcePreview = viewCode.code?.PaletteResourcePreview;
+        if (!PaletteResourcePreview) return;
         inspector.open({
           source: "palette-resource",
           title: resourceTitle(item.target.resource),
           body: <PaletteResourcePreview resource={item.target.resource} scope={scope} />,
         });
+      }
     });
   }
   return (
@@ -100,164 +179,88 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         onOpenChange={onOpenChange}
         title="Command palette"
         description="Find commands, workspace conversations, Inbox items, and Library records."
+        onOpenAutoFocus={viewCode.onOpenAutoFocus}
       >
-        <Command label="Search or run a command" shouldFilter={false} className="flex min-w-0 flex-col">
-          <Command.Input
-            autoFocus
-            value={query}
-            onValueChange={setQuery}
-            maxLength={200}
-            placeholder="Search or run a command"
-            className="h-10 min-w-0 border-b border-line-subtle bg-transparent px-3 text-base text-fg outline-none"
+        {View ? (
+          <View
+            query={query}
+            setQuery={setQuery}
+            inputRef={viewCode.inputRef}
+            activeWorkspaceId={activeWorkspaceId}
+            workspaceName={workspaceName}
+            creationNotice={creationNotice}
+            newChatBlocked={newChat.blocked || !activeWorkspaceId || !activeCitadelId}
+            modelSummary={modelSummary}
+            matches={matches}
+            commandMatches={commandMatches}
+            preferenceMatches={preferenceMatches}
+            noMatches={noMatches}
+            destinations={destinations}
+            settingsMatches={settingsMatches}
+            theme={theme}
+            density={density}
+            search={search}
+            onNewChat={onNewChat}
+            onChooseModel={onChooseModel}
+            onTheme={onTheme}
+            onDensity={onDensity}
+            onClassic={onClassic}
+            onDestination={onDestination}
+            onSetting={onSetting}
+            selectObject={selectObject}
           />
-          <p className="px-3 py-2 text-xs text-fg-muted">
-            {activeWorkspaceId ? `Workspace: ${workspaceName ?? "current workspace"}.` : "No workspace selected."} Type
-            at least two characters to search records. Installation shared results are labeled.
-          </p>
-          {visibleAttempt ? (
-            <div role="status" className="mb-2 px-3 text-sm text-fg-secondary">
-              <p>{visibleAttempt.message}</p>
-              {visibleAttempt.state === "confirmed" && visibleAttempt.sessionId ? (
+        ) : (
+          <div ref={viewCode.pendingHost} className="flex min-w-0 flex-col">
+            <input
+              ref={viewCode.inputRef}
+              aria-label="Search or run a command"
+              value={query}
+              onChange={(event) => setQuery(event.currentTarget.value)}
+              maxLength={200}
+              onCompositionStart={() => viewCode.setComposing(true)}
+              onCompositionEnd={() => viewCode.setComposing(false)}
+              onBlur={() => viewCode.setComposing(false)}
+              placeholder="Search or run a command"
+              className="h-10 min-w-0 border-b border-line-subtle bg-transparent px-3 text-base text-fg outline-none"
+            />
+            <p className="px-3 py-2 text-xs text-fg-muted">
+              {activeWorkspaceId
+                ? "Workspace: " + (workspaceName ?? "current workspace") + "."
+                : "No workspace selected."}
+              {" Type at least two characters to search records. Installation shared results are labeled."}
+            </p>
+            {creationNotice}
+            <p className="px-3 py-2 text-sm text-fg-secondary">
+              {modelSummary} Opens reviewed Settings. Conversation overrides stay in Chat.
+            </p>
+            {viewCode.failed ? (
+              <div role="alert" className="min-h-24 space-y-2 px-3 py-2 text-sm">
+                <p>
+                  Command controls could not load. You can close the palette and keep using Cockpit, or reload the app.
+                </p>
                 <Button
                   size="sm"
-                  onClick={() =>
-                    run(() =>
-                      navigate(
-                        `/chat?${new URLSearchParams({ shell: "cockpit", sessionId: visibleAttempt.sessionId! })}`,
-                      ),
-                    )
-                  }
+                  disabled={!viewCode.reloadAllowed}
+                  onClick={(event) => viewCode.openReload(event.currentTarget)}
                 >
-                  Open created conversation
+                  Reload app
                 </Button>
-              ) : null}
-            </div>
-          ) : null}
-          <div className="max-h-80 overflow-y-auto p-1">
-            <Command.List aria-busy={search.loading}>
-              {/* cmdk overrides a `hidden` prop on Group, so an empty group is left out instead of hidden. */}
-              {commandMatches ? (
-                <Command.Group heading="Commands" className="text-xs text-fg-muted">
-                  {matches("New chat conversation") ? (
-                    <Command.Item
-                      value="new-chat"
-                      disabled={newChat.blocked || !activeWorkspaceId || !activeCitadelId}
-                      onSelect={() => {
-                        requestTransition(async (review) => {
-                          await newChat.create({
-                            isCurrent: review.isCurrent,
-                            onCreated: (sessionId) => {
-                              if (review.navigate(`/chat?${new URLSearchParams({ shell: "cockpit", sessionId })}`)) {
-                                onOpenChange(false);
-                              }
-                            },
-                          });
-                        });
-                      }}
-                      className={PALETTE_ITEM_CLASS}
-                    >
-                      New chat
-                      <span className="block text-xs text-fg-secondary">
-                        Create one conversation in this workspace; nothing is sent.
-                      </span>
-                    </Command.Item>
-                  ) : null}
-                  {matches("Choose default model provider models switch") ? (
-                    <Command.Item
-                      value="choose-model"
-                      onSelect={() => run(() => navigate("/settings/models?shell=cockpit#providers"))}
-                      className={PALETTE_ITEM_CLASS}
-                    >
-                      Choose default model…
-                      <span className="block break-words text-xs text-fg-secondary">
-                        {currentConfig
-                          ? `Gateway default: ${currentConfig.activeProviderId} / ${currentConfig.activeModel}.${configAge ? ` ${configAge}` : ""}`
-                          : config.isError
-                            ? "Gateway default unavailable."
-                            : "Reading Gateway default…"}{" "}
-                        Opens reviewed Settings. Conversation overrides stay in Chat.
-                      </span>
-                    </Command.Item>
-                  ) : null}
-                </Command.Group>
-              ) : null}
-              {destinations.length ? (
-                <Command.Group heading="Go to" className="text-xs text-fg-muted">
-                  {destinations.map((entry) => (
-                    <Command.Item
-                      key={entry.area}
-                      value={`go-${entry.area}`}
-                      onSelect={() => run(() => navigate(`${entry.path}?shell=cockpit`))}
-                      className={PALETTE_ITEM_CLASS}
-                    >
-                      Go to {entry.label}
-                    </Command.Item>
-                  ))}
-                </Command.Group>
-              ) : null}
-              {preferenceMatches ? (
-                <Command.Group heading="Preferences" className="text-xs text-fg-muted">
-                  {matches("Switch theme light dark") ? (
-                    <Command.Item
-                      value="theme"
-                      onSelect={() => run(() => setTheme(theme === "dark" ? "light" : "dark"))}
-                      className={PALETTE_ITEM_CLASS}
-                    >
-                      Switch to {theme === "dark" ? "light" : "dark"} theme
-                    </Command.Item>
-                  ) : null}
-                  {matches("Switch density comfortable compact") ? (
-                    <Command.Item
-                      value="density"
-                      onSelect={() => run(() => setDensity(density === "compact" ? "comfortable" : "compact"))}
-                      className={PALETTE_ITEM_CLASS}
-                    >
-                      Switch to {density === "compact" ? "comfortable" : "compact"} density
-                    </Command.Item>
-                  ) : null}
-                  {matches("Switch to classic Mission Control") ? (
-                    <Command.Item
-                      value="classic"
-                      onSelect={() => run(shellSwitch.request)}
-                      className={PALETTE_ITEM_CLASS}
-                    >
-                      Switch to classic Mission Control
-                    </Command.Item>
-                  ) : null}
-                </Command.Group>
-              ) : null}
-              {settingsMatches.length ? (
-                <Command.Group heading="Settings" className="text-xs text-fg-muted">
-                  {settingsMatches.map((entry) => (
-                    <Command.Item
-                      key={entry.section}
-                      value={`settings-${entry.section}`}
-                      onSelect={() => run(() => navigate(entry.href))}
-                      className={PALETTE_ITEM_CLASS}
-                    >
-                      Settings · {entry.label}
-                      {entry.releaseStatus === "experimental" ? " · Experimental" : ""}
-                    </Command.Item>
-                  ))}
-                </Command.Group>
-              ) : null}
-              <CommandPaletteResults groups={search.groups} onSelect={selectObject} />
-            </Command.List>
-            {noMatches ? <p role="status" className="px-3 py-2 text-sm text-fg-secondary">No matching commands or returned records. Try a destination such as Settings, approvals, health, or a different search term.</p> : null}
-            {search.loading ? (
-              <p role="status" className="px-3 py-2 text-sm text-fg-secondary">
-                Searching current owners…
+                {!viewCode.reloadAllowed ? (
+                  <p>
+                    A conversation creation is still pending or unconfirmed. Close the palette and inspect conversation
+                    history before reloading.
+                  </p>
+                ) : null}
+              </div>
+            ) : (
+              <p role="status" className="min-h-24 px-3 py-2 text-sm text-fg-muted">
+                Loading command controls…
               </p>
-            ) : null}
-            {search.error ? (
-              <p role="alert" className="px-3 py-2 text-sm text-fg-secondary">
-                Search unavailable: {search.error}
-              </p>
-            ) : null}
-            <CommandPaletteCoverage groups={search.groups} />
+            )}
           </div>
-        </Command>
+        )}
       </Dialog>
+      {viewCode.recovery}
       {shellSwitch.feedback}
     </>
   );

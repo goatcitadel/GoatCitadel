@@ -36,7 +36,9 @@ describe("Chat session controls", () => {
   it("uses the existing controller to rename the current conversation", async () => {
     const context = dock();
     await act(async () => root.render(<ChatSessionTitle title="Original title" dock={context} />));
-    await act(async () => (container.querySelector('button[title="Rename conversation"]') as HTMLButtonElement).click());
+    await act(async () =>
+      (container.querySelector('button[title="Rename conversation"]') as HTMLButtonElement).click(),
+    );
     expect(context.onRenameTitleChange).toHaveBeenCalledWith("Original title");
     await act(async () => (container.querySelector('button[type="submit"]') as HTMLButtonElement).click());
     expect(context.onRenameSession).toHaveBeenCalledOnce();
@@ -44,9 +46,22 @@ describe("Chat session controls", () => {
 
   const trigger = () => container.querySelector('button[aria-label="Conversation actions"]') as HTMLButtonElement;
   const item = (label: string) =>
-    [...document.body.querySelectorAll('[role="menuitem"]')].find((node) => node.textContent === label) as HTMLElement | undefined;
-  const openWithPointer = () =>
-    act(async () => { trigger().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 })); });
+    [...document.body.querySelectorAll('[role="menuitem"]')].find((node) => node.textContent === label) as
+      | HTMLElement
+      | undefined;
+  const openWithPointer = async () => {
+    await act(async () => {
+      const node = trigger();
+      node.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerType: "mouse" }),
+      );
+      node.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0, pointerType: "mouse" }),
+      );
+      node.click();
+    });
+    await vi.waitFor(() => expect(item("Export conversation")).toBeDefined());
+  };
 
   it("exports immediately but requires confirmation before archiving", async () => {
     const context = dock();
@@ -67,15 +82,22 @@ describe("Chat session controls", () => {
   it("opens from the keyboard, closes on Escape and returns focus to the trigger", async () => {
     await act(async () => root.render(<ChatSessionOverflow dock={dock()} onFork={vi.fn()} onInspect={vi.fn()} />));
     trigger().focus();
-    await act(async () => { trigger().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    await act(async () => {
+      trigger().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await vi.waitFor(() => expect(item("New conversation from latest message")).toBeDefined());
     expect(trigger().getAttribute("aria-expanded")).toBe("true");
     expect(item("Inspect conversation")).toBeDefined();
     expect(item("New conversation from latest message")).toBeDefined();
     const menu = document.body.querySelector('[role="menu"]') as HTMLElement;
-    await act(async () => { menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await act(async () => {
+      menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
     expect(document.body.querySelector('[role="menu"]')).toBeNull();
     // Radix restores focus on the next task after the menu unmounts.
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     expect(document.activeElement).toBe(trigger());
   });
 

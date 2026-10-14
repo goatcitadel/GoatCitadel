@@ -29,6 +29,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatThreadResponse } from "@goatcitadel/contracts";
 import {
   resetChatStreamingPreviewForTests,
+  getChatStreamingPreview,
   useChatStreamingPreviewSnapshot,
 } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 import { useChatOutboundExecution, type ActiveChatStreamState } from "./useChatOutboundExecution";
@@ -227,90 +228,99 @@ describe("streaming preview external store: render-count acceptance", () => {
     );
 
     let renderer: ReturnType<typeof create> | null = null;
-    await act(async () => {
-      renderer = create(<HostStandIn />);
-    });
-
-    // Drive the send through the same seam the real composer uses. The
-    // execution promise itself is captured (not discarded) so it can be
-    // awaited once the deferred stream resolves below -- mirrors the pattern
-    // in useChatOutboundExecution.test.tsx's own streaming tests.
     let executePromise: Promise<void> | undefined;
-    await act(async () => {
-      executePromise = latestExecute?.({
-        id: "queue-render-count",
-        action: "send",
-        content: "Measure renders",
-        attachments: [],
-        createdAt: "2026-05-03T12:45:00.000Z",
+    try {
+      await act(async () => {
+        renderer = create(<HostStandIn />);
       });
-      await Promise.resolve();
-    });
+      const hostRendersBeforeStart = hostRenderCount;
 
-    const hostRendersAfterStart = hostRenderCount;
-    const timelineRendersAfterStart = timelineRenderCount;
-    // message_start is a turn-identity transition: it must reach the host
-    // stand-in (it re-rendered from its initial mount render at minimum).
-    expect(hostRendersAfterStart).toBeGreaterThan(0);
+      // Drive the send through the same seam the real composer uses. The
+      // execution promise itself is captured (not discarded) so it can be
+      // awaited once the deferred stream resolves below -- mirrors the pattern
+      // in useChatOutboundExecution.test.tsx's own streaming tests.
+      await act(async () => {
+        executePromise = latestExecute?.({
+          id: "queue-render-count",
+          action: "send",
+          content: "Measure renders",
+          attachments: [],
+          createdAt: "2026-05-03T12:45:00.000Z",
+        });
+        await vi.dynamicImportSettled();
+      });
+      expect(streamAgentChatMessageMock).toHaveBeenCalledTimes(1);
+      expect(outboundOnChunk).toBeTypeOf("function");
+      expect(getChatStreamingPreview("session-1")?.turnId).toBe("turn-1");
 
-    // Pump FLUSH_COUNT delta chunks through the real buffer. Each delta is
-    // followed by a RAF/timer-driven flush (the buffer's own scheduling),
-    // advanced by the fake timers exactly like the existing streaming tests
-    // in useChatOutboundExecution.test.tsx.
-    for (let index = 0; index < FLUSH_COUNT; index += 1) {
+      const hostRendersAfterStart = hostRenderCount;
+      const timelineRendersAfterStart = timelineRenderCount;
+      // message_start is a turn-identity transition: it must reach the host
+      // stand-in (it re-rendered from its initial mount render at minimum).
+      expect(hostRendersAfterStart).toBeGreaterThan(hostRendersBeforeStart);
+
+      // Pump FLUSH_COUNT delta chunks through the real buffer. Each delta is
+      // followed by a RAF/timer-driven flush (the buffer's own scheduling),
+      // advanced by the fake timers exactly like the existing streaming tests
+      // in useChatOutboundExecution.test.tsx.
+      for (let index = 0; index < FLUSH_COUNT; index += 1) {
+        await act(async () => {
+          outboundOnChunk?.({
+            type: "delta",
+            eventId: `evt-delta-${index}`,
+            sessionId: "session-1",
+            turnId: "turn-1",
+            messageId: "assistant-1",
+            delta: "x",
+          });
+          vi.advanceTimersByTime(20);
+          await Promise.resolve();
+        });
+      }
+
+      const hostRendersAfterFlushes = hostRenderCount - hostRendersAfterStart;
+      const timelineRendersAfterFlushes = timelineRenderCount - timelineRendersAfterStart;
+
+      // The acceptance criterion: the host stand-in gets zero additional
+      // renders for 50 in-place text flushes within the same turn (allow <=1
+      // as slack for any unrelated single transition render, per the brief).
+      expect(hostRendersAfterFlushes).toBeLessThanOrEqual(1);
+      // The store's subscriber (the timeline stand-in) DOES re-render per
+      // flush: with 50 flushes it must render at least once per flush.
+      expect(timelineRendersAfterFlushes).toBeGreaterThanOrEqual(FLUSH_COUNT);
+
+      const hostRendersBeforeDone = hostRenderCount;
+
+      // message_done is the stop transition: it must still reach the host.
       await act(async () => {
         outboundOnChunk?.({
-          type: "delta",
-          eventId: `evt-delta-${index}`,
+          type: "message_done",
+          eventId: "evt-done",
           sessionId: "session-1",
           turnId: "turn-1",
           messageId: "assistant-1",
-          delta: "x",
+          content: "x".repeat(FLUSH_COUNT),
         });
-        vi.advanceTimersByTime(20);
-        await Promise.resolve();
+        streamDeferred.resolve();
+        await executePromise;
+      });
+
+      expect(hostRenderCount).toBeGreaterThan(hostRendersBeforeDone);
+
+      // Report the concrete numbers for the PR body: before this change, each
+      // flush was a host+shell re-render by construction (50 flushes -> 50
+      // host re-renders, since the value flowed through host useState). After
+      // this change, the host renders are measured directly above.
+      console.info(
+        `[render-count] host renders per ${FLUSH_COUNT} flushes: before=${FLUSH_COUNT} (by construction) after=${hostRendersAfterFlushes}; timeline-standin renders per ${FLUSH_COUNT} flushes: ${timelineRendersAfterFlushes}`,
+      );
+    } finally {
+      // Dispose the actual mounted owner while fake timers still own its scheduled work.
+      await act(async () => {
+        renderer?.unmount();
+        streamDeferred.resolve();
+        await executePromise;
       });
     }
-
-    const hostRendersAfterFlushes = hostRenderCount - hostRendersAfterStart;
-    const timelineRendersAfterFlushes = timelineRenderCount - timelineRendersAfterStart;
-
-    // The acceptance criterion: the host stand-in gets zero additional
-    // renders for 50 in-place text flushes within the same turn (allow <=1
-    // as slack for any unrelated single transition render, per the brief).
-    expect(hostRendersAfterFlushes).toBeLessThanOrEqual(1);
-    // The store's subscriber (the timeline stand-in) DOES re-render per
-    // flush: with 50 flushes it must render at least once per flush.
-    expect(timelineRendersAfterFlushes).toBeGreaterThanOrEqual(FLUSH_COUNT);
-
-    const hostRendersBeforeDone = hostRenderCount;
-
-    // message_done is the stop transition: it must still reach the host.
-    await act(async () => {
-      outboundOnChunk?.({
-        type: "message_done",
-        eventId: "evt-done",
-        sessionId: "session-1",
-        turnId: "turn-1",
-        messageId: "assistant-1",
-        content: "x".repeat(FLUSH_COUNT),
-      });
-      streamDeferred.resolve();
-      await executePromise;
-    });
-
-    expect(hostRenderCount).toBeGreaterThan(hostRendersBeforeDone);
-
-    await act(async () => {
-      renderer?.unmount();
-    });
-
-    // Report the concrete numbers for the PR body: before this change, each
-    // flush was a host+shell re-render by construction (50 flushes -> 50
-    // host re-renders, since the value flowed through host useState). After
-    // this change, the host renders are measured directly above.
-    console.info(
-      `[render-count] host renders per ${FLUSH_COUNT} flushes: before=${FLUSH_COUNT} (by construction) after=${hostRendersAfterFlushes}; timeline-standin renders per ${FLUSH_COUNT} flushes: ${timelineRendersAfterFlushes}`,
-    );
   });
 });

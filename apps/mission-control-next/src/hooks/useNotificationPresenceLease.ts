@@ -1,6 +1,13 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import { getGatewayApiBaseUrl, getGatewayAccessRevision, subscribeGatewayAccessChange } from "@goatcitadel/mission-control-shared/api/client-core";
-import { getGatewayCallerScope, subscribeGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  getGatewayApiBaseUrl,
+  getGatewayAccessRevision,
+  subscribeGatewayAccessChange,
+} from "@goatcitadel/mission-control-shared/api/client-core";
+import {
+  getGatewayCallerScope,
+  subscribeGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { upsertNotificationPresence } from "@goatcitadel/mission-control-shared/api/client";
 
 const PRESENCE_INTERVAL_MS = 45_000;
@@ -20,32 +27,56 @@ function presenceAccessIdentity(): string {
 }
 
 export function useNotificationPresenceLease(workspaceId: string, sessionId?: string): void {
-  const revision = useSyncExternalStore(subscribeGatewayAccessChange, getGatewayAccessRevision, getGatewayAccessRevision);
+  const revision = useSyncExternalStore(
+    subscribeGatewayAccessChange,
+    getGatewayAccessRevision,
+    getGatewayAccessRevision,
+  );
   const caller = useSyncExternalStore(subscribeGatewayCallerScope, getGatewayCallerScope, getGatewayCallerScope);
   const identity = JSON.stringify([getGatewayApiBaseUrl(), caller, revision]);
   const active = useRef<PresenceLeaseOwner | null>(null);
+  const committedSessionId = useRef(sessionId);
   useEffect(() => {
-    if (!workspaceId || typeof window === "undefined" || typeof document === "undefined" ||
-      typeof window.addEventListener !== "function" || typeof document.addEventListener !== "function") return;
+    committedSessionId.current = sessionId;
+  }, [sessionId]);
+  useEffect(() => {
+    if (
+      !workspaceId ||
+      typeof window === "undefined" ||
+      typeof document === "undefined" ||
+      typeof window.addEventListener !== "function" ||
+      typeof document.addEventListener !== "function"
+    )
+      return;
     const clientId = sessionIdentifier(CLIENT_STORAGE_KEY);
     const leaseId = randomIdentifier();
     let disposed = false;
     let writes = Promise.resolve();
     const owner: PresenceLeaseOwner = {
-      identity, workspaceId, sessionId,
+      identity,
+      workspaceId,
+      sessionId: committedSessionId.current,
       publish(forceAway = false) {
         if (disposed && !forceAway) return;
         const input = {
-          workspaceId, leaseId, clientId, ...(owner.sessionId ? { sessionId: owner.sessionId } : {}),
+          workspaceId,
+          leaseId,
+          clientId,
+          ...(owner.sessionId ? { sessionId: owner.sessionId } : {}),
           focused: forceAway ? false : document.hasFocus(),
-          visible: forceAway ? false : document.visibilityState === "visible", ttlMs: PRESENCE_TTL_MS,
+          visible: forceAway ? false : document.visibilityState === "visible",
+          ttlMs: PRESENCE_TTL_MS,
         };
         // Serialize updates to this lease so a slow previous session write cannot replace its successor.
         writes = writes.then(async () => {
           // A replacement transport/caller cannot retire a lease using its predecessor's authority.
           // The old lease expires fail-safe under its existing TTL.
           if (presenceAccessIdentity() !== identity) return;
-          try { await upsertNotificationPresence(input); } catch { /* Unknown or expired presence is away. */ }
+          try {
+            await upsertNotificationPresence(input);
+          } catch {
+            /* Unknown or expired presence is away. */ return;
+          }
         });
       },
     };
@@ -69,7 +100,8 @@ export function useNotificationPresenceLease(workspaceId: string, sessionId?: st
 
   useEffect(() => {
     const owner = active.current;
-    if (!owner || owner.identity !== identity || owner.workspaceId !== workspaceId || owner.sessionId === sessionId) return;
+    if (!owner || owner.identity !== identity || owner.workspaceId !== workspaceId || owner.sessionId === sessionId)
+      return;
     // Selecting a conversation updates the mounted scope's lease without an artificial away/return pair.
     owner.sessionId = sessionId;
     owner.publish();

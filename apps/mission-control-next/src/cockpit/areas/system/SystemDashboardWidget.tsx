@@ -1,4 +1,4 @@
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { SystemOwnerLink } from "./SystemOwnerLink";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { OpsSavedBoardWidgetKind } from "@goatcitadel/contracts";
@@ -58,12 +58,13 @@ function WidgetFrame({
         </p>
       ) : null}
       {!loading && !error ? <div className="mt-3">{children}</div> : null}
-      <ClassicOwnerLink
+      <SystemOwnerLink
         href={ownerHref}
         scope={scope}
         className="mt-3 inline-block text-sm font-medium text-accent hover:underline"
-        label="Open source controls"
-      />
+      >
+        Open source controls
+      </SystemOwnerLink>
     </section>
   );
 }
@@ -99,7 +100,7 @@ function AgenticRunsWidget({ workspaceId }: { workspaceId: string }) {
       scope={workspaceId}
       title="Agentic runs"
       source="Workspace agentic runs · first 200"
-      ownerHref="/ops/kanban?shell=classic"
+      ownerHref={`/work?workspaceId=${encodeURIComponent(workspaceId)}`}
       loading={query.isLoading}
       refreshing={query.isFetching}
       error={query.error}
@@ -132,7 +133,7 @@ function ApprovalsWidget({ workspaceId }: { workspaceId: string }) {
       scope={workspaceId}
       title="Approval queue"
       source="Workspace-linked pending approvals · first 200"
-      ownerHref="/ops/approvals?shell=classic"
+      ownerHref={`/inbox?view=history&workspaceId=${encodeURIComponent(workspaceId)}`}
       loading={query.isLoading}
       refreshing={query.isFetching}
       error={query.error}
@@ -170,7 +171,7 @@ function RuntimeWidget() {
     <WidgetFrame
       title="Runtime truth"
       source="Gateway host-wide health snapshot"
-      ownerHref="/ops/runtime?shell=classic"
+      ownerHref="/system/runtime"
       loading={query.isLoading}
       refreshing={query.isFetching}
       error={query.error}
@@ -204,7 +205,7 @@ function TasksWidget({ workspaceId }: { workspaceId: string }) {
       scope={workspaceId}
       title="Task status"
       source="Workspace active tasks · first 200"
-      ownerHref="/ops/kanban?shell=classic"
+      ownerHref={`/work?workspaceId=${encodeURIComponent(workspaceId)}`}
       loading={query.isLoading}
       refreshing={query.isFetching}
       error={query.error}
@@ -234,7 +235,7 @@ function UsageWidget() {
     <WidgetFrame
       title="Usage and cost"
       source="Gateway-wide day-scope usage"
-      ownerHref="/ops/costs?shell=classic"
+      ownerHref="/system/spend/details"
       loading={query.isLoading}
       refreshing={query.isFetching}
       error={query.error}

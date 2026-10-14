@@ -3,13 +3,21 @@ import type { IntegrationSettingsOwner } from "../../../features/native-routes/s
 import { isReplayAuditCandidate } from "../../../features/native-routes/settings/sections/use-integration-replay-actions";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { integrationInputClass } from "./IntegrationFormFields";
 import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
 import { ExtensionConfigurationGuidance } from "./ExtensionConfigurationGuidance";
 
 export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSettingsOwner }) {
   const workspaceLabel = useActiveWorkspaceLabel();
+  const { search: routeSearch, hash } = useCockpitRoute();
+  const auditParameters = new URLSearchParams(routeSearch);
+  auditParameters.set("workspaceId", s.activeWorkspaceId);
+  if (s.lastReplayAuditRunId) auditParameters.set("runId", s.lastReplayAuditRunId);
+  auditParameters.delete("view");
+  auditParameters.delete("shell");
+  auditParameters.delete("shellScope");
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(10);
   const issue = s.data?.issues.find(
@@ -167,8 +175,16 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
                   {warning.severity}: {warning.message}
                 </p>
               ))}
-              {plugin.configurationForm ? <ExtensionConfigurationGuidance guidance={{ pluginId: plugin.pluginId, pluginVersion: plugin.version,
-                form: plugin.configurationForm, supportedFieldKeys: [] }} /> : null}
+              {plugin.configurationForm ? (
+                <ExtensionConfigurationGuidance
+                  guidance={{
+                    pluginId: plugin.pluginId,
+                    pluginVersion: plugin.version,
+                    form: plugin.configurationForm,
+                    supportedFieldKeys: [],
+                  }}
+                />
+              ) : null}
             </article>
           ))}
         </>
@@ -201,13 +217,12 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
             </article>
           ))}
           {s.lastReplayAuditRunId ? (
-            <ClassicOwnerLink
-              href={`/ops/sessions?shell=classic&view=run-detail&runId=${encodeURIComponent(s.lastReplayAuditRunId)}`}
-              scope={s.activeWorkspaceId}
-              label="Inspect durable replay audit"
+            <NativeOwnerLink
+              href={`/work/runs/${encodeURIComponent(s.lastReplayAuditRunId)}?${auditParameters}${hash}`}
+              scope={[s.activeWorkspaceId, s.lastReplayAuditRunId]}
             >
               Inspect durable replay audit {s.lastReplayAuditRunId}
-            </ClassicOwnerLink>
+            </NativeOwnerLink>
           ) : null}
         </>
       )}
