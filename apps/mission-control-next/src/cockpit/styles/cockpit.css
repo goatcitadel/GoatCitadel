@@ -659,6 +659,11 @@ html[data-shell="cockpit"] .mc-dialog-content {
 }
 
 @layer utilities {
+  .cockpit-menu-status-viewport {
+    max-width: calc(100vw - 1rem);
+    max-height: calc(100vh - 1rem);
+  }
+
   @media (width < 640px) {
     .cockpit-inspector {
       inset: auto 0 4rem;

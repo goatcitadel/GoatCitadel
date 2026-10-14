@@ -48,7 +48,7 @@ vi.mock("../../../features/native-routes/ops/RuntimeRoutePage", () => ({
     const [expanded, setExpanded] = useState(false);
     useEffect(() => () => fixture.departed(props.activeWorkspaceId), [props.activeWorkspaceId]);
     return (
-      <button onClick={() => setExpanded(true)}>
+      <button type="button" onClick={() => setExpanded(true)}>
         {expanded ? "Current owner details open" : "Existing runtime control owner"}
       </button>
     );
