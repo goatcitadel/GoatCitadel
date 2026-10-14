@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { GATEWAY_COVERAGE_SHARD_COUNT, STORAGE_COVERAGE_SHARD_COUNT, gatewayCoverageShardDirectory } from "../../../coverage-shard-contract.mjs";
+import {
+  GATEWAY_COVERAGE_SHARD_COUNT,
+  STORAGE_COVERAGE_SHARD_COUNT,
+  gatewayCoverageShardDirectory,
+} from "../../../coverage-shard-contract.mjs";
 import { clampString, maybeParseBool, repoRoot, runCommand, runScenario, sanitizeFilePart } from "../shared.mjs";
 import { buildTestbenchEnvOmit } from "../../../testbench-runtime.mjs";
 import {
@@ -191,7 +196,10 @@ export const FAST_LANE_STAGES = Object.freeze([
           {
             id: "fast.test.gateway",
             mode: "serial",
-            commands: [...GATEWAY_TEST_SHARDS.map((shard) => `fast.test.gateway.shard${shard}`), "fast.test.gateway.node"],
+            commands: [
+              ...GATEWAY_TEST_SHARDS.map((shard) => `fast.test.gateway.shard${shard}`),
+              "fast.test.gateway.node",
+            ],
           },
           {
             id: "fast.coverage.gateway",
@@ -390,7 +398,9 @@ export function serializeFastLaneStages(stages) {
 export function resolveFastLaneStageConcurrency(stage, environment = process.env) {
   if (stage.mode !== "parallel") return 1;
   if (stage.serialWhenEnv && String(environment[stage.serialWhenEnv] ?? "").trim()) return 1;
-  const override = stage.concurrencyEnv ? Number.parseInt(String(environment[stage.concurrencyEnv] ?? ""), 10) : Number.NaN;
+  const override = stage.concurrencyEnv
+    ? Number.parseInt(String(environment[stage.concurrencyEnv] ?? ""), 10)
+    : Number.NaN;
   if (Number.isInteger(override) && override >= 1) return override;
   return stage.concurrency ?? 1;
 }
@@ -408,7 +418,8 @@ export async function runFastLane(context, options = {}) {
     // Injectable so the scheduler can be tested without spawning real suites.
     runCommand: options.runCommand ?? runCommand,
   };
-  const selection = options.selection ?? resolveFastLaneSelection(options.commands ?? process.env.GOATCITADEL_VERIFY_FAST_COMMANDS);
+  const selection =
+    options.selection ?? resolveFastLaneSelection(options.commands ?? process.env.GOATCITADEL_VERIFY_FAST_COMMANDS);
   const selectedStages = selectFastLaneStages(FAST_LANE_STAGES, selection);
   await runFastLaneStages(context, serial ? serializeFastLaneStages(selectedStages) : selectedStages, executionOptions);
 }
@@ -629,6 +640,14 @@ export async function runA2AFullLane(context) {
 
 export async function resolveFastLaneCommandTempRoot(context, command) {
   const tempBaseRoot = await resolveFastLaneTempBaseRoot(context);
+  if (process.env.GOATCITADEL_VERIFY_TEMP_ROOT?.trim()) {
+    // The configured root already owns the run. Keep full IDs in evidence, not filesystem components.
+    const identity = createHash("sha256")
+      .update(JSON.stringify([context.runId, command.id]))
+      .digest("hex")
+      .slice(0, 20);
+    return path.join(tempBaseRoot, `c-${identity}`);
+  }
   return path.join(tempBaseRoot, sanitizeFilePart(command.id));
 }
 
@@ -705,7 +724,7 @@ export function resolveFastLaneCommandOmitEnv(command, env = process.env) {
 async function resolveFastLaneTempBaseRoot(context) {
   const configuredTempRoot = process.env.GOATCITADEL_VERIFY_TEMP_ROOT?.trim();
   if (configuredTempRoot) {
-    return path.join(configuredTempRoot, context.runId);
+    return configuredTempRoot;
   }
   const systemTempRoot = path.join(
     os.tmpdir(),

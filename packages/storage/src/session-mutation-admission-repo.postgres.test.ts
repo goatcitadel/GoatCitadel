@@ -748,6 +748,15 @@ describe("SessionMutationAdmissionRepository live PostgreSQL", () => {
           /expired/iu,
         );
 
+        const fixture = createPostgresContinuationFixture(db, `active-${suffix}`);
+        makePostgresContinuationPromptSecure(db, fixture, "search.parallel", "2099-08-07T00:00:00.000Z");
+        assert.throws(
+          () =>
+            fixture.repo.reserveDurableChatSecureConfiguration(
+              postgresSecureConfigurationReservationInput(fixture, "search.brave", 2),
+            ),
+          /exact required secure configuration target/iu,
+        );
         const restartFixture = createPostgresContinuationFixture(db, `restart-${suffix}`);
         makePostgresContinuationPromptSecure(db, restartFixture, "search.brave", "2099-08-07T00:00:00.000Z");
         const restartReserved = restartFixture.repo.reserveDurableChatSecureConfiguration(
@@ -779,15 +788,26 @@ describe("SessionMutationAdmissionRepository live PostgreSQL", () => {
           recoveredDb.close();
         }
 
-        const fixture = createPostgresContinuationFixture(db, `active-${suffix}`);
-        makePostgresContinuationPromptSecure(db, fixture, "search.parallel", "2099-08-07T00:00:00.000Z");
+        const retainedForeignReservation = fixture.repo.listBlockingDurableChatSecureConfigurationsByTargetScope({
+          targetId: "search.brave",
+          scopeRef: "root-postgres-installation",
+        });
+        assert.deepEqual(retainedForeignReservation, [restartReserved.reservation]);
         assert.throws(
           () =>
             fixture.repo.reserveDurableChatSecureConfiguration(
               postgresSecureConfigurationReservationInput(fixture, "search.brave", 2),
             ),
-          /exact required secure configuration target/iu,
+          /reservation identity conflicts/iu,
         );
+        assert.deepEqual(
+          fixture.repo.listBlockingDurableChatSecureConfigurationsByTargetScope({
+            targetId: "search.brave",
+            scopeRef: "root-postgres-installation",
+          }),
+          retainedForeignReservation,
+        );
+
         const first = fixture.repo.reserveDurableChatSecureConfiguration(
           postgresSecureConfigurationReservationInput(fixture, "search.parallel", 2),
         );

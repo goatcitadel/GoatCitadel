@@ -14,8 +14,8 @@ import {
 
 const createdRoots = [];
 
-async function createTestRoot() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-fast-lane-temp-"));
+async function createTestRoot(baseRoot = os.tmpdir()) {
+  const root = await fs.mkdtemp(path.join(baseRoot, "gc-fast-lane-temp-"));
   createdRoots.push(root);
   return root;
 }
@@ -38,7 +38,8 @@ describe("fast lane command scratch roots", () => {
 
       assert.notEqual(storage, shard);
       for (const root of [storage, shard]) {
-        assert.equal(path.dirname(root), path.join(configured, context.runId));
+        assert.equal(path.dirname(root), configured);
+        assert.match(path.basename(root), /^c-[a-f0-9]{20}$/u);
       }
     } finally {
       if (previous === undefined) delete process.env.GOATCITADEL_VERIFY_TEMP_ROOT;
@@ -141,5 +142,103 @@ describe("fast smoke isolation", () => {
     assert.ok(omitted.includes("GOATCITADEL_PROMPT_PACK_PATH"));
     assert.ok(!omitted.includes("PATH"));
     assert.deepEqual(resolveFastLaneCommandOmitEnv({ id: "fast.test.storage" }, inherited), []);
+  });
+});
+
+describe("configured short temp identity and real bounded fixtures", () => {
+  it("retains exact run/command identity while avoiding traversal and delimiter collisions", async () => {
+    const configured = await createTestRoot();
+    const previous = process.env.GOATCITADEL_VERIFY_TEMP_ROOT;
+    process.env.GOATCITADEL_VERIFY_TEMP_ROOT = configured;
+    try {
+      const first = await resolveFastLaneCommandTempRoot({ runId: "ab" }, { id: "c" });
+      assert.equal(await resolveFastLaneCommandTempRoot({ runId: "ab" }, { id: "c" }), first);
+      assert.notEqual(await resolveFastLaneCommandTempRoot({ runId: "a" }, { id: "bc" }), first);
+      assert.notEqual(await resolveFastLaneCommandTempRoot({ runId: "other" }, { id: "c" }), first);
+      assert.notEqual(await resolveFastLaneCommandTempRoot({ runId: "ab" }, { id: "other" }), first);
+      const escaping = await resolveFastLaneCommandTempRoot({ runId: "../outside" }, { id: "../../outside" });
+      assert.equal(path.dirname(escaping), configured);
+      assert.match(path.basename(escaping), /^c-[a-f0-9]{20}$/u);
+    } finally {
+      if (previous === undefined) delete process.env.GOATCITADEL_VERIFY_TEMP_ROOT;
+      else process.env.GOATCITADEL_VERIFY_TEMP_ROOT = previous;
+    }
+  });
+
+  it("keeps long metadata IDs out of the preferred path and preserves a real locked-root sibling", async () => {
+    const configured = await createTestRoot();
+    const previous = process.env.GOATCITADEL_VERIFY_TEMP_ROOT;
+    process.env.GOATCITADEL_VERIFY_TEMP_ROOT = configured;
+    try {
+      const context = { runId: "2026-10-14T13-58-13-014Z-fast-7e59f73f" };
+      const preferred = await resolveFastLaneCommandTempRoot(context, { id: "fast.test.gateway.shard1" });
+      await fs.mkdir(preferred);
+      await fs.writeFile(path.join(preferred, "keep.db"), "unrelated locked residue");
+      const sibling = await prepareFastLaneCommandTempRoot(preferred, { removeRoot: async () => false });
+      assert.notEqual(sibling, preferred);
+      assert.equal(path.dirname(sibling), configured);
+      assert.match(path.basename(sibling), /^c-[a-f0-9]{20}-fresh-[a-zA-Z0-9]{6}$/u);
+      assert.equal(await fs.readFile(path.join(preferred, "keep.db"), "utf8"), "unrelated locked residue");
+      const env = await resolveFastLaneCommandEnv(context, { id: "fast.test.gateway.shard1" }, sibling);
+      assert.equal(env.TEMP, sibling);
+      assert.equal(env.TMP, sibling);
+      assert.equal(env.TMPDIR, sibling);
+      assert.equal(env.NPM_CONFIG_CACHE, path.join(sibling, "npm-cache"));
+      assert.deepEqual(await fs.readdir(sibling), ["npm-cache"]);
+    } finally {
+      if (previous === undefined) delete process.env.GOATCITADEL_VERIFY_TEMP_ROOT;
+      else process.env.GOATCITADEL_VERIFY_TEMP_ROOT = previous;
+    }
+  });
+
+  it("creates real Windows-length fixture descendants and keeps compiler scratch within160", async () => {
+    const fixtureParent =
+      process.platform === "win32" && process.env.LOCALAPPDATA
+        ? path.join(process.env.LOCALAPPDATA, "Temp")
+        : os.tmpdir();
+    const configured = await createTestRoot(fixtureParent);
+    const previous = process.env.GOATCITADEL_VERIFY_TEMP_ROOT;
+    process.env.GOATCITADEL_VERIFY_TEMP_ROOT = configured;
+    try {
+      const preferred = await resolveFastLaneCommandTempRoot(
+        { runId: "2026-10-14T13-58-13-014Z-fast-7e59f73f" },
+        { id: "fast.repo-hygiene" },
+      );
+      const prepared = await prepareFastLaneCommandTempRoot(preferred);
+      const fixtures = [
+        ["gc-cl-test-XXXXXX", "gc-cl-XXXXXX"],
+        [
+          "goat-broker-repair-test-" + "0".repeat(32),
+          "ProgramData",
+          "GoatCitadel",
+          "RemoteWorkerProvisioner",
+          "bin",
+          "GoatCitadelRemoteWorkerProvisionerAvailability.exe",
+        ],
+        [
+          "goatcitadel-capability-system-XXXXXX",
+          "data",
+          "code-mode-temp",
+          "code-run-" + "0".repeat(36),
+          "code-mode-harness.mjs",
+        ],
+        ["goatcitadel-orchestration-e2e-XXXXXX", ".git", "worktrees", "0".repeat(36), "commondir"],
+      ];
+      for (const [index, parts] of fixtures.entries()) {
+        const file = path.join(prepared, ...parts);
+        if (process.platform === "win32") {
+          assert(file.length < 260);
+          if (index === 0) assert(file.length <= 160);
+        }
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, "fixture");
+        assert.equal(await fs.readFile(file, "utf8"), "fixture");
+      }
+      assert.equal(await removeFastLaneCommandTempRoot(prepared), true);
+      await assert.rejects(() => fs.stat(prepared), { code: "ENOENT" });
+    } finally {
+      if (previous === undefined) delete process.env.GOATCITADEL_VERIFY_TEMP_ROOT;
+      else process.env.GOATCITADEL_VERIFY_TEMP_ROOT = previous;
+    }
   });
 });
