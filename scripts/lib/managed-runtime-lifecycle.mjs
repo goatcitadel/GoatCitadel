@@ -140,6 +140,11 @@ export function queryProcessCreationIdentity(pid) {
   if (pid === process.pid && cachedCurrentProcessIdentity) {
     return { status: "running", identity: cachedCurrentProcessIdentity };
   }
+  if (process.platform === "win32") {
+    const current = queryWindowsProcessCreationIdentity(pid);
+    if (pid === process.pid && current.status === "running") cachedCurrentProcessIdentity = current.identity;
+    return current;
+  }
   const binding = inspectProcessBinding({ rootPid: pid, servingPid: pid });
   if (binding.status === "unavailable") {
     return { status: "unavailable" };
@@ -548,4 +553,33 @@ function fingerprintText(value) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Same kernel creation time as the ancestry probe, without starting WMI for a single PID. */
+export function queryWindowsProcessCreationIdentity(pid, { spawn = spawnSync, exists = fs.existsSync } = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return { status: "missing" };
+  if (!exists(WINDOWS_POWERSHELL)) return { status: "unavailable" };
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "try {",
+    "  $item = [System.Diagnostics.Process]::GetProcessById(" + String(pid) + ")",
+    "  try {",
+    "    $created = $item.StartTime.ToUniversalTime().ToFileTimeUtc()",
+    "    [Console]::Out.WriteLine(($item.Id.ToString() + '|' + $created.ToString()))",
+    "  } finally { $item.Dispose() }",
+    "} catch [System.ArgumentException] { [Console]::Out.WriteLine('missing') }",
+  ].join("\n");
+  const result = spawn(WINDOWS_POWERSHELL, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
+    encoding: "utf8", windowsHide: true, timeout: 5_000, maxBuffer: 64 * 1024,
+  });
+  if (result.error || result.status !== 0) return { status: "unavailable" };
+  const output = result.stdout.trim();
+  if (output === "missing") return { status: "missing" };
+  const match = output.match(/^(\d+)\|(\d{1,20})$/u);
+  if (!match || match[1] !== String(pid)) return { status: "unavailable" };
+  const created = BigInt(match[2]);
+  if (created <= 0n) return { status: "unavailable" };
+  // Existing CIM identities have microsecond precision; preserve their stored identity exactly.
+  const canonical = created - created % 10n;
+  return { status: "running", identity: "windows:" + String(canonical) };
 }
