@@ -95,7 +95,7 @@ describe("ChatSessionLifecycleRepository live PostgreSQL", () => {
           POSTGRES_MIGRATIONS.filter((migration) => migration.sql.includes("chat_session_lifecycle_intents")).map(
             (migration) => migration.version,
           ),
-          [2, 115, 130],
+          [2, 115, 130, 211],
         );
         const through113 = await runPostgresMigrations(
           migrations,
@@ -112,6 +112,15 @@ describe("ChatSessionLifecycleRepository live PostgreSQL", () => {
           schemaName,
         );
         await rewindPostgresSessionLifecycleMigration(scopedPool);
+        assert.deepEqual(
+          (
+            await scopedPool.query(
+              `SELECT to_regclass('chat_turn_secure_configuration_reservations')::text AS secure_reservations,
+                    to_regclass('chat_turn_feature_references')::text AS feature_references`,
+            )
+          ).rows[0],
+          { secure_reservations: null, feature_references: null },
+        );
         setupDb
           .prepare(
             `INSERT INTO chat_session_meta (session_id, workspace_id, created_at, updated_at)
@@ -162,6 +171,37 @@ describe("ChatSessionLifecycleRepository live PostgreSQL", () => {
           POSTGRES_MIGRATIONS.filter((migration) => migration.version >= 115).map((migration) => migration.version),
         );
         assert.deepEqual((await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS)).appliedVersions, []);
+        assert.deepEqual(
+          (
+            await scopedPool.query(
+              `SELECT source.relname AS source, target.relname AS target,
+                    source.relnamespace = target.relnamespace AS same_schema
+             FROM pg_constraint constraint_row
+             JOIN pg_class source ON source.oid = constraint_row.conrelid
+             JOIN pg_class target ON target.oid = constraint_row.confrelid
+             WHERE constraint_row.contype = 'f'
+               AND constraint_row.conrelid IN (
+                 'chat_turn_secure_configuration_reservations'::regclass,
+                 'chat_turn_feature_references'::regclass
+               )
+             ORDER BY source.relname, target.relname`,
+            )
+          ).rows,
+          [
+            { source: "chat_turn_feature_references", target: "chat_session_mutation_admissions", same_schema: true },
+            {
+              source: "chat_turn_secure_configuration_reservations",
+              target: "chat_session_mutation_admissions",
+              same_schema: true,
+            },
+            {
+              source: "chat_turn_secure_configuration_reservations",
+              target: "chat_turn_secure_configuration_reservations",
+              same_schema: true,
+            },
+            { source: "chat_turn_secure_configuration_reservations", target: "durable_runs", same_schema: true },
+          ],
+        );
         assert.equal(
           setupDb
             .prepare("SELECT lifecycle_intent_id FROM chat_session_meta WHERE session_id = @sessionId")
@@ -317,6 +357,12 @@ async function mutatePostgresControlGrantWithoutGuard(pool: Pool, sessionId: str
 }
 
 async function rewindPostgresSessionLifecycleMigration(pool: Pool): Promise<void> {
+  // Baseline2 materializes these later tables before this fixture rewinds to113.
+  // Refuse unexpected fixture data before letting131/202 recreate their real FKs.
+  for (const table of ["chat_turn_secure_configuration_reservations", "chat_turn_feature_references"] as const) {
+    const result = await pool.query<{ row_count: string }>(`SELECT count(*) AS row_count FROM ${table}`);
+    assert.equal(Number(result.rows[0]?.row_count), 0, `Cannot rewind nonempty forward fixture table ${table}`);
+  }
   await pool.query(`
     DROP TRIGGER IF EXISTS trg_chat_session_meta_lifecycle_guard ON chat_session_meta;
     DROP TRIGGER IF EXISTS trg_chat_session_meta_lifecycle_after_insert ON chat_session_meta;
@@ -334,6 +380,10 @@ async function rewindPostgresSessionLifecycleMigration(pool: Pool): Promise<void
     -- table even while this fixture rewinds the ledger to v113. CASCADE is
     -- scoped to the fixture's random schema and removes only those dependent
     -- constraints; their owning forward migrations recreate them below.
+    -- Remove only empty later tables before admission CASCADE. Forward CREATE
+    -- TABLE IF NOT EXISTS would otherwise retain the table with a missing FK.
+    DROP TABLE IF EXISTS chat_turn_feature_references;
+    DROP TABLE IF EXISTS chat_turn_secure_configuration_reservations;
     DROP TABLE IF EXISTS chat_session_mutation_admissions CASCADE;
     DROP TABLE IF EXISTS chat_session_control_auth_revoke_operation_targets;
     DROP TABLE IF EXISTS chat_session_control_auth_revoke_operations;

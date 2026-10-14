@@ -28,8 +28,8 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 263,
-        name: "approval_execution_linkage_index_sort_convergence",
+        version: 264,
+        name: "session_control_unique_index_authority",
       },
     );
     db.close();
@@ -986,12 +986,17 @@ describe("sqlite schema migrations", () => {
 
     const migrated = tempDbs.open({ dbPath });
     assert.equal(
-      (migrated.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 258").get() as { count: number }).count,
+      (
+        migrated.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 258").get() as {
+          count: number;
+        }
+      ).count,
       1,
     );
     assert.equal(
-      (migrated.prepare("PRAGMA table_info(chat_heartbeat_occurrences)").all() as Array<{ name: string }>)
-        .some((column) => column.name === "feature_reference_sha256"),
+      (migrated.prepare("PRAGMA table_info(chat_heartbeat_occurrences)").all() as Array<{ name: string }>).some(
+        (column) => column.name === "feature_reference_sha256",
+      ),
       true,
     );
     assert.equal(

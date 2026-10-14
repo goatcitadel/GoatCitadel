@@ -469,14 +469,19 @@ test("SQLite implementation closures follow local export aliases without droppin
   const source = `import { createOne } from "./helper.js";
     const SCHEMA_MIGRATION_GROUPS = [{ name: "canonical",
       migrations: [{ version: 1, name: "one", up: createOne }] }];`;
-  const extract = (sql) => extractSqliteMigrationRegistry(source, {
-    sourcePath, sourceFiles: new Map([
-      [sourcePath, source],
-      ["packages/storage/src/helper.ts", `const unrelated = 1; export { unrelated };
+  const extract = (sql) =>
+    extractSqliteMigrationRegistry(source, {
+      sourcePath,
+      sourceFiles: new Map([
+        [sourcePath, source],
+        [
+          "packages/storage/src/helper.ts",
+          `const unrelated = 1; export { unrelated };
         function implementation(db) { db.exec(${JSON.stringify(sql)}); }
-        export { implementation as createOne };`],
-    ]),
-  });
+        export { implementation as createOne };`,
+        ],
+      ]),
+    });
   const original = extract("SELECT 1").migrations[0];
   const changed = extract("SELECT 2").migrations[0];
   assert.equal(original.definitionSha256, changed.definitionSha256);
@@ -1008,34 +1013,81 @@ test("current registries and checked-in manifest cover every migration exactly",
 
   // These reviewed literals are intentionally independent from the generated
   // manifest so an accidental registry-plus-manifest edit cannot self-certify.
-  assert.equal(sqlite.migrations.length, 263);
-  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 263]);
-  assert.equal(postgres.migrations.length, 210);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 210]);
-  assert.equal(sqlite.migrations.at(-1)?.name, "approval_execution_linkage_index_sort_convergence");
-  assert.equal(sqlite.migrations.find(record => record.version === 262)?.name, "approval_execution_linkage_index");
-  assert.equal(sqlite.migrations.find(record => record.version === 253)?.name, "purge_credential_route_idempotency_payload_hashes");
-  assert.equal(postgres.migrations.at(-1)?.name, "approval_execution_linkage_index_sort_convergence");
-  assert.equal(postgres.migrations.find(record => record.version === 209)?.name, "approval_execution_linkage_index");
-  assert.equal(postgres.migrations.find(record => record.version === 200)?.name, "channel_guided_setup_schema_shape_convergence");
-  assert.equal(sqlite.migrations.find(record => record.version === 261)?.name, "cron_creator_authority");
-  assert.equal(postgres.migrations.find(record => record.version === 208)?.name, "cron_creator_authority");
-  assert.equal(sqlite.migrations.find(record => record.version === 254)?.name, "chat_provider_fallback_preference");
-  assert.equal(postgres.migrations.find(record => record.version === 201)?.name, "chat_provider_fallback_preference");
-  assert.equal(sqlite.migrations.find(record => record.version === 255)?.name, "chat_turn_feature_references");
-  assert.equal(postgres.migrations.find(record => record.version === 202)?.name, "chat_turn_feature_references");
-  assert.equal(postgres.migrations.find(record => record.version === 199)?.name, "purge_credential_route_idempotency_payload_hashes");
-  assert.equal(sqlite.migrations.find(record => record.version === 251)?.name, "delegation_step_instruction_snapshots");
-  assert.equal(postgres.migrations.find(record => record.version === 197)?.name, "delegation_step_instruction_snapshots");
-  assert.equal(sqlite.migrations.find(record => record.version === 252)?.name, "channel_guided_setup_evidence_and_oauth_attempts");
-  assert.equal(postgres.migrations.find(record => record.version === 198)?.name, "channel_guided_setup_evidence_and_oauth_attempts");
-  assert.equal(postgres.migrations.find(record => record.version === 195)?.name, "remote_worker_runtime_install_evidence");
-  assert.equal(sqlite.migrations.find(record => record.version === 249)?.name, "remote_worker_native_policy_reservations");
-  assert.equal(postgres.migrations.find(record => record.version === 194)?.name, "remote_worker_native_policy_reservations");
-  assert.equal(sqlite.migrations.find(record => record.version === 248)?.name, "remote_worker_native_file_transfers");
-  assert.equal(postgres.migrations.find(record => record.version === 193)?.name, "remote_worker_native_file_transfers");
-  assert.equal(sqlite.migrations.find(record => record.version === 246)?.name, "remote_worker_runtime_output_evidence");
-  assert.equal(postgres.migrations.find(record => record.version === 191)?.name, "remote_worker_runtime_output_evidence");
+  assert.equal(sqlite.migrations.length, 264);
+  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 264]);
+  assert.equal(postgres.migrations.length, 211);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 211]);
+  assert.equal(sqlite.migrations.at(-1)?.name, "session_control_unique_index_authority");
+  assert.equal(
+    sqlite.migrations.find((record) => record.version === 263)?.name,
+    "approval_execution_linkage_index_sort_convergence",
+  );
+  assert.equal(sqlite.migrations.find((record) => record.version === 262)?.name, "approval_execution_linkage_index");
+  assert.equal(
+    sqlite.migrations.find((record) => record.version === 253)?.name,
+    "purge_credential_route_idempotency_payload_hashes",
+  );
+  assert.equal(postgres.migrations.at(-1)?.name, "session_control_unique_index_authority");
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 210)?.name,
+    "approval_execution_linkage_index_sort_convergence",
+  );
+  assert.equal(postgres.migrations.find((record) => record.version === 209)?.name, "approval_execution_linkage_index");
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 200)?.name,
+    "channel_guided_setup_schema_shape_convergence",
+  );
+  assert.equal(sqlite.migrations.find((record) => record.version === 261)?.name, "cron_creator_authority");
+  assert.equal(postgres.migrations.find((record) => record.version === 208)?.name, "cron_creator_authority");
+  assert.equal(sqlite.migrations.find((record) => record.version === 254)?.name, "chat_provider_fallback_preference");
+  assert.equal(postgres.migrations.find((record) => record.version === 201)?.name, "chat_provider_fallback_preference");
+  assert.equal(sqlite.migrations.find((record) => record.version === 255)?.name, "chat_turn_feature_references");
+  assert.equal(postgres.migrations.find((record) => record.version === 202)?.name, "chat_turn_feature_references");
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 199)?.name,
+    "purge_credential_route_idempotency_payload_hashes",
+  );
+  assert.equal(
+    sqlite.migrations.find((record) => record.version === 251)?.name,
+    "delegation_step_instruction_snapshots",
+  );
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 197)?.name,
+    "delegation_step_instruction_snapshots",
+  );
+  assert.equal(
+    sqlite.migrations.find((record) => record.version === 252)?.name,
+    "channel_guided_setup_evidence_and_oauth_attempts",
+  );
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 198)?.name,
+    "channel_guided_setup_evidence_and_oauth_attempts",
+  );
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 195)?.name,
+    "remote_worker_runtime_install_evidence",
+  );
+  assert.equal(
+    sqlite.migrations.find((record) => record.version === 249)?.name,
+    "remote_worker_native_policy_reservations",
+  );
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 194)?.name,
+    "remote_worker_native_policy_reservations",
+  );
+  assert.equal(sqlite.migrations.find((record) => record.version === 248)?.name, "remote_worker_native_file_transfers");
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 193)?.name,
+    "remote_worker_native_file_transfers",
+  );
+  assert.equal(
+    sqlite.migrations.find((record) => record.version === 246)?.name,
+    "remote_worker_runtime_output_evidence",
+  );
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 191)?.name,
+    "remote_worker_runtime_output_evidence",
+  );
   assert.equal(
     postgres.migrations.find((record) => record.version === 62)?.name,
     "chat_delegation_step_degraded_handoff_repairs",
@@ -1048,7 +1100,12 @@ test("current registries and checked-in manifest cover every migration exactly",
   assert.equal(postgres.migrations.find((record) => record.version === 2)?.sqlPayloadSha256, undefined);
   assert.deepEqual(
     postgres.migrations.filter((record) => !record.sqlPayloadSha256).map((record) => record.version),
-    [2, 119, 120, 121, 122, 134, 135, 136, 137, 138, 140, 141, 145, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 198, 200, 204, 205, 206, 207, 209, 210],
+    [
+      2, 119, 120, 121, 122, 134, 135, 136, 137, 138, 140, 141, 145, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156,
+      157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179,
+      180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 198, 200, 204, 205, 206, 207,
+      209, 210, 211,
+    ],
   );
   assert.equal(
     postgres.migrations.find((record) => record.version === 209)?.runtimeIntegritySha256,
@@ -1057,6 +1114,10 @@ test("current registries and checked-in manifest cover every migration exactly",
   assert.equal(
     postgres.migrations.find((record) => record.version === 210)?.runtimeIntegritySha256,
     "fd9d22a3cccbb824e727517aabe5987a00fdd1936a7c3dd276724cbef47543b8",
+  );
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 211)?.runtimeIntegritySha256,
+    "3a9f7bc1529c9024d79436b5f9926231b3067d8ecb10814f5eb37d3adac4346e",
   );
   assert.equal(postgres.migrations.find((record) => record.version === 63)?.name, "citadel_tables_backfill");
   assert.equal(
