@@ -437,10 +437,18 @@ export async function listApprovalsPage(
     limit?: number;
     cursor?: string;
     workspaceId?: string;
+    runId?: string;
+    sessionId?: string;
   },
 ): Promise<ApprovalListResponse> {
   const storage = host.storage;
-  const page = await storage.approvals.listPage(input);
+  if (input.runId && !input.workspaceId)
+    throw new ValidationError({ message: "Workspace is required for run-linked approval history" });
+  if (input.sessionId && !input.runId)
+    throw new ValidationError({ message: "Run is required for session-linked approval history" });
+  const page = input.runId
+    ? await storage.approvals.listByRunLinkage({ ...input, workspaceId: input.workspaceId!, runId: input.runId })
+    : await storage.approvals.listPage(input);
   return {
     items: await Promise.all(
       page.items.map(async (approval) =>

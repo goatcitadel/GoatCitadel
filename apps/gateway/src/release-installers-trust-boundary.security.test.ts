@@ -149,7 +149,7 @@ describe("release-installers workflow trust boundary", () => {
       workflow.indexOf("\n      - name: Wait for 1.0 release proof\n"),
     );
     expect(rootPackage.devDependencies?.["@cyclonedx/cdxgen"]).toBe("12.7.1");
-    expect(lockfile).toContain("'@cyclonedx/cdxgen':\n        specifier: 12.7.1\n        version: 12.7.1");
+    expect(readRootCycloneDxPin(lockfile)).toEqual({ specifier: "12.7.1", version: "12.7.1" });
     expect(sbomStep).toContain("timeout-minutes: 5");
     expect(sbomStep).toContain("env -u NODE_PATH node node_modules/@cyclonedx/cdxgen/bin/cdxgen.js .");
     expect(sbomStep).toContain("--spec-version 1.6");
@@ -171,6 +171,84 @@ describe("release-installers workflow trust boundary", () => {
     expect(validator).toContain("omittedOptionalEdges");
   });
 });
+
+describe("root CycloneDX lockfile pin matching", () => {
+  it.each(["'", '"'])("accepts equivalent matching %s key quotes", (quote) => {
+    expect(readRootCycloneDxPin(cycloneDxLockFixture(quote))).toEqual({
+      specifier: "12.7.1",
+      version: "12.7.1",
+    });
+  });
+
+  it.each([
+    ["12.7.0", "12.7.1"],
+    ["^12.7.1", "12.7.1"],
+    ["12.7.1", "12.7.0"],
+    ["12.7.1", "12.7.1-other"],
+  ])("rejects changed specifier %s or resolved version %s", (specifier, version) => {
+    expect(readRootCycloneDxPin(cycloneDxLockFixture('"', specifier, version))).not.toEqual({
+      specifier: "12.7.1",
+      version: "12.7.1",
+    });
+  });
+
+  it("rejects mismatched dependency key quotes", () => {
+    const fixture = cycloneDxLockFixture('"').replace('"@cyclonedx/cdxgen":', "\"@cyclonedx/cdxgen':");
+    expect(() => readRootCycloneDxPin(fixture)).toThrow("Missing or duplicate root CycloneDX dependency");
+  });
+
+  it("rejects a different dependency key", () => {
+    const fixture = cycloneDxLockFixture('"').replace("@cyclonedx/cdxgen", "@cyclonedx/cdxgen-other");
+    expect(() => readRootCycloneDxPin(fixture)).toThrow("Missing or duplicate root CycloneDX dependency");
+  });
+
+  it("rejects a pin present only in another importer", () => {
+    const fixture = cycloneDxLockFixture('"').replace("  .:", "  apps/other:");
+    expect(() => readRootCycloneDxPin(fixture)).toThrow("Missing or duplicate lockfile mapping");
+  });
+
+  it("rejects an ambiguous duplicate root dependency", () => {
+    const fixture =
+      cycloneDxLockFixture('"') + '      "@cyclonedx/cdxgen":\n        specifier: 12.7.1\n        version: 12.7.1\n';
+    expect(() => readRootCycloneDxPin(fixture)).toThrow("Missing or duplicate root CycloneDX dependency");
+  });
+});
+
+function cycloneDxLockFixture(quote: string, specifier = "12.7.1", version = "12.7.1"): string {
+  return [
+    "importers:",
+    "  .:",
+    "    devDependencies:",
+    "      " + quote + "@cyclonedx/cdxgen" + quote + ":",
+    "        specifier: " + specifier,
+    "        version: " + version,
+    "",
+  ].join("\n");
+}
+
+function readRootCycloneDxPin(source: string): { specifier: string; version: string } {
+  const importers = extractLockfileMapping(source, "importers:", 0);
+  const rootImporter = extractLockfileMapping(importers, "  .:", 2);
+  const devDependencies = extractLockfileMapping(rootImporter, "    devDependencies:", 4);
+  const matches = [...devDependencies.matchAll(/^ {6}(["'])@cyclonedx\/cdxgen\1:$/gmu)];
+  if (matches.length !== 1) throw new Error("Missing or duplicate root CycloneDX dependency");
+  const entry = extractLockfileMapping(devDependencies, matches[0]![0], 6);
+  const specifiers = [...entry.matchAll(/^ {8}specifier: ([^\n]+)$/gmu)];
+  const versions = [...entry.matchAll(/^ {8}version: ([^\n]+)$/gmu)];
+  if (specifiers.length !== 1 || versions.length !== 1)
+    throw new Error("Missing or duplicate root CycloneDX pin fields");
+  return { specifier: specifiers[0]![1]!, version: versions[0]![1]! };
+}
+
+function extractLockfileMapping(source: string, header: string, indentation: number): string {
+  const lines = source.replace(/\r\n/g, "\n").split("\n");
+  const matches = lines.map((line, index) => ({ line, index })).filter(({ line }) => line === header);
+  if (matches.length !== 1) throw new Error("Missing or duplicate lockfile mapping: " + header.trim());
+  const start = matches[0]!.index + 1;
+  let end = start;
+  while (end < lines.length && (!lines[end]!.trim() || lines[end]!.startsWith(" ".repeat(indentation + 1)))) end += 1;
+  return lines.slice(start, end).join("\n");
+}
 
 function extractJobNames(source: string): string[] {
   const jobsIndex = source.indexOf("\njobs:\n");

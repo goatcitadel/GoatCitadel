@@ -30,6 +30,8 @@ export interface ApprovalFetchOptions {
   limit?: number;
   cursor?: string;
   workspaceId?: string;
+  runId?: string;
+  sessionId?: string;
 }
 
 export async function fetchApprovals(
@@ -49,6 +51,8 @@ export async function fetchApprovals(
   if (options.workspaceId?.trim()) {
     query.set("workspaceId", options.workspaceId.trim());
   }
+  if (options.runId?.trim()) query.set("runId", options.runId.trim());
+  if (options.sessionId?.trim()) query.set("sessionId", options.sessionId.trim());
   return request<ApprovalsResponse>(`/api/v1/approvals${query.size > 0 ? `?${query.toString()}` : ""}`);
 }
 

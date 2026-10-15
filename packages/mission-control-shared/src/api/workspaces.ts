@@ -1,11 +1,4 @@
-import type {
-  GuidanceBundleRecord,
-  GuidanceDocType,
-  GuidanceDocumentRecord,
-  WorkspaceCreateInput,
-  WorkspaceRecord,
-  WorkspaceUpdateInput,
-} from "@goatcitadel/contracts";
+import type { WorkspaceRecord } from "@goatcitadel/contracts";
 import { request } from "./client-core.js";
 
 export interface WorkspacesResponse {
@@ -27,65 +20,20 @@ export async function fetchWorkspaces(
   if (citadelId?.trim()) {
     query.set("citadelId", citadelId.trim());
   }
-  return request<WorkspacesResponse>(`/api/v1/workspaces?${query.toString()}`, options.signal ? { signal: options.signal, cache: "no-store" } : undefined);
-}
-
-export async function createWorkspace(input: WorkspaceCreateInput): Promise<WorkspaceRecord> {
-  return request<WorkspaceRecord>("/api/v1/workspaces", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export async function updateWorkspace(
-  workspaceId: string,
-  input: WorkspaceUpdateInput & { expectedRevision: number },
-): Promise<WorkspaceRecord> {
-  return request<WorkspaceRecord>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}`, {
-    method: "PATCH",
-    body: JSON.stringify(input),
-  });
-}
-
-export async function archiveWorkspace(workspaceId: string, expectedRevision: number): Promise<WorkspaceRecord> {
-  return request<WorkspaceRecord>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/archive`, {
-    method: "POST",
-    body: JSON.stringify({ expectedRevision }),
-  });
-}
-
-export async function restoreWorkspace(workspaceId: string, expectedRevision: number): Promise<WorkspaceRecord> {
-  return request<WorkspaceRecord>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/restore`, {
-    method: "POST",
-    body: JSON.stringify({ expectedRevision }),
-  });
-}
-
-export async function fetchGlobalGuidance(): Promise<{ items: GuidanceDocumentRecord[] }> {
-  return request<{ items: GuidanceDocumentRecord[] }>("/api/v1/guidance/global");
-}
-
-export async function updateGlobalGuidance(docType: GuidanceDocType, content: string): Promise<GuidanceDocumentRecord> {
-  return request<GuidanceDocumentRecord>(`/api/v1/guidance/global/${encodeURIComponent(docType)}`, {
-    method: "PUT",
-    body: JSON.stringify({ content }),
-  });
-}
-
-export async function fetchWorkspaceGuidance(workspaceId: string): Promise<GuidanceBundleRecord> {
-  return request<GuidanceBundleRecord>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/guidance`);
-}
-
-export async function updateWorkspaceGuidance(
-  workspaceId: string,
-  docType: GuidanceDocType,
-  content: string,
-): Promise<GuidanceDocumentRecord> {
-  return request<GuidanceDocumentRecord>(
-    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/guidance/${encodeURIComponent(docType)}`,
-    {
-      method: "PUT",
-      body: JSON.stringify({ content }),
-    },
+  return request<WorkspacesResponse>(
+    `/api/v1/workspaces?${query.toString()}`,
+    options.signal ? { signal: options.signal, cache: "no-store" } : undefined,
   );
 }
+
+// Optional destination operations retain their public bindings and shared request owner.
+export {
+  createWorkspace,
+  updateWorkspace,
+  archiveWorkspace,
+  restoreWorkspace,
+  fetchGlobalGuidance,
+  updateGlobalGuidance,
+  fetchWorkspaceGuidance,
+  updateWorkspaceGuidance,
+} from "./workspaces-operations.js";

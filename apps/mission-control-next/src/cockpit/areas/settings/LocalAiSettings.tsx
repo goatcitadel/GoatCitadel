@@ -8,9 +8,8 @@ import {
 } from "../../../features/native-routes/settings/local-ai-model";
 import { Button } from "../../ui/Button";
 import { Sheet } from "../../ui/Sheet";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
-import { LocalAiHardware, LocalAiJobs } from "./LocalAiEvidence";
+import { LocalAiHardware, LocalAiJobs, LocalAiFitEvidence } from "./LocalAiEvidence";
 
 /** Installation-scoped owner reads; explicit requests record approval intent, not successful model work. */
 export function LocalAiSettings() {
@@ -18,6 +17,11 @@ export function LocalAiSettings() {
   const control = useLocalAiSettings();
   const [inspection, setInspection] = useState<"hardware" | "jobs" | null>(null);
   const { readiness, topRecommendation: selected } = control;
+  const [fitPageIndex, setFitPageIndex] = useState(0);
+  const fitPage = Math.min(fitPageIndex, Math.max(0, Math.ceil(control.recommendations.length / 80) - 1));
+  const fitStart = fitPage * 80;
+  const fits = control.recommendations.slice(fitStart, fitStart + 80);
+  const selectedOutsidePage = selected && !fits.some((item) => localAiModelKey(item) === localAiModelKey(selected));
   return (
     <section
       id="local-ai"
@@ -123,7 +127,15 @@ export function LocalAiSettings() {
               <option value="" disabled>
                 Select a model fit
               </option>
-              {control.recommendations.slice(0, 80).map((item, index) => (
+              {selectedOutsidePage ? (
+                <option key={`selected:${localAiModelKey(selected)}`} value={localAiModelKey(selected)}>
+                  {readiness.catalog.find((model) => model.modelId === selected.modelId)?.label || selected.modelId}
+                  {" · "}
+                  {formatLocalAiFit(selected.backend)}
+                  {" · Selected outside this page"}
+                </option>
+              ) : null}
+              {fits.map((item, index) => (
                 <option key={`${localAiModelKey(item)}:${index}`} value={localAiModelKey(item)}>
                   {readiness.catalog.find((model) => model.modelId === item.modelId)?.label || item.modelId} ·{" "}
                   {formatLocalAiFit(item.backend)} · {formatLocalAiFit(item.fit)}
@@ -132,9 +144,27 @@ export function LocalAiSettings() {
             </select>
           </label>
           <p className="text-xs text-fg-muted">
-            Showing {Math.min(80, control.recommendations.length)} of {control.recommendations.length} returned model
-            fits.
+            Showing {fits.length} of {control.recommendations.length} returned model fits.
+            {fits.length ? ` Records ${fitStart + 1}–${fitStart + fits.length}.` : ""}
           </p>
+          {control.recommendations.length > 80 ? (
+            <nav aria-label="Model fit pages" className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                disabled={fitPage === 0 || control.queueing}
+                onClick={() => setFitPageIndex(fitPage - 1)}
+              >
+                Previous model fits
+              </Button>
+              <Button
+                size="sm"
+                disabled={fitStart + fits.length >= control.recommendations.length || control.queueing}
+                onClick={() => setFitPageIndex(fitPage + 1)}
+              >
+                Next model fits
+              </Button>
+            </nav>
+          ) : null}
           {selected ? (
             <div className="space-y-3 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
               <p>
@@ -161,6 +191,10 @@ export function LocalAiSettings() {
               ) : (
                 <p>No limitations were returned by the fit owner.</p>
               )}
+              <LocalAiFitEvidence
+                recommendation={selected}
+                catalog={readiness.catalog.find((model) => model.modelId === selected.modelId)}
+              />
               <details>
                 <summary>Selected identity</summary>
                 <code className="block break-all font-mono">
@@ -173,33 +207,36 @@ export function LocalAiSettings() {
               No selected model fit is available. Choose a returned recommendation to review a request.
             </p>
           )}
-          <details><summary>Advisory approval requests (no execution)</summary><p className="text-sm text-fg-secondary">
-            The current Gateway records approval intent only. These requests do not download models, start servers, or
-            configure a provider. Approval does not supply the missing execution step.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={!selected || control.queueing} onClick={() => control.requestReview("download")}>
-              Request download approval
-            </Button>
-            <Button disabled={!selected || control.queueing} onClick={() => control.requestReview("serve")}>
-              Request serve approval
-            </Button>
-          </div>
+          <details>
+            <summary>Advisory approval requests (no execution)</summary>
+            <p className="text-sm text-fg-secondary">
+              The current Gateway records approval intent only. These requests do not download models, start servers, or
+              configure a provider. Approval does not supply the missing execution step.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button disabled={!selected || control.queueing} onClick={() => control.requestReview("download")}>
+                Request download approval
+              </Button>
+              <Button disabled={!selected || control.queueing} onClick={() => control.requestReview("serve")}>
+                Request serve approval
+              </Button>
+            </div>
           </details>
         </>
       ) : null}
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
-        <a className="text-accent hover:underline" href="/settings/models?shell=cockpit#local-ai"
+        <a
+          className="text-accent hover:underline"
+          href="/settings/models?shell=cockpit#local-ai"
           onClick={(event) => {
             if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
             event.preventDefault();
             navigate("/settings/models?shell=cockpit#local-ai");
             requestAnimationFrame(() => document.getElementById("llamacpp-setup")?.scrollIntoView({ block: "start" }));
-          }}>
+          }}
+        >
           Set up llama.cpp for Chat
         </a>
-        <ClassicOwnerLink className="text-accent hover:underline" href="/settings/local-ai?shell=classic"
-          scope="installation-local-ai" label="Open detailed Local AI settings" />
       </div>
       <Sheet
         open={Boolean(inspection)}

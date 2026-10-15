@@ -5,7 +5,6 @@ import { useDraftLeaveDialogState } from "../../../features/native-routes/librar
 import { Button } from "../../ui/Button";
 import { Sheet } from "../../ui/Sheet";
 import { Dialog } from "../../ui/Dialog";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 
 const inputClass = "mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-fg";
 export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
@@ -280,7 +279,6 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
           </Button>
         </div>
       </Dialog>
-      <ClassicOwnerLink href="/library/citadel-vault?shell=classic" scope={citadelId} label="Detailed Vault controls" />
       <p className="text-xs text-fg-muted">
         Per-Chamber keys and key rotation are not available here. Keychain unavailability blocks sealing and reveal; no
         plaintext fallback is used.

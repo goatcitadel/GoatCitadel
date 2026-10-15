@@ -1,3 +1,4 @@
+import { runCockpitChatContextProof } from "./cockpit-chat-context-proof.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
@@ -85,6 +86,7 @@ describe("UX budget lane wiring", () => {
       "provider-management",
       "shell-controls",
       "long-lists",
+      "chat-context",
     ];
     assert.deepEqual(
       selectCockpitOwnerProofs(),
@@ -150,10 +152,13 @@ describe("UX budget lane wiring", () => {
     assert.deepEqual(calls, ["stop stack", "close stub", "restore package"]);
   });
   it("allows focused reruns without silently accepting an empty or unknown proof", () => {
-    assert.equal(selectCockpitOwnerProofs().length, 58);
+    assert.equal(selectCockpitOwnerProofs().length, 59);
     assert.equal(selectCockpitOwnerProofs(["approval-mode", "approval-mode"]).length, 1);
     assert.throws(() => selectCockpitOwnerProofs([]));
     assert.throws(() => selectCockpitOwnerProofs(["wrong-name"]));
+  });
+  it("selects the native context mutation proof independently", () => {
+    assert.deepEqual(selectCockpitOwnerProofs(["chat-context"]), [runCockpitChatContextProof]);
   });
   it("selects the actual active child lifecycle proof", () => {
     assert.deepEqual(selectCockpitOwnerProofs(["chat-background-active"]), [runCockpitChatBackgroundActiveProof]);

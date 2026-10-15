@@ -1,3 +1,4 @@
+import type { GatewayCurrentAccess } from "./auth.js";
 import type { AuthRuntimeSettings, AuthSettingsUpdateInput } from "./integrations.js";
 import type { LlmApiStyle, LlmProviderRequestConfig } from "./llm.js";
 import type { ToolApprovalMode } from "./policy.js";
@@ -127,6 +128,8 @@ export type OnboardingFirstTaskEvidence =
     };
 
 export interface OnboardingStartupState {
+  /** Current request authority, projected by the same owner as /auth/current. Older gateways omit it. */
+  currentAccess?: GatewayCurrentAccess;
   completed: boolean;
   completedAt?: string;
   completedBy?: string;

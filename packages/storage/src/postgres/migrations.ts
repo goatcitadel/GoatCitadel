@@ -1,3 +1,5 @@
+import { APPROVAL_EXECUTION_LINKAGE_POSTGRES_SQL } from "../approval-execution-linkage-migration.js";
+import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_POSTGRES_SQL } from "../approval-execution-linkage-index-repair.js";
 import { CHANNEL_GUIDED_SETUP_POSTGRES_SQL } from "../channel-guided-setup-schema.js";
 import { CHAT_ROUTED_CONTEXT_ADMISSION_POSTGRES_SQL } from "../chat-routed-context-admission-schema.js";
 import { HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL } from "../heartbeat-feature-binding-schema.js";
@@ -63,6 +65,7 @@ import { MANAGED_SOURCE_INSTALL_SQL } from "../managed-source-install-repo.js";
 import { PRODUCT_SOURCE_UPDATE_POSTGRES_SCHEMA_SQL } from "../product-source-update-repo.js";
 import { buildPostgresV140CanonicalSchemaAuthoritySql } from "./v140-canonical-index-authority.js";
 import { buildPostgresV149CanonicalSchemaAuthoritySql } from "./v149-canonical-schema-authority.js";
+import { buildPostgresV211SessionControlIndexAuthoritySql } from "./v211-session-control-index-authority.js";
 
 export interface PostgresMigration {
   version: number;
@@ -15119,22 +15122,60 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         FOR EACH ROW EXECUTE FUNCTION gc_chat_fanout_parent_admission_immutable();
     `,
   },
-  { version: 204, name: "chat_routed_context_admission", sql: CHAT_ROUTED_CONTEXT_ADMISSION_POSTGRES_SQL,
-    integritySha256: "11c476e940fd183e48a9d725616aa4e70b09ac5f9464c37f63a5ac796adfa8a7" },
-  { version: 205, name: "heartbeat_feature_binding", sql: HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL,
-    integritySha256: "4e649fce221f5b344f56f793f44a732c8e743465b2734c49129b0d9349200fa0" },
-  { version: 206, name: "commitment_occurrence_authority", sql: COMMITMENT_OCCURRENCE_POSTGRES_SQL,
-    integritySha256: "df1c3a9fd7c178e1c39c3ae03d4ff29917b7b318722a490868db4be9c0d09053" },
-  { version: 207, name: "remote_worker_admission_binding", sql: REMOTE_WORKER_ADMISSION_BINDING_POSTGRES_SQL,
-    integritySha256: "d6aeb0370eee651a2cf9e92d6e68bde2a069a2f89dbdc1818229830a0e4fc9e8" },
-  { version: 208, name: "cron_creator_authority", sql: `
+  {
+    version: 204,
+    name: "chat_routed_context_admission",
+    sql: CHAT_ROUTED_CONTEXT_ADMISSION_POSTGRES_SQL,
+    integritySha256: "11c476e940fd183e48a9d725616aa4e70b09ac5f9464c37f63a5ac796adfa8a7",
+  },
+  {
+    version: 205,
+    name: "heartbeat_feature_binding",
+    sql: HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL,
+    integritySha256: "4e649fce221f5b344f56f793f44a732c8e743465b2734c49129b0d9349200fa0",
+  },
+  {
+    version: 206,
+    name: "commitment_occurrence_authority",
+    sql: COMMITMENT_OCCURRENCE_POSTGRES_SQL,
+    integritySha256: "df1c3a9fd7c178e1c39c3ae03d4ff29917b7b318722a490868db4be9c0d09053",
+  },
+  {
+    version: 207,
+    name: "remote_worker_admission_binding",
+    sql: REMOTE_WORKER_ADMISSION_BINDING_POSTGRES_SQL,
+    integritySha256: "d6aeb0370eee651a2cf9e92d6e68bde2a069a2f89dbdc1818229830a0e4fc9e8",
+  },
+  {
+    version: 208,
+    name: "cron_creator_authority",
+    sql: `
       ALTER TABLE cron_jobs ADD COLUMN IF NOT EXISTS creator_authority_json TEXT;
       ALTER TABLE cron_jobs DROP CONSTRAINT IF EXISTS gc_cron_creator_authority_shape;
       ALTER TABLE cron_jobs ADD CONSTRAINT gc_cron_creator_authority_shape CHECK (
         creator_authority_json IS NULL OR (length(creator_authority_json) <= 4096
           AND COALESCE(creator_authority_json::jsonb ->> 'version' = 'cron.creator-authority.v1', FALSE))
       );
-  ` },
+  `,
+  },
+  {
+    version: 209,
+    name: "approval_execution_linkage_index",
+    sql: APPROVAL_EXECUTION_LINKAGE_POSTGRES_SQL,
+    integritySha256: "f9bd51adefcc6f27142334b99af3d291bcef33d802005d5d7e6b16960e7b709d",
+  },
+  {
+    version: 210,
+    name: "approval_execution_linkage_index_sort_convergence",
+    sql: APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_POSTGRES_SQL,
+    integritySha256: "fd9d22a3cccbb824e727517aabe5987a00fdd1936a7c3dd276724cbef47543b8",
+  },
+  {
+    version: 211,
+    name: "session_control_unique_index_authority",
+    sql: buildPostgresV211SessionControlIndexAuthoritySql(),
+    integritySha256: "3a9f7bc1529c9024d79436b5f9926231b3067d8ecb10814f5eb37d3adac4346e",
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

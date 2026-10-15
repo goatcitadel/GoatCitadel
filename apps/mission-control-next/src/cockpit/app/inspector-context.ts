@@ -17,3 +17,6 @@ export interface InspectorApi {
 
 // Keep the context identity stable when React refreshes provider and consumer components.
 export const InspectorContext = createContext<InspectorApi | null>(null);
+
+/** Separate disclosure currency does not rerender Chat on inspector body updates. */
+export const InspectorSourceContext = createContext<string | null>(null);

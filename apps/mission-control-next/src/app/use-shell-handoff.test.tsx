@@ -4,13 +4,22 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { useShellHandoff } from "./use-shell-handoff";
 import * as clientCore from "@goatcitadel/mission-control-shared/api/client-core";
+import {
+  getGatewayCallerScope,
+  setGatewayCallerScope,
+  notifyGatewayAccessChanged,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useDraftLeaveDialogState } from "../features/native-routes/library/DraftLeaveDialog";
 import {
   useSessionDraft,
   __resetSessionDraftsForTests,
   hasSessionDraft,
 } from "../features/native-routes/library/session-drafts";
-import { __resetFormDirtyRegistryForTests, getDirtySectionKeys, useFormDirty } from "../features/native-routes/library/use-form-dirty";
+import {
+  __resetFormDirtyRegistryForTests,
+  getDirtySectionKeys,
+  useFormDirty,
+} from "../features/native-routes/library/use-form-dirty";
 const switchShell = vi.hoisted(() => vi.fn());
 vi.mock("../shell-preference", () => ({ switchShell, writeShellPreference: vi.fn() }));
 let renderer: ReactTestRenderer | undefined,
@@ -18,8 +27,10 @@ let renderer: ReactTestRenderer | undefined,
   draft: ReturnType<typeof useSessionDraft<{ name: string }>>,
   dialog: ReturnType<typeof useDraftLeaveDialogState>;
 let saveDrafts = false;
-const saveA = vi.fn<() => Promise<boolean>>(), saveB = vi.fn<() => Promise<boolean>>();
-const discardA = vi.fn(), discardB = vi.fn();
+const saveA = vi.fn<() => Promise<boolean>>(),
+  saveB = vi.fn<() => Promise<boolean>>();
+const discardA = vi.fn(),
+  discardB = vi.fn();
 function Probe({ scope = "workspace-a" }: { scope?: string }) {
   handoff = useShellHandoff(scope);
   dialog = useDraftLeaveDialogState(handoff.dialogProps);
@@ -137,7 +148,9 @@ it("shares the leave lifetime guard for native navigation after unmount", async 
 
 it("shows a native navigation failure through the existing feedback", async () => {
   await mount();
-  const navigate = vi.fn(() => { throw new Error("Synthetic history failure"); });
+  const navigate = vi.fn(() => {
+    throw new Error("Synthetic history failure");
+  });
   await act(async () => handoff.requestNavigation("/inbox?shell=cockpit", navigate));
   expect(navigate).toHaveBeenCalledExactlyOnceWith("/inbox?shell=cockpit");
   expect(handoff.error).toBe("The view could not open. Your current drafts are still available.");
@@ -151,14 +164,28 @@ it.each(["scope", "navigation", "installation", "unmount"])(
     saveDrafts = true;
     await mount();
     await act(async () => handoff.request("classic"));
-    const oldDialog = dialog, oldProps = handoff.dialogProps, oldNode = handoff.dialog;
+    const oldDialog = dialog,
+      oldProps = handoff.dialogProps,
+      oldNode = handoff.dialog;
     expect(oldProps.open).toBe(true);
     expect(oldNode.props.isCurrent).toBeTypeOf("function");
     const oldNodeIsCurrent = oldNode.props.isCurrent!;
     expect(oldNodeIsCurrent()).toBe(true);
     if (change === "scope") {
-      await act(async () => renderer!.update(<StrictMode><Probe scope="workspace-b" /></StrictMode>));
-      await act(async () => renderer!.update(<StrictMode><Probe /></StrictMode>));
+      await act(async () =>
+        renderer!.update(
+          <StrictMode>
+            <Probe scope="workspace-b" />
+          </StrictMode>,
+        ),
+      );
+      await act(async () =>
+        renderer!.update(
+          <StrictMode>
+            <Probe />
+          </StrictMode>,
+        ),
+      );
     } else if (change === "navigation") {
       await act(async () => {
         window.history.replaceState(null, "", "/settings/general?shell=classic#other");
@@ -192,12 +219,19 @@ it.each(["scope", "navigation", "installation", "unmount"])(
 it("does not let an old cancel or failed in-flight save alter a fresh review", async () => {
   let reject!: (error: Error) => void;
   saveDrafts = true;
-  saveA.mockImplementationOnce(() => new Promise<boolean>((_resolve, fail) => { reject = fail; }));
+  saveA.mockImplementationOnce(
+    () =>
+      new Promise<boolean>((_resolve, fail) => {
+        reject = fail;
+      }),
+  );
   await mount();
   await act(async () => handoff.request("classic"));
   const old = handoff.dialogProps;
   let saving!: Promise<void>;
-  await act(async () => { saving = dialog.saveAndContinue(); });
+  await act(async () => {
+    saving = dialog.saveAndContinue();
+  });
   expect(saveA).toHaveBeenCalledOnce();
   await act(async () => {
     window.dispatchEvent(new Event("goatcitadel:cockpit-location"));
@@ -222,38 +256,229 @@ it("does not let an old cancel or failed in-flight save alter a fresh review", a
 it("stops between successful draft saves when the reviewed navigation is invalidated", async () => {
   let resolve!: (saved: boolean) => void;
   saveDrafts = true;
-  saveA.mockImplementationOnce(() => new Promise<boolean>((done) => { resolve = done; }));
+  saveA.mockImplementationOnce(
+    () =>
+      new Promise<boolean>((done) => {
+        resolve = done;
+      }),
+  );
   await mount();
   await act(async () => handoff.request("classic"));
   let saving!: Promise<void>;
-  await act(async () => { saving = dialog.saveAndContinue(); });
-  await act(async () => { window.dispatchEvent(new Event("goatcitadel:classic-location")); });
-  await act(async () => { resolve(true); await saving; });
+  await act(async () => {
+    saving = dialog.saveAndContinue();
+  });
+  await act(async () => {
+    window.dispatchEvent(new Event("goatcitadel:classic-location"));
+  });
+  await act(async () => {
+    resolve(true);
+    await saving;
+  });
   expect(saveA).toHaveBeenCalledOnce();
   expect(saveB).not.toHaveBeenCalled();
   expect(switchShell).not.toHaveBeenCalled();
   expect(handoff.dialogProps.open).toBe(false);
 });
 
+it.each(["installation", "scope", "navigation"])(
+  "rejects a retained transition request before admission after %s changes",
+  async (change) => {
+    const base = vi.spyOn(clientCore, "getGatewayApiBaseUrl").mockReturnValue("http://gateway-a");
+    await mount();
+    const retained = handoff.requestTransition,
+      action = vi.fn();
+    if (change === "installation") base.mockReturnValue("http://gateway-b");
+    else if (change === "scope") {
+      await act(async () =>
+        renderer!.update(
+          <StrictMode>
+            <Probe scope="workspace-b" />
+          </StrictMode>,
+        ),
+      );
+      await act(async () =>
+        renderer!.update(
+          <StrictMode>
+            <Probe />
+          </StrictMode>,
+        ),
+      );
+    } else {
+      await act(async () => {
+        window.history.replaceState(null, "", "/settings/runtime?shell=classic");
+        window.dispatchEvent(new Event("goatcitadel:classic-location"));
+        window.history.replaceState(null, "", "/settings/general?shell=classic");
+        window.dispatchEvent(new Event("popstate"));
+      });
+    }
+    await act(async () => retained(action));
+    expect(action).not.toHaveBeenCalled();
+    expect(switchShell).not.toHaveBeenCalled();
+    expect(handoff.dialogProps.open).toBe(false);
+  },
+);
 
-it.each(["installation", "scope", "navigation"])("rejects a retained transition request before admission after %s changes", async (change) => {
-  const base = vi.spyOn(clientCore, "getGatewayApiBaseUrl").mockReturnValue("http://gateway-a");
-  await mount();
-  const retained = handoff.requestTransition, action = vi.fn();
-  if (change === "installation") base.mockReturnValue("http://gateway-b");
-  else if (change === "scope") {
-    await act(async () => renderer!.update(<StrictMode><Probe scope="workspace-b" /></StrictMode>));
-    await act(async () => renderer!.update(<StrictMode><Probe /></StrictMode>));
-  } else {
-    await act(async () => {
-      window.history.replaceState(null, "", "/settings/runtime?shell=classic");
-      window.dispatchEvent(new Event("goatcitadel:classic-location"));
-      window.history.replaceState(null, "", "/settings/general?shell=classic");
-      window.dispatchEvent(new Event("popstate"));
-    });
-  }
-  await act(async () => retained(action));
-  expect(action).not.toHaveBeenCalled();
-  expect(switchShell).not.toHaveBeenCalled();
-  expect(handoff.dialogProps.open).toBe(false);
-});
+it.each(["caller-aba", "access"])(
+  "revokes a held dirty navigation for %s without discarding input or closing a fresh review",
+  async (change) => {
+    const caller = getGatewayCallerScope();
+    setGatewayCallerScope("handoff-current-a");
+    try {
+      await mount();
+      await act(async () => draft.setValue({ name: "Unsaved custody-bound input" }));
+      const navigate = vi.fn();
+      await act(async () => handoff.requestNavigation("/inbox?item=change_plan%3Aexact", navigate));
+      const obsolete = handoff.dialogProps;
+      expect(obsolete.open).toBe(true);
+      await act(async () => {
+        if (change === "caller-aba") {
+          setGatewayCallerScope("handoff-current-b");
+          setGatewayCallerScope("handoff-current-a");
+        } else notifyGatewayAccessChanged();
+        obsolete.onContinue();
+      });
+      expect(navigate).not.toHaveBeenCalled();
+      expect(switchShell).not.toHaveBeenCalled();
+      expect(handoff.dialogProps.open).toBe(false);
+      expect(hasSessionDraft("handoff-draft")).toBe(true);
+      expect(draft.value.name).toBe("Unsaved custody-bound input");
+      await act(async () => handoff.requestNavigation("/inbox?item=change_plan%3Aexact", navigate));
+      expect(handoff.dialogProps.open).toBe(true);
+      await act(async () => {
+        obsolete.onCancel();
+        obsolete.onDiscard?.();
+        obsolete.onContinue();
+      });
+      expect(handoff.dialogProps.open).toBe(true);
+      expect(navigate).not.toHaveBeenCalled();
+      expect(hasSessionDraft("handoff-draft")).toBe(true);
+      await act(async () => handoff.dialogProps.onCancel());
+      expect(navigate).not.toHaveBeenCalled();
+      await act(async () => handoff.requestNavigation("/inbox?item=change_plan%3Aexact", navigate));
+      await act(async () => handoff.dialogProps.onContinue());
+      expect(navigate).toHaveBeenCalledExactlyOnceWith("/inbox?item=change_plan%3Aexact");
+      expect(hasSessionDraft("handoff-draft")).toBe(true);
+      expect(discardA).not.toHaveBeenCalled();
+      expect(discardB).not.toHaveBeenCalled();
+      expect(saveA).not.toHaveBeenCalled();
+      expect(saveB).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => setGatewayCallerScope(caller));
+    }
+  },
+);
+
+it.each(["caller-aba", "access"])(
+  "fences a retained pre-admission request synchronously on %s without waiting for a React render",
+  async (change) => {
+    const caller = getGatewayCallerScope();
+    setGatewayCallerScope("handoff-current-a");
+    try {
+      await mount();
+      const obsolete = handoff.requestTransition,
+        action = vi.fn<(options: { isCurrent: () => boolean; signal: AbortSignal }) => void>();
+      await act(async () => {
+        if (change === "caller-aba") {
+          setGatewayCallerScope("handoff-current-b");
+          setGatewayCallerScope("handoff-current-a");
+        } else notifyGatewayAccessChanged();
+        obsolete(action);
+      });
+      expect(action).not.toHaveBeenCalled();
+      expect(switchShell).not.toHaveBeenCalled();
+      expect(handoff.dialogProps.open).toBe(false);
+      await act(async () => handoff.requestTransition(action));
+      expect(action).toHaveBeenCalledOnce();
+      expect(action.mock.calls[0]![0].isCurrent()).toBe(true);
+      expect(action.mock.calls[0]![0].signal.aborted).toBe(false);
+    } finally {
+      await act(async () => setGatewayCallerScope(caller));
+    }
+  },
+);
+
+it.each(["caller-aba", "access"])(
+  "rejects held code settlement after %s and accepts a new current navigation after cleanup",
+  async (change) => {
+    const caller = getGatewayCallerScope();
+    setGatewayCallerScope("handoff-current-a");
+    try {
+      await mount();
+      let finish!: () => void, work!: Promise<void>, guard!: { isCurrent: () => boolean; signal: AbortSignal };
+      const held = new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+        settle = vi.fn(),
+        navigate = vi.fn();
+      const action = vi.fn((options: typeof guard) => {
+        guard = options;
+        work = held.then(() => {
+          if (guard.isCurrent() && !guard.signal.aborted) settle();
+        });
+        return work;
+      });
+      await act(async () => handoff.requestTransition(action));
+      expect(action).toHaveBeenCalledOnce();
+      expect(guard.isCurrent()).toBe(true);
+      await act(async () => {
+        if (change === "caller-aba") {
+          setGatewayCallerScope("handoff-current-b");
+          setGatewayCallerScope("handoff-current-a");
+        } else notifyGatewayAccessChanged();
+        expect(guard.isCurrent()).toBe(false);
+        expect(guard.signal.aborted).toBe(true);
+        finish();
+        await work;
+      });
+      expect(settle).not.toHaveBeenCalled();
+      expect(switchShell).not.toHaveBeenCalled();
+      expect(handoff.error).toBeNull();
+      await act(async () => handoff.requestNavigation("/library/files?workspaceId=current", navigate));
+      expect(navigate).toHaveBeenCalledExactlyOnceWith("/library/files?workspaceId=current");
+    } finally {
+      await act(async () => setGatewayCallerScope(caller));
+    }
+  },
+);
+
+it.each(["caller-aba", "access"])(
+  "stops between owned draft saves after %s without navigation or a second save",
+  async (change) => {
+    const caller = getGatewayCallerScope();
+    setGatewayCallerScope("handoff-current-a");
+    try {
+      saveDrafts = true;
+      let finish!: (saved: boolean) => void, work!: Promise<void>;
+      saveA.mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            finish = resolve;
+          }),
+      );
+      await mount();
+      await act(async () => handoff.request("cockpit"));
+      await act(async () => {
+        work = dialog.saveAndContinue();
+      });
+      expect(saveA).toHaveBeenCalledOnce();
+      await act(async () => {
+        if (change === "caller-aba") {
+          setGatewayCallerScope("handoff-current-b");
+          setGatewayCallerScope("handoff-current-a");
+        } else notifyGatewayAccessChanged();
+        finish(true);
+        await work;
+      });
+      expect(saveA).toHaveBeenCalledOnce();
+      expect(saveB).not.toHaveBeenCalled();
+      expect(switchShell).not.toHaveBeenCalled();
+      expect(discardA).not.toHaveBeenCalled();
+      expect(discardB).not.toHaveBeenCalled();
+      expect(getDirtySectionKeys()).toContain("handoff-save-b");
+      expect(handoff.dialogProps.open).toBe(false);
+    } finally {
+      await act(async () => setGatewayCallerScope(caller));
+    }
+  },
+);

@@ -111,7 +111,7 @@ describe("native workspace directory", () => {
   it("includes native lifecycle and Citadel management with an explicit governance link", async () => {
     await mount();
     expect(text(view.root)).toContain("Citadel directory");
-    expect(text(view.root.findByProps({ href: "/library/citadel-overview?shell=classic" }))).toBe(
+    expect(text(view.root.findByProps({ href: "/library/citadel-overview?citadelId=personal" }))).toBe(
       "Open Citadel governance",
     );
     expect(api.updateWorkspace).not.toHaveBeenCalled();

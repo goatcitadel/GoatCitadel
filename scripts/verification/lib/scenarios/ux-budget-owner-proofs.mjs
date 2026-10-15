@@ -1,3 +1,4 @@
+import { runCockpitChatContextProof } from "./cockpit-chat-context-proof.mjs";
 import { runCockpitProviderConnectionProof } from "./cockpit-provider-connection-proof.mjs";
 import { runCockpitWorkArtifactProof } from "./cockpit-work-artifact-proof.mjs";
 import { runCockpitLibraryLinkProof } from "./cockpit-library-link-proof.mjs";
@@ -116,6 +117,7 @@ const OWNER_PROOFS = {
   "provider-management": runCockpitProviderManagementProof,
   "shell-controls": runCockpitShellControlsProof,
   "long-lists": runCockpitLongListsProof,
+  "chat-context": runCockpitChatContextProof,
 };
 
 export function selectCockpitOwnerProofs(names) {

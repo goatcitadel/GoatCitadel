@@ -8,7 +8,12 @@ import { Menu, MenuContent, MenuItem, MenuTrigger } from "../../ui/Menu";
 
 export type TurnActionHandlers = Pick<
   MissionThreadedActiveSessionSurfaceProps,
-  "onRetryTurn" | "onStartNewThreadFromTurn" | "onSwitchBranch" | "onEditTurn" | "onOpenRunDetails" | "onCreateGeneratedArtifact"
+  | "onRetryTurn"
+  | "onStartNewThreadFromTurn"
+  | "onSwitchBranch"
+  | "onEditTurn"
+  | "onOpenRunDetails"
+  | "onCreateGeneratedArtifact"
 >;
 
 const INLINE = "inline-flex min-h-8 items-center px-1 text-accent hover:underline";
@@ -40,7 +45,9 @@ export function ChatTurnActions({
   const siblings = turn.branch.siblingTurnIds ?? [];
   const copyLabel = streaming ? "Copy answer so far" : "Copy answer";
   const secondary = [
-    canBranch ? { label: "New conversation from here", run: () => actions.onStartNewThreadFromTurn(turn.turnId) } : null,
+    canBranch
+      ? { label: "New conversation from here", run: () => actions.onStartNewThreadFromTurn(turn.turnId) }
+      : null,
     canBranch ? { label: "Edit and resend", run: () => actions.onEditTurn(turn.turnId) } : null,
     { label: "Run details", run: () => actions.onOpenRunDetails(turn.turnId) },
     canSave ? { label: "Save answer", run: () => actions.onCreateGeneratedArtifact(turn.turnId) } : null,
@@ -49,7 +56,11 @@ export function ChatTurnActions({
   return (
     <div className={`flex flex-wrap items-center ${phone ? "gap-2" : "gap-x-2 gap-y-1"}`}>
       {canRetry ? (
-        <button type="button" onClick={() => actions.onRetryTurn(turn.turnId)} className={phone ? PHONE : `${INLINE} font-medium`}>
+        <button
+          type="button"
+          onClick={() => actions.onRetryTurn(turn.turnId)}
+          className={phone ? PHONE : `${INLINE} font-medium`}
+        >
           Retry
         </button>
       ) : null}
@@ -59,7 +70,7 @@ export function ChatTurnActions({
         </button>
       ) : null}
       {secondary.length ? (
-        <Menu>
+        <Menu scopeKey={JSON.stringify([turn.trace.sessionId, turn.turnId])}>
           <MenuTrigger aria-label="More message actions" className={phone ? PHONE : INLINE}>
             <MoreHorizontal aria-hidden="true" className="size-4" />
             <span className="ml-1">More</span>

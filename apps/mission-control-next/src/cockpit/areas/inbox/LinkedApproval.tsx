@@ -8,6 +8,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { ScopeSwitcher } from "../../app/ScopeSwitcher";
 import { Button } from "../../ui/Button";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { InboxApprovalDetail } from "./InboxApprovalDetail";
 import { nullWhenMissing } from "./inbox-record-read";
 
@@ -45,6 +46,31 @@ export function LinkedApproval({ approvalId }: { approvalId: string }) {
         <ScopeSwitcher hideTrigger open={scopeOpen} onOpenChange={setScopeOpen} destination={href} />
       </section>
     );
+  const runId = parameters.get("runId")?.trim();
+  const sessionId = runId ? parameters.get("sessionId")?.trim() : undefined;
+  const linkage = approval.linkage;
+  const runMismatch = Boolean(runId && linkage?.runId !== runId && linkage?.durableRunId !== runId);
+  const sessionMismatch = Boolean(sessionId && linkage?.sessionId && linkage.sessionId !== sessionId);
+  if (runMismatch || sessionMismatch) {
+    const recordParameters = new URLSearchParams(parameters);
+    recordParameters.delete("runId");
+    recordParameters.delete("sessionId");
+    return (
+      <section aria-label="Approval outside this run" className="space-y-3">
+        <p role="status">
+          This approval does not match the selected run or session filter. Inspect its canonical record in Inbox after
+          leaving this run filter.
+        </p>
+        <NativeOwnerLink
+          scope={[access.identity, approvalId, runId, sessionId]}
+          href={`/inbox?${recordParameters}${hash}`}
+          className="inline-block text-sm text-accent hover:underline"
+        >
+          Inspect approval record
+        </NativeOwnerLink>
+      </section>
+    );
+  }
   return (
     <InboxApprovalDetail
       workspaceId={workspaceId}

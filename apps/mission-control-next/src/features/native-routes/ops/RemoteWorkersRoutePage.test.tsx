@@ -2,6 +2,10 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RemoteWorkerRegistryItem } from "@goatcitadel/contracts";
 import { RemoteWorkersRoutePage } from "./RemoteWorkersRoutePage";
+import {
+  authorizeRemoteWorkerBudget,
+  revokeRemoteWorkerBudget,
+} from "@goatcitadel/mission-control-shared/api/remote-worker-budgets";
 import { useRemoteWorkerRegistry } from "@goatcitadel/mission-control-shared/hooks/useRemoteWorkerRegistry";
 import {
   fetchRemoteWorkerAssignmentEvents,
@@ -387,5 +391,75 @@ describe("RemoteWorkersRoutePage", () => {
     expect(text).toContain("Workspace B worker");
     expect(text).not.toContain("Worker details");
     expect(text).not.toContain("node-a");
+  });
+  it("opens an exact native worker bookmark and assignment through the existing read owners without a budget mutation", async () => {
+    mockedRegistry.mockReturnValue({
+      page: { items: [item()] } as never,
+      loading: false,
+      loadingMore: false,
+      moreError: null,
+      loadMore: vi.fn(),
+      error: null,
+      reload: vi.fn(),
+    });
+    await act(async () => {
+      renderer = create(
+        <RemoteWorkersRoutePage {...props()} initialWorkerId="worker-a" initialAssignmentId="assign-a" />,
+      );
+    });
+    await flush();
+    expect(mockedDetail).toHaveBeenCalledWith("workspace-a", "worker-a");
+    expect(mockedAssignments).toHaveBeenCalledWith("workspace-a", { workerId: "worker-a", limit: 50 });
+    expect(mockedReconciliation).toHaveBeenCalledWith("workspace-a", "worker-a");
+    expect(textOf(renderer!.toJSON())).toContain("Assignment details");
+    expect(textOf(renderer!.toJSON())).toContain("assign-a");
+    expect(mockedEvents).toHaveBeenCalledWith("workspace-a", "assign-a", { limit: 50 });
+    expect(authorizeRemoteWorkerBudget).not.toHaveBeenCalled();
+    expect(revokeRemoteWorkerBudget).not.toHaveBeenCalled();
+  });
+  it("keeps an unknown/unauthorized bookmarked worker explicit instead of selecting the first registry row", async () => {
+    mockedRegistry.mockReturnValue({
+      page: { items: [item()] } as never,
+      loading: false,
+      loadingMore: false,
+      moreError: null,
+      loadMore: vi.fn(),
+      error: null,
+      reload: vi.fn(),
+    });
+    mockedDetail.mockRejectedValue(new Error("Access denied or record absent"));
+    mockedAssignments.mockRejectedValue(new Error("Access denied or record absent"));
+    mockedReconciliation.mockRejectedValue(new Error("Access denied or record absent"));
+    await act(async () => {
+      renderer = create(<RemoteWorkersRoutePage {...props()} initialWorkerId="unknown-worker" />);
+    });
+    await flush();
+    expect(mockedDetail).toHaveBeenCalledWith("workspace-a", "unknown-worker");
+    expect(mockedDetail).not.toHaveBeenCalledWith("workspace-a", "worker-a");
+    expect(textOf(renderer!.toJSON())).toContain("Detail unavailable");
+    expect(textOf(renderer!.toJSON())).not.toContain("Office worker");
+    expect(authorizeRemoteWorkerBudget).not.toHaveBeenCalled();
+    expect(revokeRemoteWorkerBudget).not.toHaveBeenCalled();
+  });
+  it("does not substitute a loaded assignment for a missing bookmarked assignment", async () => {
+    mockedRegistry.mockReturnValue({
+      page: { items: [item()] } as never,
+      loading: false,
+      loadingMore: false,
+      moreError: null,
+      loadMore: vi.fn(),
+      error: null,
+      reload: vi.fn(),
+    });
+    await act(async () => {
+      renderer = create(
+        <RemoteWorkersRoutePage {...props()} initialWorkerId="worker-a" initialAssignmentId="unknown-assignment" />,
+      );
+    });
+    await flush();
+    expect(textOf(renderer!.toJSON())).toContain("The linked assignment is not in the loaded records");
+    expect(mockedEvents).not.toHaveBeenCalled();
+    expect(authorizeRemoteWorkerBudget).not.toHaveBeenCalled();
+    expect(revokeRemoteWorkerBudget).not.toHaveBeenCalled();
   });
 });

@@ -90,15 +90,19 @@ export interface UsePromptPacksWorkbenchStateOptions {
   reviewOpen?: boolean;
   navigate?: (route: AppRoute, options?: { replace?: boolean }) => void;
   initialPackId?: string;
+  initialRunId?: string;
+  initialSessionId?: string;
 }
 
 export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchStateOptions) {
-  const { variant, navigate, initialPackId } = options;
+  const { variant, navigate, initialPackId, initialRunId, initialSessionId } = options;
   const isOpsVariant = variant === "ops";
   const v2UiEnabled = isPromptPackV2UiEnabled();
   const hasLoadedOnceRef = useRef(false);
   const selectedPackIdRef = useRef<string | null>(null);
   const loadPackEpochRef = useRef(0);
+  const focusedRunIdRef = useRef(initialRunId || null);
+  const [focusedRunId, setFocusedRunId] = useState(initialRunId || null);
   const exportedBenchmarkRunIdsRef = useRef<Set<string>>(new Set());
   const exportedRegressionRunIdsRef = useRef<Set<string>>(new Set());
   const [initialLoading, setInitialLoading] = useState(true);
@@ -118,8 +122,11 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
   const [packs, setPacks] = useState<PromptPackRecord[]>([]);
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
   const [tests, setTests] = useState<PromptPackTestRecord[]>([]);
-  const importDraft = useSessionDraft("prompt-pack-import:" + (options.workspaceId ?? "global"), "", undefined, { label: "Prompt pack import" });
-  const importText = importDraft.value, setImportText = importDraft.setValue;
+  const importDraft = useSessionDraft("prompt-pack-import:" + (options.workspaceId ?? "global"), "", undefined, {
+    label: "Prompt pack import",
+  });
+  const importText = importDraft.value,
+    setImportText = importDraft.setValue;
   const [placeholderValues, setPlaceholderValues] = useState<Record<string, string>>({});
   const [runVariableBindings, setRunVariableBindings] = useState<RunVariableBindings>({});
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
@@ -128,6 +135,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     runs: PromptPackRunRecord[];
     latestAssessments: PromptPackLatestAssessmentRecordV2[];
     summary: PromptPackReportRecord["summary"];
+    focusedRun?: PromptPackReportRecord["focusedRun"];
   } | null>(null);
   const [reuseLastModel, setReuseLastModel] = useState(true);
   const [autoScoreOnRun, setAutoScoreOnRun] = useState(true);
@@ -186,45 +194,85 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     selectedPackIdRef.current = selectedPackId;
   }, [selectedPackId]);
 
-  const loadPack = useCallback(async (packId: string) => {
-    // Request epoch: if another loadPack starts while this one is in flight
-    // (user re-selects a pack during a background refresh), drop the stale
-    // responses instead of clobbering the newer pack's state.
-    const epoch = ++loadPackEpochRef.current;
-    const [testsResponse, reportResponse, exportResponse] = await Promise.all([
-      fetchPromptPackTests(packId),
-      fetchPromptPackReport(packId),
-      fetchPromptPackExport(packId).catch(() => ({
-        packId,
-        path: "",
-        exists: false,
-        sizeBytes: 0,
-      })),
-    ]);
-    if (epoch !== loadPackEpochRef.current) {
-      return;
-    }
-    setTests(testsResponse.items);
-    setReport({
-      runs: reportResponse.runs,
-      latestAssessments: reportResponse.latestAssessments,
-      summary: reportResponse.summary,
-    });
-    setExportInfo(exportResponse);
-    setSelectedTestId((current) =>
-      current && testsResponse.items.some((item) => item.testId === current)
-        ? current
-        : (testsResponse.items[0]?.testId ?? null),
-    );
-  }, []);
+  const loadPack = useCallback(
+    async (packId: string) => {
+      const epoch = ++loadPackEpochRef.current;
+      const requestedRunId = focusedRunIdRef.current;
+      const responses = await Promise.all([
+        fetchPromptPackTests(packId),
+        requestedRunId
+          ? fetchPromptPackReport(packId, {
+              runId: requestedRunId,
+              ...(initialSessionId ? { sessionId: initialSessionId } : {}),
+            })
+          : fetchPromptPackReport(packId),
+        fetchPromptPackExport(packId).catch(() => ({ packId, path: "", exists: false, sizeBytes: 0 })),
+      ]).catch((error: unknown) => {
+        if (epoch !== loadPackEpochRef.current) return null;
+        if (requestedRunId) {
+          setSelectedTestId(null);
+          setTests([]);
+          setReport(null);
+          setExportInfo(null);
+        }
+        throw error;
+      });
+      if (!responses || epoch !== loadPackEpochRef.current) return;
+      const [testsResponse, reportResponse, exportResponse] = responses;
+      const focus = reportResponse.focusedRun;
+      if (
+        requestedRunId &&
+        (!focus ||
+          focus.run.runId !== requestedRunId ||
+          focus.run.packId !== packId ||
+          focus.test.packId !== packId ||
+          focus.test.testId !== focus.run.testId ||
+          focus.assessment.testId !== focus.test.testId ||
+          focus.assessment.runId !== requestedRunId ||
+          (initialSessionId && focus.run.sessionId !== initialSessionId))
+      ) {
+        setSelectedTestId(null);
+        setTests([]);
+        setReport(null);
+        setExportInfo(null);
+        throw new Error("The requested run evidence is unavailable for this prompt pack and session.");
+      }
+      setTests(testsResponse.items);
+      setReport({
+        runs: reportResponse.runs,
+        latestAssessments: reportResponse.latestAssessments,
+        summary: reportResponse.summary,
+        ...(requestedRunId ? { focusedRun: focus } : {}),
+      });
+      setExportInfo(exportResponse);
+      setSelectedTestId((current) =>
+        requestedRunId
+          ? focus!.test.testId
+          : current && testsResponse.items.some((item) => item.testId === current)
+            ? current
+            : (testsResponse.items[0]?.testId ?? null),
+      );
+      setError(null);
+    },
+    [initialSessionId],
+  );
 
   const selectPack = useCallback(
     (packId: string) => {
+      focusedRunIdRef.current = null;
+      setFocusedRunId(null);
       setSelectedPackId(packId);
       void loadPack(packId).catch((err: Error) => setError(err.message));
     },
     [loadPack],
   );
+
+  const selectTest = useCallback((testId: string) => {
+    if (focusedRunIdRef.current) loadPackEpochRef.current += 1;
+    focusedRunIdRef.current = null;
+    setFocusedRunId(null);
+    setSelectedTestId(testId);
+  }, []);
 
   const load = useCallback(
     async (options?: { background?: boolean }) => {
@@ -245,6 +293,23 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
         setPacks(response.items);
         const currentSelectedPackId = selectedPackIdRef.current;
         const requestedPackId = initialPackId?.trim();
+        if (
+          requestedPackId &&
+          !response.items.some((item) => item.packId === requestedPackId) &&
+          !(currentSelectedPackId && response.items.some((item) => item.packId === currentSelectedPackId))
+        ) {
+          // A bookmarked record cannot silently become the first different pack.
+          loadPackEpochRef.current += 1;
+          setSelectedPackId(null);
+          setSelectedTestId(null);
+          setTests([]);
+          setReport(null);
+          setExportInfo(null);
+          setError(
+            "The requested prompt pack is unavailable. Choose a pack from the current library before running or scoring.",
+          );
+          return;
+        }
         const resolvedPackId =
           currentSelectedPackId && response.items.some((item) => item.packId === currentSelectedPackId)
             ? currentSelectedPackId
@@ -308,9 +373,20 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
   );
 
   const selectedPack = packs.find((pack) => pack.packId === selectedPackId) ?? null;
-  const selectedTest = tests.find((item) => item.testId === selectedTestId) ?? null;
-  const selectedRun = selectedTest ? latestRunByTest.get(selectedTest.testId) : undefined;
-  const selectedAssessment = selectedTest ? latestAssessmentByTest.get(selectedTest.testId) : undefined;
+  const focusedRecord = focusedRunId ? report?.focusedRun : undefined;
+  const selectedTest = focusedRunId
+    ? (focusedRecord?.test ?? null)
+    : (tests.find((item) => item.testId === selectedTestId) ?? null);
+  const selectedRun = focusedRunId
+    ? focusedRecord?.run
+    : selectedTest
+      ? latestRunByTest.get(selectedTest.testId)
+      : undefined;
+  const selectedAssessment = focusedRunId
+    ? focusedRecord?.assessment
+    : selectedTest
+      ? latestAssessmentByTest.get(selectedTest.testId)
+      : undefined;
   const selectedRunModelUsage = useMemo(() => resolvePromptPackRunModelUsage(selectedRun), [selectedRun]);
   const selectedRunRoute = useMemo(() => buildPromptPackRunRoute(selectedRun), [selectedRun]);
   const selectedRunHref = useMemo(() => (selectedRunRoute ? buildAppHref(selectedRunRoute) : null), [selectedRunRoute]);
@@ -464,17 +540,30 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     setBenchmarkProvidersInput(`${selectedRunModel.providerId}/${model}`);
   }, [benchmarkProvidersInput, selectedModel, selectedRunModel]);
 
-  const canonicalScore: ScoreDraft = selectedAssessment?.humanReview ? {
-    taskSuccess: selectedAssessment.humanReview.scores.taskSuccess ?? null,
-    honesty: selectedAssessment.humanReview.scores.honesty ?? null,
-    executionQuality: selectedAssessment.humanReview.scores.executionQuality ?? null,
-    robustness: selectedAssessment.humanReview.scores.robustness ?? null,
-    usability: selectedAssessment.humanReview.scores.usability ?? null,
-    overrideVerdict: selectedAssessment.humanReview.overrideVerdict ?? "",
-    notes: selectedAssessment.humanReview.notes ?? "",
-  } : DEFAULT_SCORE_DRAFT;
-  const reviewDraft = useSessionDraft("prompt-pack-review:" + (options.workspaceId ?? "global") + ":" + selectedPackId + ":" + selectedTestId, canonicalScore, selectedRun?.runId, { label: "Prompt test review", available: Boolean(selectedRun), active: options.reviewOpen !== false, onSave: (): Promise<boolean> => submitScore() });
-  const scoreDraft = reviewDraft.value, setScoreDraft = reviewDraft.setValue;
+  const canonicalScore: ScoreDraft = selectedAssessment?.humanReview
+    ? {
+        taskSuccess: selectedAssessment.humanReview.scores.taskSuccess ?? null,
+        honesty: selectedAssessment.humanReview.scores.honesty ?? null,
+        executionQuality: selectedAssessment.humanReview.scores.executionQuality ?? null,
+        robustness: selectedAssessment.humanReview.scores.robustness ?? null,
+        usability: selectedAssessment.humanReview.scores.usability ?? null,
+        overrideVerdict: selectedAssessment.humanReview.overrideVerdict ?? "",
+        notes: selectedAssessment.humanReview.notes ?? "",
+      }
+    : DEFAULT_SCORE_DRAFT;
+  const reviewDraft = useSessionDraft(
+    "prompt-pack-review:" + (options.workspaceId ?? "global") + ":" + selectedPackId + ":" + selectedTestId,
+    canonicalScore,
+    selectedRun?.runId,
+    {
+      label: "Prompt test review",
+      available: Boolean(selectedRun),
+      active: options.reviewOpen !== false,
+      onSave: (): Promise<boolean> => submitScore(),
+    },
+  );
+  const scoreDraft = reviewDraft.value,
+    setScoreDraft = reviewDraft.setValue;
   const reviewRevisionConflict = reviewDraft.hasRemoteChanges && reviewedRunId !== selectedRun?.runId;
 
   const buildRunInput = useCallback(
@@ -749,7 +838,12 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
 
   const submitScore = useCallback(async (): Promise<boolean> => {
     if (!selectedPackId || !selectedTest || !selectedRun) return false;
-    if (reviewRevisionConflict) { setError("This draft belongs to an earlier run. Review the current output and explicitly apply the draft before saving."); return false; }
+    if (reviewRevisionConflict) {
+      setError(
+        "This draft belongs to an earlier run. Review the current output and explicitly apply the draft before saving.",
+      );
+      return false;
+    }
     const submitted = reviewDraft.value;
     setSavingScore(true);
     setError(null);
@@ -1213,6 +1307,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     subtitle,
     setSelectedPackId,
     selectPack,
+    selectTest,
     setSelectedProviderId,
     setSelectedModel,
     setReuseLastModel,
@@ -1239,7 +1334,8 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     setScoreDraft,
     reviewDraftKey: reviewDraft.key,
     reviewDirty: reviewDraft.isDirty,
-    hasReviewDraft: (testId: string) => hasSessionDraft("prompt-pack-review:" + (options.workspaceId ?? "global") + ":" + selectedPackId + ":" + testId),
+    hasReviewDraft: (testId: string) =>
+      hasSessionDraft("prompt-pack-review:" + (options.workspaceId ?? "global") + ":" + selectedPackId + ":" + testId),
     reviewRevisionConflict,
     confirmReviewRevision: () => setReviewedRunId(selectedRun?.runId ?? null),
     importDirty: importDraft.isDirty,

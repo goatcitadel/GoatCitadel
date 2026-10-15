@@ -16,7 +16,6 @@ import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { ProjectEditor } from "./ProjectEditor";
 import { ProjectFanout } from "./ProjectFanout";
 
@@ -157,11 +156,6 @@ export function ProjectDetail({
           </p>
           <p>Color: {project.color || "Not set"}. Pins are local presentation preferences.</p>
         </TechnicalDetails>
-        <ClassicOwnerLink
-          href={`/projects/${encodeURIComponent(project.projectId)}?workspaceId=${encodeURIComponent(workspaceId)}`}
-          scope={access.identity}
-          label="Open project home, intake and artifacts in Classic"
-        />
       </section>
       {editing ? (
         <ProjectEditor
@@ -226,8 +220,19 @@ export function ProjectDetail({
           Showing up to 200 recent conversations. Use Chat history to locate older conversations.
         </p>
       </section>
-      <ProjectHome key={`home:${access.identity}`} project={project} workspaceId={workspaceId} citadelId={citadelId} available={available} />
-      <ProjectFanout key={`fanout:${access.identity}`} project={project} workspaceId={workspaceId} citadelId={citadelId} />
+      <ProjectHome
+        key={`home:${access.identity}`}
+        project={project}
+        workspaceId={workspaceId}
+        citadelId={citadelId}
+        available={available}
+      />
+      <ProjectFanout
+        key={`fanout:${access.identity}`}
+        project={project}
+        workspaceId={workspaceId}
+        citadelId={citadelId}
+      />
       <Dialog
         open={Boolean(review)}
         onOpenChange={(open) => {

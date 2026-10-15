@@ -1,10 +1,15 @@
+import { __resetApprovalOperationAttemptsForTests } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import React, { useState } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
 import type { ChatSessionsResponse } from "@goatcitadel/mission-control-shared/api/client";
-import { chatSessionCreationKey, readChatSessionCreation, resetChatSessionCreationForTests } from "@goatcitadel/mission-control-shared/state/chat-session-creation";
+import {
+  chatSessionCreationKey,
+  readChatSessionCreation,
+  resetChatSessionCreationForTests,
+} from "@goatcitadel/mission-control-shared/state/chat-session-creation";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useChatSessionControls } from "./useChatSessionControls";
 
@@ -166,6 +171,7 @@ function Harness(props: {
 
 describe("useChatSessionControls", () => {
   beforeEach(() => {
+    __resetApprovalOperationAttemptsForTests();
     latest = null;
     resetChatSessionCreationForTests();
     Object.values(apiMocks).forEach((mock) => {
@@ -173,11 +179,23 @@ describe("useChatSessionControls", () => {
         mock.mockReset();
       }
     });
-    apiMocks.createChatSession.mockImplementation(async (input: { workspaceId: string; projectId?: string }) => ({ ...selectedSession, revision: 1, sessionId: "session-new", workspaceId: input.workspaceId, projectId: input.projectId }));
+    apiMocks.createChatSession.mockImplementation(async (input: { workspaceId: string; projectId?: string }) => ({
+      ...selectedSession,
+      revision: 1,
+      sessionId: "session-new",
+      workspaceId: input.workspaceId,
+      projectId: input.projectId,
+    }));
     apiMocks.fetchChatSessionStatus.mockResolvedValue({ sessionId: "session-new", workspaceId: "workspace-1" });
     apiMocks.createChatProject.mockResolvedValue({ projectId: "project-new", name: "Project" });
     apiMocks.importChatProject.mockResolvedValue({ project: { projectId: "project-imported", name: "Imported" } });
-    apiMocks.setChatSessionBinding.mockResolvedValue({ transport: "integration", connectionId: "discord" });
+    apiMocks.setChatSessionBinding.mockResolvedValue({
+      sessionId: "session-1",
+      transport: "integration",
+      connectionId: "discord",
+      target: "channel-1",
+      writable: true,
+    });
   });
 
   it("creates and ensures sessions across selected, placeholder, and new-session paths", async () => {
@@ -204,7 +222,9 @@ describe("useChatSessionControls", () => {
     );
     expect(latest!.snapshot()).toMatchObject({ selectedSessionId: "session-new", historyView: "active" });
     expect(latest!.loadSidebar).not.toHaveBeenCalled();
-    expect(latest!.snapshot().sessions?.items).toEqual([expect.objectContaining({ sessionId: "session-new", workspaceId: "workspace-1" })]);
+    expect(latest!.snapshot().sessions?.items).toEqual([
+      expect.objectContaining({ sessionId: "session-new", workspaceId: "workspace-1" }),
+    ]);
     expect(apiMocks.fetchChatSessionStatus).toHaveBeenCalledWith("session-new", expect.any(AbortSignal));
     expect(onSessionCreated).toHaveBeenCalledTimes(1);
     expect(onSessionCreated).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: "session-new" }));
@@ -283,27 +303,41 @@ describe("useChatSessionControls", () => {
   it("keeps first-send creation settlement without adopting after Citadel view ABA", async () => {
     let renderer!: ReactTestRenderer;
     const onSessionCreated = vi.fn();
-    await act(async () => { renderer = create(<Harness viewIdentity="citadel-a" onSessionCreated={onSessionCreated} />); });
+    await act(async () => {
+      renderer = create(<Harness viewIdentity="citadel-a" onSessionCreated={onSessionCreated} />);
+    });
     let resolveReceipt!: (value: ChatSessionRecord) => void;
-    apiMocks.createChatSession.mockReturnValueOnce(new Promise<ChatSessionRecord>((resolve) => { resolveReceipt = resolve; }));
+    apiMocks.createChatSession.mockReturnValueOnce(
+      new Promise<ChatSessionRecord>((resolve) => {
+        resolveReceipt = resolve;
+      }),
+    );
     let pending!: Promise<ChatSessionRecord>;
     let rejected!: Promise<unknown>;
     await act(async () => {
       pending = latest!.controls.ensureSession();
       rejected = pending.catch((error: unknown) => error);
     });
-    await act(async () => { renderer.update(<Harness viewIdentity="citadel-b" onSessionCreated={onSessionCreated} />); });
-    await act(async () => { renderer.update(<Harness viewIdentity="citadel-a" onSessionCreated={onSessionCreated} />); });
+    await act(async () => {
+      renderer.update(<Harness viewIdentity="citadel-b" onSessionCreated={onSessionCreated} />);
+    });
+    await act(async () => {
+      renderer.update(<Harness viewIdentity="citadel-a" onSessionCreated={onSessionCreated} />);
+    });
     await act(async () => {
       resolveReceipt({ ...selectedSession, revision: 1, sessionId: "session-new", projectId: undefined });
       expect(await rejected).toMatchObject({ name: "AbortError" });
     });
-    expect(readChatSessionCreation(chatSessionCreationKey(getGatewayApiBaseUrl(), "workspace-1"))?.state).toBe("confirmed");
+    expect(readChatSessionCreation(chatSessionCreationKey(getGatewayApiBaseUrl(), "workspace-1"))?.state).toBe(
+      "confirmed",
+    );
     expect(apiMocks.createChatSession).toHaveBeenCalledTimes(1);
     expect(latest!.snapshot().selectedSessionId).toBeNull();
     expect(latest!.loadSidebar).not.toHaveBeenCalled();
     expect(onSessionCreated).not.toHaveBeenCalled();
-    await act(async () => { renderer.unmount(); });
+    await act(async () => {
+      renderer.unmount();
+    });
   });
 
   it("creates projects, archives workspace chats, and persists session metadata controls", async () => {
@@ -357,13 +391,23 @@ describe("useChatSessionControls", () => {
 
   it("rejects a retained assignment callback after Citadel view identity changes away and back", async () => {
     let renderer!: ReactTestRenderer;
-    await act(async () => { renderer = create(<Harness session={selectedSession} viewIdentity="citadel-a" />); });
+    await act(async () => {
+      renderer = create(<Harness session={selectedSession} viewIdentity="citadel-a" />);
+    });
     const oldAssignment = latest!.controls.handleAssignProject;
-    await act(async () => { renderer.update(<Harness session={selectedSession} viewIdentity="citadel-b" />); });
-    await act(async () => { renderer.update(<Harness session={selectedSession} viewIdentity="citadel-a" />); });
-    await act(async () => { await oldAssignment("project-2"); });
+    await act(async () => {
+      renderer.update(<Harness session={selectedSession} viewIdentity="citadel-b" />);
+    });
+    await act(async () => {
+      renderer.update(<Harness session={selectedSession} viewIdentity="citadel-a" />);
+    });
+    await act(async () => {
+      await oldAssignment("project-2");
+    });
     expect(apiMocks.assignChatSessionProject).not.toHaveBeenCalled();
-    await act(async () => { renderer.unmount(); });
+    await act(async () => {
+      renderer.unmount();
+    });
   });
 
   it("pins, archives, deletes, imports code projects, and saves external bindings", async () => {
@@ -393,7 +437,9 @@ describe("useChatSessionControls", () => {
     expect(latest!.snapshot().threadCleared).toBe(true);
 
     await act(async () => {
-      renderer.update(<Harness key="archived" session={{ ...selectedSession, lifecycleStatus: "archived" }} historyView="archived" />);
+      renderer.update(
+        <Harness key="archived" session={{ ...selectedSession, lifecycleStatus: "archived" }} historyView="archived" />,
+      );
     });
     await act(async () => {
       await latest!.controls.handleToggleArchiveSession();
@@ -443,7 +489,13 @@ describe("useChatSessionControls", () => {
       target: "channel-1",
       writable: true,
     });
-    expect(latest!.snapshot().binding).toEqual({ transport: "integration", connectionId: "discord" });
+    expect(latest!.snapshot().binding).toEqual({
+      sessionId: "session-1",
+      transport: "integration",
+      connectionId: "discord",
+      target: "channel-1",
+      writable: true,
+    });
   });
 
   it("surfaces errors for failed controls and missing code session imports", async () => {
@@ -466,14 +518,26 @@ describe("useChatSessionControls", () => {
   it("retains an uncertain first-send creation across remount and blocks manual and Send retries", async () => {
     apiMocks.createChatSession.mockRejectedValueOnce(new Error("lost first-send response"));
     let renderer!: ReactTestRenderer;
-    await act(async () => { renderer = create(<Harness session={null} selectedSessionId={null} />); });
-    await act(async () => { await expect(latest!.controls.ensureSession()).rejects.toThrow("lost first-send response"); });
-    await act(async () => { renderer.unmount(); });
-    await act(async () => { renderer = create(<Harness session={null} selectedSessionId={null} />); });
-    await act(async () => { await latest!.controls.handleCreateSession("chat"); });
+    await act(async () => {
+      renderer = create(<Harness session={null} selectedSessionId={null} />);
+    });
+    await act(async () => {
+      await expect(latest!.controls.ensureSession()).rejects.toThrow("lost first-send response");
+    });
+    await act(async () => {
+      renderer.unmount();
+    });
+    await act(async () => {
+      renderer = create(<Harness session={null} selectedSessionId={null} />);
+    });
+    await act(async () => {
+      await latest!.controls.handleCreateSession("chat");
+    });
     await expect(latest!.controls.ensureSession()).rejects.toThrow("Creation outcome is unconfirmed");
     expect(apiMocks.createChatSession).toHaveBeenCalledTimes(1);
-    await act(async () => { renderer.unmount(); });
+    await act(async () => {
+      renderer.unmount();
+    });
   });
 
   it("surfaces repository failures for session organization controls", async () => {
@@ -557,7 +621,9 @@ describe("useChatSessionControls", () => {
     await act(async () => {
       await latest!.controls.handleSaveExternalBinding();
     });
-    expect(latest!.setError).toHaveBeenCalledWith("binding failed");
+    expect(latest!.setError).toHaveBeenCalledWith("binding failed The original attempt remains locked.");
+    expect(latest!.controls.bindingMutation.phase).toBe("uncertain");
+    expect(latest!.controls.bindingMutation.locked).toBe(true);
 
     await act(async () => {
       renderer.update(<Harness session={null} selectedSessionId={null} />);
@@ -632,11 +698,17 @@ describe("useChatSessionControls", () => {
     expect(latest!.setError).toHaveBeenCalledWith(
       "This chat changed elsewhere. Review the latest state, then click pin again.",
     );
-    apiMocks.assignChatSessionProject.mockRejectedValueOnce(new apiMocks.ApiRequestError("stale assignment", { status: 409 }));
-    await act(async () => { await latest!.controls.handleAssignProject("project-2"); });
+    apiMocks.assignChatSessionProject.mockRejectedValueOnce(
+      new apiMocks.ApiRequestError("stale assignment", { status: 409 }),
+    );
+    await act(async () => {
+      await latest!.controls.handleAssignProject("project-2");
+    });
     expect(apiMocks.assignChatSessionProject).toHaveBeenCalledExactlyOnceWith("session-1", "project-2", 7);
     expect(refreshSessionAggregate).toHaveBeenCalledTimes(4);
     expect(refreshSessionAggregate).toHaveBeenLastCalledWith("session-1", { preserveSelection: true });
-    expect(latest!.setError).toHaveBeenCalledWith("This chat changed elsewhere. Review the latest state, then choose the project again.");
+    expect(latest!.setError).toHaveBeenCalledWith(
+      "This chat changed elsewhere. Review the latest state, then choose the project again.",
+    );
   });
 });

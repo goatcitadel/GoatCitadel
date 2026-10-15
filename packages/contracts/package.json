@@ -4,6 +4,7 @@
   "license": "Apache-2.0",
   "goatcitadelOwner": "contracts",
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -22,6 +23,18 @@
     "./mesh-schema-node": {
       "types": "./dist/mesh-schema-node.d.ts",
       "default": "./dist/mesh-schema-node.js"
+    },
+    "./secret-redaction": {
+      "types": "./dist/secret-redaction.d.ts",
+      "default": "./dist/secret-redaction.js"
+    },
+    "./startup-reads": {
+      "types": "./dist/gateway-startup-reads.d.ts",
+      "default": "./dist/gateway-startup-reads.js"
+    },
+    "./external-source-chat": {
+      "types": "./dist/external-source-chat.d.ts",
+      "default": "./dist/external-source-chat.js"
     }
   },
   "repository": {

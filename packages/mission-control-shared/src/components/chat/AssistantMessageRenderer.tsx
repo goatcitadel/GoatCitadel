@@ -23,6 +23,8 @@ export {
 export type { IncrementalSplitState } from "./streaming-markdown";
 import { downloadFile } from "../../api/client";
 import { cn } from "../../lib/utils";
+import { AssistantMessageContainer, copyTextToClipboard } from "./AssistantMessageShell";
+export { copyTextToClipboard } from "./AssistantMessageShell";
 import {
   createIncrementalDisplayTextState,
   normalizeAssistantDisplayText,
@@ -39,13 +41,20 @@ const MARKDOWN_REMARK_PLUGINS = [remarkGfm];
 const WORKSPACE_FILE_DOWNLOAD_PATH = "/api/v1/files/download";
 const WORKSPACE_FILE_OBJECT_URL_REVOKE_DELAY_MS = 5 * 60 * 1000;
 
-export function AssistantMessageRenderer({
+export function AssistantMessageRenderer(props: Parameters<typeof AssistantMessageBody>[0]) {
+  return <div className={cn("mc-assistant-renderer mc-assistant-renderer-markdown", props.running ? "mc-assistant-renderer-running" : "", `mc-assistant-stream-${props.streamPresentationMode ?? "smooth"}`, props.className)}>
+    <AssistantMessageContainer role={props.role} content={props.content} running={props.running}>
+      <AssistantMessageBody {...props} />
+    </AssistantMessageContainer>
+  </div>;
+}
+
+export function AssistantMessageBody({
   role,
   content,
   running = false,
   streamPresentationMode = "smooth",
   streamTurnId,
-  className,
 }: {
   role: "user" | "assistant";
   content: string;
@@ -79,31 +88,10 @@ export function AssistantMessageRenderer({
     return normalizeAssistantDisplayTextIncremental(normalizeStateRef.current, content);
   }, [role, content, running, streamTurnId]);
 
-  return (
-    <div
-      className={cn(
-        "mc-assistant-renderer mc-assistant-renderer-markdown",
-        running ? "mc-assistant-renderer-running" : "",
-        `mc-assistant-stream-${streamPresentationMode}`,
-        className,
-      )}
-    >
-      <AssistantMessageContainer role={role} content={content} running={running}>
-        {role === "assistant" && running ? (
-          <StreamingMarkdown
-            content={displayContent}
-            streamPresentationMode={streamPresentationMode}
-            streamTurnId={streamTurnId}
-          />
-        ) : (
-          <MemoizedMarkdownBlock
-            content={displayContent}
-            role={role}
-            components={role === "assistant" ? assistantMarkdownComponents : userMarkdownComponents}
-          />
-        )}
-      </AssistantMessageContainer>
-    </div>
+  return role === "assistant" && running ? (
+    <StreamingMarkdown content={displayContent} streamPresentationMode={streamPresentationMode} streamTurnId={streamTurnId} />
+  ) : (
+    <MemoizedMarkdownBlock content={displayContent} role={role} components={role === "assistant" ? assistantMarkdownComponents : userMarkdownComponents} />
   );
 }
 
@@ -478,97 +466,6 @@ function isExternalMarkdownHref(href: string): boolean {
   }
 }
 
-function AssistantMessageContainer({
-  role,
-  content,
-  running,
-  children,
-}: {
-  role: "user" | "assistant";
-  content: string;
-  running?: boolean;
-  children: ReactNode;
-}) {
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-  const resetTimerRef = useRef<ReturnType<Window["setTimeout"]> | null>(null);
-  const isStreamingAssistant = role === "assistant" && Boolean(running);
-  // A long answer is worth copying before it finishes. The button stays live while
-  // streaming, but says "so far" everywhere it is announced so nobody mistakes a
-  // partial copy for the finished response.
-  const copyDisabled = role !== "assistant" || !content.trim();
-
-  useEffect(() => {
-    return () => {
-      if (resetTimerRef.current !== null && typeof window !== "undefined") {
-        window.clearTimeout(resetTimerRef.current);
-      }
-    };
-  }, []);
-
-  async function handleCopy(): Promise<void> {
-    if (copyDisabled) {
-      return;
-    }
-    try {
-      await copyTextToClipboard(content);
-      setCopyState("copied");
-    } catch {
-      setCopyState("failed");
-    }
-    if (typeof window !== "undefined") {
-      if (resetTimerRef.current !== null) {
-        window.clearTimeout(resetTimerRef.current);
-      }
-      resetTimerRef.current = window.setTimeout(() => {
-        setCopyState("idle");
-        resetTimerRef.current = null;
-      }, 1800);
-    }
-  }
-
-  const copyButtonLabel =
-    copyState === "copied"
-      ? isStreamingAssistant
-        ? "Partial response copied to clipboard"
-        : "Response copied to clipboard"
-      : copyState === "failed"
-        ? "Copy unavailable from this browser"
-        : isStreamingAssistant
-          ? "Copy the response so far; it is still being written"
-          : "Copy response to clipboard";
-  const copyButtonTitle =
-    copyState === "copied"
-      ? isStreamingAssistant
-        ? "Copied so far"
-        : "Copied"
-      : copyState === "failed"
-        ? "Copy unavailable"
-        : isStreamingAssistant
-          ? "Copy so far"
-          : "Copy";
-  return (
-    <div className="mc-assistant-renderer-shell" aria-busy={isStreamingAssistant ? true : undefined}>
-      <div className="mc-assistant-renderer-body">{children}</div>
-      {role === "assistant" ? (
-        <button
-          type="button"
-          className={cn(
-            "mc-assistant-copy-button",
-            copyState === "copied" ? "copied" : "",
-            copyState === "failed" ? "failed" : "",
-          )}
-          onClick={() => void handleCopy()}
-          disabled={copyDisabled}
-          aria-label={copyButtonLabel}
-          title={copyButtonTitle}
-        >
-          {copyState === "copied" ? <Check size={14} strokeWidth={2.2} /> : <Copy size={14} strokeWidth={2.2} />}
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
 function StreamingMarkdown({
   content,
   streamPresentationMode,
@@ -622,11 +519,4 @@ function StreamingMarkdown({
       <span className="mc-assistant-streaming-cursor" aria-hidden="true" />
     </div>
   );
-}
-
-export async function copyTextToClipboard(content: string): Promise<void> {
-  if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
-    throw new Error("Clipboard API is unavailable in this environment. Copy requires navigator.clipboard.writeText().");
-  }
-  await navigator.clipboard.writeText(content);
 }

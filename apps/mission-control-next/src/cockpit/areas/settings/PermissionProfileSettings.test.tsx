@@ -6,6 +6,9 @@ import type { PermissionProfileSnapshotRecord } from "@goatcitadel/contracts";
 import { __resetPermissionActivationsForTests } from "../../../features/native-routes/settings/use-permission-profile-activation";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { PermissionProfileSettings } from "./PermissionProfileSettings";
+import { PermissionProfileEditor } from "./PermissionProfileEditor";
+import { LocalOperatorOverrides } from "./LocalOperatorOverrides";
+import { AutonomousGrantsSettings } from "./AutonomousGrantsSettings";
 const switchShellMock = vi.hoisted(() => vi.fn<typeof import("../../../shell-preference").switchShell>());
 vi.mock("../../../shell-preference", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../shell-preference")>()),
@@ -110,18 +113,20 @@ afterEach(async () => {
 });
 
 describe("native Chat permission profile", () => {
-  it("uses the guarded same-document compatibility handoff without changing policy", async () => {
+  it("keeps full profile, effective-policy, override and grant owners native without an extra policy write", async () => {
     await mount("work-a");
-    const anchor = view.root.findAllByType("a").find((item) => text(item) === "Open classic permission settings")!;
-    const preventDefault = vi.fn();
-    await act(async () => anchor.props.onClick({ button: 0, preventDefault }));
-    expect(preventDefault).toHaveBeenCalledOnce();
-    expect(switchShellMock).toHaveBeenCalledExactlyOnceWith("classic", {
-      href: "/settings/permissions?shell=classic&shellScope=visit",
-      isCurrent: expect.any(Function),
-      signal: expect.any(AbortSignal),
-    });
-    expect(switchShellMock.mock.calls[0]![1].isCurrent()).toBe(true);
+    expect(view.root.findByType(PermissionProfileEditor).props.workspaceId).toBe("work-a");
+    expect(view.root.findByType(LocalOperatorOverrides).props.workspaceId).toBe("work-a");
+    expect(view.root.findByType(AutonomousGrantsSettings).props.workspaceId).toBe("work-a");
+    expect(button("New permission profile").props.disabled).toBe(false);
+    expect(text(view.root)).toContain("Temporary Local Operator Overrides");
+    expect(text(view.root)).toContain("Autonomous activation grants");
+    expect(view.root.findAllByType("a").some((item) => String(item.props.href).includes("shell=classic"))).toBe(false);
+    await click("New permission profile");
+    expect(text(view.root)).toContain("New workspace permission profile");
+    await click("Close profile editor");
+    expect(text(view.root)).not.toContain("New workspace permission profile");
+    expect(switchShellMock).not.toHaveBeenCalled();
     expect(api.activatePermissionProfile).not.toHaveBeenCalled();
     expect(api.revokeAutonomousActivationGrant).not.toHaveBeenCalled();
   });

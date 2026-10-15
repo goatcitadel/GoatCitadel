@@ -50,13 +50,24 @@ const note = (workspaceId: string): NoteRecord => ({
 });
 let current: ReturnType<typeof useChatDocuments>;
 let renderer: ReactTestRenderer | undefined;
-function Harness({ workspaceId = "one", sessionId = "one", explicitContextEnabled = false }: { workspaceId?: string; sessionId?: string; explicitContextEnabled?: boolean }) {
+function Harness({
+  workspaceId = "one",
+  sessionId = "one",
+  explicitContextEnabled = false,
+  readEnabled,
+}: {
+  workspaceId?: string;
+  sessionId?: string;
+  explicitContextEnabled?: boolean;
+  readEnabled?: boolean;
+}) {
   current = useChatDocuments({
     workspaceId,
     selectedSession: session(sessionId, workspaceId),
     selectedSessionId: sessionId,
     documentEditingEnabled: true,
     explicitContextEnabled,
+    readEnabled,
     artifacts: [],
     setUiError,
     setActiveGeneratedArtifact,
@@ -84,13 +95,21 @@ afterEach(async () => {
 
 describe("Chat document owner extraction", () => {
   it("only adds explicit context when enabled, deduplicates palette inclusion, and permits clearing after revocation", async () => {
-    await act(async () => { renderer = create(<Harness />); });
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
     const ref = { kind: "personal_note" as const, ref: "note-one", label: "Saved note" };
-    await act(async () => { current.documents?.onToggleInclude(ref); current.includeDocumentContext(ref); });
+    await act(async () => {
+      current.documents?.onToggleInclude(ref);
+      current.includeDocumentContext(ref);
+    });
     expect(current.pendingDocumentContextRefs).toEqual([]);
     await act(async () => renderer?.update(<Harness explicitContextEnabled />));
     expect(current.documents?.contextInclusionEnabled).toBe(true);
-    await act(async () => { current.includeDocumentContext(ref); current.includeDocumentContext(ref); });
+    await act(async () => {
+      current.includeDocumentContext(ref);
+      current.includeDocumentContext(ref);
+    });
     expect(current.pendingDocumentContextRefs).toEqual([ref]);
     await act(async () => renderer?.update(<Harness />));
     expect(current.pendingDocumentContextRefs).toEqual([ref]);
@@ -150,4 +169,25 @@ describe("Chat document owner extraction", () => {
     expect(api.listNotes).toHaveBeenCalledTimes(count);
     expect(setUiError).not.toHaveBeenCalled();
   });
+});
+
+it("defers closed native document reads but retains explicit context selection when closed", async () => {
+  await act(async () => {
+    renderer = create(<Harness explicitContextEnabled readEnabled={false} />);
+  });
+  expect(api.listNotes).not.toHaveBeenCalled();
+  expect(api.listDocumentPatchProposals).not.toHaveBeenCalled();
+  expect(current.documents?.enabled).toBe(true);
+  await act(async () => renderer?.update(<Harness explicitContextEnabled readEnabled={true} />));
+  expect(api.listNotes).toHaveBeenCalledTimes(1);
+  expect(current.documents?.notes[0]?.noteId).toBe("note-one");
+  await act(async () => current.setPendingDocumentContextRefs([{ kind: "note", ref: "note-one" }]));
+  await act(async () => renderer?.update(<Harness explicitContextEnabled readEnabled={false} />));
+  expect(api.listNotes).toHaveBeenCalledTimes(1);
+  expect(current.documents?.includedRefs).toEqual([{ kind: "note", ref: "note-one" }]);
+  await act(async () =>
+    renderer?.update(<Harness explicitContextEnabled workspaceId="two" sessionId="two" readEnabled={false} />),
+  );
+  expect(current.documents?.notes).toEqual([]);
+  expect(current.documents?.includedRefs).toEqual([]);
 });

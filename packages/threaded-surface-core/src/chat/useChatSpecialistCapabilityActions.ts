@@ -15,6 +15,7 @@ import {
   createChatSpecialistCandidate,
   createCapabilityProposal,
   createCodeModeRun,
+  fetchChatSpecialistCandidates,
   fetchMcpServers,
   fetchMcpTemplates,
   fetchSkills,
@@ -24,9 +25,18 @@ import {
   updateSkillState,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { getCapabilitySuggestionConfirmationCopy } from "./chat-page-pure-helpers";
+import { useChatContextMutationOwner } from "./useChatContextMutationOwner";
+import { assertContextRecord } from "./context-mutation-evidence";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
 
 export function useChatSpecialistCapabilityActions(input: {
+  workspaceId?: string;
+  historicalRevisionRef?: { readonly current: number };
+  historicalReadOnly?: boolean;
+
+  selectionRevisionRef?: { readonly current: number };
+  turnRevisionRef?: { readonly current: number };
+  sendingRevisionRef?: { readonly current: number };
   selectedSessionId: string | null;
   selectedSession: ChatSessionRecord | null;
   selectedTurnId: string | null;
@@ -38,7 +48,11 @@ export function useChatSpecialistCapabilityActions(input: {
   setInstalledSkills: React.Dispatch<React.SetStateAction<SkillListItem[]>>;
   setMcpServers: React.Dispatch<React.SetStateAction<McpServerRecord[]>>;
   setMcpTemplates: React.Dispatch<React.SetStateAction<Array<McpServerTemplateRecord & { installed: boolean }>>>;
-  pushLocalNotice: (content: string, tone?: "neutral" | "success" | "warning") => void;
+  pushLocalNotice: (
+    content: string,
+    tone?: "neutral" | "success" | "warning",
+    publicationCurrent?: () => boolean,
+  ) => void;
   executeOutboundItemRef: MutableRefObject<(item: OutboundQueueItem) => Promise<void>>;
   tryBeginOutboundExecutionRef: MutableRefObject<() => boolean>;
   setQueuedOutbound: React.Dispatch<React.SetStateAction<OutboundQueueItem[]>>;
@@ -72,86 +86,156 @@ export function useChatSpecialistCapabilityActions(input: {
     [capabilitySuggestionConfirm],
   );
 
+  const specialistMutationOwner = useChatContextMutationOwner({
+    family: "specialists",
+    workspaceId: input.workspaceId ?? selectedSession?.workspaceId ?? "default",
+    sessionId: selectedSession?.sessionId ?? null,
+    sessionWorkspaceId: selectedSession?.workspaceId,
+    historicalRevisionRef: input.historicalRevisionRef,
+    historicalReadOnly: input.historicalReadOnly,
+    selectionRevisionRef: input.selectionRevisionRef,
+    turnRevisionRef: input.turnRevisionRef,
+    sendingRevisionRef: input.sendingRevisionRef,
+    setError,
+  });
+  const {
+    run: runSpecialistMutation,
+    inspect: inspectSpecialistMutation,
+    projection: specialistProjection,
+  } = specialistMutationOwner;
+  const workspaceId = input.workspaceId ?? selectedSession?.workspaceId ?? "default";
   const handleCreateSpecialistDraft = useCallback(
-    async (suggestion: ChatSpecialistCandidateSuggestionRecord) => {
-      if (!selectedSession || sending) {
-        return;
-      }
-      setSending(true);
-      try {
-        const created = await createChatSpecialistCandidate(selectedSession.sessionId, {
-          turnId: selectedTurnId ?? undefined,
-          suggestion,
-        });
-        setSpecialistCandidates((current) => {
-          const withoutCurrent = current.filter((item) => item.candidateId !== created.candidateId);
-          return [created, ...withoutCurrent];
-        });
-        setSpecialistSuggestions((current) =>
-          current.filter((item) => JSON.stringify(item) !== JSON.stringify(suggestion)),
-        );
-        pushLocalNotice(`Drafted specialist candidate: ${created.title}.`, "success");
-      } catch (err) {
-        setError((err as Error).message);
-      } finally {
-        setSending(false);
-      }
+    async (suggestion: ChatSpecialistCandidateSuggestionRecord): Promise<void> => {
+      if (!selectedSession || sending) return;
+      await runSpecialistMutation(
+        "specialist-draft",
+        () =>
+          createChatSpecialistCandidate(selectedSession.sessionId, {
+            turnId: selectedTurnId ?? undefined,
+            suggestion,
+          }),
+        (created) => [assertContextRecord(created, selectedSession.sessionId, workspaceId, "candidateId")],
+        (created, publicationCurrent) => {
+          setSpecialistCandidates((current) =>
+            publicationCurrent()
+              ? [created, ...current.filter((item) => item.candidateId !== created.candidateId)]
+              : current,
+          );
+          setSpecialistSuggestions((current) =>
+            publicationCurrent()
+              ? current.filter((item) => JSON.stringify(item) !== JSON.stringify(suggestion))
+              : current,
+          );
+          pushLocalNotice(`Drafted specialist candidate: ${created.title}.`, "success", publicationCurrent);
+        },
+        { begin: () => setSending(true), end: () => setSending(false) },
+      );
     },
-    [pushLocalNotice, selectedSession, selectedTurnId, sending, setError, setSending, setSpecialistCandidates],
+    [
+      selectedSession,
+      selectedTurnId,
+      sending,
+      workspaceId,
+      runSpecialistMutation,
+      setSending,
+      setSpecialistCandidates,
+      pushLocalNotice,
+    ],
   );
-
   const handleSpecialistCandidatePatch = useCallback(
-    async (candidateId: string, patch: ChatSpecialistCandidatePatchInput, notice: string) => {
-      if (!selectedSession || sending) {
-        return;
-      }
-      setSending(true);
-      try {
-        const updated = await updateChatSpecialistCandidate(selectedSession.sessionId, candidateId, patch);
-        setSpecialistCandidates((current) =>
-          current.map((item) => (item.candidateId === updated.candidateId ? updated : item)),
-        );
-        pushLocalNotice(notice, "success");
-      } catch (err) {
-        setError((err as Error).message);
-      } finally {
-        setSending(false);
-      }
+    async (candidateId: string, patch: ChatSpecialistCandidatePatchInput, notice: string): Promise<void> => {
+      if (!selectedSession || sending) return;
+      await runSpecialistMutation(
+        "specialist-patch",
+        () => updateChatSpecialistCandidate(selectedSession.sessionId, candidateId, patch),
+        (updated) => [assertContextRecord(updated, selectedSession.sessionId, workspaceId, "candidateId", candidateId)],
+        (updated, publicationCurrent) => {
+          setSpecialistCandidates((current) =>
+            publicationCurrent()
+              ? current.map((item) => (item.candidateId === updated.candidateId ? updated : item))
+              : current,
+          );
+          pushLocalNotice(notice, "success", publicationCurrent);
+        },
+        { begin: () => setSending(true), end: () => setSending(false) },
+      );
     },
-    [pushLocalNotice, selectedSession, sending, setError, setSending, setSpecialistCandidates],
+    [
+      selectedSession,
+      sending,
+      workspaceId,
+      runSpecialistMutation,
+      setSending,
+      setSpecialistCandidates,
+      pushLocalNotice,
+    ],
   );
-
   const handleActivateCatalogSpecialist = useCallback(
-    async (suggestion: ChatSpecialistCandidateSuggestionRecord) => {
-      if (!selectedSession || sending) {
-        return;
-      }
+    async (suggestion: ChatSpecialistCandidateSuggestionRecord): Promise<void> => {
+      if (!selectedSession || sending) return;
       if (!suggestion.candidateId) {
         setError("Catalog suggestion is missing its entry identifier.");
         return;
       }
-      setSending(true);
-      try {
-        const activated = await activateImportedAgentCatalogEntry(suggestion.candidateId, {
-          sessionId: selectedSession.sessionId,
-        });
-        setSpecialistCandidates((current) => {
-          const withoutCurrent = current.filter((item) => item.candidateId !== activated.specialist.candidateId);
-          return [activated.specialist, ...withoutCurrent];
-        });
-        setSpecialistSuggestions((current) => current.filter((item) => item.candidateId !== suggestion.candidateId));
-        pushLocalNotice(
-          `Activated ${activated.catalogEntry.definition.frontmatter.name} for this session as a manual-only specialist.`,
-          "success",
-        );
-      } catch (err) {
-        setError((err as Error).message);
-      } finally {
-        setSending(false);
-      }
+      await runSpecialistMutation(
+        "specialist-activation",
+        () => activateImportedAgentCatalogEntry(suggestion.candidateId, { sessionId: selectedSession.sessionId }),
+        (activated) => {
+          const id = assertContextRecord(activated.specialist, selectedSession.sessionId, workspaceId, "candidateId");
+          if (
+            activated.catalogEntry.entryId !== suggestion.candidateId ||
+            activated.specialist.routingMode !== "manual_only" ||
+            activated.specialist.status !== "active"
+          )
+            throw new TypeError("The activation receipt does not confirm the reviewed manual-only specialist.");
+          return [activated.catalogEntry.entryId, id];
+        },
+        (activated, publicationCurrent) => {
+          setSpecialistCandidates((current) =>
+            publicationCurrent()
+              ? [
+                  activated.specialist,
+                  ...current.filter((item) => item.candidateId !== activated.specialist.candidateId),
+                ]
+              : current,
+          );
+          setSpecialistSuggestions((current) =>
+            publicationCurrent() ? current.filter((item) => item.candidateId !== suggestion.candidateId) : current,
+          );
+          pushLocalNotice(
+            `Activated ${activated.catalogEntry.definition.frontmatter.name} for this session as a manual-only specialist.`,
+            "success",
+            publicationCurrent,
+          );
+        },
+        { begin: () => setSending(true), end: () => setSending(false) },
+      );
     },
-    [pushLocalNotice, selectedSession, sending, setError, setSending, setSpecialistCandidates],
+    [
+      selectedSession,
+      sending,
+      workspaceId,
+      runSpecialistMutation,
+      setError,
+      setSending,
+      setSpecialistCandidates,
+      pushLocalNotice,
+    ],
   );
+  const handleInspectSpecialists = useCallback(async (): Promise<void> => {
+    if (!selectedSession) return;
+    await inspectSpecialistMutation(
+      () => fetchChatSpecialistCandidates(selectedSession.sessionId, 500),
+      (result) => {
+        if (!Array.isArray(result.items)) throw new TypeError("The Gateway returned no specialist candidates.");
+        result.items.forEach((item) =>
+          assertContextRecord(item, selectedSession.sessionId, workspaceId, "candidateId"),
+        );
+      },
+      (result, publicationCurrent) =>
+        setSpecialistCandidates((current) => (publicationCurrent() ? result.items : current)),
+    );
+  }, [selectedSession, workspaceId, inspectSpecialistMutation, setSpecialistCandidates]);
 
   const dismissCapabilitySuggestion = useCallback((suggestion: ChatCapabilityUpgradeSuggestion) => {
     setCapabilitySuggestions((current) =>
@@ -272,7 +356,10 @@ export function useChatSpecialistCapabilityActions(input: {
           return;
         }
 
-        if (suggestion.recommendedAction === "review_tool_access" || suggestion.recommendedAction === "switch_tool_profile") {
+        if (
+          suggestion.recommendedAction === "review_tool_access" ||
+          suggestion.recommendedAction === "switch_tool_profile"
+        ) {
           window.location.hash = "permissions";
           dismissCapabilitySuggestion(suggestion);
           return;
@@ -423,6 +510,7 @@ export function useChatSpecialistCapabilityActions(input: {
     setCapabilitySuggestionConfirm,
     capabilitySuggestionPending,
     capabilityConfirmationCopy,
+    specialistMutation: { ...specialistProjection, onInspect: handleInspectSpecialists },
     handleCreateSpecialistDraft,
     handleActivateCatalogSpecialist,
     handleSpecialistCandidatePatch,

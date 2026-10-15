@@ -9,6 +9,7 @@ import { fetchTask, updateTask } from "@goatcitadel/mission-control-shared/api/t
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetTaskMutationsForTests } from "../../../features/native-routes/ops/task-mutation-state";
 import { TaskAssignmentControl } from "./TaskAssignmentControl";
+import { TaskStatusControl } from "./TaskStatusControl";
 
 vi.mock("@goatcitadel/mission-control-shared/api/operators-agents-files", () => ({ fetchAgents: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/tasks", () => ({ fetchTask: vi.fn(), updateTask: vi.fn() }));
@@ -70,6 +71,7 @@ afterEach(() => {
   client.clear();
   container.remove();
   vi.clearAllMocks();
+  window.history.replaceState(null, "", "/");
 });
 
 async function render(record = task()): Promise<void> {
@@ -147,6 +149,11 @@ describe("cockpit task assignment", () => {
   });
 
   it("locks further assignment after an unconfirmed owner response", async () => {
+    window.history.replaceState(
+      { evidence: "retained-task-recovery" },
+      "",
+      "/work?workspaceId=old-workspace&citadelId=current-citadel&runId=run-a&sessionId=session-a&filter=retained&taskId=obsolete&shell=cockpit&shellScope=visit#task-evidence",
+    );
     vi.mocked(updateTask).mockRejectedValue(new Error("Response lost"));
     await render();
     await chooseAgent();
@@ -157,12 +164,63 @@ describe("cockpit task assignment", () => {
         (item) => item.textContent?.trim() === "Save task assignment",
       ),
     ).toBe(false);
-    expect(
-      container.querySelector('a[href="/ops/kanban?taskId=task-a&shell=classic&shellScope=visit"]'),
-    ).not.toBeNull();
+    const recovery = container.querySelector<HTMLAnchorElement>('a[href^="/work/tasks/task-a?"]');
+    expect(recovery).not.toBeNull();
+    const destination = new URL(recovery!.href);
+    expect(destination.pathname).toBe("/work/tasks/task-a");
+    expect(destination.searchParams.get("workspaceId")).toBe("workspace-a");
+    expect(destination.searchParams.get("citadelId")).toBe("current-citadel");
+    expect(destination.searchParams.get("runId")).toBe("run-a");
+    expect(destination.searchParams.get("sessionId")).toBe("session-a");
+    expect(destination.searchParams.get("filter")).toBe("retained");
+    expect(destination.searchParams.get("taskId")).toBeNull();
+    expect(destination.searchParams.get("shell")).toBe("cockpit");
+    expect(destination.searchParams.get("shellScope")).toBeNull();
+    expect(destination.hash).toBe("#task-evidence");
+    expect(window.history.state).toMatchObject({ evidence: "retained-task-recovery" });
     await act(async () => root.render(null));
     await render();
     expect(container.textContent).toContain("task action outcome is unconfirmed");
     expect(updateTask).toHaveBeenCalledTimes(1);
   });
+});
+
+it("keeps an uncertain direct status mutation locked and offers its exact native record", async () => {
+  vi.mocked(updateTask).mockRejectedValue(new Error("Response lost"));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <TaskStatusControl task={task()} workspaceId="workspace-a" canMarkDone={false} />
+      </QueryClientProvider>,
+    ),
+  );
+  const select = container.querySelector<HTMLSelectElement>('select[aria-label="Status"]');
+  expect(select).not.toBeNull();
+  await act(async () => {
+    select!.value = "inbox";
+    select!.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await click("Save task status");
+  await vi.waitFor(() => expect(container.textContent).toContain("task action outcome is unconfirmed"));
+  expect(updateTask).toHaveBeenCalledExactlyOnceWith("task-a", {
+    workspaceId: "workspace-a",
+    expectedRevision: 2,
+    status: "inbox",
+  });
+  expect(container.querySelector('[role="dialog"]')).toBeNull();
+  expect(container.querySelector('select[aria-label="Status"]')).toBeNull();
+  const recovery = container.querySelector<HTMLAnchorElement>('a[href^="/work/tasks/task-a?"]');
+  expect(recovery).not.toBeNull();
+  expect(new URL(recovery!.href).searchParams.get("workspaceId")).toBe("workspace-a");
+  await act(async () => root.render(null));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <TaskStatusControl task={task()} workspaceId="workspace-a" canMarkDone={false} />
+      </QueryClientProvider>,
+    ),
+  );
+  expect(container.textContent).toContain("task action outcome is unconfirmed");
+  expect(container.querySelector('select[aria-label="Status"]')).toBeNull();
+  expect(updateTask).toHaveBeenCalledTimes(1);
 });

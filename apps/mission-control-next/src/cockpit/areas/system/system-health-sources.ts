@@ -12,7 +12,6 @@ import {
   fetchLlamaCppStatus,
   fetchNpuStatus,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { fetchRemoteWorkerRegistry } from "@goatcitadel/mission-control-shared/api/remote-workers";
 import { describeApiError, type ApiErrorDescription } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { HealthSummaryResponse } from "@goatcitadel/mission-control-shared/api/types";
 
@@ -88,10 +87,15 @@ export function retainedHealthObservations(sources: SystemHealthSources): System
 }
 
 /**
- * The cheap digest behind the sidebar dot and the phone strip: four reads (summary, llama.cpp, NPU and
- * connections). Channel runtimes and remote workers are deferred to System › Health (NV-09).
+ * Core shell status reads the summary only. Detailed callers retain the four-source digest;
+ * optional inspections and the full channel/worker fan-out run on System › Health.
  */
-export async function loadSystemHealthDigest(previous?: SystemHealthSources): Promise<SystemHealthSources> {
+export async function loadSystemHealthDigest(previous?: SystemHealthSources, options: { deferOptionalSources?: boolean } = {}): Promise<SystemHealthSources> {
+  if (options.deferOptionalSources) return {
+    summary: await read(() => fetchHealthSummary(), previous?.summary),
+    llama: { state: "deferred" }, npu: { state: "deferred" }, connections: { state: "deferred" },
+    channels: { state: "deferred" }, workers: { state: "deferred" },
+  };
   const [summary, llama, npu, connections] = await Promise.all([
     read(() => fetchHealthSummary(), previous?.summary),
     read(() => fetchLlamaCppStatus(), previous?.llama),
@@ -115,7 +119,7 @@ export async function loadSystemHealthSources(workspaceId: string, previous?: Sy
     read(() => fetchLlamaCppStatus(), previous?.llama),
     read(() => fetchNpuStatus(), previous?.npu),
     read(() => fetchIntegrationConnections(), connectionResponse(previous?.connections)),
-    read(() => fetchRemoteWorkerRegistry(workspaceId, { limit: 100 }), previous?.workers),
+    read(async () => (await import("@goatcitadel/mission-control-shared/api/remote-workers")).fetchRemoteWorkerRegistry(workspaceId, { limit: 100 }), previous?.workers),
   ]);
   const connections = connectionItems(connectionsResponse);
   if (connections.state !== "current")

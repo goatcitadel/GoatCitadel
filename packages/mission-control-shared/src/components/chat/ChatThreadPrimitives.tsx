@@ -1,3 +1,5 @@
+import { ActorTimestamp, formatActorTimestamp } from "./ChatThreadReadingPrimitives";
+export { ActorTimestamp, formatActorTimestamp, formatActorTimestampTitle, isThreadScrollNearBottom, ChatThreadNotices } from "./ChatThreadReadingPrimitives";
 import { memo, useEffect, useId, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { getWorkflowSkillCaptureDisplay } from "./workflow-skill-capture-display";
 import { WorkflowSkillCaptureEvidence } from "./WorkflowSkillCaptureEvidence";
@@ -21,7 +23,6 @@ import {
   getRecoveryStripLabel,
   getTraceTone,
   humanizeEnum,
-  parseTimestamp,
   renderSuggestionSummary,
   summarizeDelegationSteps,
   summarizeTurnRouting,
@@ -34,6 +35,8 @@ export interface ChatThreadNotice {
   tone: "neutral" | "warning" | "critical" | "success";
   content: string;
   timestamp: string;
+  /** Secondary record identifiers; action targets and consequences remain in content. */
+  technicalDetails?: Array<{ label: string; value: string }>;
 }
 
 export interface ChatDelegationStepView {
@@ -83,34 +86,6 @@ export const THREAD_HISTORY_PAGE_SIZE = 30;
 export type ChatThreadWindowItem =
   | { kind: "turn"; turn: ChatThreadTurnRecord; index: number }
   | { kind: "gap"; key: string; hiddenCount: number };
-
-const ACTOR_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  hour: "numeric",
-  minute: "2-digit",
-});
-
-const ACTOR_ABSOLUTE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
-export function formatActorTimestamp(timestamp: string): string {
-  const parsed = parseTimestamp(timestamp);
-  return parsed === null ? "Time unknown" : ACTOR_TIME_FORMATTER.format(parsed);
-}
-
-export function formatActorTimestampTitle(timestamp: string): string | undefined {
-  const parsed = parseTimestamp(timestamp);
-  return parsed === null ? timestamp || undefined : ACTOR_ABSOLUTE_TIME_FORMATTER.format(parsed);
-}
-
-export function ActorTimestamp({ timestamp }: { timestamp: string }) {
-  return (
-    <time dateTime={timestamp} title={formatActorTimestampTitle(timestamp)}>
-      {formatActorTimestamp(timestamp)}
-    </time>
-  );
-}
 
 function createIndexRange(start: number, end: number, total: number): [number, number] | null {
   if (total <= 0) {
@@ -259,10 +234,6 @@ export function hasActiveTextSelection(): boolean {
   return selection.toString().trim().length > 0;
 }
 
-export function isThreadScrollNearBottom(element: HTMLElement): boolean {
-  return element.scrollHeight - element.scrollTop - element.clientHeight <= 80;
-}
-
 function PrimitiveStatusChip({ tone, children }: { tone: string; children: ReactNode }) {
   return (
     <span className="mc-next-status-chip" data-tone={tone} data-size="sm">
@@ -336,47 +307,6 @@ export function StreamingAssistantSkeleton({ label }: { label: string }) {
   );
 }
 
-export function ChatThreadNotices({
-  notices,
-  scopeKey,
-}: {
-  notices: ChatThreadNotice[];
-  /** Remounts the disclosure when the surrounding conversation changes. */
-  scopeKey?: string | null;
-}) {
-  return <ChatThreadNoticesContents key={scopeKey ?? "thread-notices"} notices={notices} />;
-}
-
-function ChatThreadNoticesContents({ notices }: { notices: ChatThreadNotice[] }) {
-  const [open, setOpen] = useState(false);
-  const feedId = useId();
-  if (notices.length === 0) {
-    return null;
-  }
-  return (
-    <details className="mc-next-thread-notice-feed" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary
-        className="mc-next-thread-inline-button mc-next-thread-notice-feed-summary"
-        aria-label={`Conversation updates (${notices.length})`}
-        aria-expanded={open}
-        aria-controls={feedId}
-      >
-        Updates ({notices.length})
-      </summary>
-      <ul className="mc-next-thread-notices" id={feedId}>
-        {notices.map((notice) => (
-          <li key={notice.id} className={`tone-${notice.tone}`}>
-            <p className="mc-next-thread-meta">
-              <strong>Notice</strong> · <ActorTimestamp timestamp={notice.timestamp} />
-            </p>
-            <NoticeContent content={notice.content} />
-          </li>
-        ))}
-      </ul>
-    </details>
-  );
-}
-
 export function ChatThreadSystemNoticeCard({ notice }: { notice: ChatThreadSystemNoticeRecord }) {
   const [dismissed, setDismissed] = useState(false);
   const [open, setOpen] = useState(false);
@@ -420,20 +350,6 @@ export function ChatThreadSystemNoticeCard({ notice }: { notice: ChatThreadSyste
         </div>
       </details>
     </section>
-  );
-}
-
-function NoticeContent({ content }: { content: string }) {
-  const lines = content.split(/\r?\n/);
-  return (
-    <p className="mc-next-thread-notice-content">
-      {lines.map((line, index) => (
-        <span key={index}>
-          {index > 0 ? <br /> : null}
-          {line}
-        </span>
-      ))}
-    </p>
   );
 }
 
@@ -1216,7 +1132,7 @@ function approvedToolFailureRecoveryCopy(content: string): string {
   return "An approved tool action could not be completed. Open Activity to inspect the recovery details.";
 }
 
-export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
+export const ChatThreadTurnCard = /* @__PURE__ */ memo(function ChatThreadTurnCard({
   mode,
   turn,
   selected,

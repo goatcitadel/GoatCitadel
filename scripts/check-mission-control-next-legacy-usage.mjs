@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findProductionSourceExportAliases } from "./lib/mission-control-next-production-aliases.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const nextSrcRoot = path.join(repoRoot, "apps", "mission-control-next", "src");
@@ -29,9 +30,6 @@ const forbiddenConfigChecks = [
   { pattern: /legacySourceFallbackPlugin/g, label: "legacy Vite source fallback plugin" },
   { pattern: /mission-control\/public/g, label: "legacy mission-control publicDir" },
   { pattern: /mission-control\/src/g, label: "legacy mission-control source alias" },
-  { pattern: /packages\/contracts\/src/g, label: "source-exported contracts alias" },
-  { pattern: /packages\/threaded-surface-core\/src/g, label: "source-exported threaded-surface-core alias" },
-  { pattern: /packages\/mission-control-shared\/src/g, label: "source-exported mission-control-shared alias" },
 ];
 
 function walkFiles(root, matcher, results = []) {
@@ -76,10 +74,15 @@ const failures = [
   ...collectFailures(threadedFiles, forbiddenImportChecks),
   ...collectFailures(sourceFiles, forbiddenSelectorChecks),
   ...collectFailures(nextConfigFiles, forbiddenConfigChecks),
+  ...nextConfigFiles.flatMap((filePath) =>
+    findProductionSourceExportAliases(filePath, fs.readFileSync(filePath, "utf8")),
+  ),
 ];
 
 if (failures.length > 0) {
-  console.error("[legacy-check:next] Mission Control Next still references forbidden threaded legacy imports/selectors.");
+  console.error(
+    "[legacy-check:next] Mission Control Next still references forbidden threaded legacy imports/selectors.",
+  );
   for (const failure of failures) {
     console.error(`- ${path.relative(repoRoot, failure.filePath)}: ${failure.label} (${failure.count})`);
   }

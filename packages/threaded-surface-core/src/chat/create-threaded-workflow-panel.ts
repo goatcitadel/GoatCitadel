@@ -20,7 +20,7 @@ type Input = {
   isCoworkSurface: boolean;
   isCodeSurface: boolean;
   isChatSurface: boolean;
-  coworkViewModel: CoworkRunViewModel;
+  coworkViewModel: CoworkRunViewModel | null;
   blockHistoricalMutation: () => boolean;
   handleRetryTurn: (turnId: string) => Promise<void>;
   handleStopActiveTurn: () => Promise<void>;
@@ -115,7 +115,7 @@ export function createThreadedWorkflowPanel({
     refreshOrchestrationRun,
   } = workbenchController;
   const workflowPanel: MissionThreadedWorkflowPanel =
-    selectedSession && isCoworkSurface
+    selectedSession && isCoworkSurface && coworkViewModel
       ? {
           kind: "cowork",
           props: {

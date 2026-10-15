@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { deriveCoworkRunViewModel } from "@goatcitadel/mission-control-shared/components/cowork-view-model";
 import type { ChatMode } from "@goatcitadel/contracts";
 import { fetchEffectivePermissionProfile } from "@goatcitadel/mission-control-shared/api/client";
 import {
@@ -64,6 +65,7 @@ export function ThreadedSurfaceRoute({
 }) {
   return (
     <MissionThreadedControllerHost
+      coworkViewModelFactory={deriveCoworkRunViewModel}
       workspaceId={workspaceId}
       workspaceName={workspaceName}
       gatewayStatus={gatewayStatus}

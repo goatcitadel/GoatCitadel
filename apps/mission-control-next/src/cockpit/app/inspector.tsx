@@ -1,4 +1,7 @@
-import { RESPONSIVE_BREAKPOINTS, RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
+import {
+  RESPONSIVE_BREAKPOINTS,
+  RESPONSIVE_QUERIES,
+} from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { Maximize2, Minimize2, X } from "lucide-react";
 import {
   useCallback,
@@ -18,7 +21,12 @@ import { Dialog } from "../ui/Dialog";
 import { Sheet } from "../ui/Sheet";
 import { readCockpitHistory, subscribeCockpitHistory } from "./cockpit-history";
 import { InspectorResizeHandle } from "./InspectorResizeHandle";
-import { InspectorContext, type InspectorApi, type InspectorContent } from "./inspector-context";
+import {
+  InspectorContext,
+  InspectorSourceContext,
+  type InspectorApi,
+  type InspectorContent,
+} from "./inspector-context";
 
 export function InspectorProvider({ children }: { children: ReactNode }) {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
@@ -122,7 +130,11 @@ export function InspectorProvider({ children }: { children: ReactNode }) {
     () => ({ content, open, close, register, updateIfOpen, closeIfOpen, getDismissalGeneration }),
     [content, open, close, register, updateIfOpen, closeIfOpen, getDismissalGeneration],
   );
-  return <InspectorContext.Provider value={api}>{children}</InspectorContext.Provider>;
+  return (
+    <InspectorSourceContext.Provider value={content?.source ?? null}>
+      <InspectorContext.Provider value={api}>{children}</InspectorContext.Provider>
+    </InspectorSourceContext.Provider>
+  );
 }
 
 export function useInspector(): InspectorApi {

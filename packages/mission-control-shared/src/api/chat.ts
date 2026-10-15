@@ -26,6 +26,7 @@ import type {
   ChatGeneratedArtifactKind,
   ChatGeneratedArtifactRecord,
   ChatGeneratedArtifactSourceSurface,
+  ChatSessionCoreStateResponse,
   ChatGoalRequest,
   ChatGoalStatusResponse,
   ChatHistoryWindowResponse,
@@ -40,23 +41,11 @@ import type {
   ChatSideChatRecord,
   ChatSessionBindingRecord,
   ChatSessionWorkbenchDiffResponse,
-  ChatSessionWorkbenchCommandRunRequest,
-  ChatSessionWorkbenchCommandRunResponse,
   ChatSessionWorkbenchFileDiffResponse,
-  ChatSessionWorkbenchFileOperationRequest,
-  ChatSessionWorkbenchFileOperationPreviewRequest,
-  ChatSessionWorkbenchFileOperationPreviewResponse,
-  ChatSessionWorkbenchFileOperationResponse,
   ChatSessionWorkbenchFileResponse,
   ChatSessionWorkbenchOutputResponse,
-  ChatSessionWorkbenchPatchApplyRequest,
-  ChatSessionWorkbenchPatchApplyResponse,
-  ChatSessionWorkbenchPatchExportResponse,
   ChatSessionWorkbenchRecord,
   ChatSessionWorkbenchReadOptions,
-  ChatSessionWorkbenchRevertFileRequest,
-  ChatSessionWorkbenchRevertResponse,
-  ChatSessionWorkbenchSaveFileRequest,
   ChatSessionWorkbenchTreeResponse,
   ChatSessionBulkArchiveResult,
   ChatSessionOrigin,
@@ -117,6 +106,17 @@ import {
 } from "./client-core.js";
 import { consumeSseResponse, iterateSsePayloads, parseSseJson } from "./streaming.js";
 import type { OpenAICodexDevicePollResponse, OpenAICodexDeviceStartResponse } from "./platform.js";
+export {
+  createChatSessionWorkbenchWorktree,
+  saveChatSessionWorkbenchFile,
+  previewChatSessionWorkbenchFileOperation,
+  runChatSessionWorkbenchFileOperation,
+  runChatSessionWorkbenchCommand,
+  applyChatSessionWorkbenchPatch,
+  exportChatSessionWorkbenchPatch,
+  revertChatSessionWorkbenchFile,
+  revertChatSessionWorkbenchChanges,
+} from "./chat-workbench-operations.js";
 
 export interface ChatRequestSurfaceOptions {
   originSurface?: ChatMode;
@@ -591,19 +591,6 @@ export async function fetchChatSessionWorkbench(
   );
 }
 
-export async function createChatSessionWorkbenchWorktree(
-  sessionId: string,
-  input?: { baseRef?: string },
-): Promise<{ state: ChatSessionWorkbenchRecord }> {
-  return request<{ state: ChatSessionWorkbenchRecord }>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/worktree`,
-    {
-      method: "POST",
-      body: JSON.stringify(input ?? {}),
-    },
-  );
-}
-
 export async function fetchChatSessionWorkbenchTree(
   sessionId: string,
   options?: ChatSessionWorkbenchReadOptions,
@@ -622,42 +609,6 @@ export async function fetchChatSessionWorkbenchFile(
   if (options?.preview) query.set("preview", "true");
   return request<ChatSessionWorkbenchFileResponse>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file?${query.toString()}`,
-  );
-}
-
-export async function saveChatSessionWorkbenchFile(
-  sessionId: string,
-  input: ChatSessionWorkbenchSaveFileRequest,
-): Promise<ChatSessionWorkbenchFileResponse> {
-  return request<ChatSessionWorkbenchFileResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file`,
-    {
-      method: "PUT",
-      body: JSON.stringify(input),
-    },
-  );
-}
-
-export async function previewChatSessionWorkbenchFileOperation(
-  sessionId: string,
-  input: ChatSessionWorkbenchFileOperationPreviewRequest,
-): Promise<ChatSessionWorkbenchFileOperationPreviewResponse> {
-  return request<ChatSessionWorkbenchFileOperationPreviewResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file-operation/preview`,
-    { method: "POST", body: JSON.stringify(input) },
-  );
-}
-
-export async function runChatSessionWorkbenchFileOperation(
-  sessionId: string,
-  input: ChatSessionWorkbenchFileOperationRequest,
-): Promise<ChatSessionWorkbenchFileOperationResponse> {
-  return request<ChatSessionWorkbenchFileOperationResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file-operation`,
-    {
-      method: "POST",
-      body: JSON.stringify(input),
-    },
   );
 }
 
@@ -680,65 +631,6 @@ export async function fetchChatSessionWorkbenchDiff(sessionId: string): Promise<
 export async function fetchChatSessionWorkbenchOutput(sessionId: string): Promise<ChatSessionWorkbenchOutputResponse> {
   return request<ChatSessionWorkbenchOutputResponse>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/output`,
-  );
-}
-
-export async function runChatSessionWorkbenchCommand(
-  sessionId: string,
-  input: ChatSessionWorkbenchCommandRunRequest,
-): Promise<ChatSessionWorkbenchCommandRunResponse> {
-  return request<ChatSessionWorkbenchCommandRunResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/command`,
-    {
-      method: "POST",
-      body: JSON.stringify(input),
-    },
-  );
-}
-
-export async function applyChatSessionWorkbenchPatch(
-  sessionId: string,
-  input: ChatSessionWorkbenchPatchApplyRequest,
-): Promise<ChatSessionWorkbenchPatchApplyResponse> {
-  return request<ChatSessionWorkbenchPatchApplyResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/patch/apply`,
-    {
-      method: "POST",
-      body: JSON.stringify(input),
-    },
-  );
-}
-
-export async function exportChatSessionWorkbenchPatch(
-  sessionId: string,
-): Promise<ChatSessionWorkbenchPatchExportResponse> {
-  return request<ChatSessionWorkbenchPatchExportResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/patch/export`,
-  );
-}
-
-export async function revertChatSessionWorkbenchFile(
-  sessionId: string,
-  input: ChatSessionWorkbenchRevertFileRequest,
-): Promise<ChatSessionWorkbenchRevertResponse> {
-  return request<ChatSessionWorkbenchRevertResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/revert-file`,
-    {
-      method: "POST",
-      body: JSON.stringify(input),
-    },
-  );
-}
-
-export async function revertChatSessionWorkbenchChanges(
-  sessionId: string,
-): Promise<ChatSessionWorkbenchRevertResponse> {
-  return request<ChatSessionWorkbenchRevertResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/revert-all`,
-    {
-      method: "POST",
-      body: JSON.stringify({}),
-    },
   );
 }
 
@@ -1025,6 +917,16 @@ export async function removeThreadKnowledgeAttachment(
     {
       method: "DELETE",
     },
+  );
+}
+
+export async function fetchChatSessionCoreState(
+  sessionId: string,
+  options: { includeThread?: boolean } = {},
+): Promise<ChatSessionCoreStateResponse> {
+  const query = options.includeThread === false ? "?includeThread=false" : "";
+  return request<ChatSessionCoreStateResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/core-state${query}`,
   );
 }
 

@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 261,
+      "expectedCount": 264,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 261,
+      "expectedLastVersion": 264,
       "migrations": [
         {
           "version": 1,
@@ -1835,15 +1835,36 @@
           "groupName": "canonical",
           "definitionSha256": "7e92db607feadd444b8c17ea82b41aa39e414930fb4f1c09d664a30eb50d6578",
           "implementationSha256": "d1f4c235f36535769bb0c1cfb3ec8c32ee7483a926436e4cd0aa109a9c13feda"
+        },
+        {
+          "version": 262,
+          "name": "approval_execution_linkage_index",
+          "groupName": "canonical",
+          "definitionSha256": "2ee9b1df34151609b44864ba50c503d4155a91dd27693c3e41f21e31b466fc52",
+          "implementationSha256": "818818d0779041185a1e6c7be934eb12f25c7127bc814d76c15d71ac21ca9294"
+        },
+        {
+          "version": 263,
+          "name": "approval_execution_linkage_index_sort_convergence",
+          "groupName": "canonical",
+          "definitionSha256": "317d6497774e1acf3fe9addccfc843f5868be6ad0ca5c39ce25968bc3baea425",
+          "implementationSha256": "3818d368076d5f099fce34bda200be2df6981c5c1c5bde5a4cfbd1fc7121146e"
+        },
+        {
+          "version": 264,
+          "name": "session_control_unique_index_authority",
+          "groupName": "canonical",
+          "definitionSha256": "3da3bc9feb85ec5b8eb4871afd9f7a7a007d9556a50bb639621c9e44432581fe",
+          "implementationSha256": "cb37e5d9f7cd1aa169cb1e2fe5bf8b761211a7c2c1e0c9cbbb7949466a7071b2"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 208,
+      "expectedCount": 211,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 208,
+      "expectedLastVersion": 211,
       "migrations": [
         {
           "version": 1,
@@ -3096,6 +3117,24 @@
           "name": "cron_creator_authority",
           "definitionSha256": "dac71022ffe1280a5b204764e6485a7a9d3e1a4425f24911234e6c0be479c31c",
           "sqlPayloadSha256": "abfbb2bd7f7f7dcb48757850ec094ae1a92f79fee2191724ea52dce82f2342d6"
+        },
+        {
+          "version": 209,
+          "name": "approval_execution_linkage_index",
+          "definitionSha256": "f5e111e0d95866dbd554a1dae38c81018d6c0aeda84bb477dc606e6ba6f26553",
+          "runtimeIntegritySha256": "f9bd51adefcc6f27142334b99af3d291bcef33d802005d5d7e6b16960e7b709d"
+        },
+        {
+          "version": 210,
+          "name": "approval_execution_linkage_index_sort_convergence",
+          "definitionSha256": "a35a332ee4a034cfebac15e8daaf2a1adf60f80f7af918d61fefe416205724f3",
+          "runtimeIntegritySha256": "fd9d22a3cccbb824e727517aabe5987a00fdd1936a7c3dd276724cbef47543b8"
+        },
+        {
+          "version": 211,
+          "name": "session_control_unique_index_authority",
+          "definitionSha256": "97d2625b07e78a876ce4ab5cc82993b6e558bc0d622e510765a406c5dcf21bb5",
+          "runtimeIntegritySha256": "3a9f7bc1529c9024d79436b5f9926231b3067d8ecb10814f5eb37d3adac4346e"
         }
       ]
     }

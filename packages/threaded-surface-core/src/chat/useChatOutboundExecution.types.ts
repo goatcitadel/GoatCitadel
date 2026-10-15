@@ -88,7 +88,7 @@ export interface UseChatOutboundOperations {
     sessionId: string,
     options?: { background?: boolean; includeThread?: boolean },
   ) => Promise<void>;
-  ensureSession: () => Promise<ChatSessionRecord>;
+  ensureSession: (onResolved?: (session: ChatSessionRecord) => void) => Promise<ChatSessionRecord>;
   pushLocalNotice: (content: string, tone?: "neutral" | "success" | "warning") => void;
   handleCommandExecution: (sessionId: string, commandText: string) => Promise<void>;
 }

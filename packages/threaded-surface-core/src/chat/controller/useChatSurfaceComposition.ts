@@ -6,7 +6,7 @@ import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/compo
 import { pageCopy } from "@goatcitadel/mission-control-shared/content/copy";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { useCallback, useEffect, useMemo } from "react";
-import { type CoworkAgenticControlItem } from "../../cowork-view-model";
+import type { CoworkAgenticControlItem } from "../../cowork-view-model";
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
 import { describeChatUiError } from "../chat-error-copy";
 import { buildSuggestionSyncKey } from "../chat-page-pure-helpers";
@@ -25,6 +25,7 @@ import { useChatSessionSelection } from "./useChatSessionSelection";
 import { useChatSubmissionComposition } from "./useChatSubmissionComposition";
 
 type Input = {
+  coworkViewModelFactory: MissionThreadedControllerHostProps["coworkViewModelFactory"];
   session: Pick<
     ReturnType<typeof useChatSessionComposition>,
     | "sessionData"
@@ -79,6 +80,7 @@ type Input = {
 
 /** Composes display, workbench and admission evidence without changing runtime authority. */
 export function useChatSurfaceComposition({
+  coworkViewModelFactory,
   session,
   lockSurface,
   surface,
@@ -177,6 +179,7 @@ export function useChatSurfaceComposition({
     coordination.lastSpecialistSuggestionSyncKeyRef,
   ]);
   const workbenchController = useChatDockWorkbenchController({
+    workspaceId,
     workbenchEnabled: workbenchRequested,
     messageMode: surfaceState.messageMode,
     selectedSessionId: selection.selectedSessionId,
@@ -258,6 +261,7 @@ export function useChatSurfaceComposition({
     }
   }, [compactSurfaceLayout, workbenchController.dockOpen, sessionRailOpen, setDockOpen]);
   const runPresentation = useChatRunPresentation({
+    coworkViewModelFactory,
     providerOptions: submission.providerRouting.providerOptions,
     selectedProviderLabel: submission.providerRouting.selectedProviderLabel,
     selectedModelLabel: submission.providerRouting.selectedModelLabel,
@@ -317,14 +321,20 @@ export function useChatSurfaceComposition({
         session.documentContext.pendingDocumentContextRefs.length === 0)) &&
     (!routeBoundaryAckRequired || submission.currentRouteBoundaryAcknowledged);
   const canSend = composerAdmissionReady && !sending;
-  const canSendWhileRunning = composerAdmissionReady && sending && Boolean(coordination.activeStreamRef.current) && !submission.orchestration.editingTurnId;
+  const canSendWhileRunning =
+    composerAdmissionReady &&
+    sending &&
+    Boolean(coordination.activeStreamRef.current) &&
+    !submission.orchestration.editingTurnId;
   const profileDependentAdmissionBlockReason = oneShotContext.modelCouncilEnabled
     ? "Model council is temporarily unavailable. Turn Council off to send."
     : oneShotContext.workspaceSnapshotRequest
       ? "Workspace snapshots are temporarily unavailable. Remove the snapshot to send."
-      : (!session.explicitContextEnabled || submission.orchestration.editingTurnId) && session.externalSourceAttachments.selectedAttachmentIds.length > 0
+      : (!session.explicitContextEnabled || submission.orchestration.editingTurnId) &&
+          session.externalSourceAttachments.selectedAttachmentIds.length > 0
         ? "Routed external sources are temporarily unavailable. Clear the source selection to send."
-        : (!session.explicitContextEnabled || submission.orchestration.editingTurnId) && session.documentContext.pendingDocumentContextRefs.length > 0
+        : (!session.explicitContextEnabled || submission.orchestration.editingTurnId) &&
+            session.documentContext.pendingDocumentContextRefs.length > 0
           ? "Routed documents are temporarily unavailable. Remove the document selection to send."
           : undefined;
   const blockHistoricalMutation = useCallback(() => {

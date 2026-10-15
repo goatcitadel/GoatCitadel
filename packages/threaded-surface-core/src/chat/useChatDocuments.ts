@@ -22,6 +22,7 @@ type Input = {
   selectedSession: ChatSessionRecord | null;
   selectedSessionId: string | null;
   documentEditingEnabled: boolean;
+  readEnabled?: boolean;
   explicitContextEnabled?: boolean;
   artifacts: ChatGeneratedArtifactRecord[];
   setUiError: (value: string | null) => void;
@@ -34,6 +35,7 @@ export function useChatDocuments({
   selectedSession,
   selectedSessionId,
   documentEditingEnabled,
+  readEnabled,
   explicitContextEnabled = false,
   setUiError,
   setActiveGeneratedArtifact,
@@ -82,25 +84,38 @@ export function useChatDocuments({
     setPendingDocumentContextRefs([]);
     setDocumentNotes([]);
     setDocumentProposals([]);
-    void refreshDocuments();
     return () => {
       documentRequest.current += 1;
     };
-  }, [refreshDocuments]);
-  const toggleDocumentContext = useCallback((ref: ChatRoutedContextRef) => {
-    setPendingDocumentContextRefs((current) => {
-      const key = `${ref.kind}:${ref.ref}`;
-      if (current.some((item) => `${item.kind}:${item.ref}` === key)) {
-        return current.filter((item) => `${item.kind}:${item.ref}` !== key);
-      }
-      return explicitContextEnabled ? [...current, ref] : current;
-    });
-  }, [explicitContextEnabled]);
-  const includeDocumentContext = useCallback((ref: ChatRoutedContextRef) => {
-    if (!explicitContextEnabled) return;
-    setPendingDocumentContextRefs((current) => current.some((item) => item.kind === ref.kind && item.ref === ref.ref)
-      ? current : [...current, ref]);
-  }, [explicitContextEnabled]);
+  }, [documentGeneration]);
+  useEffect(() => {
+    if (readEnabled !== false) void refreshDocuments();
+    else setDocumentLoading(false);
+    return () => {
+      documentRequest.current += 1;
+    };
+  }, [refreshDocuments, readEnabled]);
+  const toggleDocumentContext = useCallback(
+    (ref: ChatRoutedContextRef) => {
+      setPendingDocumentContextRefs((current) => {
+        const key = `${ref.kind}:${ref.ref}`;
+        if (current.some((item) => `${item.kind}:${item.ref}` === key)) {
+          return current.filter((item) => `${item.kind}:${item.ref}` !== key);
+        }
+        return explicitContextEnabled ? [...current, ref] : current;
+      });
+    },
+    [explicitContextEnabled],
+  );
+  const includeDocumentContext = useCallback(
+    (ref: ChatRoutedContextRef) => {
+      if (!explicitContextEnabled) return;
+      setPendingDocumentContextRefs((current) =>
+        current.some((item) => item.kind === ref.kind && item.ref === ref.ref) ? current : [...current, ref],
+      );
+    },
+    [explicitContextEnabled],
+  );
 
   const documents: ChatContextDockPanelsProps["documents"] = selectedSession
     ? {
@@ -171,5 +186,11 @@ export function useChatDocuments({
       }
     : undefined;
 
-  return { documents, documentOwner, pendingDocumentContextRefs, setPendingDocumentContextRefs, includeDocumentContext };
+  return {
+    documents,
+    documentOwner,
+    pendingDocumentContextRefs,
+    setPendingDocumentContextRefs,
+    includeDocumentContext,
+  };
 }

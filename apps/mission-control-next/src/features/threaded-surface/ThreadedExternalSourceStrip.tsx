@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
-import { StatusChip } from "../native-routes/primitives";
+import { StatusChip } from "../native-routes/primitives/StatusChip";
 
 const SOURCES_AVAILABLE_NOTICE = "Attached sources remain available for inspection and governed Knowledge copies.";
 const NEW_TURN_CONTEXT_NOTICE =
@@ -39,6 +39,7 @@ export function ExternalSourceStrip({
   const [recentImportMetadata, setRecentImportMetadata] = useState<
     Map<string, { sourceLabel: string; importedAt: string }>
   >(() => new Map());
+  const loadCandidates = controls.onLoadCandidates;
   const selectedCount = controls.selectedAttachmentIds.length;
   const inclusionEnabled = controls.contextInclusionEnabled === true;
   const contextNotice = inclusionEnabled
@@ -57,6 +58,10 @@ export function ExternalSourceStrip({
     setAttachFormOpen(true);
     stripRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [openAttachFormToken]);
+
+  useEffect(() => {
+    if (pickerOpen) loadCandidates?.();
+  }, [pickerOpen, loadCandidates]);
 
   useEffect(() => {
     if (pickerOpen) pickerCloseRef.current?.focus();
@@ -106,11 +111,15 @@ export function ExternalSourceStrip({
     !attachFormOpen &&
     controls.attachments.length === 0 &&
     controls.candidates.length === 0 &&
-    !controls.loading &&
+    selectedCount === 0 &&
     !controls.error &&
     controls.candidatesSupported !== false
   ) {
-    return null;
+    return controls.loading ? (
+      <p role="status" className="mc-next-composer-external-status sr-only">
+        Checking attached sources…
+      </p>
+    ) : null;
   }
 
   return (
@@ -123,9 +132,13 @@ export function ExternalSourceStrip({
         <strong>Read-only sources</strong>
         <span aria-live="polite">
           {selectedCount > 0
-            ? inclusionEnabled ? `${selectedCount} source(s) selected for the next turn.` : `${selectedCount} retained source selection(s). Clear the selection to send.`
+            ? inclusionEnabled
+              ? `${selectedCount} source(s) selected for the next turn.`
+              : `${selectedCount} retained source selection(s). Clear the selection to send.`
             : compact
-              ? inclusionEnabled ? "Select sources for the next turn" : "New-turn context unavailable"
+              ? inclusionEnabled
+                ? "Select sources for the next turn"
+                : "New-turn context unavailable"
               : SOURCES_AVAILABLE_NOTICE}
         </span>
         {selectedCount > 0 ? (
@@ -151,7 +164,9 @@ export function ExternalSourceStrip({
       </div>
       {compact ? (
         <details className="mc-next-composer-external-hint mt-2 text-fg-secondary">
-          <summary className="mc-next-composer-inline-button inline-flex min-h-11 cursor-pointer items-center text-accent">About read-only sources</summary>
+          <summary className="mc-next-composer-inline-button inline-flex min-h-11 cursor-pointer items-center text-accent">
+            About read-only sources
+          </summary>
           <p className="mc-next-composer-external-hint my-2">{contextNotice}</p>
           {selectedCount > 0 ? null : <p className="mc-next-composer-external-hint my-2">{SOURCES_AVAILABLE_NOTICE}</p>}
         </details>
@@ -171,7 +186,11 @@ export function ExternalSourceStrip({
             <header className="mc-next-source-picker-header flex items-start justify-between gap-3">
               <div>
                 <h2 id={`${stripInstanceId}-picker-title`}>Attached sources</h2>
-                <p id={`${stripInstanceId}-selection-restriction`}>{inclusionEnabled ? "Select sources for this next turn only. Each selection is checked and captured by the Gateway when you send." : "Including external sources in new Chat turns is temporarily unavailable while Chat uses live capabilities. Clear any retained selection to send. Read-only inspection and governed Knowledge copies remain available."}</p>
+                <p id={`${stripInstanceId}-selection-restriction`}>
+                  {inclusionEnabled
+                    ? "Select sources for this next turn only. Each selection is checked and captured by the Gateway when you send."
+                    : "Including external sources in new Chat turns is temporarily unavailable while Chat uses live capabilities. Clear any retained selection to send. Read-only inspection and governed Knowledge copies remain available."}
+                </p>
               </div>
               <button
                 ref={pickerCloseRef}
@@ -187,15 +206,23 @@ export function ExternalSourceStrip({
                 {controls.error}
               </p>
             ) : null}
-            {mutationHint ? <p className="mc-next-composer-external-hint my-2 text-fg-secondary">{mutationHint}</p> : null}
+            {mutationHint ? (
+              <p className="mc-next-composer-external-hint my-2 text-fg-secondary">{mutationHint}</p>
+            ) : null}
             {controls.loading && controls.attachments.length === 0 ? (
               <p className="mc-next-composer-external-hint my-2 text-fg-secondary" role="status">
                 Checking attached sources…
               </p>
             ) : controls.attachments.length === 0 ? (
-              <p className="mc-next-composer-external-hint my-2 text-fg-secondary">No read-only sources are attached to this chat yet.</p>
+              <p className="mc-next-composer-external-hint my-2 text-fg-secondary">
+                No read-only sources are attached to this chat yet.
+              </p>
             ) : (
-              <ul role="list" className="mc-next-composer-external-list my-3 grid gap-3" aria-label="Attached read-only sources">
+              <ul
+                role="list"
+                className="mc-next-composer-external-list my-3 grid gap-3"
+                aria-label="Attached read-only sources"
+              >
                 {controls.attachments.map((attachment) => {
                   const busy = controls.busyAttachmentId !== null;
                   const selected = controls.selectedAttachmentIds.includes(attachment.attachmentId);
@@ -215,14 +242,25 @@ export function ExternalSourceStrip({
                     ? new Date(date).toLocaleDateString(undefined, { dateStyle: "medium" })
                     : "date unavailable";
                   return (
-                    <li key={attachment.attachmentId} className="mc-next-composer-external-chip rounded-md border border-line p-3">
+                    <li
+                      key={attachment.attachmentId}
+                      className="mc-next-composer-external-chip rounded-md border border-line p-3"
+                    >
                       <div className="mc-next-composer-external-chip-body grid min-w-0 gap-2 break-words">
-                        <label className="mc-next-composer-external-select flex min-h-11 items-center gap-2" htmlFor={checkboxId}>
+                        <label
+                          className="mc-next-composer-external-select flex min-h-11 items-center gap-2"
+                          htmlFor={checkboxId}
+                        >
                           <input
                             id={checkboxId}
                             type="checkbox"
                             checked={selected}
-                            disabled={disabled || busy || controls.loading || (!selected && (!inclusionEnabled || !controls.canMutate))}
+                            disabled={
+                              disabled ||
+                              busy ||
+                              controls.loading ||
+                              (!selected && (!inclusionEnabled || !controls.canMutate))
+                            }
                             aria-describedby={`${stripInstanceId}-selection-restriction`}
                             onChange={() => controls.onToggleSelect(attachment.attachmentId)}
                             aria-label={`Include ${sourceName} in the next turn`}
@@ -274,7 +312,8 @@ export function ExternalSourceStrip({
               <summary>Attach a verified import</summary>
               <div id={attachFormId} className="mc-next-composer-external-attach-form grid gap-3">
                 <p className="mc-next-composer-external-hint my-2 text-fg-secondary">
-                  Attach a verified import for read-only inspection or a governed Knowledge copy. Attachment alone does not include content in a turn.
+                  Attach a verified import for read-only inspection or a governed Knowledge copy. Attachment alone does
+                  not include content in a turn.
                 </p>
                 {controls.loading ? (
                   <p className="mc-next-composer-external-hint my-2 text-fg-secondary" role="status">
@@ -371,10 +410,16 @@ export function ExternalSourceStrip({
             <footer className="mc-next-source-picker-footer mt-3 flex flex-wrap items-center justify-between gap-3">
               <span aria-live="polite">
                 {selectedCount > 0
-                  ? inclusionEnabled ? `${selectedCount} source(s) selected for the next turn` : `${selectedCount} retained source selection(s); clear before sending`
+                  ? inclusionEnabled
+                    ? `${selectedCount} source(s) selected for the next turn`
+                    : `${selectedCount} retained source selection(s); clear before sending`
                   : "No sources selected"}
               </span>
-              <button type="button" className="mc-next-composer-inline-button inline-flex min-h-11 items-center rounded-md border border-line px-3 text-accent disabled:opacity-50" onClick={closePicker}>
+              <button
+                type="button"
+                className="mc-next-composer-inline-button inline-flex min-h-11 items-center rounded-md border border-line px-3 text-accent disabled:opacity-50"
+                onClick={closePicker}
+              >
                 Done reviewing sources
               </button>
             </footer>

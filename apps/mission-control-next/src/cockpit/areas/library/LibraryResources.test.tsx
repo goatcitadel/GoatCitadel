@@ -62,6 +62,9 @@ describe("Library resource inspection lifecycle", () => {
     await render();
     await vi.waitFor(() => expect(container.textContent).toContain("Visible file"));
     expect(api.preview).not.toHaveBeenCalled();
+    expect(button("Create from template")).toBeDefined();
+    expect(button("Review upload")).toBeDefined();
+    expect(container.querySelector('a[href*="shell=classic"]')).toBeNull();
     await act(async () => button("Inspect").click());
     expect(container.textContent).toContain("Visible content");
     const pending = deferred<ResourcePage>();

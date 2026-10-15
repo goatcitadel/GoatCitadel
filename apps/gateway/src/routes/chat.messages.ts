@@ -8,6 +8,7 @@ import {
   type RoutingPreflightResult,
 } from "@goatcitadel/contracts";
 import { z } from "zod";
+import { sendRouteError } from "./_error-handler.js";
 import { providerFallbackPreferenceSchema } from "./chat.provider-fallback-schema.js";
 import { routedContextRefsSchema } from "./chat.routed-context-schema.js";
 import {
@@ -484,6 +485,25 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     } catch (error) {
       return reply.code(error instanceof NotFoundError ? 404 : 400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/core-state", withRouteAccess(fastify, "operator"), async (request, reply) => {
+    reply.header("cache-control", "private, no-store");
+    reply.header("pragma", "no-cache");
+    const params = sessionParamsSchema.safeParse(request.params);
+    const query = z.object({ includeThread: z.enum(["true", "false"]).default("true") }).strict().safeParse(request.query ?? {});
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid conversation core-state request." });
+    try {
+      const sessionId = params.data.sessionId;
+      const [thread, binding, prefs] = await Promise.all([
+        query.data.includeThread === "true" ? fastify.services.chatMessages.getChatThread(sessionId, { includeDecisionTrace: false }) : undefined,
+        fastify.services.chatSessions.getChatSessionBinding(sessionId),
+        fastify.services.chatSupport.getChatSessionPrefs(sessionId),
+      ]);
+      return reply.send({ sessionId, ...(thread ? { thread } : {}), binding: binding ?? null, prefs });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
     }
   });
 

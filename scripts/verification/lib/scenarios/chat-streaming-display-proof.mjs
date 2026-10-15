@@ -132,7 +132,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
           const composer = page.getByRole("combobox", { name: "Message", exact: true });
           const send = page.getByRole("button", { name: "Send", exact: true });
           const messages = page.getByLabel("Messages", { exact: true });
-          const scroller = messages.locator('[data-virtuoso-scroller="true"]');
+          const scroller = messages.locator('[data-transcript-scroller]');
           const returnToLatest = async () => {
             const jump = page.getByRole("button", { name: "Jump to latest", exact: true });
             if (await jump.count()) await jump.click();
@@ -140,7 +140,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
               node.scrollTop = node.scrollHeight;
             });
             await page.waitForFunction(() => {
-              const node = document.querySelector('[aria-label="Messages"] [data-virtuoso-scroller="true"]');
+              const node = document.querySelector('[aria-label="Messages"] [data-transcript-scroller]');
               return node && node.scrollHeight - node.scrollTop - node.clientHeight < 5;
             });
             await jump.waitFor({ state: "hidden" });
@@ -251,14 +251,14 @@ export async function runChatStreamingDisplayProof(context, deps) {
               () => new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve))),
             );
             await page.waitForFunction(() => {
-              const node = document.querySelector('[aria-label="Messages"] [data-virtuoso-scroller="true"]');
+              const node = document.querySelector('[aria-label="Messages"] [data-transcript-scroller]');
               return node && node.scrollHeight - node.scrollTop - node.clientHeight < 5;
             });
             await page.getByRole("button", { name: "Jump to latest", exact: true }).waitFor({ state: "hidden" });
             assert.equal(stub.advanceControlledStream(), true);
             await page.locator('article[aria-label="Conversation messages"] pre').waitFor();
             await page.waitForFunction(() => {
-              const node = document.querySelector('[aria-label="Messages"] [data-virtuoso-scroller="true"]');
+              const node = document.querySelector('[aria-label="Messages"] [data-transcript-scroller]');
               return node && node.scrollHeight - node.scrollTop - node.clientHeight < 5;
             });
             await assertLayout();

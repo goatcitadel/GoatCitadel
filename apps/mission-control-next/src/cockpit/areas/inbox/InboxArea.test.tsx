@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
+import { SHELL_HISTORY_POSITION } from "../../../app/shell-transition";
 import { act } from "react";
 import { VirtuosoMockContext } from "react-virtuoso";
 import { createRoot, type Root } from "react-dom/client";
@@ -233,7 +234,9 @@ describe("viewed Updates presentation", () => {
     const data = updateProjection();
     inboxMock.result = { data, isLoading: false, isError: false, isFetching: true, refetch: vi.fn() };
     await renderUpdates(new QueryClient());
-    const markAll = [...container.querySelectorAll("button")].find((entry) => entry.textContent === "Mark all shown updates read");
+    const markAll = [...container.querySelectorAll("button")].find(
+      (entry) => entry.textContent === "Mark all shown updates read",
+    );
     if (!markAll) throw new Error("Missing Mark all shown updates read button");
     expect(markAll.disabled).toBe(false);
     await act(async () => markAll.click());
@@ -246,7 +249,7 @@ describe("viewed Updates presentation", () => {
     await renderUpdates(new QueryClient());
     const link = container.querySelector<HTMLAnchorElement>("a[data-inbox-owner]");
     if (!link) throw new Error("Missing owner link");
-    expect(link.getAttribute("href")).toBe("/work/kanban?taskId=task-a");
+    expect(link.getAttribute("href")).toBe("/work/tasks/task-a?taskId=task-a&workspaceId=default&shell=cockpit");
     expect(link.textContent).toContain("Open in Work");
     expect(link.textContent).not.toContain("classic");
   });
@@ -640,8 +643,9 @@ describe("InboxArea", () => {
     expect(container.textContent).toContain("Task deliverable");
     expect(container.textContent).toContain("Report");
     expect(
-      container.querySelector('a[href="/ops/kanban?shell=classic&taskId=task-a&shellScope=visit"]')?.textContent,
-    ).toContain("Open in classic Ops");
+      container.querySelector('a[href="/work/tasks/task-a?shell=cockpit&taskId=task-a&workspaceId=default"]')
+        ?.textContent,
+    ).toContain("Open in Work");
     const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Details");
     if (!details) throw new Error("Missing details control");
     await act(async () => details.click());
@@ -693,8 +697,9 @@ describe("InboxArea", () => {
     );
     expect(container.textContent).toContain("Background run completed");
     expect(
-      container.querySelector('a[href="/ops/runtime?runId=child-run-a&shell=classic&shellScope=visit"]')?.textContent,
-    ).toContain("Open in classic Ops");
+      container.querySelector('a[href="/work/runs/child-run-a?runId=child-run-a&shell=cockpit&workspaceId=default"]')
+        ?.textContent,
+    ).toContain("Open in Work");
     const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Details");
     if (!details) throw new Error("Missing details control");
     await act(async () => details.click());
@@ -768,7 +773,10 @@ it("acknowledges only shown update references and reports skipped operator recei
   expect(JSON.stringify({ ...localStorage })).toBe(before);
 });
 it("shows server-scoped approval history with an older-page continuation", async () => {
-  apiMocks.fetchApprovals.mockResolvedValue({ items: [{ ...approval, linkage: { ...approval.linkage, workspaceId: "default" }, status: "rejected" }], nextCursor: "more" });
+  apiMocks.fetchApprovals.mockResolvedValue({
+    items: [{ ...approval, linkage: { ...approval.linkage, workspaceId: "default" }, status: "rejected" }],
+    nextCursor: "more",
+  });
   await renderUpdates(new QueryClient());
   await clickButton("Approval history and replay");
   await act(async () => {
@@ -871,5 +879,56 @@ it.each(["workspace", "history"])("reopens the exact linked approval after a new
   }
   expect(container.querySelector('[aria-label="Inspector: Review file write"]')).not.toBeNull();
   expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
+  client.clear();
+});
+
+it("selects the canonical linked item without an inherited approval and retains source linkage context", async () => {
+  window.history.replaceState(
+    { retained: "source-history" },
+    "",
+    "/inbox?approvalId=previous&citadelId=citadel-a&workspaceId=default&runId=old-run&sessionId=old-session&keep=one&keep=two#evidence",
+  );
+  inboxMock.result = {
+    data: {
+      ...projection,
+      items: [
+        {
+          id: "change_plan:plan-a",
+          kind: "change_plan",
+          group: "needs_decision",
+          title: "Review the canonical plan",
+          summary: "Review its owner",
+          createdAt: "2026-09-28T00:00:00Z",
+          source: { workspaceId: "default", planId: "plan-a", sessionId: "session-a", runId: "run-a" },
+          href: "/chat?sessionId=stale-session&approvalId=stale-approval&shell=classic",
+        },
+      ],
+    },
+    isLoading: false,
+    isError: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  };
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await renderUpdates(client);
+  const historyBefore = structuredClone(window.history.state);
+  expect(historyBefore.retained).toBe("source-history");
+  expect(Number.isInteger(historyBefore[SHELL_HISTORY_POSITION])).toBe(true);
+  await renderUpdates(client);
+  const link = container.querySelector<HTMLAnchorElement>("a[data-inbox-owner]")!;
+  const target = new URL(link.href);
+  expect(target.pathname).toBe("/inbox");
+  expect(target.searchParams.get("item")).toBe("change_plan:plan-a");
+  expect(target.searchParams.has("approvalId")).toBe(false);
+  expect(target.searchParams.get("workspaceId")).toBe("default");
+  expect(target.searchParams.get("citadelId")).toBe("citadel-a");
+  expect(target.searchParams.get("runId")).toBe("run-a");
+  expect(target.searchParams.get("sessionId")).toBe("session-a");
+  expect(target.searchParams.getAll("keep")).toEqual(["one", "two"]);
+  expect(target.hash).toBe("#evidence");
+  expect(target.searchParams.get("shell")).toBe("cockpit");
+  expect(window.history.state).toEqual(historyBefore);
+  expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
+  expect(switchShellMock).not.toHaveBeenCalled();
   client.clear();
 });

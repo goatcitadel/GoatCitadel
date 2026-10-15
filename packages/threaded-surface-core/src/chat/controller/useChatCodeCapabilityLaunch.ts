@@ -44,7 +44,7 @@ export function useChatCodeCapabilityLaunch({
         }
         try {
           await createCodeModeRun({
-            language: normalizedLanguage.startsWith("ts") ? "typescript" : "javascript",
+            language: ["ts", "tsx", "typescript"].includes(normalizedLanguage) ? "typescript" : "javascript",
             source,
             originSurface: "chat",
             sessionId,

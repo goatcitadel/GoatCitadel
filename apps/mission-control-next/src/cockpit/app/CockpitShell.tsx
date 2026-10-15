@@ -16,6 +16,7 @@ import { InspectorPanel, InspectorProvider } from "./inspector";
 import { MobileTabBar } from "./MobileTabBar";
 import { COCKPIT_AREAS } from "./routes";
 import { Sidebar } from "./Sidebar";
+import { ChatContextHandoffNotice } from "./use-cockpit-shell-switch";
 import { IncomingScopeReview } from "./IncomingScopeReview";
 import { useCockpitRoute } from "./use-cockpit-route";
 import type { GatewayReachability } from "./use-gateway-reachability";
@@ -51,14 +52,20 @@ function CockpitShellContent({
 }: CockpitShellProps) {
   const { isTransitionPending } = useCockpitNavigation();
   const { area, rest, pathname, search, navigate, resolution } = useCockpitRoute();
-  const areaLabel = resolution.kind === "missing" ? "Page not found" : resolution.kind === "classic" ? "Classic view" :
-    COCKPIT_AREAS.find((entry) => entry.area === area)?.label ?? (area === "gallery" ? "Gallery" : "Settings");
+  const areaLabel =
+    resolution.kind === "missing"
+      ? "Page not found"
+      : resolution.kind === "classic"
+        ? "Classic view"
+        : (COCKPIT_AREAS.find((entry) => entry.area === area)?.label ?? (area === "gallery" ? "Gallery" : "Settings"));
   const firstRun = area === "settings" && rest[0] === "first-run";
   const { theme, density, activeCitadelId, activeWorkspaceId } = useUiPreferences();
   // Preserve the visited Chat's DOM/state, but dispose its effects while hidden.
   // Retention never crosses installation, Citadel or workspace boundaries.
   const chatScope = JSON.stringify([getGatewayApiBaseUrl(), activeCitadelId, activeWorkspaceId]);
-  const mainScroll = useCockpitScroll(JSON.stringify([chatScope, getGatewayCallerScope(), pathname, search, window.location.hash]));
+  const mainScroll = useCockpitScroll(
+    JSON.stringify([chatScope, getGatewayCallerScope(), pathname, search, window.location.hash]),
+  );
   const retainedChat = useRef({ scope: chatScope, visited: false });
   if (retainedChat.current.scope !== chatScope) retainedChat.current = { scope: chatScope, visited: false };
   const nativeRoute = resolution.kind === "native";
@@ -73,7 +80,11 @@ function CockpitShellContent({
   const [collapseOverride, setCollapseOverride] = useState<boolean | null>(null);
   const sidebarCollapsed = collapseOverride ?? tablet;
 
-  const documentTitle = cockpitDocumentTitle(areaLabel, area === "chat" || area === "gallery" ? undefined : rest[0], area);
+  const documentTitle = cockpitDocumentTitle(
+    areaLabel,
+    area === "chat" || area === "gallery" ? undefined : rest[0],
+    area,
+  );
   useEffect(() => {
     const previous = document.title;
     document.title = documentTitle;
@@ -91,15 +102,26 @@ function CockpitShellContent({
     };
   }, [theme, density]);
 
-  const openPalette = useCallback(() => { if (!isTransitionPending()) setPaletteOpen(true); }, [isTransitionPending]);
-  const openHelp = useCallback(() => { if (!isTransitionPending()) setHelpOpen(true); }, [isTransitionPending]);
+  const openPalette = useCallback(() => {
+    if (!isTransitionPending()) setPaletteOpen(true);
+  }, [isTransitionPending]);
+  const openHelp = useCallback(() => {
+    if (!isTransitionPending()) setHelpOpen(true);
+  }, [isTransitionPending]);
   const toggleSidebar = useCallback(() => setCollapseOverride(!sidebarCollapsed), [sidebarCollapsed]);
-  useAreaShortcuts({ scope: chatScope + pathname + search, navigate, onPalette: openPalette, onHelp: openHelp, onToggleSidebar: toggleSidebar });
+  useAreaShortcuts({
+    scope: chatScope + pathname + search,
+    navigate,
+    onPalette: openPalette,
+    onHelp: openHelp,
+    onToggleSidebar: toggleSidebar,
+  });
 
   return (
     <InspectorProvider>
       <div className="flex h-dvh flex-col bg-canvas text-fg">
         <IncomingScopeReview />
+        <ChatContextHandoffNotice />
         {/* Above the scrolling row, so the outage notice never scrolls away and phones see it. */}
         {gatewayReachability?.unavailable ? (
           <GatewayUnavailableBanner reachability={gatewayReachability} inChat={area === "chat"} />
@@ -135,10 +157,29 @@ function CockpitShellContent({
                 </AreaErrorBoundary>
               </Activity>
             ) : null}
-            {projectsVisible ? <AreaErrorBoundary label="Projects" resetKey={pathname + search}><Suspense fallback={<p role="status" className="p-4">Loading projects…</p>}><ChatProjects /></Suspense></AreaErrorBoundary> : null}
+            {projectsVisible ? (
+              <AreaErrorBoundary label="Projects" resetKey={pathname + search}>
+                <Suspense
+                  fallback={
+                    <p role="status" className="p-4">
+                      Loading projects…
+                    </p>
+                  }
+                >
+                  <ChatProjects />
+                </Suspense>
+              </AreaErrorBoundary>
+            ) : null}
             {!nativeRoute ? (
-              <section className="p-6 space-y-4"><h1 className="text-xl font-semibold">{resolution.kind === "classic" ? "This view is available in Classic" : "Page not found"}</h1>
-                {resolution.kind === "classic" ? <ClassicOwnerLink href={resolution.href} scope={chatScope} label={resolution.label} /> : <p>Choose a destination from the navigation to continue.</p>}
+              <section className="p-6 space-y-4">
+                <h1 className="text-xl font-semibold">
+                  {resolution.kind === "classic" ? "This view is available in Classic" : "Page not found"}
+                </h1>
+                {resolution.kind === "classic" ? (
+                  <ClassicOwnerLink href={resolution.href} scope={chatScope} label={resolution.label} />
+                ) : (
+                  <p>Choose a destination from the navigation to continue.</p>
+                )}
               </section>
             ) : area !== "chat" ? (
               // `key` remounts on an area change; the path retries a failed view after Back or a jump inside the area.

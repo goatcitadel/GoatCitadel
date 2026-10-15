@@ -6,6 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
 import { BudgetModeControl } from "./BudgetModeControl";
+import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
+import {
+  awaitingLlamaApproval,
+  llamaPlanFixture,
+} from "../../../features/native-routes/settings/llama-setup.test-support";
 
 const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), fetchChangePlan: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
@@ -24,27 +29,25 @@ afterEach(() => {
 describe("cockpit budget preference", () => {
   it("submits the current revision and keeps a change plan pending", async () => {
     api.fetchSettings.mockResolvedValue({ revision: 2, budgetMode: "balanced" });
-    api.patchSettings.mockResolvedValue({
-      revision: 2,
-      budgetMode: "balanced",
-      changePlanReceipt: {
-        planId: "plan-1",
-        status: "awaiting_approval",
-        revision: 1,
-        summary: "Approval required",
-        requiredAction: { kind: "approval", approvalId: "approval-1" },
-      },
-    });
-    api.fetchChangePlan.mockResolvedValue({
-      planId: "plan-1",
-      status: "awaiting_approval",
+    window.history.replaceState(
+      { retained: true },
+      "",
+      "/settings/safety?source=budget&sessionId=retained&shell=cockpit#budget-mode",
+    );
+    const base = awaitingLlamaApproval(llamaPlanFixture());
+    const canonical = {
+      ...base,
       revision: 1,
-      origin: { workspaceId: "default", surface: "settings" },
-      kind: "runtime_configuration",
-      request: { kind: "runtime_configuration", change: { operation: "budget_mode", mode: "saver" } },
-      target: { ownerId: "runtime_settings", expectedRevision: 2 },
       summary: "Approval required",
-    });
+      origin: { workspaceId: "default", surface: "settings" as const },
+      request: {
+        kind: "runtime_configuration" as const,
+        change: { operation: "budget_mode" as const, mode: "saver" as const },
+      },
+      target: { ownerId: "runtime_settings", resourceId: "budget_mode", expectedRevision: 2 },
+    };
+    api.patchSettings.mockResolvedValue({ revision: 2, budgetMode: "balanced", changePlanReceipt: canonical });
+    api.fetchChangePlan.mockResolvedValue(canonical);
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -53,7 +56,9 @@ describe("cockpit budget preference", () => {
       await act(async () =>
         root.render(
           <QueryClientProvider client={client}>
-            <BudgetModeControl />
+            <CockpitNavigationProvider>
+              <BudgetModeControl />
+            </CockpitNavigationProvider>
           </QueryClientProvider>,
         ),
       );
@@ -74,7 +79,20 @@ describe("cockpit budget preference", () => {
       expect(container.textContent).toContain("draft remains unsaved");
       expect(container.textContent).not.toContain("Budget preference saved");
       expect(container.querySelector<HTMLButtonElement>("button.bg-accent")?.disabled).toBe(true);
-      expect(container.querySelector('a[href="/ops/approvals?shell=classic&shellScope=visit"]')).not.toBeNull();
+      let link!: HTMLAnchorElement;
+      await vi.waitFor(() => {
+        link = container.querySelector<HTMLAnchorElement>('a[href^="/inbox?"]')!;
+        expect(link).not.toBeNull();
+      });
+      const target = new URL(link.href);
+      expect(target.searchParams.getAll("approvalId")).toEqual(["approval-1"]);
+      expect(target.searchParams.get("workspaceId")).toBe("default");
+      expect(target.searchParams.get("source")).toBe("budget");
+      expect(target.searchParams.get("sessionId")).toBe("retained");
+      expect(target.hash).toBe("#budget-mode");
+      expect(target.searchParams.get("shell")).toBe("cockpit");
+      expect(target.searchParams.has("shellScope")).toBe(false);
+      expect(container.querySelector('a[href*="shell=classic"]')).toBeNull();
       api.fetchSettings.mockResolvedValue({ revision: 3, budgetMode: "saver" });
       api.fetchChangePlan.mockResolvedValue({
         planId: "plan-1",
@@ -92,7 +110,7 @@ describe("cockpit budget preference", () => {
       await vi.waitFor(() => expect(container.textContent).toContain("Change saved and confirmed."));
       expect(container.textContent).not.toContain("Change submitted.");
       expect(container.textContent).not.toContain("Continue approved change");
-      expect(container.querySelector('a[href="/ops/approvals?shell=classic&shellScope=visit"]')).toBeNull();
+      expect(container.querySelector('a[href^="/inbox?"]')).toBeNull();
     } finally {
       act(() => root.unmount());
       client.clear();
@@ -112,7 +130,9 @@ describe("cockpit budget preference", () => {
       await act(async () =>
         root.render(
           <QueryClientProvider client={client}>
-            <BudgetModeControl />
+            <CockpitNavigationProvider>
+              <BudgetModeControl />
+            </CockpitNavigationProvider>
           </QueryClientProvider>,
         ),
       );
@@ -135,4 +155,59 @@ describe("cockpit budget preference", () => {
       container.remove();
     }
   });
+});
+
+it("offers native budget inspection after an uncertain write without another mutation or clearing the lock", async () => {
+  api.fetchSettings.mockResolvedValue({ revision: 2, budgetMode: "balanced" });
+  api.patchSettings.mockRejectedValue(new Error("Lost response"));
+  window.history.replaceState(
+    { retained: true },
+    "",
+    "/settings/safety?source=budget&runId=run%2Fone&shell=cockpit#budget-mode",
+  );
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container),
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  try {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <CockpitNavigationProvider>
+            <BudgetModeControl />
+          </CockpitNavigationProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.textContent).toContain("Current: Balanced"));
+    const select = container.querySelector("select")!;
+    await act(async () => {
+      select.value = "saver";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const save = [...container.querySelectorAll("button")].find((item) => item.textContent === "Save preference")!;
+    await act(async () => save.click());
+    await vi.waitFor(() => expect(container.textContent).toContain("Save outcome is uncertain"));
+    const link = [...container.querySelectorAll("a")].find(
+      (item) => item.textContent === "Inspect budget settings activity",
+    )!;
+    const target = new URL(link.href);
+    expect(target.pathname).toBe("/settings/safety");
+    expect(target.hash).toBe("#budget-mode");
+    expect(target.searchParams.get("source")).toBe("budget");
+    expect(target.searchParams.get("runId")).toBe("run/one");
+    expect(target.searchParams.get("shell")).toBe("cockpit");
+    expect(container.querySelector('a[href*="shell=classic"]')).toBeNull();
+    await act(async () =>
+      [...container.querySelectorAll("button")].find((item) => item.textContent === "Refresh")!.click(),
+    );
+    expect(save.disabled).toBe(true);
+    expect(select.disabled).toBe(true);
+    expect(api.patchSettings).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("Save outcome is uncertain");
+  } finally {
+    act(() => root.unmount());
+    client.clear();
+    container.remove();
+  }
 });

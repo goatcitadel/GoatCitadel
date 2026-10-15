@@ -1,27 +1,20 @@
+import {
+  getGatewayCallerScopeRevision,
+  getGatewayAccessRevision,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
-/* eslint-disable max-lines -- Outbound chat execution coordinates streaming, retries, attachments, and effect settlement in one hook. */
 import type {
   ChatMessageRecord,
   ChatMode,
   RoutingPreflightResult,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
-  ChatStreamChunk,
   ChatThreadResponse,
 } from "@goatcitadel/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  editChatTurn,
-  resumeChatTurnStream,
-  retryChatTurn,
-  sendAgentChatMessage,
-  streamAgentChatMessage,
-  streamEditChatTurn,
-  streamRetryChatTurn,
-} from "@goatcitadel/mission-control-shared/api/client";
-import {
   isThreadMutatingStreamChunk,
-  type PendingStreamTurnSeed,
   updateThreadFromStreamChunk,
 } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
 import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
@@ -45,10 +38,6 @@ export type {
   PendingUserInputState,
   UseChatOutboundExecutionInput,
 } from "./useChatOutboundExecution.types";
-
-const MAX_STREAM_RESUME_ATTEMPTS = 2;
-const ROUTE_FALLBACK_ACK_REQUIRED_MESSAGE = "Please confirm the route fallback before sending.";
-const STREAMING_REQUEST_FAILED_MESSAGE = "Streaming request failed.";
 
 /**
  * Chat is the only operator conversation surface, so sends no longer ask the
@@ -138,8 +127,19 @@ export function captureOutboundRequestPrefsSnapshot(input: {
   });
 }
 
+let outboundCodePromise: Promise<typeof import("./outbound-execution-code.js")> | null = null;
+function loadOutboundExecutionCode() {
+  if (!outboundCodePromise) {
+    outboundCodePromise = import("./outbound-execution-code.js").catch((cause) => {
+      outboundCodePromise = null;
+      throw cause;
+    });
+  }
+  return outboundCodePromise;
+}
+
 export function useChatOutboundExecution(
-  input: UseChatOutboundExecutionInput & { externalContext?: UseChatOutboundExternalContext },
+  input: UseChatOutboundExecutionInput & { externalContext?: UseChatOutboundExternalContext; workspaceId?: string },
 ) {
   const { sessionConfig, streamConfig, stateConfig, stateSetters, operations, refs, routing } = input;
   // Synced ref: the callback stays render-current without widening the
@@ -152,6 +152,28 @@ export function useChatOutboundExecution(
   onWorkspaceSnapshotFailedRef.current = input.externalContext?.onWorkspaceSnapshotFailed;
   const { selectedSessionId, selectedSession, prefs, fullWebAccess, selectedProviderId, selectedModel } = sessionConfig;
   const { streamEnabled, visualStreamMode = "smooth", activeStreamRef } = streamConfig;
+  const outboundMountedRef = useRef(true);
+  const outboundSelectionRef = useRef({ sessionId: selectedSessionId, workspaceId: input.workspaceId, revision: 0 });
+  if (
+    outboundSelectionRef.current.sessionId !== selectedSessionId ||
+    outboundSelectionRef.current.workspaceId !== input.workspaceId
+  ) {
+    outboundSelectionRef.current = {
+      sessionId: selectedSessionId,
+      workspaceId: input.workspaceId,
+      revision: outboundSelectionRef.current.revision + 1,
+    };
+  }
+  type PendingOutboundCode = {
+    controller: AbortController;
+    selection: typeof outboundSelectionRef.current;
+    isCurrent: () => boolean;
+  };
+  const pendingOutboundCodeRef = useRef<PendingOutboundCode | null>(null);
+  const renderedOutboundSelection = outboundSelectionRef.current;
+  const renderedCallerRevision = getGatewayCallerScopeRevision();
+  const renderedAccessRevision = getGatewayAccessRevision();
+  const renderedGatewayBase = getGatewayApiBaseUrl();
   const { sending, error, errorSource, queuedOutbound, thread, messages } = stateConfig;
   const {
     setThread,
@@ -430,6 +452,12 @@ export function useChatOutboundExecution(
   );
 
   const tryBeginOutboundExecution = useCallback(() => {
+    const pending = pendingOutboundCodeRef.current;
+    if (pending && !pending.isCurrent()) {
+      pending.controller.abort();
+      pendingOutboundCodeRef.current = null;
+      sendingRef.current = false;
+    }
     if (sendingRef.current) {
       return false;
     }
@@ -449,6 +477,14 @@ export function useChatOutboundExecution(
 
   const executeOutboundItem = useCallback(
     async (item: OutboundQueueItem) => {
+      if (
+        !outboundMountedRef.current ||
+        outboundSelectionRef.current !== renderedOutboundSelection ||
+        getGatewayCallerScopeRevision() !== renderedCallerRevision ||
+        getGatewayAccessRevision() !== renderedAccessRevision ||
+        getGatewayApiBaseUrl() !== renderedGatewayBase
+      )
+        return;
       const preflightHash = (value: RoutingPreflightResult | null) => (value ? JSON.stringify(value) : null);
       const executionCorrelationId = createChatExecutionCorrelationId();
       const trimmedContent = item.content.trim();
@@ -465,7 +501,6 @@ export function useChatOutboundExecution(
         item.action === "send" && item.templateInvocation ? { templateInvocation: item.templateInvocation } : {};
       const workspaceSnapshotOptIn =
         item.action === "send" && item.workspaceSnapshot ? { workspaceSnapshot: item.workspaceSnapshot } : {};
-      let canonicalTurnAccepted = false;
       const currentPrefs = prefsRef.current;
       const requestPrefs =
         item.requestPrefs ??
@@ -515,688 +550,174 @@ export function useChatOutboundExecution(
           attachments: localAttachments.length > 0 ? localAttachments : undefined,
         });
       }
-      let session: ChatSessionRecord | null = null;
-      // Closure-local counters for the streaming preview path: accumulated per
-      // queue-item execution (including any stream-resume segments, which reuse
-      // the same onChunk closure) and flushed as a single summary diagnostic
-      // instead of recording one event per delta chunk (10-50/s while streaming).
-      let previewDeltaCount = 0;
-      let previewCharCount = 0;
-      const flushPreviewPathDiagnostic = (reason: "message_done" | "error" | "abort", turnId: string | undefined) => {
-        if (previewDeltaCount === 0) {
-          return;
-        }
-        recordClientDiagnostic({
-          level: "debug",
-          category: "chat",
-          event: "thread.preview_path",
-          message: "Aggregated streaming preview delta volume for the message",
-          sessionId: session?.sessionId,
-          turnId,
-          // Per-turn discriminator: without this, two messages' summaries
-          // completing within the shared 1200ms throttle window (fast retry,
-          // quick follow-up, agentic loop) would collide on the single
-          // app-wide "chat:thread.preview_path" bucket and the second
-          // summary would be silently dropped, defeating its purpose of
-          // proving the preview path ran for THIS message.
-          throttleKeySuffix: turnId,
-          context: {
-            deltaCount: previewDeltaCount,
-            characterCount: previewCharCount,
-            turnId,
-            reason,
-          },
-        });
-        previewDeltaCount = 0;
-        previewCharCount = 0;
+
+      const codeController = new AbortController();
+      const admissionScope = outboundSelectionRef.current;
+      const callerRevision = getGatewayCallerScopeRevision();
+      const accessRevision = getGatewayAccessRevision();
+      const gatewayBase = getGatewayApiBaseUrl();
+      const pendingCode: PendingOutboundCode = {
+        controller: codeController,
+        selection: admissionScope,
+        isCurrent: () => isCurrentCustody(),
       };
-      try {
-        recordChatOutboundPhase({
-          phase: "start",
-          action: item.action,
-          correlationId: executionCorrelationId,
-          sessionId: item.sessionId,
-          turnId: item.targetTurnId,
-          message: `Starting ${item.action} action`,
-          context: {
-            attachmentCount: attachmentsSnapshot.length,
-            contentLength: trimmedContent.length,
-            streamEnabled,
-          },
-        });
-        setError(null);
-        session = await ensureSession();
-        if (shouldProjectOptimisticUserMessage) {
-          setOptimisticUserMessage((current) =>
-            current?.queueItemId === item.id ? { ...current, sessionId: session!.sessionId } : current,
-          );
+      pendingOutboundCodeRef.current = pendingCode;
+      let ownedSelection = admissionScope;
+      let resolvedSession: ChatSessionRecord | null = null;
+      let creationSelectionBound = false;
+      const isCurrentCustody = () => {
+        const selection = outboundSelectionRef.current;
+        if (
+          selection !== ownedSelection &&
+          !creationSelectionBound &&
+          resolvedSession &&
+          admissionScope.sessionId === null &&
+          selection.revision === admissionScope.revision + 1 &&
+          selection.sessionId === resolvedSession.sessionId &&
+          selection.workspaceId === admissionScope.workspaceId
+        ) {
+          ownedSelection = selection;
+          pendingCode.selection = selection;
+          creationSelectionBound = true;
         }
-        recordChatOutboundPhase({
-          phase: "session_ready",
-          action: item.action,
-          correlationId: executionCorrelationId,
-          sessionId: session.sessionId,
-          turnId: item.targetTurnId,
-          message: `Resolved chat session for ${item.action}`,
-        });
-        if (shouldExecuteLocalChatCommand(item.action, trimmedContent)) {
-          setPendingApproval(null);
-          recordChatOutboundPhase({
-            phase: "command_handoff",
-            action: item.action,
-            correlationId: executionCorrelationId,
-            sessionId: session.sessionId,
-            message: "Handing outbound request to the local command executor",
-          });
-          await handleCommandExecution(session.sessionId, trimmedContent);
-          await loadSidebar(undefined, { bypassCache: true, preferredSessionId: session.sessionId });
-          if (item.action === "send" && item.workspaceSnapshot) {
-            // Local commands do not create a Chat turn, so the one-shot snapshot
-            // remains armed for the next actual outbound turn.
-            onWorkspaceSnapshotFailedRef.current?.(item);
-          }
-          return;
-        }
-        const routePreflight = await ensureFreshRoutePreflight({
-          sessionId: session.sessionId,
-          action: item.action,
-          turnId: item.targetTurnId,
-          content: trimmedContent,
-          requestPrefs,
-          workspaceSnapshot: item.workspaceSnapshot,
-          force: true,
-        });
-        if (routePreflight?.blockedReason) {
-          throw new Error(routePreflight.blockedReason);
-        }
-        const routeHash = preflightHash(routePreflight);
-        const requiresRouteAck =
-          routePreflight?.fallbackResult === "local_to_cloud" || routePreflight?.fallbackResult === "cloud_to_local";
-        if (routeHash && requiresRouteAck && !isRoutePreflightAcknowledged(routeHash)) {
-          throw new Error(ROUTE_FALLBACK_ACK_REQUIRED_MESSAGE);
-        }
-        recordChatOutboundPhase({
-          phase: "provider_selected",
-          action: item.action,
-          correlationId: executionCorrelationId,
-          sessionId: session.sessionId,
-          turnId: item.targetTurnId,
-          message: `Resolved route for ${item.action}`,
-          level: "debug",
-          context: {
-            requestedProviderId: routePreflight?.requestedProviderId,
-            requestedModel: routePreflight?.requestedModel,
-            providerId: routePreflight?.effectiveProviderId,
-            model: routePreflight?.effectiveModel,
-            selectionSource: routePreflight?.selectionSource,
-            fallbackPolicy: routePreflight?.fallbackPolicy,
-            routeDecisionFingerprint: routePreflight?.decision.fingerprint,
-          },
-        });
-        const routeExecutionProviderId = routePreflight?.effectiveProviderId ?? executionProviderId;
-        const routeExecutionModel = routePreflight?.effectiveModel ?? executionModel;
-        const routeExecutionDecision = routePreflight?.decision;
-        const targetTurn = item.targetTurnId
-          ? (threadRef.current?.turns.find((turn) => turn.turnId === item.targetTurnId) ?? null)
-          : null;
-        if ((item.action === "edit" || item.action === "retry") && !targetTurn) {
-          throw new Error("The selected branch turn is no longer available.");
-        }
-        const effectiveUserMessage: ChatMessageRecord =
-          item.action === "retry" && targetTurn
-            ? targetTurn.userMessage
-            : {
-                messageId: localUserMessageId,
-                sessionId: session.sessionId,
-                role: "user",
-                actorType: "user",
-                actorId: "operator",
-                sourceAuthority: "operator",
-                content: trimmedContent,
-                timestamp: new Date().toISOString(),
-                attachments: localAttachments.length > 0 ? localAttachments : undefined,
-              };
-        if (streamEnabled) {
-          setPendingApproval(null);
-          const streamToken = `stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-          const controller = new AbortController();
-          const activeStream: ActiveChatStreamState = {
-            sessionId: session.sessionId,
-            streamToken,
-            controller,
-          };
-          activeStreamRef.current = activeStream;
-          // Seed a baseline activity timestamp as soon as the stream is
-          // created so the stall indicator has something to measure against
-          // while the connection is still opening ("connecting" status),
-          // before the first chunk (or even message_start) has arrived.
-          recordChatStreamChunkActivity(session.sessionId);
-          recordChatOutboundPhase({
-            phase: "stream_seeded",
-            action: item.action,
-            correlationId: executionCorrelationId,
-            sessionId: session.sessionId,
-            turnId: item.targetTurnId,
-            message: "Seeded realtime outbound stream execution",
-            level: "debug",
-            context: {
-              streamToken,
-            },
-          });
-          const streamSeed: PendingStreamTurnSeed = {
-            userMessage: effectiveUserMessage,
-            parentTurnId: item.action === "send" ? threadRef.current?.activeLeafTurnId : targetTurn?.parentTurnId,
-            branchKind: item.action === "send" ? "append" : item.action === "edit" ? "edit" : "retry",
-            sourceTurnId: item.action === "send" ? undefined : item.targetTurnId,
-            mode: item.action,
-          };
-          let streamErrorChunkReceived = false;
-          let terminalStreamStateReceived = false;
-          let cancelledStreamStateReceived = false;
-          const onChunk = (chunk: ChatStreamChunk) => {
-            const liveStream = activeStreamRef.current;
-            if (
-              liveStream?.streamToken !== streamToken ||
-              liveStream.controller.signal.aborted ||
-              cancelledStreamStateReceived ||
-              liveStream.sessionId !== session!.sessionId ||
-              chunk.sessionId !== liveStream.sessionId ||
-              (liveStream.turnId && chunk.turnId && chunk.turnId !== liveStream.turnId) ||
-              selectedSessionIdRef.current !== session!.sessionId
-            ) {
-              return;
-            }
-            // Only a server-authored turn identity proves this request crossed
-            // the canonical turn boundary. Route-level error chunks may omit
-            // turnId, so treating every chunk as acceptance would consume a
-            // one-shot workspace snapshot before any turn existed.
-            if (typeof chunk.turnId === "string" && chunk.turnId.trim().length > 0) {
-              canonicalTurnAccepted = true;
-            }
-            // Any chunk that survives the identity guard above proves the
-            // stream connection is alive, even one the dedupe guard below
-            // will drop as a replay/duplicate: a dropped duplicate still
-            // arrived over the wire, so it must count as liveness. Recording
-            // it here (before dedupe) keeps heartbeat-adjacent silence from
-            // ever being mistaken for a stall. Note: SSE `: heartbeat`
-            // comment lines never reach onChunk at all (the SSE parser drops
-            // them), so real heartbeats correctly do NOT mask a stall.
-            recordChatStreamChunkActivity(session!.sessionId);
-            // Server sequences are strictly increasing per turn; anything at or
-            // below the last successfully processed one is a replay (resume
-            // overlap, re-delivery) whose effects already landed. Synthetic
-            // client chunks use negative sequences and are exempt.
-            const chunkSequence = typeof chunk.sequence === "number" && chunk.sequence >= 0 ? chunk.sequence : null;
-            if (
-              chunkSequence !== null &&
-              typeof liveStream.lastSequence === "number" &&
-              chunkSequence <= liveStream.lastSequence
-            ) {
-              return;
-            }
-            // The resume cursor may only advance after a chunk's handlers have
-            // run: a handler that throws must leave the cursor on the previous
-            // chunk so resume re-delivers this one.
-            const advanceStreamCursor = () => {
-              liveStream.lastEventId = chunk.eventId;
-              if (chunk.runId) {
-                liveStream.runId = chunk.runId;
-              }
-              if (chunkSequence !== null) {
-                liveStream.lastSequence = chunkSequence;
-              }
-            };
-            if (chunk.type === "message_start") {
-              // Guards against double-counting if a resumed/retried segment ever
-              // reuses this onChunk closure across more than one message_start;
-              // the normal per-message case starts these already at zero.
-              previewDeltaCount = 0;
-              previewCharCount = 0;
-              liveStream.turnId = chunk.turnId;
-              locallyHandledTurnKeysRef.current.add(`${chunk.sessionId}:${chunk.turnId}`);
-              setOptimisticUserMessage((current) => (current?.queueItemId === item.id ? null : current));
-              getStreamingPreviewBuffer().start({
-                sessionId: chunk.sessionId,
-                turnId: chunk.turnId,
-                messageId: chunk.messageId,
-              });
-            }
-            if (chunk.type === "trace_update" && chunk.trace.durable?.runId) {
-              liveStream.runId = chunk.trace.durable.runId;
-            }
-            if (
-              chunk.type === "trace_update" &&
-              (chunk.trace.status === "failed" || chunk.trace.status === "cancelled")
-            ) {
-              terminalStreamStateReceived = true;
-            }
-            if (chunk.type === "done") {
-              terminalStreamStateReceived = true;
-            }
-            if (chunk.type === "message_done") {
-              const previewBuffer = getStreamingPreviewBuffer();
-              if (!previewBuffer.matches(chunk.sessionId, chunk.turnId)) {
-                previewBuffer.start({
-                  sessionId: chunk.sessionId,
-                  turnId: chunk.turnId,
-                  messageId: chunk.messageId,
-                });
-              }
-              previewBuffer.finish({ clear: true, forceVisible: false, finalText: chunk.content });
-              finalizedStreamMessageRef.current = {
-                sessionId: chunk.sessionId,
-                placeholderId: chunk.messageId,
-                messageId: chunk.messageId,
-                content: chunk.content,
-              };
-              flushPreviewPathDiagnostic("message_done", chunk.turnId);
-            }
-            if (chunk.type === "trace_update" && chunk.trace.capabilityUpgradeSuggestions !== undefined) {
-              setCapabilitySuggestions(chunk.trace.capabilityUpgradeSuggestions);
-            }
-            if (chunk.type === "trace_update" && chunk.trace.status === "cancelled") {
-              cancelledStreamStateReceived = true;
-              setPendingApproval(null);
-              setPendingUserInput(null);
-            }
-            if (chunk.type === "trace_update" && chunk.trace.specialistCandidateSuggestions !== undefined) {
-              setSpecialistSuggestions(chunk.trace.specialistCandidateSuggestions);
-            }
-            if (chunk.type === "capability_upgrade_suggestion") {
-              setCapabilitySuggestions(chunk.capabilityUpgradeSuggestions ?? []);
-            }
-            if (chunk.type === "approval_required") {
-              setPendingUserInput(null);
-              const approval = {
-                approvalId: chunk.approval.approvalId,
-                sessionId: chunk.sessionId,
-                kind: chunk.approval.kind,
-                toolName: chunk.approval.toolName,
-                reason: chunk.approval.reason,
-                riskLevel: chunk.approval.riskLevel,
-                expiresAt: chunk.approval.expiresAt,
-                codeHash: chunk.approval.codeHash,
-                wrapperManifestHash: chunk.approval.wrapperManifestHash,
-                capabilitySnapshotId: chunk.approval.capabilitySnapshotId,
-                inspectPath: chunk.approval.inspectPath,
-                requestedOutputIntent: chunk.approval.requestedOutputIntent,
-                saveCandidateOnSuccess: chunk.approval.saveCandidateOnSuccess,
-                remainingCount: chunk.approval.remainingCount,
-                affectedResources: chunk.approval.affectedResources,
-              };
-              setPendingApproval(approval);
-              recordChatApprovalPhase({
-                phase: "prompt_arrived",
-                correlationId: executionCorrelationId,
-                sessionId: approval.sessionId ?? session!.sessionId,
-                turnId: chunk.turnId,
-                approval: {
-                  approvalId: approval.approvalId,
-                  toolName: approval.toolName,
-                  kind: approval.kind,
-                  reason: approval.reason,
-                  riskLevel: approval.riskLevel,
-                  remainingCount: approval.remainingCount,
-                  affectedResourceCount: approval.affectedResources?.length,
-                  requestedOutputIntent: approval.requestedOutputIntent,
-                  expiresAt: approval.expiresAt,
-                },
-                source: "stream",
-              });
-            }
-            if (chunk.type === "user_input_required") {
-              if (!isBackgroundChatUserInputPrompt(chunk.prompt)) setPendingApproval(null);
-              setPendingUserInput(chunk.prompt);
-            }
-            if (
-              chunk.type === "trace_update" &&
-              chunk.trace.pendingUserInput === undefined &&
-              chunk.trace.status !== "waiting_for_user_input"
-            ) {
-              setPendingUserInput((current) => (isBackgroundChatUserInputPrompt(current) ? null : current));
-            }
-            if (chunk.type === "error") {
-              streamErrorChunkReceived = true;
-              const errorMessage = chunk.error?.trim() || STREAMING_REQUEST_FAILED_MESSAGE;
-              setError(errorMessage, getOutboundErrorSource(item.action));
-              promoteStreamingPreviewToThread(chunk.sessionId, "error");
-              recordClientDiagnostic({
-                level: "error",
-                category: "chat",
-                event: "stream.chunk_error",
-                message: errorMessage,
-                sessionId: session!.sessionId,
-                turnId: chunk.turnId,
-              });
-              flushPreviewPathDiagnostic("error", chunk.turnId);
-            }
-            if (chunk.type === "delta") {
-              getStreamingPreviewBuffer().append({
-                sessionId: chunk.sessionId,
-                turnId: chunk.turnId,
-                messageId: chunk.messageId,
-                delta: chunk.delta,
-              });
-              previewDeltaCount += 1;
-              previewCharCount += chunk.delta.length;
-              advanceStreamCursor();
-              return;
-            }
-            if (!isThreadMutatingStreamChunk(chunk)) {
-              advanceStreamCursor();
-              return;
-            }
-            recordClientDiagnostic({
-              level: "debug",
-              category: "chat",
-              event: "thread.render_path",
-              message: `Applying ${chunk.type} chunk to thread`,
-              sessionId: session!.sessionId,
-              turnId: chunk.turnId,
-              context: {
-                chunkType: chunk.type,
-              },
-            });
-            commitThreadUpdate((current) =>
-              updateThreadFromStreamChunk(current, chunk, streamSeed, session!.sessionId, optimisticPrefs),
-            );
-            advanceStreamCursor();
-          };
-          let resumeAttempts = 0;
-          while (resumeAttempts <= MAX_STREAM_RESUME_ATTEMPTS) {
-            try {
-              if (resumeAttempts > 0) {
-                const liveStream = activeStreamRef.current;
-                if (!liveStream?.turnId) {
-                  throw new Error("Streaming request failed before the turn could be resumed.");
-                }
-                recordChatOutboundPhase({
-                  phase: "stream_resume",
-                  action: item.action,
-                  correlationId: executionCorrelationId,
-                  sessionId: session.sessionId,
-                  turnId: liveStream.turnId,
-                  message: "Resuming interrupted outbound chat stream",
-                  level: "warn",
-                  context: {
-                    sinceEventId: liveStream.lastEventId,
-                    resumeAttempt: resumeAttempts,
-                  },
-                });
-                setError(null);
-                pushLocalNotice(`Stream interrupted. Reconnecting to turn ${liveStream.turnId.slice(-6)}.`, "warning");
-                await resumeChatTurnStream(session.sessionId, liveStream.turnId, onChunk, {
-                  signal: controller.signal,
-                  sinceEventId: liveStream.lastEventId,
-                  originSurface: effectiveMode,
-                });
-              } else if (item.action === "retry" && item.targetTurnId) {
-                await streamRetryChatTurn(
-                  session.sessionId,
-                  item.targetTurnId,
-                  {
-                    providerId: routeExecutionProviderId,
-                    model: routeExecutionModel,
-                    routeDecision: routeExecutionDecision,
-                    mode: effectiveMode,
-                    webMode: requestPrefs.webMode,
-                    memoryMode: requestPrefs.memoryMode,
-                    thinkingLevel: requestPrefs.thinkingLevel,
-                    speedMode: requestPrefs.speedMode,
-                    subagentPolicy: requestPrefs.subagentPolicy,
-                    ...councilOptIn,
-                    ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
-                  },
-                  onChunk,
-                  { signal: controller.signal, originSurface: effectiveMode },
-                );
-              } else if (item.action === "edit" && item.targetTurnId) {
-                await streamEditChatTurn(
-                  session.sessionId,
-                  item.targetTurnId,
-                  {
-                    content: trimmedContent,
-                    attachments: attachmentIds,
-                    ...outboundPrefs,
-                    mode: effectiveMode,
-                    providerId: routeExecutionProviderId,
-                    model: routeExecutionModel,
-                    routeDecision: routeExecutionDecision,
-                    ...councilOptIn,
-                    ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
-                  },
-                  onChunk,
-                  { signal: controller.signal, originSurface: effectiveMode },
-                );
-              } else {
-                await streamAgentChatMessage(
-                  session.sessionId,
-                  {
-                    content: trimmedContent,
-                    attachments: attachmentIds,
-                    ...externalContextOptIn,
-                    ...templateInvocationOptIn,
-                    ...workspaceSnapshotOptIn,
-                    ...outboundPrefs,
-                    mode: shouldAutoRoute ? undefined : effectiveMode,
-                    ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
-                    providerId: routeExecutionProviderId,
-                    model: routeExecutionModel,
-                    routeDecision: routeExecutionDecision,
-                    ...councilOptIn,
-                    ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
-                  },
-                  onChunk,
-                  { signal: controller.signal, originSurface: effectiveMode },
-                );
-              }
-              break;
-            } catch (streamError) {
-              if (isAbortError(streamError)) {
-                throw streamError;
-              }
-              // The shared SSE consumer rethrows a server error chunk after it
-              // reaches EOF so the caller retains the failure message. Once the
-              // same stream has also delivered canonical terminal state, that
-              // exception is an application failure, not a transport drop.
-              if (streamErrorChunkReceived && terminalStreamStateReceived) {
-                throw streamError;
-              }
-              const liveStream = activeStreamRef.current;
-              const canResume = Boolean(
-                liveStream &&
-                liveStream.streamToken === streamToken &&
-                liveStream.sessionId === session.sessionId &&
-                liveStream.turnId,
-              );
-              if (!canResume || resumeAttempts >= MAX_STREAM_RESUME_ATTEMPTS) {
-                throw streamError;
-              }
-              resumeAttempts += 1;
-            }
-          }
-          if (!canonicalTurnAccepted) {
-            throw new Error("Streaming request ended before a canonical Chat turn was accepted.");
-          }
-          const finalizedStreamMessage = finalizedStreamMessageRef.current;
-          const missingFinalizedMessage =
-            !finalizedStreamMessage || finalizedStreamMessage.sessionId !== session.sessionId;
-          scheduleStreamMessageReconciliation(session.sessionId, {
-            immediate: missingFinalizedMessage,
-          });
-        } else {
-          setPendingApproval(null);
-          const sent =
-            item.action === "retry" && item.targetTurnId
-              ? await retryChatTurn(
-                  session.sessionId,
-                  item.targetTurnId,
-                  {
-                    providerId: routeExecutionProviderId,
-                    model: routeExecutionModel,
-                    routeDecision: routeExecutionDecision,
-                    mode: effectiveMode,
-                    webMode: requestPrefs.webMode,
-                    memoryMode: requestPrefs.memoryMode,
-                    thinkingLevel: requestPrefs.thinkingLevel,
-                    speedMode: requestPrefs.speedMode,
-                    subagentPolicy: requestPrefs.subagentPolicy,
-                    ...councilOptIn,
-                    ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
-                  },
-                  { originSurface: effectiveMode },
-                )
-              : item.action === "edit" && item.targetTurnId
-                ? await editChatTurn(
-                    session.sessionId,
-                    item.targetTurnId,
-                    {
-                      content: trimmedContent,
-                      attachments: attachmentIds,
-                      ...outboundPrefs,
-                      mode: effectiveMode,
-                      providerId: routeExecutionProviderId,
-                      model: routeExecutionModel,
-                      routeDecision: routeExecutionDecision,
-                      ...councilOptIn,
-                      ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
-                    },
-                    { originSurface: effectiveMode },
-                  )
-                : await sendAgentChatMessage(
-                    session.sessionId,
-                    {
-                      content: trimmedContent,
-                      attachments: attachmentIds,
-                      ...externalContextOptIn,
-                      ...templateInvocationOptIn,
-                      ...workspaceSnapshotOptIn,
-                      ...outboundPrefs,
-                      mode: shouldAutoRoute ? undefined : effectiveMode,
-                      ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
-                      providerId: routeExecutionProviderId,
-                      model: routeExecutionModel,
-                      routeDecision: routeExecutionDecision,
-                      ...councilOptIn,
-                      ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
-                    },
-                    { originSurface: effectiveMode },
-                  );
-          canonicalTurnAccepted = true;
-          if (sent.trace) {
-            setCapabilitySuggestions(sent.trace.capabilityUpgradeSuggestions ?? []);
-            setSpecialistSuggestions(sent.trace.specialistCandidateSuggestions ?? []);
-          }
-          const canonicalUserMessageId = sent.userMessage?.messageId;
-          if (shouldProjectOptimisticUserMessage && canonicalUserMessageId) {
-            setOptimisticUserMessage((current) =>
-              current?.queueItemId === item.id ? { ...current, canonicalMessageId: canonicalUserMessageId } : current,
-            );
-          }
-          await loadSessionCoreState(session.sessionId, {
-            background: true,
-            includeThread: true,
-          });
-          setOptimisticUserMessage((current) => (current?.queueItemId === item.id ? null : current));
-        }
-        setEditingTurnId(null);
-        // Successful (non-thrown) completion is the ONLY point that consumes
-        // the frozen external-source selection; the catch/abort paths below
-        // return without reaching here, so failed sends retain it.
-        if (externalContextRefs) {
-          onExternalContextSentRef.current?.(item);
-        }
-        if (item.templateInvocation) {
-          onTemplateInvocationSentRef.current?.(item);
-        }
-        const completedSessionId = session.sessionId;
-        void loadSidebar(undefined, { bypassCache: true, preferredSessionId: completedSessionId, reconcileLoadedRange: true }).catch(
-          (sidebarError: unknown) => {
-            recordClientDiagnostic({
-              level: "warn",
-              category: "chat",
-              event: "sidebar.refresh_failed_after_send",
-              message: "Sidebar refresh failed after outbound chat completion.",
-              sessionId: completedSessionId,
-              context: {
-                error: sidebarError instanceof Error ? sidebarError.message : String(sidebarError),
-              },
-            });
-          },
+        return (
+          outboundMountedRef.current &&
+          selection === ownedSelection &&
+          pendingOutboundCodeRef.current === pendingCode &&
+          !codeController.signal.aborted &&
+          getGatewayCallerScopeRevision() === callerRevision &&
+          getGatewayAccessRevision() === accessRevision &&
+          getGatewayApiBaseUrl() === gatewayBase
         );
-        recordChatOutboundPhase({
-          phase: "complete",
-          action: item.action,
-          correlationId: executionCorrelationId,
-          sessionId: session.sessionId,
-          turnId: item.targetTurnId,
-          message: `${item.action} action completed`,
+      };
+      const assertCurrentCustody = () => {
+        if (!isCurrentCustody())
+          throw new DOMException("Outbound conversation custody changed before dispatch.", "AbortError");
+      };
+      const acceptResolvedSession = (session: ChatSessionRecord) => {
+        if (admissionScope.workspaceId !== undefined && session.workspaceId !== admissionScope.workspaceId)
+          throw new Error("The resolved conversation does not match the outbound workspace.");
+        if (admissionScope.sessionId !== null && session.sessionId !== admissionScope.sessionId)
+          throw new Error("The resolved conversation does not match the outbound selection.");
+        if (resolvedSession && resolvedSession.sessionId !== session.sessionId)
+          throw new Error("The resolved conversation changed during outbound creation.");
+        if (!resolvedSession) resolvedSession = session;
+        assertCurrentCustody();
+      };
+      const ensureOwnedSession = async () => {
+        assertCurrentCustody();
+        // The canonical owner publishes the verified record before selecting it or awaiting sidebar hydration.
+        const session = await ensureSession(acceptResolvedSession);
+        acceptResolvedSession(session);
+        return session;
+      };
+      let executionStarted = false;
+      try {
+        const code = await loadOutboundExecutionCode();
+        assertCurrentCustody();
+        const execute = code.createOutboundExecutionHandler({
+          activeStreamRef,
+          selectedSessionIdRef,
+          threadRef,
+          locallyHandledTurnKeysRef,
+          finalizedStreamMessageRef,
+          clearStreamingPreview,
+          getStreamingPreviewBuffer,
+          promoteStreamingPreviewToThread,
+          commitThreadUpdate,
+          setError,
+          setDraft,
+          setPendingAttachments,
+          setEditingTurnId,
+          setCapabilitySuggestions,
+          setSpecialistSuggestions,
+          setOptimisticUserMessage,
+          setPendingApproval,
+          setPendingUserInput,
+          ensureSession: ensureOwnedSession,
+          loadSidebar,
+          loadSessionCoreState,
+          handleCommandExecution,
+          pushLocalNotice,
+          ensureFreshRoutePreflight,
+          isRoutePreflightAcknowledged,
+          finishOutboundExecution,
+          getOutboundErrorSource,
+          scheduleStreamMessageReconciliation,
+          onExternalContextSentRef,
+          onTemplateInvocationSentRef,
+          onWorkspaceSnapshotFailedRef,
+          streamEnabled,
+          isBackgroundChatUserInputPrompt,
+          isThreadMutatingStreamChunk,
+          updateThreadFromStreamChunk,
+          clearChatStreamActivity,
+          recordChatStreamChunkActivity,
+          recordClientDiagnostic,
+          recordChatApprovalPhase,
+          recordChatOutboundPhase,
+          isAbortError,
+          shouldExecuteLocalChatCommand,
+          assertCurrentCustody,
+          isCurrentCustody,
         });
-      } catch (err) {
-        if (isAbortError(err)) {
-          if (item.action === "send" && item.workspaceSnapshot && !canonicalTurnAccepted) {
-            onWorkspaceSnapshotFailedRef.current?.(item);
-          }
-          if (session) {
-            promoteStreamingPreviewToThread(session.sessionId, "abort");
-          }
-          // Fall back to the queue-item id so rapid abort-during-send summaries
-          // from distinct sends never collide on the shared throttle bucket.
-          flushPreviewPathDiagnostic("abort", activeStreamRef.current?.turnId ?? item.targetTurnId ?? item.id);
-          recordChatOutboundPhase({
-            phase: "aborted",
-            action: item.action,
-            correlationId: executionCorrelationId,
-            sessionId: session?.sessionId ?? item.sessionId,
-            turnId: item.targetTurnId,
-            message: `${item.action} action aborted`,
-            level: "warn",
-          });
+        executionStarted = true;
+        await execute(item, {
+          preflightHash,
+          executionCorrelationId,
+          trimmedContent,
+          attachmentsSnapshot,
+          attachmentIds,
+          externalContextRefs,
+          externalContextOptIn,
+          templateInvocationOptIn,
+          workspaceSnapshotOptIn,
+          requestPrefs,
+          effectiveMode,
+          shouldAutoRoute,
+          executionProviderId,
+          executionModel,
+          outboundPrefs,
+          councilOptIn,
+          optimisticPrefs,
+          localAttachments,
+          localUserMessageId,
+          shouldProjectOptimisticUserMessage,
+        });
+      } catch (cause) {
+        if (!isCurrentCustody()) return;
+        if (isAbortError(cause)) {
+          if (item.action === "send" && item.workspaceSnapshot) onWorkspaceSnapshotFailedRef.current?.(item);
           return;
-        }
-        if (session) {
-          promoteStreamingPreviewToThread(session.sessionId, "error");
-          void loadSessionCoreState(session.sessionId, {
-            background: true,
-            includeThread: true,
-          }).catch(() => undefined);
         }
         if (item.action !== "retry") {
           setDraft((current) => (current.trim().length > 0 ? current : item.content));
           setPendingAttachments((current) => (current.length > 0 ? current : attachmentsSnapshot));
-          if (item.action === "send" && item.workspaceSnapshot && !canonicalTurnAccepted) {
-            onWorkspaceSnapshotFailedRef.current?.(item);
-          }
-          if (item.action === "edit" && item.targetTurnId) {
-            setEditingTurnId(item.targetTurnId);
-          }
+          if (item.action === "send" && item.workspaceSnapshot) onWorkspaceSnapshotFailedRef.current?.(item);
+          if (item.action === "edit" && item.targetTurnId) setEditingTurnId(item.targetTurnId);
         }
-        setError((err as Error).message, getOutboundErrorSource(item.action));
+        setError((cause as Error).message, getOutboundErrorSource(item.action));
         recordChatOutboundPhase({
           phase: "failed",
           action: item.action,
           correlationId: executionCorrelationId,
-          sessionId: session?.sessionId ?? item.sessionId,
+          sessionId: item.sessionId,
           turnId: item.targetTurnId,
-          message: `${item.action} action failed`,
+          message: "Outbound action code could not load.",
           level: "error",
-          context: {
-            error: (err as Error).message,
-          },
+          context: { error: (cause as Error).message },
         });
       } finally {
-        setOptimisticUserMessage((current) => (current?.queueItemId === item.id ? null : current));
-        const activeStream = activeStreamRef.current;
-        if (session && activeStream?.sessionId === session.sessionId) {
-          activeStreamRef.current = null;
+        const canSettle = isCurrentCustody();
+        if (pendingOutboundCodeRef.current === pendingCode) {
+          codeController.abort();
+          // A hidden/unmounted owner keeps the stale ticket for a later mounted admission to release without setters.
+          if (outboundMountedRef.current) {
+            pendingOutboundCodeRef.current = null;
+            setOptimisticUserMessage((current) => (current?.queueItemId === item.id ? null : current));
+            if (!executionStarted || !canSettle) finishOutboundExecution();
+          }
         }
-        if (!session || activeStream?.sessionId === session.sessionId) {
-          clearStreamingPreview({ allowSettlingFinalText: true });
-        }
-        if (session && activeStream?.sessionId === session.sessionId) {
-          clearChatStreamActivity(session.sessionId);
-        }
-        finishOutboundExecution();
       }
     },
     [
@@ -1229,6 +750,10 @@ export function useChatOutboundExecution(
       setPendingUserInput,
       streamEnabled,
       pushLocalNotice,
+      renderedOutboundSelection,
+      renderedCallerRevision,
+      renderedAccessRevision,
+      renderedGatewayBase,
     ],
   );
   // See the note above applyFetchedThreadRef: outbound execution is exposed to
@@ -1258,8 +783,11 @@ export function useChatOutboundExecution(
           ? "queued"
           : "idle";
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    outboundMountedRef.current = true;
+    return () => {
+      outboundMountedRef.current = false;
+      pendingOutboundCodeRef.current?.controller.abort();
       abortActiveChatStream(activeStreamRef.current);
       activeStreamRef.current = null;
       if (streamReconcileTimeoutRef.current) {
@@ -1267,9 +795,8 @@ export function useChatOutboundExecution(
         streamReconcileTimeoutRef.current = null;
       }
       disposeStreamingPreview();
-    },
-    [activeStreamRef, disposeStreamingPreview],
-  );
+    };
+  }, [activeStreamRef, disposeStreamingPreview]);
 
   return {
     activeStreamRef,

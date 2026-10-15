@@ -9,6 +9,7 @@ import {
   createChatProject,
   createChatSession,
   fetchChatSessionStatus,
+  fetchChatSessionBinding,
   deleteChatSession,
   importChatProject,
   pinChatSession,
@@ -17,8 +18,17 @@ import {
   unpinChatSession,
   updateChatSession,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { assertChatSessionCreated, beginChatSessionCreation, chatSessionCreationKey, publishChatSessionCreation, readChatSessionCreation, type ChatSessionCreation } from "@goatcitadel/mission-control-shared/state/chat-session-creation";
+import {
+  assertChatSessionCreated,
+  beginChatSessionCreation,
+  chatSessionCreationKey,
+  publishChatSessionCreation,
+  readChatSessionCreation,
+  type ChatSessionCreation,
+} from "@goatcitadel/mission-control-shared/state/chat-session-creation";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { useChatContextMutationOwner } from "./useChatContextMutationOwner";
+import { assertContextRecord } from "./context-mutation-evidence";
 import { useManualChatSessionCreation } from "./useManualChatSessionCreation";
 import type { ChatHistoryView, ChatSidebarLoadOptions } from "./useChatSessionData";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
@@ -76,6 +86,11 @@ function isSessionRevisionConflict(error: unknown): error is ApiRequestError {
 }
 
 export function useChatSessionControls(input: {
+  historicalRevisionRef?: { readonly current: number };
+  historicalReadOnly?: boolean;
+
+  selectionRevisionRef?: { readonly current: number };
+  sendingRevisionRef?: { readonly current: number };
   workspaceId: string;
   viewIdentity?: string;
   historyView: ChatHistoryView;
@@ -97,7 +112,10 @@ export function useChatSessionControls(input: {
   loadSidebar: (nextHistoryView?: ChatHistoryView, options?: ChatSidebarLoadOptions) => Promise<void>;
   onSessionCreated?: (session: ChatSessionRecord) => void;
   initialOutboundSessionCreationRef?: React.MutableRefObject<InitialOutboundSessionCreation | null>;
-  refreshSessionAggregate?: (sessionId: string, options?: Pick<ChatSidebarLoadOptions, "preserveSelection">) => Promise<void>;
+  refreshSessionAggregate?: (
+    sessionId: string,
+    options?: Pick<ChatSidebarLoadOptions, "preserveSelection">,
+  ) => Promise<void>;
   setSessionMetadataConflictDraft?: (draft: SessionMetadataConflictDraft | null) => void;
   setBinding: React.Dispatch<React.SetStateAction<ChatSessionBindingRecord | null>>;
 }) {
@@ -147,7 +165,12 @@ export function useChatSessionControls(input: {
   const [projectName, setProjectName] = useState("");
   const [projectPath, setProjectPath] = useState("chat/default");
   const [showProjectCreate, setShowProjectCreate] = useState(false);
-  const [sessionControlPending, setSessionControlPending] = useState<SessionControlPending>(null);
+  const [sessionControlPending, setSessionControlPendingState] = useState<SessionControlPending>(null);
+  const sessionControlRevisionRef = useRef(0);
+  const setSessionControlPending = useCallback((next: SessionControlPending) => {
+    sessionControlRevisionRef.current += 1;
+    setSessionControlPendingState(next);
+  }, []);
   const [sessionDeleteConfirm, setSessionDeleteConfirm] = useState<{
     sessionId: string;
     revision: number;
@@ -157,79 +180,122 @@ export function useChatSessionControls(input: {
   const [archiveWorkspaceConfirmOpen, setArchiveWorkspaceConfirmOpen] = useState(false);
   const [integrationConnectionId, setIntegrationConnectionId] = useState("");
   const [integrationTarget, setIntegrationTarget] = useState("");
-
-  const { create: handleCreateSession, creatingSessionMode, isCurrent: isCreationViewCurrent } = useManualChatSessionCreation({
-    workspaceId, viewIdentity: input.viewIdentity, selectedProjectId, selectedSessionId, historyView,
-    setSessions, setHistoryView, setSelectedSessionId, setError, onSessionCreated,
+  const bindingMutationOwner = useChatContextMutationOwner({
+    family: "binding",
+    workspaceId,
+    sessionId: selectedSession?.sessionId ?? null,
+    sessionWorkspaceId: selectedSession?.workspaceId,
+    historicalRevisionRef: input.historicalRevisionRef,
+    historicalReadOnly: input.historicalReadOnly,
+    selectionRevisionRef: input.selectionRevisionRef,
+    sendingRevisionRef: input.sendingRevisionRef,
+    setError,
   });
+  const {
+    run: runBindingMutation,
+    inspect: inspectBindingMutation,
+    projection: bindingProjection,
+  } = bindingMutationOwner;
 
-  const ensureSession = useCallback(async (): Promise<ChatSessionRecord> => {
-    if (selectedSession) return selectedSession;
-    if (selectedSessionId) {
-      return createSessionPlaceholder({
-        sessionId: selectedSessionId,
-        workspaceId,
-        mode: sessionMode,
-        projectId: selectedProjectId !== "all" && selectedProjectId !== "none" ? selectedProjectId : undefined,
-      });
-    }
-    if (!isCreationViewCurrent()) throw new DOMException("The first-send conversation view changed before creation.", "AbortError");
-    const creationScope = selectionScopeRef.current;
-    const nextHistoryView: ChatHistoryView = historyView === "archived" ? "active" : historyView;
-    const installation = getGatewayApiBaseUrl();
-    const creationKey = chatSessionCreationKey(installation, workspaceId);
-    const attempt: ChatSessionCreation = { state: "pending", mode: sessionMode, message: "Creating the conversation for this first send…" };
-    if (!beginChatSessionCreation(creationKey, attempt)) throw new Error(readChatSessionCreation(creationKey)!.message);
-    let created: ChatSessionRecord;
-    try {
-      const projectId = selectedProjectId !== "all" && selectedProjectId !== "none" ? selectedProjectId : undefined;
-      created = await createChatSession(
-        projectId ? { workspaceId, projectId, mode: sessionMode } : { workspaceId, mode: sessionMode },
-        { originSurface: sessionMode },
-      );
-      assertChatSessionCreated(created, workspaceId, projectId);
-      attempt.sessionId = created.sessionId;
-      const saved = await fetchChatSessionStatus(created.sessionId, new AbortController().signal);
-      if (getGatewayApiBaseUrl() !== installation || saved.sessionId !== created.sessionId || saved.workspaceId !== workspaceId) {
-        throw new Error("The independent conversation read does not match the first-send creation owner.");
-      }
-      attempt.state = "confirmed";
-      attempt.message = "Conversation created and independently verified.";
-      publishChatSessionCreation(creationKey, attempt);
-    } catch (cause) {
-      attempt.state = "unknown";
-      attempt.message = "Creation outcome is unconfirmed. Check conversation history before creating another; this app will not retry.";
-      publishChatSessionCreation(creationKey, attempt);
-      throw cause;
-    }
-    if (!mountedRef.current || selectionScopeRef.current !== creationScope || !isCreationViewCurrent()) {
-      // A navigation abort must not restore the old draft into the newly selected scope.
-      throw new DOMException("Session selection changed while the new conversation was being created.", "AbortError");
-    }
-    if (initialOutboundSessionCreationRef) {
-      initialOutboundSessionCreationRef.current = { workspaceId, sessionId: created.sessionId };
-    }
-    if (nextHistoryView !== historyView) {
-      setHistoryView(nextHistoryView);
-    }
-    setSelectedSessionId(created.sessionId);
-    onSessionCreated?.(created);
-    await loadSidebar(nextHistoryView, { bypassCache: true, preserveSelection: true });
-    return created;
-  }, [
-    historyView,
-    initialOutboundSessionCreationRef,
-    isCreationViewCurrent,
-    loadSidebar,
-    onSessionCreated,
+  const {
+    create: handleCreateSession,
+    creatingSessionMode,
+    isCurrent: isCreationViewCurrent,
+  } = useManualChatSessionCreation({
+    workspaceId,
+    viewIdentity: input.viewIdentity,
     selectedProjectId,
-    selectedSession,
     selectedSessionId,
-    sessionMode,
+    historyView,
+    setSessions,
     setHistoryView,
     setSelectedSessionId,
-    workspaceId,
-  ]);
+    setError,
+    onSessionCreated,
+  });
+
+  const ensureSession = useCallback(
+    async (onResolved?: (session: ChatSessionRecord) => void): Promise<ChatSessionRecord> => {
+      if (selectedSession) return selectedSession;
+      if (selectedSessionId) {
+        return createSessionPlaceholder({
+          sessionId: selectedSessionId,
+          workspaceId,
+          mode: sessionMode,
+          projectId: selectedProjectId !== "all" && selectedProjectId !== "none" ? selectedProjectId : undefined,
+        });
+      }
+      if (!isCreationViewCurrent())
+        throw new DOMException("The first-send conversation view changed before creation.", "AbortError");
+      const creationScope = selectionScopeRef.current;
+      const nextHistoryView: ChatHistoryView = historyView === "archived" ? "active" : historyView;
+      const installation = getGatewayApiBaseUrl();
+      const creationKey = chatSessionCreationKey(installation, workspaceId);
+      const attempt: ChatSessionCreation = {
+        state: "pending",
+        mode: sessionMode,
+        message: "Creating the conversation for this first send…",
+      };
+      if (!beginChatSessionCreation(creationKey, attempt))
+        throw new Error(readChatSessionCreation(creationKey)!.message);
+      let created: ChatSessionRecord;
+      try {
+        const projectId = selectedProjectId !== "all" && selectedProjectId !== "none" ? selectedProjectId : undefined;
+        created = await createChatSession(
+          projectId ? { workspaceId, projectId, mode: sessionMode } : { workspaceId, mode: sessionMode },
+          { originSurface: sessionMode },
+        );
+        assertChatSessionCreated(created, workspaceId, projectId);
+        attempt.sessionId = created.sessionId;
+        const saved = await fetchChatSessionStatus(created.sessionId, new AbortController().signal);
+        if (
+          getGatewayApiBaseUrl() !== installation ||
+          saved.sessionId !== created.sessionId ||
+          saved.workspaceId !== workspaceId
+        ) {
+          throw new Error("The independent conversation read does not match the first-send creation owner.");
+        }
+        attempt.state = "confirmed";
+        attempt.message = "Conversation created and independently verified.";
+        publishChatSessionCreation(creationKey, attempt);
+      } catch (cause) {
+        attempt.state = "unknown";
+        attempt.message =
+          "Creation outcome is unconfirmed. Check conversation history before creating another; this app will not retry.";
+        publishChatSessionCreation(creationKey, attempt);
+        throw cause;
+      }
+      if (!mountedRef.current || selectionScopeRef.current !== creationScope || !isCreationViewCurrent()) {
+        // A navigation abort must not restore the old draft into the newly selected scope.
+        throw new DOMException("Session selection changed while the new conversation was being created.", "AbortError");
+      }
+      onResolved?.(created);
+      if (initialOutboundSessionCreationRef) {
+        initialOutboundSessionCreationRef.current = { workspaceId, sessionId: created.sessionId };
+      }
+      if (nextHistoryView !== historyView) {
+        setHistoryView(nextHistoryView);
+      }
+      setSelectedSessionId(created.sessionId);
+      onSessionCreated?.(created);
+      await loadSidebar(nextHistoryView, { bypassCache: true, preserveSelection: true });
+      return created;
+    },
+    [
+      historyView,
+      initialOutboundSessionCreationRef,
+      isCreationViewCurrent,
+      loadSidebar,
+      onSessionCreated,
+      selectedProjectId,
+      selectedSession,
+      selectedSessionId,
+      sessionMode,
+      setHistoryView,
+      setSelectedSessionId,
+      workspaceId,
+    ],
+  );
 
   const handleCreateProject = useCallback(async () => {
     const name = projectName.trim();
@@ -292,6 +358,7 @@ export function useChatSessionControls(input: {
       setSessionControlPending(null);
     }
   }, [
+    setSessionControlPending,
     historyView,
     loadSidebar,
     refreshSessionAggregate,
@@ -333,6 +400,7 @@ export function useChatSessionControls(input: {
       setSessionControlPending(null);
     }
   }, [
+    setSessionControlPending,
     folderName,
     historyView,
     loadSidebar,
@@ -361,7 +429,7 @@ export function useChatSessionControls(input: {
     } finally {
       setSessionControlPending(null);
     }
-  }, [historyView, loadSidebar, refreshSessionAggregate, selectedSession, setError]);
+  }, [setSessionControlPending, historyView, loadSidebar, refreshSessionAggregate, selectedSession, setError]);
 
   const handleToggleArchiveSession = useCallback(async () => {
     if (!selectedSession) return;
@@ -394,6 +462,7 @@ export function useChatSessionControls(input: {
       setSessionControlPending(null);
     }
   }, [
+    setSessionControlPending,
     historyView,
     loadSidebar,
     refreshSessionAggregate,
@@ -441,6 +510,7 @@ export function useChatSessionControls(input: {
       setSessionDeleteConfirm(null);
     }
   }, [
+    setSessionControlPending,
     historyView,
     loadSidebar,
     refreshSessionAggregate,
@@ -456,11 +526,14 @@ export function useChatSessionControls(input: {
       if (!selectedSession) return;
       const assignmentScope = renderedSelectionScope;
       if (selectionScopeRef.current !== assignmentScope) return;
-      if (assignmentScope.selectedSessionId !== selectedSession.sessionId ||
-        assignmentScope.workspaceId !== (selectedSession.workspaceId ?? "default")) return;
+      if (
+        assignmentScope.selectedSessionId !== selectedSession.sessionId ||
+        assignmentScope.workspaceId !== (selectedSession.workspaceId ?? "default")
+      )
+        return;
       const installation = getGatewayApiBaseUrl();
-      const isCurrent = () => mountedRef.current && selectionScopeRef.current === assignmentScope &&
-        getGatewayApiBaseUrl() === installation;
+      const isCurrent = () =>
+        mountedRef.current && selectionScopeRef.current === assignmentScope && getGatewayApiBaseUrl() === installation;
       setSessionControlPending("project");
       try {
         await assignChatSessionProject(
@@ -474,7 +547,8 @@ export function useChatSessionControls(input: {
         if (isSessionRevisionConflict(err)) {
           await (refreshSessionAggregate?.(selectedSession.sessionId, { preserveSelection: true }) ??
             loadSidebar(historyView, { bypassCache: true, preserveSelection: true }));
-          if (isCurrent()) setError("This chat changed elsewhere. Review the latest state, then choose the project again.");
+          if (isCurrent())
+            setError("This chat changed elsewhere. Review the latest state, then choose the project again.");
         } else {
           setError((err as Error).message);
         }
@@ -482,7 +556,15 @@ export function useChatSessionControls(input: {
         setSessionControlPending(null);
       }
     },
-    [historyView, loadSidebar, refreshSessionAggregate, selectedSession, setError, renderedSelectionScope],
+    [
+      setSessionControlPending,
+      historyView,
+      loadSidebar,
+      refreshSessionAggregate,
+      selectedSession,
+      setError,
+      renderedSelectionScope,
+    ],
   );
 
   const handleImportCodeProject = useCallback(
@@ -520,26 +602,84 @@ export function useChatSessionControls(input: {
         setSessionControlPending(null);
       }
     },
-    [historyView, loadSidebar, refreshSessionAggregate, selectedSession, setError, workspaceId],
+    [
+      setSessionControlPending,
+      historyView,
+      loadSidebar,
+      refreshSessionAggregate,
+      selectedSession,
+      setError,
+      workspaceId,
+    ],
   );
 
-  const handleSaveExternalBinding = useCallback(async () => {
+  const handleSaveExternalBinding = useCallback(
+    async (reviewedDraft?: { connectionId: string; target: string }): Promise<void> => {
+      if (!selectedSession || sessionControlPending) return;
+      const connectionId = (reviewedDraft?.connectionId ?? integrationConnectionId).trim();
+      const target = (reviewedDraft?.target ?? integrationTarget).trim();
+      await runBindingMutation(
+        "external-binding",
+        () =>
+          setChatSessionBinding(selectedSession.sessionId, {
+            transport: "integration",
+            connectionId,
+            target,
+            writable: true,
+          }),
+        (next) => {
+          const id = assertContextRecord(
+            next,
+            selectedSession.sessionId,
+            workspaceId,
+            "sessionId",
+            selectedSession.sessionId,
+          );
+          if (
+            next.transport !== "integration" ||
+            next.connectionId !== connectionId ||
+            next.target !== target ||
+            next.writable !== true
+          )
+            throw new TypeError("The binding receipt does not confirm the reviewed writable integration target.");
+          return [id];
+        },
+        (next, publicationCurrent) => setBinding((current) => (publicationCurrent() ? next : current)),
+        {
+          begin: () => setSessionControlPending("binding"),
+          end: () => setSessionControlPending(null),
+          revisionRef: sessionControlRevisionRef,
+        },
+      );
+    },
+    [
+      integrationConnectionId,
+      integrationTarget,
+      selectedSession,
+      sessionControlPending,
+      workspaceId,
+      runBindingMutation,
+      setBinding,
+      setSessionControlPending,
+    ],
+  );
+  const handleInspectExternalBinding = useCallback(async (): Promise<void> => {
     if (!selectedSession) return;
-    setSessionControlPending("binding");
-    try {
-      const next = await setChatSessionBinding(selectedSession.sessionId, {
-        transport: "integration",
-        connectionId: integrationConnectionId.trim(),
-        target: integrationTarget.trim(),
-        writable: true,
-      });
-      setBinding(next);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSessionControlPending(null);
-    }
-  }, [integrationConnectionId, integrationTarget, selectedSession, setBinding, setError]);
+    await inspectBindingMutation(
+      () => fetchChatSessionBinding(selectedSession.sessionId),
+      (result) => {
+        if (result.item !== null)
+          assertContextRecord(
+            result.item,
+            selectedSession.sessionId,
+            workspaceId,
+            "sessionId",
+            selectedSession.sessionId,
+          );
+      },
+      (result, publicationCurrent) => setBinding((current) => (publicationCurrent() ? result.item : current)),
+    );
+  }, [selectedSession, workspaceId, inspectBindingMutation, setBinding]);
 
   return {
     creatingSessionMode,
@@ -555,6 +695,7 @@ export function useChatSessionControls(input: {
     archiveWorkspacePending,
     archiveWorkspaceConfirmOpen,
     setArchiveWorkspaceConfirmOpen,
+    bindingMutation: { ...bindingProjection, onInspect: handleInspectExternalBinding },
     integrationConnectionId,
     setIntegrationConnectionId,
     integrationTarget,

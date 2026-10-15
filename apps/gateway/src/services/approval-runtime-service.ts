@@ -62,6 +62,8 @@ export interface ApprovalRuntime {
     limit?: number;
     cursor?: string;
     workspaceId?: string;
+    runId?: string;
+    sessionId?: string;
   }): Promise<ApprovalListResponse>;
   resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult>;
   expirePendingApprovals(limit?: number): Promise<number>;
@@ -168,6 +170,8 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     limit?: number;
     cursor?: string;
     workspaceId?: string;
+    runId?: string;
+    sessionId?: string;
   }): Promise<ApprovalListResponse> {
     return approvalLifecycleService.listApprovalsPage(this.host, input);
   }

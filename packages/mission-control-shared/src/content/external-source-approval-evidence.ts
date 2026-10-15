@@ -1,9 +1,11 @@
 import {
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE,
   assertExternalSourceKnowledgeSnapshotApprovalPayload,
-  type ApprovalRequest,
-  type ExternalSourceKnowledgeSnapshotApprovalPayload,
-  type ExternalSourceKnowledgeSnapshotApprovalPreview,
+} from "@goatcitadel/contracts/external-source-chat";
+import type {
+  ApprovalRequest,
+  ExternalSourceKnowledgeSnapshotApprovalPayload,
+  ExternalSourceKnowledgeSnapshotApprovalPreview,
 } from "@goatcitadel/contracts";
 import type { ApprovalEvidenceModel } from "./approval-helpers.js";
 

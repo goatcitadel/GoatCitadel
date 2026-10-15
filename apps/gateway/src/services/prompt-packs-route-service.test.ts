@@ -19,7 +19,11 @@ function createPromptPacksPort() {
     scorePromptPackTest: vi.fn(async (input: unknown) => ({ op: "score", input })),
     autoScorePromptPackTest: vi.fn(async (input: unknown) => ({ op: "auto-score", input })),
     autoScorePromptPackBatch: vi.fn(async (input: unknown) => ({ op: "batch", input })),
-    getPromptPackReport: vi.fn((packId: string) => ({ op: "report", packId })),
+    getPromptPackReport: vi.fn((packId: string, focus?: unknown) => ({
+      op: "report",
+      packId,
+      ...(focus ? { focus } : {}),
+    })),
     listPromptPackTestReviews: vi.fn((packId: string, testId: string) => [{ op: "reviews", packId, testId }]),
     runPromptPackBenchmark: vi.fn((packId: string, input: unknown) => ({ op: "benchmark", packId, input })),
     getPromptPackBenchmarkStatus: vi.fn((benchmarkRunId: string) => ({ op: "benchmark-status", benchmarkRunId })),
@@ -135,5 +139,15 @@ describe("PromptPacksRouteService", () => {
 
     expect(port.reviewPromptPackTest).toBeUndefined();
     expect(port.scorePromptPackTest).toHaveBeenCalledWith({ packId: "pack-2", testId: "test-2" });
+  });
+  it("forwards exact focused report input and preserves the original one-argument default", () => {
+    const port = createPromptPacksPort();
+    const service = new PromptPacksRouteService(port as unknown as PromptPacksRoutePort);
+    expect(service.getPromptPackReport("pack-1")).toEqual({ op: "report", packId: "pack-1" });
+    expect(port.getPromptPackReport).toHaveBeenLastCalledWith("pack-1");
+    const focus = { runId: "run/one", sessionId: "session:one" };
+    expect(service.getPromptPackReport("pack-1", focus)).toEqual({ op: "report", packId: "pack-1", focus });
+    expect(port.getPromptPackReport).toHaveBeenLastCalledWith("pack-1", focus);
+    expect(port.getPromptPackReport.mock.calls.at(-1)?.[1]).toBe(focus);
   });
 });

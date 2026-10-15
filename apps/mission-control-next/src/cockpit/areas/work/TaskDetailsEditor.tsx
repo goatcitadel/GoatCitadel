@@ -10,7 +10,8 @@ import { humanizeToken } from "@goatcitadel/mission-control-shared/content/statu
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { taskRecordsEqual } from "../../../features/native-routes/ops/task-detail-mutation";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { readCockpitLocation } from "../../app/cockpit-back-guard";
 
 const PRIORITIES: readonly TaskRecord["priority"][] = ["normal", "low", "high", "urgent"];
 
@@ -26,12 +27,22 @@ function draftFrom(task: TaskRecord): Draft {
 }
 
 export function TaskDetailsEditor({ task, workspaceId }: { task: TaskRecord; workspaceId: string }) {
+  const { search, hash } = typeof window === "undefined" ? { search: "", hash: "" } : readCockpitLocation();
+  const recoveryParams = new URLSearchParams(search);
+  recoveryParams.set("workspaceId", workspaceId);
+  recoveryParams.delete("taskId");
+  recoveryParams.delete("shell");
+  recoveryParams.delete("shellScope");
+  const recoveryHref = `/work/tasks/${encodeURIComponent(task.taskId)}` + "?" + recoveryParams + hash;
   const client = useQueryClient();
   const editor = useSessionDraft(
-    taskDetailsDraftKey(getGatewayApiBaseUrl(), workspaceId, task.taskId), draftFrom(task), task.revision,
+    taskDetailsDraftKey(getGatewayApiBaseUrl(), workspaceId, task.taskId),
+    draftFrom(task),
+    task.revision,
     { label: "Task details" },
   );
-  const draft = editor.value, base = draft.base;
+  const draft = editor.value,
+    base = draft.base;
   const owner = useTaskDetailReview(task, workspaceId);
   const { busy, uncertain } = owner;
   const [notice, setNotice] = useState<string | null>(null);
@@ -54,14 +65,17 @@ export function TaskDetailsEditor({ task, workspaceId }: { task: TaskRecord; wor
 
   async function save(): Promise<void> {
     const submitted = draft;
-    await owner.confirm((updated) => {
-      editor.acceptSaved(draftFrom(updated), updated.revision, submitted);
-      setNotice("Gateway recorded the task details. This board edit does not change a running execution.");
-      void Promise.allSettled([
-        client.invalidateQueries({ queryKey: ["tasks", "work-task", workspaceId, updated.taskId] }),
-        client.invalidateQueries({ queryKey: queryKeys.workTasks(workspaceId) }),
-      ]);
-    }, { kind: "details", title: draft.title.trim(), description: draft.description.trim(), priority: draft.priority });
+    await owner.confirm(
+      (updated) => {
+        editor.acceptSaved(draftFrom(updated), updated.revision, submitted);
+        setNotice("Gateway recorded the task details. This board edit does not change a running execution.");
+        void Promise.allSettled([
+          client.invalidateQueries({ queryKey: ["tasks", "work-task", workspaceId, updated.taskId] }),
+          client.invalidateQueries({ queryKey: queryKeys.workTasks(workspaceId) }),
+        ]);
+      },
+      { kind: "details", title: draft.title.trim(), description: draft.description.trim(), priority: draft.priority },
+    );
   }
 
   return (
@@ -162,14 +176,14 @@ export function TaskDetailsEditor({ task, workspaceId }: { task: TaskRecord; wor
         </p>
       ) : null}
       {uncertain ? (
-        <ClassicOwnerLink
-          href={`/ops/kanban?taskId=${encodeURIComponent(task.taskId)}&shell=classic`}
+        <NativeOwnerLink
+          href={recoveryHref}
           scope={`${workspaceId}:${task.taskId}`}
-          label="Review task in Ops"
           className="mt-2 inline-block text-sm font-medium text-accent underline"
-        />
+        >
+          Inspect task
+        </NativeOwnerLink>
       ) : null}
-
     </section>
   );
 }

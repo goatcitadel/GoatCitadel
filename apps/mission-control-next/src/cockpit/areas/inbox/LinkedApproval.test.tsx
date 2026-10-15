@@ -82,7 +82,12 @@ it("shows authorized same-workspace records and preserves permission errors", as
   expect(host.textContent).not.toContain("Scoped approval details");
 });
 it("opens specialist decisions in the native owner without rewriting its source URL", async () => {
-  api.read.mockResolvedValue({ approvalId: "a/1", status: "pending", kind: "code_mode.run", linkage: { workspaceId: "active" } });
+  api.read.mockResolvedValue({
+    approvalId: "a/1",
+    status: "pending",
+    kind: "code_mode.run",
+    linkage: { workspaceId: "active" },
+  });
   await render();
   await vi.waitFor(() => expect(host.textContent).toContain("Scoped approval details"));
   expect(window.location.search).toContain("extra=keep");
@@ -91,11 +96,103 @@ it("opens specialist decisions in the native owner without rewriting its source 
 
 it("keeps the same detail node mounted while its linked owner refetches", async () => {
   api.read.mockResolvedValue({ approvalId: "a/1", status: "approved", linkage: { workspaceId: "active" } });
-  await render(); await vi.waitFor(() => expect(host.textContent).toContain("Scoped approval details"));
-  const detail = host.querySelector("p"); let finish!: (value: unknown) => void;
-  api.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-  await act(async () => { void client.invalidateQueries(); });
+  await render();
+  await vi.waitFor(() => expect(host.textContent).toContain("Scoped approval details"));
+  const detail = host.querySelector("p");
+  let finish!: (value: unknown) => void;
+  api.read.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await act(async () => {
+    void client.invalidateQueries();
+  });
   expect(host.querySelector("p")).toBe(detail);
   await act(async () => finish({ approvalId: "a/1", status: "approved", linkage: { workspaceId: "active" } }));
   expect(host.querySelector("p")).toBe(detail);
+});
+
+it.each(["run", "session"])(
+  "withholds a selected approval outside the explicit %s history filter and offers only native record inspection",
+  async (mismatch) => {
+    window.history.replaceState(
+      { retained: true },
+      "",
+      "/inbox?view=history&approvalId=a%2F1&workspaceId=active&runId=expected&sessionId=expected-session&keep=yes#review",
+    );
+    api.read.mockResolvedValue({
+      approvalId: "a/1",
+      status: "pending",
+      linkage: {
+        workspaceId: "active",
+        runId: mismatch === "run" ? "other" : "expected",
+        sessionId: mismatch === "session" ? "other" : "expected-session",
+      },
+    });
+    await render();
+    await vi.waitFor(() => expect(host.querySelector('[aria-label="Approval outside this run"]')).not.toBeNull());
+    expect(host.textContent).not.toContain("Scoped approval details");
+    expect(api.read).toHaveBeenCalledOnce();
+    const link = host.querySelector<HTMLAnchorElement>("a")!;
+    expect(link.textContent).toBe("Inspect approval record");
+    const target = new URL(link.href);
+    expect(target.pathname).toBe("/inbox");
+    expect(target.searchParams.get("approvalId")).toBe("a/1");
+    expect(target.searchParams.get("workspaceId")).toBe("active");
+    expect(target.searchParams.get("view")).toBe("history");
+    expect(target.searchParams.has("runId")).toBe(false);
+    expect(target.searchParams.has("sessionId")).toBe(false);
+    expect(target.searchParams.get("keep")).toBe("yes");
+    expect(target.searchParams.get("shell")).toBe("cockpit");
+    expect(target.hash).toBe("#review");
+    expect(window.history.state).toEqual({ retained: true });
+    expect(new URLSearchParams(window.location.search).get("runId")).toBe("expected");
+  },
+);
+it.each(["runId", "durableRunId"])(
+  "accepts exact canonical %s history linkage with a legacy unspecified session",
+  async (field) => {
+    window.history.replaceState(
+      {},
+      "",
+      "/inbox?view=history&approvalId=a%2F1&runId=expected&sessionId=expected-session",
+    );
+    api.read.mockResolvedValue({
+      approvalId: "a/1",
+      status: "approved",
+      linkage: { workspaceId: "active", [field]: "expected" },
+    });
+    await render();
+    await vi.waitFor(() => expect(host.textContent).toContain("Scoped approval details"));
+    expect(host.querySelector('[aria-label="Approval outside this run"]')).toBeNull();
+    expect(api.read).toHaveBeenCalledOnce();
+  },
+);
+it("withholds details when a canonical refetch changes the selected record's run linkage", async () => {
+  window.history.replaceState({}, "", "/inbox?view=history&approvalId=a%2F1&runId=expected");
+  api.read.mockResolvedValue({
+    approvalId: "a/1",
+    status: "pending",
+    linkage: { workspaceId: "active", runId: "expected" },
+  });
+  await render();
+  await vi.waitFor(() => expect(host.textContent).toContain("Scoped approval details"));
+  let finish!: (value: unknown) => void;
+  api.read.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await act(async () => {
+    void client.invalidateQueries();
+  });
+  expect(host.textContent).toContain("Scoped approval details");
+  await act(async () =>
+    finish({ approvalId: "a/1", status: "pending", linkage: { workspaceId: "active", runId: "other" } }),
+  );
+  await vi.waitFor(() => expect(host.querySelector('[aria-label="Approval outside this run"]')).not.toBeNull());
+  expect(host.textContent).not.toContain("Scoped approval details");
 });

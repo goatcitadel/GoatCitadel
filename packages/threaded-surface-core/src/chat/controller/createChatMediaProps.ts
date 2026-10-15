@@ -12,6 +12,7 @@ type Input = {
   handlePrefPatch: ReturnType<typeof useChatPreferenceMutations>["handlePrefPatch"];
   multimodal: Pick<
     ReturnType<typeof useChatMultimodalControls>,
+    | "onMediaControlsOpenChange"
     | "voiceBusy"
     | "liveVoiceActive"
     | "liveVoiceAvailable"
@@ -54,6 +55,7 @@ export function createChatMediaProps({
   multimodal,
 }: Input): Pick<
   MissionControlActiveSessionSurfaceProps,
+  | "onMediaControlsOpenChange"
   | "voiceBusy"
   | "liveVoiceActive"
   | "liveVoiceAvailable"
@@ -96,6 +98,7 @@ export function createChatMediaProps({
   const { handleEditImage } = multimodal;
 
   return {
+    onMediaControlsOpenChange: multimodal.onMediaControlsOpenChange,
     voiceBusy: multimodal.voiceBusy,
     liveVoiceActive: multimodal.liveVoiceActive,
     liveVoiceAvailable: multimodal.liveVoiceAvailable,

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { createInvalidationBatcher, throttleIntervalFor } from "./invalidation-batcher";
-import { toast } from "sonner";
+import { requestCockpitToast } from "../ui/toast-runtime";
 import {
   getGatewayApiBaseUrl,
   getGatewayAccessRevision,
@@ -324,14 +324,18 @@ export function useCockpitRealtime(input: {
               if (isCurrentWorkspace()) navigateRef.current(inboxItemLocation(item));
             };
             const id = `inbox:${scopeWorkspaceId}:${item.id}`;
-            const show =
-              notification.tone === "error" ? toast.error : notification.tone === "warning" ? toast.warning : toast;
             if (preferences.toastsEnabled)
-              show(item.title, {
-                id,
-                description: item.summary,
-                duration: notification.tone === "error" ? Infinity : 6_000,
-                action: { label: "Open Inbox item", onClick: open },
+              requestCockpitToast((toast) => {
+                const show = notification.tone === "error" ? toast.error : notification.tone === "warning" ? toast.warning : toast;
+                show(item.title, { id, description: item.summary, duration: notification.tone === "error" ? Infinity : 6_000,
+                  action: { label: "Open Inbox item", onClick: open } });
+              }, () => {
+                const currentPreferences = preferencesRef.current;
+                return isCurrentWorkspace() && currentPreferences.toastsEnabled &&
+                  !(currentPreferences.onlyWhenUnfocused && pageFocused()) && decideNotificationDelivery(notification, {
+                    replayed: delivery.replayed, eventSessionId: item.source.sessionId,
+                    visibleSessionId: visibleSessionIdRef.current, pageFocused: pageFocused(),
+                  }).toast;
               });
             if (deliveryDecision.sound) void playOperatorAttentionSound(notification.soundCue, preferences.soundMode);
             if (deliveryDecision.desktop && preferences.desktopEnabled && document.visibilityState === "hidden") {

@@ -65,6 +65,7 @@ export interface ThreadedPersonalityPresence {
  * actions disabled while chips and per-turn selection stay live.
  */
 export interface ThreadedExternalSourceControls {
+  onLoadCandidates?: () => void;
   contextInclusionEnabled?: boolean;
   /** Live read-only attachments (content-free records; no transcript bytes). */
   attachments: readonly ExternalSessionAttachmentRecord[];
@@ -245,7 +246,12 @@ export interface MissionControlActiveSessionSurfaceProps {
   projectSwitchContext?: {
     workspaceId: string;
     session: Pick<ChatSessionRecord, "sessionId" | "workspaceId" | "projectId" | "revision">;
-    projects: Array<Pick<import("@goatcitadel/contracts").ChatProjectRecord, "projectId" | "workspaceId" | "revision" | "name" | "workspacePath" | "lifecycleStatus">>;
+    projects: Array<
+      Pick<
+        import("@goatcitadel/contracts").ChatProjectRecord,
+        "projectId" | "workspaceId" | "revision" | "name" | "workspacePath" | "lifecycleStatus"
+      >
+    >;
     mutationPending: boolean;
   };
   pendingAttachments: Array<Pick<ChatAttachmentRecord, "attachmentId" | "fileName" | "mimeType" | "sizeBytes">>;
@@ -352,6 +358,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   onAttachFiles: () => void;
   onUploadFiles: (files: FileList | null) => void;
   onRunQuickResearch: () => void;
+  onMediaControlsOpenChange?: (open: boolean) => void;
   voiceBusy?: boolean;
   liveVoiceActive?: boolean;
   liveVoiceAvailable?: boolean;

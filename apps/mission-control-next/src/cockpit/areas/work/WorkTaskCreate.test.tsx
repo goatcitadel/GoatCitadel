@@ -3,9 +3,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
-import { createTask, fetchTask } from "@goatcitadel/mission-control-shared/api/tasks";
+import { createTask, fetchTask, fetchTasks } from "@goatcitadel/mission-control-shared/api/tasks";
+import { fetchDurableRunHistory, fetchObserveRunTrace } from "@goatcitadel/mission-control-shared/api/durable";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkTaskCreate } from "./WorkTaskCreate";
+import { WorkArea } from "./WorkArea";
 import {
   __resetSessionDraftsForTests,
   discardSessionDraft,
@@ -22,7 +24,18 @@ vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOrig
   getGatewayApiBaseUrl: () => gateway.base,
 }));
 
-vi.mock("@goatcitadel/mission-control-shared/api/tasks", () => ({ createTask: vi.fn(), fetchTask: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/tasks", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/tasks")>()),
+  createTask: vi.fn(),
+  fetchTask: vi.fn(),
+  fetchTasks: vi.fn(),
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/durable", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/durable")>()),
+  fetchDurableRunHistory: vi.fn(),
+  fetchObserveRunTrace: vi.fn(),
+}));
+vi.mock("./WorkWaitingDecisions", () => ({ WorkWaitingDecisions: () => null }));
 
 const task = (overrides: Partial<TaskRecord> = {}): TaskRecord => ({
   taskId: "task-new",
@@ -63,6 +76,7 @@ afterEach(() => {
   client.clear();
   container.remove();
   vi.clearAllMocks();
+  window.history.replaceState(null, "", "/");
 });
 
 async function render(workspaceId = "workspace-a"): Promise<void> {
@@ -126,6 +140,11 @@ describe("cockpit task creation", () => {
   });
 
   it("prevents retry after a response is lost", async () => {
+    window.history.replaceState(
+      { evidence: "retained-task-recovery" },
+      "",
+      "/work?workspaceId=old-workspace&citadelId=current-citadel&runId=run-a&sessionId=session-a&filter=retained&taskId=obsolete&shell=cockpit&shellScope=visit#task-evidence",
+    );
     vi.mocked(createTask).mockRejectedValue(new Error("Response lost"));
     await render();
     await fill();
@@ -133,7 +152,48 @@ describe("cockpit task creation", () => {
     await vi.waitFor(() => expect(container.textContent).toContain("create outcome is unconfirmed"));
     await click("Close");
     expect(createTask).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('a[href="/ops/kanban?shell=classic&shellScope=visit"]')).not.toBeNull();
+    const recovery = container.querySelector<HTMLAnchorElement>('a[href^="/work?"]');
+    expect(recovery).not.toBeNull();
+    const destination = new URL(recovery!.href);
+    expect(destination.pathname).toBe("/work");
+    expect(destination.searchParams.get("workspaceId")).toBe("workspace-a");
+    expect(destination.searchParams.get("citadelId")).toBe("current-citadel");
+    expect(destination.searchParams.get("runId")).toBe("run-a");
+    expect(destination.searchParams.get("sessionId")).toBe("session-a");
+    expect(destination.searchParams.get("filter")).toBe("retained");
+    expect(destination.searchParams.get("taskId")).toBeNull();
+    expect(destination.searchParams.get("shell")).toBe("cockpit");
+    expect(destination.searchParams.get("shellScope")).toBeNull();
+    expect(destination.hash).toBe("#task-evidence");
+    expect(window.history.state).toMatchObject({ evidence: "retained-task-recovery" });
+    // Load the actual destination owner with the retained run context, not a run-detail substitute.
+    await act(async () => preferences.setActiveWorkspaceId("workspace-a"));
+    vi.mocked(fetchTasks).mockResolvedValue({ items: [task()] });
+    vi.mocked(fetchDurableRunHistory).mockResolvedValue({ items: [] } as never);
+    window.history.replaceState(window.history.state, "", destination.pathname + destination.search + destination.hash);
+    await act(async () =>
+      root.render(
+        <UiPreferencesProvider>
+          <ScopeProbe />
+          <QueryClientProvider client={client}>
+            <WorkArea />
+          </QueryClientProvider>
+        </UiPreferencesProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.textContent).toContain("Review launch plan"));
+    expect(container.querySelector('nav[aria-label="Work views"] a[aria-current="page"]')?.textContent).toBe("Board");
+    expect(container.querySelector('a[href="/work/tasks/task-new"]')).not.toBeNull();
+    expect(fetchTasks).toHaveBeenCalledWith(undefined, "workspace-a", {
+      limit: 200,
+      cursor: undefined,
+      signal: expect.any(AbortSignal),
+    });
+    expect(fetchObserveRunTrace).not.toHaveBeenCalled();
+    expect(createTask).toHaveBeenCalledTimes(1);
+    expect(onCreated).not.toHaveBeenCalled();
+    expect(window.location.search).toBe(destination.search);
+    expect(window.location.hash).toBe("#task-evidence");
   });
 });
 
@@ -266,7 +326,7 @@ describe("confirmed task draft acknowledgement", () => {
       const invalidate = vi.spyOn(client, "invalidateQueries").mockReturnValue(refreshed);
       await render();
       await fill();
-        await click("Create task");
+      await click("Create task");
       await vi.waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
       if (kind === "workspace-aba") {
         await render("workspace-b");

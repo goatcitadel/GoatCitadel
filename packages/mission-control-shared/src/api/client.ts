@@ -508,6 +508,7 @@ export {
   fetchChatTurnCapabilityProfile,
   fetchChatTurnRoutedContext,
   fetchChatThread,
+  fetchChatSessionCoreState,
   fetchThreadKnowledgeAttachments,
   hardDeleteChatProject,
   pinChatSession,

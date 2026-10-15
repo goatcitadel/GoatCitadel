@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useRef, useState } from "react";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useQuery } from "@tanstack/react-query";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
@@ -19,6 +19,7 @@ import { chatSelectionHref } from "./chat-selection-evidence";
 import { readCockpitHistory } from "../../app/cockpit-history";
 import { ThreadList } from "./ThreadList";
 import { useInspector } from "../../app/inspector";
+import { InspectorSourceContext } from "../../app/inspector-context";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { ChatOwnerNavigationBoundary } from "./ChatOwnerNavigationBoundary";
 import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
@@ -54,15 +55,18 @@ export function ChatArea({
   // `search` is the page the views show: while a Back move is held, the live URL names its target.
   const { navigate, search } = useCockpitRoute();
 
+  const inspectorSource = useContext(InspectorSourceContext);
   const conversationNavigation = useChatOwnerNavigation(activeWorkspaceId ?? "default", activeCitadelId);
   return (
     <div className="cockpit-chat-host flex min-h-0 min-w-0 flex-1 flex-col">
       <MissionThreadedControllerHost
+        coworkViewModelFactory={null}
         workspaceId={activeWorkspaceId ?? "default"}
         surface="chat"
         lockSurface
         hidePageHeader
         renderWhileLoading
+        secondaryEvidenceEnabled={inspectorSource === "chat"}
         routeSearch={search}
         onNavigateSurface={conversationNavigation.request}
         onOpenApprovals={(approvalId) =>

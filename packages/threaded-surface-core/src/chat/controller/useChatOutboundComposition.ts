@@ -17,7 +17,8 @@ import { useChatStreamPreferences } from "./useChatStreamPreferences";
 import { useChatSubmissionComposition } from "./useChatSubmissionComposition";
 
 type Input = {
-  selection: Pick<ReturnType<typeof useChatSessionSelection>, "selectedSessionId">;
+  workspaceId: string;
+  selection: Pick<ReturnType<typeof useChatSessionSelection>, "selectedSessionId" | "selectedSessionRevisionRef">;
   session: Pick<
     ReturnType<typeof useChatSessionComposition>,
     | "threadController"
@@ -31,6 +32,8 @@ type Input = {
     | "runVariables"
   >;
   selectedTurnId: string | null;
+  selectedTurnRevisionRef: { readonly current: number };
+  sendingRevisionRef: { readonly current: number };
   draft: string;
   submission: Pick<
     ReturnType<typeof useChatSubmissionComposition>,
@@ -68,9 +71,12 @@ type Input = {
 
 /** Composes outbound and approval owners, publishing execution and blocker refs before restoration runs. */
 export function useChatOutboundComposition({
+  workspaceId,
   selection,
   session,
   selectedTurnId,
+  selectedTurnRevisionRef,
+  sendingRevisionRef,
   draft,
   submission,
   oneShotContext,
@@ -93,6 +99,12 @@ export function useChatOutboundComposition({
 
   const runtimeBlockerActiveRef = useRef(false);
   const contextActions = useChatContextActions({
+    workspaceId,
+    historicalRevisionRef: session.sessionData.historicalWindowGenerationRef,
+    historicalReadOnly: session.sessionData.contextMutationReadOnly,
+    selectionRevisionRef: selection.selectedSessionRevisionRef,
+    turnRevisionRef: selectedTurnRevisionRef,
+    sendingRevisionRef,
     selectedSessionId: selection.selectedSessionId,
     selectedSession: session.threadController.selectedSession,
     selectedTurnId,
@@ -133,6 +145,7 @@ export function useChatOutboundComposition({
   const { setSpecialistSuggestions } = contextActions;
 
   const outbound = useChatOutboundExecution({
+    workspaceId,
     sessionConfig: {
       surfaceMode: submission.outboundSurfaceMode,
       selectedSessionId: selection.selectedSessionId,

@@ -185,6 +185,7 @@ function installWindow() {
 }
 
 function Harness(props: {
+  deferVoiceReadiness?: boolean;
   draft?: string;
   providerOptions?: (typeof openaiProvider)[];
   selectedProviderId?: string | null;
@@ -203,6 +204,7 @@ function Harness(props: {
   const errorsRef = React.useRef<Array<{ value: string | null; source?: string }>>([]);
   const noticesRef = React.useRef<Array<{ message: string; tone?: string }>>([]);
   const controls = useChatMultimodalControls({
+    deferVoiceReadiness: props.deferVoiceReadiness,
     providerOptions: (props.providerOptions ?? [openaiProvider, googleProvider]) as never,
     selectedProviderId: props.selectedProviderId === undefined ? "openai" : (props.selectedProviderId ?? undefined),
     preferredImageProviderId: props.preferredImageProviderId,
@@ -290,6 +292,34 @@ describe("useChatMultimodalControls", () => {
       fileName: "input.png",
       mimeType: "image/png",
     });
+  });
+
+  it("defers voice reads until disclosure intent while retaining automatic speech and readiness gates", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness deferVoiceReadiness />);
+      await flushAsyncEffects();
+    });
+    expect(apiMocks.fetchVoiceStatus).not.toHaveBeenCalled();
+    expect(apiMocks.fetchVoiceRuntimeStatus).not.toHaveBeenCalled();
+    expect(latest!.controls.voiceInputAvailable).toBe(false);
+    expect(latest!.controls.voiceStatusLabel).toBe("Voice readiness not confirmed");
+    expect(latest!.controls.voiceUnavailableReason).toBe("Voice readiness has not been confirmed yet.");
+    expect(latest!.controls.speakResponsesEnabled).toBe(true);
+    await act(async () => {
+      latest!.controls.onMediaControlsOpenChange(true);
+      await flushAsyncEffects();
+    });
+    expect(apiMocks.fetchVoiceStatus).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchVoiceRuntimeStatus).toHaveBeenCalledTimes(1);
+    expect(latest!.controls.voiceInputAvailable).toBe(true);
+    await act(async () => {
+      latest!.controls.onMediaControlsOpenChange(false);
+      latest!.controls.onMediaControlsOpenChange(true);
+      await flushAsyncEffects();
+    });
+    expect(apiMocks.fetchVoiceStatus).toHaveBeenCalledTimes(1);
+    await act(async () => renderer.unmount());
   });
 
   it("hydrates voice state, stores speech preference, and speaks new completed assistant replies", async () => {

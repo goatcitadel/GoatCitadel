@@ -1,5 +1,6 @@
 import type { MissionThreadedSessionControlBannerProps } from "@goatcitadel/threaded-surface-core";
-import { NativeButton, StatusChip } from "../native-routes/primitives";
+import { NativeButton } from "../native-routes/primitives/NativeButton";
+import { StatusChip } from "../native-routes/primitives/StatusChip";
 
 /**
  * HX-411 Chat controller banner.

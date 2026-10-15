@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+import { attachCockpitToastHost, resetCockpitToastRuntimeForTests } from "../ui/toast-runtime";
+import { toast } from "sonner";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
@@ -98,6 +100,8 @@ async function emit(value = event, replayed = false) {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  resetCockpitToastRuntimeForTests();
+  attachCockpitToastHost(toast);
   mocks.installation = "http://owner-a.invalid";
   mocks.accessRevision = 0;
   setGatewayCallerScope("");
@@ -116,6 +120,7 @@ afterEach(() => {
   client.clear();
   container.remove();
   vi.restoreAllMocks();
+  resetCockpitToastRuntimeForTests();
 });
 it("retains four distinct live targets through repeated cancellation and active owner refetch", async () => {
   const records = Array.from({ length: 4 }, (_, index) => ({

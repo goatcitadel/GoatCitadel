@@ -3,7 +3,9 @@ import { createWriteStream } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { verificationSourceDigest } from "./source-identity.mjs";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
@@ -32,6 +34,15 @@ export function createRunId(lane) {
   return `${stamp}-${lane}-${randomUUID().slice(0, 8)}`;
 }
 
+export async function readVerificationCandidateIdentity() {
+  const { stdout } = await promisify(execFile)("git", ["rev-parse", "HEAD"], { cwd: repoRoot });
+  return {
+    revision: stdout.trim(),
+    sourceDigest: await verificationSourceDigest(repoRoot),
+    sourceDigestAlgorithm: "sha256-source-files-v1",
+  };
+}
+
 export async function createRunContext(lane, options = {}) {
   const outputLockLease = await acquireWorktreeOutputLock({
     repoRoot,
@@ -57,6 +68,7 @@ export async function createRunContext(lane, options = {}) {
   });
 
   try {
+    manifest.metadata.candidate = await readVerificationCandidateIdentity();
     await fs.mkdir(path.join(artifactRoot, "diagnostics"), { recursive: true });
     await fs.mkdir(path.join(artifactRoot, "screenshots"), { recursive: true });
     await fs.mkdir(path.join(artifactRoot, "playwright"), { recursive: true });
@@ -91,13 +103,29 @@ export async function releaseRunContext(context) {
 
 export async function finalizeRunContext(context, statusOverride) {
   await flushManifestWrites(context);
+  if (context.manifest.metadata?.candidate) {
+    const initial = context.manifest.metadata.candidate;
+    const final = await readVerificationCandidateIdentity();
+    const unchanged = initial.revision === final.revision && initial.sourceDigest === final.sourceDigest;
+    context.manifest.metadata = { ...context.manifest.metadata, candidateFinal: final, candidateUnchanged: unchanged };
+    if (!unchanged)
+      await recordScenario(context, {
+        id: "verification.candidate-integrity",
+        lane: context.lane,
+        subsystem: "verification",
+        status: "failed",
+        title: "Implementation remains unchanged during required proof",
+        error: "Implementation changed during verification; this run cannot certify one candidate revision.",
+      });
+  }
+  const effectiveStatusOverride = context.manifest.metadata?.candidateUnchanged === false ? "failed" : statusOverride;
   const finishedAt = new Date().toISOString();
   const durationMs = Date.parse(finishedAt) - Date.parse(context.manifest.startedAt);
   const baseManifest = createVerificationRunManifest({
     ...context.manifest,
     finishedAt,
     durationMs,
-    status: statusOverride ?? deriveManifestStatus(context.manifest),
+    status: effectiveStatusOverride ?? deriveManifestStatus(context.manifest),
   });
   // A sliced run holds only part of the lane, so its timings cannot be measured
   // against the lane's budgets — most slices record no fast.test scenario at all,
@@ -107,7 +135,7 @@ export async function finalizeRunContext(context, statusOverride) {
   const fastLanePerf =
     baseManifest.lane === "fast" && !partialRun ? await writeFastLanePerfArtifact(context, baseManifest) : undefined;
   const finalStatus =
-    statusOverride ??
+    effectiveStatusOverride ??
     (fastLanePerf?.integrityFailure || (fastLanePerf?.strict && fastLanePerf.status === "failed")
       ? "failed"
       : deriveManifestStatus(context.manifest));
@@ -185,6 +213,33 @@ async function flushManifestWrites(context) {
   }
 }
 
+export async function verificationErrorDiagnostic(error) {
+  // Verification entrypoints must load before workspace build output exists.
+  // Suppress the diagnostic if the canonical parser cannot load; never emit raw errors.
+  let redactSecretText;
+  try {
+    ({ redactSecretText } = await import("../../../packages/contracts/dist/secret-redaction.js"));
+  } catch {
+    return "Verification diagnostic suppressed: canonical redactor is unavailable before contracts build.";
+  }
+  const rawError = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  const secretEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) =>
+      /(?:TOKEN|(?:^|_)KEY(?:_|$)|SECRET|PASSWORD|CREDENTIAL)/iu.test(name),
+    ),
+  );
+  // These values come from explicitly classified credential variables, so exact
+  // matching also covers short passwords and secrets containing whitespace.
+  // Keep the generic parser unchanged for ordinary, unclassified text.
+  let protectedError = rawError;
+  const knownSecrets = [...new Set(Object.values(secretEnv).filter((value) => value))].sort(
+    (a, b) => b.length - a.length,
+  );
+  for (const secret of knownSecrets) protectedError = protectedError.split(secret).join("[REDACTED]");
+  const redacted = redactSecretText(protectedError, { env: secretEnv }).value;
+  return redacted.length > 8192 ? redacted.slice(0, 8150) + "\n[Diagnostic truncated]" : redacted;
+}
+
 export async function runScenario(context, definition, fn) {
   const startedAt = new Date().toISOString();
   const startMs = Date.now();
@@ -216,6 +271,14 @@ export async function runScenario(context, definition, fn) {
       },
     });
   } catch (error) {
+    const diagnosticError = await verificationErrorDiagnostic(error);
+    const diagnostic = "diagnostics/" + sanitizeFilePart(definition.id) + "-" + correlationId + "-failure.json";
+    await writeJson(path.join(context.artifactRoot, diagnostic), {
+      scenarioId: definition.id,
+      correlationId,
+      error: diagnosticError,
+      truncated: diagnosticError.endsWith("[Diagnostic truncated]"),
+    });
     return await recordScenario(context, {
       id: definition.id,
       lane: definition.lane ?? context.lane,
@@ -226,11 +289,11 @@ export async function runScenario(context, definition, fn) {
       finishedAt: new Date().toISOString(),
       durationMs: Date.now() - startMs,
       correlationId,
-      error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+      error: diagnosticError,
       notes: [],
       metrics: {},
       artifacts: {
-        diagnostics: [],
+        diagnostics: [diagnostic],
         screenshots: [],
         traces: [],
         logs: [],

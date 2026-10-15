@@ -6,7 +6,6 @@ import { humanizeToken } from "@goatcitadel/mission-control-shared/content/statu
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { TaskStatusControl } from "./TaskStatusControl";
 import { EmptyState } from "../../ui/EmptyState";
 import { taskMatchesWorkspace } from "./work-tasks";
@@ -35,7 +34,8 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
     !taskQuery.isError && taskQuery.data && taskMatchesWorkspace(taskQuery.data, workspaceId)
       ? taskQuery.data
       : undefined;
-  const taskSessionId = task?.proactiveContext?.sessionId ?? task?.agenticContext?.childSessionId ?? task?.agenticContext?.parentSessionId;
+  const taskSessionId =
+    task?.proactiveContext?.sessionId ?? task?.agenticContext?.childSessionId ?? task?.agenticContext?.parentSessionId;
   const activities = useQuery({
     queryKey: ["tasks", "work-task-activities", workspaceId, taskId],
     queryFn: () => fetchTaskActivities(taskId, workspaceId),
@@ -80,7 +80,9 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
           description="This task has no matching active workspace record."
         />
       ) : null}
-      {!taskQuery.isLoading && !taskQuery.isError && !taskQuery.data ? <EmptyState title="Task not found" description="The Gateway returned no task record for this link." /> : null}
+      {!taskQuery.isLoading && !taskQuery.isError && !taskQuery.data ? (
+        <EmptyState title="Task not found" description="The Gateway returned no task record for this link." />
+      ) : null}
       {task ? (
         <>
           <header>
@@ -91,10 +93,38 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
               {formattedTime(task.updatedAt)}
             </p>
           </header>
-          {task.distressSignals?.filter(signal => !signal.resolvedAt).map(signal => <p key={signal.signalId} role="status" className="rounded-md border border-line p-3 text-sm text-fg-secondary">{signal.title}: {signal.summary}</p>)}
-          {task.status === "blocked" && !task.distressSignals?.some(signal => !signal.resolvedAt) ? <p className="text-sm text-fg-secondary">This task is blocked. No blocker reason was recorded; review its activity.</p> : null}
-          {task.proactiveContext?.durableRunId || task.agenticContext?.durableRunId ? <NativeOwnerLink scope={[workspaceId, taskId]} href={`/work/runs/${encodeURIComponent((task.proactiveContext?.durableRunId ?? task.agenticContext?.durableRunId)!)}`}>Open linked runtime run</NativeOwnerLink> : null}
-          {taskSessionId ? <NativeOwnerLink scope={[workspaceId, taskId]} href={`/chat?sessionId=${encodeURIComponent(taskSessionId)}`}>Open linked conversation</NativeOwnerLink> : null}
+          {task.distressSignals
+            ?.filter((signal) => !signal.resolvedAt)
+            .map((signal) => (
+              <p
+                key={signal.signalId}
+                role="status"
+                className="rounded-md border border-line p-3 text-sm text-fg-secondary"
+              >
+                {signal.title}: {signal.summary}
+              </p>
+            ))}
+          {task.status === "blocked" && !task.distressSignals?.some((signal) => !signal.resolvedAt) ? (
+            <p className="text-sm text-fg-secondary">
+              This task is blocked. No blocker reason was recorded; review its activity.
+            </p>
+          ) : null}
+          {task.proactiveContext?.durableRunId || task.agenticContext?.durableRunId ? (
+            <NativeOwnerLink
+              scope={[workspaceId, taskId]}
+              href={`/work/runs/${encodeURIComponent((task.proactiveContext?.durableRunId ?? task.agenticContext?.durableRunId)!)}`}
+            >
+              Open linked runtime run
+            </NativeOwnerLink>
+          ) : null}
+          {taskSessionId ? (
+            <NativeOwnerLink
+              scope={[workspaceId, taskId]}
+              href={`/chat?sessionId=${encodeURIComponent(taskSessionId)}`}
+            >
+              Open linked conversation
+            </NativeOwnerLink>
+          ) : null}
           {task.description ? (
             <section className="rounded-lg border border-line bg-raised p-4">
               <h2 className="font-display text-lg font-semibold text-fg">Description</h2>
@@ -104,18 +134,18 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
           {/* Only an unconfirmed record locks the form. The 30 s poll and realtime invalidations refetch while the
               operator types; each Save re-checks the exact revision before mutating, so editing stays open. */}
           <fieldset disabled={!taskQuery.isFetchedAfterMount || taskQuery.isPlaceholderData} className="grid gap-4">
-          <TaskStatusControl
-            key={`${workspaceId}:${task.taskId}`}
-            task={task}
-            workspaceId={workspaceId}
-            canMarkDone={!deliverables.isError && Boolean(deliverables.data?.items.length)}
-          />
-          <TaskAssignmentControl
-            key={`${workspaceId}:${task.taskId}:assignment`}
-            task={task}
-            workspaceId={workspaceId}
-          />
-          <TaskDetailsEditor key={`${workspaceId}:${task.taskId}:details`} task={task} workspaceId={workspaceId} />
+            <TaskStatusControl
+              key={`${workspaceId}:${task.taskId}`}
+              task={task}
+              workspaceId={workspaceId}
+              canMarkDone={!deliverables.isError && Boolean(deliverables.data?.items.length)}
+            />
+            <TaskAssignmentControl
+              key={`${workspaceId}:${task.taskId}:assignment`}
+              task={task}
+              workspaceId={workspaceId}
+            />
+            <TaskDetailsEditor key={`${workspaceId}:${task.taskId}:details`} task={task} workspaceId={workspaceId} />
           </fieldset>
           <div className="grid gap-3 md:grid-cols-2">
             <section className="rounded-lg border border-line bg-raised p-4">
@@ -172,16 +202,6 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
               ) : null}
             </section>
           </div>
-          <p className="text-sm text-fg-muted">
-            For other task details and controls, open the{" "}
-            <ClassicOwnerLink
-              href={`/ops/kanban?taskId=${encodeURIComponent(task.taskId)}&shell=classic`}
-              scope={`${workspaceId}:${task.taskId}`}
-              label="classic Kanban view"
-              className="font-medium text-accent"
-            />
-            .
-          </p>
         </>
       ) : null}
     </section>

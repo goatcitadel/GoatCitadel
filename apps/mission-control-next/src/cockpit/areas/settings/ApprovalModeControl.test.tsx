@@ -9,6 +9,12 @@ import { __resetSessionDraftsForTests } from "../../../features/native-routes/li
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
 import { __resetApprovalModeUncertaintyForTests } from "./approval-mode-state";
 import { ApprovalModeControl } from "./ApprovalModeControl";
+import { SHELL_HISTORY_POSITION } from "../../../app/shell-transition";
+import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
+import {
+  awaitingLlamaApproval,
+  llamaPlanFixture,
+} from "../../../features/native-routes/settings/llama-setup.test-support";
 
 const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), fetchChangePlan: vi.fn() }));
 const switchShellMock = vi.hoisted(() => vi.fn<typeof import("../../../shell-preference").switchShell>());
@@ -36,7 +42,9 @@ async function render() {
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
-        <ApprovalModeControl />
+        <CockpitNavigationProvider>
+          <ApprovalModeControl />
+        </CockpitNavigationProvider>
       </QueryClientProvider>,
     ),
   );
@@ -53,28 +61,28 @@ async function click(label: string) {
   await act(async () => button(label).click());
 }
 function pending(mode: ToolApprovalMode) {
-  const receipt = {
-    planId: "approval-plan",
-    status: "awaiting_approval",
-    revision: 2,
-    risk: "danger",
-    summary: "Approval required",
-    requiredAction: { kind: "approval", approvalId: "approval-1", title: "Review the rule" },
-  };
-  api.patchSettings.mockResolvedValue({ ...owner, changePlanReceipt: receipt });
+  const base = awaitingLlamaApproval(llamaPlanFixture());
   const canonical = {
-    ...receipt,
-    kind: "runtime_configuration",
-    origin: { workspaceId: "default", surface: "settings" },
-    request: { kind: "runtime_configuration", change: { operation: "tool_approval_mode", mode } },
+    ...base,
+    planId: "approval-plan",
+    revision: 2,
+    summary: "Approval required",
+    origin: { workspaceId: "default", surface: "settings" as const },
+    request: { kind: "runtime_configuration" as const, change: { operation: "tool_approval_mode" as const, mode } },
     target: { ownerId: "runtime_settings", resourceId: "tool_approval_mode", expectedRevision: 2 },
   };
+  api.patchSettings.mockResolvedValue({ ...owner, changePlanReceipt: canonical });
   api.fetchChangePlan.mockResolvedValue(canonical);
   return canonical;
 }
 beforeEach(() => {
   vi.resetAllMocks();
   switchShellMock.mockResolvedValue("cancelled");
+  window.history.replaceState(
+    { retained: true },
+    "",
+    "/settings/safety?source=tools&runId=run%2Fone&sessionId=session%3Aone&shell=cockpit#approval-mode",
+  );
   owner = { revision: 2, toolApprovalMode: "approve_all", deploymentProfile: "trusted_local" };
   api.fetchSettings.mockImplementation(async () => ({ ...owner }));
   api.patchSettings.mockImplementation(async (input: { toolApprovalMode: ToolApprovalMode }) => {
@@ -122,29 +130,49 @@ describe("cockpit tool approval rule", () => {
     expect(container.textContent).toContain("draft remains unsaved");
     expect(container.textContent).not.toContain("Tool approval rule saved");
     expect(button("Save approval rule").disabled).toBe(true);
-    const link = container.querySelector<HTMLAnchorElement>(
-      'a[href="/ops/approvals?shell=classic&approvalId=approval-1&shellScope=visit"]',
-    )!;
-    expect(link).not.toBeNull();
-    expect(container.querySelector('a[href^="/inbox?approvalId"]')).toBeNull();
+    let link!: HTMLAnchorElement;
+    await vi.waitFor(() => {
+      link = container.querySelector<HTMLAnchorElement>('a[href^="/inbox?"]')!;
+      expect(link).not.toBeNull();
+    });
+    const target = new URL(link.href);
+    expect(target.searchParams.getAll("approvalId")).toEqual(["approval-1"]);
+    expect(target.searchParams.get("workspaceId")).toBe("default");
+    expect(target.searchParams.get("source")).toBe("tools");
+    expect(target.searchParams.get("runId")).toBe("run/one");
+    expect(target.searchParams.get("sessionId")).toBe("session:one");
+    expect(target.hash).toBe("#approval-mode");
+    expect(target.searchParams.get("shell")).toBe("cockpit");
+    expect(target.searchParams.has("shellScope")).toBe(false);
+    const originalDocument = window.document;
+    const originalHistoryState = window.history.state;
+    const originalHistoryStateSnapshot = { ...originalHistoryState };
+    const originalHistoryPosition = originalHistoryState[SHELL_HISTORY_POSITION];
+    const push = vi.spyOn(window.history, "pushState");
     await act(async () => {
       link.click();
     });
     expect(switchShellMock).not.toHaveBeenCalled();
-    const keep = [...document.querySelectorAll("button")].find((item) => item.textContent === "Keep draft and close");
-    expect(keep).toBeDefined();
-    await act(async () => {
-      keep!.click();
-    });
-    expect(switchShellMock).toHaveBeenCalledExactlyOnceWith(
-      "classic",
-      expect.objectContaining({
-        href: "/ops/approvals?shell=classic&approvalId=approval-1&shellScope=visit",
-        isCurrent: expect.any(Function),
-        signal: expect.any(AbortSignal),
-      }),
-    );
-    expect(switchShellMock.mock.calls[0]![1].isCurrent()).toBe(true);
+    expect(push).not.toHaveBeenCalled();
+    const findAction = (label: string) =>
+      [...document.querySelectorAll("button")].find((item) => item.textContent === label)!;
+    await vi.waitFor(() => expect(findAction("Cancel")).toBeDefined());
+    await act(async () => findAction("Cancel").click());
+    expect(container.querySelector("select")!.value).toBe("approve_risky");
+    expect(window.location.pathname).toBe("/settings/safety");
+    expect(push).not.toHaveBeenCalled();
+    await act(async () => link.click());
+    await vi.waitFor(() => expect(findAction("Keep draft and close")).toBeDefined());
+    await act(async () => findAction("Keep draft and close").click());
+    await vi.waitFor(() => expect(window.location.pathname).toBe("/inbox"));
+    expect(push).toHaveBeenCalledOnce();
+    expect(switchShellMock).not.toHaveBeenCalled();
+    expect(window.document).toBe(originalDocument);
+    expect(originalHistoryState.retained).toBe(true);
+    expect(originalHistoryState).toEqual(originalHistoryStateSnapshot);
+    expect(window.history.state[SHELL_HISTORY_POSITION]).toBe(originalHistoryPosition + 1);
+    expect(container.querySelector("select")!.value).toBe("approve_risky");
+    push.mockRestore();
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
     expect(button("Save approval rule").disabled).toBe(true);
   });
@@ -264,6 +292,15 @@ describe("cockpit tool approval rule", () => {
     expect(container.textContent).toContain("Save outcome is uncertain");
     expect(button("Save approval rule").disabled).toBe(true);
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
+    const recovery = [...container.querySelectorAll("a")].find(
+      (link) => link.textContent === "Inspect tool settings activity",
+    )!;
+    const href = new URL(recovery.href);
+    expect(href.pathname).toBe("/settings/safety");
+    expect(href.hash).toBe("#approval-mode");
+    expect(href.searchParams.get("source")).toBe("tools");
+    expect(href.searchParams.get("shell")).toBe("cockpit");
+    expect(container.querySelector('a[href*="shell=classic"]')).toBeNull();
   });
 
   it("locks mismatched completed settings instead of claiming success", async () => {

@@ -2,7 +2,7 @@ import type { ChatMessageRecord, ChatMode, ChatThreadResponse, OrchestrationRun 
 import type { OrchestrationCheckpointRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
-import { resolveActiveWorkflowTurn } from "@goatcitadel/mission-control-shared/components/cowork-view-model";
+import { resolveActiveWorkflowTurn } from "@goatcitadel/mission-control-shared/components/chat/active-workflow-turn";
 import { useRefreshSubscription } from "@goatcitadel/mission-control-shared/hooks/useRefreshSubscription";
 import { deriveCoworkItems } from "./chat-page-derivations";
 import { defaultDockOpenForMode } from "./surface-config";
@@ -17,6 +17,7 @@ export function useChatDockWorkbenchController(input: {
   messageMode: ChatMode;
   workbenchEnabled?: boolean;
   selectedSessionId: string | null;
+  workspaceId?: string;
   selectedSession: { projectId?: string | null } | null;
   selectedTurn: ChatThreadResponse["turns"][number] | null;
   thread: ChatThreadResponse | null;
@@ -65,6 +66,7 @@ export function useChatDockWorkbenchController(input: {
     revertWorkbenchAll,
   } = useChatWorkbench({
     sessionId: input.selectedSessionId,
+    workspaceId: input.workspaceId,
     // The canonical host loads specialist file evidence when its owning panel opens.
     enabled: Boolean(input.selectedSession) && input.workbenchEnabled !== false,
   });

@@ -193,6 +193,7 @@
     "verify:code:workbench-loop": "node scripts/verification/run.mjs agentic-workbench-loop",
     "verify:accessibility:smoke": "node scripts/verification/run.mjs accessibility-smoke",
     "verify:ux:budgets": "node scripts/verification/run.mjs ux-budgets",
+    "verify:cockpit:performance": "node scripts/verification/cockpit-performance-proof.mjs",
     "verify:cockpit:code-mode": "node scripts/verification/cockpit-code-mode-proof.mjs",
     "verify:cockpit:chat-stop": "node scripts/verification/cockpit-chat-stop-proof.mjs",
     "verify:cockpit:chat-error": "node scripts/verification/cockpit-chat-error-proof.mjs",

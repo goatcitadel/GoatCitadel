@@ -16,17 +16,19 @@ export function useChatNoticesAndPresetRefresh({ setLocalNotices, coordination, 
   const { setPresetProfiles } = presetCatalog;
 
   const pushLocalNotice = useCallback(
-    (content: string, tone: ChatThreadNotice["tone"] = "neutral") => {
+    (content: string, tone: ChatThreadNotice["tone"] = "neutral", publicationCurrent: () => boolean = () => true) => {
       setLocalNotices((current) =>
-        [
-          {
-            id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            content,
-            tone,
-            timestamp: new Date().toISOString(),
-          },
-          ...current,
-        ].slice(0, 12),
+        !publicationCurrent()
+          ? current
+          : [
+              {
+                id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                content,
+                tone,
+                timestamp: new Date().toISOString(),
+              },
+              ...current,
+            ].slice(0, 12),
       );
     },
     [setLocalNotices],

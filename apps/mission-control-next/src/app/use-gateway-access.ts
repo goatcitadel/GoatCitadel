@@ -1,3 +1,5 @@
+import { beginStartupReadWindow } from "@goatcitadel/mission-control-shared/api/startup-reads";
+import { getGatewayCallerScopeRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 import {
   getGatewayAccessRevision,
@@ -49,7 +51,8 @@ export interface UseGatewayAccessResult {
   retryGatewayAccess: () => Promise<void>;
 }
 
-export function useGatewayAccess(): UseGatewayAccessResult {
+export function useGatewayAccess(options?: { batchStartupReads?: boolean }): UseGatewayAccessResult {
+  const batchStartupReads = options?.batchStartupReads === true;
   const [gatewayAccess, setGatewayAccess] = useState<GatewayAccessViewState>({
     status: "checking",
     message: "Verifying gateway reachability and Mission Control access policy.",
@@ -68,7 +71,7 @@ export function useGatewayAccess(): UseGatewayAccessResult {
       const next = await preflightGatewayAccess({ bootstrap });
       if (generation !== requestGeneration.current || revision !== getGatewayAccessRevision()) return;
       if (next.status === "ready") {
-        const caller = await fetchGatewayCurrentAccess();
+        const caller = next.onboardingState?.currentAccess ?? await fetchGatewayCurrentAccess();
         if (generation !== requestGeneration.current || revision !== getGatewayAccessRevision()) return;
         const scope = JSON.stringify([
           getGatewayApiBaseUrl(),
@@ -79,6 +82,7 @@ export function useGatewayAccess(): UseGatewayAccessResult {
           caller.grantId,
         ]);
         setGatewayCallerScope(scope);
+        if (batchStartupReads && caller.operatorAccess) beginStartupReadWindow({ installation: getGatewayApiBaseUrl(), accessRevision: revision, caller: scope, callerRevision: getGatewayCallerScopeRevision() });
         setCallerScope(scope);
       }
       setGatewayAccess(next);
@@ -95,7 +99,7 @@ export function useGatewayAccess(): UseGatewayAccessResult {
     } finally {
       if (generation === requestGeneration.current) setGatewayBusy(false);
     }
-  }, []);
+  }, [batchStartupReads]);
 
   useEffect(() => {
     void retryGatewayAccess();

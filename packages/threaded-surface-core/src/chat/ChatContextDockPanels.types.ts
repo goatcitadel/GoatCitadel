@@ -31,7 +31,14 @@ import type { WorkTrustDescriptor } from "./work-trust";
 import type { ChatCapabilityProfileInspection } from "./useChatCapabilityProfileInspection";
 import type { AutonomousActivationGrantRecord } from "@goatcitadel/contracts";
 
+import type { ChatContextMutationProjection } from "./context-mutation-projection";
+
 export interface ChatContextDockPanelsProps {
+  contextMutations?: {
+    specialists: ChatContextMutationProjection;
+    learnedMemory: ChatContextMutationProjection;
+    binding: ChatContextMutationProjection;
+  };
   mode: "chat" | "cowork" | "code";
   dockOpen: boolean;
   dockSectionStyle: (sectionId: MissionControlDockSectionId) => { order: number };
@@ -172,5 +179,5 @@ export interface ChatContextDockPanelsProps {
   onExportRunBundle?: () => void;
   onIntegrationConnectionIdChange: (value: string) => void;
   onIntegrationTargetChange: (value: string) => void;
-  onSaveExternalBinding: () => Promise<void>;
+  onSaveExternalBinding: (reviewedDraft?: { connectionId: string; target: string }) => Promise<void>;
 }

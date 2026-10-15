@@ -49,7 +49,7 @@ describe("cockpit access gate", () => {
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
-  it.each(["needs-auth", "misconfigured"])(
+  it.each(["misconfigured"])(
     "opens the classic view as a visit when access is %s, so the saved layout stays the cockpit",
     async (status) => {
       await act(async () =>
@@ -70,4 +70,11 @@ describe("cockpit access gate", () => {
     expect(document.documentElement.dataset.density).toBe("compact");
     expect(document.documentElement.dataset.shell).toBeUndefined();
   });
+});
+
+it("restores authentication through the shared native form without requiring a Classic handoff", async () => {
+  await act(async () => root.render(<CockpitAccessGate access={{status:"needs-auth",authMode:"token",message:"Authentication required"} as never} busy={false} onRetry={vi.fn()} />));
+  await act(async () => { await vi.dynamicImportSettled(); });
+  expect(container.querySelector('input#gateway-access-token')).not.toBeNull();
+  expect([...container.querySelectorAll("button")].some(button=>button.textContent?.trim()==="Open classic view")).toBe(false);
 });

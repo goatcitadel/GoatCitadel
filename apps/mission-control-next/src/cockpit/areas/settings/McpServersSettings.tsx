@@ -11,7 +11,6 @@ import {
 } from "../../../features/native-routes/settings/mcp-server-mutation";
 import { mcpToggleUnavailableReason, useMcpEnabled } from "../../../features/native-routes/settings/use-mcp-enabled";
 import { Button } from "../../ui/Button";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { McpServerEditor } from "./McpServerEditor";
 import { McpServerCreate } from "./McpServerCreate";
 import { McpDeleteControl } from "./McpDeleteControl";
@@ -81,17 +80,20 @@ export function McpServersSettings({ workspaceId }: { workspaceId: string }) {
         >
           Register MCP server
         </Button>
-        <ClassicOwnerLink href="/settings/mcp?shell=classic" scope={workspaceId} label="Server setup and diagnostics" />
-        <Button size="sm" onClick={() => setPreviewing(true)}>Inspect MCP installation previews</Button>
+        <Button size="sm" onClick={() => setPreviewing(true)}>
+          Inspect MCP installation previews
+        </Button>
       </div>
       {query.isPending ? (
         <p role="status" className="text-sm text-fg-muted">
           Loading MCP servers…
         </p>
       ) : null}
-      {query.isFetching && items ? <p role="status" className="text-sm text-fg-muted">
-        Refreshing server records. Connection states below are from the last read.
-      </p> : null}
+      {query.isFetching && items ? (
+        <p role="status" className="text-sm text-fg-muted">
+          Refreshing server records. Connection states below are from the last read.
+        </p>
+      ) : null}
       {query.isError ? (
         <p role="alert" className="text-sm text-status-failed">
           MCP servers unavailable: {describeApiError(query.error).summary}
@@ -172,7 +174,15 @@ export function McpServersSettings({ workspaceId }: { workspaceId: string }) {
         />
       ) : null}
       {creating ? (
-        <McpServerCreate key={`create:${workspaceId}`} workspaceId={workspaceId} onClose={() => setCreating(false)} onInspect={(serverId) => { setCreating(false); setInspecting(serverId); }} />
+        <McpServerCreate
+          key={`create:${workspaceId}`}
+          workspaceId={workspaceId}
+          onClose={() => setCreating(false)}
+          onInspect={(serverId) => {
+            setCreating(false);
+            setInspecting(serverId);
+          }}
+        />
       ) : null}
       {inspecting ? (
         <McpServerInspection
@@ -183,7 +193,9 @@ export function McpServersSettings({ workspaceId }: { workspaceId: string }) {
         />
       ) : null}
       <McpElicitationRequests key={`elicitation:${workspaceId}`} workspaceId={workspaceId} />
-      {previewing ? <McpModeInspection key={`mode:${workspaceId}`} workspaceId={workspaceId} onClose={() => setPreviewing(false)} /> : null}
+      {previewing ? (
+        <McpModeInspection key={`mode:${workspaceId}`} workspaceId={workspaceId} onClose={() => setPreviewing(false)} />
+      ) : null}
     </section>
   );
 }

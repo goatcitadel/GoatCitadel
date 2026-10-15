@@ -210,14 +210,33 @@ describe("native managed runtime configuration", () => {
     expect(button("Check outcome")).toBeUndefined();
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
   });
-  it("keeps external launch configuration with its owner", async () => {
+  it("keeps external launch configuration with its native setup and diagnostics owners", async () => {
+    window.history.replaceState(
+      { retained: true },
+      "",
+      "/settings/advanced?keep=yes&citadelId=c&workspaceId=w&sessionId=s&shell=cockpit&shellScope=visit#managed-runtime",
+    );
     owner.llamaCpp.managementMode = "external";
     await render();
     expect(container.textContent).toContain("observes this external server");
     expect(container.querySelectorAll("input")).toHaveLength(0);
-    expect(
-      container.querySelector('a[href="/settings/onboarding?view=llamacpp&shell=classic&shellScope=visit"]'),
-    ).not.toBeNull();
+    for (const [label, pathname, hash] of [
+      ["Open validated llama.cpp setup", "/settings/models", "#local-ai"],
+      ["Voice and runtime diagnostics", "/settings/advanced", "#managed-runtime"],
+    ]) {
+      const link = [...container.querySelectorAll("a")].find((item) => item.textContent === label)!;
+      expect(link).toBeDefined();
+      const target = new URL(link.href);
+      expect(target.pathname).toBe(pathname);
+      expect(target.hash).toBe(hash);
+      expect(target.searchParams.get("keep")).toBe("yes");
+      expect(target.searchParams.get("citadelId")).toBe("c");
+      expect(target.searchParams.get("workspaceId")).toBe("w");
+      expect(target.searchParams.get("sessionId")).toBe("s");
+      expect(target.searchParams.get("shell")).toBe("cockpit");
+      expect(target.searchParams.has("shellScope")).toBe(false);
+    }
+    expect(window.history.state.retained).toBe(true);
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
   it("explains a disabled stale review inside the dialog and allows cancellation without a mutation", async () => {

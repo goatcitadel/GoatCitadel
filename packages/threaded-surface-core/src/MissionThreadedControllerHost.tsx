@@ -1,4 +1,5 @@
 import { WorkspaceChannelPlanReview } from "./chat/WorkspaceChannelPlanReview";
+import { detectComposerPaletteTrigger } from "./chat/composer-palette";
 import { createChatActiveSessionPresentation } from "./chat/controller/createChatActiveSessionPresentation";
 import { createChatChangePlanReceipt } from "./chat/controller/createChatChangePlanReceipt";
 import { createChatContextDockProps } from "./chat/controller/createChatContextDockProps";
@@ -35,7 +36,7 @@ import type {
   ChatGeneratedArtifactRecord,
   ThreadKnowledgeRetrievalMode,
 } from "@goatcitadel/contracts";
-import { useDeferredValue, useLayoutEffect, useState } from "react";
+import { useCallback, useDeferredValue, useLayoutEffect, useRef, useState } from "react";
 
 import { type AgenticRunTreeResponse } from "@goatcitadel/mission-control-shared/api/agentic";
 
@@ -154,16 +155,37 @@ export function MissionThreadedControllerHost({
   onNavigateSurface,
   onResolvedModeChange,
   renderSurface,
+  secondaryEvidenceEnabled,
+  coworkViewModelFactory,
 }: MissionThreadedControllerHostProps) {
   const selection = useChatSessionSelection({ initialModeOverride });
-  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
+  const [selectedTurnId, setSelectedTurnIdState] = useState<string | null>(null);
+  const selectedTurnRevisionRef = useRef(0);
+  const selectedTurnIntentRef = useRef(selectedTurnId);
+  useLayoutEffect(() => {
+    selectedTurnIntentRef.current = selectedTurnId;
+  }, [selectedTurnId]);
+  const [, setSelectedTurnRevision] = useState(0);
+  const setSelectedTurnId = useCallback<React.Dispatch<React.SetStateAction<string | null>>>((next) => {
+    if (typeof next === "function" || next !== selectedTurnIntentRef.current) {
+      selectedTurnRevisionRef.current += 1;
+      setSelectedTurnRevision(selectedTurnRevisionRef.current);
+    }
+    if (typeof next !== "function") selectedTurnIntentRef.current = next;
+    setSelectedTurnIdState(next);
+  }, []);
   const [selectedContextTurnIds, setSelectedContextTurnIds] = useState<string[]>([]);
   const [workbenchRequested, setWorkbenchRequested] = useState(false);
   const [pendingThreadContext, setPendingThreadContext] = useState<OutboundContextBlock | null>(null);
   const [draft, setDraft] = useState("");
   const [pinnedGoal, setPinnedGoal] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState("");
-  const [sending, setSending] = useState(false);
+  const [sending, setSendingState] = useState(false);
+  const sendingRevisionRef = useRef(0);
+  const setSending = useCallback<React.Dispatch<React.SetStateAction<boolean>>>((next) => {
+    sendingRevisionRef.current += 1;
+    setSendingState(next);
+  }, []);
   const oneShotContext = useChatOneShotContext();
   const { restoreWorkspaceSnapshotRequest } = oneShotContext;
 
@@ -214,6 +236,13 @@ export function MissionThreadedControllerHost({
   const notices = useChatNoticesAndPresetRefresh({ setLocalNotices, coordination, presetCatalog });
   const { pushLocalNotice } = notices;
   const session = useChatSessionComposition({
+    sendingRevisionRef,
+    catalogEvidenceEnabled:
+      secondaryEvidenceEnabled === undefined ||
+      secondaryEvidenceEnabled ||
+      composerPaletteGlobalOpen ||
+      detectComposerPaletteTrigger(draft) !== null,
+    secondaryEvidenceEnabled,
     workspaceId,
     selection,
     deferredSearch,
@@ -276,6 +305,9 @@ export function MissionThreadedControllerHost({
     changePlanState,
   });
   const execution = useChatOutboundComposition({
+    selectedTurnRevisionRef,
+    sendingRevisionRef,
+    workspaceId,
     selection,
     session,
     selectedTurnId,
@@ -316,6 +348,7 @@ export function MissionThreadedControllerHost({
     setRenameTitle,
   });
   const surfaceRuntime = useChatSurfaceComposition({
+    coworkViewModelFactory,
     session,
     lockSurface,
     surface,
@@ -405,6 +438,7 @@ export function MissionThreadedControllerHost({
   const { recordChangePlanResult } = actions;
 
   const composer = useChatComposerInteractionComposition({
+    deferVoiceReadiness: secondaryEvidenceEnabled !== undefined,
     workspaceId,
     surfaceRuntime,
     selectedTurnId,
@@ -676,5 +710,15 @@ export function MissionThreadedControllerHost({
     planOAuth: actions.planOAuth,
     sessionControls: session.sessionControls,
   });
-  return <><WorkspaceChannelPlanReview workspaceId={workspaceId} routeSearch={routeSearch} onReturnToChannels={onReturnToChannels} onOpenApprovals={onOpenApprovals} />{frame}</>;
+  return (
+    <>
+      <WorkspaceChannelPlanReview
+        workspaceId={workspaceId}
+        routeSearch={routeSearch}
+        onReturnToChannels={onReturnToChannels}
+        onOpenApprovals={onOpenApprovals}
+      />
+      {frame}
+    </>
+  );
 }

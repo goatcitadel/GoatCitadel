@@ -171,19 +171,34 @@ describe("approval lifecycle service", () => {
 
   it("allows an exact governed Code Mode request from a completed Chat turn", async () => {
     const linkage = {
-      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
-      originSurface: "chat" as const, actionType: "code_mode.run", toolName: "code_mode.run",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      runId: "code-run-1",
+      originSurface: "chat" as const,
+      actionType: "code_mode.run",
+      toolName: "code_mode.run",
     };
     const payload = {
-      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
-      codeHash: "code-hash", wrapperManifestHash: "wrapper-hash", capabilitySnapshotId: "cap-snap-1",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      runId: "code-run-1",
+      codeHash: "code-hash",
+      wrapperManifestHash: "wrapper-hash",
+      capabilitySnapshotId: "cap-snap-1",
     };
     const host = createApprovalHarness({
-      approvalKind: "code_mode.run", approvalLinkage: linkage, approvalPayload: payload,
+      approvalKind: "code_mode.run",
+      approvalLinkage: linkage,
+      approvalPayload: payload,
       codeModeRun: createCodeModeRunRecord({ workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1" }),
     });
     host.storage.chatTurnTraces.get.mockReturnValue({
-      turnId: "turn-1", sessionId: "session-1", status: "completed", durable: { runId: "durable-turn-1" },
+      turnId: "turn-1",
+      sessionId: "session-1",
+      status: "completed",
+      durable: { runId: "durable-turn-1" },
     } as never);
     await createApproval(host, { kind: "code_mode.run", riskLevel: "caution", payload, linkage });
     expect(host.storage.approvals.create).toHaveBeenCalledOnce();
@@ -194,73 +209,134 @@ describe("approval lifecycle service", () => {
 
   it("rejects completed-turn Code Mode approval when the pending run binding drifts", async () => {
     const linkage = {
-      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
-      originSurface: "chat" as const, actionType: "code_mode.run", toolName: "code_mode.run",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      runId: "code-run-1",
+      originSurface: "chat" as const,
+      actionType: "code_mode.run",
+      toolName: "code_mode.run",
     };
     const payload = {
-      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
-      codeHash: "code-hash", wrapperManifestHash: "wrapper-hash", capabilitySnapshotId: "cap-snap-1",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      runId: "code-run-1",
+      codeHash: "code-hash",
+      wrapperManifestHash: "wrapper-hash",
+      capabilitySnapshotId: "cap-snap-1",
     };
     const host = createApprovalHarness({
-      approvalKind: "code_mode.run", approvalLinkage: linkage, approvalPayload: payload,
-      codeModeRun: createCodeModeRunRecord({ workspaceId: "workspace-1", sessionId: "session-1", turnId: "another-turn" }),
+      approvalKind: "code_mode.run",
+      approvalLinkage: linkage,
+      approvalPayload: payload,
+      codeModeRun: createCodeModeRunRecord({
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        turnId: "another-turn",
+      }),
     });
     host.storage.chatTurnTraces.get.mockReturnValue({
-      turnId: "turn-1", sessionId: "session-1", status: "completed", durable: { runId: "durable-turn-1" },
+      turnId: "turn-1",
+      sessionId: "session-1",
+      status: "completed",
+      durable: { runId: "durable-turn-1" },
     } as never);
-    await expect(resolveApproval(host, "approval-1", { decision: "approve", resolvedBy: "operator" }))
-      .rejects.toThrow("no longer matches its pending run");
+    await expect(resolveApproval(host, "approval-1", { decision: "approve", resolvedBy: "operator" })).rejects.toThrow(
+      "no longer matches its pending run",
+    );
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
   });
 
   it.each(["failed", "cancelled"] as const)("does not reopen a %s Chat turn for Code Mode", async (status) => {
     const linkage = {
-      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
-      originSurface: "chat" as const, actionType: "code_mode.run", toolName: "code_mode.run",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      runId: "code-run-1",
+      originSurface: "chat" as const,
+      actionType: "code_mode.run",
+      toolName: "code_mode.run",
     };
     const payload = {
-      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
-      codeHash: "code-hash", wrapperManifestHash: "wrapper-hash", capabilitySnapshotId: "cap-snap-1",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      runId: "code-run-1",
+      codeHash: "code-hash",
+      wrapperManifestHash: "wrapper-hash",
+      capabilitySnapshotId: "cap-snap-1",
     };
-    const host = createApprovalHarness({ approvalKind: "code_mode.run", approvalLinkage: linkage, approvalPayload: payload });
+    const host = createApprovalHarness({
+      approvalKind: "code_mode.run",
+      approvalLinkage: linkage,
+      approvalPayload: payload,
+    });
     host.storage.chatTurnTraces.get.mockReturnValue({
-      turnId: "turn-1", sessionId: "session-1", status, durable: { runId: "durable-turn-1" },
+      turnId: "turn-1",
+      sessionId: "session-1",
+      status,
+      durable: { runId: "durable-turn-1" },
     } as never);
-    await expect(createApproval(host, { kind: "code_mode.run", riskLevel: "caution", payload, linkage }))
-      .rejects.toThrow("already stopped or finished");
+    await expect(
+      createApproval(host, { kind: "code_mode.run", riskLevel: "caution", payload, linkage }),
+    ).rejects.toThrow("already stopped or finished");
     expect(host.storage.approvals.create).not.toHaveBeenCalled();
   });
 
   it("rejects completed-turn Code Mode approval when the immutable code hash drifts", async () => {
     const linkage = {
-      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
-      originSurface: "chat" as const, actionType: "code_mode.run", toolName: "code_mode.run",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      runId: "code-run-1",
+      originSurface: "chat" as const,
+      actionType: "code_mode.run",
+      toolName: "code_mode.run",
     };
     const payload = {
-      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
-      codeHash: "changed-code-hash", wrapperManifestHash: "wrapper-hash", capabilitySnapshotId: "cap-snap-1",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      runId: "code-run-1",
+      codeHash: "changed-code-hash",
+      wrapperManifestHash: "wrapper-hash",
+      capabilitySnapshotId: "cap-snap-1",
     };
     const host = createApprovalHarness({
-      approvalKind: "code_mode.run", approvalLinkage: linkage, approvalPayload: payload,
+      approvalKind: "code_mode.run",
+      approvalLinkage: linkage,
+      approvalPayload: payload,
       codeModeRun: createCodeModeRunRecord({ workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1" }),
     });
     host.storage.chatTurnTraces.get.mockReturnValue({
-      turnId: "turn-1", sessionId: "session-1", status: "completed", durable: { runId: "durable-turn-1" },
+      turnId: "turn-1",
+      sessionId: "session-1",
+      status: "completed",
+      durable: { runId: "durable-turn-1" },
     } as never);
-    await expect(resolveApproval(host, "approval-1", { decision: "approve", resolvedBy: "operator" }))
-      .rejects.toThrow("no longer matches its pending run");
+    await expect(resolveApproval(host, "approval-1", { decision: "approve", resolvedBy: "operator" })).rejects.toThrow(
+      "no longer matches its pending run",
+    );
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
   });
 
   it("keeps completed Chat turns closed to ordinary tool approvals", async () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
     host.storage.chatTurnTraces.get.mockReturnValue({
-      turnId: "turn-1", sessionId: "session-1", status: "completed", durable: { runId: "durable-turn-1" },
+      turnId: "turn-1",
+      sessionId: "session-1",
+      status: "completed",
+      durable: { runId: "durable-turn-1" },
     } as never);
-    await expect(createApproval(host, {
-      kind: "tool.invoke", riskLevel: "caution", payload: { toolName: "documents.create" },
-      linkage: { sessionId: "session-1", turnId: "turn-1" },
-    })).rejects.toThrow("already stopped or finished");
+    await expect(
+      createApproval(host, {
+        kind: "tool.invoke",
+        riskLevel: "caution",
+        payload: { toolName: "documents.create" },
+        linkage: { sessionId: "session-1", turnId: "turn-1" },
+      }),
+    ).rejects.toThrow("already stopped or finished");
     expect(host.storage.approvals.create).not.toHaveBeenCalled();
   });
 
@@ -663,6 +739,50 @@ describe("approval lifecycle service", () => {
       items: [expect.objectContaining({ approvalId: "approval-1" })],
       nextCursor: "opaque-next-cursor",
     });
+    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+  });
+
+  it("awaits the exact indexed run/session page and retains canonical outcomes without a workspace scan or mutation", async () => {
+    const host = createApprovalHarness();
+    const approval = host.storage.approvals.get("approval-1");
+    const page = { items: [approval], nextCursor: "opaque-index-cursor" };
+    host.storage.approvals.listByRunLinkage = vi.fn(async () => page);
+    const input = {
+      workspaceId: "workspace-1",
+      runId: "original/run",
+      sessionId: "session-1",
+      status: "pending" as const,
+      limit: 2,
+      cursor: "prior",
+    };
+    expect(await listApprovalsPage(host, input)).toEqual({
+      items: [expect.objectContaining({ approvalId: "approval-1" })],
+      nextCursor: "opaque-index-cursor",
+    });
+    expect(host.storage.approvals.listByRunLinkage).toHaveBeenCalledWith(input);
+    expect(host.storage.approvals.listPage).not.toHaveBeenCalled();
+    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+  });
+
+  it.each([{ runId: "run" }, { workspaceId: "ws", sessionId: "session" }])(
+    "rejects incomplete service linkage scope before discovery %j",
+    async (input) => {
+      const host = createApprovalHarness();
+      await expect(listApprovalsPage(host, input)).rejects.toThrow(/required/i);
+      expect(host.storage.approvals.listPage).not.toHaveBeenCalled();
+      expect(host.storage.approvals.listByRunLinkage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains an indexed empty result and fails indexed read errors without fallback or mutation", async () => {
+    const host = createApprovalHarness();
+    const input = { workspaceId: "ws", runId: "unknown" };
+    expect(await listApprovalsPage(host, input)).toEqual({ items: [], nextCursor: undefined });
+    host.storage.approvals.listByRunLinkage = vi.fn(async () => {
+      throw new Error("index unavailable");
+    });
+    await expect(listApprovalsPage(host, input)).rejects.toThrow("index unavailable");
+    expect(host.storage.approvals.listPage).not.toHaveBeenCalled();
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
   });
 
@@ -3587,6 +3707,7 @@ function createApprovalHarness(input?: {
     }),
     list: vi.fn(() => []),
     listPage: vi.fn(() => ({ items: [], nextCursor: undefined })),
+    listByRunLinkage: vi.fn(() => ({ items: [], nextCursor: undefined })),
     listExpiredPending: vi.fn(() => []),
     isExpiredPendingAtDatabaseNow: vi.fn(isExpiredPendingAtDatabaseNow),
   };

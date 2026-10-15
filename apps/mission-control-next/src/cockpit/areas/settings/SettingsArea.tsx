@@ -3,7 +3,6 @@ import { ArrowRight, ArrowUpRight, Search } from "lucide-react";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { EmptyState } from "../../ui/EmptyState";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { buildSettingsIndex, searchSettingsPages, type SettingsIndexEntry } from "./settings-index";
 import { SettingsSectionTabs, selectedSettingsSection, useSettingsSectionHash } from "./SettingsSectionTabs";
 import {
@@ -90,9 +89,21 @@ export function SettingsArea() {
       case "citadel-vault":
         return <CitadelVaultSettings key={activeCitadelId} citadelId={activeCitadelId ?? ""} />;
       case "citadel-capabilities":
-        return <CapabilityScopesSettings key={`citadel:${activeCitadelId}`} scopeKind="citadel" scopeId={activeCitadelId ?? ""} />;
+        return (
+          <CapabilityScopesSettings
+            key={`citadel:${activeCitadelId}`}
+            scopeKind="citadel"
+            scopeId={activeCitadelId ?? ""}
+          />
+        );
       case "workspace-capabilities":
-        return <CapabilityScopesSettings key={`workspace:${activeWorkspaceId}`} scopeKind="workspace" scopeId={activeWorkspaceId ?? ""} />;
+        return (
+          <CapabilityScopesSettings
+            key={`workspace:${activeWorkspaceId}`}
+            scopeKind="workspace"
+            scopeId={activeWorkspaceId ?? ""}
+          />
+        );
       case "integrations":
         return <IntegrationConnectionsSettings workspaceId={activeWorkspaceId ?? ""} />;
       case "channels":
@@ -100,13 +111,34 @@ export function SettingsArea() {
       case "mcp":
         return <McpServersSettings workspaceId={activeWorkspaceId ?? ""} />;
       case "addons":
-        return <><AddonsSettings /><PortablePacksSettings /></>;
+        return (
+          <>
+            <AddonsSettings />
+            <PortablePacksSettings />
+          </>
+        );
       case "runtime":
-        return <><ManagedRuntimeSettings /><DaemonDiagnostics /><VoiceRuntimeSettings /><LlamaSetupSettings workspaceId={activeWorkspaceId ?? ""} /></>;
+        return (
+          <>
+            <ManagedRuntimeSettings />
+            <DaemonDiagnostics />
+            <VoiceRuntimeSettings />
+            <LlamaSetupSettings workspaceId={activeWorkspaceId ?? ""} />
+          </>
+        );
       case "providers":
         return <ModelsSettings />;
       case "local-ai":
-        return <><LlamaSetupSettings workspaceId={activeWorkspaceId ?? ""} /><LocalAiSettings key={activeCitadelId} /><details className="mt-4"><summary className="cursor-pointer text-sm font-medium">Expert local runtime configuration</summary><ManagedRuntimeSettings /></details></>;
+        return (
+          <>
+            <LlamaSetupSettings workspaceId={activeWorkspaceId ?? ""} />
+            <LocalAiSettings key={activeCitadelId} />
+            <details className="mt-4">
+              <summary className="cursor-pointer text-sm font-medium">Expert local runtime configuration</summary>
+              <ManagedRuntimeSettings />
+            </details>
+          </>
+        );
       case "permissions":
         return <PermissionProfileSettings key={activeWorkspaceId} workspaceId={activeWorkspaceId ?? ""} />;
       case "hooks":
@@ -128,10 +160,43 @@ export function SettingsArea() {
     }
   };
 
-  if (rest[0] === "first-run") return <Suspense fallback={<p role="status" className="p-4 text-sm text-fg-muted">Loading setup…</p>}><FirstRunArea /></Suspense>;
-  if (page.entries.find((entry) => entry.section === selectedSection)?.releaseStatus === "hide") return <EmptyState title="Settings destination unavailable" description="This capability is hidden from the current release. Technical display preferences do not enable it." />;
-  if (rest[0] && !PAGES.some((item) => item.id === rest[0] || item.entries.some((entry) => entry.section === rest[0]))) return <EmptyState title="Settings destination unavailable" description="This link does not identify a supported settings destination. Open Settings to choose a current page." />;
-  if (hash && !["application-updates", "approval-mode"].includes(hash) && !page.entries.some((entry) => entry.anchor === hash || entry.section === hash)) return <EmptyState title="Settings destination unavailable" description="This link does not identify a supported section on this settings page. Open Settings to choose a current section." />;
+  if (rest[0] === "first-run")
+    return (
+      <Suspense
+        fallback={
+          <p role="status" className="p-4 text-sm text-fg-muted">
+            Loading setup…
+          </p>
+        }
+      >
+        <FirstRunArea />
+      </Suspense>
+    );
+  if (page.entries.find((entry) => entry.section === selectedSection)?.releaseStatus === "hide")
+    return (
+      <EmptyState
+        title="Settings destination unavailable"
+        description="This capability is hidden from the current release. Technical display preferences do not enable it."
+      />
+    );
+  if (rest[0] && !PAGES.some((item) => item.id === rest[0] || item.entries.some((entry) => entry.section === rest[0])))
+    return (
+      <EmptyState
+        title="Settings destination unavailable"
+        description="This link does not identify a supported settings destination. Open Settings to choose a current page."
+      />
+    );
+  if (
+    hash &&
+    !["application-updates", "approval-mode"].includes(hash) &&
+    !page.entries.some((entry) => entry.anchor === hash || entry.section === hash)
+  )
+    return (
+      <EmptyState
+        title="Settings destination unavailable"
+        description="This link does not identify a supported section on this settings page. Open Settings to choose a current section."
+      />
+    );
 
   return (
     <section className="mx-auto flex w-full min-w-0 max-w-5xl flex-col gap-5 p-4 sm:p-6">
@@ -242,37 +307,34 @@ function SettingsDestinations({
   entries: SettingsIndexEntry[];
   onNavigate: (href: string) => void;
 }) {
-  const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
-  const scope = JSON.stringify([activeCitadelId, activeWorkspaceId]);
   return (
     <ul className="mt-3 grid gap-2 sm:grid-cols-2">
       {entries.map((entry) => (
         <li key={entry.href} className="min-w-0 rounded-md border border-line-subtle bg-sunken">
-          {entry.href.includes("shell=classic") ? <ClassicOwnerLink href={entry.href} scope={scope} label={entry.label}
-            className="flex min-h-20 items-start gap-3 p-3 hover:bg-canvas"><SettingsDestinationContent entry={entry} /></ClassicOwnerLink> : <a
-            href={entry.href}
-            onPointerEnter={() => preloadSettingsSection(entry.section)}
-            onFocus={() => preloadSettingsSection(entry.section)}
-            onPointerDown={() => preloadSettingsSection(entry.section)}
-            className="flex min-h-20 items-start gap-3 p-3 hover:bg-canvas"
-            onClick={(event) => {
-              if (
-                event.button !== 0 ||
-                event.ctrlKey ||
-                event.metaKey ||
-                event.altKey ||
-                event.shiftKey
-              )
-                return;
-              event.preventDefault();
-              onNavigate(entry.href);
-              const sectionId = entry.href.split("#")[1];
-              if (sectionId)
-                requestAnimationFrame(() => document.getElementById(sectionId)?.scrollIntoView({ block: "start" }));
-            }}
-          >
-            <SettingsDestinationContent entry={entry} />
-          </a>}
+          {entry.destination === "detailed" ? (
+            <div role="status" className="flex min-h-20 items-start gap-3 p-3">
+              <SettingsDestinationContent entry={entry} />
+              <span>Native settings owner unavailable</span>
+            </div>
+          ) : (
+            <a
+              href={entry.href}
+              onPointerEnter={() => preloadSettingsSection(entry.section)}
+              onFocus={() => preloadSettingsSection(entry.section)}
+              onPointerDown={() => preloadSettingsSection(entry.section)}
+              className="flex min-h-20 items-start gap-3 p-3 hover:bg-canvas"
+              onClick={(event) => {
+                if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+                event.preventDefault();
+                onNavigate(entry.href);
+                const sectionId = entry.href.split("#")[1];
+                if (sectionId)
+                  requestAnimationFrame(() => document.getElementById(sectionId)?.scrollIntoView({ block: "start" }));
+              }}
+            >
+              <SettingsDestinationContent entry={entry} />
+            </a>
+          )}
         </li>
       ))}
     </ul>
@@ -280,23 +342,25 @@ function SettingsDestinations({
 }
 
 function SettingsDestinationContent({ entry }: { entry: SettingsIndexEntry }) {
-  return <>
-            <span className="min-w-0 flex-1">
-              <span className="block text-sm font-medium text-fg">{entry.label}</span>
-              {entry.releaseStatus === "experimental" ? <span className="text-xs text-fg-muted">Experimental</span> : null}
-              <span className="mt-1 block text-xs text-fg-muted">{entry.description}</span>
-              <span className="mt-1 block text-xs text-fg-secondary">
-                {entry.destination === "detailed"
-                  ? "Opens detailed settings"
-                  : entry.completeNative
-                    ? "Opens cockpit controls"
-                    : "Opens cockpit controls and management links"}
-              </span>
-            </span>
-            {entry.href.includes("shell=classic") ? (
-              <ArrowUpRight aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-accent" />
-            ) : (
-              <ArrowRight aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-accent" />
-            )}
-  </>;
+  return (
+    <>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium text-fg">{entry.label}</span>
+        {entry.releaseStatus === "experimental" ? <span className="text-xs text-fg-muted">Experimental</span> : null}
+        <span className="mt-1 block text-xs text-fg-muted">{entry.description}</span>
+        <span className="mt-1 block text-xs text-fg-secondary">
+          {entry.destination === "detailed"
+            ? "Opens detailed settings"
+            : entry.completeNative
+              ? "Opens cockpit controls"
+              : "Opens cockpit controls and management links"}
+        </span>
+      </span>
+      {entry.href.includes("shell=classic") ? (
+        <ArrowUpRight aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-accent" />
+      ) : (
+        <ArrowRight aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-accent" />
+      )}
+    </>
+  );
 }

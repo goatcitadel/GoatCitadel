@@ -5,7 +5,8 @@ import { humanizeToken } from "@goatcitadel/mission-control-shared/content/statu
 import { useTaskDetailReview } from "../../../features/native-routes/ops/use-task-detail-review";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { readCockpitLocation } from "../../app/cockpit-back-guard";
 import { TASK_STATUSES } from "./work-tasks";
 
 export function TaskStatusControl({
@@ -17,23 +18,33 @@ export function TaskStatusControl({
   workspaceId: string;
   canMarkDone: boolean;
 }) {
+  const { search, hash } = typeof window === "undefined" ? { search: "", hash: "" } : readCockpitLocation();
+  const recoveryParams = new URLSearchParams(search);
+  recoveryParams.set("workspaceId", workspaceId);
+  recoveryParams.delete("taskId");
+  recoveryParams.delete("shell");
+  recoveryParams.delete("shellScope");
+  const recoveryHref = `/work/tasks/${encodeURIComponent(task.taskId)}` + "?" + recoveryParams + hash;
   const queryClient = useQueryClient();
   const owner = useTaskDetailReview(task, workspaceId);
   const [target, setTarget] = useState(task.status);
   const [notice, setNotice] = useState("");
   const executionOwned = Boolean(task.agenticContext || task.proactiveContext);
   async function changeStatus() {
-    await owner.confirm((updated) => {
-      setTarget(updated.status);
-      setNotice(
-        `Gateway recorded ${humanizeToken(updated.status).toLowerCase()} for this task. This board change does not control an execution.`,
-      );
-      void Promise.allSettled([
-        queryClient.invalidateQueries({ queryKey: ["tasks", "work-task", workspaceId, updated.taskId] }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.workTasks(workspaceId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) }),
-      ]);
-    }, { kind: "status", status: target });
+    await owner.confirm(
+      (updated) => {
+        setTarget(updated.status);
+        setNotice(
+          `Gateway recorded ${humanizeToken(updated.status).toLowerCase()} for this task. This board change does not control an execution.`,
+        );
+        void Promise.allSettled([
+          queryClient.invalidateQueries({ queryKey: ["tasks", "work-task", workspaceId, updated.taskId] }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.workTasks(workspaceId) }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) }),
+        ]);
+      },
+      { kind: "status", status: target },
+    );
   }
   return (
     <section aria-label="Task status" className="rounded-lg border border-line bg-raised p-4">
@@ -103,13 +114,14 @@ export function TaskStatusControl({
         </p>
       ) : null}
       {owner.uncertain ? (
-        <ClassicOwnerLink
-          href={`/ops/kanban?taskId=${encodeURIComponent(task.taskId)}&shell=classic`}
+        <NativeOwnerLink
+          href={recoveryHref}
           scope={`${workspaceId}:${task.taskId}`}
-          label="Review task in Ops"
-        />
+          className="inline-block text-sm text-accent hover:underline"
+        >
+          Inspect task
+        </NativeOwnerLink>
       ) : null}
-
     </section>
   );
 }

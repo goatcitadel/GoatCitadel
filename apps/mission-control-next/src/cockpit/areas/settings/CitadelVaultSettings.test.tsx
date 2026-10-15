@@ -23,9 +23,6 @@ vi.mock("../../ui/Dialog", () => ({
   Dialog: ({ open, children, title }: { open: boolean; children: ReactNode; title: string }) =>
     open ? <section aria-label={title}>{children}</section> : null,
 }));
-vi.mock("../../ui/ClassicOwnerLink", () => ({
-  ClassicOwnerLink: ({ label }: { label: string }) => <button type="button">{label}</button>,
-}));
 let renderer: ReactTestRenderer | undefined, owner: CitadelVaultSnapshot;
 function text(node: ReactTestInstance | string): string {
   return typeof node === "string" ? node : node.children.map(text).join(" ");
@@ -59,6 +56,10 @@ it("renders bounded public names and explicit native reveal inspection without f
   await mount();
   expect(renderer!.root.findAllByType("li")).toHaveLength(50);
   expect(api.reveal).not.toHaveBeenCalled();
+  expect(text(renderer!.root)).not.toContain("Detailed Vault controls");
+  expect(
+    renderer!.root.findAllByType("a").filter((node) => String(node.props.href).includes("shell=classic")),
+  ).toHaveLength(0);
   await act(async () => button("Inspect Name 0").props.onClick());
   expect(button("Reveal secret")).toBeDefined();
   expect(api.reveal).not.toHaveBeenCalled();

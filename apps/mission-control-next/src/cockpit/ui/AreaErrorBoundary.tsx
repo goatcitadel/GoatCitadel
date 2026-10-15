@@ -1,3 +1,7 @@
+import {
+  hasUnsettledChatContextMutation,
+  CHAT_CONTEXT_RELOAD_NOTE,
+} from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { isModuleLoadError } from "@goatcitadel/mission-control-shared/components/PageErrorBoundary";
 import { Button } from "./Button";
@@ -18,6 +22,7 @@ interface AreaErrorBoundaryState {
 }
 
 function reloadDocument(): void {
+  if (hasUnsettledChatContextMutation()) return;
   window.location.reload();
 }
 
@@ -62,13 +67,19 @@ export class AreaErrorBoundary extends Component<AreaErrorBoundaryProps, AreaErr
             ? "Part of Mission Control didn't finish loading, usually because it was just updated. Reload to get the current version."
             : "Something went wrong while showing this view. If you had just sent or approved something, check whether it went through before trying again."}
         </p>
+        {hasUnsettledChatContextMutation() ? <p role="status">{CHAT_CONTEXT_RELOAD_NOTE}</p> : null}
         <div className="flex flex-wrap gap-2">
           {staleBuild ? null : (
             <Button variant="primary" onClick={this.retry}>
               Try again
             </Button>
           )}
-          <Button variant={staleBuild ? "primary" : "secondary"} onClick={reloadDocument}>
+          <Button
+            variant={staleBuild ? "primary" : "secondary"}
+            disabled={hasUnsettledChatContextMutation()}
+            title={hasUnsettledChatContextMutation() ? CHAT_CONTEXT_RELOAD_NOTE : undefined}
+            onClick={reloadDocument}
+          >
             Reload app
           </Button>
           {this.props.onGoToChat ? <Button onClick={this.props.onGoToChat}>Go to Chat</Button> : null}

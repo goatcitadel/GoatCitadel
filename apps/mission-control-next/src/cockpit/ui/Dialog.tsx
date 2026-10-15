@@ -35,6 +35,7 @@ export function Dialog({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-canvas/70" />
         <DialogPrimitive.Content
+          aria-modal="true"
           onOpenAutoFocus={(event) => {
             returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
             onOpenAutoFocus?.(event);

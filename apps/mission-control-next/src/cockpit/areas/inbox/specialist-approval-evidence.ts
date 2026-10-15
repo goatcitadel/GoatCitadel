@@ -7,7 +7,7 @@ import {
 } from "@goatcitadel/contracts";
 import { fetchApprovalReplay } from "@goatcitadel/mission-control-shared/api/approvals";
 import { fetchCodeModeRun, fetchCodeModeRunArtifact } from "@goatcitadel/mission-control-shared/api/capabilities";
-import { nativeRuntimeReviewForApproval } from "../../../features/native-routes/ops/NativeRuntimeApprovalReview";
+import { nativeRuntimeReviewForApproval } from "../../../features/native-routes/ops/native-runtime-approval-evidence";
 
 export type SpecialistEvidence = {
   replay: ApprovalReplaySnapshot;

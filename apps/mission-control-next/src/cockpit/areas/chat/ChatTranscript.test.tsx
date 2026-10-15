@@ -2,6 +2,7 @@
 import { act, type ComponentType, type ReactNode, type Ref } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { ChangePlanRecord, ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type {
   MissionThreadedActiveSessionSurfaceProps,
@@ -15,6 +16,9 @@ import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-in
 
 const viewport = vi.hoisted(() => ({
   preview: null as { turnId: string; visibleText: string } | null,
+  virtualMounts: 0,
+  virtualDataCount: 0,
+  initialIndex: 0,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (importOriginal) => ({
@@ -28,6 +32,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/sessions", async (importOrigina
   fetchRuntimeLifecycle: vi.fn().mockRejectedValue(new Error("No lifecycle fixture")),
 }));
 
+vi.mock("@goatcitadel/mission-control-shared/api/sessions", async (importOriginal) => ({
+  ...(await importOriginal()),
+  fetchRuntimeLifecycle: vi.fn().mockResolvedValue({ canonical: {}, turns: [] }),
+}));
+
 vi.mock("react-virtuoso", () => ({
   Virtuoso: ({
     data,
@@ -37,6 +46,7 @@ vi.mock("react-virtuoso", () => ({
     computeItemKey,
     followOutput,
     scrollerRef,
+    initialTopMostItemIndex,
   }: {
     data: ChatThreadTurnRecord[];
     itemContent: (index: number, turn: ChatThreadTurnRecord) => ReactNode;
@@ -48,15 +58,20 @@ vi.mock("react-virtuoso", () => ({
     computeItemKey?: (index: number, turn: ChatThreadTurnRecord) => string;
     followOutput?: boolean | string | ((atBottom: boolean) => boolean | string);
     scrollerRef?: Ref<HTMLDivElement>;
+    initialTopMostItemIndex?: number;
   }) => {
+    viewport.virtualMounts++;
+    viewport.virtualDataCount = data.length;
+    viewport.initialIndex = initialTopMostItemIndex ?? 0;
     const Footer = components.Footer;
     const EmptyPlaceholder = components.EmptyPlaceholder;
     return (
       <div
         ref={scrollerRef}
+        data-virtuoso-scroller="true"
         data-follow-output={String(typeof followOutput === "function" ? followOutput(true) : followOutput)}
       >
-        {data.map((turn, index) => (
+        {data.slice(viewport.initialIndex, viewport.initialIndex + 10).map((turn, index) => (
           <div key={computeItemKey?.(index, turn) ?? index}>{itemContent(index, turn)}</div>
         ))}
         {!data.length && EmptyPlaceholder ? <EmptyPlaceholder context={context} /> : null}
@@ -65,8 +80,8 @@ vi.mock("react-virtuoso", () => ({
     );
   },
 }));
-vi.mock("@goatcitadel/mission-control-shared/components/chat/AssistantMessageRenderer", () => ({
-  AssistantMessageRenderer: ({ content }: { content: string }) => <span>{content}</span>,
+vi.mock("./NativeMessageRenderer", () => ({
+  NativeMessageRenderer: ({ content }: { content: string }) => <span>{content}</span>,
 }));
 vi.mock("@goatcitadel/mission-control-shared/state/chat-streaming-preview-store", () => ({
   useChatStreamingPreviewSnapshot: () => viewport.preview,
@@ -106,6 +121,9 @@ function renderWithProviders(node: ReactNode) {
 }
 beforeEach(() => {
   viewport.preview = null;
+  viewport.virtualMounts = 0;
+  viewport.virtualDataCount = 0;
+  viewport.initialIndex = 0;
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -116,6 +134,7 @@ afterEach(() => {
   container.remove();
   client.clear();
   vi.unstubAllGlobals();
+  localStorage.removeItem("goatcitadel.ui.technical_details.v1");
 });
 
 describe("ChatTranscript", () => {
@@ -145,7 +164,12 @@ describe("ChatTranscript", () => {
       ),
     );
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await import("./ChatApprovalRendererBody");
+    });
+    await vi.waitFor(() => {
+      const allow = [...container.querySelectorAll("button")].find((button) => button.textContent === "Approve once");
+      expect(allow).toBeDefined();
+      expect(allow!.disabled).toBe(false);
     });
     const allow = [...container.querySelectorAll("button")].find((button) => button.textContent === "Approve once");
     expect(allow).toBeDefined();
@@ -261,6 +285,178 @@ describe("ChatTranscript", () => {
     await render(false);
     await flushFrames();
     expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+  it("moves outer Home instantly through the shared reading owner despite measured height growth", async () => {
+    const cancelFrame = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+    const onBottomStateChange = vi.fn();
+    const recorded = turn("boundary-home", true);
+    const render = async (followOutput: boolean) =>
+      act(async () =>
+        renderWithProviders(
+          <InspectorProvider>
+            <ChatTranscript props={{ ...sessionProps([recorded]), followOutput, onBottomStateChange }} />
+          </InspectorProvider>,
+        ),
+      );
+    await render(true);
+    const scroller = container.querySelector<HTMLElement>("[data-transcript-scroller]")!;
+    const scrollIntoView = vi.fn();
+    container.querySelector<HTMLElement>('div[aria-hidden="true"].h-px')!.scrollIntoView = scrollIntoView;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, writable: true, value: 800 },
+    });
+    await act(async () => scroller.dispatchEvent(new Event("scroll")));
+    scrollIntoView.mockClear();
+    onBottomStateChange.mockClear();
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 1200 });
+    scroller.focus();
+    const home = new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true });
+    await act(async () => scroller.dispatchEvent(home));
+    expect(home.defaultPrevented).toBe(true);
+    expect(scroller.scrollTop).toBe(0);
+    expect(document.activeElement).toBe(scroller);
+    expect(onBottomStateChange).toHaveBeenCalledExactlyOnceWith(false);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(cancelFrame).toHaveBeenCalledWith(1);
+    viewport.preview = { turnId: recorded.turnId, visibleText: "New output while reading the start" };
+    await render(false);
+    expect(scroller.scrollTop).toBe(0);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("uses the shared End action to pin the outer transcript and clear unread messages", async () => {
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const onBottomStateChange = vi.fn();
+    const first = turn("boundary-end-first", true);
+    const render = async (turns: ChatThreadTurnRecord[]) =>
+      act(async () =>
+        renderWithProviders(
+          <InspectorProvider>
+            <ChatTranscript props={{ ...sessionProps(turns), followOutput: false, onBottomStateChange }} />
+          </InspectorProvider>,
+        ),
+      );
+    await render([first]);
+    const scroller = container.querySelector<HTMLElement>("[data-transcript-scroller]")!;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, writable: true, value: 100 },
+    });
+    await act(async () => scroller.dispatchEvent(new Event("scroll")));
+    await render([first, turn("boundary-end-second", true)]);
+    expect(container.textContent).toContain("2 new messages");
+    const scrollIntoView = vi.fn(() => {
+      scroller.scrollTop = 800;
+    });
+    container.querySelector<HTMLElement>('div[aria-hidden="true"].h-px')!.scrollIntoView = scrollIntoView;
+    onBottomStateChange.mockClear();
+    scroller.focus();
+    const end = new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true });
+    await act(async () => scroller.dispatchEvent(end));
+    expect(end.defaultPrevented).toBe(true);
+    expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({ block: "end", behavior: "auto" });
+    expect(scroller.scrollTop).toBe(800);
+    expect(document.activeElement).toBe(scroller);
+    expect(onBottomStateChange).toHaveBeenCalledExactlyOnceWith(true);
+    expect(container.textContent).not.toContain("new messages");
+  });
+
+  it.each(["Home", "End"])("preserves descendant pending-question %s behavior, draft and focus", async (key) => {
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const onBottomStateChange = vi.fn(),
+      onSubmitUserInput = vi.fn();
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript
+            props={{
+              ...sessionProps([turn("boundary-question", true)]),
+              followOutput: false,
+              onBottomStateChange,
+              pendingUserInput: {
+                promptId: "boundary-question",
+                turnId: "boundary-question",
+                kind: "text",
+                title: "Note",
+                question: "What should be retained?",
+                required: true,
+              },
+              userInputPending: false,
+              onSubmitUserInput,
+            }}
+          />
+        </InspectorProvider>,
+      ),
+    );
+    const scroller = container.querySelector<HTMLElement>("[data-transcript-scroller]")!;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, writable: true, value: 350 },
+    });
+    const input = container.querySelector<HTMLInputElement>('form[aria-label="Pending question"] input[type="text"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Retain this answer");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    input.focus();
+    input.setSelectionRange(6, 6);
+    const scrollIntoView = vi.fn();
+    container.querySelector<HTMLElement>('div[aria-hidden="true"].h-px')!.scrollIntoView = scrollIntoView;
+    onBottomStateChange.mockClear();
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    await act(async () => input.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("Retain this answer");
+    expect(input.selectionStart).toBe(6);
+    expect(scroller.scrollTop).toBe(350);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(onBottomStateChange).not.toHaveBeenCalled();
+    expect(onSubmitUserInput).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    ["Home", "End"].flatMap((key) =>
+      ["altKey", "ctrlKey", "metaKey", "shiftKey"].map((modifier) => ({ key, modifier })),
+    ),
+  )("preserves modified outer $modifier+$key browser behavior", async ({ key, modifier }) => {
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const onBottomStateChange = vi.fn();
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript
+            props={{ ...sessionProps([turn("modified-boundary", true)]), followOutput: false, onBottomStateChange }}
+          />
+        </InspectorProvider>,
+      ),
+    );
+    const scroller = container.querySelector<HTMLElement>("[data-transcript-scroller]")!;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, writable: true, value: 350 },
+    });
+    const scrollIntoView = vi.fn();
+    container.querySelector<HTMLElement>('div[aria-hidden="true"].h-px')!.scrollIntoView = scrollIntoView;
+    onBottomStateChange.mockClear();
+    scroller.focus();
+    const event = new KeyboardEvent("keydown", { key, [modifier]: true, bubbles: true, cancelable: true });
+    await act(async () => scroller.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(false);
+    expect(scroller.scrollTop).toBe(350);
+    expect(document.activeElement).toBe(scroller);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(onBottomStateChange).not.toHaveBeenCalled();
   });
   it("retains disclosure and focus by turn and tool ID through insertion and canonical refresh", async () => {
     const recorded = turn("retained", true);
@@ -414,8 +610,12 @@ describe("ChatTranscript", () => {
         ),
       );
     await render(props);
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() => {
+      const review = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Review approval",
+      );
+      expect(review).toBeDefined();
+      expect(review!.disabled).toBe(false);
     });
     await act(async () =>
       [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval")!.click(),
@@ -611,6 +811,9 @@ describe("ChatTranscript", () => {
         </InspectorProvider>,
       ),
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     expect(container.textContent).toContain("Use another model");
     const review = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Review and confirm",
@@ -636,6 +839,13 @@ describe("ChatTranscript", () => {
         .querySelector('button[aria-label="More message actions"]')
         ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
     );
+    await vi.waitFor(() => {
+      const item = [...document.querySelectorAll('[role="menuitem"]')].find(
+        (candidate) => candidate.textContent === "Run details",
+      );
+      expect(item).toBeInstanceOf(HTMLElement);
+      expect(item?.getAttribute("data-disabled")).toBeNull();
+    });
     await act(async () =>
       [...document.querySelectorAll('[role="menuitem"]')]
         .find((item) => item.textContent === "Run details")
@@ -677,6 +887,9 @@ describe("ChatTranscript", () => {
         </InspectorProvider>,
       ),
     );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     expect(container.textContent).toContain("OpenCode report");
     expect(container.textContent).toContain("1 reported file");
     expect(container.textContent).toContain("Reported files");
@@ -839,4 +1052,149 @@ it("offers starters only after an editable empty conversation has loaded", async
     ),
   );
   expect(container.textContent).not.toContain("Explain this project");
+});
+
+function NoticePreferenceToggle() {
+  const { setShowTechnicalDetails } = useUiPreferences();
+  return (
+    <button type="button" onClick={() => setShowTechnicalDetails(false)}>
+      Hide notice identifiers
+    </button>
+  );
+}
+
+it.each(["neutral", "warning"] as const)(
+  "keeps %s notice targets visible and record IDs under technical disclosure",
+  async (tone) => {
+    localStorage.setItem("goatcitadel.ui.technical_details.v1", "true");
+    const props = {
+      ...sessionProps([]),
+      notices: [
+        {
+          id: "run-notice",
+          tone,
+          content: "Research is waiting for approval with one child item.",
+          timestamp: "2026-10-01T00:00:00Z",
+          technicalDetails: [{ label: "Run ID", value: "run-private-identifier" }],
+        },
+      ],
+    };
+    await act(async () =>
+      renderWithProviders(
+        <UiPreferencesProvider>
+          <NoticePreferenceToggle />
+          <InspectorProvider>
+            <ChatTranscript props={props} />
+          </InspectorProvider>
+        </UiPreferencesProvider>,
+      ),
+    );
+    const notice = container.querySelector(
+      tone === "warning" ? '[aria-label="Conversation warning"]' : '[aria-label="Latest conversation update"]',
+    )!;
+    expect(notice.textContent).toContain("Research is waiting for approval with one child item.");
+    const details = notice.querySelector("details")!;
+    expect(details).not.toBeNull();
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent).toBe("Technical details");
+    expect(details.textContent).toContain("Run ID");
+    expect(details.textContent).toContain("run-private-identifier");
+    const primary = notice.cloneNode(true) as HTMLElement;
+    primary.querySelector("details")!.remove();
+    expect(primary.textContent).not.toContain("run-private-identifier");
+    details.open = true;
+    await act(async () =>
+      renderWithProviders(
+        <UiPreferencesProvider>
+          <NoticePreferenceToggle />
+          <InspectorProvider>
+            <ChatTranscript props={{ ...props, selectedSessionId: "other" }} />
+          </InspectorProvider>
+        </UiPreferencesProvider>,
+      ),
+    );
+    expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(false);
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent === "Hide notice identifiers")!
+        .click(),
+    );
+    expect(container.querySelector("details")).toBeNull();
+    expect(container.textContent).toContain("Research is waiting for approval with one child item.");
+  },
+);
+
+it.each([0, 1, 99, 100])(
+  "shows %s selected-path turns in the plain transcript without mounting optional virtualization",
+  async (count) => {
+    const records = Array.from({ length: count }, (_, index) => turn("plain-" + index, true));
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript props={sessionProps(records)} />
+        </InspectorProvider>,
+      ),
+    );
+    expect(viewport.virtualMounts).toBe(0);
+    expect(container.querySelectorAll("[data-turn-id]")).toHaveLength(count);
+    expect(container.querySelector("[data-virtuoso-scroller]")).toBeNull();
+    expect(container.querySelector('[data-follow-output="false"]')?.className).toContain("overflow-y-auto");
+  },
+);
+it("hands all 1000 canonical turns to optional virtualization and starts a pinned conversation at its actual tail", async () => {
+  const records = Array.from({ length: 1000 }, (_, index) => turn("long-" + index, true));
+  await act(async () =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={sessionProps(records)} />
+      </InspectorProvider>,
+    ),
+  );
+  await act(async () => {
+    await import("react-virtuoso");
+  });
+  expect(viewport.virtualDataCount).toBe(1000);
+  expect(viewport.initialIndex).toBe(999);
+  expect(container.querySelectorAll("[data-turn-id]").length).toBeLessThan(100);
+  expect(container.textContent).toContain("Assistant long-999");
+  expect(container.querySelector('[data-follow-output="false"]')).not.toBeNull();
+});
+it("preserves the reader's disclosure, focus and scroll anchor when a short transcript grows into a virtual viewport", async () => {
+  const records = Array.from({ length: 1000 }, (_, index) => turn("anchor-" + index, true));
+  records[99]!.toolRuns = [
+    {
+      toolRunId: "retained-tool",
+      turnId: records[99]!.turnId,
+      sessionId: "session-1",
+      toolName: "session.status",
+      status: "blocked",
+      error: "Denied by policy",
+    } as never,
+  ];
+  const render = (count: number) =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={{ ...sessionProps(records.slice(0, count)), followOutput: false }} />
+      </InspectorProvider>,
+    );
+  await act(async () => render(100));
+  const oldRow = container.querySelector<HTMLElement>('[data-turn-id="anchor-99"]')!;
+  const disclosure = oldRow.querySelector<HTMLDetailsElement>('details[aria-label="Tool activity for this turn"]')!;
+  disclosure.open = true;
+  disclosure.querySelector("summary")!.focus();
+  const oldScroller = container.querySelector<HTMLElement>('[data-follow-output="false"]')!;
+  oldScroller.scrollTop = 123;
+  vi.spyOn(oldRow, "getBoundingClientRect").mockReturnValue({ top: 0, bottom: 50 } as DOMRect);
+  await act(async () => render(1000));
+  await act(async () => {
+    await import("react-virtuoso");
+  });
+  expect(viewport.initialIndex).toBe(99);
+  expect(viewport.virtualDataCount).toBe(1000);
+  const newDisclosure = container.querySelector<HTMLDetailsElement>(
+    '[data-turn-id="anchor-99"] details[aria-label="Tool activity for this turn"]',
+  )!;
+  expect(newDisclosure.open).toBe(true);
+  expect(document.activeElement).toBe(newDisclosure.querySelector("summary"));
+  expect(container.querySelector<HTMLElement>("[data-transcript-scroller]")!.scrollTop).toBe(123);
 });

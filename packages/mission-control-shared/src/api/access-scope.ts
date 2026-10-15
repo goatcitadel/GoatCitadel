@@ -46,6 +46,9 @@ export function subscribeGatewayAccessChange(listener: () => void): () => void {
 }
 
 let callerScope = "";
+let callerScopeRevision = 0;
+/** Monotonic custody generation, including a caller leaving and later returning. */
+export function getGatewayCallerScopeRevision() { return callerScopeRevision; }
 const callerScopeListeners = new Set<() => void>();
 export function subscribeGatewayCallerScope(listener: () => void): () => void {
   callerScopeListeners.add(listener);
@@ -59,5 +62,6 @@ export function setGatewayCallerScope(scope: string) {
   if (callerScope === scope) return;
   if (callerScope && callerScope !== scope) invalidateLocalInboxReads();
   callerScope = scope;
+  callerScopeRevision += 1;
   callerScopeListeners.forEach((listener) => listener());
 }

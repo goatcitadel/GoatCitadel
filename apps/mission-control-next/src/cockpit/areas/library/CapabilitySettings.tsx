@@ -3,7 +3,8 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { presentCapabilityTitle } from "@goatcitadel/mission-control-shared/content/capability-rows";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { resolveCockpitContinuation } from "../../app/cockpit-compatibility";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import type { CapabilityCatalogView } from "./capability-catalog";
 import { useCapabilitySkillState } from "./use-capability-skill-state";
@@ -44,18 +45,20 @@ function CapabilityOwnerLink({ item }: { item: CapabilityCatalogEntry }) {
       </a>
     );
   }
-  const path =
-    item.kind === "skill"
-      ? "/library/skills"
-      : item.kind === "proposal" || item.kind === "candidate_skill"
-        ? "/library/curator"
-        : "/library/capabilities";
+  const owner = resolveCockpitContinuation(
+    "/library/" +
+      encodeURIComponent(item.kind) +
+      "/" +
+      encodeURIComponent(item.capabilityId) +
+      "?type=" +
+      encodeURIComponent(item.kind),
+    { search: window.location.search, hash: window.location.hash, workspaceId: activeWorkspaceId ?? "default" },
+  );
+  if (owner.kind !== "native") return <p role="status">Current capability owner unavailable</p>;
   return (
-    <ClassicOwnerLink
-      href={`${path}?shell=classic`}
-      scope={JSON.stringify([activeCitadelId, activeWorkspaceId, item.capabilityId])}
-      label={item.kind === "skill" ? "Open current skills view" : "Open current capability view"}
-    />
+    <NativeOwnerLink href={owner.href} scope={[activeCitadelId, activeWorkspaceId, item.kind, item.capabilityId]}>
+      {item.kind === "skill" ? "Open current skills view" : "Open current capability view"}
+    </NativeOwnerLink>
   );
 }
 
@@ -75,7 +78,17 @@ export function CapabilitySettings({
   const { target, pending, locked, notice, error } = control;
   const title = presentCapabilityTitle(item);
 
-  if (item.kind === "proposal" || item.kind === "candidate_skill") return <><CapabilityLifecycleInspector key={JSON.stringify([activeWorkspaceId, item.capabilityId])} item={item} workspaceId={activeWorkspaceId ?? "default"} /><CapabilityOwnerLink item={item} /></>;
+  if (item.kind === "proposal" || item.kind === "candidate_skill")
+    return (
+      <>
+        <CapabilityLifecycleInspector
+          key={JSON.stringify([activeWorkspaceId, item.capabilityId])}
+          item={item}
+          workspaceId={activeWorkspaceId ?? "default"}
+        />
+        <CapabilityOwnerLink item={item} />
+      </>
+    );
 
   if (item.kind !== "skill" || !item.skillId)
     return (

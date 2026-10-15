@@ -29,7 +29,11 @@ describe("ApprovalRuntimeService", () => {
     const readNativeRuntimeReview = vi.fn();
     const service = new ApprovalRuntimeService({ readNativeRuntimeReview } as never);
     let finish!: (value: unknown) => void;
-    lifecycle.getApprovalReplay.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    lifecycle.getApprovalReplay.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
     const pending = service.getApprovalReplay("native");
     expect(readNativeRuntimeReview).not.toHaveBeenCalled();
     const replay = Object.freeze({ approval: Object.freeze({ approvalId: "native" }), events: Object.freeze([]) });
@@ -50,7 +54,9 @@ describe("ApprovalRuntimeService", () => {
     expect(replay).not.toHaveProperty("nativeRuntimeReview");
     expect(readNativeRuntimeReview).toHaveBeenCalledWith(replay.approval);
     lifecycle.getApprovalReplay.mockResolvedValueOnce(replay);
-    readNativeRuntimeReview.mockImplementation(() => { throw new Error("context unavailable"); });
+    readNativeRuntimeReview.mockImplementation(() => {
+      throw new Error("context unavailable");
+    });
     expect(await service.getApprovalReplay("native")).toBe(replay);
   });
   beforeEach(() => {
@@ -142,6 +148,29 @@ describe("ApprovalRuntimeService", () => {
       cursor: "cursor-1",
     });
     expect(lifecycle.getApprovalReplay).toHaveBeenCalledWith(host, "approval-1", "operator");
+  });
+
+  it("forwards immutable run/session filters through the existing approvals lifecycle facade", async () => {
+    const host = { storage: {} };
+    const service = new ApprovalRuntimeService(host as never);
+    const input = Object.freeze({
+      workspaceId: "ws",
+      runId: "run",
+      sessionId: "session",
+      status: "approved" as const,
+      limit: 100,
+      cursor: "next",
+    });
+    await service.listApprovalsPage(input);
+    expect(lifecycle.listApprovalsPage).toHaveBeenCalledWith(host, input);
+    expect(input).toEqual({
+      workspaceId: "ws",
+      runId: "run",
+      sessionId: "session",
+      status: "approved",
+      limit: 100,
+      cursor: "next",
+    });
   });
 
   it("preserves explicit approval filters, replay actors, and chat approval options", async () => {

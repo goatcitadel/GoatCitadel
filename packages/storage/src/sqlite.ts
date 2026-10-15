@@ -1,3 +1,5 @@
+import { APPROVAL_EXECUTION_LINKAGE_SQLITE_SQL } from "./approval-execution-linkage-migration.js";
+import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_SQLITE_SQL } from "./approval-execution-linkage-index-repair.js";
 import { createChannelGuidedSetupSchema } from "./channel-guided-setup-schema.js";
 import { upgradeChatRoutedContextAdmissionSchema } from "./chat-routed-context-admission-schema.js";
 import { upgradeHeartbeatFeatureBindingSchema } from "./heartbeat-feature-binding-schema.js";
@@ -7400,7 +7402,12 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         version: 256,
         name: "chat_fanout_parent_admission",
         up: (db) => {
-          addColumnIfMissing(db, "chat_fanout_invocations", "parent_admission_json", "TEXT CHECK(parent_admission_json IS NULL OR json_valid(parent_admission_json))");
+          addColumnIfMissing(
+            db,
+            "chat_fanout_invocations",
+            "parent_admission_json",
+            "TEXT CHECK(parent_admission_json IS NULL OR json_valid(parent_admission_json))",
+          );
           db.exec(`CREATE TRIGGER chat_fanout_parent_admission_immutable BEFORE UPDATE OF parent_admission_json ON chat_fanout_invocations
             WHEN NEW.parent_admission_json IS NOT OLD.parent_admission_json
             BEGIN SELECT RAISE(ABORT, 'Fanout parent admission is immutable'); END;`);
@@ -7410,14 +7417,31 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
       { version: 258, name: "heartbeat_feature_binding", up: upgradeHeartbeatFeatureBindingSchema },
       { version: 259, name: "commitment_occurrence_authority", up: upgradeCommitmentOccurrenceSchema },
       { version: 260, name: "remote_worker_admission_binding", up: upgradeRemoteWorkerAdmissionBindingSchema },
-      { version: 261, name: "cron_creator_authority", up: (db) => {
-        if (!tableHasColumn(db, "cron_jobs", "creator_authority_json")) db.exec(`
+      {
+        version: 261,
+        name: "cron_creator_authority",
+        up: (db) => {
+          if (!tableHasColumn(db, "cron_jobs", "creator_authority_json"))
+            db.exec(`
           ALTER TABLE cron_jobs ADD COLUMN creator_authority_json TEXT
             CHECK (CASE WHEN creator_authority_json IS NULL THEN 1
               WHEN length(creator_authority_json) > 4096 OR NOT json_valid(creator_authority_json) THEN 0
               ELSE COALESCE(json_extract(creator_authority_json, '$.version') = 'cron.creator-authority.v1', 0) END);
         `);
-      } },
+        },
+      },
+      {
+        version: 262,
+        name: "approval_execution_linkage_index",
+        up: (db) => db.exec(APPROVAL_EXECUTION_LINKAGE_SQLITE_SQL),
+      },
+      {
+        version: 263,
+        name: "approval_execution_linkage_index_sort_convergence",
+        up: (db) => db.exec(APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_SQLITE_SQL),
+      },
+      // PostgreSQL v115 backing-index names need convergence; SQLite already owns the canonical names.
+      { version: 264, name: "session_control_unique_index_authority", up: () => undefined },
     ],
   },
 ];

@@ -1,6 +1,7 @@
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { buildClassicOwnerUrl } from "../../app/classic-owner-url";
-import { useShellHandoff } from "../../app/use-shell-handoff";
+import { useUnsettledChatContextMutation } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
+import { CHAT_CONTEXT_HANDOFF_WARNING, useShellHandoff } from "../../app/use-shell-handoff";
 import { useDraftLeaveDialogState } from "../../features/native-routes/library/DraftLeaveDialog";
 import { buildShellSwitchUrl } from "../../shell-preference";
 import { Button } from "../ui/Button";
@@ -67,4 +68,14 @@ export function ShellSwitchFeedback({ owner }: { owner: ReturnType<typeof useShe
       </Dialog>
     </>
   );
+}
+
+/** The shell announces retained uncertainty once, independently of its navigation entrypoints. */
+export function ChatContextHandoffNotice() {
+  const pending = useUnsettledChatContextMutation();
+  return pending ? (
+    <p role="status" className="border-b border-line bg-sunken px-3 py-2 text-sm text-fg-secondary">
+      {CHAT_CONTEXT_HANDOFF_WARNING}
+    </p>
+  ) : null;
 }

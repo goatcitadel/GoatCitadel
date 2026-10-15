@@ -1,4 +1,5 @@
-import { getGatewayAccessRevision, notifyGatewayAccessChanged } from "./access-scope";
+import { fetchStartupRead } from "./startup-reads";
+import { getGatewayCallerScope, getGatewayCallerScopeRevision, getGatewayAccessRevision, notifyGatewayAccessChanged } from "./access-scope";
 export { getGatewayAccessRevision, subscribeGatewayAccessChange } from "./access-scope";
 import type { OnboardingStartupState, UiActionState } from "@goatcitadel/contracts";
 
@@ -235,6 +236,15 @@ async function requestUncoalesced<T>(
   if (sink && attemptKey)
     sink({ attemptKey, method, path: path.split("?")[0] ?? path, installation: getGatewayApiBaseUrl() });
   const accessRevision = getGatewayAccessRevision();
+  const callerRevision = getGatewayCallerScopeRevision();
+  const installation = getGatewayApiBaseUrl();
+  const scopeCurrent = () => accessRevision === getGatewayAccessRevision() && callerRevision === getGatewayCallerScopeRevision() && installation === getGatewayApiBaseUrl();
+  const assertScopeCurrent = () => {
+    if (!scopeCurrent()) throw new ApiRequestError(
+      "Gateway access changed while this request was in flight. Refresh current caller state.",
+      { kind: "protocol", method, path },
+    );
+  };
   const correlationId = createCorrelationId();
   const headers = buildGatewayHeaders(path, method, correlationId, filterGatewayExtraHeaders(init?.headers), {
     hasBody: init?.body != null,
@@ -253,13 +263,13 @@ async function requestUncoalesced<T>(
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     init?.signal?.throwIfAborted();
     try {
-      const res = await fetch(buildGatewayUrl(path), {
+      const res = await fetchStartupRead(buildGatewayUrl(path), {
         ...init,
         headers: {
           ...headers,
         },
         method,
-      });
+      }, { installation, accessRevision, caller: getGatewayCallerScope(), callerRevision }, scopeCurrent);
       init?.signal?.throwIfAborted();
       const responseCorrelationId = res.headers.get("x-goatcitadel-correlation-id") ?? correlationId;
       setDevDiagnosticsActiveCorrelationId(responseCorrelationId);
@@ -268,7 +278,7 @@ async function requestUncoalesced<T>(
       if (!res.ok) {
         const text = await res.text();
         const parsed = parseApiError(text);
-        if (accessRevision === getGatewayAccessRevision()) handleGatewayAuthRejectionResponse(res.status, text, path);
+        if (scopeCurrent()) handleGatewayAuthRejectionResponse(res.status, text, path);
         lastError = new ApiRequestError(`API error ${res.status}: ${text}`, {
           kind: "http",
           method,
@@ -310,11 +320,7 @@ async function requestUncoalesced<T>(
         throw lastError;
       }
 
-      if (accessRevision !== getGatewayAccessRevision())
-        throw new ApiRequestError(
-          "Gateway access changed while this request was in flight. Refresh current caller state.",
-          { kind: "protocol", method, path },
-        );
+      assertScopeCurrent();
       setDevDiagnosticsLastRequestError(undefined);
       recordClientDiagnostic({
         level: "info",
@@ -334,6 +340,8 @@ async function requestUncoalesced<T>(
         return undefined as T;
       }
       const bodyText = await res.text();
+      init?.signal?.throwIfAborted();
+      assertScopeCurrent();
       if (!bodyText) {
         return undefined as T;
       }
@@ -439,6 +447,10 @@ function buildGetRequestCoalescingKey(path: string, method: string, init?: Reque
   // user signs in — would share one in-flight promise and receive each other's response.
   const authHeaders = Object.entries(readGatewayAuthHeaders(path)).sort();
   return JSON.stringify({
+    installation: getGatewayApiBaseUrl(),
+    accessRevision: getGatewayAccessRevision(),
+    caller: getGatewayCallerScope(),
+    callerRevision: getGatewayCallerScopeRevision(),
     path,
     headers,
     authHeaders,

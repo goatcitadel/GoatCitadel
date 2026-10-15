@@ -3,12 +3,13 @@ import { act, StrictMode, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useSessionDraft, __resetSessionDraftsForTests } from "../../features/native-routes/library/session-drafts";
 import { __resetFormDirtyRegistryForTests } from "../../features/native-routes/library/use-form-dirty";
 import { CockpitNavigationProvider } from "./CockpitNavigationProvider";
 import { useCockpitNavigation } from "./cockpit-navigation-context";
 import { CockpitShell } from "./CockpitShell";
+import { resolveCockpitCompatibility } from "./cockpit-compatibility";
 
 vi.mock("@goatcitadel/mission-control-shared/api/citadels", () => ({
   getCitadelStructureSnapshot: vi.fn(async () => {
@@ -39,9 +40,19 @@ vi.mock("../areas/library/LibraryArea", () => ({
 const chatArea = vi.hoisted(() => ({ failure: null as Error | null, effects: 0 }));
 vi.mock("../areas/chat/ChatArea", () => ({
   ChatArea: () => {
-    useEffect(() => { chatArea.effects++; return () => { chatArea.effects--; }; }, []);
+    useEffect(() => {
+      chatArea.effects++;
+      return () => {
+        chatArea.effects--;
+      };
+    }, []);
     if (chatArea.failure) throw chatArea.failure;
-    return <><p>Chat content</p><input aria-label="Retained conversation draft" defaultValue="Draft" /></>;
+    return (
+      <>
+        <p>Chat content</p>
+        <input aria-label="Retained conversation draft" defaultValue="Draft" />
+      </>
+    );
   },
 }));
 vi.mock("../areas/chat/ChatProjects", () => ({ ChatProjects: () => <p>Native projects content</p> }));
@@ -80,6 +91,38 @@ vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({
   })),
 }));
 
+const selectedSession = vi.hoisted(() => ({ control: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () => ({
+  useOpsRuntimeSnapshot: () => ({
+    data: {
+      sessions: [
+        {
+          sessionId: "session-linked",
+          displayName: "Linked session",
+          channel: "web",
+          lastActivityAt: "2026-10-13T00:00:00Z",
+        },
+      ],
+      dashboard: { pendingApprovals: 0, activeSubagents: 0, recentEvents: [] },
+      sourceStatus: { sessions: { status: "ok" }, dashboard: { status: "ok" } },
+    },
+    loading: false,
+    error: null,
+    isStale: false,
+    reload: vi.fn(),
+  }),
+}));
+vi.mock("../areas/chat/SessionControlManager", () => ({
+  SessionControlManager: (props: { sessionId: string; workspaceId: string }) => {
+    selectedSession.control(props);
+    return <p>Canonical session control</p>;
+  },
+}));
+let shellPreferences: ReturnType<typeof useUiPreferences>;
+function ShellScopeProbe() {
+  shellPreferences = useUiPreferences();
+  return null;
+}
 let navigation: ReturnType<typeof useCockpitNavigation>;
 let shellDraft: ReturnType<typeof useSessionDraft<{ text: string }>>;
 function PendingProbe() {
@@ -608,35 +651,103 @@ describe("CockpitShell", () => {
 });
 
 // `/ops/runtime` now redirects natively to System › Health (cockpit-compatibility), so it no longer belongs here.
-it.each(["/missing", "/system/missing", "/ops/sessions", "/library/knowledge"])("does not show Chat or Health for %s", async (path) => {
+it.each(["/missing", "/system/missing", "/library/knowledge"])("does not show Chat or Health for %s", async (path) => {
   window.history.replaceState(null, "", path + "?workspaceId=w#record");
-  await act(async () => root.render(<QueryClientProvider client={new QueryClient()}><CockpitShell /></QueryClientProvider>));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CockpitShell />
+      </QueryClientProvider>,
+    ),
+  );
   expect(container.textContent).not.toContain("Chat content");
-  if (path === "/ops/sessions") {
-    expect(container.textContent).toContain("This view is available in Classic");
-    const link = container.querySelector<HTMLAnchorElement>('a[href*="shell=classic"]');
-    expect(link?.href).toContain("workspaceId=w");
-    expect(link?.hash).toBe("#record");
-  } else if (path === "/library/knowledge") {
+  if (path === "/library/knowledge") {
     expect(container.textContent).toContain("Library content");
     expect(container.textContent).not.toContain("This view is available in Classic");
   } else expect(container.textContent).toContain("Page not found");
 });
 
+it("routes the legacy sessions bookmark to its exact native session owner after known-scope review", async () => {
+  selectedSession.control.mockClear();
+  window.history.replaceState(
+    { evidence: "legacy-sessions-bookmark" },
+    "",
+    "/ops/sessions?workspaceId=w&sessionId=session-linked&source=legacy#record",
+  );
+  await act(async () =>
+    root.render(
+      <UiPreferencesProvider>
+        <ShellScopeProbe />
+        <QueryClientProvider client={new QueryClient()}>
+          <CockpitShell />
+        </QueryClientProvider>
+      </UiPreferencesProvider>,
+    ),
+  );
+  const originalScope = {
+    citadelId: shellPreferences.activeCitadelId,
+    workspaceId: shellPreferences.activeWorkspaceId,
+  };
+  try {
+    await act(async () => shellPreferences.setActiveScope({ citadelId: "personal", workspaceId: "default" }));
+    expect(container.querySelector('[aria-label="Linked scope review"]')?.textContent).toContain(
+      "This link requests a different Citadel or workspace",
+    );
+    expect(shellPreferences.activeWorkspaceId).toBe("default");
+    // Trusted fixture selection represents a directory-reviewed scope; the URL never selects it.
+    await act(async () => shellPreferences.setActiveScope({ citadelId: "personal", workspaceId: "w" }));
+    // Settle the actual destination, without waiting on unrelated held lazy imports.
+    await act(async () => {
+      await import("../areas/system/SystemArea");
+    });
+    await vi.waitFor(() => expect(container.textContent).toContain("Canonical session control"));
+    expect(selectedSession.control).toHaveBeenCalledWith({ sessionId: "session-linked", workspaceId: "w" });
+    expect(container.querySelector('[aria-label="Linked scope review"]')).toBeNull();
+    expect(container.textContent).toContain("Session evidence");
+    expect(container.textContent).not.toContain("Chat content");
+    expect(container.textContent).not.toContain("Health owner unavailable");
+    expect(container.textContent).not.toContain("This view is available in Classic");
+    const resolution = resolveCockpitCompatibility(
+      "/ops/sessions?workspaceId=w&sessionId=session-linked&source=legacy#record",
+    );
+    expect(resolution).toEqual({
+      kind: "native",
+      href: "/system/sessions?workspaceId=w&sessionId=session-linked&source=legacy#record",
+    });
+    expect(window.location.pathname).toBe("/system/sessions");
+    expect(window.location.search).toBe("?workspaceId=w&sessionId=session-linked&source=legacy&shell=cockpit");
+    expect(window.location.hash).toBe("#record");
+    expect(window.history.state).toMatchObject({ evidence: "legacy-sessions-bookmark" });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => shellPreferences.setActiveScope(originalScope));
+  }
+});
 
 it("retains Chat state but suspends its effects while native Projects owns the destination", async () => {
   window.history.replaceState(null, "", "/chat?sessionId=conversation-a&shell=cockpit");
-  await act(async () => root.render(<QueryClientProvider client={new QueryClient()}><CockpitNavigationProvider><CockpitShell /><PendingProbe /></CockpitNavigationProvider></QueryClientProvider>));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CockpitNavigationProvider>
+          <CockpitShell />
+          <PendingProbe />
+        </CockpitNavigationProvider>
+      </QueryClientProvider>,
+    ),
+  );
   const draft = container.querySelector<HTMLInputElement>('[aria-label="Retained conversation draft"]')!;
   draft.value = "Keep my conversation input";
   expect(chatArea.effects).toBe(1);
   await act(async () => navigation.navigate("/chat/projects/project-a"));
   await vi.waitFor(() => expect(container.textContent).toContain("Native projects content"));
-  expect(window.location.pathname).toBe("/chat/projects/project-a"); expect(chatArea.effects).toBe(0);
+  expect(window.location.pathname).toBe("/chat/projects/project-a");
+  expect(chatArea.effects).toBe(0);
   expect(container.querySelector('[aria-label="Retained conversation draft"]')).toBe(draft);
   await act(async () => window.history.back());
   await vi.waitFor(() => expect(window.location.pathname).toBe("/chat"));
-  expect(chatArea.effects).toBe(1); expect(draft.value).toBe("Keep my conversation input");
+  expect(chatArea.effects).toBe(1);
+  expect(draft.value).toBe("Keep my conversation input");
   await act(async () => window.history.forward());
   await vi.waitFor(() => expect(window.location.pathname).toBe("/chat/projects/project-a"));
   expect(chatArea.effects).toBe(0);

@@ -7,7 +7,6 @@ import { usePermissionProfileActivation } from "../../../features/native-routes/
 import { profileCanBeSelected } from "../../../features/native-routes/settings/permission-activation-binding";
 import { describeToolApprovalMode } from "../../../features/native-routes/settings/helpers/permission-helpers";
 import { Button } from "../../ui/Button";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { PermissionProfileEditor } from "./PermissionProfileEditor";
 import { LocalOperatorOverrides } from "./LocalOperatorOverrides";
@@ -270,11 +269,6 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
       />
       <LocalOperatorOverrides workspaceId={workspaceId} />
       <AutonomousGrantsSettings workspaceId={workspaceId} />
-      <ClassicOwnerLink
-        href="/settings/permissions?shell=classic"
-        scope={workspaceId}
-        label="Open classic permission settings"
-      />
     </section>
   );
 }

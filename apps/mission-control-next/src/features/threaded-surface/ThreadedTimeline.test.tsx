@@ -2362,19 +2362,39 @@ describe("ThreadedTimeline", () => {
     });
   });
 
-  it("cancels pending follow-output scrolling when the timeline unmounts", () => {
+  it("cancels pending follow-output scrolling when the timeline unmounts", async () => {
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    let pendingFrame: FrameRequestCallback | undefined;
+    const requestFrame = vi.fn((callback: FrameRequestCallback) => {
+      pendingFrame = callback;
+      return 99;
+    });
     const cancelAnimationFrame = vi.fn();
-    vi.stubGlobal(
-      "requestAnimationFrame",
-      vi.fn(() => 99),
-    );
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
     vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
 
-    const renderer = TestRenderer.create(<ThreadedTimeline props={buildProps({ followOutput: true }) as any} />);
-    renderer.unmount();
+    try {
+      await act(async () => {
+        root?.render(<ThreadedTimeline props={buildProps({ followOutput: true }) as any} />);
+      });
+      expect(requestFrame).toHaveBeenCalled();
+      expect(pendingFrame).toBeTypeOf("function");
+      expect(cancelAnimationFrame).not.toHaveBeenCalled();
 
-    expect(cancelAnimationFrame).toHaveBeenCalledWith(99);
-    vi.unstubAllGlobals();
+      await act(async () => {
+        root?.unmount();
+      });
+      root = null;
+
+      expect(cancelAnimationFrame).toHaveBeenCalledWith(99);
+      await act(async () => {
+        pendingFrame?.(0);
+      });
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      scrollIntoView.mockRestore();
+    }
   });
 
   it("keeps cowork delegation compact while exposing detail handoff and expansion state", () => {

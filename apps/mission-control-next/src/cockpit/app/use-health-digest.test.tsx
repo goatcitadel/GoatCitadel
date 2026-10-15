@@ -8,6 +8,7 @@ import { persistGatewayAuthState, getGatewayAccessRevision } from "@goatcitadel/
 import { useHealthDigestStatus, healthDigestKey, type HealthDigestStatus } from "./use-health-digest";
 import type { SystemHealthSources } from "../areas/system/system-health-sources";
 import { healthQueryScope } from "../data/health-query-scope";
+import { queryKeys } from "../data/query-keys";
 import { deriveSystemHealthChecks } from "../areas/system/system-health";
 import type { OperatorInboxResponse } from "@goatcitadel/contracts";
 const inboxState = vi.hoisted(() => ({ isError: false, data: { workspaceId: "workspace-a", items: [], coverage: [{ source: "backup_trust", state: "not_enabled" }] } as unknown as OperatorInboxResponse }));
@@ -77,4 +78,31 @@ it("shares the four-read digest between consumers and freshly revalidates a scop
   expect(api.fetchHealthSummary).toHaveBeenCalledTimes(3);
   await act(async () => { await vi.advanceTimersByTimeAsync(310_000); });
   expect(api.fetchNpuStatus).toHaveBeenCalledTimes(3); expect(api.fetchHealthSummary).toHaveBeenCalledTimes(4);
+});
+
+it("shares one core health read across shell consumers and explicitly defers optional diagnostics", async () => {
+ function CoreProbe() { status = useHealthDigestStatus("workspace-a", true, true); return <p title={status.title}>{status.label}</p>; }
+ await act(async () => root.render(<QueryClientProvider client={client}><CoreProbe /><CoreProbe /></QueryClientProvider>)); await settle();
+ expect(api.fetchHealthSummary).toHaveBeenCalledTimes(1);
+ for (const read of [api.fetchLlamaCppStatus, api.fetchNpuStatus, api.fetchIntegrationConnections, api.fetchChannelRuntimeStatus]) expect(read).not.toHaveBeenCalled();
+ expect(status.label).toContain("Core checks"); expect(status.title).toContain("Managed local runtimes, integrations, channels and workers are checked on System");
+ const scope = healthQueryScope(client, "workspace-a", getGatewayAccessRevision());
+ const sources = client.getQueryData<SystemHealthSources>(healthDigestKey("workspace-a", scope[1], scope[2], true))!;
+ expect(sources.npu.state).toBe("deferred"); expect(sources.connections.state).toBe("deferred");
+ const checks = deriveSystemHealthChecks(sources, null, "none"); expect(checks.some(check => ["models", "integrations", "channels", "remote_workers"].includes(check.id))).toBe(false);
+});
+
+it("retains inspected runtime failures without extra reads and fences them on workspace changes", async () => {
+ const scope = healthQueryScope(client, "workspace-a", getGatewayAccessRevision());
+ client.setQueryData([...queryKeys.health("workspace-a"), ...scope], {
+ summary: { state: "unavailable", detail: "Not read in this retained runtime fixture" },
+ llama: { state: "current", value: { enabled: false, desiredState: "stopped", processState: "stopped", baseUrl: "http://127.0.0.1:8080", healthy: false, updatedAt: "2026-10-12T00:00:00Z" } },
+ npu: { state: "current", value: { enabled: true, healthy: false, processState: "error", desiredState: "running", sidecarUrl: "http://127.0.0.1:8788", backend: "cpu", updatedAt: "2026-10-12T00:00:00Z", capability: { platform: "win32", arch: "x64", isWindowsArm64: false, onnxRuntimeAvailable: false, onnxRuntimeGenAiAvailable: false, qnnExecutionProviderAvailable: false, supported: false, details: [] } } },
+ connections: { state: "current", value: [] }, channels: { state: "deferred" }, workers: { state: "deferred" },
+ } satisfies SystemHealthSources);
+ function CoreProbe({ workspace }: { workspace: string }) { status = useHealthDigestStatus(workspace, true, true); return <p>{status.label}</p>; }
+ const show = (workspace: string) => act(async () => root.render(<QueryClientProvider client={client}><CoreProbe workspace={workspace} /></QueryClientProvider>));
+ await show("workspace-a"); await settle(); expect(status.label).toContain("Earlier system check needs review"); expect(status.tone).toBe("failed"); expect(status.title).toContain("retained evidence");
+ await show("workspace-b"); await settle(); expect(status.label).toContain("Core checks"); expect(status.label).not.toContain("Earlier system check");
+ expect(api.fetchNpuStatus).not.toHaveBeenCalled(); expect(api.fetchLlamaCppStatus).not.toHaveBeenCalled();
 });

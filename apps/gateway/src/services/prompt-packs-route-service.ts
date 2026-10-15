@@ -92,8 +92,8 @@ export class PromptPacksRouteService {
     return this.promptPacks.autoScorePromptPackBatch(input);
   }
 
-  public getPromptPackReport(packId: string) {
-    return this.promptPacks.getPromptPackReport(packId);
+  public getPromptPackReport(packId: string, focus?: Parameters<PromptPacksRoutePort["getPromptPackReport"]>[1]) {
+    return focus ? this.promptPacks.getPromptPackReport(packId, focus) : this.promptPacks.getPromptPackReport(packId);
   }
 
   public listPromptPackTestReviews(packId: string, testId: string) {

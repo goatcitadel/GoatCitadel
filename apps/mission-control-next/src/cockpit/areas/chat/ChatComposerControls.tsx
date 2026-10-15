@@ -1,10 +1,11 @@
-import { useState } from "react";
-import { Popover } from "radix-ui";
+import { useId, useRef } from "react";
+import { useDeferredOverlay } from "../../ui/deferred-overlay-owner";
+import { Dialog } from "../../ui/Dialog";
+import { Button } from "../../ui/Button";
 import { SlidersHorizontal } from "lucide-react";
 import type { ChatCompletionReasoningEffort, ChatWebMode } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
-import { GUIDED_THINKING_LEVELS } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
 
 type Controls = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -37,8 +38,21 @@ type Controls = Pick<
   | "onAcknowledgeRouteBoundary"
 >;
 
-/** Every effort stays selectable while the catalog records no reasoning metadata; the Gateway still gates the send. */
-const ALL_THINKING_LEVELS: readonly Controls["currentThinkingLevel"][] = GUIDED_THINKING_LEVELS.map((option) => option.value);
+export type ChatModelOptionsControls = Pick<
+  Controls,
+  | "providerOptions"
+  | "selectedProviderId"
+  | "selectedModel"
+  | "modelSwitchDisabled"
+  | "onRequestProviderChange"
+  | "onRequestModelChange"
+  | "currentThinkingLevel"
+  | "onSetThinkingLevel"
+  | "activePersonality"
+  | "onOpenPersonalitiesSettings"
+  | "historicalReadOnly"
+  | "sending"
+>;
 
 const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
   { value: "auto", label: "Auto" },
@@ -47,90 +61,29 @@ const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
   { value: "deep", label: "Deep" },
 ];
 
-export function ChatComposerControls({ props, reasoningEfforts }: { props: Controls; reasoningEfforts?: ChatCompletionReasoningEffort[] }) {
-  const supported = reasoningEfforts?.length ? [...new Set<Controls["currentThinkingLevel"]>([...reasoningEfforts.map((effort) => ({ none: "off", low: "minimal", medium: "standard", high: "extended", xhigh: "deep", max: "max", ultra: "ultra" } as const)[effort])])] : null;
-  const thinkingLevels = supported ?? ALL_THINKING_LEVELS;
-  const selectedProvider = props.providerOptions.find((provider) => provider.providerId === props.selectedProviderId);
+type ModelPopover = typeof import("./ChatModelOptionsPopover");
+let modelPopoverLoad: Promise<ModelPopover> | undefined;
+const loadModelPopover = () =>
+  (modelPopoverLoad ??= import("./ChatModelOptionsPopover").catch((cause) => {
+    modelPopoverLoad = undefined;
+    throw cause;
+  }));
+
+export function ChatComposerControls({
+  props,
+  reasoningEfforts,
+  scopeKey = "",
+}: {
+  props: Controls;
+  reasoningEfforts?: ChatCompletionReasoningEffort[];
+  scopeKey?: string;
+}) {
   const disabled = props.historicalReadOnly || props.sending;
-  const [optionsOpen, setOptionsOpen] = useState(false);
+  const options = useDeferredOverlay({ scopeKey, load: loadModelPopover });
+  const contentId = useId();
+  const reloadCancel = useRef<HTMLButtonElement>(null);
+  const ModelPopover = options.runtime?.ChatModelOptionsPopover;
   const optionsSummary = [props.selectedModel || "Choose model", humanizeToken(props.currentThinkingLevel)].join(" · ");
-  const modelOptions = (
-    <>
-      <label className="flex items-center gap-1">
-        Provider
-        <select
-          aria-label="Provider"
-          value={props.selectedProviderId ?? ""}
-          disabled={disabled || props.modelSwitchDisabled}
-          onChange={(event) => { if (event.target.value) props.onRequestProviderChange(event.target.value); }}
-          className="max-w-32 rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-full"
-        >
-          <option value="">Choose</option>
-          {props.selectedProviderId && !selectedProvider ? (
-            <option value={props.selectedProviderId}>{props.selectedProviderId} · current, catalog unavailable</option>
-          ) : null}
-          {props.providerOptions.map((provider) => (
-            <option key={provider.providerId} value={provider.providerId} disabled={provider.disabled}>
-              {provider.label}
-              {provider.availabilityLabel ? ` · ${provider.availabilityLabel}` : ""}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="flex items-center gap-1">
-        Model
-        <select
-          aria-label="Model"
-          value={props.selectedModel ?? ""}
-          disabled={disabled || props.modelSwitchDisabled || !selectedProvider}
-          onChange={(event) => { if (event.target.value) props.onRequestModelChange(event.target.value); }}
-          className="max-w-36 rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-full"
-        >
-          <option value="">Choose</option>
-          {props.selectedModel && !selectedProvider?.models.includes(props.selectedModel) ? (
-            <option value={props.selectedModel}>{props.selectedModel} · current, unverified</option>
-          ) : null}
-          {selectedProvider?.models.map((model) => (
-            <option key={model} value={model}>
-              {model}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="flex items-center gap-1">
-        Effort
-        <select
-          aria-label="Thinking effort"
-          value={props.currentThinkingLevel}
-          disabled={disabled}
-          onChange={(event) => { const level = event.target.value as Controls["currentThinkingLevel"]; if (thinkingLevels.includes(level)) props.onSetThinkingLevel(level); }}
-          className="rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11"
-        >
-          {supported && !supported.includes(props.currentThinkingLevel) ? <option value={props.currentThinkingLevel} disabled>{humanizeToken(props.currentThinkingLevel)} · current, unsupported by this model</option> : null}
-          {thinkingLevels.map((level) => (
-            <option key={level} value={level}>
-              {humanizeToken(level)}
-            </option>
-          ))}
-        </select>
-        {!supported ? <span className="text-fg-muted" title="The model catalog lists no reasoning efforts for this model.">· support unverified</span> : null}
-      </label>
-      <button
-        type="button"
-        aria-label="Open personality settings"
-        onClick={props.onOpenPersonalitiesSettings}
-        disabled={!props.onOpenPersonalitiesSettings}
-        className="rounded-md border border-line px-2 py-1 text-fg-secondary hover:border-line-strong max-sm:min-h-11"
-      >
-        {props.activePersonality?.name ?? "Personality"}
-      </button>
-      {selectedProvider?.contextWindowTokens ? (
-        <span className="ml-auto">
-          {new Intl.NumberFormat().format(selectedProvider.contextWindowTokens)} token context limit
-        </span>
-      ) : null}
-    </>
-  );
   const modeOptions = (
     <>
       {" "}
@@ -198,7 +151,16 @@ export function ChatComposerControls({ props, reasoningEfforts }: { props: Contr
       ) : null}
       {props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged ? (
         <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-status-waiting bg-sunken p-2 text-xs text-fg-secondary">
-          <span>Route: {props.routePreflight?.effectiveProviderId ?? "provider unrecorded"} / {props.routePreflight?.effectiveModel ?? "model unrecorded"} · {humanizeToken(props.routePreflight?.runtimeClass ?? "unknown")}. Fallback may send conversation content to another runtime, including outside this computer. {props.routePreflight?.degradedReason ?? props.routePreflight?.normalizationReason}</span>
+          <span>
+            {"Route: "}
+            {props.routePreflight?.effectiveProviderId ?? "provider unrecorded"}
+            {" / "}
+            {props.routePreflight?.effectiveModel ?? "model unrecorded"}
+            {" · "}
+            {humanizeToken(props.routePreflight?.runtimeClass ?? "unknown")}
+            {". Fallback may send conversation content to another runtime, including outside this computer. "}
+            {props.routePreflight?.degradedReason ?? props.routePreflight?.normalizationReason}
+          </span>
           <button
             type="button"
             onClick={props.onAcknowledgeRouteBoundary}
@@ -233,33 +195,108 @@ export function ChatComposerControls({ props, reasoningEfforts }: { props: Contr
         >
           + Attach
         </button>
-        <Popover.Root open={optionsOpen} onOpenChange={setOptionsOpen}>
-          <Popover.Trigger asChild>
+        <button
+          ref={(element) => {
+            options.trigger.current = element;
+          }}
+          type="button"
+          aria-label="Model and reasoning options"
+          aria-haspopup="dialog"
+          aria-expanded={options.open}
+          aria-controls={options.open ? contentId : undefined}
+          aria-busy={options.loading || undefined}
+          data-state={options.open ? "open" : "closed"}
+          onClick={() => options.request(!options.open)}
+          className="inline-flex min-h-9 min-w-0 max-w-64 items-center gap-2 max-sm:max-w-full max-sm:basis-1/2 max-sm:flex-1 rounded-md border border-line px-2 text-left text-fg-secondary hover:border-line-strong max-sm:min-h-11"
+        >
+          <SlidersHorizontal aria-hidden="true" className="size-4 shrink-0" />
+          <span className="min-w-0 truncate">{optionsSummary}</span>
+        </button>
+        {options.loading || options.failure ? (
+          <span ref={options.status} role="status" className="text-xs text-fg-muted">
+            {options.failure ? (
+              <>
+                {"Model options could not load. "}
+                <Button
+                  size="sm"
+                  className="cockpit-deferred-recovery-control min-h-8 max-sm:min-h-11"
+                  onClick={(event) => options.requestReload(event.currentTarget)}
+                >
+                  Reload app
+                </Button>
+              </>
+            ) : (
+              "Loading model options…"
+            )}{" "}
             <button
               type="button"
-              aria-label="Model and reasoning options"
-              className="inline-flex min-h-9 min-w-0 max-w-64 items-center gap-2 max-sm:max-w-full max-sm:basis-1/2 max-sm:flex-1 rounded-md border border-line px-2 text-left text-fg-secondary hover:border-line-strong max-sm:min-h-11"
+              className="cockpit-deferred-recovery-control min-h-8 px-2 max-sm:min-h-11"
+              onClick={() => options.close(true)}
             >
-              <SlidersHorizontal aria-hidden="true" className="size-4 shrink-0" />
-              <span className="min-w-0 truncate">{optionsSummary}</span>
+              Cancel model options
             </button>
-          </Popover.Trigger>
-          <Popover.Portal>
-            <Popover.Content
-              side="top"
-              align="start"
-              sideOffset={8}
-              className="z-50 w-80 max-w-full space-y-3 rounded-lg border border-line bg-overlay p-3 text-xs text-fg shadow-overlay"
+          </span>
+        ) : null}
+        {ModelPopover ? (
+          <ModelPopover
+            props={props}
+            reasoningEfforts={reasoningEfforts}
+            open={options.open}
+            onOpenChange={(open) => options.request(open)}
+            trigger={options.trigger}
+            contentRef={options.content}
+            contentId={contentId}
+            ownsFocus={() =>
+              Boolean(
+                options.intent.current &&
+                options.isCurrent(options.intent.current.owner) &&
+                options.ownsFocus(options.intent.current),
+              )
+            }
+            isCurrent={options.isCurrent}
+            onOutside={() => {
+              if (options.intent.current) options.intent.current.restore = false;
+            }}
+            canRestore={() =>
+              Boolean(
+                options.intent.current &&
+                options.isCurrent(options.intent.current.owner) &&
+                options.intent.current.restore &&
+                options.ownsFocus(options.intent.current),
+              )
+            }
+          />
+        ) : null}
+        <Dialog
+          open={Boolean(options.reloadReview && options.reloadCurrent(options.reloadReview))}
+          onOpenChange={(open) => {
+            if (!open) options.cancelReload(options.reloadReview);
+          }}
+          title="Reload app?"
+          description="Reloading keeps the recorded conversation. Unsent question answers and unsaved edits may be lost. Reloading does not submit an answer or an approval decision."
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            if (options.reloadReview && options.reloadCurrent(options.reloadReview))
+              reloadCancel.current?.focus({ preventScroll: true });
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            options.restoreReloadFocus();
+          }}
+        >
+          <div ref={options.registerRecoveryHost} className="flex justify-end gap-2">
+            <Button ref={reloadCancel} onClick={() => options.cancelReload(options.reloadReview)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              disabled={!options.reloadReview || !options.reloadCurrent(options.reloadReview)}
+              onClick={() => options.confirmReload(options.reloadReview)}
             >
-              <h3 className="text-sm font-semibold">Model and reasoning</h3>
-              <div className="flex flex-wrap items-center gap-3">{modelOptions}</div>
-              <p className="text-fg-muted">Effort support depends on the selected model.</p>
-              <Popover.Close className="min-h-9 rounded-md border border-line px-3" type="button">
-                Done
-              </Popover.Close>
-            </Popover.Content>
-          </Popover.Portal>
-        </Popover.Root>
+              Reload app
+            </Button>
+          </div>
+        </Dialog>
         {modeOptions}
       </div>
     </>

@@ -19,8 +19,9 @@ export function assertProjectReadRequests(requests, prefsBySession) {
     assert.ok(prefs, "Routing inspection belongs to a foreign conversation");
     const body = request.body;
     assert.equal(body.action, "send");
-    assert.ok(Object.keys(body).every((key) => ["action", "prefsOverride", "fullWebAccess"].includes(key)),
+    assert.ok(Object.keys(body).every((key) => ["action", "prefsOverride", "fullWebAccess", "providerFallback"].includes(key)),
       "Read-only routing inspection captured content, a turn, or a workspace snapshot");
+    if (Object.hasOwn(body, "providerFallback")) assert.deepEqual(body.providerFallback, prefs.providerFallback ?? null, "Routing inspection changed saved fallback consent");
     if (body.fullWebAccess !== undefined) assert.equal(typeof body.fullWebAccess, "boolean");
     if (body.prefsOverride) {
       const fields = ["mode", "providerId", "model", "webMode", "memoryMode", "thinkingLevel", "speedMode", "subagentPolicy"];

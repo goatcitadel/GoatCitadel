@@ -1,6 +1,6 @@
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
 import { useCallback, useMemo } from "react";
-import { type ComposerPaletteItem } from "../composer-palette";
+import type { ComposerPaletteItem } from "../composer-palette";
 import { useChatComposerInteractions } from "../useChatComposerInteractions";
 import { useChatGoalActions } from "../useChatGoalActions";
 import { useChatMultimodalControls } from "../useChatMultimodalControls";
@@ -20,6 +20,7 @@ import { useChatSurfaceNavigation } from "./useChatSurfaceNavigation";
 import { useChatTurnNavigation } from "./useChatTurnNavigation";
 
 type Input = {
+  deferVoiceReadiness?: boolean;
   workspaceId: string;
   surfaceRuntime: Pick<
     ReturnType<typeof useChatSurfaceComposition>,
@@ -73,6 +74,7 @@ type Input = {
 
 /** Composes turn navigation, composer, media and send-intent owners while leaving final send binding to the Host. */
 export function useChatComposerInteractionComposition({
+  deferVoiceReadiness,
   workspaceId,
   surfaceRuntime,
   selectedTurnId,
@@ -172,6 +174,7 @@ export function useChatComposerInteractionComposition({
     [session.sessionData.thread?.turns],
   );
   const multimodal = useChatMultimodalControls({
+    deferVoiceReadiness,
     providerOptions: submission.providerRouting.providerOptions,
     selectedProviderId: submission.providerRouting.selectedProviderId,
     preferredImageProviderId: session.sessionData.prefs?.imageProviderId,

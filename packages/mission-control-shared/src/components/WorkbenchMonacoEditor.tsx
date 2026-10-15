@@ -1,6 +1,6 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import type { editor as MonacoEditorNamespace } from "monaco-editor";
-import { shouldRenderMonacoRuntime } from "./monaco-runtime";
+import { observeMonacoTheme, resolveMonacoTheme, shouldRenderMonacoRuntime } from "./monaco-runtime";
 import { loadMonacoEditorRuntime, normalizeMonacoLoaderLanguage, type MonacoEditorApiModule } from "./monaco-loader";
 
 interface WorkbenchMonacoEditorProps {
@@ -17,13 +17,6 @@ interface WorkbenchMonacoEditorProps {
 
 const WORKBENCH_EDITOR_FONT_SIZE = 12;
 const WORKBENCH_EDITOR_LINE_HEIGHT = 18;
-
-function resolveMonacoTheme(): "vs" | "vs-dark" {
-  if (typeof document === "undefined") {
-    return "vs-dark";
-  }
-  return document.querySelector(".theme-citadel-light") ? "vs" : "vs-dark";
-}
 
 export function WorkbenchMonacoEditor({
   value,
@@ -68,12 +61,13 @@ export function WorkbenchMonacoEditor({
     }
 
     let disposed = false;
+    let stopTheme: (() => void) | undefined;
     void loadMonacoEditorRuntime(resolvedLanguage).then((monaco) => {
       if (disposed || !containerRef.current) {
         return;
       }
       monacoRef.current = monaco;
-      monaco.editor.setTheme(resolveMonacoTheme());
+      stopTheme = observeMonacoTheme((theme) => monaco.editor.setTheme(theme));
       const model = monaco.editor.createModel(latestPropsRef.current.value, latestPropsRef.current.language);
       modelRef.current = model;
       const editor = monaco.editor.create(containerRef.current, {
@@ -108,6 +102,7 @@ export function WorkbenchMonacoEditor({
 
     return () => {
       disposed = true;
+      stopTheme?.();
       editorRef.current?.dispose();
       modelRef.current?.dispose();
       editorRef.current = null;

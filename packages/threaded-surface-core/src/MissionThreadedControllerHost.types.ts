@@ -193,6 +193,8 @@ export type MissionThreadedActiveSessionSurfaceProps = MissionControlActiveSessi
 export type MissionThreadedContextDockProps = ChatContextDockPanelsProps;
 
 export interface MissionThreadedControllerHostProps {
+  /** Legacy presentation adapter; native Chat keeps canonical runtime controls without this projection. */
+  coworkViewModelFactory: typeof import("./cowork-view-model").deriveCoworkRunViewModel | null;
   workspaceId?: string;
   workspaceName?: string;
   approvalsCount?: number;
@@ -201,6 +203,8 @@ export interface MissionThreadedControllerHostProps {
   hidePageHeader?: boolean;
   /** Let a shell render its conversation layout while initial discovery loads. */
   renderWhileLoading?: boolean;
+  /** Secondary session evidence is admitted by the native inspector owner. */
+  secondaryEvidenceEnabled?: boolean;
   /**
    * Seeds modeOverride from an explicit URL mode (e.g. ?mode=chat) so it behaves
    * like the operator manually clicking the mode override control (QA finding N3):
@@ -233,7 +237,13 @@ export interface MissionThreadedControllerHostProps {
   onOpenOpsRuntime?: () => void;
   onNavigateSurface?: (
     surface: ChatMode,
-    options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null; messageId?: string; sequence?: number },
+    options?: {
+      sessionId?: string | null;
+      turnId?: string | null;
+      artifactId?: string | null;
+      messageId?: string;
+      sequence?: number;
+    },
   ) => void;
   // `origin` distinguishes a passive session-mode sync (the selected session's
   // own stored mode, e.g. on arrival or session switch) from an active operator

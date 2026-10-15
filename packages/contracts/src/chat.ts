@@ -2238,6 +2238,14 @@ export interface ChatThreadSystemNoticeRecord {
   message: ChatMessageRecord;
 }
 
+/** Canonical core reads for one operator conversation, combined without a second state owner. */
+export interface ChatSessionCoreStateResponse {
+  sessionId: string;
+  thread?: ChatThreadResponse;
+  binding: ChatSessionBindingRecord | null;
+  prefs: ChatSessionPrefsRecord;
+}
+
 export interface ChatThreadResponse {
   sessionId: string;
   activeLeafTurnId?: string;

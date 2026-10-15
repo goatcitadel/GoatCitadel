@@ -10,7 +10,7 @@ import {
 import { useGatewayAccess } from "../../app/use-gateway-access";
 import { createCockpitQueryClient } from "../data/query-client";
 import { useCockpitRealtime } from "../data/realtime";
-import { GeneratedArtifactActionsContext } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
+import { GeneratedArtifactActionsContext } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactActionsContext";
 import { AreaErrorBoundary } from "../ui/AreaErrorBoundary";
 import { renderCockpitArtifactActions } from "../ui/ArtifactRenderActions";
 import { CockpitToaster } from "../ui/Toaster";
@@ -23,7 +23,7 @@ import { useGatewayReachability } from "./use-gateway-reachability";
 function GatedCockpit() {
   const { activeWorkspaceId, notifications, theme, density } = useUiPreferences();
   useLayoutEffect(() => applyCockpitAppearance(theme, density), [theme, density]);
-  const { gatewayAccess, gatewayBusy, callerScope, retryGatewayAccess } = useGatewayAccess();
+  const { gatewayAccess, gatewayBusy, callerScope, retryGatewayAccess } = useGatewayAccess({ batchStartupReads: true });
   const accessRevision = useSyncExternalStore(subscribeGatewayAccessChange, getGatewayAccessRevision, () => 0);
   const queryClient = useMemo(createCockpitQueryClient, [callerScope]);
   const route = useCockpitRoute();

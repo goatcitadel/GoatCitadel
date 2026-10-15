@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { startupReadRoutes } from "./routes/startup-reads.js";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import cors from "@fastify/cors";
@@ -452,6 +453,7 @@ export async function buildApp(options: GatewayPluginOptions = {}) {
       registerChangePlanRoutes(changePlanApp);
     });
     await app.register(chatRoutes);
+    await app.register(startupReadRoutes);
     await app.register(promptPackRoutes);
     await app.register(modelComparisonRoutes);
     await app.register(mcpRoutes);

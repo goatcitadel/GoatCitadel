@@ -175,6 +175,85 @@ describe("approvals routes", () => {
     });
   });
 
+  it("preserves exact run/session history filters and canonical redaction through the existing authorized list", async () => {
+    const rawApproval = createSensitiveApproval("approved");
+    const listApprovalsPage = vi.fn(async () => ({ items: [rawApproval], nextCursor: "next" }));
+    const built = buildApp({ listApprovalsPage });
+    app = built.app;
+    await app.register(approvalsRoutes);
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/approvals?workspaceId=%20workspace-a%20&runId=run%2Fone&sessionId=session%3Atwo&status=approved&limit=25&cursor=opaque",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(listApprovalsPage).toHaveBeenCalledOnce();
+    expect(listApprovalsPage).toHaveBeenCalledWith({
+      workspaceId: "workspace-a",
+      runId: "run/one",
+      sessionId: "session:two",
+      status: "approved",
+      limit: 25,
+      cursor: "opaque",
+    });
+    expect(built.requireOperatorAuth).toHaveBeenCalledOnce();
+    expect(response.json().nextCursor).toBe("next");
+    expectSecretSafeApprovalProjection(response.json());
+    expectRawApprovalUnchanged(rawApproval);
+  });
+
+  it.each([
+    "runId=run",
+    "workspaceId=ws&sessionId=session",
+    "workspaceId=ws&runId=%20",
+    "workspaceId=%20&runId=run",
+    "workspaceId=ws&runId=run&sessionId=%20",
+    "workspaceId=ws&runId=" + "a".repeat(257),
+  ])("rejects incomplete or invalid linkage filter %s before any repository read", async (query) => {
+    const listApprovalsPage = vi.fn();
+    const listApprovals = vi.fn();
+    const built = buildApp({ listApprovalsPage, listApprovals });
+    app = built.app;
+    await app.register(approvalsRoutes);
+    expect((await app.inject({ method: "GET", url: "/api/v1/approvals?" + query })).statusCode).toBe(400);
+    expect(listApprovalsPage).not.toHaveBeenCalled();
+    expect(listApprovals).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to unfiltered workspace scans when the indexed list owner is unavailable", async () => {
+    const listApprovals = vi.fn();
+    const built = buildApp({ listApprovals });
+    app = built.app;
+    await app.register(approvalsRoutes);
+    expect((await app.inject({ method: "GET", url: "/api/v1/approvals?workspaceId=ws&runId=run" })).statusCode).toBe(
+      503,
+    );
+    expect(listApprovals).not.toHaveBeenCalled();
+  });
+
+  it("retains an empty canonical result for an unknown run and preserves the list authentication boundary", async () => {
+    const listApprovalsPage = vi.fn(async () => ({ items: [] }));
+    const built = buildApp({ listApprovalsPage });
+    app = built.app;
+    await app.register(approvalsRoutes);
+    const found = await app.inject({ method: "GET", url: "/api/v1/approvals?workspaceId=ws&runId=unknown" });
+    expect(found.statusCode).toBe(200);
+    expect(found.json()).toEqual({ items: [] });
+    await app.close();
+    app = null;
+    listApprovalsPage.mockClear();
+    const requireOperatorAuth = vi.fn(
+      async (_request: unknown, reply: { code: (status: number) => { send: (body: unknown) => unknown } }) =>
+        reply.code(401).send({ error: "Operator authentication required." }),
+    );
+    const denied = buildApp({ listApprovalsPage }, requireOperatorAuth);
+    app = denied.app;
+    await app.register(approvalsRoutes);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/v1/approvals?workspaceId=ws&runId=unknown" })).statusCode,
+    ).toBe(401);
+    expect(listApprovalsPage).not.toHaveBeenCalled();
+  });
+
   it("reads one approval by id with the list's projection, scope and access", async () => {
     const rawApproval = createSensitiveApproval();
     const getApproval = vi.fn(async (approvalId: string, workspaceId?: string) => {

@@ -241,7 +241,8 @@ export function useChatSubmissionComposition({
     fullWebAccess: oneShotContext.fullWebAccess,
     displayAction: orchestration.editingTurnId ? "edit" : "send",
     displayTurnId: orchestration.editingTurnId,
-    enabled: Boolean(selection.selectedSessionId),
+    // Await canonical preferences before previewing the route; submission still forces fresh admission.
+    enabled: Boolean(selection.selectedSessionId && session.sessionData.prefs),
     workspaceSnapshot: orchestration.editingTurnId ? undefined : oneShotContext.workspaceSnapshotRequest,
   });
   const { ensureFreshPreflight } = routePreflight;

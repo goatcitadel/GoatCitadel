@@ -1,8 +1,40 @@
-/* eslint-disable max-lines -- External-source protocol contracts remain colocated through the parity schema freeze. */
+/* eslint-disable max-lines -- Library protocol contracts retain their existing owner; Chat uses the eager leaf. */
 import { canonicalJsonString } from "./canonical-json.js";
+import {
+  EXTERNAL_SOURCE_LIMITS,
+  EXTERNAL_SOURCE_SCHEMA_VERSION,
+  assertCanonicalJsonBytes,
+  assertExactKeys,
+  assertIso,
+  assertPositiveInteger,
+  assertRecord,
+  assertSha256,
+  assertText,
+  assertVersion,
+  isRecord,
+  normalizeInputText,
+  normalizePositiveInteger,
+} from "./external-source-validation.js";
 import { assertCoherentWorkspacePathFlavors, type WorkspacePathFlavor } from "./workspace-path-bridge.js";
 
-export const EXTERNAL_SOURCE_SCHEMA_VERSION = "goatcitadel.external-source.v1" as const;
+import {
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE,
+} from "./external-source-chat.js";
+export {
+  EXTERNAL_SOURCE_LIMITS,
+  EXTERNAL_SOURCE_SCHEMA_VERSION,
+  EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH,
+} from "./external-source-validation.js";
+export {
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE,
+  assertExternalSessionAttachment,
+  assertExternalSourceAttachmentCandidate,
+  assertExternalSourceAttachmentCandidateListResponse,
+  assertExternalSourceKnowledgeSnapshotApprovalPayload,
+  normalizeExternalSessionAttachInput,
+  normalizeExternalSessionDetachInput,
+  normalizeExternalSourceKnowledgeSnapshotRequestInput,
+} from "./external-source-chat.js";
 export const EXTERNAL_SOURCE_CURSOR_VERSION = "goatcitadel.external-source-cursor.v1" as const;
 
 /**
@@ -26,35 +58,6 @@ export const EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_TTL_MS = 24 * 60 * 60_0
  * one approved request always yields byte-identical chunk content.
  */
 export const EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CHUNK_MAX_CHARS = 4_000;
-/** Session incarnation identifiers follow the chat lifecycle column bound. */
-export const EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH = 320;
-
-export const EXTERNAL_SOURCE_LIMITS = Object.freeze({
-  rootPathBytes: 2_048,
-  activeRootsPerWorkspace: 16,
-  directoryDepth: 12,
-  directoryEntriesPerScan: 10_000,
-  catalogItemsPerScan: 5_000,
-  scanWallTimeMs: 60_000,
-  concurrentFileReads: 4,
-  sourceFileBytes: 16 * 1024 * 1024,
-  jsonlLineBytes: 1024 * 1024,
-  normalizedMessageBytes: 256 * 1024,
-  messagesPerSessionItem: 10_000,
-  messagesPerImport: 50_000,
-  normalizedSessionArtifactBytes: 8 * 1024 * 1024,
-  markdownItemBytes: 1024 * 1024,
-  selectedItemsPerImport: 100,
-  rawBytesPerPlan: 25 * 1024 * 1024,
-  normalizedBytesPerImport: 25 * 1024 * 1024,
-  stagingLeaseMs: 30 * 60 * 1000,
-  lineageNodes: 10_000,
-  lineageDepth: 64,
-  defaultPageSize: 50,
-  maxPageSize: 100,
-  encodedCursorBytes: 8_192,
-  canonicalJsonBytes: 64 * 1024,
-});
 
 export type ExternalSourceKind = "codex_sessions" | "codex_memory" | "claude_sessions" | "claude_memory";
 export type ExternalSourceAdapterId =
@@ -428,10 +431,6 @@ export interface ExternalSourceKnowledgeSnapshotApprovalPayload {
   attachmentRevision: number;
 }
 
-/** Content-free operator preview for the knowledge-snapshot approval inbox. */
-export const EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE =
-  "Create a Knowledge document and retrieval chunks from this verified imported snapshot. This does not include the source in the next Chat turn or activate a skill. Approval alone does not prove the copy completed.";
-
 export interface ExternalSourceKnowledgeSnapshotApprovalPreview {
   sourceId: string;
   importId: string;
@@ -741,27 +740,6 @@ export function normalizeExternalSourceImportApplyInput(value: unknown): Externa
   };
 }
 
-export function normalizeExternalSessionAttachInput(value: unknown): ExternalSessionAttachInput {
-  assertRecord(value, "attach input");
-  assertExactKeys(
-    value,
-    ["workspaceId", "sessionId", "expectedSessionIncarnationId", "sourceId", "importId", "itemId"],
-    new Set(),
-  );
-  return {
-    workspaceId: normalizeInputText(value.workspaceId, "workspaceId", 256),
-    sessionId: normalizeInputText(value.sessionId, "sessionId", 256),
-    expectedSessionIncarnationId: normalizeInputText(
-      value.expectedSessionIncarnationId,
-      "expectedSessionIncarnationId",
-      EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH,
-    ),
-    sourceId: normalizeInputText(value.sourceId, "sourceId", 256),
-    importId: normalizeInputText(value.importId, "importId", 256),
-    itemId: normalizeInputText(value.itemId, "itemId", 256),
-  };
-}
-
 export function normalizeExternalSessionAttachmentListInput(value: unknown): ExternalSessionAttachmentListInput {
   assertRecord(value, "attachment list input");
   assertExactKeys(value, ["workspaceId", "sessionId", "limit"], new Set(["limit"]));
@@ -773,61 +751,6 @@ export function normalizeExternalSessionAttachmentListInput(value: unknown): Ext
     workspaceId: normalizeInputText(value.workspaceId, "workspaceId", 256),
     sessionId: normalizeInputText(value.sessionId, "sessionId", 256),
     ...(limit ? { limit } : {}),
-  };
-}
-
-export function normalizeExternalSessionDetachInput(value: unknown): ExternalSessionDetachInput {
-  assertRecord(value, "detach input");
-  assertExactKeys(
-    value,
-    ["workspaceId", "sessionId", "attachmentId", "expectedRevision", "expectedSessionIncarnationId"],
-    new Set(),
-  );
-  return {
-    workspaceId: normalizeInputText(value.workspaceId, "workspaceId", 256),
-    sessionId: normalizeInputText(value.sessionId, "sessionId", 256),
-    attachmentId: normalizeInputText(value.attachmentId, "attachmentId", 256),
-    expectedRevision: normalizePositiveInteger(value.expectedRevision, "expectedRevision"),
-    expectedSessionIncarnationId: normalizeInputText(
-      value.expectedSessionIncarnationId,
-      "expectedSessionIncarnationId",
-      EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH,
-    ),
-  };
-}
-
-export function normalizeExternalSourceKnowledgeSnapshotRequestInput(
-  value: unknown,
-): ExternalSourceKnowledgeSnapshotRequestInput {
-  assertRecord(value, "knowledge snapshot request input");
-  assertExactKeys(
-    value,
-    [
-      "workspaceId",
-      "sessionId",
-      "expectedSessionIncarnationId",
-      "attachmentId",
-      "importId",
-      "itemId",
-      "expectedAttachmentRevision",
-    ],
-    new Set(),
-  );
-  return {
-    workspaceId: normalizeInputText(value.workspaceId, "workspaceId", 256),
-    sessionId: normalizeInputText(value.sessionId, "sessionId", 256),
-    expectedSessionIncarnationId: normalizeInputText(
-      value.expectedSessionIncarnationId,
-      "expectedSessionIncarnationId",
-      EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH,
-    ),
-    attachmentId: normalizeInputText(value.attachmentId, "attachmentId", 256),
-    importId: normalizeInputText(value.importId, "importId", 256),
-    itemId: normalizeInputText(value.itemId, "itemId", 256),
-    expectedAttachmentRevision: normalizePositiveInteger(
-      value.expectedAttachmentRevision,
-      "expectedAttachmentRevision",
-    ),
   };
 }
 
@@ -847,42 +770,6 @@ export function normalizeExternalSourceKnowledgeSnapshotApplyInput(
     approvalId: normalizeInputText(value.approvalId, "approvalId", 256),
     ...(value.includeThreadAttachment === undefined ? {} : { includeThreadAttachment: value.includeThreadAttachment }),
   };
-}
-
-export function assertExternalSourceKnowledgeSnapshotApprovalPayload(
-  value: ExternalSourceKnowledgeSnapshotApprovalPayload,
-): void {
-  assertRecord(value, "knowledge snapshot payload");
-  assertExactKeys(
-    value,
-    [
-      "workspaceId",
-      "sourceId",
-      "importId",
-      "itemId",
-      "normalizedArtifactSha256",
-      "rawSha256",
-      "sessionId",
-      "sessionIncarnationId",
-      "attachmentId",
-      "attachmentRevision",
-    ],
-    new Set(),
-  );
-  for (const [name, input, max] of [
-    ["workspaceId", value.workspaceId, 256],
-    ["sourceId", value.sourceId, 256],
-    ["importId", value.importId, 256],
-    ["itemId", value.itemId, 256],
-    ["sessionId", value.sessionId, 256],
-    ["sessionIncarnationId", value.sessionIncarnationId, EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH],
-    ["attachmentId", value.attachmentId, 256],
-  ] as const)
-    assertText(input, name, max);
-  assertSha256(value.normalizedArtifactSha256);
-  assertSha256(value.rawSha256);
-  assertPositiveInteger(value.attachmentRevision, "attachmentRevision");
-  assertCanonicalJsonBytes(value, 16 * 1024);
 }
 
 export function projectExternalSourceSummary(
@@ -1414,110 +1301,6 @@ export function assertExternalSourceImportSettlement(value: ExternalSourceImport
   assertCanonicalJsonBytes(value, EXTERNAL_SOURCE_LIMITS.canonicalJsonBytes);
 }
 
-export function assertExternalSessionAttachment(value: ExternalSessionAttachmentRecord): void {
-  assertRecord(value, "external attachment");
-  assertExactKeys(
-    value,
-    [
-      "schemaVersion",
-      "attachmentId",
-      "workspaceId",
-      "sessionId",
-      "sourceId",
-      "importId",
-      "itemId",
-      "normalizedArtifactSha256",
-      "mode",
-      "status",
-      "revision",
-      "attachedByActorId",
-      "attachedAt",
-      "detachedByActorId",
-      "detachedAt",
-    ],
-    new Set(["detachedByActorId", "detachedAt"]),
-  );
-  assertVersion(value.schemaVersion);
-  for (const [name, input] of [
-    ["attachmentId", value.attachmentId],
-    ["workspaceId", value.workspaceId],
-    ["sessionId", value.sessionId],
-    ["sourceId", value.sourceId],
-    ["importId", value.importId],
-    ["itemId", value.itemId],
-    ["attachedByActorId", value.attachedByActorId],
-  ] as const)
-    assertText(input, name, 256);
-  assertSha256(value.normalizedArtifactSha256);
-  if (value.mode !== "read_only_external" || (value.status !== "attached" && value.status !== "detached"))
-    throw new Error("External attachment mode/status is invalid.");
-  assertPositiveInteger(value.revision, "revision");
-  assertIso(value.attachedAt);
-  if (
-    value.status === "attached" &&
-    (value.revision !== 1 || value.detachedAt !== undefined || value.detachedByActorId !== undefined)
-  )
-    throw new Error("Attached external source contains invalid revision or detach evidence.");
-  if (value.status === "detached") {
-    if (value.revision !== 2 || !value.detachedAt || !value.detachedByActorId)
-      throw new Error("Detached external source lacks actor or CAS evidence.");
-    assertIso(value.detachedAt);
-    assertText(value.detachedByActorId, "detachedByActorId", 256);
-  }
-  assertCanonicalJsonBytes(value, EXTERNAL_SOURCE_LIMITS.canonicalJsonBytes);
-}
-
-export function assertExternalSourceAttachmentCandidate(value: ExternalSourceAttachmentCandidateRecord): void {
-  assertRecord(value, "external attachment candidate");
-  assertExactKeys(
-    value,
-    [
-      "schemaVersion",
-      "workspaceId",
-      "sourceId",
-      "sourceLabel",
-      "sourceRevision",
-      "importId",
-      "itemId",
-      "normalizedArtifactSha256",
-      "normalizedByteCount",
-      "importedAt",
-      "artifactsVerifiedAt",
-    ],
-    new Set(),
-  );
-  assertVersion(value.schemaVersion);
-  for (const [name, input] of [
-    ["workspaceId", value.workspaceId],
-    ["sourceId", value.sourceId],
-    ["importId", value.importId],
-    ["itemId", value.itemId],
-  ] as const)
-    assertText(input, name, 256);
-  assertText(value.sourceLabel, "sourceLabel", 512);
-  assertPositiveInteger(value.sourceRevision, "sourceRevision");
-  assertSha256(value.normalizedArtifactSha256);
-  if (!Number.isSafeInteger(value.normalizedByteCount) || value.normalizedByteCount < 0)
-    throw new Error("External attachment candidate byte count is invalid.");
-  assertIso(value.importedAt);
-  assertIso(value.artifactsVerifiedAt);
-  assertCanonicalJsonBytes(value, EXTERNAL_SOURCE_LIMITS.canonicalJsonBytes);
-}
-
-export function assertExternalSourceAttachmentCandidateListResponse(
-  value: ExternalSourceAttachmentCandidateListResponse,
-): void {
-  assertRecord(value, "external attachment candidate list");
-  assertExactKeys(value, ["schemaVersion", "workspaceId", "sessionId", "items"], new Set());
-  assertVersion(value.schemaVersion);
-  assertText(value.workspaceId, "workspaceId", 256);
-  assertText(value.sessionId, "sessionId", 256);
-  if (!Array.isArray(value.items) || value.items.length > EXTERNAL_SOURCE_LIMITS.maxPageSize)
-    throw new Error("External attachment candidate list item count is invalid.");
-  value.items.forEach(assertExternalSourceAttachmentCandidate);
-  assertCanonicalJsonBytes(value, EXTERNAL_SOURCE_LIMITS.canonicalJsonBytes);
-}
-
 export function assertExternalSourceKnowledgeLink(value: ExternalSourceKnowledgeLinkRecord): void {
   assertRecord(value, "knowledge link");
   assertExactKeys(
@@ -1655,9 +1438,7 @@ const CATALOG_DISPOSITIONS = new Set<ExternalSourceCatalogDisposition>([
 ]);
 const IMPORT_DISPOSITIONS = new Set<ExternalSourceImportDisposition>(["applied", "blocked", "manual_reconciliation"]);
 const PATH_FLAVORS = new Set<WorkspacePathFlavor>(["windows_native", "windows_forward", "msys", "wsl", "posix"]);
-const SHA256 = /^[a-f0-9]{64}$/u;
 const MTIME_NS = /^\d{20}$/u;
-const UTF8 = new TextEncoder();
 
 function assertAdapterKind(kind: ExternalSourceKind, adapterId: ExternalSourceAdapterId): void {
   const expected: Record<ExternalSourceKind, ExternalSourceAdapterId> = {
@@ -1762,22 +1543,10 @@ function normalizeDispositions(value: unknown): ExternalSourceCatalogDisposition
   return normalized;
 }
 
-function normalizeInputText(value: unknown, name: string, max: number, byteLimit = false): string {
-  if (typeof value !== "string") throw new Error(`External source ${name} is invalid.`);
-  const normalized = value.normalize("NFKC").trim();
-  assertText(normalized, name, max, byteLimit);
-  return normalized;
-}
-
 function normalizeSha256(value: unknown): string {
   if (typeof value !== "string") throw new Error("External source SHA-256 is invalid.");
   assertSha256(value);
   return value;
-}
-
-function normalizePositiveInteger(value: unknown, name: string): number {
-  if (!Number.isSafeInteger(value) || Number(value) < 1) throw new Error(`External source ${name} is invalid.`);
-  return Number(value);
 }
 
 function normalizeIntegerRange(value: unknown, name: string, min: number, max: number): number {
@@ -1790,57 +1559,10 @@ function normalizeIntegerRange(value: unknown, name: string, min: number, max: n
 function assertMtimeNs(value: string): void {
   if (!MTIME_NS.test(value)) throw new Error("External source mtime must be a 20-digit nanosecond value.");
 }
-function assertSha256(value: string): void {
-  if (!SHA256.test(value)) throw new Error("External source SHA-256 is invalid.");
-}
 function assertOptionalSha256(value: string | undefined): void {
   if (value !== undefined) assertSha256(value);
-}
-function assertPositiveInteger(value: number, name: string): void {
-  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`External source ${name} is invalid.`);
 }
 function assertBoundedCount(value: number, name: string, max: number): void {
   if (!Number.isSafeInteger(value) || value < 0 || value > max)
     throw new Error(`External source ${name} exceeds its hard limit.`);
-}
-function assertIso(value: string): void {
-  if (typeof value !== "string" || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value)
-    throw new Error("External source timestamp is invalid.");
-}
-function assertVersion(value: string): void {
-  if (value !== EXTERNAL_SOURCE_SCHEMA_VERSION) throw new Error("External source schema version is unsupported.");
-}
-function assertText(value: string, name: string, max: number, byteLimit = false): void {
-  if (
-    typeof value !== "string" ||
-    !value ||
-    value !== value.trim() ||
-    value !== value.normalize("NFKC") ||
-    containsAsciiControlCharacter(value) ||
-    (byteLimit ? UTF8.encode(value).byteLength : value.length) > max
-  )
-    throw new Error(`External source ${name} is invalid.`);
-}
-function containsAsciiControlCharacter(value: string): boolean {
-  for (const character of value) {
-    const codePoint = character.charCodeAt(0);
-    if (codePoint <= 0x1f || codePoint === 0x7f) return true;
-  }
-  return false;
-}
-function assertCanonicalJsonBytes(value: unknown, max: number): void {
-  if (UTF8.encode(canonicalJsonString(value)).byteLength > max)
-    throw new Error("External source canonical JSON exceeds its hard limit.");
-}
-function assertRecord(value: unknown, name: string): asserts value is Record<string, unknown> {
-  if (!isRecord(value)) throw new Error(`External source ${name} is malformed.`);
-}
-function assertExactKeys(value: object, keys: readonly string[], optional: ReadonlySet<string>): void {
-  const actual = Object.keys(value);
-  const allowed = new Set(keys);
-  if (actual.some((key) => !allowed.has(key)) || keys.some((key) => !optional.has(key) && !actual.includes(key)))
-    throw new Error("External source record contains unsupported or missing fields.");
-}
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

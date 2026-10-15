@@ -21,7 +21,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/ops-saved-boards", () => ({
   fetchOpsSavedBoards: vi.fn(),
   updateOpsSavedBoard: vi.fn(),
 }));
-vi.mock("@goatcitadel/mission-control-shared/api/system", () => ({ fetchHealthSummary: vi.fn(), fetchCostSummary: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/system", () => ({
+  fetchHealthSummary: vi.fn(),
+  fetchCostSummary: vi.fn(),
+}));
 
 const board = (overrides: Partial<OpsSavedBoardRecord> = {}): OpsSavedBoardRecord => ({
   schemaVersion: OPS_SAVED_BOARD_SCHEMA_VERSION,
@@ -82,7 +85,9 @@ async function render(edit = true, accessAvailable = true): Promise<void> {
 }
 
 function button(label: string) {
-  return [...container.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim() === label);
+  return [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (item) => item.textContent?.trim() === label,
+  );
 }
 async function typeName(value: string): Promise<void> {
   const input = container.querySelector<HTMLInputElement>("input");
@@ -118,19 +123,27 @@ async function click(label: string): Promise<void> {
 
 describe("cockpit saved-board editor", () => {
   it("previews current Gateway widgets without saving the retained layout", async () => {
-    vi.mocked(fetchHealthSummary).mockResolvedValue({ daemonStatus: { running: true }, systemVitals: { hostname: "BLD", memoryUsedBytes: 50, memoryTotalBytes: 100 } } as never);
-    await render(); await click("Preview live widgets");
-    await vi.waitFor(() => expect(container.querySelector('[aria-label="Draft live widget preview"]')?.textContent).toContain("BLD"));
+    vi.mocked(fetchHealthSummary).mockResolvedValue({
+      daemonStatus: { running: true },
+      systemVitals: { hostname: "BLD", memoryUsedBytes: 50, memoryTotalBytes: 100 },
+    } as never);
+    await render();
+    await click("Preview live widgets");
+    await vi.waitFor(() =>
+      expect(container.querySelector('[aria-label="Draft live widget preview"]')?.textContent).toContain("BLD"),
+    );
     expect(fetchHealthSummary).toHaveBeenCalledOnce();
-    expect(updateOpsSavedBoard).not.toHaveBeenCalled(); expect(createOpsSavedBoard).not.toHaveBeenCalled();
-    await click("Preview live widgets"); expect(container.querySelector('[aria-label="Draft live widget preview"]')).toBeNull();
+    expect(updateOpsSavedBoard).not.toHaveBeenCalled();
+    expect(createOpsSavedBoard).not.toHaveBeenCalled();
+    await click("Preview live widgets");
+    expect(container.querySelector('[aria-label="Draft live widget preview"]')).toBeNull();
     expect(container.querySelector("input")?.value).toBe("Operator board");
   });
   it("retains the editor and blocks saving when the current access read is unavailable", async () => {
     await render();
     await click("Review changes");
     await render(true, false);
-    const confirm = [...container.querySelectorAll("button")].find(node => node.textContent === "Confirm save")!;
+    const confirm = [...container.querySelectorAll("button")].find((node) => node.textContent === "Confirm save")!;
     expect(confirm.disabled).toBe(true);
     expect(container.querySelector("input")?.value).toBe("Operator board");
     expect(container.textContent).toContain("Your draft is retained");
@@ -192,7 +205,10 @@ describe("cockpit saved-board editor", () => {
       (item) => item.textContent?.trim() === "Review changes",
     );
     expect(review?.disabled).toBe(true);
-    expect(container.querySelector('a[href="/ops/boards?shell=classic&shellScope=visit"]')).not.toBeNull();
+    const recovery = container.querySelector<HTMLAnchorElement>('a[href^="/system/dashboards/board-a?"]');
+    expect(recovery).not.toBeNull();
+    expect(new URL(recovery!.href).searchParams.get("workspaceId")).toBe("workspace-a");
+    expect(new URL(recovery!.href).searchParams.get("shell")).toBe("cockpit");
     expect(updateOpsSavedBoard).toHaveBeenCalledTimes(1);
   });
 
@@ -243,7 +259,12 @@ describe("cockpit saved-board editor", () => {
     vi.mocked(updateOpsSavedBoard).mockResolvedValue(board({ revision: 4, name: "My edited name" }));
     await click("Review changes");
     await click("Confirm save");
-    await vi.waitFor(() => expect(updateOpsSavedBoard).toHaveBeenCalledWith("board-a", expect.objectContaining({ expectedRevision: 3, name: "My edited name" })));
+    await vi.waitFor(() =>
+      expect(updateOpsSavedBoard).toHaveBeenCalledWith(
+        "board-a",
+        expect.objectContaining({ expectedRevision: 3, name: "My edited name" }),
+      ),
+    );
   });
 
   it("discards the draft for the current revision without saving anything", async () => {
@@ -260,7 +281,9 @@ describe("cockpit saved-board editor", () => {
     await render();
     await typeName("My edited name");
     await click("Review changes");
-    vi.mocked(fetchOpsSavedBoard).mockResolvedValue(board({ revision: 3, name: "Renamed elsewhere", updatedAt: "2026-09-29T02:00:00.000Z" }));
+    vi.mocked(fetchOpsSavedBoard).mockResolvedValue(
+      board({ revision: 3, name: "Renamed elsewhere", updatedAt: "2026-09-29T02:00:00.000Z" }),
+    );
     await click("Confirm save");
     await vi.waitFor(() => expect(container.textContent).toContain("Revision 3 is now current"));
     expect(updateOpsSavedBoard).not.toHaveBeenCalled();
@@ -281,7 +304,13 @@ describe("cockpit saved-board editor", () => {
   it("offers recovery when a retained draft is reopened behind a newer board", async () => {
     await render();
     await typeName("My edited name");
-    await act(async () => root.render(<QueryClientProvider client={client}><div /></QueryClientProvider>));
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <div />
+        </QueryClientProvider>,
+      ),
+    );
     const newer = board({ revision: 3, name: "Renamed elsewhere", updatedAt: "2026-09-29T02:00:00.000Z" });
     await rerender(newer);
     expect(container.querySelector("input")?.value).toBe("My edited name");
@@ -291,7 +320,12 @@ describe("cockpit saved-board editor", () => {
     vi.mocked(updateOpsSavedBoard).mockResolvedValue(board({ revision: 4, name: "My edited name" }));
     await click("Review changes");
     await click("Confirm save");
-    await vi.waitFor(() => expect(updateOpsSavedBoard).toHaveBeenCalledWith("board-a", expect.objectContaining({ expectedRevision: 3, name: "My edited name" })));
+    await vi.waitFor(() =>
+      expect(updateOpsSavedBoard).toHaveBeenCalledWith(
+        "board-a",
+        expect.objectContaining({ expectedRevision: 3, name: "My edited name" }),
+      ),
+    );
   });
 
   it("hides recovery choices while a previous save outcome is unconfirmed", async () => {
@@ -311,15 +345,23 @@ describe("cockpit saved-board editor", () => {
     await typeName("New board");
     await click("Review new board");
     const first = lastReviewedKey();
-    vi.mocked(fetchOpsSavedBoards).mockResolvedValue({ workspaceId: "workspace-a",
-      items: [board({ revision: 1, updatedAt: board().createdAt, idempotencyKey: first })] });
+    vi.mocked(fetchOpsSavedBoards).mockResolvedValue({
+      workspaceId: "workspace-a",
+      items: [board({ revision: 1, updatedAt: board().createdAt, idempotencyKey: first })],
+    });
     await click("Confirm save");
     await vi.waitFor(() => expect(container.textContent).toContain("This create identity already exists"));
     expect(createOpsSavedBoard).not.toHaveBeenCalled();
     await click("Start a fresh create request");
     vi.mocked(fetchOpsSavedBoards).mockResolvedValue({ workspaceId: "workspace-a", items: [] });
     vi.mocked(createOpsSavedBoard).mockImplementation(async (input) => {
-      const saved = board({ revision: 1, updatedAt: board().createdAt, name: input.name, idempotencyKey: input.idempotencyKey, placements: input.placements });
+      const saved = board({
+        revision: 1,
+        updatedAt: board().createdAt,
+        name: input.name,
+        idempotencyKey: input.idempotencyKey,
+        placements: input.placements,
+      });
       vi.mocked(fetchOpsSavedBoard).mockResolvedValue(saved);
       return saved;
     });

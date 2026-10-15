@@ -6,7 +6,6 @@ import { inspectMcpServer } from "../../../features/native-routes/settings/mcp-s
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Sheet } from "../../ui/Sheet";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { McpConfigurationReport } from "../../../features/native-routes/settings/McpConfigurationReport";
 import { McpConnectionControls } from "../../../features/native-routes/settings/McpConnectionControls";
 import { McpOAuthControls } from "../../../features/native-routes/settings/McpOAuthControls";
@@ -35,16 +34,24 @@ export function McpServerInspection({
     retry: false,
   });
   const testEvidence = useQuery({
-    queryKey: ["settings", "mcp-test-evidence", workspaceId, serverId, query.data?.server.revision, query.data?.server.connectionRevision],
+    queryKey: [
+      "settings",
+      "mcp-test-evidence",
+      workspaceId,
+      serverId,
+      query.data?.server.revision,
+      query.data?.server.connectionRevision,
+    ],
     queryFn: () => fetchMcpServerTestEvidence(serverId, workspaceId),
     enabled: Boolean(query.data),
     retry: false,
   });
-  const refreshConnectionEvidence = () => Promise.all([
-    query.refetch(),
-    testEvidence.refetch(),
-    queryClient.invalidateQueries({ queryKey: ["settings", "mcp-servers"] }),
-  ]);
+  const refreshConnectionEvidence = () =>
+    Promise.all([
+      query.refetch(),
+      testEvidence.refetch(),
+      queryClient.invalidateQueries({ queryKey: ["settings", "mcp-servers"] }),
+    ]);
   // The last inspection (and any open review in its controls) stays while it is read again.
   const view = recordView(query);
   const evidenceView = recordView(testEvidence);
@@ -53,7 +60,8 @@ export function McpServerInspection({
   const checking = view.phase === "checking";
   const lastVersion = lastVersionNote(view);
   const inspectionStale = view.stale || query.isError;
-  const setupStale = inspectionStale || evidenceView.stale || availabilityView.stale || testEvidence.isError || settings.isError;
+  const setupStale =
+    inspectionStale || evidenceView.stale || availabilityView.stale || testEvidence.isError || settings.isError;
   return (
     <Sheet
       open
@@ -98,10 +106,16 @@ export function McpServerInspection({
         {data ? (
           <>
             <h4 className="text-base font-semibold text-fg">{data.server.label}</h4>
-            <McpSetupProgress key={`${workspaceId}:${data.server.serverId}:${data.server.revision}`} server={data.server} tools={data.tools} stale={setupStale}
+            <McpSetupProgress
+              key={`${workspaceId}:${data.server.serverId}:${data.server.revision}`}
+              server={data.server}
+              tools={data.tools}
+              stale={setupStale}
               testEvidence={evidenceView.record}
               staticMcpAvailable={availabilityView.record}
-              availabilityChecking={settings.isFetching} refreshAvailability={() => void settings.refetch()} />
+              availabilityChecking={settings.isFetching}
+              refreshAvailability={() => void settings.refetch()}
+            />
             <dl className="cockpit-definition-grid grid gap-x-3 gap-y-2">
               <dt>Server ID</dt>
               <dd>
@@ -201,7 +215,6 @@ export function McpServerInspection({
                 </Button>
               )}
             />
-            <ClassicOwnerLink href="/settings/mcp?shell=classic" scope={workspaceId} label="Detailed MCP management" />
           </>
         ) : null}
       </div>

@@ -1,12 +1,28 @@
+import { useUnsettledChatContextMutation } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import { createElement, useLayoutEffect, useRef, useState } from "react";
 import { canonicalJsonString } from "@goatcitadel/contracts";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import { DraftLeaveDialog, useDraftLeave, type DraftLeaveDialogProps } from "../features/native-routes/library/DraftLeaveDialog";
+import {
+  getGatewayAccessRevision,
+  getGatewayCallerScopeRevision,
+  subscribeGatewayAccessChange,
+  subscribeGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  DraftLeaveDialog,
+  useDraftLeave,
+  type DraftLeaveDialogProps,
+} from "../features/native-routes/library/DraftLeaveDialog";
 import { switchShell, type ShellPreference } from "../shell-preference";
 import { SHELL_NAVIGATION_EVENTS } from "./shell-transition";
 
+export const CHAT_CONTEXT_HANDOFF_WARNING =
+  "An unconfirmed Chat context action remains locked in this document. Switching layouts does not settle or replay its result.";
+
 /** A reviewed presentation transition; runtime owners and their session locks remain in the document. */
 export function useShellHandoff(scope: unknown) {
+  const contextActionPending = useUnsettledChatContextMutation();
+  const contextWarning = contextActionPending ? CHAT_CONTEXT_HANDOFF_WARNING : undefined;
   const leave = useDraftLeave();
   const identity = canonicalJsonString(scope);
   const renderedInstallation = getGatewayApiBaseUrl();
@@ -41,20 +57,29 @@ export function useShellHandoff(scope: unknown) {
       cancelReview.current();
       setFeedback({ identity: view.identity, epoch: view.epoch, opening: false, error: null });
     };
+    // These existing custody publishers invalidate even a same-batch caller away/back before React re-renders.
+    const unsubscribeAccess = subscribeGatewayAccessChange(invalidate);
+    const unsubscribeCaller = subscribeGatewayCallerScope(invalidate);
     for (const event of SHELL_NAVIGATION_EVENTS) window.addEventListener(event, invalidate);
     return () => {
       view.mounted = false;
       view.epoch++;
       review.current = null;
       controller.current?.abort();
+      unsubscribeAccess();
+      unsubscribeCaller();
       for (const event of SHELL_NAVIGATION_EVENTS) window.removeEventListener(event, invalidate);
     };
   }, [identity]);
-  function requestTransition(transition: (options: { isCurrent: () => boolean; signal: AbortSignal }) => Promise<unknown> | void) {
+  function requestTransition(
+    transition: (options: { isCurrent: () => boolean; signal: AbortSignal }) => Promise<unknown> | void,
+  ) {
     if (controller.current || review.current || leave.dialogProps.open) return;
     const epoch = live.current.epoch,
       origin = window.location.href,
-      installation = renderedInstallation;
+      installation = renderedInstallation,
+      accessRevision = getGatewayAccessRevision(),
+      callerRevision = getGatewayCallerScopeRevision();
     const current = () =>
       live.current.mounted &&
       scopeToken.current === renderedScope &&
@@ -63,6 +88,8 @@ export function useShellHandoff(scope: unknown) {
       live.current.identity === identity &&
       live.current.epoch === epoch &&
       getGatewayApiBaseUrl() === installation &&
+      getGatewayAccessRevision() === accessRevision &&
+      getGatewayCallerScopeRevision() === callerRevision &&
       window.location.href === origin;
     if (!current()) return;
     const pending = { isCurrent: current };
@@ -73,7 +100,9 @@ export function useShellHandoff(scope: unknown) {
       const attempt = new AbortController();
       controller.current = attempt;
       setFeedback({ identity, epoch, opening: true, error: null });
-      void (async () => { await transition({ isCurrent: current, signal: attempt.signal }); })()
+      void (async () => {
+        await transition({ isCurrent: current, signal: attempt.signal });
+      })()
         .catch(() => {
           if (current())
             setFeedback({
@@ -86,8 +115,10 @@ export function useShellHandoff(scope: unknown) {
         .finally(() => {
           if (controller.current !== attempt) return;
           controller.current = null;
-          if (live.current.mounted) setFeedback((value) =>
-            value.identity === identity && value.epoch === epoch ? { ...value, opening: false } : value);
+          if (live.current.mounted)
+            setFeedback((value) =>
+              value.identity === identity && value.epoch === epoch ? { ...value, opening: false } : value,
+            );
         });
     });
   }
@@ -100,6 +131,7 @@ export function useShellHandoff(scope: unknown) {
   };
   const dialogProps: DraftLeaveDialogProps = {
     ...leave.dialogProps,
+    warning: contextWarning,
     open: leave.dialogProps.open && reviewCurrent(),
     isCurrent: reviewCurrent,
     onContinue: () => completeReview(leave.dialogProps.onContinue),
@@ -116,6 +148,7 @@ export function useShellHandoff(scope: unknown) {
   }
   const visible = feedback.identity === identity && feedback.epoch === live.current.epoch;
   return {
+    contextWarning,
     request,
     requestNavigation,
     requestTransition,

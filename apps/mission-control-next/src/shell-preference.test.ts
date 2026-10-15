@@ -112,7 +112,9 @@ describe("shell preference", () => {
   });
 
   it("keeps the browser-session view and record through Classic rollback", () => {
-    const target = new URL(buildShellSwitchUrl("http://localhost/system/browser-sessions?sessionId=s1#grants", "classic"));
+    const target = new URL(
+      buildShellSwitchUrl("http://localhost/system/browser-sessions?sessionId=s1#grants", "classic"),
+    );
     expect(target.pathname).toBe("/ops/sessions");
     expect(target.searchParams.get("view")).toBe("browser-sessions");
     expect(target.searchParams.get("sessionId")).toBe("s1");
@@ -125,11 +127,13 @@ describe("shell preference", () => {
   it.each([
     ["/inbox", "/inbox"],
     ["/work/schedules", "/work/schedules"],
-    ["/system", "/system"],
+    ["/system", "/system/runtime"],
     ["/system/activity", "/system/activity"],
     ["/system/quality", "/system/quality"],
-    ["/system/diagnostics", "/system/diagnostics"],
+    ["/system/diagnostics", "/system/runtime/diagnostics"],
     ["/system/spend", "/system/spend"],
+    ["/system/spend/details", "/system/spend/details"],
+    ["/system/runtime/workers", "/system/runtime/workers"],
     ["/system/improvement", "/system/improvement"],
     ["/system/dashboards", "/system/dashboards"],
     ["/system/dashboards/board%2F1", "/system/dashboards"],
@@ -156,9 +160,109 @@ describe("shell preference", () => {
 });
 
 it.each(["activity", "quality", "diagnostics"])("preserves the %s view and record through Classic rollback", (view) => {
-  const target = new URL(buildShellSwitchUrl(`http://localhost/system/${view}?workspaceId=w&runId=keep#record`, "classic"));
+  const target = new URL(
+    buildShellSwitchUrl(`http://localhost/system/${view}?workspaceId=w&runId=keep#record`, "classic"),
+  );
   expect(target.pathname).toBe(`/ops/${view}`);
   expect(target.searchParams.get("workspaceId")).toBe("w");
   expect(target.searchParams.get("runId")).toBe("keep");
   expect(target.hash).toBe("#record");
+});
+
+it.each(["/system/spend", "/system/spend/details"])(
+  "preserves exact Costs scope through explicit Classic and Cockpit switches from %s",
+  (pathname) => {
+    const storage = memoryStorage({ [SHELL_PREFERENCE_KEY]: "cockpit" });
+    const carried =
+      "?workspaceId=w%2Fone&citadelId=c&sessionId=s%2Fone&runId=r%3Aone&keep=one&keep=two&shellScope=visit";
+    const classic = new URL(buildShellSwitchUrl("http://localhost" + pathname + carried + "#coverage", "classic"));
+    expect(classic.pathname).toBe("/ops/costs");
+    expect(classic.searchParams.get("cockpitReturnView")).toBe(pathname === "/system/spend" ? "spend-overview" : null);
+    expect(classic.searchParams.has("shellScope")).toBe(false);
+    expect(resolveShellPreference({ search: classic.search, storage })).toBe("classic");
+    expect(storage.values.get(SHELL_PREFERENCE_KEY)).toBe("classic");
+    const cockpit = new URL(buildShellSwitchUrl(classic.href, "cockpit"));
+    expect(resolveShellPreference({ search: cockpit.search, storage })).toBe("cockpit");
+    expect(storage.values.get(SHELL_PREFERENCE_KEY)).toBe("cockpit");
+    const result = resolveCockpitCompatibility(cockpit.pathname + cockpit.search + cockpit.hash);
+    expect(result.kind).toBe("native");
+    if (result.kind !== "native") throw new Error("Native Costs destination unavailable");
+    const target = new URL(result.href, "http://localhost");
+    expect(target.pathname).toBe(pathname);
+    expect(target.searchParams.get("workspaceId")).toBe("w/one");
+    expect(target.searchParams.get("citadelId")).toBe("c");
+    expect(target.searchParams.get("sessionId")).toBe("s/one");
+    expect(target.searchParams.get("runId")).toBe("r:one");
+    expect(target.searchParams.getAll("keep")).toEqual(["one", "two"]);
+    expect(target.searchParams.has("cockpitReturnView")).toBe(false);
+    expect(target.searchParams.get("shell")).toBe("cockpit");
+    expect(target.hash).toBe("#coverage");
+  },
+);
+
+it("does not carry a stale overview return when the operator explicitly rolls back full Costs details", () => {
+  const target = new URL(
+    buildShellSwitchUrl(
+      "http://localhost/system/spend/details?cockpitReturnView=spend-overview&keep=one&keep=two#evidence",
+      "classic",
+    ),
+  );
+  expect(target.pathname).toBe("/ops/costs");
+  expect(target.searchParams.has("cockpitReturnView")).toBe(false);
+  expect(target.searchParams.getAll("keep")).toEqual(["one", "two"]);
+  expect(target.hash).toBe("#evidence");
+});
+
+it("rolls native worker inspection back to its exact Classic worker owner without losing record or history context", () => {
+  const carried =
+    "?workerId=worker%2Fone&assignmentId=assignment%3Aone&workspaceId=w%2Fone&citadelId=c&sessionId=s&runId=r&keep=one&keep=two&shellScope=visit";
+  const classic = new URL(
+    buildShellSwitchUrl("http://localhost/system/runtime/workers" + carried + "#record", "classic"),
+  );
+  expect(classicFallbackPath("/system/runtime/workers")).toBe("/ops/workers");
+  expect(classic.pathname).toBe("/ops/workers");
+  expect(classic.searchParams.get("shell")).toBe("classic");
+  expect(classic.searchParams.has("shellScope")).toBe(false);
+  const cockpit = new URL(buildShellSwitchUrl(classic.href, "cockpit"));
+  const result = resolveCockpitCompatibility(cockpit.pathname + cockpit.search + cockpit.hash);
+  expect(result.kind).toBe("native");
+  if (result.kind !== "native") throw new Error("Native worker destination unavailable");
+  const target = new URL(result.href, "http://localhost");
+  expect(target.pathname).toBe("/system/runtime/workers");
+  for (const [key, value] of [
+    ["workerId", "worker/one"],
+    ["assignmentId", "assignment:one"],
+    ["workspaceId", "w/one"],
+    ["citadelId", "c"],
+    ["sessionId", "s"],
+    ["runId", "r"],
+  ] as const)
+    expect(target.searchParams.get(key)).toBe(value);
+  expect(target.searchParams.getAll("keep")).toEqual(["one", "two"]);
+  expect(target.hash).toBe("#record");
+});
+
+it.each([
+  ["unknown"],
+  [""],
+  ["spend-overview", "details"],
+  ["spend-overview", "spend-overview"],
+  ["details", "spend-overview"],
+  ["https://elsewhere.invalid"],
+])("retains unsupported or ambiguous Costs return markers through an explicit details rollback: %j", (...markers) => {
+  const params = new URLSearchParams("workspaceId=w%2Fone&keep=one&keep=two");
+  for (const marker of markers) params.append("cockpitReturnView", marker);
+  const classic = new URL(
+    buildShellSwitchUrl("http://localhost/system/spend/details?" + params + "#evidence", "classic"),
+  );
+  expect(classic.pathname).toBe("/ops/costs");
+  expect(classic.searchParams.getAll("cockpitReturnView")).toEqual(markers);
+  expect(classic.searchParams.getAll("keep")).toEqual(["one", "two"]);
+  expect(classic.searchParams.get("workspaceId")).toBe("w/one");
+  expect(classic.hash).toBe("#evidence");
+  const cockpit = new URL(buildShellSwitchUrl(classic.href, "cockpit"));
+  expect(cockpit.searchParams.getAll("cockpitReturnView")).toEqual(markers);
+  const expectedSearch = cockpit.search;
+  const result = resolveCockpitCompatibility(cockpit.pathname + expectedSearch + cockpit.hash);
+  expect(result).toEqual({ kind: "native", href: "/system/spend/details" + expectedSearch + "#evidence" });
 });

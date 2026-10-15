@@ -3,7 +3,6 @@ import os from "node:os";
 import {
   redactStructuredSecrets,
   type ApprovalRequest,
-  type ApprovalListResponse,
   type ChatGeneratedArtifactRecord,
   type ChatStreamUsageRecord,
   type ChatToolRunRecord,
@@ -32,7 +31,7 @@ import type { PromptPackService } from "./prompt-pack-service.js";
 import type { RealtimeEventService } from "./realtime-event-service.js";
 import type { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
 import { projectDurableRouteResponse } from "./durable-public-projection.js";
-import { runString, runWorkspaceId } from "./inbox-projection-model.js";
+import { loadRunLinkedApprovals, safeReadAsync } from "./dashboard-readers.js";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
 export const dashboardRouteMethods = [
@@ -714,7 +713,9 @@ async function buildObserveRunTrace(
   const approvalIds = lifecycle ? dedupe(lifecycle.linked.approvalIds) : collectStringIds(run, "approvalId");
   const approvals = await loadApprovals(storage, approvalIds);
   const linkedApprovals = await loadRunLinkedApprovals(storage, run);
-  const approvalItems = [...new Map([...approvals.items, ...linkedApprovals.items].map(item => [item.approvalId, item])).values()];
+  const approvalItems = [
+    ...new Map([...approvals.items, ...linkedApprovals.items].map((item) => [item.approvalId, item])).values(),
+  ];
   const turnIds = lifecycle ? dedupe(lifecycle.linked.turnIds) : collectStringIds(run, "turnId");
   const artifactsResult = await loadArtifacts(storage, turnIds);
   const memoryResult = await safeReadAsync(() => storage.memoryContexts.listByRun(runId));
@@ -755,7 +756,12 @@ async function buildObserveRunTrace(
       turns: lifecycle?.turns ?? [],
     },
     approvals: {
-      state: lifecycleResult.error || linkedApprovals.incomplete || approvals.missingIds.length > 0 ? "unknown" : approvalItems.length > 0 ? "available" : "not_available",
+      state:
+        lifecycleResult.error || linkedApprovals.incomplete || approvals.missingIds.length > 0
+          ? "unknown"
+          : approvalItems.length > 0
+            ? "available"
+            : "not_available",
       items: approvalItems,
       missingIds: approvals.missingIds,
     },
@@ -813,32 +819,6 @@ function safeRunTraceFilenameSegment(value: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
   return safe || "unknown";
-}
-
-/** Reverse canonical linkage is absent from some in-flight turn projections.
- * Read bounded workspace pages through the approval owner; never infer from a
- * shared session or treat the approval-wait run as the original Chat run. */
-async function loadRunLinkedApprovals(storage: Storage, run: DurableRunRecord): Promise<{ items: ApprovalRequest[]; incomplete: boolean }> {
-  const workspaceId = runWorkspaceId(run);
-  const sessionId = runString(run, "sessionId");
-  // Do not broaden discovery to all workspaces when the durable owner lacks scope.
-  if (!workspaceId) return { items: [], incomplete: true };
-  const items: ApprovalRequest[] = [];
-  let cursor: string | undefined;
-  for (let pageNumber = 0; pageNumber < 5; pageNumber += 1) {
-    const result: { value?: ApprovalListResponse; error?: Error } = await safeReadAsync(() => storage.approvals.listPage({ workspaceId, limit: 200, cursor, includeExpired: true }));
-    if (!result.value) return { items, incomplete: true };
-    for (const approval of result.value.items) {
-      const linkage = approval.linkage;
-      if (linkage?.workspaceId !== workspaceId || (sessionId && linkage.sessionId && linkage.sessionId !== sessionId)) continue;
-      if (linkage.runId === run.runId || linkage.durableRunId === run.runId) items.push(approval);
-    }
-    const nextCursor = result.value.nextCursor;
-    if (!nextCursor) return { items, incomplete: false };
-    if (nextCursor === cursor) return { items, incomplete: true };
-    cursor = nextCursor;
-  }
-  return { items, incomplete: true };
 }
 
 async function loadApprovals(
@@ -1028,14 +1008,6 @@ function isPresentString(value: string | undefined): value is string {
 function safeRead<T>(read: () => T): { value?: T; error?: Error } {
   try {
     return { value: read() };
-  } catch (error) {
-    return { error: error instanceof Error ? error : new Error(String(error)) };
-  }
-}
-
-async function safeReadAsync<T>(read: () => Promise<T>): Promise<{ value?: T; error?: Error }> {
-  try {
-    return { value: await read() };
   } catch (error) {
     return { error: error instanceof Error ? error : new Error(String(error)) };
   }

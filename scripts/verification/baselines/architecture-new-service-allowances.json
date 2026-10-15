@@ -2244,6 +2244,54 @@
       "maxDependencyMemberAccesses": 5,
       "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
       "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "mission-control-cockpit:phase-3",
+      "path": "apps/gateway/src/services/dashboard-readers.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 1,
+      "reason": "Canonical indexed approval summary reader extracted during Cockpit closure; the original dashboard owner and the five-by-200 read cap are preserved.",
+      "evidence": "Prepared owner-specific proposal .tmp/architecture-six-owner-repair-proposal-20261014/revision-5; focused canonical artifact/route/report tests, Gateway typecheck and named architecture gate are required before acceptance."
+    },
+    {
+      "planStep": "mission-control-cockpit:phase-3",
+      "path": "apps/gateway/src/services/html-artifact-critique-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 7,
+      "reason": "Published upstream artifact critique owner preserves preflight, canonical actor, durable turn, tracked background task and redacted failure logging.",
+      "evidence": "Prepared owner-specific proposal .tmp/architecture-six-owner-repair-proposal-20261014/revision-5; focused canonical artifact/route/report tests, Gateway typecheck and named architecture gate are required before acceptance."
+    },
+    {
+      "planStep": "mission-control-cockpit:phase-3",
+      "path": "apps/gateway/src/services/html-artifact-render-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 11,
+      "reason": "Published upstream artifact render owner preserves hash-keyed render reuse, workspace/secret checks, bounded attachment reads and jailed scratch cleanup.",
+      "evidence": "Prepared owner-specific proposal .tmp/architecture-six-owner-repair-proposal-20261014/revision-5; focused canonical artifact/route/report tests, Gateway typecheck and named architecture gate are required before acceptance."
+    },
+    {
+      "planStep": "mission-control-cockpit:phase-3",
+      "path": "apps/gateway/src/services/chat-artifact-renders-route-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 3,
+      "reason": "Typed three-method artifact facade replaces the added legacy variadic-any RoutePort alias while preserving exact scope, actor and promise forwarding.",
+      "evidence": "Prepared owner-specific proposal .tmp/architecture-six-owner-repair-proposal-20261014/revision-5; focused canonical artifact/route/report tests, Gateway typecheck and named architecture gate are required before acceptance."
+    },
+    {
+      "planStep": "mission-control-cockpit:phase-3",
+      "path": "apps/gateway/src/services/gateway-route-composition-artifact-renders.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 7,
+      "reason": "Narrow artifact composition extraction moves the published artifact cone out of the existing Chat owner without changing its session, attachment or durable execution owners.",
+      "evidence": "Prepared owner-specific proposal .tmp/architecture-six-owner-repair-proposal-20261014/revision-5; focused canonical artifact/route/report tests, Gateway typecheck and named architecture gate are required before acceptance."
+    },
+    {
+      "planStep": "mission-control-cockpit:phase-3",
+      "path": "apps/gateway/src/services/prompt-pack/focused-report-readers.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 5,
+      "reason": "Canonical focused prompt-pack run/test and indexed assessment reads extracted from the existing service; default reads, generation policy and missing/foreign rejection remain unchanged.",
+      "evidence": "Prepared owner-specific proposal .tmp/architecture-six-owner-repair-proposal-20261014/revision-5; focused canonical artifact/route/report tests, Gateway typecheck and named architecture gate are required before acceptance."
     }
   ]
 }

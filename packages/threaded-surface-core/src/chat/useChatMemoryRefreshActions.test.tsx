@@ -1,3 +1,4 @@
+import { __resetApprovalOperationAttemptsForTests } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import React, { useState } from "react";
 import { act, create } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -68,6 +69,7 @@ function Harness(props: { hasSession?: boolean; sending?: boolean }) {
 
 describe("useChatMemoryRefreshActions", () => {
   beforeEach(() => {
+    __resetApprovalOperationAttemptsForTests();
     latest = null;
     apiMocks.rebuildChatLearnedMemory.mockReset();
     apiMocks.updateChatLearnedMemoryItem.mockReset();
@@ -93,12 +95,18 @@ describe("useChatMemoryRefreshActions", () => {
     await act(async () => {
       await latest!.actions.handleMemoryStatusUpdate("memory-1", "conflict");
     });
-    expect(latest!.snapshot().errors).toContain("memory update failed");
+    expect(latest!.snapshot().errors).toContain("memory update failed The original attempt remains locked.");
+    expect(latest!.actions.learnedMemoryMutation.phase).toBe("uncertain");
+    expect(latest!.actions.learnedMemoryMutation.locked).toBe(true);
   });
 
   it("rebuilds learned memory with sending guards and clears the sending flag", async () => {
     const rebuilt = [{ ...baseMemory, itemId: "memory-2", content: "Rebuilt memory" }];
-    apiMocks.rebuildChatLearnedMemory.mockResolvedValueOnce({ items: rebuilt });
+    apiMocks.rebuildChatLearnedMemory.mockResolvedValueOnce({
+      rebuiltAt: "2026-05-01T00:00:00.000Z",
+      items: rebuilt,
+      conflicts: [],
+    });
     await act(async () => {
       create(<Harness />);
     });
@@ -115,7 +123,8 @@ describe("useChatMemoryRefreshActions", () => {
     await act(async () => {
       await latest!.actions.handleRebuildLearnedMemory();
     });
-    expect(latest!.snapshot().errors).toContain("rebuild failed");
+    expect(latest!.snapshot().errors).toContain("rebuild failed The original attempt remains locked.");
+    expect(latest!.actions.learnedMemoryMutation.phase).toBe("uncertain");
     expect(latest!.snapshot().sendingChanges.slice(-2)).toEqual([true, false]);
   });
 

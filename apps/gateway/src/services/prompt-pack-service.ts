@@ -1,13 +1,14 @@
+import {
+  loadPromptPackReportFocus,
+  loadPromptPackFocusedAssessmentEvidence,
+} from "./prompt-pack/focused-report-readers.js";
 /* eslint-disable max-lines */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
-import {
-  buildSecurityQualityGateRecord,
-  buildSecurityRedTeamEvalPack,
-} from "./prompt-pack/security-eval.js";
+import { buildSecurityQualityGateRecord, buildSecurityRedTeamEvalPack } from "./prompt-pack/security-eval.js";
 
 import type {
   PromptPackBuiltinImportInput,
@@ -1175,8 +1176,12 @@ export class PromptPackService {
     });
   }
 
-  async getPromptPackReport(packId: string): Promise<PromptPackReportRecord> {
+  async getPromptPackReport(
+    packId: string,
+    focus?: { runId: string; sessionId?: string },
+  ): Promise<PromptPackReportRecord> {
     const pack = await this.ctx.storage.promptPacks.getPack(packId);
+    const { focusedRunRecord, focusedTest } = focus ? await loadPromptPackReportFocus(this.ctx, packId, focus) : {};
     const tests = await this.ctx.storage.promptPacks.listTests(packId, 5000);
     const runs = await this.ctx.storage.promptPackRuns.listByPack(packId, 10000);
     const scores = await this.ctx.storage.promptPackScores.listByPack(packId, 10000);
@@ -1197,7 +1202,26 @@ export class PromptPackService {
       generation,
     );
 
+    let focusedRun: PromptPackReportRecord["focusedRun"];
+    if (focusedRunRecord && focusedTest) {
+      const [focusedAutoScores, focusedHumanReviews, focusedLegacyScores] =
+        await loadPromptPackFocusedAssessmentEvidence(this.ctx, focusedRunRecord);
+      focusedRun = {
+        run: focusedRunRecord,
+        test: focusedTest,
+        assessment: buildPromptPackLatestStateV2(
+          [focusedTest],
+          [focusedRunRecord],
+          focusedAutoScores,
+          focusedHumanReviews,
+          focusedLegacyScores,
+          generation,
+        )[0]!,
+      };
+    }
+
     return {
+      ...(focusedRun ? { focusedRun } : {}),
       pack,
       tests,
       runs,

@@ -19,7 +19,6 @@ import { useWorkspaceName } from "../../data/use-workspace-name";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { WindowedRecordList } from "../../ui/WindowedRecordList";
 import { ProjectEditor } from "./ProjectEditor";
 import { ProjectDetail } from "./ProjectDetail";
@@ -86,22 +85,19 @@ function ProjectsWorkspace({ workspaceId, citadelId }: { workspaceId: string; ci
           </Button>
         </div>
       </header>
-      <nav aria-label="Project governance" className="flex flex-wrap gap-3"><NativeOwnerLink href="/library/citadel-overview" scope={access.identity}>Open Citadels</NativeOwnerLink><NativeOwnerLink href="/library/citadel" scope={access.identity}>Use Mason</NativeOwnerLink><NativeOwnerLink href="/settings/onboarding" scope={access.identity}>Start here</NativeOwnerLink></nav>
+      <nav aria-label="Project governance" className="flex flex-wrap gap-3">
+        <NativeOwnerLink href="/library/citadel-overview" scope={access.identity}>
+          Open Citadels
+        </NativeOwnerLink>
+        <NativeOwnerLink href="/library/citadel" scope={access.identity}>
+          Use Mason
+        </NativeOwnerLink>
+        <NativeOwnerLink href="/settings/onboarding" scope={access.identity}>
+          Start here
+        </NativeOwnerLink>
+      </nav>
       <ProjectRecents key={access.identity} workspaceId={workspaceId} />
       <ProjectImport key={access.identity} workspaceId={workspaceId} citadelId={citadelId} refresh={refresh} />
-      <ClassicOwnerLink
-        href={`/projects${projectId ? `/${encodeURIComponent(projectId)}` : ""}?workspaceId=${encodeURIComponent(workspaceId)}${citadelId ? `&citadelId=${encodeURIComponent(citadelId)}` : ""}`}
-        scope={access.identity}
-        label="Open project home, intake and artifacts in Classic"
-      />
-      <ClassicOwnerLink
-        href={`/chat?workspaceId=${encodeURIComponent(workspaceId)}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""}`}
-        scope={access.identity}
-        label="Open local-folder and GitHub import in Classic Chat"
-      />
-      <p className="text-sm text-fg-muted">
-        Native import, project overview and intake are available below. Classic remains available while full action parity is verified.
-      </p>
       {projects.isPending ? <p role="status">Reading projects…</p> : null}
       {projects.error ? (
         <Callout tone="error">

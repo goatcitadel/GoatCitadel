@@ -67,6 +67,24 @@ describe("onboarding routes", () => {
   });
 
   it.each([
+    { source: "token" as const, operator: true, scope: "operator" },
+    { source: "basic" as const, operator: true, scope: "operator" },
+    { source: "loopback" as const, operator: true, scope: "browser_local" },
+    { source: "none" as const, operator: true, scope: "browser_local" },
+    { source: "device" as const, operator: false, scope: "unavailable" },
+    { source: "companion" as const, operator: false, scope: "unavailable" },
+  ])("projects startup caller metadata without changing authority for $source", async ({source, operator, scope}) => {
+    app = Fastify();
+    app.decorate("gatewayConfig", {assistant: {auth: {mode: "none"}}} as never);
+    app.decorate("services", {onboarding: {getOnboardingStartupState: () => ({completed: true})}} as never);
+    app.addHook("onRequest", async request => { request.authActorSource = source; request.authActorId = source === "none" ? "anonymous" : "actor-fixture"; request.authDeviceId = "device-fixture"; request.authGrantId = "grant-fixture"; });
+    await app.register(onboardingRoutes);
+    const response = await app.inject({method: "GET", url: "/api/v1/onboarding/startup"});
+    expect(response.statusCode).toBe(200); expect(response.headers["cache-control"]).toBe("private, no-store");
+    expect(response.json()).toEqual({completed: true, currentAccess: {actorId: source === "none" ? null : "actor-fixture", actorSource: source, operatorAccess: operator, readStatusScope: scope, deviceId: "device-fixture", grantId: "grant-fixture"}});
+  });
+
+  it.each([
     ["startup", "getOnboardingStartupState"],
     ["state", "getOnboardingState"],
   ] as const)("maps the onboarding %s config-generation read fence to a retryable conflict", async (route, method) => {

@@ -33,7 +33,7 @@ import {
   triggerChatProactive,
   updateChatProactivePolicy,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { resolveActiveWorkflowTurn } from "@goatcitadel/mission-control-shared/components/cowork-view-model";
+import { resolveActiveWorkflowTurn } from "@goatcitadel/mission-control-shared/components/chat/active-workflow-turn";
 import { toTitleCase } from "./chat-page-normalizers";
 
 export interface ChatProactivePolicyPatch {

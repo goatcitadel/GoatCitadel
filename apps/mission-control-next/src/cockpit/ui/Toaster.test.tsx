@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { requestCockpitToast, resetCockpitToastRuntimeForTests } from "./toast-runtime";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
@@ -6,10 +7,13 @@ import { toast } from "sonner";
 import { CockpitToaster } from "./Toaster";
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({useUiPreferences: () => ({theme:"dark"})}));
 it("expands retained notification actions and promotes queued notifications after dismissal", async () => {
+  resetCockpitToastRuntimeForTests();
   const host=document.createElement("div");document.body.append(host);const root=createRoot(host);const open=vi.fn();
   try {
     await act(async()=>root.render(<CockpitToaster/>));
-    await act(async()=> {for(let i=0;i<5;i++) toast("Owned notification "+i,{id:"owned-"+i,duration:Infinity,action:{label:"Open Inbox item",onClick:open}});await new Promise(resolve=>setTimeout(resolve,30));});
+    expect(document.querySelector("[data-sonner-toaster]")).toBeNull();
+    await act(async()=> {for(let i=0;i<5;i++) requestCockpitToast(runtime => runtime("Owned notification "+i,{id:"owned-"+i,duration:Infinity,action:{label:"Open Inbox item",onClick:open}}), () => true);await vi.dynamicImportSettled();});
+    await act(async()=> {await new Promise(resolve=>setTimeout(resolve,30));});
     const cards=[...document.querySelectorAll<HTMLElement>('[data-sonner-toast]')];
     expect(cards).toHaveLength(5);
     expect(cards.filter(card=>card.dataset.visible==='true')).toHaveLength(3);
@@ -20,5 +24,5 @@ it("expands retained notification actions and promotes queued notifications afte
     await act(async()=> {await new Promise(resolve=>setTimeout(resolve,250));});
     expect(document.querySelectorAll('[data-sonner-toast][data-visible="true"]')).toHaveLength(3);
     expect([...document.querySelectorAll<HTMLElement>('[data-sonner-toast]')].every(card=>card.dataset.expanded==='true')).toBe(true);
-  } finally {await act(async()=>{toast.dismiss();root.unmount();});host.remove();}
+  } finally {await act(async()=>{toast.dismiss();root.unmount();});host.remove();resetCockpitToastRuntimeForTests();}
 });

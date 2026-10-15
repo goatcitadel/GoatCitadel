@@ -9,6 +9,10 @@ export default defineConfig({
   resolve: {
     alias: [
       {
+        find: "@goatcitadel/contracts/startup-reads",
+        replacement: path.resolve(configDir, "../../packages/contracts/src/gateway-startup-reads.ts"),
+      },
+      {
         find: "@goatcitadel/contracts/remote-worker-runtime-node",
         replacement: path.resolve(configDir, "../../packages/contracts/src/remote-worker-runtime-node.ts"),
       },
@@ -19,6 +23,10 @@ export default defineConfig({
       {
         find: "@goatcitadel/contracts/citadel-vault-node",
         replacement: path.resolve(configDir, "../../packages/contracts/src/citadel-vault-node.ts"),
+      },
+      {
+        find: "@goatcitadel/contracts/external-source-chat",
+        replacement: path.resolve(configDir, "../../packages/contracts/src/external-source-chat.ts"),
       },
       {
         find: "@goatcitadel/contracts",

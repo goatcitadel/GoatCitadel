@@ -589,7 +589,9 @@ async function change(node: ReactTestInstance, value: string, checked?: boolean)
 }
 
 async function openTest(renderer: ReactTestRenderer, code = "TEST-01") {
-  const row = renderer.root.findAll((node) => node.props.role === "button").find((node) => readNodeText(node).includes(code));
+  const row = renderer.root
+    .findAll((node) => node.props.role === "button")
+    .find((node) => readNodeText(node).includes(code));
   if (!row) throw new Error("Missing test row " + code);
   await click(row);
 }
@@ -825,6 +827,201 @@ describe("PromptPacksWorkbenchPage", () => {
     expect(promptPackMocks.fetchPromptPackTests).toHaveBeenLastCalledWith("pack-1");
     expect(promptPackMocks.fetchPromptPackReport).toHaveBeenLastCalledWith("pack-1");
     expect(promptPackMocks.fetchPromptPackTests).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not substitute another pack or dispatch its controls for an unavailable bookmarked pack", async () => {
+    const renderer = await renderWorkbench({ initialPackId: "missing-bookmarked-pack" });
+    expect(readNodeText(renderer.root)).toContain("The requested prompt pack is unavailable");
+    expect(promptPackMocks.fetchPromptPackTests).not.toHaveBeenCalled();
+    expect(promptPackMocks.fetchPromptPackReport).not.toHaveBeenCalled();
+    expect(promptPackMocks.fetchPromptPackExport).not.toHaveBeenCalled();
+    expect(findButton(renderer, "Run all").props.disabled).toBe(true);
+    await click(findButton(renderer, "Run all"));
+    expect(promptPackMocks.runPromptPackBenchmark).not.toHaveBeenCalled();
+    expect(promptPackMocks.runPromptPackTest).not.toHaveBeenCalled();
+    expect(promptPackMocks.scorePromptPackTest).not.toHaveBeenCalled();
+    expect(promptPackMocks.autoScorePromptPackTest).not.toHaveBeenCalled();
+    expect(promptPackMocks.autoScorePromptPackBatch).not.toHaveBeenCalled();
+    await change(findSelectContaining(renderer, "Operator trust pack"), "pack-1");
+    expect(promptPackMocks.fetchPromptPackTests).toHaveBeenCalledExactlyOnceWith("pack-1");
+    expect(promptPackMocks.fetchPromptPackReport).toHaveBeenCalledExactlyOnceWith("pack-1");
+  });
+
+  it("opens and scores the exact historical run rather than its newer test result", async () => {
+    const normal = buildReport();
+    const older = {
+      ...completedRun,
+      runId: "run-historical",
+      responseText: "Historical canonical answer.",
+      startedAt: "2026-04-21T00:01:00.000Z",
+      finishedAt: "2026-04-21T00:02:00.000Z",
+    };
+    const assessment = {
+      ...normal.latestAssessments[0]!,
+      runId: older.runId,
+      autoScore: { ...autoScore, runId: older.runId },
+      humanReview: { ...normal.humanReviewsV2[0]!, runId: older.runId, notes: "Historical review notes." },
+    };
+    promptPackMocks.fetchPromptPackReport.mockResolvedValue({
+      ...normal,
+      focusedRun: { run: older, test: tests[0], assessment },
+    });
+    const renderer = await renderWorkbench({
+      initialPackId: "pack-1",
+      initialRunId: older.runId,
+      initialSessionId: older.sessionId,
+      initialDetailTab: "review",
+    });
+    expect(promptPackMocks.fetchPromptPackReport).toHaveBeenCalledExactlyOnceWith("pack-1", {
+      runId: older.runId,
+      sessionId: older.sessionId,
+    });
+    expect(readNodeText(renderer.root)).toContain("Manual review");
+    expect(findTextarea(renderer, "Optional notes...").props.value).toBe("Historical review notes.");
+    await selectDetailTab(renderer, "Output");
+    expect(readNodeText(renderer.root)).toContain("Historical canonical answer.");
+    expect(readNodeText(renderer.root)).not.toContain(completedRun.responseText);
+    await selectDetailTab(renderer, "Review");
+    await click(findButton(renderer, "Fill pass defaults"));
+    await click(findButton(renderer, "Save review"));
+    expect(promptPackMocks.scorePromptPackTest).toHaveBeenCalledWith(
+      "pack-1",
+      "test-1",
+      expect.objectContaining({ runId: older.runId }),
+    );
+    await click(findButton(renderer, "Auto score this run"));
+    expect(promptPackMocks.autoScorePromptPackTest).toHaveBeenCalledWith("pack-1", "test-1", {
+      runId: older.runId,
+      force: true,
+    });
+  });
+
+  it.each(["missing", "wrong-run", "wrong-pack", "wrong-session", "wrong-assessment"])(
+    "withholds focused output and scoring for %s evidence",
+    async (mode) => {
+      const normal = buildReport(),
+        run = { ...completedRun };
+      if (mode === "missing")
+        promptPackMocks.fetchPromptPackReport.mockRejectedValue(new Error("Requested run is unavailable"));
+      else
+        promptPackMocks.fetchPromptPackReport.mockResolvedValue({
+          ...normal,
+          focusedRun: {
+            run: {
+              ...run,
+              ...(mode === "wrong-run" ? { runId: "other" } : {}),
+              ...(mode === "wrong-pack" ? { packId: "other" } : {}),
+              ...(mode === "wrong-session" ? { sessionId: "other" } : {}),
+            },
+            test: tests[0],
+            assessment: { ...normal.latestAssessments[0]!, ...(mode === "wrong-assessment" ? { runId: "other" } : {}) },
+          },
+        });
+      const renderer = await renderWorkbench({
+        initialPackId: "pack-1",
+        initialRunId: run.runId,
+        initialSessionId: run.sessionId,
+        initialDetailTab: "review",
+      });
+      expect(readNodeText(renderer.root)).toMatch(/requested run/i);
+      expect(readNodeText(renderer.root)).not.toContain(run.responseText);
+      expect(renderer.root.findAllByType("button").some((button) => readNodeText(button).includes("Save review"))).toBe(
+        false,
+      );
+      expect(promptPackMocks.scorePromptPackTest).not.toHaveBeenCalled();
+      expect(promptPackMocks.autoScorePromptPackTest).not.toHaveBeenCalled();
+      expect(promptPackMocks.runPromptPackTest).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["completion", "rejection"])("retains deliberate test selection after a late focused %s", async (mode) => {
+    const focused = {
+      ...buildReport(),
+      focusedRun: { run: completedRun, test: tests[0], assessment: buildReport().latestAssessments[0] },
+    };
+    promptPackMocks.fetchPromptPackReport.mockResolvedValueOnce(focused);
+    const renderer = await renderWorkbench({ initialPackId: "pack-1", initialRunId: "run-1" });
+    await click(findButton(renderer, "Back to list"));
+    let resolve!: (value: unknown) => void, reject!: (error: Error) => void;
+    promptPackMocks.fetchPromptPackReport.mockImplementationOnce(
+      () =>
+        new Promise((done, failed) => {
+          resolve = done;
+          reject = failed;
+        }),
+    );
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = promptPackMocks.refreshCallback!();
+    });
+    await openTest(renderer, "TEST-02");
+    await act(async () => {
+      if (mode === "completion") resolve(focused);
+      else reject(new Error("Old focused read failed"));
+    });
+    await act(async () => {
+      await pending;
+    });
+    await flush();
+    expect(readNodeText(renderer.root)).toContain("Handle failed tool output");
+    expect(readNodeText(renderer.root)).not.toContain("Old focused read failed");
+    await selectDetailTab(renderer, "Output");
+    expect(readNodeText(renderer.root)).toContain("Tool failed");
+    expect(readNodeText(renderer.root)).not.toContain(completedRun.responseText);
+    expect(promptPackMocks.scorePromptPackTest).not.toHaveBeenCalled();
+    expect(promptPackMocks.autoScorePromptPackTest).not.toHaveBeenCalled();
+  });
+
+  it("withholds previously loaded focused evidence after canonical refresh rejection", async () => {
+    const focused = {
+      ...buildReport(),
+      focusedRun: { run: completedRun, test: tests[0], assessment: buildReport().latestAssessments[0] },
+    };
+    promptPackMocks.fetchPromptPackReport.mockResolvedValueOnce(focused);
+    const renderer = await renderWorkbench({
+      initialPackId: "pack-1",
+      initialRunId: "run-1",
+      initialDetailTab: "review",
+    });
+    expect(readNodeText(renderer.root)).toContain("Manual review");
+    promptPackMocks.fetchPromptPackReport.mockRejectedValueOnce(new Error("Requested run is unavailable"));
+    await act(async () => {
+      await promptPackMocks.refreshCallback!();
+    });
+    await flush();
+    expect(readNodeText(renderer.root)).toContain("Requested run is unavailable");
+    expect(renderer.root.findAllByType("button").some((button) => readNodeText(button).includes("Save review"))).toBe(
+      false,
+    );
+    expect(promptPackMocks.scorePromptPackTest).not.toHaveBeenCalled();
+    expect(promptPackMocks.autoScorePromptPackTest).not.toHaveBeenCalled();
+  });
+
+  it("drops a late focused response after an explicit native pack selection", async () => {
+    const focused = {
+      ...buildReport(),
+      focusedRun: { run: completedRun, test: tests[0], assessment: buildReport().latestAssessments[0] },
+    };
+    promptPackMocks.fetchPromptPackReport.mockResolvedValueOnce(focused);
+    const renderer = await renderWorkbench({ initialPackId: "pack-1", initialRunId: "run-1" });
+    await click(findButton(renderer, "Back to list"));
+    let finishRefresh!: (value: unknown) => void;
+    const refresh = new Promise((done) => {
+      finishRefresh = done;
+    });
+    promptPackMocks.fetchPromptPackReport.mockImplementationOnce(() => refresh);
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = promptPackMocks.refreshCallback!();
+    });
+    await change(findSelectContaining(renderer, "Operator trust pack"), "pack-2");
+    await act(async () => finishRefresh(focused));
+    await act(async () => {
+      await pending;
+    });
+    await flush();
+    expect(readNodeText(renderer.root)).toContain("Secondary pack");
+    expect(promptPackMocks.fetchPromptPackReport).toHaveBeenLastCalledWith("pack-2");
   });
 
   it("surfaces load, copy, validation, and ops import failures", async () => {

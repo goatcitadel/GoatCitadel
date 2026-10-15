@@ -17,7 +17,7 @@ async function waitUntil(read, predicate, page, label) {
 
 async function lastTurn(page, content) {
   const messages = page.locator('[aria-label="Messages"]');
-  const scroller = messages.locator('[data-testid="virtuoso-scroller"]');
+  const scroller = messages.locator('[data-transcript-scroller]');
   await scroller.waitFor();
   await scroller.evaluate((element) => {
     element.scrollTop = element.scrollHeight;

@@ -2,7 +2,7 @@ import type { CapabilityKind } from "@goatcitadel/contracts";
 import { readCatalogLocation } from "../areas/library/capability-catalog-route";
 import { adaptLegacyUrl } from "../../app/legacy-route-adapter";
 import { buildAppHref, parseAppRoute, RAIL_ITEMS } from "../../app/route-model";
-import { buildSettingsIndex } from "../areas/settings/settings-index";
+import { buildSettingsDestinations } from "../areas/settings/settings-destinations";
 import { parseCockpitLocation } from "./routes";
 
 export type CockpitResolution =
@@ -10,7 +10,18 @@ export type CockpitResolution =
   | { kind: "classic"; href: string; label: string }
   | { kind: "missing" };
 
-const systemViews = new Set(["health", "spend", "quality", "diagnostics", "activity", "dashboards", "browser-sessions", "improvement"]);
+const systemViews = new Set([
+  "health",
+  "spend",
+  "quality",
+  "diagnostics",
+  "activity",
+  "sessions",
+  "dashboards",
+  "browser-sessions",
+  "improvement",
+  "runtime",
+]);
 const libraryViews = new Set([
   "capabilities",
   "memory",
@@ -40,21 +51,22 @@ const catalogKinds: Record<CapabilityKind, true> = {
   mesh_mcp_server: true,
   mesh_skill: true,
 };
-const settings = buildSettingsIndex();
+const settings = buildSettingsDestinations();
 const opsNative: Record<string, string> = {
   approvals: "/inbox",
   activity: "/system/activity",
   quality: "/system/quality",
-  diagnostics: "/system/diagnostics",
-  costs: "/system/spend",
+  diagnostics: "/system/runtime/diagnostics",
+  costs: "/system/spend/details",
   improvement: "/system/improvement",
-  // System › Health is the native owner of runtime and worker status; desktop "needs attention" toasts that
-  // open Classic notifications land in the Inbox.
-  runtime: "/system",
-  workers: "/system",
+  // Runtime reuses its existing Services, efficiency, backup and diagnostics owners inside Cockpit.
+  // Worker status remains an inspection boundary; desktop notifications land in Inbox.
+  runtime: "/system/runtime",
+  workers: "/system/runtime/workers",
   notifications: "/inbox",
-  // Port4: saved boards and schedules are native end to end. Kanban stays Classic: agentic run evidence has no
-  // native owner yet.
+  // These destinations reuse the existing session evidence and revision-aware task owners.
+  sessions: "/system/sessions",
+  kanban: "/work/kanban",
   boards: "/system/dashboards",
   schedules: "/work/schedules",
 };
@@ -69,6 +81,14 @@ export function isCockpitConversationLocation(input: string): boolean {
   return route.area === "chat" && route.rest.length === 0;
 }
 
+function validApprovalRecordId(value: string): boolean {
+  if (!value || value.trim() !== value) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return false;
+  }
+  return true;
+}
 /** Coverage, not the permissive Classic parser, decides whether a Cockpit view exists. */
 export function resolveCockpitCompatibility(input: string): CockpitResolution {
   if (!input.startsWith("/") || input.startsWith("//") || input.includes("\\")) return { kind: "missing" };
@@ -79,6 +99,8 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
     return { kind: "classic", href: fallback.pathname + fallback.search + fallback.hash, label: "Open in Classic" };
   };
   if (url.searchParams.get("shell") === "classic") return classic();
+  if (input.startsWith("/inbox/approvals/") && !url.pathname.startsWith("/inbox/approvals/"))
+    return { kind: "missing" };
   // Only root legacy routing parameters are Classic inputs. Native URLs own their query state.
   if (url.pathname === "/" && ["tab", "space", "page", "surface"].some((key) => url.searchParams.has(key))) {
     const route = adaptLegacyUrl(url);
@@ -107,7 +129,12 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
     if (path) url.pathname = path;
     return { kind: "native", href: url.pathname + url.search + url.hash };
   };
-  if (area === "settings" && section === "onboarding" && parts.length === 2 && url.searchParams.get("view") === "llamacpp") {
+  if (
+    area === "settings" &&
+    section === "onboarding" &&
+    parts.length === 2 &&
+    url.searchParams.get("view") === "llamacpp"
+  ) {
     url.hash = "local-ai";
     return native("/settings/models");
   }
@@ -117,16 +144,45 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
     return native(new URL(buildAppHref(route), url).pathname);
   }
   if (area === "cowork" && parts.length === 2 && coworkWorkViews.has(section!)) return native("/work");
-  if (area === "inbox" && parts.length === 1) {
-    if (url.searchParams.has("view") && url.searchParams.get("view") !== "pending") {
-      url.pathname = "/ops/approvals";
-      return classic();
+  let linkedApprovalId: string | undefined;
+  if (area === "inbox" && section === "approvals" && parts.length === 3) {
+    if (url.pathname !== "/inbox/approvals/" + parts[2]) return { kind: "missing" };
+    try {
+      linkedApprovalId = decodeURIComponent(parts[2]!);
+    } catch {
+      return { kind: "missing" };
     }
-    return native();
+  }
+  if (
+    (area === "inbox" && parts.length === 1) ||
+    (area === "ops" && section === "approvals" && parts.length === 2) ||
+    linkedApprovalId !== undefined
+  ) {
+    const approvalIds = url.searchParams.getAll("approvalId");
+    const approvalId = linkedApprovalId ?? approvalIds[0];
+    if (approvalId !== undefined && (!validApprovalRecordId(approvalId) || approvalIds.some((id) => id !== approvalId)))
+      return { kind: "missing" };
+    if (linkedApprovalId !== undefined) url.searchParams.set("approvalId", linkedApprovalId);
+    const view = url.searchParams.get("view");
+    const historyView = url.searchParams.get("historyView");
+    if (
+      (view && !["pending", "history", "all", "recovery", "approved", "rejected", "edited"].includes(view)) ||
+      (historyView && !["pending", "all", "recovery", "approved", "rejected", "edited"].includes(historyView))
+    )
+      return { kind: "missing" };
+    return native("/inbox");
   }
   if (area === "__gallery" && parts.length === 1) return native();
   if (area === "system" && (parts.length === 1 || (parts.length === 2 && systemViews.has(section!)))) return native();
+  if (area === "system" && section === "spend" && parts.length === 3 && parts[2] === "details") return native();
   if (area === "system" && section === "dashboards" && parts.length === 3) return native();
+  if (
+    area === "system" &&
+    section === "runtime" &&
+    parts.length === 3 &&
+    ["diagnostics", "workers"].includes(parts[2]!)
+  )
+    return native();
   if (
     area === "work" &&
     (parts.length === 1 ||
@@ -136,7 +192,11 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
     return native();
   if (area === "library") {
     // Notes are UUID-owned records. Keep malformed resource suffixes unavailable.
-    if (section === "notes" && parts.length === 3 && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu.test(parts[2]!)) {
+    if (
+      section === "notes" &&
+      parts.length === 3 &&
+      /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu.test(parts[2]!)
+    ) {
       url.searchParams.set("noteId", parts[2]!);
       return native("/library/notes");
     }
@@ -162,18 +222,30 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
           ))))
   )
     return native();
-  // Only the browser-session view of Ops sessions is native; run/session evidence stays with Classic.
-  if (area === "ops" && section === "sessions" && parts.length === 2 && url.searchParams.get("view") === "browser-sessions") {
+  // Browser sessions keep their separate grant and state owner.
+  if (
+    area === "ops" &&
+    section === "sessions" &&
+    parts.length === 2 &&
+    url.searchParams.get("view") === "browser-sessions"
+  ) {
     url.searchParams.delete("view");
     return native("/system/browser-sessions");
   }
+  // Only an explicit overview rollback marker selects this fixed native view. Legacy Costs keeps its full owner.
+  const returnViews = url.searchParams.getAll("cockpitReturnView");
+  if (url.pathname === "/ops/costs" && returnViews.length === 1 && returnViews[0] === "spend-overview") {
+    url.searchParams.delete("cockpitReturnView");
+    return native("/system/spend");
+  }
   if (area === "ops" && parts.length === 2 && section && opsNative[section]) {
-    if (section === "approvals" && url.searchParams.has("view") && url.searchParams.get("view") !== "pending")
-      return classic();
     return native(opsNative[section]);
   }
   if (area === "chat" && section === "projects" && parts.length <= 3) return native();
-  if (area === "projects" && parts.length <= 2) return native(`/chat/projects${section ? `/${section}` : url.searchParams.get("projectId") ? `/${encodeURIComponent(url.searchParams.get("projectId")!)}` : ""}`);
+  if (area === "projects" && parts.length <= 2)
+    return native(
+      `/chat/projects${section ? `/${section}` : url.searchParams.get("projectId") ? `/${encodeURIComponent(url.searchParams.get("projectId")!)}` : ""}`,
+    );
   if (
     (area === "ops" || area === "library" || area === "settings") &&
     parts.length <= 2 &&
@@ -181,4 +253,34 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
   )
     return classic();
   return { kind: "missing" };
+}
+
+/** Internal owner projections are continuations, not an operator's explicit layout choice.
+ * Caller/record authority remains with the destination; navigation alone cannot approve an action.
+ */
+export function resolveCockpitContinuation(
+  input: string,
+  context: { search?: string; hash?: string; workspaceId?: string } = {},
+): CockpitResolution {
+  if (!input.startsWith("/") || input.startsWith("//") || /[\\\r\n]/u.test(input)) return { kind: "missing" };
+  try {
+    const url = new URL(input, "http://cockpit.invalid");
+    const rawPath = input.split(/[?#]/u, 1)[0]!;
+    if (url.origin !== "http://cockpit.invalid" || url.pathname !== rawPath) return { kind: "missing" };
+    const carried = new URLSearchParams(context.search);
+    for (const key of new Set(carried.keys())) {
+      if (key === "shell" || key === "shellScope" || url.searchParams.has(key)) continue;
+      for (const value of carried.getAll(key)) url.searchParams.append(key, value);
+    }
+    if (context.workspaceId !== undefined) {
+      if (!context.workspaceId) return { kind: "missing" };
+      url.searchParams.set("workspaceId", context.workspaceId);
+    }
+    if (!input.includes("#") && context.hash) url.hash = context.hash;
+    url.searchParams.set("shell", "cockpit");
+    url.searchParams.delete("shellScope");
+    return resolveCockpitCompatibility(rawPath + url.search + url.hash);
+  } catch {
+    return { kind: "missing" };
+  }
 }

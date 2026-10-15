@@ -10,6 +10,7 @@ import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/Con
 import { useSessionControlStatus } from "@goatcitadel/mission-control-shared/hooks/useSessionControlStatus";
 import { deriveSessionControlBannerViewModel } from "@goatcitadel/threaded-surface-core";
 import { Button } from "../../ui/Button";
+import { useProjectAccess } from "@goatcitadel/mission-control-shared/hooks/use-current-access";
 
 type Review =
   | { kind: "handoff"; request: SessionControlRequestRecord; read: boolean }
@@ -92,7 +93,27 @@ function reviewCopy(review: Review | null) {
  * external controller (revoke or emergency takeover). Every consequential action is reviewed, re-reads the canonical
  * control state, and is bound to the reviewed generation; the Gateway enforces the same compare-and-set.
  */
-export function SessionControlManager({ sessionId }: { sessionId: string }) {
+export function SessionControlManager({ sessionId, workspaceId }: { sessionId: string; workspaceId?: string }) {
+  const access = useProjectAccess(JSON.stringify(["session-control", workspaceId, sessionId]));
+  return (
+    <SelectedSessionControlManager
+      key={access.identity}
+      sessionId={sessionId}
+      workspaceId={workspaceId}
+      access={access}
+    />
+  );
+}
+
+function SelectedSessionControlManager({
+  sessionId,
+  workspaceId,
+  access,
+}: {
+  sessionId: string;
+  workspaceId?: string;
+  access: ReturnType<typeof useProjectAccess>;
+}) {
   const status = useSessionControlStatus(sessionId);
   const [grantRead, setGrantRead] = useState<Record<string, boolean>>({});
   const [review, setReview] = useState<Review | null>(null);
@@ -100,21 +121,26 @@ export function SessionControlManager({ sessionId }: { sessionId: string }) {
   const [notice, setNotice] = useState("");
   const [retry, setRetry] = useState<Attempt | null>(null);
   const running = useRef(false);
-  const detail = status.data as SessionControlDetailResponse | null;
+  const matchesSelection = (value: SessionControlDetailResponse) =>
+    value.control.sessionId === sessionId.trim() &&
+    (workspaceId === undefined || value.control.workspaceId === workspaceId);
+  const detail = status.data && matchesSelection(status.data) ? status.data : null;
+  const scopeMismatch = Boolean(status.data && !detail);
   const model = deriveSessionControlBannerViewModel(detail);
   const pending = detail && detail.control.ownerKind === "operator" ? detail.pendingRequests : [];
 
   async function run(action: () => Promise<string>) {
-    if (running.current) return;
+    if (running.current || !access.current()) return;
     running.current = true;
     setBusy(true);
     setNotice("");
     try {
-      setNotice(await action());
+      const message = await action();
+      if (access.current()) setNotice(message);
     } finally {
-      await status.reload();
+      if (access.current()) await status.reload();
       running.current = false;
-      setBusy(false);
+      if (access.current()) setBusy(false);
     }
   }
 
@@ -126,7 +152,7 @@ export function SessionControlManager({ sessionId }: { sessionId: string }) {
         return DONE[attempt.review.kind];
       } catch (error) {
         if (refused(error)) return CHANGED;
-        setRetry(attempt);
+        if (access.current()) setRetry(attempt);
         return UNKNOWN;
       }
     });
@@ -140,6 +166,9 @@ export function SessionControlManager({ sessionId }: { sessionId: string }) {
       } catch {
         return "The control state could not be re-read, so nothing was sent.";
       }
+      if (!access.current()) return "The selected session or access changed, so nothing was sent.";
+      if (!matchesSelection(current))
+        return "The control state does not match this session and workspace, so nothing was sent.";
       if (!stillCurrent(reviewed, current))
         return "Control of this conversation changed since your review, so nothing was sent. Review the current state.";
       const attempt = { review: reviewed, idempotencyKey: newKey() };
@@ -149,7 +178,7 @@ export function SessionControlManager({ sessionId }: { sessionId: string }) {
         return DONE[reviewed.kind];
       } catch (error) {
         if (refused(error)) return CHANGED;
-        setRetry(attempt);
+        if (access.current()) setRetry(attempt);
         return UNKNOWN;
       }
     });
@@ -179,6 +208,11 @@ export function SessionControlManager({ sessionId }: { sessionId: string }) {
           {status.loading ? "Reloading control" : "Reload control"}
         </Button>
       </div>
+      {scopeMismatch ? (
+        <p role="alert" className="text-status-failed">
+          This control state does not match the selected session and workspace. No control actions are available.
+        </p>
+      ) : null}
       {status.error ? (
         <p role="alert" className="text-status-failed">
           {detail ? `${status.error} Showing the last read.` : status.error}

@@ -30,7 +30,17 @@ function nativeRequest() {
 }
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "gc-native-policy-admission-"));
-  const sync = new Storage({ dbPath: ":memory:", transcriptsDir: join(root, "transcripts"), auditDir: join(root, "audit") });
+  // Each case keeps its own real database and transaction state. Reuse only the
+  // storage owner's canonical schema snapshot; it still verifies the migration ledger.
+  const previousTemplate = process.env.GOATCITADEL_SQLITE_SCHEMA_TEMPLATE;
+  let sync: Storage;
+  try {
+    process.env.GOATCITADEL_SQLITE_SCHEMA_TEMPLATE = "1";
+    sync = new Storage({ dbPath: join(root, "index.db"), transcriptsDir: join(root, "transcripts"), auditDir: join(root, "audit") });
+  } finally {
+    if (previousTemplate === undefined) delete process.env.GOATCITADEL_SQLITE_SCHEMA_TEMPLATE;
+    else process.env.GOATCITADEL_SQLITE_SCHEMA_TEMPLATE = previousTemplate;
+  }
   const storage = createSqliteAsyncStorage(sync);
   cleanup.push(async () => { await storage.close(); await rm(root, { recursive: true, force: true }); });
   const grant = await storage.toolGrants.create({ toolPattern: "shell.exec", decision: "allow", scope: "session",

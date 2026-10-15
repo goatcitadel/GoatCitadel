@@ -6,6 +6,7 @@ const monacoMocks = vi.hoisted(() => ({
   loadMonacoEditorRuntime: vi.fn(),
   normalizeMonacoLoaderLanguage: vi.fn((language?: string) => language?.trim().toLowerCase() || "plaintext"),
   shouldRenderMonacoRuntime: vi.fn(() => false),
+  stopTheme: vi.fn(),
 }));
 
 vi.mock("./ui", () => ({
@@ -55,9 +56,17 @@ vi.mock("./monaco-loader", () => ({
   normalizeMonacoLoaderLanguage: monacoMocks.normalizeMonacoLoaderLanguage,
 }));
 
-vi.mock("./monaco-runtime", () => ({
-  shouldRenderMonacoRuntime: monacoMocks.shouldRenderMonacoRuntime,
-}));
+vi.mock("./monaco-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monaco-runtime")>();
+  return {
+    ...actual,
+    shouldRenderMonacoRuntime: monacoMocks.shouldRenderMonacoRuntime,
+    observeMonacoTheme: vi.fn((apply: (theme: "vs" | "vs-dark") => void) => {
+      apply(actual.resolveMonacoTheme());
+      return monacoMocks.stopTheme;
+    }),
+  };
+});
 
 import { ChatQueueBar, buildVisibleQueueItems, type ChatQueueItemView } from "./chat/ChatQueueBar";
 import { ChatExecutionPlanSummary } from "./chat/ChatExecutionPlanSummary";
@@ -499,6 +508,7 @@ describe("shared loop 24 component tails", () => {
     runtime.unmount();
     expect(editor.dispose).toHaveBeenCalled();
     expect(model.dispose).toHaveBeenCalled();
+    expect(monacoMocks.stopTheme).toHaveBeenCalled();
 
     let resolveRuntime!: (value: typeof monaco) => void;
     monacoMocks.loadMonacoEditorRuntime.mockReturnValueOnce(

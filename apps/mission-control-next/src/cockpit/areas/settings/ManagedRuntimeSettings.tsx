@@ -5,7 +5,7 @@ import { humanizeToken } from "@goatcitadel/mission-control-shared/content/statu
 import { useManagedRuntimeSettings } from "../../../features/native-routes/settings/use-managed-runtime-settings";
 import { ManagedRuntimeReview } from "../../../features/native-routes/settings/ManagedRuntimeReview";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { Button } from "../../ui/Button";
@@ -14,7 +14,10 @@ import { LlamaRuntimeLifecycle } from "./LlamaRuntimeLifecycle";
 const inputClass =
   "mt-1 min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg disabled:opacity-60";
 export function ManagedRuntimeSettings() {
-  const { navigate } = useCockpitRoute();
+  const { navigate, search } = useCockpitRoute();
+  const parameters = new URLSearchParams(search);
+  parameters.delete("shell");
+  parameters.delete("shellScope");
   const scope = getGatewayApiBaseUrl();
   const settings = useQuery({
     queryKey: ["system", "managed-runtime-settings"],
@@ -176,9 +179,17 @@ export function ManagedRuntimeSettings() {
           <Button size="sm" onClick={() => void change.refresh()}>
             Refresh runtime change status
           </Button>
-          {change.change.blocking && change.change.receipt.status === "awaiting_approval" && change.change.receipt.requiredAction?.kind === "approval" ? (
-            <SettingsApprovalOwnerAction plan={change.change.plan} receipt={change.change.receipt}
-              owner="managed-runtime" workspaceId="default" viewIdentity={draft.key} disabled={control.busy} />
+          {change.change.blocking &&
+          change.change.receipt.status === "awaiting_approval" &&
+          change.change.receipt.requiredAction?.kind === "approval" ? (
+            <SettingsApprovalOwnerAction
+              plan={change.change.plan}
+              receipt={change.change.receipt}
+              owner="managed-runtime"
+              workspaceId="default"
+              viewIdentity={draft.key}
+              disabled={control.busy}
+            />
           ) : null}
         </div>
       ) : null}
@@ -206,9 +217,15 @@ export function ManagedRuntimeSettings() {
         />
       ) : null}
       <div className="flex flex-wrap gap-3 text-sm">
-        <ClassicOwnerLink href="/settings/onboarding?view=llamacpp&shell=classic" scope={scope} label="Open validated llama.cpp setup" />
-        <Button size="sm" onClick={() => navigate("/system/health")}>Check runtime health</Button>
-        <ClassicOwnerLink href="/settings/runtime?shell=classic" scope={scope} label="Voice and runtime diagnostics" />
+        <NativeOwnerLink href={`/settings/models?${parameters}#local-ai`} scope={scope}>
+          Open validated llama.cpp setup
+        </NativeOwnerLink>
+        <Button size="sm" onClick={() => navigate("/system/health")}>
+          Check runtime health
+        </Button>
+        <NativeOwnerLink href={`/settings/advanced?${parameters}#managed-runtime`} scope={scope}>
+          Voice and runtime diagnostics
+        </NativeOwnerLink>
       </div>
       <ManagedRuntimeReview control={control} />
     </section>

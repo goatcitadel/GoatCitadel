@@ -83,10 +83,14 @@ it("the real shared decision bar reconciles the actual Chat prompt owner without
         </QueryClientProvider>,
       ),
     );
-    for (let attempt = 0; attempt < 30 && !host.textContent?.includes("Approve once"); attempt++)
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    await vi.waitFor(() =>
+      expect([...host.querySelectorAll("button")].find((item) => item.textContent === "Approve once")?.disabled).toBe(
+        false,
+      ),
+    );
     expect(owner.pendingApproval?.approvalId).toBe(pending.approvalId);
     const button = [...host.querySelectorAll("button")].find((item) => item.textContent === "Approve once")!;
     await act(async () => {

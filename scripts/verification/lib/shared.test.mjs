@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import {
+  verificationErrorDiagnostic,
+  runScenario,
+  readVerificationCandidateIdentity,
   buildFastLanePerfPayload,
   finalizeRunContext,
   parseCliArgs,
@@ -385,6 +388,106 @@ function emptyArtifacts() {
     playwright: [],
   };
 }
+
+test("verification identity binds a real revision and complete implementation digest", async () => {
+  const candidate = await readVerificationCandidateIdentity();
+  assert.match(candidate.revision, /^[a-f0-9]{40}$/);
+  assert.match(candidate.sourceDigest, /^[a-f0-9]{64}$/);
+  assert.equal(candidate.sourceDigestAlgorithm, "sha256-source-files-v1");
+});
+
+test("failed scenarios retain bounded redacted diagnostics and their originating error", async () => {
+  const context = await createFinalizeTestContext({ lane: "proof", scenarios: [] });
+  try {
+    const credential = "Bearer " + "synthetic".repeat(8);
+    await runScenario(
+      context,
+      { id: "proof.origin", title: "Originating failure", subsystem: "verification" },
+      async () => {
+        throw new Error("Owner transport failed: " + credential + "\n" + "diagnostic line\n".repeat(2000));
+      },
+    );
+    const scenario = context.manifest.scenarios[0];
+    assert.equal(scenario.status, "failed");
+    assert.match(scenario.error, /Owner transport failed/);
+    assert.ok(scenario.error.length <= 8192);
+    assert.ok(!scenario.error.includes(credential));
+    assert.equal(scenario.artifacts.diagnostics.length, 1);
+    const evidence = await fs.readFile(path.join(context.artifactRoot, scenario.artifacts.diagnostics[0]), "utf8");
+    assert.ok(!evidence.includes(credential));
+    assert.match(evidence, /Owner transport failed/);
+  } finally {
+    await fs.rm(context.artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test("finalization rejects proof recorded against a different implementation digest", async () => {
+  const candidate = await readVerificationCandidateIdentity();
+  const context = await createFinalizeTestContext({
+    lane: "proof",
+    scenarios: [],
+    metadata: { candidate: { ...candidate, sourceDigest: "0".repeat(64) } },
+  });
+  try {
+    const manifest = await finalizeRunContext(context);
+    assert.equal(manifest.status, "failed");
+    assert.equal(manifest.metadata.candidateUnchanged, false);
+    assert.equal(manifest.scenarios[0].id, "verification.candidate-integrity");
+  } finally {
+    await fs.rm(context.artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test("a passed status override cannot conceal changed candidate source", async () => {
+  const candidate = await readVerificationCandidateIdentity();
+  const context = await createFinalizeTestContext({
+    lane: "proof",
+    scenarios: [],
+    metadata: { candidate: { ...candidate, sourceDigest: "0".repeat(64) } },
+  });
+  try {
+    const manifest = await finalizeRunContext(context, "passed");
+    assert.equal(manifest.status, "failed");
+  } finally {
+    await fs.rm(context.artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test("originating diagnostics redact designated credential-reference env values", async () => {
+  const keys = ["TRELLO_VERIFICATION_KEY", "MESH_TEST_CREDENTIAL"];
+  const previous = keys.map((key) => process.env[key]);
+  const values = keys.map((_, index) => "fixture-value-" + index);
+  try {
+    keys.forEach((key, index) => {
+      process.env[key] = values[index];
+    });
+    const diagnostic = await verificationErrorDiagnostic(new Error("Owner failed with " + values.join(" and ")));
+    values.forEach((value) => assert.ok(!diagnostic.includes(value)));
+    assert.match(diagnostic, /Owner failed/);
+  } finally {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key];
+      else process.env[key] = previous[index];
+    });
+  }
+});
+
+test("originating diagnostics redact exact short and spaced designated credentials", async () => {
+  const key = "GOATCITADEL_VERIFY_BASIC_PASSWORD";
+  const previous = process.env[key];
+  try {
+    for (const value of ["tiny", "fixture with spaces"]) {
+      process.env[key] = value;
+      const diagnostic = await verificationErrorDiagnostic(new Error("Owner rejected " + value + " during recovery"));
+      assert.ok(!diagnostic.includes(value));
+      assert.match(diagnostic, /Owner rejected/);
+      assert.match(diagnostic, /during recovery/);
+    }
+  } finally {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
+});
 
 test("parseCliArgs keeps every character after the first = in an inline option value", () => {
   assert.deepEqual(parseCliArgs(["lane", "--output=proofs/run=latest.json", "--empty=", "--flag"]), {

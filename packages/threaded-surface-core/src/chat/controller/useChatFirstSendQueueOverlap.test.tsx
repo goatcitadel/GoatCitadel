@@ -234,7 +234,9 @@ describe("first-session send and queue restoration composition", () => {
 it("collects, removes, recollects and preserves the original caller queue across pagehide before one explicit resume", async () => {
   setGatewayCallerScope("queue-actor-a");
   api.sendAgentChatMessage.mockResolvedValue({ userMessage: { messageId: "resumed-once" } });
-  await act(async () => { renderer = create(<Harness />); });
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
   await act(async () => latest.navigate(CREATED.sessionId));
   await act(async () => latest.setDraft("/queue collect Remove this"));
   await act(async () => latest.sendIntent());
@@ -244,46 +246,63 @@ it("collects, removes, recollects and preserves the original caller queue across
   await act(async () => latest.setDraft("/queue collect Retain this"));
   await act(async () => latest.sendIntent());
   expect(latest.queue.map((item) => item.content)).toEqual(["Retain this"]);
-  expect(latest.draft).toBe(""); expect(api.sendAgentChatMessage).not.toHaveBeenCalled();
+  expect(latest.draft).toBe("");
+  expect(api.sendAgentChatMessage).not.toHaveBeenCalled();
   const originalKey = createQueueStorageKey(CREATED.workspaceId!, CREATED.sessionId);
   // Reload/page navigation does not run React cleanup. Flush the captured key,
   // even if identity changes immediately before the browser lifecycle event.
   setGatewayCallerScope("queue-actor-b");
   await act(async () => window.dispatchEvent(new Event("pagehide")));
-  expect(JSON.parse(window.localStorage.getItem(originalKey) ?? "[]").map((item: OutboundQueueItem) => item.content)).toEqual(["Retain this"]);
+  expect(
+    JSON.parse(window.localStorage.getItem(originalKey) ?? "[]").map((item: OutboundQueueItem) => item.content),
+  ).toEqual(["Retain this"]);
   expect(window.localStorage.getItem(createQueueStorageKey(CREATED.workspaceId!, CREATED.sessionId))).toBeNull();
-  await act(async () => renderer!.unmount()); renderer = undefined;
-  await act(async () => { renderer = create(<Harness />); });
+  await act(async () => renderer!.unmount());
+  renderer = undefined;
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
   await act(async () => latest.navigate(CREATED.sessionId));
   expect(latest.queue).toEqual([]);
-  await act(async () => renderer!.unmount()); renderer = undefined;
+  await act(async () => renderer!.unmount());
+  renderer = undefined;
   setGatewayCallerScope("queue-actor-a");
-  await act(async () => { renderer = create(<Harness />); });
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
   await act(async () => latest.navigate(CREATED.sessionId));
-  expect(latest.queue).toHaveLength(1); expect(latest.queue[0]!.paused).toBe(true);
+  expect(latest.queue).toHaveLength(1);
+  expect(latest.queue[0]!.paused).toBe(true);
   expect(api.sendAgentChatMessage).not.toHaveBeenCalled();
   await act(async () => latest.resumeQueue());
   expect(api.sendAgentChatMessage).toHaveBeenCalledTimes(1);
   expect(api.sendAgentChatMessage.mock.calls[0]?.[1].content).toBe("Retain this");
   expect(latest.queue).toEqual([]);
-  await act(async () => renderer!.unmount()); renderer = undefined;
+  await act(async () => renderer!.unmount());
+  renderer = undefined;
   setGatewayCallerScope("");
 });
-
 
 it.each([false, true])("retains new parent input across delayed side opening (handoff %s)", async (handoff) => {
   const opening = deferred<void>();
   api.openBtwSideChat.mockReturnValue(opening.promise);
-  await act(async () => { renderer = create(<Harness />); });
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
   await act(async () => latest.setDraft("/btw Side question"));
   const originalIntent = latest.sendIntent;
   let pending!: Promise<void>;
-  await act(async () => { pending = latest.sendIntent(); });
+  await act(async () => {
+    pending = latest.sendIntent();
+  });
   expect(latest.draft).toBe("");
   expect(api.openBtwSideChat).toHaveBeenCalledExactlyOnceWith("Side question");
   if (handoff) await act(async () => latest.navigate("other-parent", "other-workspace"));
   await act(async () => latest.setDraft("New parent input"));
-  await act(async () => { opening.resolve(); await pending; });
+  await act(async () => {
+    opening.resolve();
+    await pending;
+  });
   expect(latest.draft).toBe("New parent input");
   expect(api.sendAgentChatMessage).not.toHaveBeenCalled();
   if (handoff) {
@@ -292,3 +311,78 @@ it.each([false, true])("retains new parent input across delayed side opening (ha
     expect(latest.draft).toBe("New parent input");
   }
 });
+
+it.each([false, true])(
+  "retains the original first-send lease through held sidebar hydration (assignment send %s)",
+  async (sendOnAssignment) => {
+    const creation = deferred<ChatSessionRecord>(),
+      sidebar = deferred<void>(),
+      firstResponse = deferred<{ userMessage: { messageId: string } }>(),
+      secondResponse = deferred<{ userMessage: { messageId: string } }>();
+    api.createChatSession.mockReturnValueOnce(creation.promise);
+    api.loadSidebar.mockReturnValueOnce(sidebar.promise);
+    api.sendAgentChatMessage.mockReturnValueOnce(firstResponse.promise).mockReturnValueOnce(secondResponse.promise);
+    await act(async () => {
+      renderer = create(<Harness sendOnAssignment={sendOnAssignment} />);
+    });
+    act(() => latest.setDraft("First message"));
+    let firstSend!: Promise<void>;
+    await act(async () => {
+      firstSend = latest.send();
+    });
+    await vi.waitFor(() => expect(api.createChatSession).toHaveBeenCalledTimes(1));
+    act(() => {
+      latest.setDraft("Second message");
+      latest.setRoute(QUEUED_ROUTE);
+    });
+    if (!sendOnAssignment) await act(async () => latest.send());
+    await act(async () => {
+      creation.resolve(CREATED);
+    });
+    expect(latest.sessionId).toBe(CREATED.sessionId);
+    expect(latest.sending).toBe(true);
+    expect(api.loadSidebar).toHaveBeenCalledTimes(1);
+    expect(api.preflight).not.toHaveBeenCalled();
+    expect(api.sendAgentChatMessage).not.toHaveBeenCalled();
+    expect(latest.queue.map((item) => item.content)).toEqual(["Second message"]);
+    expect(api.createChatSession).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      sidebar.resolve();
+    });
+    await vi.waitFor(() => expect(api.sendAgentChatMessage).toHaveBeenCalledTimes(1));
+    expect(api.sendAgentChatMessage.mock.calls[0]?.[1].content).toBe("First message");
+    expect(latest.queue.map((item) => item.content)).toEqual(["Second message"]);
+    await act(async () => {
+      firstResponse.resolve({ userMessage: { messageId: "first-confirmed" } });
+      await firstSend;
+    });
+    await vi.waitFor(() => expect(api.sendAgentChatMessage).toHaveBeenCalledTimes(2));
+    expect(
+      api.sendAgentChatMessage.mock.calls.map(([sessionId, input]) => ({
+        sessionId,
+        content: input.content,
+        providerId: input.providerId,
+        model: input.model,
+      })),
+    ).toEqual([
+      {
+        sessionId: CREATED.sessionId,
+        content: "First message",
+        providerId: FIRST_ROUTE.providerId,
+        model: FIRST_ROUTE.model,
+      },
+      {
+        sessionId: CREATED.sessionId,
+        content: "Second message",
+        providerId: QUEUED_ROUTE.providerId,
+        model: QUEUED_ROUTE.model,
+      },
+    ]);
+    await act(async () => {
+      secondResponse.resolve({ userMessage: { messageId: "second-confirmed" } });
+    });
+    expect(latest.sending).toBe(false);
+    expect(latest.queue).toEqual([]);
+    expect(api.createChatSession).toHaveBeenCalledTimes(1);
+  },
+);

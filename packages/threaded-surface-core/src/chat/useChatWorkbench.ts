@@ -1,6 +1,12 @@
 import * as draftOwner from "./workbench-session-drafts.js";
 import { useWorkbenchDraftVersion } from "./workbench-session-drafts.js";
-import { getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  getGatewayCallerScope,
+  getGatewayCallerScopeRevision,
+  getGatewayAccessRevision,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import type { WorkbenchActionOwner } from "./workbench-action-code.js";
 import { useMemo, useCallback, useEffect, useRef, useState } from "react";
 import type {
   ChatSessionWorkbenchDiffResponse,
@@ -13,21 +19,12 @@ import type {
   ChatSessionWorkbenchTreeResponse,
 } from "@goatcitadel/contracts";
 import {
-  applyChatSessionWorkbenchPatch,
-  createChatSessionWorkbenchWorktree,
-  exportChatSessionWorkbenchPatch,
   fetchChatSessionWorkbench,
   fetchChatSessionWorkbenchDiff,
   fetchChatSessionWorkbenchFile,
   fetchChatSessionWorkbenchFileDiff,
   fetchChatSessionWorkbenchOutput,
   fetchChatSessionWorkbenchTree,
-  revertChatSessionWorkbenchChanges,
-  revertChatSessionWorkbenchFile,
-  runChatSessionWorkbenchCommand,
-  previewChatSessionWorkbenchFileOperation,
-  runChatSessionWorkbenchFileOperation,
-  saveChatSessionWorkbenchFile,
 } from "@goatcitadel/mission-control-shared/api/chat";
 import { useRefreshSubscription } from "@goatcitadel/mission-control-shared/hooks/useRefreshSubscription";
 
@@ -154,18 +151,31 @@ function resolveWorkbenchFileCandidates(input: {
   );
 }
 
-export function useChatWorkbench(input: { sessionId: string | null; enabled: boolean }) {
+type WorkbenchActionModule = typeof import("./workbench-action-code.js");
+let workbenchActionCode: Promise<WorkbenchActionModule> | undefined;
+function loadWorkbenchActionCode(): Promise<WorkbenchActionModule> {
+  return (workbenchActionCode ??= import("./workbench-action-code.js").catch((cause) => {
+    workbenchActionCode = undefined;
+    throw cause;
+  }));
+}
+
+export function useChatWorkbench(input: { sessionId: string | null; enabled: boolean; workspaceId?: string }) {
   const { sessionId, enabled } = input;
   const callerScope = getGatewayCallerScope();
   const draftHelpers = useMemo(() => {
-    const scoped = (id: string) => callerScope ? JSON.stringify([callerScope, id]) : id;
+    const scoped = (id: string) => (callerScope ? JSON.stringify([callerScope, id]) : id);
     return {
       getWorkbenchDraft: (id: string, path: string) => draftOwner.getWorkbenchDraft(scoped(id), path),
       listWorkbenchDrafts: (id: string | null) => draftOwner.listWorkbenchDrafts(id ? scoped(id) : null),
-      updateWorkbenchDraft: (id: string, file: ChatSessionWorkbenchFileResponse, content: string) => draftOwner.updateWorkbenchDraft(scoped(id), file, content),
-      discardWorkbenchSessionDraft: (id: string, path: string) => draftOwner.discardWorkbenchSessionDraft(scoped(id), path),
-      acknowledgeWorkbenchDraft: (id: string, file: ChatSessionWorkbenchFileResponse, content: string) => draftOwner.acknowledgeWorkbenchDraft(scoped(id), file, content),
-      rebaseWorkbenchDraft: (id: string, file: ChatSessionWorkbenchFileResponse) => draftOwner.rebaseWorkbenchDraft(scoped(id), file),
+      updateWorkbenchDraft: (id: string, file: ChatSessionWorkbenchFileResponse, content: string) =>
+        draftOwner.updateWorkbenchDraft(scoped(id), file, content),
+      discardWorkbenchSessionDraft: (id: string, path: string) =>
+        draftOwner.discardWorkbenchSessionDraft(scoped(id), path),
+      acknowledgeWorkbenchDraft: (id: string, file: ChatSessionWorkbenchFileResponse, content: string) =>
+        draftOwner.acknowledgeWorkbenchDraft(scoped(id), file, content),
+      rebaseWorkbenchDraft: (id: string, file: ChatSessionWorkbenchFileResponse) =>
+        draftOwner.rebaseWorkbenchDraft(scoped(id), file),
     };
   }, [callerScope]);
   const { getWorkbenchDraft, listWorkbenchDrafts } = draftHelpers;
@@ -186,10 +196,63 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ownerRef = useRef({ sessionId, enabled });
-  if (ownerRef.current.sessionId !== sessionId || ownerRef.current.enabled !== enabled) ownerRef.current = { sessionId, enabled };
+  if (ownerRef.current.sessionId !== sessionId || ownerRef.current.enabled !== enabled)
+    ownerRef.current = { sessionId, enabled };
   const owner = ownerRef.current;
   const mountedRef = useRef(true);
-  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  const actionLifetimeRef = useRef(0);
+  useEffect(
+    () => () => {
+      actionLifetimeRef.current += 1;
+    },
+    [],
+  );
+  const nextActionView = {
+    sessionId,
+    enabled,
+    workspaceId: input.workspaceId,
+    caller: getGatewayCallerScopeRevision(),
+    access: getGatewayAccessRevision(),
+    gateway: getGatewayApiBaseUrl(),
+  };
+  const actionViewRef = useRef(nextActionView);
+  if (
+    Object.keys(nextActionView).some(
+      (key) =>
+        nextActionView[key as keyof typeof nextActionView] !==
+        actionViewRef.current[key as keyof typeof nextActionView],
+    )
+  )
+    actionViewRef.current = nextActionView;
+  const actionView = actionViewRef.current;
+  type ActionAttempt = { view: typeof actionView; lifetime: number; saving: boolean };
+  const busyAttemptRef = useRef<ActionAttempt | null>(null);
+  const saveAttemptRef = useRef<ActionAttempt | null>(null);
+  const isCurrentAction = useCallback(
+    (view: typeof actionView): boolean => {
+      return (
+        mountedRef.current &&
+        actionViewRef.current === view &&
+        ownerRef.current === owner &&
+        getGatewayCallerScopeRevision() === view.caller &&
+        getGatewayAccessRevision() === view.access &&
+        getGatewayApiBaseUrl() === view.gateway
+      );
+    },
+    [owner],
+  );
+  const claimAction = useCallback((view: typeof actionView, saving: boolean): ActionAttempt => {
+    const attempt = { view, saving, lifetime: actionLifetimeRef.current };
+    busyAttemptRef.current = attempt;
+    if (saving) saveAttemptRef.current = attempt;
+    return attempt;
+  }, []);
   const savingRef = useRef(false);
   const fileReadRef = useRef(0);
   useWorkbenchDraftVersion();
@@ -200,7 +263,14 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   const retainedDrafts = listWorkbenchDrafts(sessionId);
   const activeDraft = sessionId && selectedFile ? getWorkbenchDraft(sessionId, selectedFile.path) : undefined;
   const hasDirtyDraft = Boolean(activeDraft);
-  const hasRemoteChanges = Boolean(activeDraft && selectedFile && (activeDraft.base.revision !== selectedFile.revision || activeDraft.base.content !== selectedFile.content || activeDraft.base.state.worktreePath !== selectedFile.state.worktreePath || activeDraft.base.state.projectId !== selectedFile.state.projectId));
+  const hasRemoteChanges = Boolean(
+    activeDraft &&
+    selectedFile &&
+    (activeDraft.base.revision !== selectedFile.revision ||
+      activeDraft.base.content !== selectedFile.content ||
+      activeDraft.base.state.worktreePath !== selectedFile.state.worktreePath ||
+      activeDraft.base.state.projectId !== selectedFile.state.projectId),
+  );
 
   useEffect(() => {
     selectedFileRef.current = selectedFile;
@@ -245,9 +315,18 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
     setError(null);
   }, []);
 
-  const isCurrentSession = useCallback((candidateSessionId: string | null) => {
-    return mountedRef.current && enabled && Boolean(candidateSessionId) && ownerRef.current === owner && owner.sessionId === candidateSessionId;
-  }, [enabled, owner]);
+  const isCurrentSession = useCallback(
+    (candidateSessionId: string | null) => {
+      return (
+        mountedRef.current &&
+        enabled &&
+        Boolean(candidateSessionId) &&
+        ownerRef.current === owner &&
+        owner.sessionId === candidateSessionId
+      );
+    },
+    [enabled, owner],
+  );
 
   const applySelectedFileState = useCallback(
     (
@@ -287,7 +366,13 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
       if (!isCurrentSession(requestSessionId) || readId !== fileReadRef.current) {
         return null;
       }
-      if (nextFile.path !== relativePath || nextFile.state.sessionId !== requestSessionId || nextFileDiff.path !== relativePath || nextFileDiff.state.sessionId !== requestSessionId) throw new Error("File evidence does not match the selected session and path.");
+      if (
+        nextFile.path !== relativePath ||
+        nextFile.state.sessionId !== requestSessionId ||
+        nextFileDiff.path !== relativePath ||
+        nextFileDiff.state.sessionId !== requestSessionId
+      )
+        throw new Error("File evidence does not match the selected session and path.");
       applySelectedFileState(nextFile, nextFileDiff, options);
       return nextFile;
     },
@@ -311,8 +396,18 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
       } catch (cause) {
         if (isCurrentSession(requestSessionId)) {
           const retained = draftHelpersRef.current.getWorkbenchDraft(requestSessionId, relativePath);
-          if (retained) { selectedFileRef.current = retained.base; setSelectedFile(retained.base); setSelectedFileDiff(null); draftContentRef.current = retained.content; setDraftContent(retained.content); }
-          setError(retained ? "Current file unavailable. This is your retained draft; saving requires a current file read." : describeWorkbenchActionError(cause, "Unable to load workbench file."));
+          if (retained) {
+            selectedFileRef.current = retained.base;
+            setSelectedFile(retained.base);
+            setSelectedFileDiff(null);
+            draftContentRef.current = retained.content;
+            setDraftContent(retained.content);
+          }
+          setError(
+            retained
+              ? "Current file unavailable. This is your retained draft; saving requires a current file read."
+              : describeWorkbenchActionError(cause, "Unable to load workbench file."),
+          );
         }
         return false;
       } finally {
@@ -342,7 +437,11 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
 
       if (workbench.state.worktreeStatus !== "ready") {
         setTree(null);
-        if (!dirtyDraftRef.current) { setSelectedFile(null); setSelectedFileDiff(null); setDraftContent(""); }
+        if (!dirtyDraftRef.current) {
+          setSelectedFile(null);
+          setSelectedFileDiff(null);
+          setDraftContent("");
+        }
         setDiff(null);
         setOutput(null);
         return;
@@ -376,8 +475,13 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
       );
 
       if (candidatePaths.length === 0) {
-        if (dirtyDraftRef.current) setError("The current file is no longer listed. Your draft is preserved; refresh before saving.");
-        else { setSelectedFile(null); setSelectedFileDiff(null); setDraftContent(""); }
+        if (dirtyDraftRef.current)
+          setError("The current file is no longer listed. Your draft is preserved; refresh before saving.");
+        else {
+          setSelectedFile(null);
+          setSelectedFileDiff(null);
+          setDraftContent("");
+        }
         return;
       }
 
@@ -396,7 +500,11 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
       }
 
       if (!loaded && isCurrentSession(requestSessionId)) {
-        if (!dirtyDraftRef.current) { setSelectedFile(null); setSelectedFileDiff(null); setDraftContent(""); }
+        if (!dirtyDraftRef.current) {
+          setSelectedFile(null);
+          setSelectedFileDiff(null);
+          setDraftContent("");
+        }
         setError(describeWorkbenchActionError(lastError, "Unable to load the active workbench file."));
       }
     } catch (cause) {
@@ -410,184 +518,155 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
     }
   }, [enabled, isCurrentSession, loadWorkbenchFileSelection, resetWorkbench, sessionId, setPersistedExpandedPaths]);
 
+  const runOptionalAction = useCallback(
+    async <Value, Input = undefined>(
+      attempt: ActionAttempt,
+      execute: (
+        actions: ReturnType<WorkbenchActionModule["createWorkbenchActionCode"]>,
+        input: Input,
+      ) => Promise<Value>,
+      fallback: Value,
+      fallbackMessage: string,
+      input?: Input,
+    ): Promise<Value> => {
+      const current = () => isCurrentAction(attempt.view) && actionLifetimeRef.current === attempt.lifetime;
+      const stillMounted = () => mountedRef.current && actionLifetimeRef.current === attempt.lifetime;
+      const ownsBusy = () => busyAttemptRef.current === attempt;
+      const ownsSave = () => saveAttemptRef.current === attempt;
+      try {
+        const serialized = input === undefined ? undefined : JSON.stringify(input);
+        const admittedInput = serialized === undefined ? input : (JSON.parse(serialized) as Input);
+        if (!current()) return fallback;
+        const code = await loadWorkbenchActionCode();
+        if (!current()) return fallback;
+        const owner: WorkbenchActionOwner = {
+          requireCurrent: () => {
+            if (!current()) throw new Error("The workbench owner changed before the action could continue.");
+          },
+          isCurrentSession: (candidate) => current() && isCurrentSession(candidate),
+          savingRef,
+          selectedFileRef,
+          draftContentRef,
+          fileReadRef,
+          setBusy: (value) => {
+            if (stillMounted() && ownsBusy()) setBusy(value);
+          },
+          setSaving: (value) => {
+            if (stillMounted() && ownsSave()) setSaving(value);
+          },
+          setState,
+          setTree,
+          setDiff,
+          setOutput,
+          setSelectedFile,
+          setSelectedFileDiff,
+          setDraftContent,
+          setError,
+          setPersistedExpandedPaths,
+          deriveDefaultExpandedPaths,
+          readWorkbenchUiState,
+          describeWorkbenchActionError,
+          applySelectedFileState,
+          refresh,
+        };
+        return await execute(code.createWorkbenchActionCode(owner), admittedInput as Input);
+      } catch (cause) {
+        if (current()) setError(describeWorkbenchActionError(cause, fallbackMessage));
+        return fallback;
+      } finally {
+        if (ownsBusy()) {
+          busyAttemptRef.current = null;
+          if (stillMounted()) setBusy(false);
+        }
+        if (attempt.saving && ownsSave()) {
+          saveAttemptRef.current = null;
+          savingRef.current = false;
+          if (stillMounted()) setSaving(false);
+        }
+      }
+    },
+    [applySelectedFileState, isCurrentAction, isCurrentSession, refresh, setPersistedExpandedPaths],
+  );
   const saveFile = useCallback(async () => {
+    if (!isCurrentAction(actionView)) return false;
+
     if (!sessionId || !selectedFileRef.current || savingRef.current) return false;
-    const requestSessionId = sessionId, activeFile = selectedFileRef.current;
+    const requestSessionId = sessionId,
+      activeFile = selectedFileRef.current;
+    const draftHelpersAtAdmission = draftHelpersRef.current;
     const draft = draftHelpersRef.current.getWorkbenchDraft(sessionId, activeFile.path);
     if (!draft) return true;
     const submitted = draft.content;
-    savingRef.current = true; setBusy(true); setSaving(true);
-    try {
-      const currentFile = await fetchChatSessionWorkbenchFile(requestSessionId, activeFile.path);
-      if (!isCurrentSession(requestSessionId)) return false;
-      if (currentFile.path !== activeFile.path || currentFile.state.sessionId !== requestSessionId) throw new Error("The file response does not match this editor. Your draft is preserved.");
-      if (currentFile.revision !== draft.base.revision || currentFile.content !== draft.base.content || currentFile.state.worktreePath !== draft.base.state.worktreePath || currentFile.state.projectId !== draft.base.state.projectId) {
-        if (selectedFileRef.current?.path === activeFile.path) { selectedFileRef.current = currentFile; setSelectedFile(currentFile); }
-        throw new Error("This file changed since editing began. Review the latest version before saving your retained draft.");
-      }
-      const nextFile = await saveChatSessionWorkbenchFile(requestSessionId, { path: activeFile.path, content: submitted, expectedRevision: draft.base.revision });
-      if (nextFile.path !== activeFile.path || nextFile.state.sessionId !== requestSessionId || nextFile.content !== submitted) throw new Error("The Gateway did not confirm the submitted file contents. Your draft is preserved.");
-      const clean = draftHelpersRef.current.acknowledgeWorkbenchDraft(requestSessionId, nextFile, submitted);
-      if (isCurrentSession(requestSessionId)) fileReadRef.current += 1;
-      if (!isCurrentSession(requestSessionId)) return clean;
-      if (selectedFileRef.current?.path === activeFile.path) {
-        selectedFileRef.current = nextFile; setSelectedFile(nextFile);
-        const nextContent = draftHelpersRef.current.getWorkbenchDraft(requestSessionId, activeFile.path)?.content ?? nextFile.content;
-        draftContentRef.current = nextContent; setDraftContent(nextContent);
-      }
-      setError(null);
-      try {
-        const [nextTree, nextDiff, nextOutput, nextFileDiff] = await Promise.all([
-          fetchChatSessionWorkbenchTree(requestSessionId), fetchChatSessionWorkbenchDiff(requestSessionId),
-          fetchChatSessionWorkbenchOutput(requestSessionId), fetchChatSessionWorkbenchFileDiff(requestSessionId, activeFile.path),
-        ]);
-        if (isCurrentSession(requestSessionId)) {
-          setTree(nextTree); setDiff(nextDiff); setOutput(nextOutput);
-          if (selectedFileRef.current?.path === activeFile.path) setSelectedFileDiff(nextFileDiff);
-          setPersistedExpandedPaths(deriveDefaultExpandedPaths(nextTree, activeFile.path, readWorkbenchUiState(requestSessionId).expandedPaths));
-        }
-      } catch { if (isCurrentSession(requestSessionId)) setError("File saved. Updated workbench evidence is unavailable; refresh to retry."); }
-      return clean;
-    } catch (cause) {
-      const isConflict = cause && typeof cause === "object" && "status" in cause && cause.status === 409;
-      if (isConflict && isCurrentSession(requestSessionId)) {
-        let currentUnavailable = false;
-        try {
-          const latestFile = await fetchChatSessionWorkbenchFile(requestSessionId, activeFile.path);
-          if (latestFile.state.sessionId !== requestSessionId || latestFile.path !== activeFile.path) throw new Error("Mismatched file response", { cause });
-          if (isCurrentSession(requestSessionId) && selectedFileRef.current?.path === activeFile.path) {
-            selectedFileRef.current = latestFile; setSelectedFile(latestFile);
-          }
-        } catch { currentUnavailable = true; }
-        if (isCurrentSession(requestSessionId)) setError(currentUnavailable
-          ? "Save was blocked and the current file is unavailable. Your draft is preserved; reload before trying again."
-          : "Save was blocked by a concurrent Workbench operation. Review the latest file before saving your retained draft.");
-      } else if (isCurrentSession(requestSessionId)) setError(describeWorkbenchActionError(cause, "Unable to save the active workbench file."));
-      return false;
-    } finally {
-      savingRef.current = false;
-      if (isCurrentSession(requestSessionId)) { setBusy(false); setSaving(false); }
-    }
-  }, [isCurrentSession, sessionId, setPersistedExpandedPaths]);
-
-  const previewFileOperation = useCallback(async (input: ChatSessionWorkbenchFileOperationPreviewRequest) => {
-    if (!sessionId) return null;
-    const requestSessionId = sessionId;
+    savingRef.current = true;
     setBusy(true);
-    try {
-      const review = await previewChatSessionWorkbenchFileOperation(requestSessionId, input);
-      if (!isCurrentSession(requestSessionId)) return null;
-      setError(null);
-      return review;
-    } catch (cause) {
-      if (isCurrentSession(requestSessionId)) setError(describeWorkbenchActionError(cause, "Unable to review this file action."));
-      return null;
-    } finally { if (isCurrentSession(requestSessionId)) setBusy(false); }
-  }, [isCurrentSession, sessionId]);
+    setSaving(true);
+    const attempt = claimAction(actionView, true);
+    return runOptionalAction(
+      attempt,
+      (actions) => actions.saveFile({ requestSessionId, activeFile, draft, submitted, draftHelpersAtAdmission }),
+      false,
+      "Unable to save the active workbench file.",
+    );
+  }, [sessionId, actionView, isCurrentAction, claimAction, runOptionalAction]);
+
+  const previewFileOperation = useCallback(
+    async (input: ChatSessionWorkbenchFileOperationPreviewRequest) => {
+      if (!isCurrentAction(actionView)) return null;
+
+      if (!sessionId) return null;
+      const requestSessionId = sessionId;
+      setBusy(true);
+      const attempt = claimAction(actionView, false);
+      return runOptionalAction(
+        attempt,
+        (actions, admittedInput) => actions.previewFileOperation({ requestSessionId, input: admittedInput }),
+        null,
+        "Unable to review this file action.",
+        input,
+      );
+    },
+    [sessionId, actionView, isCurrentAction, claimAction, runOptionalAction],
+  );
 
   const runFileOperation = useCallback(
     async (input: ChatSessionWorkbenchFileOperationRequest) => {
+      if (!isCurrentAction(actionView)) return false;
+
       if (!sessionId) {
         return false;
       }
       const requestSessionId = sessionId;
       setBusy(true);
-      try {
-        const response = await runChatSessionWorkbenchFileOperation(requestSessionId, input);
-        if (!isCurrentSession(requestSessionId)) {
-          return false;
-        }
-
-        const nextDiff = await fetchChatSessionWorkbenchDiff(requestSessionId);
-        if (!isCurrentSession(requestSessionId)) {
-          return false;
-        }
-
-        setState(response.state);
-        setTree(response.tree);
-        setDiff(nextDiff);
-        setOutput(response.output);
-        setPersistedExpandedPaths(
-          deriveDefaultExpandedPaths(
-            response.tree,
-            response.targetPath ?? response.path,
-            readWorkbenchUiState(requestSessionId).expandedPaths,
-          ),
-        );
-
-        const candidatePathAfterOperation =
-          input.operation === "create_file" || input.operation === "duplicate" || input.operation === "rename"
-            ? (response.targetPath ?? response.path)
-            : input.operation === "move"
-              ? (response.targetPath ?? response.path)
-              : undefined;
-        const selectedPathAfterOperation =
-          candidatePathAfterOperation &&
-          response.tree.items.some((item) => item.kind === "file" && item.path === candidatePathAfterOperation)
-            ? candidatePathAfterOperation
-            : undefined;
-        if (selectedPathAfterOperation) {
-          const nextFileDiff = await fetchChatSessionWorkbenchFileDiff(requestSessionId, selectedPathAfterOperation);
-          const nextFile = await fetchChatSessionWorkbenchFile(requestSessionId, selectedPathAfterOperation);
-          if (!isCurrentSession(requestSessionId)) {
-            return false;
-          }
-          applySelectedFileState(nextFile, nextFileDiff, { preserveDraft: false });
-        } else if (
-          input.operation === "delete" &&
-          selectedFileRef.current &&
-          (selectedFileRef.current.path === response.path ||
-            selectedFileRef.current.path.startsWith(`${response.path}/`))
-        ) {
-          setSelectedFile(null);
-          setSelectedFileDiff(null);
-          setDraftContent("");
-        }
-
-        setError(null);
-        return true;
-      } catch (cause) {
-        if (isCurrentSession(requestSessionId)) {
-          const isConflict = cause && typeof cause === "object" && "status" in cause && cause.status === 409;
-          setError(isConflict ? "The file action's source, destination or project changed. Review the action again before applying it."
-            : describeWorkbenchActionError(cause, "Unable to update the workbench file tree."));
-        }
-        return false;
-      } finally {
-        if (isCurrentSession(requestSessionId)) {
-          setBusy(false);
-        }
-      }
+      const attempt = claimAction(actionView, false);
+      return runOptionalAction(
+        attempt,
+        (actions, admittedInput) => actions.runFileOperation({ requestSessionId, input: admittedInput }),
+        false,
+        "Unable to update the workbench file tree.",
+        input,
+      );
     },
-    [applySelectedFileState, isCurrentSession, sessionId, setPersistedExpandedPaths],
+    [sessionId, actionView, isCurrentAction, claimAction, runOptionalAction],
   );
 
   const createWorktree = useCallback(
     async (baseRef?: string) => {
+      if (!isCurrentAction(actionView)) return undefined;
+
       if (!sessionId) {
         return;
       }
       const requestSessionId = sessionId;
       setBusy(true);
-      try {
-        const nextState = await createChatSessionWorkbenchWorktree(requestSessionId, { baseRef });
-        if (!isCurrentSession(requestSessionId)) {
-          return;
-        }
-        setState(nextState.state);
-        setError(null);
-        await refresh();
-      } catch (cause) {
-        if (isCurrentSession(requestSessionId)) {
-          setError(describeWorkbenchActionError(cause, "Unable to create worktree."));
-        }
-      } finally {
-        if (isCurrentSession(requestSessionId)) {
-          setBusy(false);
-        }
-      }
+      const attempt = claimAction(actionView, false);
+      return runOptionalAction(
+        attempt,
+        (actions) => actions.createWorktree({ requestSessionId, baseRef }),
+        undefined,
+        "Unable to create worktree.",
+      );
     },
-    [isCurrentSession, refresh, sessionId],
+    [sessionId, actionView, isCurrentAction, claimAction, runOptionalAction],
   );
 
   const discardDraft = useCallback(() => {
@@ -598,13 +677,17 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
     setError(null);
   }, [sessionId]);
 
-  const updateDraft = useCallback((content: string) => {
-    const file = selectedFileRef.current;
-    if (!sessionId || !file || !isCurrentSession(sessionId)) return;
-    draftHelpersRef.current.updateWorkbenchDraft(sessionId, file, content);
-    draftContentRef.current = content; dirtyDraftRef.current = Boolean(draftHelpersRef.current.getWorkbenchDraft(sessionId, file.path));
-    setDraftContent(content);
-  }, [isCurrentSession, sessionId]);
+  const updateDraft = useCallback(
+    (content: string) => {
+      const file = selectedFileRef.current;
+      if (!sessionId || !file || !isCurrentSession(sessionId)) return;
+      draftHelpersRef.current.updateWorkbenchDraft(sessionId, file, content);
+      draftContentRef.current = content;
+      dirtyDraftRef.current = Boolean(draftHelpersRef.current.getWorkbenchDraft(sessionId, file.path));
+      setDraftContent(content);
+    },
+    [isCurrentSession, sessionId],
+  );
 
   const reviewCurrentFile = useCallback(() => {
     const file = selectedFileRef.current;
@@ -614,167 +697,104 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
 
   const runValidationCommand = useCallback(
     async (input: { command: string; args?: string[]; timeoutMs?: number }) => {
+      if (!isCurrentAction(actionView)) return false;
+
       if (!sessionId) {
         return false;
       }
       const requestSessionId = sessionId;
       setBusy(true);
-      try {
-        const response = await runChatSessionWorkbenchCommand(requestSessionId, input);
-        if (!isCurrentSession(requestSessionId)) {
-          return false;
-        }
-        setState(response.state);
-        setError(null);
-        await refresh();
-        if (!isCurrentSession(requestSessionId)) {
-          return false;
-        }
-        setOutput(response.output);
-        return true;
-      } catch (cause) {
-        if (isCurrentSession(requestSessionId)) {
-          setError(describeWorkbenchActionError(cause, "Unable to run workbench validation."));
-        }
-        return false;
-      } finally {
-        if (isCurrentSession(requestSessionId)) {
-          setBusy(false);
-        }
-      }
+      const attempt = claimAction(actionView, false);
+      return runOptionalAction(
+        attempt,
+        (actions, admittedInput) => actions.runValidationCommand({ requestSessionId, input: admittedInput }),
+        false,
+        "Unable to run workbench validation.",
+        input,
+      );
     },
-    [isCurrentSession, refresh, sessionId],
+    [sessionId, actionView, isCurrentAction, claimAction, runOptionalAction],
   );
 
   const applyPatch = useCallback(
     async (patch?: string) => {
+      if (!isCurrentAction(actionView)) return false;
+
       if (!sessionId || !patch?.trim()) {
         return false;
       }
       const requestSessionId = sessionId;
       setBusy(true);
-      try {
-        const response = await applyChatSessionWorkbenchPatch(requestSessionId, { patch });
-        if (!isCurrentSession(requestSessionId)) {
-          return false;
-        }
-        setState(response.state);
-        setError(null);
-        await refresh();
-        if (!isCurrentSession(requestSessionId)) {
-          return false;
-        }
-        setOutput(response.output);
-        return response.applied;
-      } catch (cause) {
-        if (isCurrentSession(requestSessionId)) {
-          setError(describeWorkbenchActionError(cause, "Unable to apply the workbench patch."));
-        }
-        return false;
-      } finally {
-        if (isCurrentSession(requestSessionId)) {
-          setBusy(false);
-        }
-      }
+      const attempt = claimAction(actionView, false);
+      return runOptionalAction(
+        attempt,
+        (actions) => actions.applyPatch({ requestSessionId, patch }),
+        false,
+        "Unable to apply the workbench patch.",
+      );
     },
-    [isCurrentSession, refresh, sessionId],
+    [sessionId, actionView, isCurrentAction, claimAction, runOptionalAction],
   );
 
   const exportPatch = useCallback(async () => {
+    if (!isCurrentAction(actionView)) return null;
+
     if (!sessionId) {
       return null;
     }
     const requestSessionId = sessionId;
     setBusy(true);
-    try {
-      const response = await exportChatSessionWorkbenchPatch(requestSessionId);
-      if (!isCurrentSession(requestSessionId)) {
-        return null;
-      }
-      setState(response.state);
-      setError(null);
-      await refresh();
-      return response;
-    } catch (cause) {
-      if (isCurrentSession(requestSessionId)) {
-        setError(describeWorkbenchActionError(cause, "Unable to export the workbench patch."));
-      }
-      return null;
-    } finally {
-      if (isCurrentSession(requestSessionId)) {
-        setBusy(false);
-      }
-    }
-  }, [isCurrentSession, refresh, sessionId]);
+    const attempt = claimAction(actionView, false);
+    return runOptionalAction(
+      attempt,
+      (actions) => actions.exportPatch({ requestSessionId }),
+      null,
+      "Unable to export the workbench patch.",
+    );
+  }, [sessionId, actionView, isCurrentAction, claimAction, runOptionalAction]);
 
   const revertFile = useCallback(
     async (relativePath?: string) => {
+      if (!isCurrentAction(actionView)) return false;
+
       const pathToRevert = relativePath ?? selectedFileRef.current?.path;
       if (!sessionId || !pathToRevert) {
         return false;
       }
       const requestSessionId = sessionId;
       setBusy(true);
-      try {
-        const response = await revertChatSessionWorkbenchFile(requestSessionId, { path: pathToRevert });
-        if (!isCurrentSession(requestSessionId)) {
-          return false;
-        }
-        setState(response.state);
-        setError(null);
-        await refresh();
-        if (!isCurrentSession(requestSessionId)) {
-          return false;
-        }
-        setOutput(response.output);
-        return true;
-      } catch (cause) {
-        if (isCurrentSession(requestSessionId)) {
-          setError(describeWorkbenchActionError(cause, "Unable to revert the selected workbench file."));
-        }
-        return false;
-      } finally {
-        if (isCurrentSession(requestSessionId)) {
-          setBusy(false);
-        }
-      }
+      const attempt = claimAction(actionView, false);
+      return runOptionalAction(
+        attempt,
+        (actions) => actions.revertFile({ requestSessionId, pathToRevert }),
+        false,
+        "Unable to revert the selected workbench file.",
+      );
     },
-    [isCurrentSession, refresh, sessionId],
+    [sessionId, actionView, isCurrentAction, claimAction, runOptionalAction],
   );
 
   const revertAll = useCallback(async () => {
+    if (!isCurrentAction(actionView)) return false;
+
     if (!sessionId) {
       return false;
     }
     const requestSessionId = sessionId;
     setBusy(true);
-    try {
-      const response = await revertChatSessionWorkbenchChanges(requestSessionId);
-      if (!isCurrentSession(requestSessionId)) {
-        return false;
-      }
-      setState(response.state);
-      setError(null);
-      await refresh();
-      if (!isCurrentSession(requestSessionId)) {
-        return false;
-      }
-      setOutput(response.output);
-      return true;
-    } catch (cause) {
-      if (isCurrentSession(requestSessionId)) {
-        setError(describeWorkbenchActionError(cause, "Unable to revert workbench changes."));
-      }
-      return false;
-    } finally {
-      if (isCurrentSession(requestSessionId)) {
-        setBusy(false);
-      }
-    }
-  }, [isCurrentSession, refresh, sessionId]);
+    const attempt = claimAction(actionView, false);
+    return runOptionalAction(
+      attempt,
+      (actions) => actions.revertAll({ requestSessionId }),
+      false,
+      "Unable to revert workbench changes.",
+    );
+  }, [sessionId, actionView, isCurrentAction, claimAction, runOptionalAction]);
 
   useEffect(() => {
-    selectedFileRef.current = null; draftContentRef.current = ""; dirtyDraftRef.current = false;
+    selectedFileRef.current = null;
+    draftContentRef.current = "";
+    dirtyDraftRef.current = false;
     resetWorkbench();
     if (!enabled || !sessionId) {
       resetWorkbench();

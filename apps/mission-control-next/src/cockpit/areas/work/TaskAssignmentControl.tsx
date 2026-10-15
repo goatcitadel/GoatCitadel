@@ -6,9 +6,17 @@ import { useTaskDetailReview } from "../../../features/native-routes/ops/use-tas
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { readCockpitLocation } from "../../app/cockpit-back-guard";
 
 export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord; workspaceId: string }) {
+  const { search, hash } = typeof window === "undefined" ? { search: "", hash: "" } : readCockpitLocation();
+  const recoveryParams = new URLSearchParams(search);
+  recoveryParams.set("workspaceId", workspaceId);
+  recoveryParams.delete("taskId");
+  recoveryParams.delete("shell");
+  recoveryParams.delete("shellScope");
+  const recoveryHref = `/work/tasks/${encodeURIComponent(task.taskId)}` + "?" + recoveryParams + hash;
   const client = useQueryClient();
   const agents = useQuery({
     queryKey: ["work", "active-agents"],
@@ -34,14 +42,17 @@ export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord;
     (!target || Boolean(targetAgent));
 
   async function assign(): Promise<void> {
-    await owner.confirm((updated) => {
-      setTarget(updated.assignedAgentId ?? "");
-      setNotice("Gateway recorded the task assignment. This does not start a run or transfer runtime ownership.");
-      void Promise.allSettled([
-        client.invalidateQueries({ queryKey: ["tasks", "work-task", workspaceId, updated.taskId] }),
-        client.invalidateQueries({ queryKey: queryKeys.workTasks(workspaceId) }),
-      ]);
-    }, { kind: "assignment", assignedAgentId: target || null });
+    await owner.confirm(
+      (updated) => {
+        setTarget(updated.assignedAgentId ?? "");
+        setNotice("Gateway recorded the task assignment. This does not start a run or transfer runtime ownership.");
+        void Promise.allSettled([
+          client.invalidateQueries({ queryKey: ["tasks", "work-task", workspaceId, updated.taskId] }),
+          client.invalidateQueries({ queryKey: queryKeys.workTasks(workspaceId) }),
+        ]);
+      },
+      { kind: "assignment", assignedAgentId: target || null },
+    );
   }
 
   return (
@@ -119,14 +130,14 @@ export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord;
         </p>
       ) : null}
       {uncertain ? (
-        <ClassicOwnerLink
-          href={`/ops/kanban?taskId=${encodeURIComponent(task.taskId)}&shell=classic`}
+        <NativeOwnerLink
+          href={recoveryHref}
           scope={`${workspaceId}:${task.taskId}`}
-          label="Review task in Ops"
           className="mt-2 inline-block text-sm font-medium text-accent underline"
-        />
+        >
+          Inspect task
+        </NativeOwnerLink>
       ) : null}
-
     </section>
   );
 }
