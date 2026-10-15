@@ -51,10 +51,20 @@ let root: Root, host: HTMLDivElement, client: QueryClient, record: ApprovalReque
 const resolved = vi.fn(),
   invalidated = vi.fn(),
   submit = vi.fn();
+// An owner change can start a retry load that outlives its test. Vitest keeps factory exports on a mock node
+// shared across doMock calls, so a load settling after the next test's doMock would be returned to that test's
+// import without running its factory (loader.load). afterEach waits for these loads.
+const bodyLoads = new Set<Promise<unknown>>();
 function installBodyMock() {
-  vi.doMock("./ChatApprovalRendererBody", async () => {
-    await loader.load();
-    return vi.importActual<typeof import("./ChatApprovalRendererBody")>("./ChatApprovalRendererBody");
+  vi.doMock("./ChatApprovalRendererBody", () => {
+    const load = (async () => {
+      await loader.load();
+      return vi.importActual<typeof import("./ChatApprovalRendererBody")>("./ChatApprovalRendererBody");
+    })();
+    const drop = () => bodyLoads.delete(load);
+    bodyLoads.add(load);
+    void load.then(drop, drop);
+    return load;
   });
 }
 function deferred<T>() {
@@ -214,6 +224,9 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await act(async () => root.unmount());
+  await Promise.allSettled([...bodyLoads]);
+  // Let the mocker store the settled exports before the next test's doMock invalidates them.
+  await new Promise((settle) => setTimeout(settle, 0));
   host.remove();
   client.clear();
   vi.restoreAllMocks();

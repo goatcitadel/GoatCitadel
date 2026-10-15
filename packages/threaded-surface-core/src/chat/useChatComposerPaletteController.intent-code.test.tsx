@@ -189,6 +189,9 @@ describe("composer palette optional source-code custody", () => {
     await render();
     await advance();
     await releaseCode();
+    await act(async () => {
+      await vi.waitFor(() => expect(api.packs).toHaveBeenCalledTimes(1));
+    });
     expect(api.packs).toHaveBeenCalledTimes(1);
     scope.caller += 1;
     await act(async () => {
@@ -203,6 +206,9 @@ describe("composer palette optional source-code custody", () => {
     await render();
     await advance();
     await releaseCode();
+    await act(async () => {
+      await vi.waitFor(() => expect(api.files).toHaveBeenCalledTimes(1));
+    });
     expect(api.files).toHaveBeenCalledTimes(1);
     props = { ...props, query: "brief" };
     await render();
