@@ -5,6 +5,7 @@ import {
   formatBytes,
   formatDuration,
   formatMoney,
+  formatMoneyLowerBound,
   formatRelativeTime,
   formatSeconds,
   plural,
@@ -37,6 +38,9 @@ describe("format", () => {
     expect(formatMoney(0)).toBe("$0.00");
     expect(formatMoney(undefined)).toBe("Unknown");
     expect(formatMoney(3, { atLeast: true })).toBe("at least $3.00");
+    expect(formatMoney(0.0012, { atLeast: true })).toBe("at least $0.0012");
+    expect(formatMoneyLowerBound(0.0012)).toBe("$0.0012+");
+    expect(formatMoneyLowerBound(3)).toBe("$3.00+");
   });
 
   it("formats sizes, durations and counts", () => {

@@ -1,5 +1,5 @@
 import type { CostSummaryResponse } from "../api/types.js";
-import { formatMoney } from "./format.js";
+import { formatMoney, formatMoneyLowerBound } from "./format.js";
 
 /**
  * Operator-facing USD: always two decimals, "<$0.01" for positive amounts under a cent, and "Unknown" (never $0.00)
@@ -40,7 +40,7 @@ export function projectUsageCostSummary(summary: CostSummaryResponse): {
     };
   }
 
-  const knownCostLabel = totals.costUsd > 0 ? `${formatCostUsd(totals.costUsd)}+` : "Unknown";
+  const knownCostLabel = totals.costUsd > 0 ? formatMoneyLowerBound(totals.costUsd) : "Unknown";
   if (complete === false) {
     const unknownAttempts = canonicalCoverage?.unknownAttemptCount;
     return {
@@ -81,7 +81,7 @@ export function projectDailyCostBars(summary: CostSummaryResponse): DailyCostBar
       key: day.isoDate,
       // Daily ledger buckets are UTC; do not relabel aggregates as local days.
       label: `${day.isoDate} UTC`,
-      costLabel: complete ? formatCostUsd(known) : known > 0 ? `${formatCostUsd(known)}+` : "Unknown",
+      costLabel: complete ? formatCostUsd(known) : known > 0 ? formatMoneyLowerBound(known) : "Unknown",
       percent: maxAmount > 0 ? Math.round((known / maxAmount) * 100) : 0,
     };
   });
@@ -120,7 +120,7 @@ export function projectProviderCostRows(summary: CostSummaryResponse): ProviderC
       costLabel: complete
         ? formatCostUsd(row.knownCostUsd)
         : row.knownCostUsd > 0
-          ? `${formatCostUsd(row.knownCostUsd)}+`
+          ? formatMoneyLowerBound(row.knownCostUsd)
           : "Unknown",
     }))
     .sort(

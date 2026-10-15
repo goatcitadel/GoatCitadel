@@ -11,18 +11,16 @@ import { fetchChatSessions } from "@goatcitadel/mission-control-shared/api/chat"
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
-import { LibraryApproval } from "./LibraryApproval";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
-import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useLibraryOperation } from "./use-library-operation";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { KnowledgeResults, record, type KnowledgeOutcome } from "./LibraryKnowledgeResults";
+import { KnowledgeSourceFields } from "./LibraryKnowledgeSourceFields";
 
-const record = (value: unknown): Record<string, unknown> =>
-  value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 const KNOWLEDGE_ACTION = {
   ingest: "Add to knowledge",
   index: "Index knowledge",
@@ -56,10 +54,10 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
       { action: "ingest" | "index" | "retrieve"; draft: typeof draft.value } | undefined
     >(operation.key + ":review", undefined),
     [busy, setBusy] = useState(false);
-  const [outcome, setOutcome] = useSessionViewState<
-    | { error: boolean; text: string; approvalId?: string; rows?: Record<string, unknown>[]; documentId?: string }
-    | undefined
-  >(operation.key + ":outcome", undefined);
+  const [outcome, setOutcome] = useSessionViewState<KnowledgeOutcome | undefined>(
+    operation.key + ":outcome",
+    undefined,
+  );
   const [resultAuthorized, setResultAuthorized] = useState(false);
   const pending = useRef(false);
   const resultRequest = useRef(0);
@@ -249,53 +247,7 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
           </select>
         )}
       </Field>
-      <Field label="Knowledge namespace">
-        {(props) => (
-          <input
-            {...props}
-            className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
-            value={draft.value.namespace}
-            onChange={(event) => draft.setValue({ ...draft.value, namespace: event.target.value })}
-          />
-        )}
-      </Field>
-      <Field label="Source type">
-        {(props) => (
-          <select
-            {...props}
-            className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
-            value={draft.value.sourceType}
-            onChange={(event) =>
-              draft.setValue({ ...draft.value, sourceType: event.target.value as DocsIngestInput["sourceType"] })
-            }
-          >
-            <option value="text">Text</option>
-            <option value="file">File</option>
-            <option value="url">URL</option>
-          </select>
-        )}
-      </Field>
-      <Field label="Source title">
-        {(props) => (
-          <input
-            {...props}
-            className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
-            value={draft.value.title}
-            onChange={(event) => draft.setValue({ ...draft.value, title: event.target.value })}
-          />
-        )}
-      </Field>
-      <Field label="Knowledge source" help="Text, an allowed file path, or a URL matching the selected source type.">
-        {(props) => (
-          <textarea
-            {...props}
-            rows={4}
-            className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
-            value={draft.value.source}
-            onChange={(event) => draft.setValue({ ...draft.value, source: event.target.value })}
-          />
-        )}
-      </Field>
+      <KnowledgeSourceFields value={draft.value} onChange={(next) => draft.setValue(next)} />
       <div className="flex flex-wrap gap-2">
         <Button
           disabled={
@@ -360,56 +312,17 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
             Ingest persists source material. Indexing can invoke an embedding provider. Retrieval may return only
             content admitted for this conversation.
           </Callout>
-          {outcome ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
-          {outcome?.approvalId ? (
-            <LibraryApproval approvalId={outcome.approvalId} workspaceId={workspaceId} onRefresh={refreshResult} />
-          ) : null}
-          {outcome?.documentId ? (
-            <TechnicalDetails label="Document receipt">
-              <p>{outcome.documentId}</p>
-            </TechnicalDetails>
-          ) : null}
-          {outcome?.rows && !resultAuthorized ? (
-            <Callout>
-              Retained result content is withheld until current source access is checked. Refresh the original approval
-              result, or make an explicit new retrieval when no approval was needed.
-            </Callout>
-          ) : null}
-          {outcome?.rows && resultAuthorized ? (
-            <ul className="grid min-w-0 grid-cols-1 gap-2">
-              {outcome.rows.map((row, index) => (
-                <KnowledgeMatch key={index} row={row} index={index} />
-              ))}
-            </ul>
-          ) : null}
+          <KnowledgeResults
+            outcome={outcome}
+            workspaceId={workspaceId}
+            resultAuthorized={resultAuthorized}
+            onRefresh={refreshResult}
+          />
           <Button disabled={busy || Boolean(outcome)} onClick={() => void submit()}>
             Confirm knowledge request
           </Button>
         </div>
       </Dialog>
     </section>
-  );
-}
-
-function KnowledgeMatch({ row, index }: { row: Record<string, unknown>; index: number }) {
-  const attribution = record(row.attribution);
-  const text = (value: unknown) => (typeof value === "string" && value.trim() ? value : undefined);
-  const redacted = row.redacted === true || attribution.redacted === true;
-  return (
-    <li className="grid min-w-0 grid-cols-1 gap-1 wrap-anywhere rounded-md border border-line p-2">
-      <h3>{text(attribution.title) ?? `Match ${index + 1}: title unavailable`}</h3>
-      <p className="whitespace-pre-wrap break-words">
-        {redacted ? "Excerpt redacted by the source owner." : (text(row.snippet) ?? "Excerpt unavailable")}
-      </p>
-      <p className="break-words text-sm">Source: {text(attribution.sourceRef) ?? "Unavailable"}</p>
-      <p className="text-sm">
-        Source type: {text(attribution.sourceType) ?? "Unavailable"} · Trust:{" "}
-        {text(attribution.trustLevel) ?? "Unavailable"}
-      </p>
-      <TechnicalDetails label="Retrieved record identifiers">
-        <p>Document: {text(row.docId) ?? "Unavailable"}</p>
-        <p>Chunk: {text(row.chunkId) ?? "Unavailable"}</p>
-      </TechnicalDetails>
-    </li>
   );
 }

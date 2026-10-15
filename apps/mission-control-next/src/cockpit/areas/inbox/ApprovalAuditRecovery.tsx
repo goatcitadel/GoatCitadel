@@ -182,7 +182,8 @@ function AuditRecovery({
               <ol className="grid gap-2">
                 {audit.data.replay.events.map((event) => (
                   <li key={event.eventId}>
-                    {presentApprovalEvent(event.eventType)} · {presentActor(event.actorId)} ·{" "}
+                    {presentApprovalEvent(event.eventType)} ·{" "}
+                    {presentActor(event.actorId, event.eventType === "resolved" ? "decision" : "event")} ·{" "}
                     <TimeText value={event.timestamp} />
                   </li>
                 ))}

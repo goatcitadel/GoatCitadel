@@ -77,18 +77,29 @@ export function presentTime(
   };
 }
 
-/** US dollars at two decimals; positive amounts under a cent read "<$0.01"; unknown never becomes $0.00. */
-export function formatMoney(usd: number | null | undefined, options: { atLeast?: boolean } = {}): string {
-  if (usd === null || usd === undefined || !Number.isFinite(usd)) return "Unknown";
-  const prefix = options.atLeast ? "at least " : "";
-  if (usd > 0 && usd < 0.005) return `${prefix}<$0.01`;
-  const amount = new Intl.NumberFormat("en-US", {
+/** Two-decimal dollars, or the measured amount to two significant digits when it is under a cent. */
+function moneyAmount(usd: number, keepSubCent: boolean): string {
+  const subCent = keepSubCent && usd > 0 && usd < 0.005;
+  return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    ...(subCent ? { maximumSignificantDigits: 2 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
   }).format(usd);
-  return `${prefix}${amount}`;
+}
+
+/**
+ * US dollars at two decimals; positive amounts under a cent read "<$0.01"; unknown never becomes $0.00. A lower bound
+ * ("at least") keeps its measured sub-cent amount, since "at least <$0.01" would also claim an upper bound.
+ */
+export function formatMoney(usd: number | null | undefined, options: { atLeast?: boolean } = {}): string {
+  if (usd === null || usd === undefined || !Number.isFinite(usd)) return "Unknown";
+  if (options.atLeast) return `at least ${moneyAmount(usd, true)}`;
+  return usd > 0 && usd < 0.005 ? "<$0.01" : moneyAmount(usd, false);
+}
+
+/** A known lower bound in compact form, for example "$3.00+" or "$0.0012+". */
+export function formatMoneyLowerBound(usd: number): string {
+  return `${moneyAmount(usd, true)}+`;
 }
 
 const BYTE_UNITS = ["KB", "MB", "GB", "TB"] as const;

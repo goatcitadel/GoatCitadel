@@ -25,7 +25,7 @@ describe("formatCostUsd", () => {
         { key: "2026-09-27", tokenInput: 0, tokenOutput: 0, tokenCachedInput: 0, tokenTotal: 5, costUsd: 0.000123 },
       ],
     };
-    expect(projectUsageCostSummary(summary).costLabel).toBe("<$0.01+");
+    expect(projectUsageCostSummary(summary).costLabel).toBe("$0.00012+");
   });
 });
 
