@@ -263,7 +263,7 @@ export function ChatTranscript({
           {virtualized && Virtuoso && scrollElement ? (
             <Virtuoso<ChatThreadTurnRecord, TranscriptFooterContext>
               key={props.selectedSessionId}
-              customScrollParent={scrollElement ?? undefined}
+              customScrollParent={scrollElement}
               data={visibleTurns}
               initialTopMostItemIndex={props.followOutput ? visibleTurns.length - 1 : (initialIndex ?? 0)}
               rangeChanged={rangeChanged}

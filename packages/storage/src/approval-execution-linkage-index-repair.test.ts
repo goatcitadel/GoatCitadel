@@ -102,7 +102,7 @@ for (const previousDirection of ["ASC", "DESC"] as const) {
       before.exec("DROP INDEX idx_approval_execution_run; DROP INDEX idx_approval_execution_durable_run;"
         + "CREATE INDEX idx_approval_execution_run ON approval_execution_linkages(workspace_id, run_id, created_at " + previousDirection + ", approval_id " + previousDirection + ");"
         + "CREATE INDEX idx_approval_execution_durable_run ON approval_execution_linkages(workspace_id, durable_run_id, created_at " + previousDirection + ", approval_id " + previousDirection + ");");
-      before.prepare("DELETE FROM schema_migrations WHERE version = 263").run();
+      before.prepare("DELETE FROM schema_migrations WHERE version >= 263").run();
     });
     const rows = snapshotData(before);
     const ledger = before.prepare("SELECT * FROM schema_migrations ORDER BY version").all();
