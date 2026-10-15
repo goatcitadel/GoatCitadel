@@ -215,6 +215,10 @@ import {
   normalizePathForComparison,
 } from "./chat-turn-agent-runner/artifact-write-helpers.js";
 import { groundResearchPresentationArgs } from "./chat-turn-agent-runner/presentation-research-evidence.js";
+import {
+  buildPathBridgeFailureGuidance,
+  buildToolFailureAppendixText,
+} from "./chat-turn-agent-runner/tool-failure-messaging.js";
 import { repairToolCalls, type ToolCallRepairFeedback } from "./chat-agent-tool-call-repair.js";
 import { MAX_INLINE_FILE_DOWNLOAD_BYTES } from "./files-route-service.js";
 import {
@@ -10175,6 +10179,15 @@ function buildToolFailureGuidance(input: {
    */
   blockerStrictness?: number;
 }): string | undefined {
+  if (input.status === "blocked") {
+    // Path-bridge guidance is already a complete, reason-specific blocker
+    // explanation; the strict template would ask for an approval that cannot
+    // lift a jail boundary.
+    const pathBridgeGuidance = buildPathBridgeFailureGuidance(input);
+    if (pathBridgeGuidance) {
+      return pathBridgeGuidance;
+    }
+  }
   const normalizedError = (input.error ?? "").toLowerCase();
   const host = readBlockedSourceHost(input.result ?? {}, input.args);
   const browserFailureClass =
@@ -16645,28 +16658,13 @@ function formatToolLabel(toolName: string): string {
 }
 
 function buildToolFailureAppendix(toolRuns: ChatToolRunRecord[]): string | undefined {
-  const failedOrBlocked = toolRuns.filter(
-    (run) =>
-      (run.status === "failed" || run.status === "blocked") && !isRecoveredMissingLocalPathSearchFailure(run, toolRuns),
+  return buildToolFailureAppendixText(
+    toolRuns.filter(
+      (run) =>
+        (run.status === "failed" || run.status === "blocked") &&
+        !isRecoveredMissingLocalPathSearchFailure(run, toolRuns),
+    ),
   );
-  if (failedOrBlocked.length === 0) {
-    return undefined;
-  }
-  const uniqueTools = [...new Set(failedOrBlocked.map((run) => formatToolLabel(run.toolName)))];
-  const opening =
-    uniqueTools.length === 1
-      ? `Note: ${uniqueTools[0]} failed while I was working, so parts of this answer may be incomplete.`
-      : "Note: a few tools failed while I was working, so parts of this answer may be incomplete.";
-  const guidance = [...new Set(failedOrBlocked.map((run) => run.failureGuidance).filter(Boolean))][0];
-  return [
-    opening,
-    "",
-    guidance ? `Best next move: ${guidance}` : undefined,
-    guidance ? "" : undefined,
-    'Say "keep going" to try another approach, or give me a specific URL or narrower query.',
-  ]
-    .filter(Boolean)
-    .join("\n");
 }
 
 function isRecoveredMissingLocalPathSearchFailure(
