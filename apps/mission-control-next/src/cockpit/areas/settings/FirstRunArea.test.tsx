@@ -176,6 +176,9 @@ describe("native first-run setup", () => {
     expect(container.querySelector("#first-run-finish-prerequisite")?.textContent).toContain(
       "Review the current approval rule",
     );
+    // The always-present prerequisite describes the disabled button; it is not a live region.
+    expect(button("Finish setup and open Chat").getAttribute("aria-describedby")).toBe("first-run-finish-prerequisite");
+    expect(container.querySelector("#first-run-finish-prerequisite")?.hasAttribute("role")).toBe(false);
     await safety();
     await click("Keep current rule");
     expect(api.fetchOnboardingState).toHaveBeenCalledTimes(2);

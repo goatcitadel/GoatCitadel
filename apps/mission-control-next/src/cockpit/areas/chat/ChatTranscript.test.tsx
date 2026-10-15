@@ -773,6 +773,30 @@ describe("ChatTranscript", () => {
     expect(onRetryTurn).toHaveBeenCalledWith("cancelled");
   });
 
+  it("keeps per-turn progress notes as plain text beside the single transcript live region", async () => {
+    const pending = turn("pending", true, "failed");
+    pending.trace.status = "running";
+    pending.trace.failure = undefined;
+    const cancelled = turn("cancelled", true, "failed");
+    cancelled.trace.status = "cancelled";
+    cancelled.trace.failure = undefined;
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript
+            props={{ ...sessionProps([cancelled, pending]), hasActiveStream: true, activeStreamingTurnId: "pending" }}
+          />
+        </InspectorProvider>,
+      ),
+    );
+    const notes = [...container.querySelectorAll("p")].filter((node) =>
+      ["Preparing response…", "Stopped"].includes(node.textContent ?? ""),
+    );
+    expect(notes.map((node) => node.textContent)).toEqual(["Stopped", "Preparing response…"]);
+    for (const note of notes) expect(note.hasAttribute("role")).toBe(false);
+    expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(1);
+  });
+
   it("explains an empty thread without inventing a message", async () => {
     await act(async () =>
       renderWithProviders(

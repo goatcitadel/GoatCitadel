@@ -206,11 +206,35 @@ async function click(label: string) {
   const button = [...container.querySelectorAll("button")].find((item) => item.textContent?.trim() === label);
   expect(button, label).toBeDefined();
   await act(async () => {
+    // Radix tab triggers activate on a primary mouse down, as a real pointer click does.
+    if (button!.getAttribute("role") === "tab") {
+      button!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    }
     button!.click();
     await new Promise((resolve) => setTimeout(resolve, 5));
   });
 }
 const region = (label: string) => container.querySelector(`[aria-label="${label}"]`)!;
+
+describe("Quality evidence tabs", () => {
+  it("uses a labelled tab list with arrow-key navigation between evidence views", async () => {
+    await mount();
+    const list = container.querySelector('[role="tablist"][aria-label="Quality evidence"]')!;
+    const tabs = [...list.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Gates", "Evaluations", "Design"]);
+    expect(tabs[0]!.getAttribute("aria-selected")).toBe("true");
+    const panel = () => container.querySelector('[role="tabpanel"]:not([hidden])')!;
+    expect(panel().getAttribute("aria-labelledby")).toBe(tabs[0]!.id);
+    await act(async () => {
+      tabs[0]!.focus();
+      tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    expect(document.activeElement).toBe(tabs[1]);
+    expect(tabs[1]!.getAttribute("aria-selected")).toBe("true");
+    expect(panel().getAttribute("aria-labelledby")).toBe(tabs[1]!.id);
+  });
+});
 
 describe("native Quality owner evidence", () => {
   it("shows installation limitations once while retaining source-specific warnings", async () => {

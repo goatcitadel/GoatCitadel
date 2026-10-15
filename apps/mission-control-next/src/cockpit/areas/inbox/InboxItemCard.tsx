@@ -25,12 +25,14 @@ export function InboxItemCard({
   return (
     <article
       data-selected={selected}
+      aria-current={selected ? "true" : undefined}
       className="rounded-lg border border-line bg-raised p-4 data-[selected=true]:border-accent"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-fg-muted">
             {inboxItemKindLabel(item.kind)} · {approvalCreatedLabel(item.createdAt)}
+            {selected ? <span className="font-semibold text-fg"> · Selected</span> : null}
           </p>
           <h3 className="mt-1 font-display text-md font-semibold text-fg">{item.title}</h3>
           <p className="mt-1 text-sm text-fg-secondary">{item.summary}</p>

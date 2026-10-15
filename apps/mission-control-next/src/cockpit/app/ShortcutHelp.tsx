@@ -1,6 +1,16 @@
+import { useRef } from "react";
 import { Dialog } from "../ui/Dialog";
 import { Kbd } from "../ui/Kbd";
+import { shortcutLabel } from "./platform-keys";
 import { COCKPIT_AREA_SHORTCUTS } from "./routes";
+
+const GLOBAL_SHORTCUTS: ReadonlyArray<{ label: string; keys: () => string }> = [
+  { label: "Command palette", keys: () => shortcutLabel("k") },
+  { label: "Toggle sidebar", keys: () => shortcutLabel("b") },
+  { label: "Toggle inspector", keys: () => shortcutLabel("i") },
+  { label: "Shortcut help", keys: () => "?" },
+  { label: "Close dialog or inspector", keys: () => "Esc" },
+];
 
 export function ShortcutHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const opener = useRef<HTMLElement | null>(null);
@@ -29,32 +39,15 @@ export function ShortcutHelp({ open, onOpenChange }: { open: boolean; onOpenChan
             </dd>
           </div>
         ))}
-        <div className="flex justify-between gap-4">
-          <dt>Command palette</dt>
-          <dd>
-            <Kbd>Ctrl / Cmd K</Kbd>
-          </dd>
-        </div>
-        <div className="flex justify-between gap-4">
-          <dt>Toggle sidebar</dt>
-          <dd>
-            <Kbd>Ctrl / Cmd B</Kbd>
-          </dd>
-        </div>
-        <div className="flex justify-between gap-4">
-          <dt>Shortcut help</dt>
-          <dd>
-            <Kbd>?</Kbd>
-          </dd>
-        </div>
-        <div className="flex justify-between gap-4">
-          <dt>Close dialog</dt>
-          <dd>
-            <Kbd>Esc</Kbd>
-          </dd>
-        </div>
+        {GLOBAL_SHORTCUTS.map((entry) => (
+          <div key={entry.label} className="flex justify-between gap-4">
+            <dt>{entry.label}</dt>
+            <dd>
+              <Kbd>{entry.keys()}</Kbd>
+            </dd>
+          </div>
+        ))}
       </dl>
     </Dialog>
   );
 }
-import { useRef } from "react";

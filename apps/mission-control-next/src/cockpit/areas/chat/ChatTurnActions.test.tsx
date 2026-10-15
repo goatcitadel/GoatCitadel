@@ -93,4 +93,32 @@ describe("Chat turn actions", () => {
     expect(labels()).not.toContain("Fork");
     expect(labels()).not.toContain("Edit and resend");
   });
+
+  it("marks the current answer version with aria-current", async () => {
+    const branched = {
+      ...turn,
+      branch: { siblingTurnIds: ["turn-0", "turn-1"], activeSiblingIndex: 1, siblingCount: 2 },
+    } as unknown as ChatThreadTurnRecord;
+    const actions = handlers();
+    await act(async () =>
+      root.render(
+        <ChatTurnActions
+          turn={branched}
+          actions={actions}
+          streaming={false}
+          readOnly={false}
+          hasAnswer
+          onCopy={vi.fn()}
+        />,
+      ),
+    );
+    const first = container.querySelector<HTMLButtonElement>('button[aria-label="Switch to version 1"]')!;
+    const current = container.querySelector<HTMLButtonElement>('button[aria-label="Switch to version 2"]')!;
+    expect(current.getAttribute("aria-current")).toBe("true");
+    expect(current.disabled).toBe(true);
+    expect(current.className).toContain("rounded-sm");
+    expect(first.hasAttribute("aria-current")).toBe(false);
+    await act(async () => first.click());
+    expect(actions.onSwitchBranch).toHaveBeenCalledWith("turn-0");
+  });
 });

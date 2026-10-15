@@ -7,9 +7,12 @@ import {
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
+  RotateCw,
   Search,
   Settings,
 } from "lucide-react";
+import { isModifiedClick } from "../lib/modified-click";
+import { shortcutLabel } from "./platform-keys";
 import { fetchWorkspaces } from "@goatcitadel/mission-control-shared/api/workspaces";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -90,7 +93,7 @@ export function Sidebar({
       <button
         type="button"
         aria-label="Search commands and records"
-        title="Search (Ctrl / Cmd K)"
+        title={`Search (${shortcutLabel("k")})`}
         onClick={onOpenPalette}
         className="mb-2 flex h-8 items-center gap-2 rounded-md border border-line-control px-2 text-sm text-fg-muted hover:border-fg"
       >
@@ -98,7 +101,7 @@ export function Sidebar({
         {!collapsed ? (
           <>
             <span className="flex-1 text-left">Search</span>
-            <Kbd>Ctrl / Cmd K</Kbd>
+            <Kbd>{shortcutLabel("k")}</Kbd>
           </>
         ) : null}
       </button>
@@ -126,11 +129,9 @@ export function Sidebar({
                 <span
                   aria-hidden="true"
                   title={inboxCountTitle(inboxCount)}
-                  className={
-                    collapsed
-                      ? "absolute -top-1 right-0 min-w-4 rounded-full bg-accent px-0.5 text-center text-xs font-semibold text-accent-ink"
-                      : "rounded-full border border-line bg-sunken px-1.5 text-xs font-medium text-fg"
-                  }
+                  className={`min-w-4 rounded-full bg-accent px-1 text-center text-xs font-semibold text-accent-ink ${
+                    collapsed ? "absolute -top-1 right-0" : ""
+                  }`}
                 >
                   {inboxCount}
                 </span>
@@ -144,9 +145,17 @@ export function Sidebar({
         <div className={`flex items-center gap-2 py-1 text-xs text-fg-muted ${collapsed ? "flex-col" : "px-2"}`}>
           <span aria-hidden="true" className="size-2 rounded-full bg-status-neutral" />
           <span className={collapsed ? "sr-only" : "flex-1"}>{healthStatus.label}</span>
-          <Button size="sm" variant="ghost" onClick={healthStatus.retry}>
-            Retry
-          </Button>
+          {collapsed ? (
+            <IconButton
+              label="Retry system checks"
+              icon={<RotateCw aria-hidden="true" className="size-4" />}
+              onClick={healthStatus.retry}
+            />
+          ) : (
+            <Button size="sm" variant="ghost" aria-label="Retry system checks" onClick={healthStatus.retry}>
+              Retry
+            </Button>
+          )}
         </div>
       ) : (
         <a
@@ -155,6 +164,7 @@ export function Sidebar({
           onPointerEnter={() => preload("system")}
           onFocus={() => preload("system")}
           onClick={(event) => {
+            if (isModifiedClick(event)) return;
             event.preventDefault();
             navigate("/system");
           }}

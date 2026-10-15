@@ -6,6 +6,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/Tabs";
 import { QualityGates } from "./quality/QualityGates";
 import { QualityEvaluations } from "./quality/QualityEvaluations";
 import { QualityDesign } from "./quality/QualityDesign";
@@ -17,9 +18,10 @@ const VIEWS = [
   { id: "evaluations", label: "Evaluations" },
   { id: "design", label: "Design" },
 ] as const;
+type QualityView = (typeof VIEWS)[number]["id"];
 
 export function SystemQuality() {
-  const [view, setView] = useState<(typeof VIEWS)[number]["id"]>("gates");
+  const [view, setView] = useState<QualityView>("gates");
   const proof = useQuery({
     queryKey: [...queryKeys.systemQuality(), "snapshot", 200, 25],
     queryFn: () => fetchOpsQualitySnapshot({ packLimit: 200, evalLimit: 25 }),
@@ -58,33 +60,26 @@ export function SystemQuality() {
             <p>{snapshot.metricScope.note}</p>
             <QualityNotes items={snapshot.warnings.filter((item) => item !== snapshot.metricScope.note)} />
           </div>
-          <div role="tablist" aria-label="Quality evidence" className="flex gap-1 rounded-md bg-sunken p-1">
-            {VIEWS.map((item) => (
-              <button
-                key={item.id}
-                id={`quality-tab-${item.id}`}
-                role="tab"
-                type="button"
-                aria-selected={view === item.id}
-                aria-controls={`quality-panel-${item.id}`}
-                onClick={() => setView(item.id)}
-                className="min-h-9 flex-1 rounded px-3 text-sm font-medium text-fg-secondary hover:bg-raised aria-selected:bg-raised aria-selected:text-fg"
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-          <section role="tabpanel" id={`quality-panel-${view}`} aria-labelledby={`quality-tab-${view}`}>
+          <Tabs value={view} onValueChange={(value) => setView(value as QualityView)}>
+            <TabsList aria-label="Quality evidence">
+              {VIEWS.map((item) => (
+                <TabsTrigger key={item.id} value={item.id} className="min-h-11 flex-1 font-medium hover:text-fg">
+                  {item.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
             <QualityGlobalWarnings.Provider value={[...snapshot.warnings, snapshot.metricScope.note]}>
-              {view === "gates" ? (
+              <TabsContent value="gates" className="pt-3">
                 <QualityGates snapshot={snapshot} reload={() => proof.refetch()} />
-              ) : view === "evaluations" ? (
+              </TabsContent>
+              <TabsContent value="evaluations" className="pt-3">
                 <QualityEvaluations source={snapshot.evalProof} />
-              ) : (
+              </TabsContent>
+              <TabsContent value="design" className="pt-3">
                 <QualityDesign source={snapshot.designQuality} />
-              )}
+              </TabsContent>
             </QualityGlobalWarnings.Provider>
-          </section>
+          </Tabs>
           {snapshot.nextChecks.length ? (
             <details className="rounded-lg border border-line bg-raised p-4">
               <summary className="cursor-pointer text-sm font-semibold text-fg">Recorded next checks</summary>

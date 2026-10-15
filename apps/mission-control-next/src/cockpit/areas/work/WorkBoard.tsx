@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -9,6 +9,7 @@ import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { isModifiedClick } from "../../lib/modified-click";
 import { projectWorkBoard, workRunTitle, type WorkBoardGroup } from "./work-board";
 import { projectWorkTasks } from "./work-tasks";
 import { WorkTaskCreate } from "./WorkTaskCreate";
@@ -68,7 +69,8 @@ export function WorkBoard() {
       else next.add(taskId);
       return next;
     });
-  const open = (path: string) => (event: { preventDefault: () => void }) => {
+  const open = (path: string) => (event: MouseEvent<HTMLAnchorElement>) => {
+    if (isModifiedClick(event)) return;
     event.preventDefault();
     navigate(path);
   };

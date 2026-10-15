@@ -21,6 +21,9 @@ import { buildRecentDiagnosticsExport } from "./recent-diagnostics-export";
 import { FirstRunVerification } from "../settings/FirstRunVerification";
 import { RuntimeAuthorityMap } from "./RuntimeAuthorityMap";
 
+// Segmented control: the pressed view uses a neutral fill and strong border, not the primary accent.
+const EVENT_VIEW_TOGGLE = "aria-[pressed=true]:border-fg aria-[pressed=true]:bg-sunken";
+
 function timestamp(value: string): string {
   const time = Date.parse(value);
   return Number.isFinite(time)
@@ -245,16 +248,16 @@ export function SystemDiagnostics() {
         <div role="group" aria-label="Diagnostic event view" className="mt-3 flex flex-wrap items-center gap-2">
           <Button
             size="sm"
-            variant={eventView === "issues" ? "primary" : "secondary"}
             aria-pressed={eventView === "issues"}
+            className={EVENT_VIEW_TOGGLE}
             onClick={() => selectEventView("issues")}
           >
             Warnings and errors
           </Button>
           <Button
             size="sm"
-            variant={eventView === "all" ? "primary" : "secondary"}
             aria-pressed={eventView === "all"}
+            className={EVENT_VIEW_TOGGLE}
             onClick={() => selectEventView("all")}
           >
             All events

@@ -27,8 +27,9 @@ export function InspectorResizeHandle({ width, onChange }: { width: number; onCh
       aria-valuemin={INSPECTOR_MIN_WIDTH}
       aria-valuemax={INSPECTOR_MAX_WIDTH}
       aria-valuenow={width}
-      aria-valuetext={`${width} pixels`}
-      className="absolute inset-y-0 left-0 z-10 w-2 cursor-col-resize touch-none rounded focus-visible:outline-2 focus-visible:outline-accent"
+      aria-valuetext={`Inspector width: ${inspectorWidthName(width)}`}
+      // 16px hit area centred on the border, with a grip that appears on hover and keyboard focus.
+      className="group absolute inset-y-0 left-0 z-10 flex w-4 -translate-x-1/2 cursor-col-resize touch-none items-center justify-center rounded-sm focus-visible:outline-2 focus-visible:outline-accent"
       onPointerDown={(event) => {
         if (event.button !== 0 || drag.current) return;
         event.preventDefault();
@@ -58,6 +59,17 @@ export function InspectorResizeHandle({ width, onChange }: { width: number; onCh
           onChange(clampInspectorWidth(next));
         }
       }}
-    />
+    >
+      <span
+        aria-hidden="true"
+        className="h-10 w-1 rounded-full bg-line-strong opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+      />
+    </div>
   );
+}
+
+function inspectorWidthName(width: number): string {
+  const third = (INSPECTOR_MAX_WIDTH - INSPECTOR_MIN_WIDTH) / 3;
+  if (width < INSPECTOR_MIN_WIDTH + third) return "narrow";
+  return width < INSPECTOR_MAX_WIDTH - third ? "medium" : "wide";
 }

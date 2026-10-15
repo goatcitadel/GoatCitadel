@@ -27,10 +27,12 @@ export function useAreaShortcuts({
         return;
       }
       const key = event.key.toLowerCase();
+      const dialogOpen = document.querySelector('[role="dialog"][data-state="open"], dialog[open]') !== null;
       if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && key === "k") {
         cancel();
         event.preventDefault();
-        onPalette();
+        // Never stack the palette over another dialog (unsaved changes, scope review): both would sit at one level.
+        if (!dialogOpen) onPalette();
         return;
       }
       if (
@@ -38,7 +40,7 @@ export function useAreaShortcuts({
           event.target.closest(
             'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]',
           )) ||
-        document.querySelector('[role="dialog"][data-state="open"], dialog[open]')
+        dialogOpen
       ) {
         cancel();
         return;

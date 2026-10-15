@@ -15,7 +15,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/tasks", () => ({ fetchTasks: vi
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "workspace-a" }),
 }));
-vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ rest: [], navigate: vi.fn() }) }));
+const navigate = vi.hoisted(() => vi.fn());
+vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ rest: [], navigate }) }));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -63,6 +64,46 @@ describe("Work view tabs", () => {
       "Automation Designer",
     ]);
     expect(nav.querySelector('a[aria-current="page"]')?.textContent).toBe("Board");
+  });
+
+  it("leaves modified tab and card clicks to the browser so they can open a new tab", async () => {
+    vi.mocked(fetchTasks).mockResolvedValue({
+      items: [
+        {
+          taskId: "planning",
+          revision: 1,
+          workspaceId: "workspace-a",
+          title: "Outline release",
+          status: "planning",
+          priority: "normal",
+          createdAt: "2026-10-06",
+          updatedAt: "2026-10-06",
+        },
+      ],
+    } as never);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <WorkArea />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.querySelector('a[href="/work/tasks/planning"]')).not.toBeNull());
+    const click = (link: Element, init: MouseEventInit) => {
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...init });
+      link.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    for (const href of ["/work/history", "/work/tasks/planning"]) {
+      const link = container.querySelector(`a[href="${href}"]`)!;
+      for (const init of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { button: 1 }]) {
+        expect(await act(async () => click(link, init))).toBe(false);
+      }
+      expect(navigate).not.toHaveBeenCalled();
+      expect(await act(async () => click(link, {}))).toBe(true);
+      expect(navigate).toHaveBeenCalledWith(href);
+      navigate.mockClear();
+    }
   });
 });
 

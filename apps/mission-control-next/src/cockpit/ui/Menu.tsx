@@ -83,7 +83,7 @@ export function Menu({ scopeKey = "", children, open, defaultOpen, onOpenChange,
       {state.loading || state.failure ? (
         <span
           ref={state.status}
-          className="fixed z-50 w-max cockpit-menu-status-viewport overflow-auto rounded-md border border-line bg-overlay p-2 text-xs text-fg-muted shadow-overlay"
+          className="fixed z-60 w-max cockpit-menu-status-viewport overflow-auto rounded-md border border-line bg-overlay p-2 text-xs text-fg-muted shadow-overlay"
           role="status"
         >
           {state.failure ? (

@@ -117,7 +117,7 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
       value={{ navigate, requestTransition, isTransitionPending: handoff.isTransitionPending }}
     >
       {children}
-      <ShellSwitchFeedback owner={handoff} />
+      <ShellSwitchFeedback owner={handoff} floating />
     </CockpitNavigationContext.Provider>
   );
 }

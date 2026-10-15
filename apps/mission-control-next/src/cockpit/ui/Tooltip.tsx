@@ -9,7 +9,7 @@ export function Tooltip({ label, children }: { label: string; children: ReactNod
         <TooltipPrimitive.Portal>
           <TooltipPrimitive.Content
             sideOffset={6}
-            className="z-50 rounded-sm bg-overlay px-2 py-1 text-xs text-fg shadow-overlay"
+            className="z-60 rounded-sm bg-overlay px-2 py-1 text-xs text-fg shadow-overlay"
           >
             {label}
           </TooltipPrimitive.Content>

@@ -43,12 +43,14 @@ export function Sheet({
   children,
   sideOnDesktop = false,
   onCloseAutoFocus,
+  closeLabel = "Close sheet",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   children: ReactNode;
   sideOnDesktop?: boolean;
+  closeLabel?: string;
   onCloseAutoFocus?: ComponentProps<DrawerContent>["onCloseAutoFocus"];
 }) {
   const isDesktop = useMediaQuery(RESPONSIVE_QUERIES.abovePhone);
@@ -288,7 +290,7 @@ export function Sheet({
       {Drawer ? (
         <Drawer.Root open={open} onOpenChange={onOpenChange} direction={side ? "right" : "bottom"}>
           <Drawer.Portal>
-            <Drawer.Overlay className="fixed inset-0 z-40 bg-canvas/70" />
+            <Drawer.Overlay className="fixed inset-0 z-40 bg-scrim" />
             <Drawer.Content
               onOpenAutoFocus={handoffFocus}
               onCloseAutoFocus={
@@ -310,7 +312,7 @@ export function Sheet({
                 <div className="mb-3 flex items-center justify-between gap-4">
                   <Drawer.Title className="font-display text-md font-semibold text-fg">{title}</Drawer.Title>
                   <Drawer.Close asChild>
-                    <IconButton ref={sdkClose} label="Close sheet" icon={<X aria-hidden="true" className="size-4" />} />
+                    <IconButton ref={sdkClose} label={closeLabel} icon={<X aria-hidden="true" className="size-4" />} />
                   </Drawer.Close>
                 </div>
                 {children}

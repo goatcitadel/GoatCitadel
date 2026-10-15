@@ -477,6 +477,47 @@ describe("cockpit text composer", () => {
     expect(plainEnter.defaultPrevented).toBe(true);
     expect(props.composerPalette?.onSelect).toHaveBeenCalledOnce();
   });
+
+  it.each([false, true])(
+    "gives the suggestions listbox to exactly one focused owner with non-tabbable options (palette=%s)",
+    async (globalOpen) => {
+      const props = composerProps({
+        commandSuggestions: [
+          { key: "status", command: "/status", description: "Show status", applyValue: "/status" },
+          { key: "help", command: "/help", description: "Show help", applyValue: "/help" },
+        ],
+        commandIndex: 1,
+        composerPalette: {
+          enabled: true,
+          globalOpen,
+          query: "",
+          failures: [],
+          onOpen: vi.fn(),
+          onQueryChange: vi.fn(),
+          onClose: vi.fn(),
+          onIndexChange: vi.fn(),
+          onSelect: vi.fn(),
+          loading: false,
+        },
+      });
+      await act(async () => root.render(<ChatTextComposer props={props} />));
+      const owners = [...container.querySelectorAll('[aria-controls="cockpit-composer-suggestions"]')];
+      expect(owners).toHaveLength(1);
+      expect(owners[0]!.tagName).toBe(globalOpen ? "INPUT" : "TEXTAREA");
+      expect(container.querySelectorAll("[aria-activedescendant]")).toHaveLength(1);
+      expect(owners[0]!.getAttribute("aria-activedescendant")).toBe("cockpit-suggestion-1");
+      const textarea = container.querySelector("textarea")!;
+      expect(textarea.getAttribute("aria-expanded")).toBe(String(!globalOpen));
+      const options = [...container.querySelectorAll<HTMLElement>('[role="option"]')];
+      expect(options.map((option) => option.tabIndex)).toEqual([-1, -1]);
+      expect(container.querySelector(".shadow-overlay")).toBeNull();
+      const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      options[0]!.dispatchEvent(mouseDown);
+      expect(mouseDown.defaultPrevented).toBe(true);
+      await act(async () => options[0]!.click());
+      expect(props.composerPalette?.onSelect).toHaveBeenCalledWith(props.commandSuggestions[0]);
+    },
+  );
 });
 
 it("keeps governed external-control recovery actions available while send is locked", async () => {

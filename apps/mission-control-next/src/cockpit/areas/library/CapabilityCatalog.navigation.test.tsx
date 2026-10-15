@@ -82,6 +82,19 @@ describe("Library catalog links", () => {
     expect(container.textContent).toContain("Read files");
     expect(container.textContent).not.toContain("Review changes");
   });
+  it("announces a short count only after filtering settles", async () => {
+    await navigate("/library?shell=cockpit");
+    const status = () => [...container.querySelectorAll('[role="status"]')].map((node) => node.textContent);
+    expect(status()).toEqual(["2 of 2 shown"]);
+    await navigate("/library?type=tool&shell=cockpit");
+    // The visible count updates at once; the live region waits for the debounce.
+    expect(container.textContent).toContain("1 of 2 capabilities shown");
+    expect(status()).toEqual(["2 of 2 shown"]);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
+    expect(status()).toEqual(["1 of 2 shown"]);
+  });
   it("opens the exact linked kind and ID without falling back to the first item", async () => {
     await navigate("/library/tool/tool%3Aread?shell=cockpit");
     expect(container.querySelector('aside[aria-label="Capability details"] h2')?.textContent).toBe("Read files");

@@ -54,6 +54,8 @@ export function CockpitAccessGate({
   return (
     <main className="flex h-dvh items-center justify-center bg-canvas">
       <EmptyState
+        // The gate replaces the whole cockpit, so its title is the page heading.
+        headingLevel={1}
         title={title}
         description={description}
         action={

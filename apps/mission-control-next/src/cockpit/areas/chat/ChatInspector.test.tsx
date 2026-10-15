@@ -81,6 +81,10 @@ describe("conversation inspector", () => {
     );
     expect(container.textContent).toContain("example-model");
     expect(container.textContent).toContain("$0.0123");
+    const panel = container.querySelector('[role="tabpanel"]')!;
+    expect(panel.getAttribute("aria-labelledby")).toBe("cockpit-inspector-tab-turn");
+    expect(panel.hasAttribute("aria-label")).toBe(false);
+    expect(container.querySelector('[role="tablist"]')?.className).toContain("overflow-x-auto");
     await act(async () =>
       (container.querySelector('[role="tab"][aria-controls="cockpit-inspector-sources"]') as HTMLButtonElement).click(),
     );

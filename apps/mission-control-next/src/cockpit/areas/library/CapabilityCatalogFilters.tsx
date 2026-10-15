@@ -27,22 +27,22 @@ export function CapabilityCatalogFilters({
 }) {
   return (
     <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-      <label className="col-span-2 text-xs text-fg-muted lg:col-span-1">
+      <label className="col-span-2 text-sm text-fg-muted lg:col-span-1">
         Search
         <input
           value={search}
           maxLength={200}
           onChange={(event) => setFilters({ search: event.target.value })}
           placeholder="Find a capability"
-          className="mt-1 h-9 w-full rounded-md border border-line-control bg-raised px-2 text-base text-fg"
+          className="mt-1 min-h-11 w-full rounded-md border border-line-control bg-raised px-2 text-base text-fg"
         />
       </label>
-      <label className="text-xs text-fg-muted">
+      <label className="text-sm text-fg-muted">
         Type
         <select
           value={kind}
           onChange={(event) => setFilters({ kind: event.target.value })}
-          className="mt-1 h-9 w-full rounded-md border border-line-control bg-raised px-2 text-base text-fg"
+          className="mt-1 min-h-11 w-full rounded-md border border-line-control bg-raised px-2 text-base text-fg"
         >
           <option value="all">All types</option>
           {kind !== "all" && !kinds.includes(kind as CapabilityCatalogEntry["kind"]) ? (
@@ -55,13 +55,13 @@ export function CapabilityCatalogFilters({
           ))}
         </select>
       </label>
-      <label className="text-xs text-fg-muted">
+      <label className="text-sm text-fg-muted">
         Status
         <select
           value={callableKnown ? status : "all"}
           onChange={(event) => setFilters({ status: event.target.value as CapabilityStatusFilter })}
           disabled={!callableKnown}
-          className="mt-1 h-9 w-full rounded-md border border-line-control bg-raised px-2 text-base text-fg disabled:opacity-60"
+          className="mt-1 min-h-11 w-full rounded-md border border-line-control bg-raised px-2 text-base text-fg disabled:opacity-60"
         >
           {callableKnown ? (
             STATUS_OPTIONS.map((option) => (
@@ -74,12 +74,12 @@ export function CapabilityCatalogFilters({
           )}
         </select>
       </label>
-      <label className="text-xs text-fg-muted">
+      <label className="text-sm text-fg-muted">
         Trust
         <select
           value={trust}
           onChange={(event) => setFilters({ trust: event.target.value })}
-          className="mt-1 h-9 w-full rounded-md border border-line-control bg-raised px-2 text-base text-fg"
+          className="mt-1 min-h-11 w-full rounded-md border border-line-control bg-raised px-2 text-base text-fg"
         >
           <option value="all">All trust levels</option>
           {trust !== "all" && !trustLabels.includes(trust) ? (

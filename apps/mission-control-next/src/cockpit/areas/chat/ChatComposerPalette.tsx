@@ -23,7 +23,7 @@ export function ChatComposerPalette({
     props.composerRef.current?.focus();
   };
   return (
-    <div className="mb-2 max-h-56 overflow-y-auto rounded-md border border-line bg-overlay p-2 shadow-overlay">
+    <div className="mb-2 max-h-56 overflow-y-auto rounded-md border border-line bg-overlay p-2">
       {palette?.globalOpen ? (
         <label className="block text-xs text-fg-muted">
           Find a command, model, file, or variable
@@ -77,10 +77,13 @@ export function ChatComposerPalette({
           <button
             type="button"
             role="option"
+            tabIndex={-1}
             id={`cockpit-suggestion-${index}`}
             aria-selected={index === props.commandIndex}
             key={item.key}
             onMouseEnter={() => palette?.onIndexChange(index)}
+            // Focus stays on the combobox that owns the listbox; selection follows aria-activedescendant.
+            onMouseDown={(event) => event.preventDefault()}
             onClick={() => choose(index)}
             className="flex w-full items-start justify-between gap-2 rounded-md px-2 py-1.5 text-left hover:bg-sunken aria-[selected=true]:bg-sunken"
           >

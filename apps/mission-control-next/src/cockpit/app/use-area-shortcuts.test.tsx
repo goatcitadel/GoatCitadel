@@ -58,6 +58,20 @@ it("navigates six areas with g sequences and retains palette and help", () => {
   expect(palette).toHaveBeenCalledOnce();
   expect(key("1", { ctrlKey: true }).defaultPrevented).toBe(false);
 });
+it("does not open the palette over another open dialog, but still keeps the browser's Ctrl+K away", () => {
+  const dialog = document.createElement("div");
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("data-state", "open");
+  document.body.append(dialog);
+  try {
+    expect(key("k", { ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(palette).not.toHaveBeenCalled();
+  } finally {
+    dialog.remove();
+  }
+  key("k", { ctrlKey: true });
+  expect(palette).toHaveBeenCalledOnce();
+});
 it("never consumes editing, IME, repeated, or modified sequence keys", () => {
   for (const target of [container.querySelector("input")!, container.querySelector("[contenteditable]")!]) {
     expect(key("g", {}, target).defaultPrevented).toBe(false);

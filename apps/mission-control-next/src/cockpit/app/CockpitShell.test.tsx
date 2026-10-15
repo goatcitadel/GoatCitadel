@@ -229,7 +229,7 @@ describe("CockpitShell", () => {
       ),
     );
     const alert = container.querySelector("[data-gateway-banner]");
-    expect(alert?.getAttribute("role")).toBe("alert");
+    expect(alert?.querySelector('[role="alert"]')?.textContent).toContain("Gateway unavailable.");
     // Above the scrolling area, so it never scrolls away and phones see it.
     expect(alert?.closest("#main-content")).toBeNull();
     // Only Chat sends, so other areas must not claim that sending is paused.

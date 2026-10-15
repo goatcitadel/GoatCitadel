@@ -1,4 +1,5 @@
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { isModifiedClick } from "../../lib/modified-click";
 import { EmptyState } from "../../ui/EmptyState";
 import { AREA_TABS } from "../../ui/area-layout";
 import { WorkBoard } from "./WorkBoard";
@@ -44,6 +45,7 @@ export function WorkArea() {
             href={item.path}
             aria-current={view === item.id ? "page" : undefined}
             onClick={(event) => {
+              if (isModifiedClick(event)) return;
               event.preventDefault();
               navigate(item.path);
             }}

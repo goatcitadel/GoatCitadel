@@ -96,7 +96,8 @@ export function ApprovalSettlement({
           may be stale.
         </p>
       ) : null}
-      {query.isFetching ? <p role="status">Checking canonical follow-on work…</p> : null}
+      {/* Background polling stays quiet; only the outcome lines above and below are live regions. */}
+      {query.isFetching ? <p className="text-fg-muted">Checking canonical follow-on work…</p> : null}
       {state?.wait ? (
         <p>Approval wait settlement: {state.wait.status}. This records approval bookkeeping, not original execution.</p>
       ) : null}

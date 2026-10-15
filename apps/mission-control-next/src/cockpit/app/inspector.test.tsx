@@ -339,7 +339,8 @@ it("restores phone inspection focus to its originating control", async () => {
   const trigger = container.querySelector<HTMLButtonElement>("button")!;
   trigger.focus();
   await act(async () => trigger.click());
-  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Close sheet"]')!.click());
+  // The phone sheet names what it closes.
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Close inspector"]')!.click());
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
   });

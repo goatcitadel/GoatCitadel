@@ -21,7 +21,7 @@ export function InboxCoverageSummary({ projection }: { projection: OperatorInbox
     (source) => source.state === "limited" || source.state === "not_enabled",
   );
   return (
-    <div role="status" className="rounded-lg border border-line bg-raised p-3 text-sm text-fg-secondary">
+    <div className="rounded-lg border border-line bg-raised p-3 text-sm text-fg-secondary">
       {summaryLine(projection)}
       {gaps.length > 0 ? (
         <details className="mt-2 text-xs text-fg-muted">

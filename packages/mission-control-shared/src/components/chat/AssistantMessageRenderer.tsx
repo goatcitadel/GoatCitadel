@@ -112,8 +112,27 @@ export function AssistantMessageBody({
   );
 }
 
+// Message headings belong to the message, not the page: an assistant "# Title" must not compete with the page's
+// own h1 in the document outline. The element (and so its styling) is kept; only the announced level drops by two.
+const MESSAGE_HEADING_LEVEL_OFFSET = 2;
+function messageHeading(level: 1 | 2 | 3 | 4 | 5 | 6): NonNullable<Components["h1"]> {
+  const Tag = `h${level}` as const;
+  return function MessageHeading({ node: _node, ...props }) {
+    return <Tag {...props} aria-level={Math.min(6, level + MESSAGE_HEADING_LEVEL_OFFSET)} />;
+  };
+}
+const MESSAGE_HEADINGS = {
+  h1: messageHeading(1),
+  h2: messageHeading(2),
+  h3: messageHeading(3),
+  h4: messageHeading(4),
+  h5: messageHeading(5),
+  h6: messageHeading(6),
+} satisfies Components;
+
 function createMarkdownComponents({ allowGeneratedUi }: { allowGeneratedUi: boolean }): Components {
   return {
+    ...MESSAGE_HEADINGS,
     a({ children, href, node: _node, ...props }) {
       const safeHref = resolveSafeMarkdownHref(href);
       if (!safeHref) {

@@ -17,23 +17,45 @@ export function useCockpitShellSwitch(sessionId?: string | null) {
       owner.request("classic", {
         href: buildClassicOwnerUrl(buildShellSwitchUrl(window.location.href, "classic", sessionId)),
       }),
-    feedback: <ShellSwitchFeedback owner={owner} />,
+    feedback: <ShellSwitchFeedback owner={owner} floating />,
   };
 }
-export function ShellSwitchFeedback({ owner }: { owner: ReturnType<typeof useShellHandoff> }) {
+/**
+ * `floating` pins the status above the shell for owners rendered outside the visible layout (the navigation
+ * provider and the phone tab bar render after the 100dvh shell, so inline text would land below the fold).
+ */
+export function ShellSwitchFeedback({
+  owner,
+  floating = false,
+}: {
+  owner: ReturnType<typeof useShellHandoff>;
+  floating?: boolean;
+}) {
   const state = useDraftLeaveDialogState(owner.dialogProps);
+  const status =
+    owner.opening || owner.error ? (
+      <>
+        {owner.opening ? (
+          <span role="status" className="block text-sm text-fg-muted">
+            Opening view…
+          </span>
+        ) : null}
+        {owner.error ? (
+          <span role="alert" className="block text-sm text-status-failed">
+            {owner.error}
+          </span>
+        ) : null}
+      </>
+    ) : null;
   return (
     <>
-      {owner.opening ? (
-        <span role="status" className="block text-sm text-fg-muted">
-          Opening view…
-        </span>
-      ) : null}
-      {owner.error ? (
-        <span role="alert" className="block text-sm text-status-failed">
-          {owner.error}
-        </span>
-      ) : null}
+      {floating && status ? (
+        <div className="fixed inset-x-4 bottom-20 z-70 mx-auto w-fit max-w-full rounded-md border border-line bg-overlay px-3 py-2 shadow-overlay sm:bottom-4">
+          {status}
+        </div>
+      ) : (
+        status
+      )}
       <Dialog
         open={owner.dialogProps.open}
         title="Unsaved changes"

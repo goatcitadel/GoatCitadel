@@ -63,6 +63,9 @@ const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
 
 type ModelPopover = typeof import("./ChatModelOptionsPopover");
 let modelPopoverLoad: Promise<ModelPopover> | undefined;
+const PLAN_HELP = "Plan before acting. The Gateway still governs every tool and approval.";
+const REVIEW_HELP = "Request review of the answer before completion; availability follows the runtime.";
+
 const loadModelPopover = () =>
   (modelPopoverLoad ??= import("./ChatModelOptionsPopover").catch((cause) => {
     modelPopoverLoad = undefined;
@@ -81,6 +84,7 @@ export function ChatComposerControls({
   const disabled = props.historicalReadOnly || props.sending;
   const options = useDeferredOverlay({ scopeKey, load: loadModelPopover });
   const contentId = useId();
+  const modeHelpId = useId();
   const reloadCancel = useRef<HTMLButtonElement>(null);
   const ModelPopover = options.runtime?.ChatModelOptionsPopover;
   const optionsSummary = [props.selectedModel || "Choose model", humanizeToken(props.currentThinkingLevel)].join(" · ");
@@ -89,13 +93,14 @@ export function ChatComposerControls({
       {" "}
       <button
         type="button"
-        title="Plan before acting. The Gateway still governs every tool and approval."
+        title={PLAN_HELP}
         aria-pressed={props.planningMode === "advisory"}
+        aria-describedby={`${modeHelpId}-plan`}
         disabled={disabled}
         onClick={props.onTogglePlanningMode}
         className="rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
       >
-        Plan {props.planningMode === "advisory" ? "on" : "off"}
+        Plan first
       </button>
       <label className="flex items-center gap-1">
         Web
@@ -116,14 +121,22 @@ export function ChatComposerControls({
       </label>
       <button
         type="button"
-        title="Request review of the answer before completion; availability follows the runtime."
+        title={REVIEW_HELP}
         aria-pressed={props.currentReviewDepth !== "off"}
+        aria-describedby={`${modeHelpId}-review`}
         disabled={disabled}
         onClick={props.onToggleReviewMode}
         className="rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
       >
-        Review {props.currentReviewDepth === "off" ? "off" : "on"}
+        Review answer
       </button>
+      {/* Hover keeps the tooltip; screen readers and touch get the same explanation through aria-describedby. */}
+      <span id={`${modeHelpId}-plan`} className="sr-only">
+        {PLAN_HELP}
+      </span>
+      <span id={`${modeHelpId}-review`} className="sr-only">
+        {REVIEW_HELP}
+      </span>
     </>
   );
   return (

@@ -173,7 +173,7 @@ export function ChatModelOptionsPopover({
           side="top"
           align="start"
           sideOffset={8}
-          className="z-50 w-80 max-w-full space-y-3 rounded-lg border border-line bg-overlay p-3 text-xs text-fg shadow-overlay"
+          className="z-60 w-80 max-w-full space-y-3 rounded-lg border border-line bg-overlay p-3 text-xs text-fg shadow-overlay"
           onClickCapture={(event) => {
             if (!isCurrent()) {
               event.preventDefault();

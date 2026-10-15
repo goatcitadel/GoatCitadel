@@ -109,7 +109,7 @@ export function FirstRunArea() {
                     {setup.checking ? "Checking current rule…" : "Keep current rule"}
                   </Button>
                 ) : (
-                  <p role="alert" className="text-sm text-status-waiting">
+                  <p className="text-sm text-status-waiting">
                     Choose and save a rule that keeps approval prompts before finishing guided setup.
                   </p>
                 )}
@@ -155,7 +155,7 @@ export function FirstRunArea() {
               </Button>
             ) : null}
           </div>
-          <p id="first-run-finish-prerequisite" role="status" className="text-sm text-fg-secondary">
+          <p id="first-run-finish-prerequisite" className="text-sm text-fg-secondary">
             {setup.finishPrerequisite}
           </p>
           {setup.notice || completion.notice ? (
