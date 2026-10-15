@@ -159,7 +159,7 @@
     "apps/gateway/src/services/workflow-recipe-service.ts": 4,
     "apps/gateway/src/services/gateway/chat-stream-runtime.ts": 24
   },
-  "totalDependencyMemberAccesses": 10013,
+  "totalDependencyMemberAccesses": 10005,
   "dependencyMemberAccessesByFile": {
     "apps/gateway/src/services/a2a-grpc-client.ts": 2,
     "apps/gateway/src/services/a2a-grpc-outbound-service.ts": 10,
