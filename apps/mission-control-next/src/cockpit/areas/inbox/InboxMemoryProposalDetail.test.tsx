@@ -174,6 +174,18 @@ describe("Inbox memory proposal review", () => {
     expect(button("Confirm promotion").disabled).toBe(false);
   });
 
+  it("promotes with a primary button and rejects with a secondary one, never in the danger style", async () => {
+    await render();
+    expect(button("Promote to memory").className).toContain("bg-accent");
+    expect(button("Reject proposal").className).toContain("bg-raised");
+    await act(async () => button("Promote to memory").click());
+    expect(button("Confirm promotion").className).toContain("bg-accent");
+    await act(async () => button("Cancel").click());
+    await act(async () => button("Reject proposal").click());
+    expect(button("Confirm rejection").className).toContain("bg-accent");
+    expect(document.body.innerHTML).not.toContain("text-status-failed hover:bg-sunken");
+  });
+
   it("keeps the proposal beside a failed recheck", async () => {
     const client = await render();
     api.fetchTraceMemoryCandidate.mockRejectedValueOnce(new Error("Gateway offline"));

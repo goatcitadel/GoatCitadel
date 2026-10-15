@@ -88,6 +88,12 @@ async function type(label: string, value: string) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
+async function allowAnyHost() {
+  const box = [...container.querySelectorAll("label")]
+    .find((item) => item.textContent === "Allow any host")!
+    .querySelector("input")!;
+  await act(async () => box.click());
+}
 const dialog = () => document.body.querySelector<HTMLElement>("[role=dialog]");
 
 it("reviews the exact grant, Cancel requests nothing, and Confirm sends one request with a request ID", async () => {
@@ -116,6 +122,7 @@ it("reviews the exact grant, Cancel requests nothing, and Confirm sends one requ
 it("keeps a lost grant response locked and replays only the same request ID", async () => {
   await render([]);
   await type("Actor", "agent");
+  await type("Allowed hosts", "example.com");
   vi.mocked(createBrowserSessionGrant)
     .mockRejectedValueOnce(new Error("socket closed"))
     .mockResolvedValueOnce(oneHourReceipt);
@@ -131,6 +138,7 @@ it("keeps a lost grant response locked and replays only the same request ID", as
 it("keeps text typed after a lost response when the exact replay succeeds", async () => {
   await render([]);
   await type("Actor", "agent");
+  await allowAnyHost();
   vi.mocked(createBrowserSessionGrant)
     .mockRejectedValueOnce(new Error("socket closed"))
     .mockResolvedValueOnce(noHostReceipt);
@@ -149,6 +157,7 @@ it("keeps text typed after a lost response when the exact replay succeeds", asyn
 it("reports a replayed grant that has since been revoked instead of calling it new", async () => {
   await render([]);
   await type("Actor", "agent");
+  await allowAnyHost();
   vi.mocked(createBrowserSessionGrant).mockResolvedValue({ ...noHostReceipt, revokedAt: "2099-01-01T00:30:00.000Z" });
   await click("Review grant");
   await click("Create grant");
@@ -198,6 +207,7 @@ it("offers no grant form or actions on a closed session", async () => {
 it("creates a never-expiring grant only when chosen, with a warning in the review and no TTL sent", async () => {
   await render([]);
   await type("Actor", "agent");
+  await allowAnyHost();
   const expiry = [...container.querySelectorAll("select")].find((item) =>
     [...item.options].some((option) => option.textContent?.includes("Never expires")),
   )!;
@@ -214,4 +224,31 @@ it("creates a never-expiring grant only when chosen, with a warning in the revie
   const [, input] = vi.mocked(createBrowserSessionGrant).mock.calls[0]!;
   expect(input).not.toHaveProperty("ttlSeconds");
   expect(container.textContent).toContain("never expires");
+});
+
+it("never treats an empty host list as every host until Allow any host is checked", async () => {
+  await render([]);
+  await type("Actor", "agent");
+  const review = button("Review grant")!;
+  expect(review.disabled).toBe(true);
+  const reason = document.getElementById(review.getAttribute("aria-describedby")!);
+  expect(reason?.textContent).toBe("Enter at least one host, or check Allow any host.");
+  expect(container.textContent).not.toContain("Leave empty to allow every host.");
+  expect(container.textContent).toContain("Comma-separated, for example example.com, docs.example.com.");
+
+  await type("Allowed hosts", "docs.example.com");
+  expect(button("Review grant")!.disabled).toBe(false);
+  await click("Review grant");
+  expect(dialog()!.textContent).not.toContain("This grant covers every host.");
+  await click("Cancel");
+
+  await allowAnyHost();
+  const hosts = [...container.querySelectorAll("label")].find((item) => item.textContent === "Allowed hosts")!;
+  expect((document.getElementById(hosts.htmlFor) as HTMLInputElement).disabled).toBe(true);
+  await click("Review grant");
+  expect(dialog()!.textContent).toContain("risk");
+  expect(dialog()!.textContent).toContain("This grant covers every host.");
+  vi.mocked(createBrowserSessionGrant).mockResolvedValue(noHostReceipt);
+  await click("Create grant");
+  expect(vi.mocked(createBrowserSessionGrant).mock.calls[0]![1]).toMatchObject({ allowedHosts: [] });
 });

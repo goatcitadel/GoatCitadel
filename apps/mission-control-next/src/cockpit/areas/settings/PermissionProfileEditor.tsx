@@ -199,7 +199,6 @@ export function PermissionProfileEditor({
             </Button>
             {selected ? (
               <Button
-                variant="danger"
                 disabled={blocked || control.checking}
                 onClick={() => {
                   const submitted = editor.value;

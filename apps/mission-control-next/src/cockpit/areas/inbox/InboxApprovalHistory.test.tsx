@@ -8,7 +8,6 @@ import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { InboxApprovalHistory } from "./InboxApprovalHistory";
 import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { __resetApprovalOperationAttemptsForTests } from "./approval-operation-attempts";
-import { queryKeys } from "../../data/query-keys";
 import { SHELL_HISTORY_POSITION } from "../../../app/shell-transition";
 const api = vi.hoisted(() => ({ list: vi.fn(), bulk: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
@@ -149,30 +148,14 @@ it("labels an expiry sweep as expired and shows who settled an operator decision
   expect(plain).not.toContain("Decided by");
 });
 
-it("refreshes the pending Inbox projection and every approval read after an installation-wide rejection", async () => {
+it("keeps the installation-wide rejection out of the workspace history", async () => {
+  // It lives in the Inbox danger zone (InboxBulkRejectZone), apart from everyday history.
   api.list.mockResolvedValue({ items: [record("recent")] });
-  api.bulk.mockResolvedValue({ resolvedCount: 1, skippedCount: 0, failedCount: 0 });
   await render();
   await click("Approval history and replay");
-  const invalidate = vi.spyOn(client, "invalidateQueries");
-  const dialogButton = (name: string) =>
-    [...document.body.querySelectorAll("button")].find(
-      (item) => !item.closest('[aria-hidden="true"]') && item.textContent === name,
-    )!;
-  await act(async () => dialogButton("Review installation-wide rejection").click());
-  const input = document.querySelector<HTMLInputElement>('[role="dialog"] input')!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "reject all");
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await act(async () => dialogButton("Confirm installation-wide rejection").click());
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  });
-  expect(api.bulk).toHaveBeenCalledOnce();
-  expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.inbox("one") });
-  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["approvals"] });
-  invalidate.mockRestore();
+  const labels = [...host.querySelectorAll("button")].map((item) => item.textContent);
+  expect(labels).not.toContain("Review installation-wide rejection");
+  expect(api.bulk).not.toHaveBeenCalled();
 });
 
 it("does not expose retained history after a caller transition", async () => {

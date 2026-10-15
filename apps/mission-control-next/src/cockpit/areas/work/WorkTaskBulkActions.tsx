@@ -107,7 +107,7 @@ export function WorkTaskBulkActions({
           <Button
             key={entry.action}
             size="sm"
-            variant={entry.action === "close" ? "danger" : "secondary"}
+            variant="secondary"
             disabled={!selected.length || locked || busy}
             onClick={() => {
               setOutcome(undefined);
@@ -149,11 +149,7 @@ export function WorkTaskBulkActions({
                 {outcome ? "Close" : "Cancel"}
               </Button>
               {outcome ? null : (
-                <Button
-                  variant={review.action.action === "close" ? "danger" : "primary"}
-                  disabled={busy || locked}
-                  onClick={() => void confirm()}
-                >
+                <Button variant="primary" disabled={busy || locked} onClick={() => void confirm()}>
                   {busy ? "Applying…" : `${review.action.verb} ${count(review.tasks.length)}`}
                 </Button>
               )}

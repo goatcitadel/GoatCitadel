@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, type ComponentProps } from "react";
+import { act, type ComponentProps, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,9 +21,10 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ ...api, isApiRequestError: () => false }));
 // Each owner write reports the attempt it dispatched, as the real capture would for its Gateway route.
-const attempts = vi.hoisted(() => ({ paths: [] as string[], read: vi.fn() }));
+const attempts = vi.hoisted(() => ({ paths: [] as string[], read: vi.fn(), signOut: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
   ...(await importOriginal<object>()),
+  clearGatewayAuthState: attempts.signOut,
   captureMutationAttempt: (dispatch: () => Promise<unknown>, onAttempt: (attempt: unknown) => void) => {
     const path = attempts.paths.shift();
     if (path) onAttempt({ attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b", method: "PATCH", path });
@@ -202,6 +203,36 @@ it.each([false, true])(
   },
 );
 
+const access = vi.hoisted(() => ({ actorId: null as string | null }));
 vi.mock("../../../app/use-current-access", () => ({
-  useCurrentAccess: () => ({ isSuccess: true, data: { actorId: null, actorSource: "none", operatorAccess: true } }),
+  useCurrentAccess: () => ({
+    isSuccess: true,
+    data: { actorId: access.actorId, actorSource: "none", operatorAccess: true },
+    refetch: vi.fn(),
+  }),
 }));
+vi.mock("../../ui/Dialog", () => ({
+  Dialog: ({ open, title, children }: { open: boolean; title: string; children: ReactNode }) =>
+    open ? <section aria-label={title}>{children}</section> : null,
+}));
+
+describe("native Gateway sign-out", () => {
+  afterEach(() => {
+    access.actorId = null;
+  });
+  it("puts a danger sign-out first and keeping access last", async () => {
+    access.actorId = "operator-1";
+    await render();
+    await click("Sign out of this browser");
+    const dialog = renderer.root.findByProps({ "aria-label": "Sign out of this browser?" });
+    const actions = dialog.findAllByType("button");
+    expect(actions.map((node) => node.children.join(""))).toEqual(["Sign out", "Keep access"]);
+    expect(String(actions[0]!.props.className)).toContain("border-status-failed");
+    expect(String(actions[1]!.props.className)).not.toContain("border-status-failed");
+    await click("Keep access");
+    expect(attempts.signOut).not.toHaveBeenCalled();
+    await click("Sign out of this browser");
+    await click("Sign out");
+    expect(attempts.signOut).toHaveBeenCalledOnce();
+  });
+});

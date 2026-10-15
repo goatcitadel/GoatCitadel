@@ -343,7 +343,40 @@ describe("risk approval action", () => {
     expect(onApprove).not.toHaveBeenCalled();
   });
 
-  it("tells assistive technology the confirmation word is required and why approval waits", async () => {
+  it("accepts the confirmation word in any case with surrounding spaces", async () => {
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("nuclear")}
+          reviewedApproval={{ ...reviewedApproval, riskLevel: "nuclear" }}
+          pending={false}
+          onApprove={vi.fn()}
+        />,
+      ),
+    );
+    await act(async () => container.querySelector("button")?.click());
+    await typeConfirmation("  APPROVE ");
+    expect(dialogButton("Approve once").disabled).toBe(false);
+  });
+
+  it("labels the review with its risk and a shield icon, in the danger style", async () => {
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("danger")}
+          reviewedApproval={reviewedApproval}
+          pending={false}
+          onApprove={vi.fn()}
+        />,
+      ),
+    );
+    const review = container.querySelector("button")!;
+    expect(review.textContent).toBe("Review approval");
+    expect(review.className).toContain("text-status-failed");
+    expect(review.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("tells assistive technology why approval waits for the confirmation word", async () => {
     await act(async () =>
       root.render(
         <RiskApprovalAction
@@ -356,9 +389,9 @@ describe("risk approval action", () => {
     );
     await act(async () => container.querySelector("button")?.click());
     const input = document.body.querySelector<HTMLInputElement>('[role="dialog"] input')!;
-    expect(input.getAttribute("aria-required")).toBe("true");
     const hint = document.getElementById(input.getAttribute("aria-describedby") ?? "");
-    expect(hint?.textContent).toBe("Approve once stays unavailable until the word matches.");
+    expect(hint?.textContent).toBe("Approve once stays unavailable until the text matches.");
+    expect(document.body.querySelector('[role="dialog"] label code')?.textContent).toBe("approve");
   });
 
   it("starts a reopened nuclear review with an empty confirmation", async () => {

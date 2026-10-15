@@ -356,6 +356,7 @@ describe("saved board lifecycle", () => {
     expect(dialog()).toBeNull();
     expect(api.archiveOpsSavedBoard).not.toHaveBeenCalled();
     await act(async () => button("Archive board…")!.click());
+    expect(button("Archive board")!.className).toContain("bg-accent");
     await act(async () => button("Archive board")!.click());
     await vi.waitFor(() => expect(container.textContent).toContain("Board archived and confirmed at revision 3."));
     expect(api.archiveOpsSavedBoard).toHaveBeenCalledExactlyOnceWith("board-1", {

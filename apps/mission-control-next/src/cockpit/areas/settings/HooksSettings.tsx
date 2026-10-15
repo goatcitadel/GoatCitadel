@@ -7,17 +7,16 @@ import {
   HOOK_OWNER_LIMIT,
   HOOK_TRIGGER_VALUES,
 } from "../../../features/native-routes/settings/sections/hooks-owner-binding";
-import { useDraftLeaveDialogState } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { integrationInputClass } from "./IntegrationFormFields";
 import { HookRecordEvidence, HookRunEvidence } from "./HookEvidence";
 import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
 
 export function HooksSettings({ workspaceId }: { workspaceId: string }) {
   const workspaceLabel = useActiveWorkspaceLabel();
-  const s = useHooksSettings(workspaceId),
-    leave = useDraftLeaveDialogState(s.leave.dialogProps);
+  const s = useHooksSettings(workspaceId);
   const [limit, setLimit] = useState(10),
     [query, setQuery] = useState("");
   const hooks = s.hooks.filter((item) =>
@@ -282,22 +281,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
           </Button>
         </div>
       </Dialog>
-      <Dialog
-        open={s.leave.dialogProps.open}
-        title="Unsaved hook inputs"
-        description={leave.description}
-        onOpenChange={(open) => {
-          if (!open) s.leave.dialogProps.onCancel();
-        }}
-      >
-        <div className="flex flex-wrap gap-2">
-          {leave.canKeep ? <Button onClick={s.leave.dialogProps.onContinue}>Keep public draft and close</Button> : null}
-          <Button variant="danger" onClick={leave.discard}>
-            Discard hook inputs
-          </Button>
-          <Button onClick={s.leave.dialogProps.onCancel}>Keep editing</Button>
-        </div>
-      </Dialog>
+      <UnsavedChangesDialog {...s.leave.dialogProps} />
     </section>
   );
 }

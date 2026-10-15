@@ -385,6 +385,31 @@ describe("cockpit saved-board editor", () => {
     expect(onSaved).not.toHaveBeenCalled();
   });
 
+  it("closes an unedited editor directly and asks before discarding an edited layout", async () => {
+    const bodyButton = (label: string) =>
+      [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
+        (item) => item.textContent?.trim() === label,
+      );
+    await render();
+    await click("Close editor");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).not.toContain("Discard layout changes?");
+
+    await typeName("Renamed board");
+    await click("Close editor");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain("Discard layout changes?");
+    expect(bodyButton("Discard changes")?.className).toContain("border-status-failed");
+    await act(async () => bodyButton("Keep editing")!.click());
+    expect(document.body.textContent).not.toContain("Discard layout changes?");
+    expect(container.querySelector<HTMLInputElement>("input")?.value).toBe("Renamed board");
+
+    await click("Close editor");
+    await act(async () => bodyButton("Discard changes")!.click());
+    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(updateOpsSavedBoard).not.toHaveBeenCalled();
+  });
+
   it("does not navigate from a completed refresh after the editor closes", async () => {
     let finishRefresh!: () => void;
     vi.mocked(updateOpsSavedBoard).mockResolvedValue(board({ revision: 3 }));

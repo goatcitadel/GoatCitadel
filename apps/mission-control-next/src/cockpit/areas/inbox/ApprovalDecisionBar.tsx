@@ -317,14 +317,7 @@ function ApprovalDecisionReview({
             onApprove={() => void decide("approve")}
           />
         </span>
-        <Button
-          ref={denyRef}
-          type="button"
-          size="sm"
-          variant="danger"
-          disabled={Boolean(attempt)}
-          onClick={() => setDenyOpen(true)}
-        >
+        <Button ref={denyRef} type="button" size="sm" disabled={Boolean(attempt)} onClick={() => setDenyOpen(true)}>
           Deny
         </Button>
       </div>
@@ -368,7 +361,7 @@ function ApprovalDecisionReview({
         description="The pending action will not be authorized by this decision."
       >
         <div className="flex gap-2">
-          <Button variant="danger" disabled={Boolean(attempt)} onClick={() => void decide("reject")}>
+          <Button variant="primary" disabled={Boolean(attempt)} onClick={() => void decide("reject")}>
             Confirm deny
           </Button>
           <Button disabled={pending} onClick={() => setDenyOpen(false)}>

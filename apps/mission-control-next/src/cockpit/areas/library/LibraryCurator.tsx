@@ -255,7 +255,7 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
                 {!selected.immune && !selected.archived ? (
                   <div>
                     <Button
-                      variant="danger"
+                      variant="secondary"
                       disabled={busy || operation.locked}
                       onClick={() => {
                         setOutcome(undefined);
@@ -331,7 +331,7 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
                   Replay exact archive request
                 </Button>
               ) : (
-                <Button variant="danger" disabled={busy || operation.locked} onClick={() => void confirmArchive()}>
+                <Button variant="primary" disabled={busy || operation.locked} onClick={() => void confirmArchive()}>
                   Archive skill
                 </Button>
               )}

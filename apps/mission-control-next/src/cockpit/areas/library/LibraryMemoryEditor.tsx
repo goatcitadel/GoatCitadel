@@ -245,6 +245,7 @@ function MemoryEditor({
           Review memory changes
         </Button>
         <Button
+          variant="danger"
           disabled={globalItem || !enabled || !available || busy || item.status !== "active"}
           onClick={() => start("forget")}
         >
@@ -316,7 +317,7 @@ function MemoryEditor({
           </p>
           <Callout tone="warning">
             {review?.action === "forget"
-              ? "Forgetting removes the item from active recall after approval and effect settlement."
+              ? "Forgetting removes the item from active recall after approval and effect settlement. A forgotten item can't be restored from the cockpit."
               : "The reviewed title, content and pinned state are applied only after approval and effect settlement."}
           </Callout>
           {review?.action === "save" ? (
@@ -341,10 +342,15 @@ function MemoryEditor({
             <LibraryApproval approvalId={outcome.request.approvalId} workspaceId={workspaceId} onRefresh={refresh} />
           ) : null}
           <Button
+            variant={review?.action === "forget" ? "danger" : "primary"}
             disabled={busy || Boolean(outcome) || reviewStale || !available || !enabled}
             onClick={() => void submit()}
           >
-            {busy ? "Requesting approval…" : "Request memory approval"}
+            {busy
+              ? "Requesting approval…"
+              : review?.action === "forget"
+                ? "Request forget approval"
+                : "Request edit approval"}
           </Button>
         </div>
       </Dialog>

@@ -191,6 +191,7 @@ describe("native workspace directory", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(button("Confirm archive workspace").props.disabled).toBe(true);
+    expect(String(button("Confirm archive workspace").props.className)).toContain("bg-accent");
     expect(text(view.root)).toContain("Checking for changes…");
 
     await act(async () => {

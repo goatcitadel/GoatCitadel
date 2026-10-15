@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "cockpit");
 
-export const LIVE_REGION_BUDGET = 742;
+export const LIVE_REGION_BUDGET = 741;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

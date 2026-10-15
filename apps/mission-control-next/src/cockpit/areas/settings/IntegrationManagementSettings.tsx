@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useIntegrationSettings } from "../../../features/native-routes/settings/sections/use-integration-settings";
-import { useDraftLeaveDialogState } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { IntegrationConnectionEditor } from "./IntegrationConnectionEditor";
 import { IntegrationConnectionDetails } from "./IntegrationConnectionDetails";
 import { IntegrationCatalogEvidence } from "./IntegrationCatalogEvidence";
@@ -12,7 +12,6 @@ import { integrationInputClass } from "./IntegrationFormFields";
 
 export function IntegrationManagementSettings({ workspaceId }: { workspaceId: string }) {
   const s = useIntegrationSettings(workspaceId);
-  const leave = useDraftLeaveDialogState(s.leave.dialogProps);
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(20);
   const available = Boolean(
@@ -151,22 +150,7 @@ export function IntegrationManagementSettings({ workspaceId }: { workspaceId: st
           </Button>
         </div>
       </Dialog>
-      <Dialog
-        open={s.leave.dialogProps.open}
-        title="Unsaved integration draft"
-        description={leave.description}
-        onOpenChange={(open) => {
-          if (!open) s.leave.dialogProps.onCancel();
-        }}
-      >
-        <div className="flex flex-wrap gap-2">
-          {leave.canKeep ? <Button onClick={s.leave.dialogProps.onContinue}>Keep draft and close</Button> : null}
-          <Button variant="danger" onClick={leave.discard}>
-            Discard draft
-          </Button>
-          <Button onClick={s.leave.dialogProps.onCancel}>Keep editing</Button>
-        </div>
-      </Dialog>
+      <UnsavedChangesDialog {...s.leave.dialogProps} />
     </section>
   );
 }

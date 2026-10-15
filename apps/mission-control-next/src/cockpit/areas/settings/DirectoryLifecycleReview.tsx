@@ -47,7 +47,7 @@ export function DirectoryLifecycleReview({ lifecycle }: { lifecycle: ReturnType<
           {lifecycle.pending ? <p role="status">Waiting for the Gateway lifecycle owner…</p> : null}
           <div className="flex flex-wrap gap-2">
             <Button
-              variant={review.action === "archive" ? "danger" : "primary"}
+              variant="primary"
               disabled={lifecycle.pending || !lifecycle.available}
               onClick={() => void lifecycle.confirm()}
             >

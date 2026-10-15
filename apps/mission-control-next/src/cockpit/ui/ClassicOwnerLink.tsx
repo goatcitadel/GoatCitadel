@@ -2,9 +2,7 @@ import { type MouseEvent, type ReactNode } from "react";
 import { useShellHandoff } from "../../app/use-shell-handoff";
 import { buildClassicOwnerUrl } from "../../app/classic-owner-url";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import { useDraftLeaveDialogState } from "../../features/native-routes/library/DraftLeaveDialog";
-import { Button } from "./Button";
-import { Dialog } from "./Dialog";
+import { UnsavedChangesDialog } from "./UnsavedChangesDialog";
 
 /** Explicit owner handoff keeps the document's drafts and mutation admission stores. */
 export function ClassicOwnerLink({
@@ -29,7 +27,6 @@ export function ClassicOwnerLink({
   const installation = getGatewayApiBaseUrl();
   const ownerHref = buildClassicOwnerUrl(href);
   const handoff = useShellHandoff([installation, scope, ownerHref]);
-  const dialog = useDraftLeaveDialogState(handoff.dialogProps);
   const opening = handoff.opening;
 
   function request(event: MouseEvent<HTMLAnchorElement>) {
@@ -63,38 +60,7 @@ export function ClassicOwnerLink({
           {errorLabel ?? "The owner view could not open. Your current drafts are still available."}
         </span>
       ) : null}
-      <Dialog
-        open={handoff.dialogProps.open}
-        title="Unsaved changes"
-        description={dialog.description}
-        onOpenChange={(open) => {
-          if (!open && !dialog.saving) handoff.dialogProps.onCancel();
-        }}
-      >
-        {dialog.error ? (
-          <p role="alert" className="text-sm text-status-failed">
-            {dialog.error}
-          </p>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          {dialog.canSave ? (
-            <Button disabled={dialog.saving} onClick={() => void dialog.saveAndContinue()}>
-              Save and continue
-            </Button>
-          ) : null}
-          {dialog.canKeep ? (
-            <Button disabled={dialog.saving} onClick={handoff.dialogProps.onContinue}>
-              Keep draft and close
-            </Button>
-          ) : null}
-          <Button variant="danger" disabled={dialog.saving} onClick={dialog.discard}>
-            Discard changes
-          </Button>
-          <Button disabled={dialog.saving} onClick={handoff.dialogProps.onCancel}>
-            Cancel
-          </Button>
-        </div>
-      </Dialog>
+      <UnsavedChangesDialog {...handoff.dialogProps} />
     </>
   );
 }

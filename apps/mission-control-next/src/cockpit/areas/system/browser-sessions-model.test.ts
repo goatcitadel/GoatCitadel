@@ -59,9 +59,20 @@ describe("grant drafts", () => {
       errors: {
         actorId: "Enter the actor this grant is for.",
         scopes: "Choose at least one scope.",
+        hosts: "Enter at least one host, or check Allow any host.",
         ttlSeconds: "Choose a supported expiry.",
       },
     });
+  });
+
+  it("sends an empty host list only when Allow any host is checked", () => {
+    const draft = { actorId: "agent", scopes: ["read" as const], hosts: " ; ", ttlSeconds: 3600 };
+    expect(validateGrantDraft(draft)).toEqual({
+      ok: false,
+      errors: { hosts: "Enter at least one host, or check Allow any host." },
+    });
+    const any = validateGrantDraft({ ...draft, hosts: "example.com", anyHost: true });
+    expect(any.ok && any.request.allowedHosts).toEqual([]);
   });
 
   it("normalizes hosts the way the Gateway does", () => {
@@ -196,13 +207,25 @@ describe("never-expiring grants", () => {
   });
 
   it("asks the Gateway for no expiry and accepts only a receipt without one", () => {
-    const parsed = validateGrantDraft({ actorId: "agent", scopes: ["read"], hosts: "", ttlSeconds: NEVER_EXPIRES_TTL });
+    const parsed = validateGrantDraft({
+      actorId: "agent",
+      scopes: ["read"],
+      hosts: "",
+      ttlSeconds: NEVER_EXPIRES_TTL,
+      anyHost: true,
+    });
     expect(parsed.ok && parsed.request.ttlSeconds).toBeNull();
     if (!parsed.ok) throw new Error("expected a valid draft");
     const permanent = { ...grant, scopes: ["read" as const], allowedHosts: [], expiresAt: undefined };
     expect(grantMatchesRequest(permanent, parsed.request, "s-1")).toBe(true);
     expect(grantMatchesRequest({ ...permanent, expiresAt: grant.expiresAt }, parsed.request, "s-1")).toBe(false);
-    const timed = validateGrantDraft({ actorId: "agent", scopes: ["read"], hosts: "", ttlSeconds: 3600 });
+    const timed = validateGrantDraft({
+      actorId: "agent",
+      scopes: ["read"],
+      hosts: "",
+      ttlSeconds: 3600,
+      anyHost: true,
+    });
     if (!timed.ok) throw new Error("expected a valid draft");
     expect(grantMatchesRequest(permanent, timed.request, "s-1")).toBe(false);
   });

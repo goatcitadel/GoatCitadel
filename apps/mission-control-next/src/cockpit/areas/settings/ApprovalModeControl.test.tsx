@@ -1,9 +1,8 @@
 // @vitest-environment happy-dom
-import { act, type ComponentProps } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import type { ToolApprovalMode } from "@goatcitadel/contracts";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
@@ -26,13 +25,16 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   ...api,
   isApiRequestError: (value: unknown) => Boolean(value && typeof value === "object" && "status" in value),
 }));
-let confirmation: ComponentProps<typeof ConfirmModal>;
-vi.mock("@goatcitadel/mission-control-shared/components/ConfirmModal", () => ({
-  ConfirmModal: (props: ComponentProps<typeof ConfirmModal>) => {
-    confirmation = props;
-    return null;
-  },
+vi.mock("../../ui/Dialog", () => ({
+  Dialog: (props: { open: boolean; title: string; description?: string; children: ReactNode }) =>
+    props.open ? (
+      <section role="dialog" aria-label={props.title}>
+        <p>{props.description}</p>
+        {props.children}
+      </section>
+    ) : null,
 }));
+const dialog = () => container.querySelector<HTMLElement>('[role="dialog"]');
 let owner: { revision: number; toolApprovalMode: ToolApprovalMode; deploymentProfile?: string };
 let root: Root;
 let container: HTMLDivElement;
@@ -232,10 +234,13 @@ describe("cockpit tool approval rule", () => {
     await choose("bypass");
     await click("Review prompt skipping");
     expect(api.patchSettings).not.toHaveBeenCalled();
-    expect(confirmation).toMatchObject({ open: true, danger: true, confirmDisabled: false });
-    expect(confirmation.message).toContain("settings revision 2");
-    expect(confirmation.message).toContain("Deny rules, Critical risk and risky-shell approvals");
-    await act(async () => confirmation.onConfirm());
+    const actions = [...dialog()!.querySelectorAll("button")];
+    expect(actions.map((item) => item.textContent)).toEqual(["Skip normal prompts", "Keep current rule"]);
+    expect(actions[0]!.className).toContain("border-status-failed");
+    expect(actions[0]!.disabled).toBe(false);
+    expect(dialog()!.textContent).toContain("settings revision 2");
+    expect(dialog()!.textContent).toContain("Deny rules, Critical risk and risky-shell approvals");
+    await click("Skip normal prompts");
     expect(api.patchSettings).toHaveBeenCalledExactlyOnceWith({ expectedRevision: 2, toolApprovalMode: "bypass" });
     expect(container.textContent).toContain("draft remains unsaved");
   });
@@ -244,9 +249,9 @@ describe("cockpit tool approval rule", () => {
     await render();
     await choose("bypass");
     await click("Review prompt skipping");
-    await act(async () => confirmation.onCancel());
+    await click("Keep current rule");
     expect(api.patchSettings).not.toHaveBeenCalled();
-    expect(confirmation.open).toBe(false);
+    expect(dialog()).toBeNull();
   });
 
   it("invalidates bypass confirmation when the canonical revision changes", async () => {
@@ -257,8 +262,8 @@ describe("cockpit tool approval rule", () => {
     await act(async () => {
       client.setQueryData(["system", "settings-approval-mode"], { ...owner });
     });
-    await vi.waitFor(() => expect(confirmation.confirmDisabled).toBe(true));
-    await act(async () => confirmation.onConfirm());
+    await vi.waitFor(() => expect(button("Skip normal prompts").disabled).toBe(true));
+    await click("Skip normal prompts");
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
 

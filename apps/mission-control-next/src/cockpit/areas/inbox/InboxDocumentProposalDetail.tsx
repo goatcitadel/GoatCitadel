@@ -220,7 +220,7 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
             <div className="flex flex-wrap gap-2">
               <Button
                 size="sm"
-                variant="danger"
+                variant="primary"
                 disabled={pending || checking}
                 onClick={() => setReview({ proposal, decision: "apply" })}
               >
@@ -277,7 +277,7 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
-            variant={review?.decision === "apply" ? "danger" : "primary"}
+            variant="primary"
             disabled={pending || scopeChanged || checking}
             onClick={() => void decide()}
           >

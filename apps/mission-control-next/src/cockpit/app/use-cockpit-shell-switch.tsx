@@ -2,10 +2,8 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { buildClassicOwnerUrl } from "../../app/classic-owner-url";
 import { useUnsettledChatContextMutation } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import { CHAT_CONTEXT_HANDOFF_WARNING, useShellHandoff } from "../../app/use-shell-handoff";
-import { useDraftLeaveDialogState } from "../../features/native-routes/library/DraftLeaveDialog";
 import { buildShellSwitchUrl } from "../../shell-preference";
-import { Button } from "../ui/Button";
-import { Dialog } from "../ui/Dialog";
+import { UnsavedChangesDialog } from "../ui/UnsavedChangesDialog";
 export function useCockpitShellSwitch(sessionId?: string | null) {
   const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
   const owner = useShellHandoff([activeCitadelId, activeWorkspaceId, sessionId]);
@@ -31,7 +29,6 @@ export function ShellSwitchFeedback({
   owner: ReturnType<typeof useShellHandoff>;
   floating?: boolean;
 }) {
-  const state = useDraftLeaveDialogState(owner.dialogProps);
   const status =
     owner.opening || owner.error ? (
       <>
@@ -56,38 +53,7 @@ export function ShellSwitchFeedback({
       ) : (
         status
       )}
-      <Dialog
-        open={owner.dialogProps.open}
-        title="Unsaved changes"
-        description={state.description}
-        onOpenChange={(open) => {
-          if (!open && !state.saving) owner.dialogProps.onCancel();
-        }}
-      >
-        {state.error ? (
-          <p role="alert" className="text-sm text-status-failed">
-            {state.error}
-          </p>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          {state.canSave ? (
-            <Button disabled={state.saving} onClick={() => void state.saveAndContinue()}>
-              Save and continue
-            </Button>
-          ) : null}
-          {state.canKeep ? (
-            <Button disabled={state.saving} onClick={owner.dialogProps.onContinue}>
-              Keep draft and close
-            </Button>
-          ) : null}
-          <Button variant="danger" disabled={state.saving} onClick={state.discard}>
-            Discard changes
-          </Button>
-          <Button disabled={state.saving} onClick={owner.dialogProps.onCancel}>
-            Cancel
-          </Button>
-        </div>
-      </Dialog>
+      <UnsavedChangesDialog {...owner.dialogProps} />
     </>
   );
 }

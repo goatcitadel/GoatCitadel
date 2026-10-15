@@ -1,4 +1,3 @@
-import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import {
@@ -7,6 +6,7 @@ import {
   TOOL_APPROVAL_MODE_OPTIONS,
 } from "../../../features/native-routes/settings/helpers/permission-helpers";
 import { Button } from "../../ui/Button";
+import { Dialog } from "../../ui/Dialog";
 import { isApprovalMode } from "./approval-mode-state";
 import { useApprovalModeControl } from "./use-approval-mode-control";
 import { ApprovedSettingsContinuation } from "./ApprovedSettingsContinuation";
@@ -187,18 +187,28 @@ export function ApprovalModeEditor({
           Inspect tool settings activity
         </NativeOwnerLink>
       ) : null}
-      <ConfirmModal
+      <Dialog
         open={Boolean(review)}
         title="Skip normal tool prompts?"
-        danger
-        confirmLabel="Confirm prompt skipping"
-        cancelLabel="Keep current rule"
-        message={`Change the installation default from ${describeToolApprovalMode(review?.current ?? current)} to Skip normal prompts at settings revision ${review?.revision ?? "unknown"}. Allowed tools may run without normal prompts. Deny rules, Critical risk and risky-shell approvals, read boundaries, and tool grants remain in force.`}
-        pending={control.busy}
-        confirmDisabled={!control.reviewCurrent}
-        onConfirm={() => void control.confirm()}
-        onCancel={() => control.setReview(null)}
-      />
+        description={`Change the installation default from ${describeToolApprovalMode(review?.current ?? current)} to Skip normal prompts at settings revision ${review?.revision ?? "unknown"}. Allowed tools may run without normal prompts. Deny rules, Critical risk and risky-shell approvals, read boundaries, and tool grants remain in force.`}
+        onOpenChange={(open) => {
+          if (!open && !control.busy) control.setReview(null);
+        }}
+      >
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="danger"
+            loading={control.busy}
+            disabled={!control.reviewCurrent}
+            onClick={() => void control.confirm()}
+          >
+            Skip normal prompts
+          </Button>
+          <Button disabled={control.busy} onClick={() => control.setReview(null)}>
+            Keep current rule
+          </Button>
+        </div>
+      </Dialog>
     </section>
   );
 }

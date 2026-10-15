@@ -235,7 +235,7 @@ describe("native saved MCP editor", () => {
     expect(close).not.toHaveBeenCalled();
     expect(container.querySelector('[aria-label="Unsaved changes"]')).not.toBeNull();
     expect(button("Save and continue")).toBeUndefined();
-    expect(container.textContent).toContain("review the exact fields in the editor");
+    expect(container.textContent).not.toContain("To save, cancel this dialog");
     expect(api.updateMcpServer).not.toHaveBeenCalled();
     await click("Keep draft and close");
     expect(close).toHaveBeenCalledTimes(1);

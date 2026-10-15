@@ -31,7 +31,14 @@ export const GRANT_TTL_PRESETS: readonly { seconds: number; label: string }[] = 
 ];
 export const DEFAULT_GRANT_TTL_SECONDS = 60 * 60;
 
-export type GrantDraft = { actorId: string; scopes: BrowserSessionGrantScope[]; hosts: string; ttlSeconds: number };
+export type GrantDraft = {
+  actorId: string;
+  scopes: BrowserSessionGrantScope[];
+  hosts: string;
+  ttlSeconds: number;
+  /** An explicit choice: an empty host list never means every host on its own. */
+  anyHost?: boolean;
+};
 export type GrantRequest = {
   actorId: string;
   scopes: BrowserSessionGrantScope[];
@@ -39,14 +46,24 @@ export type GrantRequest = {
   /** Null asks the Gateway for a grant that never expires. */
   ttlSeconds: number | null;
 };
-export type GrantDraftErrors = Partial<Record<"actorId" | "scopes" | "ttlSeconds", string>>;
+export type GrantDraftErrors = Partial<Record<"actorId" | "scopes" | "hosts" | "ttlSeconds", string>>;
+
+export const HOSTS_REQUIRED_MESSAGE = "Enter at least one host, or check Allow any host.";
 
 export const EMPTY_GRANT_DRAFT: GrantDraft = {
   actorId: "",
   scopes: ["read"],
   hosts: "",
   ttlSeconds: DEFAULT_GRANT_TTL_SECONDS,
+  anyHost: false,
 };
+
+/** The hosts a draft would grant, or undefined while it names none and does not allow any host. */
+export function draftHosts(draft: GrantDraft): string[] | undefined {
+  if (draft.anyHost) return [];
+  const hosts = parseHosts(draft.hosts);
+  return hosts.length ? hosts : undefined;
+}
 
 /** Mirrors the Gateway's host normalization so the review shows what will be stored. */
 export function normalizeHost(raw: string): string {
@@ -77,15 +94,18 @@ export function validateGrantDraft(
   const actorId = draft.actorId.trim();
   if (!actorId) errors.actorId = "Enter the actor this grant is for.";
   if (!draft.scopes.length) errors.scopes = "Choose at least one scope.";
+  // The Gateway reads an empty host list as every host, so it is sent only when Allow any host is checked.
+  const allowedHosts = draftHosts(draft);
+  if (!allowedHosts) errors.hosts = HOSTS_REQUIRED_MESSAGE;
   if (!GRANT_TTL_PRESETS.some((preset) => preset.seconds === draft.ttlSeconds))
     errors.ttlSeconds = "Choose a supported expiry.";
-  if (Object.keys(errors).length) return { ok: false, errors };
+  if (Object.keys(errors).length || !allowedHosts) return { ok: false, errors };
   return {
     ok: true,
     request: {
       actorId,
       scopes: [...draft.scopes],
-      allowedHosts: parseHosts(draft.hosts),
+      allowedHosts,
       ttlSeconds: draft.ttlSeconds === NEVER_EXPIRES_TTL ? null : draft.ttlSeconds,
     },
   };

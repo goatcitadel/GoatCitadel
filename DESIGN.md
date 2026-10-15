@@ -53,6 +53,17 @@ Both themes are first-class. Contrast: body and placeholder text at least 4.5:1,
 
 One shared module maps domain states to label, tone, and icon; no raw status string, enum value, ID, URL, API path, or stack trace reaches the screen (IDs appear only in monospace technical slots inside the inspector). Labels operators see: Queued, Running, Waiting on you, Waiting, Paused, Done, Failed, Cancelled, Failed · needs recovery, Needs your input, Needs confirmation, Applying, Verifying, Monitoring, Needs a manual step, Rolling back, Rolled back, Draft, Approved, Approved with edits, Denied, Expired, Withdrawn, Blocked by policy, Couldn't deliver, Outcome unknown. Risk reads Safe, Caution, Danger, Nuclear. Trust reads Built-in, Verified, Reviewed, Not reviewed, Quarantined. Status is never conveyed by color alone.
 
+## Decisions and danger
+
+Red (`variant="danger"`) means one thing: this action deletes, forgets, revokes, removes, discards unsaved work, or rejects in bulk, and the cockpit cannot take it back. Everything reversible uses primary or secondary styling, including archive, restore, close or mark done, test, send for approval, retry, cancel a run, deny a single request, and reject a single proposal.
+
+- Approvals scale with risk. A safe or caution approval is a primary "Approve once". A danger or nuclear approval is a red, risk-labelled review button with a shield icon, and nuclear risk adds a typed confirmation. Deny is always a neutral secondary button, because denying is the safe choice.
+- Proposals (memory, documents, improvements) apply or promote with a primary button and reject with a secondary one.
+- Typed confirmations use the shared `TypedConfirmation` (case- and space-insensitive, phrase shown in monospace). Unsaved-changes prompts use the shared `UnsavedChangesDialog`: Save and continue (primary), Keep draft and close, Discard changes (danger), then Cancel last.
+- A destructive confirmation states its scope and consequence before the button: how many items, in which workspaces, and whether it can be undone here.
+
+`scripts/check-mission-control-next-danger-actions.mjs` enforces the parts that can be checked statically.
+
 ## Copy
 
 Sentence case; buttons are verbs that name their action. The product speaks to "you"; the assistant says "I" only inside chat messages. Errors say what happened and what to do, with no "Error:" prefix. Plain names first, Citadel names second ("Rules · Wards"). Truth beats theater: experimental, compatibility-only, advisory, or manually governed things say so; missing evidence is shown as missing, never as zero, clean, or healthy.

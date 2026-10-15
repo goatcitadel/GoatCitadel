@@ -1,9 +1,10 @@
 import { useState } from "react";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { useNotificationRouting } from "../../../features/native-routes/settings/sections/use-notification-routing";
-import { useDraftLeaveDialogState } from "../../../features/native-routes/library/DraftLeaveDialog";
+import type { NotificationReview } from "../../../features/native-routes/settings/sections/use-notification-routing-actions";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { NotificationRoutingFields } from "./NotificationRoutingFields";
 
 export function NotificationRoutingSettings({
@@ -13,8 +14,7 @@ export function NotificationRoutingSettings({
   workspaceId: string;
   channels: IntegrationConnection[];
 }) {
-  const s = useNotificationRouting(workspaceId, channels),
-    leave = useDraftLeaveDialogState(s.leave.dialogProps);
+  const s = useNotificationRouting(workspaceId, channels);
   const [limit, setLimit] = useState(20);
   return (
     <section aria-label="Notification routing" className="min-w-0 space-y-4 rounded-md border border-line p-4">
@@ -118,7 +118,6 @@ export function NotificationRoutingSettings({
                     Disable {target.label}
                   </Button>
                   <Button
-                    variant="danger"
                     disabled={s.attempt.locked || target.lifecycleState === "archived"}
                     onClick={() => s.handleTargetState(target, "archived")}
                   >
@@ -152,7 +151,6 @@ export function NotificationRoutingSettings({
                     .join(", ")}
                 </p>
                 <Button
-                  variant="danger"
                   disabled={s.attempt.locked || rule.lifecycleState === "archived"}
                   onClick={() => s.handleArchiveRule(rule)}
                 >
@@ -201,34 +199,36 @@ export function NotificationRoutingSettings({
         }}
       >
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant={s.review?.kind === "test" ? "danger" : "primary"}
-            disabled={s.attempt.locked}
-            onClick={() => void s.confirmReview()}
-          >
-            Apply reviewed notification action
+          <Button variant="primary" disabled={s.attempt.locked} onClick={() => void s.confirmReview()}>
+            {s.review ? notificationReviewLabel(s.review) : "Confirm"}
           </Button>
           <Button disabled={s.attempt.pending} onClick={s.cancelReview}>
             Cancel notification action
           </Button>
         </div>
       </Dialog>
-      <Dialog
-        open={s.leave.dialogProps.open}
-        title="Unsaved notification draft"
-        description={leave.description}
-        onOpenChange={(open) => {
-          if (!open) s.leave.dialogProps.onCancel();
-        }}
-      >
-        <div className="flex flex-wrap gap-2">
-          {leave.canKeep ? <Button onClick={s.leave.dialogProps.onContinue}>Keep draft and close</Button> : null}
-          <Button variant="danger" onClick={leave.discard}>
-            Discard draft
-          </Button>
-          <Button onClick={s.leave.dialogProps.onCancel}>Keep editing</Button>
-        </div>
-      </Dialog>
+      <UnsavedChangesDialog {...s.leave.dialogProps} />
     </section>
   );
+}
+
+const LIFECYCLE_VERB = { disabled: "Disable", archived: "Archive" } as const;
+
+function notificationReviewLabel(review: NotificationReview): string {
+  switch (review.kind) {
+    case "create-target":
+      return "Create destination";
+    case "create-rule":
+      return "Create rule";
+    case "target-state":
+      return `${lifecycleVerb(review.input.lifecycleState)} destination`;
+    case "rule-state":
+      return `${lifecycleVerb(review.input.lifecycleState)} rule`;
+    case "test":
+      return "Send test notification";
+  }
+}
+
+function lifecycleVerb(state: string | undefined): string {
+  return state === "disabled" || state === "archived" ? LIFECYCLE_VERB[state] : "Restore";
 }

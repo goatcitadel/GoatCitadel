@@ -1,8 +1,8 @@
 import { useLibraryOperation } from "./use-library-operation";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { uploadFile } from "@goatcitadel/mission-control-shared/api/operators-agents-files";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { fetchFilesList, uploadFile } from "@goatcitadel/mission-control-shared/api/operators-agents-files";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
 import { Button } from "../../ui/Button";
@@ -12,6 +12,20 @@ import { Field } from "../../ui/Field";
 
 const EMPTY = { path: "", content: "" };
 const INPUT = "w-full rounded-md border border-line bg-raised p-2 text-fg";
+const LOOKUP_LIMIT = 1000;
+
+/** The file list is relative to the listed directory, so the reviewed path splits into that directory and a name. */
+function splitUploadPath(path: string) {
+  const normalized = path
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^(\.\/)+/, "");
+  const slash = normalized.lastIndexOf("/");
+  return { dir: slash > 0 ? normalized.slice(0, slash) : ".", name: normalized.slice(slash + 1) };
+}
+function formatSize(bytes: number) {
+  return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${(bytes / 1024).toFixed(1)} KB`;
+}
 
 export function LibraryFileUpload(props: Parameters<typeof LibraryFileUploadContent>[0]) {
   const access = useLibraryOperation(JSON.stringify(["file-upload", props.workspaceId, props.citadelId]));
@@ -30,6 +44,25 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
     undefined,
   );
   const [busy, setBusy] = useState(false);
+  const target = review ? splitUploadPath(review.path) : undefined;
+  // A truncated listing cannot prove absence, so it reads as a failed check rather than a new file.
+  const existing = useQuery({
+    queryKey: ["library", "file-upload-target", target?.dir, target?.name],
+    enabled: Boolean(target?.name),
+    retry: false,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      const { items } = await fetchFilesList(target!.dir, LOOKUP_LIMIT);
+      const match = items.find((file) => file.relativePath === target!.name);
+      if (!match && items.length >= LOOKUP_LIMIT) throw new Error("The directory listing was truncated.");
+      return match ?? null;
+    },
+  });
+  const checking = Boolean(target?.name) && existing.isPending;
+  const replaces = existing.data
+    ? `This replaces ${target?.name} (${formatSize(existing.data.size)}, modified ${new Date(existing.data.modifiedAt).toLocaleString()}).`
+    : undefined;
   async function submit() {
     if (!review || operation.locked || result) return;
     setBusy(true);
@@ -127,14 +160,28 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
       >
         <div className="grid gap-3">
           <p className="break-words text-sm text-fg">Target: {review?.path.trim()}</p>
-          <Callout tone="warning">
-            This writes a shared file and may replace existing content at this path. The Gateway enforces access and
-            path restrictions.
-          </Callout>
+          {checking ? (
+            <p role="status" className="text-sm text-fg-secondary">
+              Checking whether a file already exists at this path…
+            </p>
+          ) : replaces ? (
+            <Callout tone="warning">{replaces} The Gateway enforces access and path restrictions.</Callout>
+          ) : existing.data === null ? null : (
+            <Callout tone="warning">
+              {existing.isError ? "The file check could not run. " : ""}This writes a shared file and may replace
+              existing content at this path. The Gateway enforces access and path restrictions.
+            </Callout>
+          )}
           {result ? <Callout tone={result.error ? "error" : "info"}>{result.message}</Callout> : null}
           {busy ? <p role="status">Uploading text file…</p> : null}
-          <Button disabled={busy || operation.locked || Boolean(result)} onClick={() => void submit()}>
-            Upload reviewed text
+          <Button
+            variant={existing.data === null ? "primary" : "danger"}
+            loading={checking}
+            loadingLabel="Checking file…"
+            disabled={busy || operation.locked || Boolean(result)}
+            onClick={() => void submit()}
+          >
+            {replaces ? "Replace file" : existing.data === null ? "Upload file" : "Upload or replace file"}
           </Button>
         </div>
       </Dialog>

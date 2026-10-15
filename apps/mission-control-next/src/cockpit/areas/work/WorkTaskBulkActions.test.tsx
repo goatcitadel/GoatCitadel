@@ -67,8 +67,10 @@ it("reviews exactly the selected tasks, sends nothing on Cancel and one request 
   await act(async () => button("Cancel")!.click());
   expect(dialog()).toBeNull();
   expect(commitTaskBulkAction).not.toHaveBeenCalled();
+  expect(button("Close…")!.className).not.toContain("border-status-failed");
   await act(async () => button("Close…")!.click());
   expect(dialog()?.textContent).toContain("refuses the whole batch if any task has no deliverable");
+  expect(button("Close 2 tasks")!.className).toContain("bg-accent");
   await act(async () => button("Close 2 tasks")!.click());
   expect(commitTaskBulkAction).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ action: "close", workspaceId: "ws", reviewed: [task("a"), task("b")] }),

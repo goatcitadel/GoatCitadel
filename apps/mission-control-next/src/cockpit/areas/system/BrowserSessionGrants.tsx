@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { BrowserSessionGrantRecord, BrowserSessionRecord } from "@goatcitadel/contracts";
 import {
   createBrowserSessionGrant,
@@ -13,6 +13,7 @@ import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
+import { RiskBadge } from "../../ui/RiskBadge";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useLibraryOperation } from "../library/use-library-operation";
@@ -21,7 +22,9 @@ import {
   EMPTY_GRANT_DRAFT,
   GRANT_SCOPES,
   GRANT_TTL_PRESETS,
+  HOSTS_REQUIRED_MESSAGE,
   LIST_LIMIT,
+  draftHosts,
   formatTime,
   describeReceiptState,
   grantMatchesRequest,
@@ -67,9 +70,11 @@ export function BrowserSessionGrants({
   const active = session.status === "active";
   const now = Date.now();
   const set = (patch: Partial<GrantDraft>) => draft.setValue((current) => ({ ...current, ...patch }));
+  const hostsMissing = !draftHosts(draft.value);
+  const hostsReasonId = useId();
 
   function openCreateReview() {
-    if (busy || operation.locked || !active) return;
+    if (busy || operation.locked || !active || hostsMissing) return;
     const parsed = validateGrantDraft(draft.value);
     if (!parsed.ok) {
       setErrors(parsed.errors);
@@ -286,16 +291,25 @@ export function BrowserSessionGrants({
                 </p>
               ) : null}
             </fieldset>
-            <Field label="Allowed hosts" help="Comma-separated. Leave empty to allow every host.">
+            <Field label="Allowed hosts" help="Comma-separated, for example example.com, docs.example.com.">
               {(props) => (
                 <input
                   {...props}
                   className={INPUT}
                   value={draft.value.hosts}
+                  disabled={Boolean(draft.value.anyHost)}
                   onChange={(event) => set({ hosts: event.target.value })}
                 />
               )}
             </Field>
+            <label className="flex min-h-11 min-w-0 items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={Boolean(draft.value.anyHost)}
+                onChange={(event) => set({ anyHost: event.target.checked })}
+              />
+              <span className="min-w-0">Allow any host</span>
+            </label>
             <Field
               label="Expires after"
               help="Defaults to one hour. Timed grants last at most seven days; choose Never expires only for access meant to be permanent."
@@ -317,13 +331,23 @@ export function BrowserSessionGrants({
               )}
             </Field>
             <div className="flex flex-wrap gap-2">
-              <Button variant="primary" disabled={busy || operation.locked} onClick={openCreateReview}>
+              <Button
+                variant="primary"
+                disabled={busy || operation.locked || hostsMissing}
+                aria-describedby={hostsMissing ? hostsReasonId : undefined}
+                onClick={openCreateReview}
+              >
                 Review grant
               </Button>
               <Button variant="ghost" disabled={busy || !draft.isDirty} onClick={draft.discard}>
                 Discard grant draft
               </Button>
             </div>
+            {hostsMissing ? (
+              <p id={hostsReasonId} className="text-sm text-fg-secondary">
+                {HOSTS_REQUIRED_MESSAGE}
+              </p>
+            ) : null}
           </div>
         </details>
       ) : (
@@ -345,6 +369,12 @@ export function BrowserSessionGrants({
       >
         {review ? (
           <div className="grid min-w-0 grid-cols-1 gap-3 text-sm wrap-anywhere">
+            {review.kind === "create" && !review.request.allowedHosts.length ? (
+              <Callout tone="warning">
+                <RiskBadge risk="danger" /> This grant covers every host. {review.request.actorId} can use this session
+                on any site within its scopes.
+              </Callout>
+            ) : null}
             <GrantReviewBody review={review} />
             {outcome ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
             <div className="flex flex-wrap gap-2">

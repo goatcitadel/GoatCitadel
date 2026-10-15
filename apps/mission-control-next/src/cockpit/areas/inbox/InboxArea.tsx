@@ -1,5 +1,6 @@
 import { LinkedApproval } from "./LinkedApproval";
 import { InboxApprovalHistory } from "./InboxApprovalHistory";
+import { InboxBulkRejectZone } from "./InboxBulkRejectZone";
 import { markOperatorInboxUpdatesRead } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import { WindowedRecordList, type WindowedRecordListHandle } from "../../ui/WindowedRecordList";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -398,6 +399,7 @@ export function InboxArea() {
           })}
         </>
       ) : null}
+      <InboxBulkRejectZone />
     </section>
   );
 }

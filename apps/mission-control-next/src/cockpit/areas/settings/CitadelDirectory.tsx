@@ -197,7 +197,6 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
                     </Button>
                     <Button
                       size="sm"
-                      variant={target.action === "archive" ? "danger" : "secondary"}
                       disabled={!canStart || locked}
                       aria-label={`${target.action === "archive" ? "Archive" : "Restore"} Citadel ${record.name}`}
                       onClick={() => lifecycle.request(target)}

@@ -1,9 +1,9 @@
 import { useId } from "react";
 import { useCitadelWards } from "../../../features/native-routes/library/use-citadel-wards";
 import { WARD_EFFECT_META, WARD_EFFECTS } from "../../../features/native-routes/library/citadel-ward-model";
-import { useDraftLeaveDialogState } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { CitadelAccessReview } from "./CitadelAccessReview";
 
 export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
@@ -11,8 +11,7 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
     nameId = useId(),
     patternId = useId(),
     probeId = useId();
-  const leave = useDraftLeaveDialogState(c.leave.dialogProps),
-    review = c.pendingAddWard;
+  const review = c.pendingAddWard;
   const notice = (
     <>
       {c.access.error ? (
@@ -266,22 +265,7 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
           ) : null}
         </div>
       </Dialog>
-      <Dialog
-        open={c.leave.dialogProps.open}
-        title="Unsaved Ward draft"
-        description={leave.description}
-        onOpenChange={(open) => {
-          if (!open) c.leave.dialogProps.onCancel();
-        }}
-      >
-        <div className="flex flex-wrap gap-2">
-          {leave.canKeep ? <Button onClick={c.leave.dialogProps.onContinue}>Keep draft and close</Button> : null}
-          <Button variant="danger" onClick={leave.discard}>
-            Discard changes
-          </Button>
-          <Button onClick={c.leave.dialogProps.onCancel}>Cancel</Button>
-        </div>
-      </Dialog>
+      <UnsavedChangesDialog {...c.leave.dialogProps} />
     </section>
   );
 }

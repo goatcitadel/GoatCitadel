@@ -56,15 +56,18 @@ export function GatewayAuthSettings() {
         title="Sign out of this browser?"
         description="Remove this browser’s Gateway access credentials. Drafts stay in this app session, but protected work pauses until you sign in again. This does not revoke other approved devices."
       >
-        <Button
-          onClick={() => {
-            setLogoutReview(false);
-            clearGatewayAuthState();
-          }}
-        >
-          Sign out
-        </Button>
-        <Button onClick={() => setLogoutReview(false)}>Keep access</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="danger"
+            onClick={() => {
+              setLogoutReview(false);
+              clearGatewayAuthState();
+            }}
+          >
+            Sign out
+          </Button>
+          <Button onClick={() => setLogoutReview(false)}>Keep access</Button>
+        </div>
       </Dialog>
       <GatewayAuthEditor
         cockpit
