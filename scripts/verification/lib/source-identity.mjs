@@ -21,6 +21,8 @@ export async function verificationSourceDigest(repoRoot) {
       "package.json",
       "pnpm-lock.yaml",
       "pnpm-workspace.yaml",
+      // Baselines are evidence the visual-rebaseline lane writes; they must not read as implementation drift.
+      ":(exclude)scripts/verification/baselines",
     ],
     { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 },
   );
