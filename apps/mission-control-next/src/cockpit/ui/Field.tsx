@@ -14,7 +14,7 @@ export function Field({
   const id = useId();
   const description = [help && `${id}-help`, error && `${id}-error`].filter(Boolean).join(" ") || undefined;
   return (
-    <div className="space-y-1 text-sm text-fg-secondary [&_:is(input,select,textarea)]:border-line-control">
+    <div className="space-y-1 text-sm text-fg-secondary [--cockpit-border:var(--cockpit-border-control)]">
       <label htmlFor={id} className="block font-medium">
         {label}
       </label>
