@@ -34,7 +34,7 @@ export function WorkArea() {
       return <EmptyState title="Run link unavailable" description="This run link could not be read." />;
     }
   }
-  const view = VIEWS.some(item => item.id === rest[0]) ? rest[0] : "board";
+  const view = VIEWS.some((item) => item.id === rest[0]) ? rest[0] : "board";
   return (
     <>
       <nav aria-label="Work views" className={AREA_TABS}>
@@ -53,7 +53,19 @@ export function WorkArea() {
           </a>
         ))}
       </nav>
-      {view === "history" ? <WorkHistory /> : view === "schedules" ? <WorkSchedules /> : view === "kanban" ? <WorkKanban /> : view === "archive" ? <WorkArchive /> : view === "automation" ? <WorkAutomation /> : <WorkBoard />}
+      {view === "history" ? (
+        <WorkHistory />
+      ) : view === "schedules" ? (
+        <WorkSchedules />
+      ) : view === "kanban" ? (
+        <WorkKanban />
+      ) : view === "archive" ? (
+        <WorkArchive />
+      ) : view === "automation" ? (
+        <WorkAutomation />
+      ) : (
+        <WorkBoard />
+      )}
     </>
   );
 }

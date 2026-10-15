@@ -100,7 +100,15 @@ afterEach(() => {
 
 describe("native first-run setup", () => {
   it("keeps release-engineering readiness prose out of the first-answer model step", async () => {
-    owner = { ...owner, setupReadiness: { ...owner.setupReadiness!, items: owner.setupReadiness!.items.map((item) => item.id === "provider" ? { ...item, detail: "Check release evidence before public readiness claims" } : item) } };
+    owner = {
+      ...owner,
+      setupReadiness: {
+        ...owner.setupReadiness!,
+        items: owner.setupReadiness!.items.map((item) =>
+          item.id === "provider" ? { ...item, detail: "Check release evidence before public readiness claims" } : item,
+        ),
+      },
+    };
     await render();
     expect(container.textContent).not.toContain("before public readiness claims");
     expect(container.textContent).not.toContain("Connection verified");
@@ -115,7 +123,15 @@ describe("native first-run setup", () => {
   });
   it("does not continue when the fresh model read loses readiness", async () => {
     await render();
-    owner = { ...owner, setupReadiness: { ...owner.setupReadiness!, items: owner.setupReadiness!.items.map((item) => item.id === "provider" ? { ...item, status: "blocked" as const } : item) } };
+    owner = {
+      ...owner,
+      setupReadiness: {
+        ...owner.setupReadiness!,
+        items: owner.setupReadiness!.items.map((item) =>
+          item.id === "provider" ? { ...item, status: "blocked" as const } : item,
+        ),
+      },
+    };
     await click("Continue to safety");
     expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Choose a model");
     expect(button("Continue to safety").disabled).toBe(true);
@@ -157,7 +173,9 @@ describe("native first-run setup", () => {
   it("requires fresh safety review then exact owner completion before Chat", async () => {
     await render();
     expect(button("Finish setup and open Chat").disabled).toBe(true);
-    expect(container.querySelector("#first-run-finish-prerequisite")?.textContent).toContain("Review the current approval rule");
+    expect(container.querySelector("#first-run-finish-prerequisite")?.textContent).toContain(
+      "Review the current approval rule",
+    );
     await safety();
     await click("Keep current rule");
     expect(api.fetchOnboardingState).toHaveBeenCalledTimes(2);

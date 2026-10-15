@@ -44,7 +44,16 @@ const labels = () => [...container.querySelectorAll("button")].map((button) => b
 describe("Chat turn actions", () => {
   it("keeps Copy visible and secondary actions in a menu on wider screens", async () => {
     await act(async () =>
-      root.render(<ChatTurnActions turn={turn} actions={handlers()} streaming={false} readOnly={false} hasAnswer onCopy={vi.fn()} />),
+      root.render(
+        <ChatTurnActions
+          turn={turn}
+          actions={handlers()}
+          streaming={false}
+          readOnly={false}
+          hasAnswer
+          onCopy={vi.fn()}
+        />,
+      ),
     );
     expect(labels()).toEqual(expect.arrayContaining(["Copy answer", "More"]));
     expect(labels()).not.toContain("Edit and resend");
@@ -54,7 +63,16 @@ describe("Chat turn actions", () => {
     media.phone = true;
     const onCopy = vi.fn();
     await act(async () =>
-      root.render(<ChatTurnActions turn={turn} actions={handlers()} streaming={false} readOnly={false} hasAnswer onCopy={onCopy} />),
+      root.render(
+        <ChatTurnActions
+          turn={turn}
+          actions={handlers()}
+          streaming={false}
+          readOnly={false}
+          hasAnswer
+          onCopy={onCopy}
+        />,
+      ),
     );
     expect(labels()).not.toContain("Fork");
     const more = container.querySelector('button[aria-label="More message actions"]')!;
@@ -67,7 +85,9 @@ describe("Chat turn actions", () => {
 
   it("hides branching actions while streaming or read-only", async () => {
     await act(async () =>
-      root.render(<ChatTurnActions turn={turn} actions={handlers()} streaming readOnly={false} hasAnswer onCopy={vi.fn()} />),
+      root.render(
+        <ChatTurnActions turn={turn} actions={handlers()} streaming readOnly={false} hasAnswer onCopy={vi.fn()} />,
+      ),
     );
     expect(labels()).toContain("Copy answer so far");
     expect(labels()).not.toContain("Fork");

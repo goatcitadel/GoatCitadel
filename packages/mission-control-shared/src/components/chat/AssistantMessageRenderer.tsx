@@ -42,11 +42,20 @@ const WORKSPACE_FILE_DOWNLOAD_PATH = "/api/v1/files/download";
 const WORKSPACE_FILE_OBJECT_URL_REVOKE_DELAY_MS = 5 * 60 * 1000;
 
 export function AssistantMessageRenderer(props: Parameters<typeof AssistantMessageBody>[0]) {
-  return <div className={cn("mc-assistant-renderer mc-assistant-renderer-markdown", props.running ? "mc-assistant-renderer-running" : "", `mc-assistant-stream-${props.streamPresentationMode ?? "smooth"}`, props.className)}>
-    <AssistantMessageContainer role={props.role} content={props.content} running={props.running}>
-      <AssistantMessageBody {...props} />
-    </AssistantMessageContainer>
-  </div>;
+  return (
+    <div
+      className={cn(
+        "mc-assistant-renderer mc-assistant-renderer-markdown",
+        props.running ? "mc-assistant-renderer-running" : "",
+        `mc-assistant-stream-${props.streamPresentationMode ?? "smooth"}`,
+        props.className,
+      )}
+    >
+      <AssistantMessageContainer role={props.role} content={props.content} running={props.running}>
+        <AssistantMessageBody {...props} />
+      </AssistantMessageContainer>
+    </div>
+  );
 }
 
 export function AssistantMessageBody({
@@ -89,9 +98,17 @@ export function AssistantMessageBody({
   }, [role, content, running, streamTurnId]);
 
   return role === "assistant" && running ? (
-    <StreamingMarkdown content={displayContent} streamPresentationMode={streamPresentationMode} streamTurnId={streamTurnId} />
+    <StreamingMarkdown
+      content={displayContent}
+      streamPresentationMode={streamPresentationMode}
+      streamTurnId={streamTurnId}
+    />
   ) : (
-    <MemoizedMarkdownBlock content={displayContent} role={role} components={role === "assistant" ? assistantMarkdownComponents : userMarkdownComponents} />
+    <MemoizedMarkdownBlock
+      content={displayContent}
+      role={role}
+      components={role === "assistant" ? assistantMarkdownComponents : userMarkdownComponents}
+    />
   );
 }
 

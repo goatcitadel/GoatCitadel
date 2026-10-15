@@ -35,7 +35,8 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
   useLayoutEffect(() => {
     const href = window.location.pathname + window.location.search + window.location.hash;
     const resolution = resolveCockpitCompatibility(href);
-    if (resolution.kind === "native" && resolution.href !== href) commitCockpitNavigation(resolution.href, { replace: true });
+    if (resolution.kind === "native" && resolution.href !== href)
+      commitCockpitNavigation(resolution.href, { replace: true });
   }, [history]);
   const view = useRef({ identity, history });
   if (view.current.identity !== identity || view.current.history !== history) view.current = { identity, history };
