@@ -41,6 +41,27 @@ describe("files route service limits", () => {
     await expect(fs.access(path.join(rootDir, "workspace", "notes", "large.txt"))).rejects.toBeInstanceOf(Error);
   }, 30_000);
 
+  it("refuses an expected-absent upload when the file already exists and leaves it unchanged", async () => {
+    const { createFilesRoutePort } = await import("./files-route-service.js");
+    const rootDir = await createTempWorkspace(tempRoots);
+    const existing = path.join(rootDir, "workspace", "notes", "proof.txt");
+    await fs.mkdir(path.dirname(existing), { recursive: true });
+    await fs.writeFile(existing, "original", "utf8");
+    const port = createPort(createFilesRoutePort, rootDir);
+
+    await expect(port.uploadWorkspaceFile("notes/proof.txt", "new", { expectAbsent: true })).rejects.toMatchObject({
+      code: "ALREADY_EXISTS",
+      httpStatus: 409,
+    });
+    await expect(fs.readFile(existing, "utf8")).resolves.toBe("original");
+    await expect(port.uploadWorkspaceFile("notes/fresh.txt", "new", { expectAbsent: true })).resolves.toMatchObject({
+      relativePath: "notes/fresh.txt",
+      bytes: 3,
+    });
+    await port.uploadWorkspaceFile("notes/proof.txt", "replaced");
+    await expect(fs.readFile(existing, "utf8")).resolves.toBe("replaced");
+  }, 30_000);
+
   it("rejects inline downloads before reading content over the route cap", async () => {
     const { createFilesRoutePort } = await import("./files-route-service.js");
     const rootDir = await createTempWorkspace(tempRoots);

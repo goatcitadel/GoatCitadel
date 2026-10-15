@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { fetchFilesList, uploadFile } from "@goatcitadel/mission-control-shared/api/operators-agents-files";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { LibraryFileUpload } from "./LibraryFileUpload";
 vi.mock("@goatcitadel/mission-control-shared/api/operators-agents-files", () => ({
@@ -77,7 +78,7 @@ it("retains a successful owner receipt inside the actual portal after query inva
   expect(dialog.closest('[aria-hidden="true"]')).toBeNull();
   expect(dialog.textContent).toContain("Gateway accepted proof.txt (5 bytes)");
   expect(dialog.textContent).not.toContain("private");
-  expect(uploadFile).toHaveBeenCalledExactlyOnceWith("proof.txt", "proof");
+  expect(uploadFile).toHaveBeenCalledExactlyOnceWith("proof.txt", "proof", { expectAbsent: true });
   await click("Upload file");
   expect(uploadFile).toHaveBeenCalledTimes(1);
 });
@@ -89,6 +90,29 @@ it("keeps uncertainty accessible and retains the draft on a failed write", async
     await client.invalidateQueries();
   });
   expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain("upload is not confirmed");
+  await click("Close dialog");
+  expect(container.querySelector("textarea")?.value).toBe("proof");
+});
+it("refuses to replace a file that appeared after review and keeps the draft for a new review", async () => {
+  const modifiedAt = "2026-01-01T00:00:00Z";
+  vi.mocked(uploadFile).mockRejectedValue(
+    new ApiRequestError("A file already exists", {
+      kind: "http",
+      method: "POST",
+      path: "/api/v1/files/upload",
+      status: 409,
+    }),
+  );
+  await setup();
+  vi.mocked(fetchFilesList).mockResolvedValue({ items: [{ relativePath: "proof.txt", size: 2048, modifiedAt }] });
+  await click("Upload file");
+  expect(uploadFile).toHaveBeenCalledExactlyOnceWith("proof.txt", "proof", { expectAbsent: true });
+  await vi.waitFor(() => {
+    const text = document.querySelector('[role="dialog"]')?.textContent ?? "";
+    expect(text).toContain("A file now exists at this path, so nothing was written.");
+    expect(text).toContain("This replaces proof.txt (2.0 KB");
+  });
+  expect(cta("Replace file")?.disabled).toBe(true);
   await click("Close dialog");
   expect(container.querySelector("textarea")?.value).toBe("proof");
 });

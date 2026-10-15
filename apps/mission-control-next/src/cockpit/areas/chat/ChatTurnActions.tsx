@@ -76,7 +76,7 @@ export function ChatTurnActions({
         </button>
       ) : null}
       {effectfulTools ? (
-        <Dialog open={confirmRetry} onOpenChange={setConfirmRetry} title="Retry this answer?">
+        <Dialog open={confirmRetry && canRetry} onOpenChange={setConfirmRetry} title="Retry this answer?">
           <p className="mb-3 text-sm text-fg-secondary">
             {effectfulTools === 1
               ? "1 tool in this answer may change things outside the chat."
@@ -88,7 +88,8 @@ export function ChatTurnActions({
               variant="primary"
               onClick={() => {
                 setConfirmRetry(false);
-                retry();
+                // Retry eligibility can change while the dialog is open; never dispatch a stale retry.
+                if (canRetry) retry();
               }}
             >
               Retry answer

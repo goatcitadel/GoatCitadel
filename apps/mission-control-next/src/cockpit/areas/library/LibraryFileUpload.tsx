@@ -72,7 +72,8 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
       const receipt = await operation.run(
         review.path.trim(),
         async () => review,
-        () => uploadFile(review.path.trim(), review.content),
+        // A checked "new file" upload asks the Gateway to refuse the write if a file appeared since the review.
+        () => uploadFile(review.path.trim(), review.content, { expectAbsent: existing.data === null }),
         (receipt) => {
           if (
             receipt.relativePath !== review.path.trim() ||
@@ -93,7 +94,16 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
       });
       await client.invalidateQueries({ queryKey: ["library", "resources", "files"] });
     } catch (cause) {
-      if (operation.current())
+      // The operation runner wraps the Gateway error; its cause says whether a file appeared since the review.
+      const ownerError = cause instanceof Error && cause.cause !== undefined ? cause.cause : cause;
+      if (operation.current() && describeApiError(ownerError).category === "conflict") {
+        setResult({
+          error: true,
+          message:
+            "A file now exists at this path, so nothing was written. Your draft is retained; close and review the upload again to replace it.",
+        });
+        void existing.refetch();
+      } else if (operation.current())
         setResult({
           error: true,
           message: `${describeApiError(cause).summary} The upload is not confirmed. Your draft is retained; check the directory before retrying.`,
