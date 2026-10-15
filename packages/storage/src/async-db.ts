@@ -129,6 +129,8 @@ class SqliteAsyncStatement implements AsyncDbStatement {
 class SqlitePinnedAsyncDatabaseClient implements AsyncDatabaseClient {
   public readonly dialect = "sqlite" as const;
 
+  private nestedActive = false;
+
   public constructor(private readonly db: DatabaseClient) {}
 
   public prepare(sql: string): AsyncDbStatement {
@@ -144,8 +146,30 @@ class SqlitePinnedAsyncDatabaseClient implements AsyncDatabaseClient {
     this.db.exec(sql);
   }
 
-  public async transaction<T>(): Promise<T> {
-    throw new Error("Nested SQLite async transactions are not supported; reuse the provided transaction client.");
+  public async transaction<T>(_mode: DbTransactionMode, callback: (db: AsyncDatabaseClient) => Promise<T>): Promise<T> {
+    if (this.nestedActive) {
+      throw new Error("Concurrent nested SQLite async transactions are not supported; await each nested transaction.");
+    }
+    this.nestedActive = true;
+    const savepoint = `gc_async_nested_${randomUUID().replaceAll("-", "")}`;
+    try {
+      this.db.exec(`SAVEPOINT ${savepoint}`);
+      try {
+        const result = await callback(this);
+        this.db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+        return result;
+      } catch (error) {
+        try {
+          this.db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+          this.db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+        } catch {
+          // Preserve the original callback failure.
+        }
+        throw error;
+      }
+    } finally {
+      this.nestedActive = false;
+    }
   }
 
   public async close(): Promise<void> {

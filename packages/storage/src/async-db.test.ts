@@ -76,3 +76,53 @@ test("PostgreSQL async adapter translates shared placeholders and uses awaited t
 
   await db.close();
 });
+
+test("SQLite async transaction client nests with savepoints", async () => {
+  const db = new SqliteAsyncDatabaseClient(createDatabase({ dbPath: ":memory:" }));
+  try {
+    await db.exec("CREATE TABLE nested_tx_test (id INTEGER PRIMARY KEY)");
+    await db.transaction("immediate", async (tx) => {
+      await tx.prepare("INSERT INTO nested_tx_test (id) VALUES (?)").run(1);
+      await assert.rejects(
+        tx.transaction("immediate", async (inner) => {
+          await inner.prepare("INSERT INTO nested_tx_test (id) VALUES (?)").run(2);
+          throw new Error("inner rollback");
+        }),
+        /inner rollback/,
+      );
+      await tx.transaction("immediate", async (inner) => {
+        await inner.prepare("INSERT INTO nested_tx_test (id) VALUES (?)").run(3);
+      });
+    });
+    const rows = await db.prepare("SELECT id FROM nested_tx_test ORDER BY id").all<{ id: number }>();
+    assert.deepEqual(
+      rows.map((row) => row.id),
+      [1, 3],
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("SQLite async transaction client rejects concurrent nested transactions", async () => {
+  const db = new SqliteAsyncDatabaseClient(createDatabase({ dbPath: ":memory:" }));
+  try {
+    await db.transaction("immediate", async (tx) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const first = tx.transaction("immediate", async () => {
+        await gate;
+      });
+      await assert.rejects(
+        tx.transaction("immediate", async () => undefined),
+        /concurrent nested/i,
+      );
+      release();
+      await first;
+    });
+  } finally {
+    await db.close();
+  }
+});
