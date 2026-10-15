@@ -54,14 +54,16 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
     refetchOnWindowFocus: false,
     queryFn: async () => {
       const { items } = await fetchFilesList(target!.dir, LOOKUP_LIMIT);
-      const match = items.find((file) => file.relativePath === target!.name);
+      // Windows filesystems ignore case, so a case-only match still counts as a replacement.
+      const name = target!.name.toLowerCase();
+      const match = items.find((file) => file.relativePath.toLowerCase() === name);
       if (!match && items.length >= LOOKUP_LIMIT) throw new Error("The directory listing was truncated.");
       return match ?? null;
     },
   });
   const checking = Boolean(target?.name) && existing.isPending;
   const replaces = existing.data
-    ? `This replaces ${target?.name} (${formatSize(existing.data.size)}, modified ${new Date(existing.data.modifiedAt).toLocaleString()}).`
+    ? `This replaces ${existing.data.relativePath} (${formatSize(existing.data.size)}, modified ${new Date(existing.data.modifiedAt).toLocaleString()}).`
     : undefined;
   async function submit() {
     if (!review || operation.locked || result) return;

@@ -44,10 +44,8 @@ export function describeInstallationScope(
       ? "There is nothing pending to reject."
       : `Rejects ${atLeast}${plural(count, "pending request")} across ${atLeast}${plural(ids.length, "workspace")}.` +
         (unscoped ? " Some requests have no workspace recorded." : "");
-  const names = ids.map((id) => nameOf(id)).filter((name): name is string => Boolean(name));
-  const unnamed = ids.length - names.length;
-  const workspaces = names.length
-    ? `Workspaces: ${names.join(", ")}${unnamed ? `, and ${plural(unnamed, "other")}` : ""}.`
-    : "";
+  // Every affected workspace is listed; one without a name here shows its ID so the scope is never ambiguous.
+  const labels = ids.map((id) => nameOf(id) ?? `workspace ID ${id}`);
+  const workspaces = labels.length ? `Workspaces: ${labels.join(", ")}.` : "";
   return { count, summary, workspaces };
 }

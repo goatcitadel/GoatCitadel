@@ -117,6 +117,13 @@ it("names the replaced file with its size and date and makes the replace explici
   expect(cta("Replace file")?.className).toContain("border-status-failed");
   expect(cta("Upload file")).toBeUndefined();
 });
+it("treats a case-only name match as a replacement of the existing file", async () => {
+  const modifiedAt = "2026-01-01T00:00:00Z";
+  vi.mocked(fetchFilesList).mockResolvedValue({ items: [{ relativePath: "Proof.txt", size: 2048, modifiedAt }] });
+  await setup();
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("This replaces Proof.txt (2.0 KB");
+  expect(cta("Replace file")?.className).toContain("border-status-failed");
+});
 it("keeps the cautious wording when the file check cannot run or is still running", async () => {
   vi.mocked(fetchFilesList).mockReturnValue(new Promise(() => undefined));
   await act(async () =>
