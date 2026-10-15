@@ -161,7 +161,7 @@ export function Sheet({
         node instanceof HTMLElement &&
         pendingHost.current?.contains(node) &&
         current() &&
-        (node.getAttribute("aria-label") === "Close sheet" || node === pendingHost.current)
+        (node.getAttribute("aria-label") === closeLabel || node === pendingHost.current)
       ) {
         pendingFocus.current = { owner, node, kind: node === pendingHost.current ? "panel" : "close" };
         if (activation.current && activation.current.node !== node) releaseActivation();
@@ -171,7 +171,7 @@ export function Sheet({
       }
     };
     const ownedClose = (target: EventTarget | null) =>
-      target instanceof Element ? target.closest<HTMLElement>('button[aria-label="Close sheet"]') : null;
+      target instanceof Element ? target.closest<HTMLElement>(`button[aria-label="${CSS.escape(closeLabel)}"]`) : null;
     const releaseActivation = (saved = activation.current) => {
       if (!saved || activation.current !== saved) return;
       clearActivationTimer();
@@ -254,7 +254,7 @@ export function Sheet({
       document.removeEventListener("keyup", keyEnd);
       window.removeEventListener("blur", blur);
     };
-  }, [open, Drawer, failed, owner, current]);
+  }, [open, Drawer, failed, owner, current, closeLabel]);
   const handoffFocus: NonNullable<ComponentProps<DrawerContent>["onOpenAutoFocus"]> = (event) => {
     const saved = pendingFocus.current;
     pendingFocus.current = undefined;
@@ -324,7 +324,7 @@ export function Sheet({
         <Dialog
           open={open}
           title={title}
-          closeLabel="Close sheet"
+          closeLabel={closeLabel}
           description={failed ? "Sheet controls are unavailable." : "Loading sheet controls."}
           onOpenChange={(value) => {
             if (current()) onOpenChange(value);

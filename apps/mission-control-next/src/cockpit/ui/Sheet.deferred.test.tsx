@@ -231,6 +231,23 @@ it("transfers only the removed owned Close focus through SDK handoff", async () 
   expect(close.isConnected).toBe(false);
   expect(document.activeElement).toBe(named("Close sheet"));
 });
+it("names the loading fallback with a custom close label and still hands its focus over", async () => {
+  const held = deferred();
+  loader.load.mockImplementationOnce(() => held.promise);
+  await act(async () =>
+    root.render(
+      <Sheet open onOpenChange={vi.fn()} title="Run" closeLabel="Close inspector">
+        <p>Run details</p>
+      </Sheet>,
+    ),
+  );
+  await vi.waitFor(() => expect(loader.load).toHaveBeenCalledOnce());
+  const fallbackClose = named("Close inspector");
+  fallbackClose.focus();
+  await ready(held);
+  expect(fallbackClose.isConnected).toBe(false);
+  expect(document.activeElement).toBe(named("Close inspector"));
+});
 it("preserves a complete pointer click when code becomes ready between down and up", async () => {
   const held = deferred(),
     close = vi.fn();
