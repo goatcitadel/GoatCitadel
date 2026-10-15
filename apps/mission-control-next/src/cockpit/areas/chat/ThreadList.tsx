@@ -27,7 +27,7 @@ export function ThreadList({
             type="button"
             onClick={() => void rail.onCreateSession()}
             disabled={rail.creatingSession || rail.loading}
-            className="rounded-md border border-line px-2 py-1 text-xs font-medium text-accent hover:border-accent disabled:opacity-60"
+            className="rounded-md border border-line-control px-2 py-1 text-xs font-medium text-accent hover:border-accent disabled:opacity-60"
           >
             {rail.creatingSession ? "Creating…" : "New"}
           </button>

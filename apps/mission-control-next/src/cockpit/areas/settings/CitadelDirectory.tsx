@@ -126,7 +126,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
             Search Citadels
             <input
               type="search"
-              className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-fg"
+              className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg"
               value={search}
               onChange={(event) => {
                 setSearch(event.target.value);
@@ -137,7 +137,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
           <label className="block text-sm text-fg-secondary">
             Citadel lifecycle view
             <select
-              className="mt-1 block min-h-10 rounded-md border border-line bg-canvas px-3 py-2 text-sm text-fg"
+              className="mt-1 block min-h-10 rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg"
               value={filter}
               onChange={(event) => {
                 setFilter(event.target.value as typeof filter);

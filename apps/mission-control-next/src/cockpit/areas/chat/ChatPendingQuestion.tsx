@@ -58,7 +58,7 @@ export function ChatPendingQuestion({
               value={value}
               disabled={pending}
               onChange={(event) => setValue(event.target.value)}
-              className="mt-1 block min-h-9 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg"
+              className="mt-1 block min-h-9 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg"
             />
           </label>
           <p className="mt-1 text-xs text-fg-muted">
@@ -98,7 +98,7 @@ export function ChatPendingQuestion({
               disabled={pending}
               placeholder={prompt.placeholder}
               onChange={(event) => setValue(event.target.value)}
-              className="mt-1 block min-h-20 w-full rounded-md border border-line bg-canvas p-2 text-sm text-fg"
+              className="mt-1 block min-h-20 w-full rounded-md border border-line-control bg-canvas p-2 text-sm text-fg"
             />
           ) : (
             <input
@@ -107,7 +107,7 @@ export function ChatPendingQuestion({
               disabled={pending}
               placeholder={prompt.placeholder}
               onChange={(event) => setValue(event.target.value)}
-              className="mt-1 block min-h-9 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg"
+              className="mt-1 block min-h-9 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg"
             />
           )}
         </label>

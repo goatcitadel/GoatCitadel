@@ -113,7 +113,7 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
               id={nameId}
               value={c.draft.name}
               disabled={c.access.locked}
-              className="mt-1 block w-full rounded-md border border-line bg-canvas px-3 py-2 text-fg"
+              className="mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-fg"
               onChange={(e) => c.setDraft((draft) => ({ ...draft, name: e.target.value }))}
             />
           </label>
@@ -124,7 +124,7 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
               value={c.draft.actionPattern}
               disabled={c.access.locked}
               placeholder="shell.*"
-              className="mt-1 block w-full rounded-md border border-line bg-canvas px-3 py-2 text-fg"
+              className="mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-fg"
               onChange={(e) => c.setDraft((draft) => ({ ...draft, actionPattern: e.target.value }))}
             />
           </label>
@@ -247,7 +247,7 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
               id={probeId}
               value={c.probe}
               placeholder="shell.run"
-              className="mt-1 block w-full rounded-md border border-line bg-canvas px-3 py-2 text-fg"
+              className="mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-fg"
               onChange={(e) => c.setProbe(e.target.value)}
             />
           </label>

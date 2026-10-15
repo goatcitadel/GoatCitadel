@@ -85,7 +85,7 @@ function BulkReject({ onResolved }: { onResolved: () => void }) {
           <label>
             Type reject all to confirm
             <input
-              className="block w-full rounded-md border border-line bg-raised p-2"
+              className="block w-full rounded-md border border-line-control bg-raised p-2"
               value={typed}
               onChange={(event) => setTyped(event.target.value)}
             />

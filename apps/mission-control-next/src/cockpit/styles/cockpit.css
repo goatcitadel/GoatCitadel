@@ -100,6 +100,7 @@ html[data-shell="cockpit"] body {
   --color-line-subtle: var(--cockpit-border-subtle);
   --color-line: var(--cockpit-border);
   --color-line-strong: var(--cockpit-border-strong);
+  --color-line-control: var(--cockpit-border-control);
   --color-accent: var(--cockpit-accent);
   --color-accent-ink: var(--cockpit-accent-ink);
   --color-status-running: var(--cockpit-running);

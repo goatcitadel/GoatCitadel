@@ -17,7 +17,8 @@ export type TurnActionHandlers = Pick<
 >;
 
 const INLINE = "inline-flex min-h-8 items-center px-1 text-accent hover:underline";
-const PHONE = "inline-flex min-h-11 items-center rounded-md border border-line px-3 text-sm font-medium text-accent";
+const PHONE =
+  "inline-flex min-h-11 items-center rounded-md border border-line-control px-3 text-sm font-medium text-accent";
 
 /**
  * Turn actions. On a phone, Retry and Copy stay as 44 px buttons and the rest move into a
@@ -94,7 +95,7 @@ export function ChatTurnActions({
               disabled={siblingId === turn.turnId}
               onClick={() => actions.onSwitchBranch(siblingId)}
               aria-label={`Switch to version ${index + 1}`}
-              className={`inline-flex items-center justify-center rounded border border-line text-accent disabled:text-fg-muted ${phone ? "min-h-11 min-w-11" : "min-h-8 min-w-8"}`}
+              className={`inline-flex items-center justify-center rounded border border-line-control text-accent disabled:text-fg-muted ${phone ? "min-h-11 min-w-11" : "min-h-8 min-w-8"}`}
             >
               {index + 1}
             </button>

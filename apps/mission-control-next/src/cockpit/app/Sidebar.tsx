@@ -92,7 +92,7 @@ export function Sidebar({
         aria-label="Search commands and records"
         title="Search (Ctrl / Cmd K)"
         onClick={onOpenPalette}
-        className="mb-2 flex h-8 items-center gap-2 rounded-md border border-line px-2 text-sm text-fg-muted hover:border-line-strong"
+        className="mb-2 flex h-8 items-center gap-2 rounded-md border border-line-control px-2 text-sm text-fg-muted hover:border-fg"
       >
         <Search aria-hidden="true" className="size-4" />
         {!collapsed ? (

@@ -69,7 +69,7 @@ export function ChatModelOptionsPopover({
           onChange={(event) => {
             if (event.target.value) props.onRequestProviderChange(event.target.value);
           }}
-          className="max-w-32 rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-full"
+          className="max-w-32 rounded-md border border-line-control bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-full"
         >
           <option value="">Choose</option>
           {props.selectedProviderId && !selectedProvider ? (
@@ -92,7 +92,7 @@ export function ChatModelOptionsPopover({
           onChange={(event) => {
             if (event.target.value) props.onRequestModelChange(event.target.value);
           }}
-          className="max-w-36 rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-full"
+          className="max-w-36 rounded-md border border-line-control bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-full"
         >
           <option value="">Choose</option>
           {props.selectedModel && !selectedProvider?.models.includes(props.selectedModel) ? (
@@ -115,7 +115,7 @@ export function ChatModelOptionsPopover({
             const level = event.target.value as Controls["currentThinkingLevel"];
             if (thinkingLevels.includes(level)) props.onSetThinkingLevel(level);
           }}
-          className="rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11"
+          className="rounded-md border border-line-control bg-canvas px-1 py-1 text-fg max-sm:min-h-11"
         >
           {supported && !supported.includes(props.currentThinkingLevel) ? (
             <option value={props.currentThinkingLevel} disabled>
@@ -139,7 +139,7 @@ export function ChatModelOptionsPopover({
         aria-label="Open personality settings"
         onClick={props.onOpenPersonalitiesSettings}
         disabled={!props.onOpenPersonalitiesSettings}
-        className="rounded-md border border-line px-2 py-1 text-fg-secondary hover:border-line-strong max-sm:min-h-11"
+        className="rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-line-strong max-sm:min-h-11"
       >
         {props.activePersonality?.name ?? "Personality"}
       </button>

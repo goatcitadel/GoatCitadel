@@ -6,7 +6,7 @@ export type ButtonSize = "sm" | "md";
 
 const VARIANTS: Readonly<Record<ButtonVariant, string>> = {
   primary: "bg-accent text-accent-ink hover:underline underline-offset-2",
-  secondary: "border border-line bg-raised text-fg hover:border-line-strong",
+  secondary: "border border-line-control bg-raised text-fg hover:border-fg",
   ghost: "text-fg-secondary hover:bg-sunken hover:text-fg",
   danger: "border border-status-failed text-status-failed hover:bg-sunken",
 };

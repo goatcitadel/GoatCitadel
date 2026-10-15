@@ -119,7 +119,7 @@ export function LocalAiSettings() {
           <label className="block text-sm text-fg-secondary">
             Model and backend
             <select
-              className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-3 text-fg"
+              className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-fg"
               disabled={control.queueing}
               value={selected ? localAiModelKey(selected) : ""}
               onChange={(event) => control.setSelectedModelKey(event.target.value)}

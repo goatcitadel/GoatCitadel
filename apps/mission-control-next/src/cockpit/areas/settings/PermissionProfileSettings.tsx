@@ -108,7 +108,7 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
               aria-label="Selection policy context"
               value={surface}
               disabled={control.locked || control.reviewing}
-              className="mt-1 min-h-10 w-full rounded border border-line bg-canvas px-3 text-fg"
+              className="mt-1 min-h-10 w-full rounded border border-line-control bg-canvas px-3 text-fg"
               onChange={(event) => {
                 control.clear();
                 setSurface(event.target.value as PermissionSurface);
@@ -138,7 +138,7 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
                 setSearch(event.target.value);
                 setLimit(PAGE_SIZE);
               }}
-              className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-3 text-fg"
+              className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-fg"
             />
           </label>
           <p className="text-xs text-fg-muted">

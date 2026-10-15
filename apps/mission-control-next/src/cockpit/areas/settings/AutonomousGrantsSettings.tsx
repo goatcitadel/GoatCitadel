@@ -67,7 +67,7 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
             setQuery(event.target.value);
             setLimit(30);
           }}
-          className="mt-1 min-h-10 w-full rounded border border-line bg-canvas px-3 text-fg"
+          className="mt-1 min-h-10 w-full rounded border border-line-control bg-canvas px-3 text-fg"
         />
       </label>
       <ul className="space-y-3">

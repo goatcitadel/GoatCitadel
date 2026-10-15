@@ -94,7 +94,7 @@ export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord;
                 setTarget(event.target.value);
                 owner.invalidate();
               }}
-              className="min-h-10 rounded-md border border-line bg-sunken px-3 text-fg"
+              className="min-h-10 rounded-md border border-line-control bg-sunken px-3 text-fg"
             >
               <option value="">Unassigned</option>
               {task.assignedAgentId && !currentAgent ? (

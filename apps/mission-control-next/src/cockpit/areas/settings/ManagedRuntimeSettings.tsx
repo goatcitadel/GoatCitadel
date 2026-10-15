@@ -12,7 +12,7 @@ import { Button } from "../../ui/Button";
 import { LlamaRuntimeLifecycle } from "./LlamaRuntimeLifecycle";
 
 const inputClass =
-  "mt-1 min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg disabled:opacity-60";
+  "mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg disabled:opacity-60";
 export function ManagedRuntimeSettings() {
   const { navigate, search } = useCockpitRoute();
   const parameters = new URLSearchParams(search);

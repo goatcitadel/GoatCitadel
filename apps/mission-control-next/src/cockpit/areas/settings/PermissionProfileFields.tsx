@@ -6,7 +6,7 @@ import {
 } from "../../../features/native-routes/settings/helpers/permission-helpers";
 import { PERMISSION_CONTEXT_PRESENTATION } from "../../../features/native-routes/settings/sections/PermissionProfileDraftFields";
 
-const inputClass = "mt-1 min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg";
+const inputClass = "mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg";
 export function PermissionProfileFields({
   draft,
   change,

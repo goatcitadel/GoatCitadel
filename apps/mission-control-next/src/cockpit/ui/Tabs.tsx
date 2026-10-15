@@ -13,7 +13,7 @@ export function TabsTrigger({ className, ...props }: ComponentPropsWithoutRef<ty
   return (
     <TabsPrimitive.Trigger
       className={cn(
-        "border-b-2 border-transparent px-3 py-2 text-sm text-fg-secondary data-[state=active]:border-accent data-[state=active]:text-fg",
+        "border-b-2 border-transparent px-3 py-2 shadow-none text-sm text-fg-secondary data-[state=active]:border-accent data-[state=active]:text-fg",
         className,
       )}
       {...props}

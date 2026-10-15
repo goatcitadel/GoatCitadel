@@ -115,7 +115,7 @@ export function TaskDetailsEditor({ task, workspaceId }: { task: TaskRecord; wor
                 editor.setValue((value) => ({ ...value, title: event.target.value }));
                 owner.invalidate();
               }}
-              className="rounded-md border border-line bg-sunken p-2 text-fg"
+              className="rounded-md border border-line-control bg-sunken p-2 text-fg"
             />
           </label>
           <label className="grid gap-1 text-sm text-fg-secondary">
@@ -130,7 +130,7 @@ export function TaskDetailsEditor({ task, workspaceId }: { task: TaskRecord; wor
                 editor.setValue((value) => ({ ...value, description: event.target.value }));
                 owner.invalidate();
               }}
-              className="rounded-md border border-line bg-sunken p-2 text-fg"
+              className="rounded-md border border-line-control bg-sunken p-2 text-fg"
             />
           </label>
           <label className="grid max-w-xs gap-1 text-sm text-fg-secondary">
@@ -143,7 +143,7 @@ export function TaskDetailsEditor({ task, workspaceId }: { task: TaskRecord; wor
                 editor.setValue((value) => ({ ...value, priority: event.target.value as TaskRecord["priority"] }));
                 owner.invalidate();
               }}
-              className="min-h-10 rounded-md border border-line bg-sunken px-3 text-fg"
+              className="min-h-10 rounded-md border border-line-control bg-sunken px-3 text-fg"
             >
               {PRIORITIES.map((priority) => (
                 <option key={priority} value={priority}>

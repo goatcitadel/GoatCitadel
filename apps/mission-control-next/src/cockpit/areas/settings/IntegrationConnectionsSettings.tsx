@@ -107,7 +107,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
                 setSearch(event.target.value);
                 setLimit(PAGE_SIZE);
               }}
-              className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-3 text-sm text-fg"
+              className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-sm text-fg"
             />
           </label>
           <p className="text-xs text-fg-muted">

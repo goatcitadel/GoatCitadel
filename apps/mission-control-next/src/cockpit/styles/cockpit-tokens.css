@@ -12,6 +12,8 @@
   --cockpit-border-subtle: rgba(18, 69, 93, 0.15);
   --cockpit-border: rgba(18, 69, 93, 0.24);
   --cockpit-border-strong: rgba(18, 69, 93, 0.38);
+  /* Control boundaries (buttons, inputs) need 3:1 non-text contrast, which the translucent borders do not reach. */
+  --cockpit-border-control: var(--cockpit-text-muted);
   --cockpit-accent: #006f85;
   --cockpit-accent-ink: #f6fbff;
   --cockpit-running: #006f85;
@@ -37,6 +39,7 @@
   --cockpit-border-subtle: rgba(178, 224, 245, 0.14);
   --cockpit-border: rgba(178, 224, 245, 0.24);
   --cockpit-border-strong: rgba(178, 224, 245, 0.38);
+  --cockpit-border-control: var(--cockpit-text-muted);
   --cockpit-accent: #5ce9ff;
   --cockpit-accent-ink: #0c2530;
   --cockpit-running: #5ce9ff;

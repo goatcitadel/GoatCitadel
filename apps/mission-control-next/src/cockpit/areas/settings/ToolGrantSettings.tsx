@@ -129,7 +129,7 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            className="mt-1 min-h-10 w-full rounded-md border border-line bg-raised px-3 text-fg"
+            className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-raised px-3 text-fg"
           />
         </label>
         <label className="block text-sm text-fg-secondary">
@@ -141,7 +141,7 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
               setSelectedTool(event.target.value);
               setLimit(PAGE_SIZE);
             }}
-            className="mt-1 min-h-10 w-full rounded-md border border-line bg-raised px-3 text-fg"
+            className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-raised px-3 text-fg"
           >
             <option value="">All recorded grants / custom pattern</option>
             {tools.map((item) => (
@@ -190,7 +190,7 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
               setGrantSearch(event.target.value);
               setLimit(PAGE_SIZE);
             }}
-            className="mt-1 min-h-10 w-full rounded-md border border-line bg-raised px-3 text-fg"
+            className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-raised px-3 text-fg"
           />
         </label>
         {grantsReady && !grants.length ? (

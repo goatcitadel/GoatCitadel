@@ -167,7 +167,7 @@ export function BudgetModeControl() {
           <label className="mt-3 block max-w-sm text-sm font-medium text-fg">
             Mode
             <select
-              className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-fg"
+              className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
               value={draft.value}
               onChange={(event) => {
                 setNotice(null);

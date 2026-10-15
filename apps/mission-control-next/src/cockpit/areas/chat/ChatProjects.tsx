@@ -147,7 +147,7 @@ function ProjectsWorkspace({ workspaceId, citadelId }: { workspaceId: string; ci
             Search projects
             <input
               aria-label="Search projects"
-              className="min-w-0 rounded-md border border-line bg-raised p-2"
+              className="min-w-0 rounded-md border border-line-control bg-raised p-2"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />

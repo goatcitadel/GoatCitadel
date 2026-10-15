@@ -74,7 +74,7 @@ export function PersonalitySettings() {
               value={selectedId ?? data.defaultPersonalityId}
               disabled={!available || action.locked}
               onChange={(event) => setSelectedId(event.target.value)}
-              className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-fg"
+              className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
             >
               {selectedId && !selected ? (
                 <option value={selectedId} disabled>

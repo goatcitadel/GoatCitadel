@@ -249,7 +249,7 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
                   placeholder={prompt.placeholder}
                   disabled={pending}
                   onChange={(event) => setTextValue(event.target.value)}
-                  className="w-full rounded-md border border-line bg-sunken p-2 text-fg"
+                  className="w-full rounded-md border border-line-control bg-sunken p-2 text-fg"
                 />
               ) : (
                 <input
@@ -258,7 +258,7 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
                   placeholder={prompt.placeholder}
                   disabled={pending}
                   onChange={(event) => setTextValue(event.target.value)}
-                  className="w-full rounded-md border border-line bg-sunken p-2 text-fg"
+                  className="w-full rounded-md border border-line-control bg-sunken p-2 text-fg"
                 />
               )}
             </label>

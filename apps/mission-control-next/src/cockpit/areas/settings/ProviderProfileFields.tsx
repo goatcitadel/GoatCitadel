@@ -7,7 +7,7 @@ import {
 import { ProviderTransportFields } from "./ProviderTransportFields";
 
 export const providerFieldClass =
-  "mt-1 block min-h-11 w-full rounded-md border border-line bg-canvas px-2 py-1 text-sm text-fg disabled:opacity-60";
+  "mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 py-1 text-sm text-fg disabled:opacity-60";
 export function ProviderProfileFields(
   props: ProviderProfileFieldsProps & {
     disabled: boolean;

@@ -132,7 +132,7 @@ export function ProviderCatalogSettings() {
                     setQuery("");
                     setPage(0);
                   }}
-                  className="mt-1 block min-h-11 w-full rounded-md border border-line bg-canvas px-2 text-fg"
+                  className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
                 >
                   {catalog.providers.map((item) => (
                     <option key={item.providerId} value={item.providerId}>
@@ -208,7 +208,7 @@ export function ProviderCatalogSettings() {
                       setQuery(event.target.value);
                       setPage(0);
                     }}
-                    className="mt-1 block min-h-11 w-full rounded-md border border-line bg-canvas px-3 text-fg"
+                    className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-3 text-fg"
                     placeholder="Find a model"
                   />
                 </label>

@@ -100,7 +100,7 @@ export function PermissionProfileEditor({
       <label className="block text-sm">
         Find custom profile
         <input
-          className="mt-1 w-full rounded border border-line bg-canvas p-2"
+          className="mt-1 w-full rounded border border-line-control bg-canvas p-2"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />

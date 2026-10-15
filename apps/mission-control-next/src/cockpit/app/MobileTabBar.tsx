@@ -65,7 +65,7 @@ export function MobileTabBar({
           {citadelName} / {workspaceName ?? "Workspace name unavailable"}
         </p>
         {phone ? <MobileStatusStrip workspaceId={workspaceId} streamState={streamState} /> : null}
-        <nav aria-label="Areas on small screens" className="flex">
+        <nav aria-label="Areas on small screens" data-cockpit-tabbar="" className="flex">
           {TABS.map(({ area, label, path, Icon }) => (
             <button
               key={area}

@@ -36,7 +36,7 @@ export function ChatConversationFilters({
           aria-label="Filter by project"
           value={projectId}
           onChange={(event) => rail.onSelectProjectId(event.target.value)}
-          className="mt-1 h-8 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg"
+          className="mt-1 h-8 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg"
         >
           <option value="all">All projects</option>
           <option value="none">Unassigned</option>
@@ -99,7 +99,7 @@ export function ChatConversationFilters({
           value={rail.search}
           onChange={(event) => rail.onSearchChange(event.target.value)}
           placeholder="Find a conversation"
-          className="mt-1 h-8 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg"
+          className="mt-1 h-8 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg"
         />
       </label>
     </div>

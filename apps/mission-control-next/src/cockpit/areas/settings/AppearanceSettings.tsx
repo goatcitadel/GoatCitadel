@@ -83,7 +83,7 @@ export function AppearanceSettings() {
           <select
             value={prefs.notifications.soundMode}
             onChange={(event) => prefs.setNotificationSoundMode(event.target.value as "off" | "subtle" | "normal")}
-            className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-fg"
+            className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
           >
             <option value="off">Off</option>
             <option value="subtle">Subtle</option>

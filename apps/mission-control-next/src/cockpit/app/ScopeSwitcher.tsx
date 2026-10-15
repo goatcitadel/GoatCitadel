@@ -144,7 +144,7 @@ export function ScopeSwitcher({
               aria-label="Scope Citadel"
               value={target.citadelId}
               onChange={(event) => setTarget({ citadelId: event.target.value, workspaceId: "" })}
-              className="mt-1 min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg"
+              className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg"
             >
               <option value="">Choose Citadel</option>
               {!owner.citadels.some((item) => item.citadelId === target.citadelId) && target.citadelId ? (
@@ -165,7 +165,7 @@ export function ScopeSwitcher({
               aria-label="Scope Workspace"
               value={target.workspaceId}
               onChange={(event) => setTarget((current) => ({ ...current, workspaceId: event.target.value }))}
-              className="mt-1 min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg"
+              className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg"
             >
               <option value="">Choose workspace</option>
               {!owner.workspaces.some((item) => item.workspaceId === target.workspaceId) && target.workspaceId ? (

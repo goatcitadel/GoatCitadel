@@ -38,7 +38,7 @@ export function ChatMobileConversationSelect({
             if (match) rail.onSelectSession(match.sessionId, { searchHit: match.hit });
           } else rail.onSelectSession(value);
         }}
-        className="block h-8 w-full rounded-md border border-line bg-raised px-1 text-sm text-fg"
+        className="block h-8 w-full rounded-md border border-line-control bg-raised px-1 text-sm text-fg"
       >
         <option value="" disabled>
           Choose

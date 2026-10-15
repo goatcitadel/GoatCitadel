@@ -12,7 +12,7 @@ import {
   type PolicyInspectionResult,
 } from "./capability-policy-inspection";
 
-const FIELD = "mt-1 w-full rounded-md border border-line bg-raised px-2 py-2 text-base text-fg";
+const FIELD = "mt-1 w-full rounded-md border border-line-control bg-raised px-2 py-2 text-base text-fg";
 const bounded = (value: string, limit = 240) => (value.length > limit ? `${value.slice(0, limit)}…` : value);
 const TRUST: { value: NonNullable<PolicyInspectionInput["trustLevel"]>; label: string }[] = [
   { value: "trusted_operator", label: "Operator input" },

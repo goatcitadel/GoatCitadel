@@ -161,7 +161,7 @@ function BoardEditorView({
               setDraft({ ...draft, name: event.target.value });
               setReviewing(false);
             }}
-            className="rounded-md border border-line bg-canvas p-2 text-fg"
+            className="rounded-md border border-line-control bg-canvas p-2 text-fg"
           />
         </label>
         <label className="grid gap-1 text-sm text-fg-secondary">
@@ -175,7 +175,7 @@ function BoardEditorView({
               setDraft({ ...draft, description: event.target.value });
               setReviewing(false);
             }}
-            className="rounded-md border border-line bg-canvas p-2 text-fg"
+            className="rounded-md border border-line-control bg-canvas p-2 text-fg"
           />
         </label>
         <div className="grid gap-2 rounded-md border border-line p-3">
@@ -189,7 +189,7 @@ function BoardEditorView({
                 value={widgetKind}
                 disabled={busy || uncertain}
                 onChange={(event) => setWidgetKind(event.target.value as OpsSavedBoardWidgetKind)}
-                className="rounded-md border border-line bg-canvas p-2 text-fg"
+                className="rounded-md border border-line-control bg-canvas p-2 text-fg"
               >
                 {OPS_SAVED_BOARDS_WIDGET_OPTIONS.map((option) => (
                   <option key={option.kind} value={option.kind}>
@@ -233,7 +233,7 @@ function BoardEditorView({
                         [placement.widgetId]: event.target.value as OpsSavedBoardsPlacementAdjustment,
                       })
                     }
-                    className="rounded-md border border-line bg-canvas p-2 text-sm text-fg"
+                    className="rounded-md border border-line-control bg-canvas p-2 text-sm text-fg"
                   >
                     {ADJUSTMENTS.map((option) => (
                       <option key={option.value} value={option.value}>

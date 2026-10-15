@@ -90,7 +90,7 @@ export function ApprovalModeEditor({
           <label className="mt-3 block max-w-sm text-sm font-medium text-fg">
             Approval rule
             <select
-              className="mt-1 block min-h-11 w-full rounded-md border border-line bg-canvas px-2 text-fg"
+              className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
               value={draft.value}
               disabled={locked || Boolean(review)}
               onChange={(event) => {

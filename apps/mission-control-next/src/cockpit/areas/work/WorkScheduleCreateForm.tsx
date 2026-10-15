@@ -64,7 +64,7 @@ export function WorkScheduleCreateForm({
           onChange={(event) => {
             onName(event.target.value);
           }}
-          className="rounded-md border border-line bg-canvas p-2 text-fg"
+          className="rounded-md border border-line-control bg-canvas p-2 text-fg"
         />
       </label>
       <ScheduleTiming value={schedule} disabled={locked} onChange={onSchedule} />
@@ -76,7 +76,7 @@ export function WorkScheduleCreateForm({
           onChange={(event) => {
             onAction(event.target.value as CreateScheduleAction);
           }}
-          className="rounded-md border border-line bg-canvas p-2 text-fg"
+          className="rounded-md border border-line-control bg-canvas p-2 text-fg"
         >
           {CREATE_ACTIONS.map((action) => (
             <option key={action} value={action}>
