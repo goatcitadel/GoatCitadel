@@ -3,7 +3,14 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyDurableExecutionBaselineToConfig, buildUnifiedConfigPayload, replaceMutableConfigValue, syncUnifiedConfig } from "./config-sync-lib.js";
+import {
+  applyDurableExecutionBaselineToConfig,
+  buildUnifiedConfigPayload,
+  buildUnifiedConfigPayloadFromRuntime,
+  replaceMutableConfigValue,
+  serializeSandboxRootForConfig,
+  syncUnifiedConfig,
+} from "./config-sync-lib.js";
 import type { GatewayRuntimeConfig } from "./config.js";
 
 const TEMP_ROOTS: string[] = [];
@@ -64,6 +71,57 @@ afterEach(async () => {
       await rm(next, { recursive: true, force: true });
     }
   }
+});
+
+describe("sandbox root persistence", () => {
+  const rootDir = path.resolve(os.tmpdir(), "goat-runtime-root");
+  const outsideRoot = path.resolve(os.tmpdir(), "goat-operator-scratch");
+  const relativeSerializer = (fullPath: string) => `./${path.relative(rootDir, fullPath).replaceAll("\\", "/")}`;
+
+  it("keeps roots inside the runtime root in their serialized relative form", () => {
+    expect(serializeSandboxRootForConfig(rootDir, path.join(rootDir, "workspace"), relativeSerializer)).toBe(
+      "./workspace",
+    );
+  });
+
+  it("persists roots outside the runtime root as absolute paths without consulting the display serializer", () => {
+    const redactingSerializer = vi.fn(() => "[outside-root]");
+    expect(serializeSandboxRootForConfig(rootDir, outsideRoot, redactingSerializer)).toBe(outsideRoot);
+    expect(serializeSandboxRootForConfig(rootDir, path.join(rootDir, "..", "sibling"), redactingSerializer)).toBe(
+      path.resolve(rootDir, "..", "sibling"),
+    );
+    expect(redactingSerializer).not.toHaveBeenCalled();
+  });
+
+  it("treats a sibling folder that only shares a name prefix as outside the root", () => {
+    const sibling = `${rootDir}-other`;
+    expect(serializeSandboxRootForConfig(rootDir, sibling, relativeSerializer)).toBe(sibling);
+  });
+
+  it("never writes the redaction sentinel into the persisted tool-policy sandbox", () => {
+    const runtimeConfig = {
+      rootDir,
+      assistant: { auth: { token: {} } },
+      budgets: {},
+      toolPolicy: {
+        tools: {},
+        sandbox: {
+          writeJailRoots: [path.join(rootDir, "workspace"), outsideRoot],
+          readOnlyRoots: [outsideRoot],
+        },
+      },
+    } as unknown as GatewayRuntimeConfig;
+    const payload = buildUnifiedConfigPayloadFromRuntime(
+      runtimeConfig,
+      {} as never,
+      {} as never,
+      { jobs: [] },
+      (fullPath) => (fullPath.startsWith(rootDir) ? relativeSerializer(fullPath) : "[outside-root]"),
+    );
+    const sandbox = (payload.toolPolicy as { sandbox: { writeJailRoots: string[]; readOnlyRoots: string[] } }).sandbox;
+    expect(sandbox.writeJailRoots).toEqual(["./workspace", outsideRoot]);
+    expect(sandbox.readOnlyRoots).toEqual([outsideRoot]);
+  });
 });
 
 describe("syncUnifiedConfig", () => {
