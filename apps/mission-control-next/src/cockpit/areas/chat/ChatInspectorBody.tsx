@@ -84,7 +84,7 @@ export function ChatInspector({
       <div
         role="tablist"
         aria-label="Conversation inspector"
-        className="grid grid-cols-3 gap-1 rounded-md bg-sunken p-1"
+        className="flex gap-1 overflow-x-auto whitespace-nowrap rounded-md bg-sunken p-1"
       >
         {TABS.map((entry) => (
           <button
@@ -113,7 +113,7 @@ export function ChatInspector({
               setTab(TABS[next]!.id);
               (event.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
             }}
-            className="min-h-8 rounded px-2 text-xs font-medium text-fg-secondary hover:bg-raised aria-selected:bg-raised aria-selected:text-fg"
+            className="min-h-8 shrink-0 rounded px-2 text-xs font-medium text-fg-secondary hover:bg-raised aria-selected:bg-raised aria-selected:text-fg"
           >
             {entry.label}
           </button>
@@ -123,7 +123,6 @@ export function ChatInspector({
         id={`cockpit-inspector-${tab}`}
         aria-labelledby={`cockpit-inspector-tab-${tab}`}
         role="tabpanel"
-        aria-label={TABS.find((entry) => entry.id === tab)?.label}
         className="min-w-0"
       >
         {tab === "run" ? renderInspectorRunEvidence(run, selectedTurn) : null}

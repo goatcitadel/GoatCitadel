@@ -33,9 +33,11 @@ export function Dialog({
   return (
     <DialogPrimitive.Root open={open && accessCurrent} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-canvas/70" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-scrim" />
         <DialogPrimitive.Content
           aria-modal="true"
+          // Radix links a Description automatically; without one it needs an explicit undefined to stay silent.
+          {...(description ? {} : { "aria-describedby": undefined })}
           onOpenAutoFocus={(event) => {
             returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
             onOpenAutoFocus?.(event);

@@ -108,7 +108,14 @@ html[data-shell="cockpit"] body {
   --color-status-done: var(--cockpit-done);
   --color-status-failed: var(--cockpit-failed);
   --color-status-neutral: var(--cockpit-neutral);
+  --color-scrim: var(--cockpit-scrim);
+  /* Every transition-* utility uses the DESIGN.md motion tokens instead of Tailwind's 150ms default. */
+  --default-transition-duration: var(--motion-fast);
+  --default-transition-timing-function: var(--motion-ease);
 }
+
+/* Stacking scale (Tailwind z-* utilities), lowest first: z-40 scrims, z-50 dialogs and sheets (shared Classic
+   dialogs sit at 50/51), z-60 popovers (menus, tooltips) so they open above any dialog, z-70 toasts. */
 
 @keyframes pulse-live {
   0%,
@@ -343,11 +350,10 @@ html[data-shell="cockpit"] .mc-dialog-content {
     display: grid;
     gap: 0.35rem;
   }
+  /* Plain muted context, not an eyebrow: DESIGN.md bans all-caps and accent kickers above headings. */
   .cockpit-chat-host .mc-next-threaded-loading-copy p {
-    color: var(--cockpit-accent);
-    font-size: var(--text-xs);
-    font-weight: 700;
-    text-transform: uppercase;
+    color: var(--cockpit-text-muted);
+    font-size: var(--text-sm);
   }
   .cockpit-chat-host .mc-next-threaded-loading-copy h2 {
     font-family: var(--font-display);

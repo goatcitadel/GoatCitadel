@@ -1,4 +1,5 @@
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { isModifiedClick } from "../../lib/modified-click";
 import { EmptyState } from "../../ui/EmptyState";
 import { AREA_TABS } from "../../ui/area-layout";
 import { WorkBoard } from "./WorkBoard";
@@ -34,7 +35,7 @@ export function WorkArea() {
       return <EmptyState title="Run link unavailable" description="This run link could not be read." />;
     }
   }
-  const view = VIEWS.some(item => item.id === rest[0]) ? rest[0] : "board";
+  const view = VIEWS.some((item) => item.id === rest[0]) ? rest[0] : "board";
   return (
     <>
       <nav aria-label="Work views" className={AREA_TABS}>
@@ -44,6 +45,7 @@ export function WorkArea() {
             href={item.path}
             aria-current={view === item.id ? "page" : undefined}
             onClick={(event) => {
+              if (isModifiedClick(event)) return;
               event.preventDefault();
               navigate(item.path);
             }}
@@ -53,7 +55,19 @@ export function WorkArea() {
           </a>
         ))}
       </nav>
-      {view === "history" ? <WorkHistory /> : view === "schedules" ? <WorkSchedules /> : view === "kanban" ? <WorkKanban /> : view === "archive" ? <WorkArchive /> : view === "automation" ? <WorkAutomation /> : <WorkBoard />}
+      {view === "history" ? (
+        <WorkHistory />
+      ) : view === "schedules" ? (
+        <WorkSchedules />
+      ) : view === "kanban" ? (
+        <WorkKanban />
+      ) : view === "archive" ? (
+        <WorkArchive />
+      ) : view === "automation" ? (
+        <WorkAutomation />
+      ) : (
+        <WorkBoard />
+      )}
     </>
   );
 }

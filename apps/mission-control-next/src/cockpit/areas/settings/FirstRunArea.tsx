@@ -91,7 +91,9 @@ export function FirstRunArea() {
                 workspaceId={activeWorkspaceId}
                 onReload={setup.refresh}
                 onModelReady={() => setup.setStep("safety")}
-                canContinue={Boolean(progress.modelReady && !query.isFetching && !setup.checking && !completion.locked && !approval.locked)}
+                canContinue={Boolean(
+                  progress.modelReady && !query.isFetching && !setup.checking && !completion.locked && !approval.locked,
+                )}
                 onContinue={() => void setup.continueModel()}
               />
             ) : null}
@@ -107,7 +109,7 @@ export function FirstRunArea() {
                     {setup.checking ? "Checking current rule…" : "Keep current rule"}
                   </Button>
                 ) : (
-                  <p role="alert" className="text-sm text-status-waiting">
+                  <p className="text-sm text-status-waiting">
                     Choose and save a rule that keeps approval prompts before finishing guided setup.
                   </p>
                 )}
@@ -143,12 +145,19 @@ export function FirstRunArea() {
               Refresh checks
             </Button>
             {!state.completed ? (
-              <Button variant="primary" aria-describedby="first-run-finish-prerequisite" disabled={!setup.canFinish} onClick={() => void finish()}>
+              <Button
+                variant="primary"
+                aria-describedby="first-run-finish-prerequisite"
+                disabled={!setup.canFinish}
+                onClick={() => void finish()}
+              >
                 {completion.attempt?.phase === "pending" ? "Confirming setup…" : "Finish setup and open Chat"}
               </Button>
             ) : null}
           </div>
-          <p id="first-run-finish-prerequisite" role="status" className="text-sm text-fg-secondary">{setup.finishPrerequisite}</p>
+          <p id="first-run-finish-prerequisite" className="text-sm text-fg-secondary">
+            {setup.finishPrerequisite}
+          </p>
           {setup.notice || completion.notice ? (
             <p role="status" className="text-sm text-fg-secondary">
               {completion.notice ?? setup.notice}

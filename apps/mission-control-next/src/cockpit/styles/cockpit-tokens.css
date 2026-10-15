@@ -26,6 +26,11 @@
   /* Modal backdrop and generated-document canvases keep these values in both themes. */
   --cockpit-scrim: rgb(5 17 29 / 0.52);
   --cockpit-document-surface: #fff;
+  /* Motion is theme-independent; DESIGN.md names these tokens and the cockpit declares no other durations. */
+  --motion-fast: 120ms;
+  --motion-base: 160ms;
+  --motion-slow: 220ms;
+  --motion-ease: cubic-bezier(0.2, 0, 0, 1);
 }
 
 [data-theme="dark"] {

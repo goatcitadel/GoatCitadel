@@ -28,6 +28,10 @@ import {
   type InspectorContent,
 } from "./inspector-context";
 
+// Controls that use Escape themselves. Checkboxes, radios and button-like inputs do not, so Escape still closes.
+const ESCAPE_OWNERS =
+  'input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="reset"], [type="range"], [type="color"], [type="file"]), textarea, select, [contenteditable]:not([contenteditable="false"]), [role="menu"], [role="listbox"], [role="combobox"]';
+
 export function InspectorProvider({ children }: { children: ReactNode }) {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
   const installation = getGatewayApiBaseUrl();
@@ -110,6 +114,8 @@ export function InspectorProvider({ children }: { children: ReactNode }) {
       ];
       if (modals.some((modal) => !modal.querySelector('[data-inspector-body="true"]'))) return;
       if (event.key === "Escape" && content) {
+        // Escape in a text field, menu, listbox or combobox belongs to that control (clear, close the menu).
+        if (event.target instanceof Element && event.target.closest(ESCAPE_OWNERS)) return;
         close();
         return;
       }
@@ -176,6 +182,7 @@ export function InspectorPanel() {
           if (!value) close();
         }}
         title={content.title}
+        closeLabel="Close inspector"
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           if (focusTarget.current?.isConnected) focusTarget.current.focus();
@@ -214,14 +221,17 @@ export function InspectorPanel() {
     );
   return (
     <aside
-      aria-label={`Inspector: ${content.title}`}
+      // The body region carries "Inspector: <title>"; the landmark stays generic so the two names differ.
+      aria-label="Inspector"
       style={{ width }}
       className="cockpit-inspector relative flex max-w-full shrink-0 flex-col border-l border-line-subtle bg-raised"
     >
       <InspectorResizeHandle width={width} onChange={setWidth} />
-      <header className="flex h-12 items-center justify-between border-b border-line-subtle px-3">
-        <h2 className="text-sm font-medium text-fg">{content.title}</h2>
-        <div className="flex gap-1">
+      <header className="flex h-12 items-center justify-between gap-2 border-b border-line-subtle px-3">
+        <h2 title={content.title} className="min-w-0 truncate text-base font-medium text-fg">
+          {content.title}
+        </h2>
+        <div className="flex shrink-0 gap-1">
           <IconButton
             label="Expand inspector"
             icon={<Maximize2 className="size-4" aria-hidden="true" />}

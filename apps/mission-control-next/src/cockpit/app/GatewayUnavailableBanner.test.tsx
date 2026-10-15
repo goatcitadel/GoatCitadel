@@ -27,7 +27,11 @@ describe("Gateway unavailable banner", () => {
     expect(container.textContent).toContain("Sending is paused; your draft is preserved.");
     await act(async () => root.render(<GatewayUnavailableBanner reachability={idle} inChat={false} />));
     expect(container.textContent).not.toContain("Sending is paused");
-    expect(container.textContent).toContain("Reconnecting…");
+    expect(container.textContent).toContain("No confirmed connection yet.");
+    // Only the static outage sentence is announced; the changing time stays outside the alert.
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      "Gateway unavailable. What you see here may be out of date.",
+    );
   });
 
   it("hides the retry control when no probe handle is available", async () => {
@@ -41,8 +45,9 @@ describe("Gateway unavailable banner", () => {
       root.render(<GatewayUnavailableBanner reachability={{ ...idle, checking: true, retry }} inChat />),
     );
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Checking…");
-    expect(container.querySelector("button")?.disabled).toBe(true);
-    expect(container.querySelector('[role="alert"] [role="status"]')).not.toBeNull();
+    // Busy, not disabled, so keyboard focus stays on Check again while the probe runs.
+    expect(container.querySelector("button")?.getAttribute("aria-busy")).toBe("true");
+    expect(container.querySelector('[role="alert"] [role="status"]')).toBeNull();
   });
 
   it("says when the Gateway was last checked and is still unreachable", async () => {
@@ -58,6 +63,6 @@ describe("Gateway unavailable banner", () => {
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
       `Still unreachable · checked ${new Date(checkedAt).toLocaleTimeString()}`,
     );
-    expect(container.querySelector("button")?.disabled).toBe(false);
+    expect(container.querySelector("button")?.getAttribute("aria-busy")).toBeNull();
   });
 });

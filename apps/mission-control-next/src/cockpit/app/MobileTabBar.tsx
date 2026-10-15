@@ -110,7 +110,8 @@ export function MobileTabBar({
             className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-xs text-fg-muted"
           >
             <MoreHorizontal aria-hidden="true" className="size-5" />
-            {current === "system" ? "System" : current === "settings" ? "Settings" : "More"}
+            {/* Stays "More" so the visible text is part of the accessible name; aria-current marks System/Settings. */}
+            More
           </button>
         </nav>
       </div>

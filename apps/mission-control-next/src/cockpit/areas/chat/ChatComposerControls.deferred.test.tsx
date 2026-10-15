@@ -172,7 +172,7 @@ describe("deferred public model options Popover", () => {
     await change(host.querySelector<HTMLSelectElement>('select[aria-label="Web search"]')!, "quick");
     expect(input.onSetWebMode).toHaveBeenCalledExactlyOnceWith("quick");
     const plan = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
-      (node) => node.textContent === "Plan off",
+      (node) => node.textContent === "Plan first",
     )!;
     await act(async () => plan.click());
     expect(input.onTogglePlanningMode).toHaveBeenCalledOnce();
@@ -354,7 +354,7 @@ describe("deferred public model options Popover", () => {
     expect(document.activeElement).toBe(native);
     expect(reload).not.toHaveBeenCalled();
     const plan = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
-      (node) => node.textContent === "Plan off",
+      (node) => node.textContent === "Plan first",
     )!;
     await act(async () => plan.click());
     expect(input.onTogglePlanningMode).toHaveBeenCalledOnce();

@@ -106,16 +106,12 @@ export function Turn({
               streamTurnId={turn.turnId}
             />
           ) : (
-            <p role="status" className="text-sm text-fg-muted">
-              Preparing response…
-            </p>
+            <p className="text-sm text-fg-muted">Preparing response…</p>
           )}
           {turn.assistantMessage && !streaming ? <TurnReceipt turn={turn} /> : null}
         </div>
       ) : !failed && !partial ? (
-        <p role="status" className="text-xs text-fg-muted">
-          {stopped ? "Stopped" : humanizeToken(turn.trace.status)}
-        </p>
+        <p className="text-xs text-fg-muted">{stopped ? "Stopped" : humanizeToken(turn.trace.status)}</p>
       ) : null}
       {failed || partial ? (
         <div

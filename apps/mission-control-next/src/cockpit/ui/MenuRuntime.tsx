@@ -12,7 +12,7 @@ export const Content = forwardRef<
       <DropdownMenu.Content
         ref={ref}
         sideOffset={6}
-        className={cn("z-50 min-w-48 rounded-md border border-line bg-overlay p-1 shadow-overlay", className)}
+        className={cn("z-60 min-w-48 rounded-md border border-line bg-overlay p-1 shadow-overlay", className)}
         {...props}
       />
     </DropdownMenu.Portal>

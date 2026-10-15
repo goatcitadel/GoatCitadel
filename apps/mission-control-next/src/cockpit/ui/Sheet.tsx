@@ -43,12 +43,14 @@ export function Sheet({
   children,
   sideOnDesktop = false,
   onCloseAutoFocus,
+  closeLabel = "Close sheet",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   children: ReactNode;
   sideOnDesktop?: boolean;
+  closeLabel?: string;
   onCloseAutoFocus?: ComponentProps<DrawerContent>["onCloseAutoFocus"];
 }) {
   const isDesktop = useMediaQuery(RESPONSIVE_QUERIES.abovePhone);
@@ -159,7 +161,7 @@ export function Sheet({
         node instanceof HTMLElement &&
         pendingHost.current?.contains(node) &&
         current() &&
-        (node.getAttribute("aria-label") === "Close sheet" || node === pendingHost.current)
+        (node.getAttribute("aria-label") === closeLabel || node === pendingHost.current)
       ) {
         pendingFocus.current = { owner, node, kind: node === pendingHost.current ? "panel" : "close" };
         if (activation.current && activation.current.node !== node) releaseActivation();
@@ -169,7 +171,7 @@ export function Sheet({
       }
     };
     const ownedClose = (target: EventTarget | null) =>
-      target instanceof Element ? target.closest<HTMLElement>('button[aria-label="Close sheet"]') : null;
+      target instanceof Element ? target.closest<HTMLElement>(`button[aria-label="${CSS.escape(closeLabel)}"]`) : null;
     const releaseActivation = (saved = activation.current) => {
       if (!saved || activation.current !== saved) return;
       clearActivationTimer();
@@ -252,7 +254,7 @@ export function Sheet({
       document.removeEventListener("keyup", keyEnd);
       window.removeEventListener("blur", blur);
     };
-  }, [open, Drawer, failed, owner, current]);
+  }, [open, Drawer, failed, owner, current, closeLabel]);
   const handoffFocus: NonNullable<ComponentProps<DrawerContent>["onOpenAutoFocus"]> = (event) => {
     const saved = pendingFocus.current;
     pendingFocus.current = undefined;
@@ -288,7 +290,7 @@ export function Sheet({
       {Drawer ? (
         <Drawer.Root open={open} onOpenChange={onOpenChange} direction={side ? "right" : "bottom"}>
           <Drawer.Portal>
-            <Drawer.Overlay className="fixed inset-0 z-40 bg-canvas/70" />
+            <Drawer.Overlay className="fixed inset-0 z-40 bg-scrim" />
             <Drawer.Content
               onOpenAutoFocus={handoffFocus}
               onCloseAutoFocus={
@@ -310,7 +312,7 @@ export function Sheet({
                 <div className="mb-3 flex items-center justify-between gap-4">
                   <Drawer.Title className="font-display text-md font-semibold text-fg">{title}</Drawer.Title>
                   <Drawer.Close asChild>
-                    <IconButton ref={sdkClose} label="Close sheet" icon={<X aria-hidden="true" className="size-4" />} />
+                    <IconButton ref={sdkClose} label={closeLabel} icon={<X aria-hidden="true" className="size-4" />} />
                   </Drawer.Close>
                 </div>
                 {children}
@@ -322,7 +324,7 @@ export function Sheet({
         <Dialog
           open={open}
           title={title}
-          closeLabel="Close sheet"
+          closeLabel={closeLabel}
           description={failed ? "Sheet controls are unavailable." : "Loading sheet controls."}
           onOpenChange={(value) => {
             if (current()) onOpenChange(value);

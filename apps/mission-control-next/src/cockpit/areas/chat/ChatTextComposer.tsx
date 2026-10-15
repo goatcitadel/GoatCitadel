@@ -76,6 +76,8 @@ export function ChatTextComposer({
     props.composerPalette?.onSelect(item);
   };
   const command = props.draft.trim().toLowerCase();
+  // While the global palette is open, its search input owns the suggestions listbox.
+  const ownsSuggestions = !props.composerPalette?.globalOpen && props.commandSuggestions.length > 0;
   const localCommand =
     !props.editingTurnId &&
     !props.composerPalette?.globalOpen &&
@@ -235,10 +237,12 @@ export function ChatTextComposer({
           rows={1}
           role="combobox"
           aria-autocomplete="list"
-          aria-expanded={props.commandSuggestions.length > 0}
-          aria-controls={props.commandSuggestions.length ? "cockpit-composer-suggestions" : undefined}
+          aria-expanded={ownsSuggestions}
+          aria-controls={ownsSuggestions ? "cockpit-composer-suggestions" : undefined}
           aria-activedescendant={
-            props.commandSuggestions[props.commandIndex] ? `cockpit-suggestion-${props.commandIndex}` : undefined
+            ownsSuggestions && props.commandSuggestions[props.commandIndex]
+              ? `cockpit-suggestion-${props.commandIndex}`
+              : undefined
           }
           value={capture?.summary ?? props.draft}
           readOnly={Boolean(capture)}

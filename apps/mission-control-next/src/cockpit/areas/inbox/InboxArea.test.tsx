@@ -398,6 +398,12 @@ describe("InboxArea", () => {
     expect(container.textContent).toContain("No known items, but some sources could not be read completely.");
     expect(container.textContent).not.toContain("Nothing needs your attention");
     expect(container.textContent).toContain("Coverage is incomplete for 1 source");
+    // The coverage summary is static polled context, not a live region.
+    expect(
+      [...container.querySelectorAll('[role="status"]')].some((node) =>
+        node.textContent?.includes("No known items, but some sources"),
+      ),
+    ).toBe(false);
     expect(container.querySelector('[aria-label="Needs attention Gateway count"]')?.textContent).toBe("0 known");
   });
 
@@ -797,6 +803,10 @@ it("lets operators disable single-letter shortcuts", async () => {
   await act(async () => toggle.click());
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true })));
   expect(container.querySelector('[data-inbox-item][data-selected="true"]')).not.toBeNull();
+  // Selection is exposed to assistive technology and shown with text, not only the accent border.
+  const current = container.querySelectorAll('[data-inbox-item] article[aria-current="true"]');
+  expect(current).toHaveLength(1);
+  expect(current[0]?.textContent).toContain("Selected");
 });
 it("orders decisions by risk and selects the next remaining decision after settlement", async () => {
   const low = { ...projection.items[0]!, id: "approval:low", title: "Lower risk", riskLevel: "safe" as const };

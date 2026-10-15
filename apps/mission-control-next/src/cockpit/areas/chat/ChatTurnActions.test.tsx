@@ -44,7 +44,16 @@ const labels = () => [...container.querySelectorAll("button")].map((button) => b
 describe("Chat turn actions", () => {
   it("keeps Copy visible and secondary actions in a menu on wider screens", async () => {
     await act(async () =>
-      root.render(<ChatTurnActions turn={turn} actions={handlers()} streaming={false} readOnly={false} hasAnswer onCopy={vi.fn()} />),
+      root.render(
+        <ChatTurnActions
+          turn={turn}
+          actions={handlers()}
+          streaming={false}
+          readOnly={false}
+          hasAnswer
+          onCopy={vi.fn()}
+        />,
+      ),
     );
     expect(labels()).toEqual(expect.arrayContaining(["Copy answer", "More"]));
     expect(labels()).not.toContain("Edit and resend");
@@ -54,7 +63,16 @@ describe("Chat turn actions", () => {
     media.phone = true;
     const onCopy = vi.fn();
     await act(async () =>
-      root.render(<ChatTurnActions turn={turn} actions={handlers()} streaming={false} readOnly={false} hasAnswer onCopy={onCopy} />),
+      root.render(
+        <ChatTurnActions
+          turn={turn}
+          actions={handlers()}
+          streaming={false}
+          readOnly={false}
+          hasAnswer
+          onCopy={onCopy}
+        />,
+      ),
     );
     expect(labels()).not.toContain("Fork");
     const more = container.querySelector('button[aria-label="More message actions"]')!;
@@ -67,10 +85,40 @@ describe("Chat turn actions", () => {
 
   it("hides branching actions while streaming or read-only", async () => {
     await act(async () =>
-      root.render(<ChatTurnActions turn={turn} actions={handlers()} streaming readOnly={false} hasAnswer onCopy={vi.fn()} />),
+      root.render(
+        <ChatTurnActions turn={turn} actions={handlers()} streaming readOnly={false} hasAnswer onCopy={vi.fn()} />,
+      ),
     );
     expect(labels()).toContain("Copy answer so far");
     expect(labels()).not.toContain("Fork");
     expect(labels()).not.toContain("Edit and resend");
+  });
+
+  it("marks the current answer version with aria-current", async () => {
+    const branched = {
+      ...turn,
+      branch: { siblingTurnIds: ["turn-0", "turn-1"], activeSiblingIndex: 1, siblingCount: 2 },
+    } as unknown as ChatThreadTurnRecord;
+    const actions = handlers();
+    await act(async () =>
+      root.render(
+        <ChatTurnActions
+          turn={branched}
+          actions={actions}
+          streaming={false}
+          readOnly={false}
+          hasAnswer
+          onCopy={vi.fn()}
+        />,
+      ),
+    );
+    const first = container.querySelector<HTMLButtonElement>('button[aria-label="Switch to version 1"]')!;
+    const current = container.querySelector<HTMLButtonElement>('button[aria-label="Switch to version 2"]')!;
+    expect(current.getAttribute("aria-current")).toBe("true");
+    expect(current.disabled).toBe(true);
+    expect(current.className).toContain("rounded-sm");
+    expect(first.hasAttribute("aria-current")).toBe(false);
+    await act(async () => first.click());
+    expect(actions.onSwitchBranch).toHaveBeenCalledWith("turn-0");
   });
 });

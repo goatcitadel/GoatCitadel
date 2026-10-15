@@ -93,9 +93,10 @@ export function ChatTurnActions({
               key={siblingId}
               type="button"
               disabled={siblingId === turn.turnId}
+              aria-current={siblingId === turn.turnId ? "true" : undefined}
               onClick={() => actions.onSwitchBranch(siblingId)}
               aria-label={`Switch to version ${index + 1}`}
-              className={`inline-flex items-center justify-center rounded border border-line-control text-accent disabled:text-fg-muted ${phone ? "min-h-11 min-w-11" : "min-h-8 min-w-8"}`}
+              className={`inline-flex items-center justify-center rounded-sm border border-line-control text-accent disabled:text-fg-muted ${phone ? "min-h-11 min-w-11" : "min-h-8 min-w-8"}`}
             >
               {index + 1}
             </button>

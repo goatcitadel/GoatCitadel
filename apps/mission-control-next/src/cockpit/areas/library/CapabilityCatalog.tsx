@@ -1,5 +1,5 @@
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Virtuoso } from "react-virtuoso";
 import { Library, RefreshCw } from "lucide-react";
@@ -43,6 +43,7 @@ import { catalogHref, readCatalogLocation } from "./capability-catalog-route";
 import { AREA_COLUMN } from "../../ui/area-layout";
 
 const EMPTY_ITEMS: CapabilityCatalogEntry[] = [];
+const COUNT_ANNOUNCE_DELAY_MS = 500;
 
 function CatalogDetail({
   item,
@@ -160,6 +161,13 @@ export function CapabilityCatalog() {
       }),
     [items, search, kind, status, trust, callableKnown],
   );
+  // Announce a short count only after typing or filtering settles, instead of on every keystroke.
+  const shownCount = `${filtered.length} of ${items.length} shown`;
+  const [announcedCount, setAnnouncedCount] = useState(shownCount);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setAnnouncedCount(shownCount), COUNT_ANNOUNCE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [shownCount]);
   const selected = location.invalidSelection
     ? null
     : location.selection
@@ -225,9 +233,12 @@ export function CapabilityCatalog() {
             callableKnown={callableKnown}
             setFilters={setFilters}
           />
-          <p role="status" className="text-xs text-fg-muted">
+          <p className="text-xs text-fg-muted">
             {filtered.length} of {items.length} capabilities shown. Usage dates appear only when recorded; inspect a
             capability for availability and provenance.{view.issues.length ? " · partial catalog" : ""}
+          </p>
+          <p role="status" className="sr-only">
+            {announcedCount}
           </p>
           {missingSelection ? (
             <EmptyState

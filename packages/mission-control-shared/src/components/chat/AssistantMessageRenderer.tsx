@@ -42,11 +42,20 @@ const WORKSPACE_FILE_DOWNLOAD_PATH = "/api/v1/files/download";
 const WORKSPACE_FILE_OBJECT_URL_REVOKE_DELAY_MS = 5 * 60 * 1000;
 
 export function AssistantMessageRenderer(props: Parameters<typeof AssistantMessageBody>[0]) {
-  return <div className={cn("mc-assistant-renderer mc-assistant-renderer-markdown", props.running ? "mc-assistant-renderer-running" : "", `mc-assistant-stream-${props.streamPresentationMode ?? "smooth"}`, props.className)}>
-    <AssistantMessageContainer role={props.role} content={props.content} running={props.running}>
-      <AssistantMessageBody {...props} />
-    </AssistantMessageContainer>
-  </div>;
+  return (
+    <div
+      className={cn(
+        "mc-assistant-renderer mc-assistant-renderer-markdown",
+        props.running ? "mc-assistant-renderer-running" : "",
+        `mc-assistant-stream-${props.streamPresentationMode ?? "smooth"}`,
+        props.className,
+      )}
+    >
+      <AssistantMessageContainer role={props.role} content={props.content} running={props.running}>
+        <AssistantMessageBody {...props} />
+      </AssistantMessageContainer>
+    </div>
+  );
 }
 
 export function AssistantMessageBody({
@@ -89,14 +98,41 @@ export function AssistantMessageBody({
   }, [role, content, running, streamTurnId]);
 
   return role === "assistant" && running ? (
-    <StreamingMarkdown content={displayContent} streamPresentationMode={streamPresentationMode} streamTurnId={streamTurnId} />
+    <StreamingMarkdown
+      content={displayContent}
+      streamPresentationMode={streamPresentationMode}
+      streamTurnId={streamTurnId}
+    />
   ) : (
-    <MemoizedMarkdownBlock content={displayContent} role={role} components={role === "assistant" ? assistantMarkdownComponents : userMarkdownComponents} />
+    <MemoizedMarkdownBlock
+      content={displayContent}
+      role={role}
+      components={role === "assistant" ? assistantMarkdownComponents : userMarkdownComponents}
+    />
   );
 }
 
+// Message headings belong to the message, not the page: an assistant "# Title" must not compete with the page's
+// own h1 in the document outline. The element (and so its styling) is kept; only the announced level drops by two.
+const MESSAGE_HEADING_LEVEL_OFFSET = 2;
+function messageHeading(level: 1 | 2 | 3 | 4 | 5 | 6): NonNullable<Components["h1"]> {
+  const Tag = `h${level}` as const;
+  return function MessageHeading({ node: _node, ...props }) {
+    return <Tag {...props} aria-level={Math.min(6, level + MESSAGE_HEADING_LEVEL_OFFSET)} />;
+  };
+}
+const MESSAGE_HEADINGS = {
+  h1: messageHeading(1),
+  h2: messageHeading(2),
+  h3: messageHeading(3),
+  h4: messageHeading(4),
+  h5: messageHeading(5),
+  h6: messageHeading(6),
+} satisfies Components;
+
 function createMarkdownComponents({ allowGeneratedUi }: { allowGeneratedUi: boolean }): Components {
   return {
+    ...MESSAGE_HEADINGS,
     a({ children, href, node: _node, ...props }) {
       const safeHref = resolveSafeMarkdownHref(href);
       if (!safeHref) {

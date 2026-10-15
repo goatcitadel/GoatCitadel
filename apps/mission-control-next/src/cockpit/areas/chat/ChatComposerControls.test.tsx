@@ -75,10 +75,37 @@ describe("Chat composer controls", () => {
     await openOptions();
     expect(document.querySelector('select[aria-label="Provider"]')).not.toBeNull();
     expect(document.querySelector('select[aria-label="Thinking effort"]')).not.toBeNull();
-    const plan = [...container.querySelectorAll("button")].find((button) => button.textContent === "Plan off")!;
+    const plan = [...container.querySelectorAll("button")].find((button) => button.textContent === "Plan first")!;
     await act(async () => plan.click());
     expect(input.onTogglePlanningMode).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["off", "off", "false"],
+    ["advisory", "standard", "true"],
+  ] as const)(
+    "keeps static mode labels and reports state through aria-pressed (%s)",
+    async (planningMode, review, pressed) => {
+      await act(async () =>
+        root.render(
+          <ChatComposerControls props={props({ planningMode, currentReviewDepth: review } as Partial<Props>)} />,
+        ),
+      );
+      const buttons = [...container.querySelectorAll("button")];
+      for (const [label, help] of [
+        ["Plan first", "Plan before acting."],
+        ["Review answer", "Request review of the answer"],
+      ] as const) {
+        const toggle = buttons.find((button) => button.textContent === label)!;
+        expect(toggle.getAttribute("aria-pressed")).toBe(pressed);
+        // Hover keeps the tooltip; assistive tech gets the same explanation through aria-describedby.
+        const helper = document.getElementById(toggle.getAttribute("aria-describedby")!);
+        expect(helper?.textContent).toContain(help);
+        expect(toggle.getAttribute("title")).toBe(helper?.textContent);
+        expect(helper?.className).toContain("sr-only");
+      }
+    },
+  );
 
   it("sets web search to any mode, including off", async () => {
     const input = props({ currentWebMode: "auto" });

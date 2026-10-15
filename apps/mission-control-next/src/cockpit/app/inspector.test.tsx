@@ -83,6 +83,25 @@ describe("inspector", () => {
     expect(container.querySelector('[aria-label="Inspector: Run"]')).toBeNull();
   });
 
+  it("leaves Escape to text fields but still closes from controls that do not use it", () => {
+    act(() => {
+      root.render(
+        <InspectorProvider>
+          <Probe />
+          <InspectorPanel />
+        </InspectorProvider>,
+      );
+    });
+    const escapeFrom = (target: Element) =>
+      act(() => target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    act(() => api.open({ title: "Run", body: <input aria-label="Filter steps" /> }));
+    escapeFrom(container.querySelector('input[aria-label="Filter steps"]')!);
+    expect(container.querySelector('[aria-label="Inspector: Run"]')).not.toBeNull();
+    act(() => api.open({ title: "Run", body: <input type="checkbox" aria-label="Show retries" /> }));
+    escapeFrom(container.querySelector('input[aria-label="Show retries"]')!);
+    expect(container.querySelector('[aria-label="Inspector: Run"]')).toBeNull();
+  });
+
   it("refreshes only the matching owner and closes its panel when the owner leaves", () => {
     act(() => {
       root.render(
@@ -339,7 +358,8 @@ it("restores phone inspection focus to its originating control", async () => {
   const trigger = container.querySelector<HTMLButtonElement>("button")!;
   trigger.focus();
   await act(async () => trigger.click());
-  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Close sheet"]')!.click());
+  // The phone sheet names what it closes.
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Close inspector"]')!.click());
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
   });

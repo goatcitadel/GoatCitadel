@@ -192,6 +192,13 @@ describe("cockpit Diagnostics", () => {
         [...container.querySelectorAll("button")].find((button) => button.textContent === "All events")?.click(),
       );
       expect(eventRows()).toHaveLength(20);
+      // The view toggle is a segmented control: pressed state, not the primary accent variant.
+      const toggles = [...container.querySelectorAll('[aria-label="Diagnostic event view"] button')];
+      expect(toggles.map((button) => [button.textContent, button.getAttribute("aria-pressed")])).toEqual([
+        ["Warnings and errors", "false"],
+        ["All events", "true"],
+      ]);
+      expect(toggles.some((button) => button.classList.contains("bg-accent"))).toBe(false);
       expect(container.textContent).toContain("Show remaining 7 events");
       await act(async () =>
         [...container.querySelectorAll("button")]

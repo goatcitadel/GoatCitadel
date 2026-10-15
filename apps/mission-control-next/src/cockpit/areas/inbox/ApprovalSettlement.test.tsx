@@ -94,6 +94,32 @@ it("notifies Chat when a slow effect or linked run changes, without refreshing o
   expect(container.textContent).toContain("Original linked work: completed");
 });
 
+it("shows background checking as quiet text instead of a live region", async () => {
+  mocks.read.mockResolvedValue(state("completed", "completed"));
+  await render(vi.fn());
+  await waitForRefresh(false);
+  let resolve!: (value: FollowOnState) => void;
+  mocks.read.mockReturnValueOnce(
+    new Promise<FollowOnState>((done) => {
+      resolve = done;
+    }),
+  );
+  await act(async () => {
+    void client.invalidateQueries({ queryKey: ["approval-settlement"] });
+  });
+  await waitForRefresh(true);
+  const checking = [...container.querySelectorAll("p")].find((node) =>
+    node.textContent?.includes("Checking canonical follow-on work"),
+  );
+  expect(checking).toBeDefined();
+  expect(checking?.closest('[role="status"], [role="alert"], [aria-live]')).toBeNull();
+  await act(async () => resolve(state("completed", "completed")));
+  await waitForRefresh(false);
+  const live = [...container.querySelectorAll('[role="status"]')].map((node) => node.textContent);
+  expect(live.some((text) => text?.includes("Original linked work: completed"))).toBe(true);
+  expect(live.some((text) => text?.includes("Checking canonical"))).toBe(false);
+});
+
 it("uses the current callback only when a follow-on outcome changes", async () => {
   mocks.read.mockResolvedValue(state("completed", "completed"));
   const original = vi.fn();

@@ -7,7 +7,6 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { ChatArea } from "../areas/chat/ChatArea";
 import { AreaErrorBoundary } from "../ui/AreaErrorBoundary";
-import { AreaPlaceholder } from "./AreaPlaceholder";
 import { CommandPalette } from "./CommandPalette";
 import { GatewayUnavailableBanner } from "./GatewayUnavailableBanner";
 import { CockpitNavigationContext, useCockpitNavigation } from "./cockpit-navigation-context";
@@ -120,6 +119,12 @@ function CockpitShellContent({
   return (
     <InspectorProvider>
       <div className="flex h-dvh flex-col bg-canvas text-fg">
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-70 focus:rounded-md focus:bg-overlay focus:px-3 focus:py-2 focus:text-sm focus:text-fg focus:shadow-overlay"
+        >
+          Skip to main content
+        </a>
         <IncomingScopeReview />
         <ChatContextHandoffNotice />
         {/* Above the scrolling row, so the outage notice never scrolls away and phones see it. */}
@@ -140,6 +145,7 @@ function CockpitShellContent({
           <main
             ref={mainScroll}
             id="main-content"
+            tabIndex={-1}
             className={
               conversationVisible
                 ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
@@ -209,9 +215,7 @@ function CockpitShellContent({
                     <WorkArea />
                   ) : area === "settings" ? (
                     <SettingsArea />
-                  ) : (
-                    <AreaPlaceholder area={area} />
-                  )}
+                  ) : null}
                 </Suspense>
               </AreaErrorBoundary>
             ) : null}

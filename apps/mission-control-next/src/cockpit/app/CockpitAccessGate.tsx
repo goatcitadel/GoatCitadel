@@ -1,5 +1,7 @@
 import { lazy, Suspense } from "react";
-const GatewayAccessGate = lazy(async () => ({ default: (await import("@goatcitadel/mission-control-shared/components/GatewayAccessGate")).GatewayAccessGate }));
+const GatewayAccessGate = lazy(async () => ({
+  default: (await import("@goatcitadel/mission-control-shared/components/GatewayAccessGate")).GatewayAccessGate,
+}));
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import type { GatewayAccessViewState } from "../../app/use-gateway-access";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
@@ -34,11 +36,11 @@ export function CockpitAccessGate({
     ? access.message
     : misconfigured
       ? access.message
-    : needsSignIn
-      ? "Restore gateway access with the form below. Unsaved drafts remain in this app session."
-      : checking
-        ? "Checking gateway access."
-        : `It may not be running. ${gatewayStartHint(currentGatewayHost())} This page retries automatically.`;
+      : needsSignIn
+        ? "Restore gateway access with the form below. Unsaved drafts remain in this app session."
+        : checking
+          ? "Checking gateway access."
+          : `It may not be running. ${gatewayStartHint(currentGatewayHost())} This page retries automatically.`;
   if (needsSignIn || blocked)
     return (
       <main className="cockpit-access min-h-dvh overflow-auto bg-canvas p-4">
@@ -52,11 +54,18 @@ export function CockpitAccessGate({
   return (
     <main className="flex h-dvh items-center justify-center bg-canvas">
       <EmptyState
+        // The gate replaces the whole cockpit, so its title is the page heading.
+        headingLevel={1}
         title={title}
         description={description}
         action={
           misconfigured ? (
-            <div className="flex flex-wrap gap-2"><Button disabled={busy} onClick={onRetry}>{busy ? "Checking…" : "Try again"}</Button><Button onClick={shellSwitch.visit}>Open classic view</Button></div>
+            <div className="flex flex-wrap gap-2">
+              <Button disabled={busy} onClick={onRetry}>
+                {busy ? "Checking…" : "Try again"}
+              </Button>
+              <Button onClick={shellSwitch.visit}>Open classic view</Button>
+            </div>
           ) : (
             <Button disabled={busy || checking} onClick={onRetry}>
               {busy || checking ? "Checking…" : "Try again"}
