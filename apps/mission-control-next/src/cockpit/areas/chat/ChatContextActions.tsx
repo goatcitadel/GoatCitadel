@@ -300,7 +300,7 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
           <label className="block">
             Connection
             <input
-              className="block w-full rounded-md border border-line bg-canvas p-2"
+              className="block w-full rounded-md border border-line-control bg-canvas p-2"
               value={bindingDraft.value.connectionId}
               onChange={(event) => bindingDraft.setValue({ ...bindingDraft.value, connectionId: event.target.value })}
             />
@@ -308,7 +308,7 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
           <label className="block">
             Target
             <input
-              className="block w-full rounded-md border border-line bg-canvas p-2"
+              className="block w-full rounded-md border border-line-control bg-canvas p-2"
               value={bindingDraft.value.target}
               onChange={(event) => bindingDraft.setValue({ ...bindingDraft.value, target: event.target.value })}
             />

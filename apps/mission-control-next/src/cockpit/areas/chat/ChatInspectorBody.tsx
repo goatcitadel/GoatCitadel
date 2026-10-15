@@ -357,7 +357,7 @@ export function ChatInspector({
                 <label className="block">
                   Folder
                   <input
-                    className="block w-full rounded-md border border-line bg-canvas p-2"
+                    className="block w-full rounded-md border border-line-control bg-canvas p-2"
                     value={dock.folderName}
                     onChange={(event) => dock.onFolderNameChange(event.target.value)}
                   />
@@ -365,7 +365,7 @@ export function ChatInspector({
                 <label className="block">
                   Tags
                   <input
-                    className="block w-full rounded-md border border-line bg-canvas p-2"
+                    className="block w-full rounded-md border border-line-control bg-canvas p-2"
                     value={dock.tagsValue}
                     onChange={(event) => dock.onTagsValueChange(event.target.value)}
                     placeholder="Comma-separated tags"
@@ -374,7 +374,7 @@ export function ChatInspector({
                 <button
                   type="submit"
                   disabled={Boolean(dock.sessionControlPending)}
-                  className="rounded-md border border-line px-3 py-2 text-accent"
+                  className="rounded-md border border-line-control px-3 py-2 text-accent"
                 >
                   Save organization
                 </button>

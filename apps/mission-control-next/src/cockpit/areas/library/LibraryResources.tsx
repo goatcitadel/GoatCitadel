@@ -189,7 +189,7 @@ function LibraryResourceDirectory({
           <label className="text-sm text-fg-secondary">
             Recorded source
             <select
-              className="mt-1 block min-h-10 rounded-md border border-line bg-raised px-2 text-fg"
+              className="mt-1 block min-h-10 rounded-md border border-line-control bg-raised px-2 text-fg"
               value={sourceSurface}
               onChange={(event) => {
                 if (!access.current()) return;
