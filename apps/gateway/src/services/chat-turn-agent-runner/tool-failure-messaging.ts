@@ -23,10 +23,39 @@ function readPathBridgeBlock(
   return (error ?? "").toLowerCase().includes(PATH_BRIDGE_POLICY_REASON) ? {} : undefined;
 }
 
+const JAIL_BOUNDARY_NEXT_STEP =
+  "This is a fixed execution boundary, not a pending approval, so retrying the same command will not help. Run it from a folder inside the workspace, or the operator can run it outside GoatCitadel.";
+
+function describePathBridgeBlock(folder: string, reasonCode: string | undefined): string {
+  switch (reasonCode) {
+    case "outside_jail":
+      return `${folder} is outside the workspace folders GoatCitadel may run commands in. ${JAIL_BOUNDARY_NEXT_STEP}`;
+    case "symlink_escape":
+      return `${folder} resolves through a link to a location outside the workspace folders GoatCitadel may run commands in. ${JAIL_BOUNDARY_NEXT_STEP}`;
+    case "invalid_path":
+      return `${folder} is not a valid absolute folder path for execution. Retry with an absolute folder path inside the workspace.`;
+    case "canonicalization_failed":
+    case "round_trip_mismatch":
+      return `${folder} could not be resolved to a stable path; it may be missing, inaccessible, or changed during verification. Check that the folder exists and is readable, then retry.`;
+    case "wsl_unavailable":
+    case "wsl_conversion_failed":
+      return `${folder} could not be verified because WSL is unavailable or could not translate the path. Check that WSL is installed and running for the Gateway, then retry.`;
+    case "git_unavailable":
+      return `${folder} could not be verified because Git is not available to the Gateway. Install or repair Git on the Gateway host, then retry.`;
+    case "git_not_repository":
+    case "git_verification_failed":
+    case "git_identity_mismatch":
+      return `${folder} could not be matched to the project's bound Git repository. Check the project's repository binding in Projects, then retry.`;
+    default:
+      return `${folder} could not be verified for execution by the workspace path bridge. Check Gateway path-bridge health and configuration before retrying; this is not a pending approval.`;
+  }
+}
+
 /**
- * Guidance for a tool blocked by the workspace path bridge. The bridge is a
- * fixed execution boundary rather than an approval gate, so the guidance must
- * not suggest retrying with narrower input or imply an approval is pending.
+ * Guidance for a tool blocked by the workspace path bridge. Only jail-boundary
+ * reasons are described as fixed; availability, binding, and canonicalization
+ * failures get reason-specific repair steps. None of them imply an approval is
+ * pending or suggest a narrower input.
  */
 export function buildPathBridgeFailureGuidance(input: {
   args?: Record<string, unknown>;
@@ -38,14 +67,7 @@ export function buildPathBridgeFailureGuidance(input: {
     return undefined;
   }
   const cwd = typeof input.args?.cwd === "string" && input.args.cwd.trim() ? input.args.cwd.trim() : undefined;
-  const folder = cwd ? `The working folder ${cwd}` : "The working folder";
-  const nextStep =
-    "This is a fixed execution boundary, not a pending approval, so retrying the same command will not help. Run it from a folder inside the workspace, or the operator can run it outside GoatCitadel.";
-  if (block.reasonCode === "outside_jail") {
-    return `${folder} is outside the workspace folders GoatCitadel may run commands in. ${nextStep}`;
-  }
-  const reason = block.reasonCode ? ` (${block.reasonCode.replaceAll("_", " ")})` : "";
-  return `${folder} could not be verified for execution${reason}. ${nextStep}`;
+  return describePathBridgeBlock(cwd ? `The working folder ${cwd}` : "The working folder", block.reasonCode);
 }
 
 function isWebTool(toolName: string): boolean {

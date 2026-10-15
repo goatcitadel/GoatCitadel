@@ -30,22 +30,44 @@ describe("buildPathBridgeFailureGuidance", () => {
     expect(guidance).not.toMatch(/narrower|URL/i);
   });
 
-  it("recognizes the path-bridge block from the policy reason alone", () => {
+  it("points at bridge health, not a fixed boundary, when no reason code is reported", () => {
     const guidance = buildPathBridgeFailureGuidance({ error: PATH_BRIDGE_REASON });
 
     expect(guidance).toMatch(/could not be verified/i);
-    expect(guidance).not.toMatch(/narrower|URL/i);
+    expect(guidance).toContain("path-bridge health");
+    expect(guidance).not.toMatch(/fixed execution boundary|narrower|URL/i);
   });
 
-  it("names a non-jail reason code without calling it outside the workspace", () => {
+  it("treats a symlink escape as a fixed jail boundary", () => {
     const guidance = buildPathBridgeFailureGuidance({
       args: { cwd: "C:\\repo\\linked" },
       result: { workspacePathBridge: { status: "blocked", reasonCode: "symlink_escape" } },
       error: PATH_BRIDGE_REASON,
     });
 
-    expect(guidance).toContain("symlink escape");
-    expect(guidance).not.toContain("outside the workspace folders");
+    expect(guidance).toContain("resolves through a link");
+    expect(guidance).toMatch(/fixed execution boundary/i);
+  });
+
+  it.each([
+    ["wsl_unavailable", "WSL"],
+    ["wsl_conversion_failed", "WSL"],
+    ["git_unavailable", "Git is not available"],
+    ["git_not_repository", "repository binding"],
+    ["git_verification_failed", "repository binding"],
+    ["git_identity_mismatch", "repository binding"],
+    ["canonicalization_failed", "stable path"],
+    ["round_trip_mismatch", "stable path"],
+    ["invalid_path", "absolute folder path"],
+  ])("gives repair guidance, not a fixed-boundary claim, for %s", (reasonCode, expected) => {
+    const guidance = buildPathBridgeFailureGuidance({
+      args: { cwd: "C:\\repo" },
+      result: { workspacePathBridge: { status: "blocked", reasonCode } },
+      error: PATH_BRIDGE_REASON,
+    });
+
+    expect(guidance).toContain(expected);
+    expect(guidance).not.toMatch(/fixed execution boundary|outside the workspace folders|narrower|URL/i);
   });
 
   it("ignores failures that are not path-bridge blocks", () => {
