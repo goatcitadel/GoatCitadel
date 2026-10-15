@@ -17,6 +17,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/citadels", () => ({
   }),
   listCitadels: vi.fn(async () => ({ items: [] })),
 }));
+// The Inbox bulk-reject zone reads installation-wide pending approvals.
+vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/approvals")>()),
+  fetchApprovals: vi.fn(async () => ({ items: [] })),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/durable")>()),
   fetchDurableRunHistory: vi.fn(async () => ({ items: [], nextCursor: "more" })),
