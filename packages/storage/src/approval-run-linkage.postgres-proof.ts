@@ -231,7 +231,8 @@ test("PostgreSQL canonical execution linkage migrates, backfills, indexes and pa
           const retained = {
             approvals: scope.db.prepare("SELECT * FROM approvals ORDER BY approval_id").all(),
             linkages: scope.db.prepare("SELECT * FROM approval_execution_linkages ORDER BY approval_id").all(),
-            ledger: scope.db.prepare("SELECT * FROM schema_migrations ORDER BY version").all(),
+            ledger: scope.db.prepare("SELECT * FROM schema_migrations WHERE version <= 209 ORDER BY version").all(),
+            laterLedger: scope.db.prepare("SELECT * FROM schema_migrations WHERE version > 210 ORDER BY version").all(),
             objects: (
               await scope.scopedPool.query(
                 "SELECT relation.relname, relation.relkind, relation.oid::text FROM pg_catalog.pg_class relation JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname = current_schema() AND relation.relname NOT IN ('idx_approval_execution_run', 'idx_approval_execution_durable_run') ORDER BY relation.relname",
@@ -251,6 +252,10 @@ test("PostgreSQL canonical execution linkage migrates, backfills, indexes and pa
           assert.deepEqual(
             scope.db.prepare("SELECT * FROM schema_migrations WHERE version <= 209 ORDER BY version").all(),
             retained.ledger,
+          );
+          assert.deepEqual(
+            scope.db.prepare("SELECT * FROM schema_migrations WHERE version > 210 ORDER BY version").all(),
+            retained.laterLedger,
           );
           assert.deepEqual(
             (
