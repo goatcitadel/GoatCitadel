@@ -4,7 +4,6 @@ import type {
   ChatOrchestrationSummary,
   ChatSessionWorkbenchRecord,
   ChatTurnTraceRecord,
-  ChatThreadResponse,
   ChatThreadTurnRecord,
   ContinuationGateDecision,
   AgenticControlAction,

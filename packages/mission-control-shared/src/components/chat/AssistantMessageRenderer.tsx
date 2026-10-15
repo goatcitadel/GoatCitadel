@@ -55,7 +55,6 @@ export function AssistantMessageBody({
   running = false,
   streamPresentationMode = "smooth",
   streamTurnId,
-  className,
 }: {
   role: "user" | "assistant";
   content: string;
