@@ -36,7 +36,6 @@ const LAYER_CLASS = /(?:^|[\s"'`:])z-(40|50|60|70|[89]\d|\d{3,})(?=[\s"'`]|$)/;
 
 // Files that intercepted link clicks before this guard existed. Remove entries as they adopt isModifiedClick.
 export const MODIFIED_CLICK_BASELINE = new Set([
-  "areas/chat/ChatInspectorBody.tsx",
   "areas/library/CapabilitySettings.tsx",
   "areas/library/LibraryArea.tsx",
   "areas/settings/FirstRunVerification.tsx",
@@ -45,12 +44,10 @@ export const MODIFIED_CLICK_BASELINE = new Set([
   "areas/settings/SafetyCatalogSummary.tsx",
   "areas/settings/SettingsArea.tsx",
   "areas/settings/TrustPolicySettings.tsx",
-  "areas/system/CockpitBoardEditor.tsx",
   "areas/system/HealthLocalRuntimeActions.tsx",
   "areas/system/SystemArea.tsx",
   "areas/system/SystemDashboards.tsx",
   "areas/work/WorkRunDetail.tsx",
-  "areas/work/WorkTaskCreate.tsx",
   "areas/work/WorkTaskDetail.tsx",
   "ui/ClassicOwnerLink.tsx",
 ]);
@@ -71,14 +68,57 @@ export function checkFile(relativePath, contents) {
       if (LAYER_CLASS.test(line)) findings.push(`${relativePath}:${index + 1}: layer z-index outside a layer owner`);
     });
   }
-  const interceptsLinks = /href=/.test(contents) && /preventDefault\(\)/.test(contents);
-  if (interceptsLinks && !/isModifiedClick/.test(contents) && !MODIFIED_CLICK_BASELINE.has(relativePath))
-    findings.push(`${relativePath}: intercepts clicks on a link without isModifiedClick`);
+  if (!MODIFIED_CLICK_BASELINE.has(relativePath)) {
+    for (const line of findUnguardedLinkHandlers(contents))
+      findings.push(`${relativePath}:${line}: intercepts clicks on a link without isModifiedClick`);
+  }
   return findings;
 }
 
+/** Returns the text between the brace at `open` and its matching close brace (string contents are skipped). */
+function braceBody(source, open) {
+  let depth = 0;
+  let quote = null;
+  for (let index = open; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (char === "\\") index += 1;
+      else if (char === quote) quote = null;
+    } else if (char === '"' || char === "'" || char === "`") quote = char;
+    else if (char === "{") depth += 1;
+    else if (char === "}" && --depth === 0) return source.slice(open + 1, index);
+  }
+  return "";
+}
+
+function namedHandlerBody(source, name) {
+  const declaration = new RegExp(`(?:const|let|function)\\s+${name}\\b[^{]*`).exec(source);
+  return declaration ? braceBody(source, declaration.index + declaration[0].length) : "";
+}
+
+/**
+ * Line numbers of onClick handlers on elements with an href that cancel the click without first leaving modified
+ * clicks to the browser. Each handler is checked on its own, inline or named, so one guarded link cannot hide
+ * another.
+ */
+export function findUnguardedLinkHandlers(contents) {
+  const lines = [];
+  for (const match of contents.matchAll(/onClick=\{/g)) {
+    const expression = braceBody(contents, match.index + "onClick=".length);
+    const tag = contents.slice(contents.lastIndexOf("<", match.index), match.index);
+    if (!/\bhref=/.test(tag) && !/\bhref=/.test(contents.slice(match.index, contents.indexOf(">", match.index + 9 + expression.length))))
+      continue;
+    const named = /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(expression);
+    const body = named ? namedHandlerBody(contents, named[1]) : expression;
+    if (/preventDefault\(\)/.test(body) && !/isModifiedClick/.test(body))
+      lines.push(contents.slice(0, match.index).split(/\r?\n/).length);
+  }
+  return lines;
+}
+
 async function walk(dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  // A directory that cannot be read must fail the guard, not pass silently.
+  const entries = await fs.readdir(dir, { withFileTypes: true });
   const groups = await Promise.all(
     entries.map((entry) => {
       const full = path.join(dir, entry.name);
@@ -99,19 +139,21 @@ async function main() {
     const contents = await fs.readFile(file, "utf8");
     liveRegions += countLiveRegions(contents);
     findings.push(...checkFile(relative, contents));
-    if (MODIFIED_CLICK_BASELINE.has(relative) && /isModifiedClick/.test(contents)) stale.push(relative);
+    if (MODIFIED_CLICK_BASELINE.has(relative) && findUnguardedLinkHandlers(contents).length === 0) stale.push(relative);
   }
   if (liveRegions > LIVE_REGION_BUDGET)
     findings.push(`live regions grew to ${liveRegions} (budget ${LIVE_REGION_BUDGET}); announce outcomes, not static or polled text`);
-  for (const relative of stale) findings.push(`${relative} now uses isModifiedClick: remove it from MODIFIED_CLICK_BASELINE`);
+  // An exact ratchet: when the count drops, the same change lowers the budget so the slack cannot be reused.
+  if (liveRegions < LIVE_REGION_BUDGET)
+    findings.push(`live regions dropped to ${liveRegions}: lower LIVE_REGION_BUDGET from ${LIVE_REGION_BUDGET} to ${liveRegions}`);
+  for (const relative of stale) findings.push(`${relative} has no unguarded link handlers: remove it from MODIFIED_CLICK_BASELINE`);
   if (findings.length) {
     console.error("[cockpit-semantics] violations:");
     for (const finding of findings) console.error(`- ${finding}`);
     process.exitCode = 1;
     return;
   }
-  const note = liveRegions < LIVE_REGION_BUDGET ? ` (lower LIVE_REGION_BUDGET to ${liveRegions})` : "";
-  console.log(`[cockpit-semantics] ${files.length} cockpit files pass; ${liveRegions} live regions${note}`);
+  console.log(`[cockpit-semantics] ${files.length} cockpit files pass; ${liveRegions} live regions`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

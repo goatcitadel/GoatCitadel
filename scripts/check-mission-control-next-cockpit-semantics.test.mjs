@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { checkFile, countLiveRegions } from "./check-mission-control-next-cockpit-semantics.mjs";
+import { checkFile, countLiveRegions, findUnguardedLinkHandlers } from "./check-mission-control-next-cockpit-semantics.mjs";
 
 describe("cockpit semantics guard", () => {
   it("keeps EmptyState and Callout off live regions and prefixes", () => {
@@ -29,9 +29,21 @@ describe("cockpit semantics guard", () => {
   it("requires isModifiedClick when a new file intercepts link clicks", () => {
     const intercepting = '<a href="/work" onClick={(event) => { event.preventDefault(); go(); }}>Work</a>';
     assert.deepEqual(checkFile("areas/inbox/NewLink.tsx", intercepting), [
-      "areas/inbox/NewLink.tsx: intercepts clicks on a link without isModifiedClick",
+      "areas/inbox/NewLink.tsx:1: intercepts clicks on a link without isModifiedClick",
     ]);
     const guarded = '<a href="/work" onClick={(event) => { if (isModifiedClick(event)) return; event.preventDefault(); }}>Work</a>';
     assert.deepEqual(checkFile("areas/inbox/NewLink.tsx", guarded), []);
+  });
+
+  it("checks every link handler on its own, inline or named", () => {
+    const source = [
+      'const open = (event) => { if (isModifiedClick(event)) return; event.preventDefault(); go("/a"); };',
+      'const jump = (event) => { event.preventDefault(); go("/b"); };',
+      '<a href="/a" onClick={open}>A</a>',
+      '<a href="/b" onClick={jump}>B</a>',
+      '<a href="/c" onClick={(event) => { event.preventDefault(); go("/c"); }}>C</a>',
+      '<button type="button" onClick={(event) => { event.preventDefault(); save(); }}>Save</button>',
+    ].join("\n");
+    assert.deepEqual(findUnguardedLinkHandlers(source), [4, 5]);
   });
 });

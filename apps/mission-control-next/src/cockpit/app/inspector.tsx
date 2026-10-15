@@ -28,8 +28,9 @@ import {
   type InspectorContent,
 } from "./inspector-context";
 
+// Controls that use Escape themselves. Checkboxes, radios and button-like inputs do not, so Escape still closes.
 const ESCAPE_OWNERS =
-  'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="menu"], [role="listbox"], [role="combobox"]';
+  'input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="reset"], [type="range"], [type="color"], [type="file"]), textarea, select, [contenteditable]:not([contenteditable="false"]), [role="menu"], [role="listbox"], [role="combobox"]';
 
 export function InspectorProvider({ children }: { children: ReactNode }) {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
