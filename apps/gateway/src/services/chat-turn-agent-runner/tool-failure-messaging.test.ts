@@ -26,6 +26,7 @@ describe("buildPathBridgeFailureGuidance", () => {
 
     expect(guidance).toContain("C:\\Users\\example");
     expect(guidance).toContain("outside the workspace folders");
+    expect(guidance).toContain("Path-bridge reason: outside_jail.");
     expect(guidance).toMatch(/not a pending approval/i);
     expect(guidance).not.toMatch(/narrower|URL/i);
   });
@@ -47,6 +48,7 @@ describe("buildPathBridgeFailureGuidance", () => {
 
     expect(guidance).toContain("resolves through a link");
     expect(guidance).toMatch(/fixed execution boundary/i);
+    expect(guidance).toContain("Path-bridge reason: symlink_escape.");
   });
 
   it.each([
@@ -102,6 +104,13 @@ describe("buildToolFailureAppendixText", () => {
     const text = buildToolFailureAppendixText([toolRun({ toolName: "browser.search", status: "blocked" })]);
 
     expect(text).toContain("give me a specific URL or narrower query");
+  });
+
+  it("treats a blocked docs.search as a policy block, not a web tool", () => {
+    const text = buildToolFailureAppendixText([toolRun({ toolName: "docs.search", status: "blocked" })]);
+
+    expect(text).toContain("Note: search was blocked by policy");
+    expect(text).not.toMatch(/URL|narrower query/);
   });
 
   it("uses the multi-tool opening for several tools", () => {

@@ -1,7 +1,7 @@
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 
 const PATH_BRIDGE_POLICY_REASON = "workspace path was not freshly verified for execution";
-const WEB_TOOL_PREFIXES = ["browser.", "http.", "web.", "docs.search", "search."];
+const WEB_TOOL_PREFIXES = ["browser.", "http."];
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
@@ -67,7 +67,8 @@ export function buildPathBridgeFailureGuidance(input: {
     return undefined;
   }
   const cwd = typeof input.args?.cwd === "string" && input.args.cwd.trim() ? input.args.cwd.trim() : undefined;
-  return describePathBridgeBlock(cwd ? `The working folder ${cwd}` : "The working folder", block.reasonCode);
+  const guidance = describePathBridgeBlock(cwd ? `The working folder ${cwd}` : "The working folder", block.reasonCode);
+  return block.reasonCode ? `${guidance} Path-bridge reason: ${block.reasonCode}.` : guidance;
 }
 
 function isWebTool(toolName: string): boolean {

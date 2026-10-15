@@ -10179,6 +10179,15 @@ function buildToolFailureGuidance(input: {
    */
   blockerStrictness?: number;
 }): string | undefined {
+  if (input.status === "blocked") {
+    // Path-bridge guidance is already a complete, reason-specific blocker
+    // explanation; the strict template would ask for an approval that cannot
+    // lift a jail boundary.
+    const pathBridgeGuidance = buildPathBridgeFailureGuidance(input);
+    if (pathBridgeGuidance) {
+      return pathBridgeGuidance;
+    }
+  }
   const normalizedError = (input.error ?? "").toLowerCase();
   const host = readBlockedSourceHost(input.result ?? {}, input.args);
   const browserFailureClass =
@@ -10239,13 +10248,6 @@ function buildToolFailureGuidanceBase(input: {
   browserFailureClass?: string;
 }): string | undefined {
   const { normalizedError, host, browserFailureClass } = input;
-
-  if (input.status === "blocked") {
-    const pathBridgeGuidance = buildPathBridgeFailureGuidance(input);
-    if (pathBridgeGuidance) {
-      return pathBridgeGuidance;
-    }
-  }
 
   if (input.toolName.startsWith("browser.") || input.toolName.startsWith("http.")) {
     if (/\bnot yet allowlisted\b|\bnot allowlisted\b|\ballowlisted\b/.test(normalizedError)) {
