@@ -13,7 +13,8 @@ import { Field } from "../../ui/Field";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { useLibraryOperation } from "../library/use-library-operation";
 import { BrowserSessionDetail } from "./BrowserSessionDetail";
-import { formatTime, LIST_LIMIT } from "./browser-sessions-model";
+import { LIST_LIMIT } from "./browser-sessions-model";
+import { TimeText } from "../../ui/TimeText";
 
 type Filter = "active" | "closed" | "all";
 const FILTERS: readonly { id: Filter; label: string }[] = [
@@ -100,8 +101,8 @@ function BrowserSessionsWorkspace({ workspaceId }: { workspaceId: string }) {
       <header className="grid min-w-0 gap-2">
         <h1 className="font-display text-xl font-semibold">Browser sessions</h1>
         <p className="text-sm text-fg-secondary">
-          Governed browser-session records and scoped grants for workspace {workspaceId}. A session record does not
-          open, bind or control a browser; tools still need a grant, policy checks and guardrails.
+          Governed browser-session records and scoped grants for this workspace. A session record does not open, bind or
+          control a browser; tools still need a grant, policy checks and guardrails.
         </p>
       </header>
       <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-3">
@@ -125,7 +126,7 @@ function BrowserSessionsWorkspace({ workspaceId }: { workspaceId: string }) {
             {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
             {operation.locked && pending ? (
               <p className="text-sm wrap-anywhere">
-                Pending request: a session labelled &ldquo;{pending.label}&rdquo; in workspace {workspaceId}.
+                Pending request: a session labelled &ldquo;{pending.label}&rdquo; in this workspace.
               </p>
             ) : null}
             {outcome ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
@@ -194,7 +195,7 @@ function BrowserSessionsWorkspace({ workspaceId }: { workspaceId: string }) {
                         }
                       />
                     </span>
-                    <span className="text-sm text-fg-secondary">Updated {formatTime(session.updatedAt)}</span>
+                    <TimeText value={session.updatedAt} prefix="Updated" className="text-sm text-fg-secondary" />
                   </button>
                 </li>
               ))}

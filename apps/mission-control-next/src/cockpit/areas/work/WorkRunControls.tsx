@@ -11,13 +11,19 @@ import {
   resumeDurableRun,
   retryDurableRun,
 } from "@goatcitadel/mission-control-shared/api/durable";
+import {
+  presentRunStatus,
+  type StatusPresentation,
+} from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { sameDurableRecoveryEvidence } from "../../data/durable-run-recovery";
 import { queryKeys } from "../../data/query-keys";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { StatusBadge } from "../../ui/StatusBadge";
 import { canControlWorkRun, sameWorkRunEvidence, type WorkRunAction } from "./work-run-control-guard";
+import { NOTICE_TONE_CLASS, RUN_ACTION_CONFIRM } from "./work-vocabulary";
 
 const ACTIONS: readonly { id: WorkRunAction; label: string; description: string }[] = [
   { id: "pause", label: "Pause", description: "Stops active processing and leaves the run paused." },
@@ -59,7 +65,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
   const [pending, setPending] = useState(false);
   const [outcomeUncertain, setOutcomeUncertain] = useState(false);
   const [completed, setCompleted] = useState(false);
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState<{ text: string; status: StatusPresentation } | null>(null);
   const [error, setError] = useState("");
   const runKey = ["tasks", "work-run-controls", runId];
   const query = useQuery({
@@ -127,9 +133,11 @@ export function WorkRunControls({ runId }: { runId: string }) {
       const result = await applyAction(runId, reviewed.action, currentLetter);
       setReviewed(null);
       setCompleted(true);
-      setNotice(
-        `Gateway returned ${result.status} for this run. Refresh to review its current state and any follow-on effects.`,
-      );
+      const returned = presentRunStatus(result.status);
+      setNotice({
+        text: `Run moved to ${returned.label}. Refresh to review its current state and any follow-on effects.`,
+        status: returned,
+      });
       void queryClient.invalidateQueries({ queryKey: queryKeys.durableRuns() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.runTrace(runId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
@@ -162,7 +170,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
             setReviewed(null);
             setCompleted(false);
             setError("");
-            setNotice("");
+            setNotice(null);
             void query.refetch();
             if (run?.status === "dead_lettered") void letterQuery.refetch();
           }}
@@ -187,8 +195,8 @@ export function WorkRunControls({ runId }: { runId: string }) {
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {run ? (
         <p className="text-fg-secondary">
-          {view.stale ? "Last known status" : "Current status"}: {run.status}. These controls are available only for
-          runs scoped to the selected workspace.
+          {view.stale ? "Last known status" : "Current status"}: <StatusBadge status={presentRunStatus(run.status)} />{" "}
+          These controls are available only for runs scoped to the selected workspace.
         </p>
       ) : null}
       {run?.status === "dead_lettered" && letterView.phase === "loading" ? (
@@ -226,7 +234,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
               onClick={() => {
                 setReviewed({ run, action: entry.id, deadLetter });
                 setError("");
-                setNotice("");
+                setNotice(null);
               }}
             >
               {entry.label}
@@ -240,8 +248,8 @@ export function WorkRunControls({ runId }: { runId: string }) {
         </p>
       ) : null}
       {notice ? (
-        <p role="status" className="text-status-done">
-          {notice}
+        <p role="status" data-tone={notice.status.tone} className={NOTICE_TONE_CLASS[notice.status.tone]}>
+          {notice.text}
         </p>
       ) : null}
       {error ? (
@@ -268,7 +276,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
             disabled={pending || scopeRef.current !== workspaceId || checking || letterView.phase === "checking"}
             onClick={() => void requestAction()}
           >
-            Confirm {reviewed?.action ?? "action"}
+            {reviewed ? RUN_ACTION_CONFIRM[reviewed.action] : "Confirm"}
           </Button>
           <Button size="sm" disabled={pending} onClick={() => setReviewed(null)}>
             {reviewed?.action === "cancel" ? "Keep running" : "Go back"}

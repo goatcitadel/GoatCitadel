@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { LlmProviderConfig } from "@goatcitadel/contracts";
+import { presentApiStyle } from "./settings-vocabulary";
 import { fetchOpenAICodexOAuthStatus, fetchProviderSecretStatus } from "@goatcitadel/mission-control-shared/api/client";
 import type { ProviderModelCatalogOption } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import {
@@ -100,9 +101,9 @@ function Body({ provider, request }: { provider: ProviderModelCatalogOption; req
   return (
     <div className="mt-3 space-y-3 text-sm text-fg-secondary">
       <ul className="space-y-1">
-        <li>Configured API: {provider.apiStyle}</li>
+        <li>Configured API: {presentApiStyle(provider.apiStyle)}</li>
         <li>
-          Gateway executes: {executed}
+          Gateway executes: {presentApiStyle(executed)}
           {executed !== provider.apiStyle ? " (differs from the configured API)" : ""}
         </li>
         <li>

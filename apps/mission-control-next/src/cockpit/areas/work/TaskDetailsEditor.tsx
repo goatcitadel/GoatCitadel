@@ -6,7 +6,7 @@ import { taskDetailsDraftKey } from "../../../features/native-routes/ops/work-fo
 import { useQueryClient } from "@tanstack/react-query";
 import type { TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { useTaskDetailReview } from "../../../features/native-routes/ops/use-task-detail-review";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { TASK_PRIORITY_LABELS } from "./work-vocabulary";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { taskRecordsEqual } from "../../../features/native-routes/ops/task-detail-mutation";
@@ -147,7 +147,7 @@ export function TaskDetailsEditor({ task, workspaceId }: { task: TaskRecord; wor
             >
               {PRIORITIES.map((priority) => (
                 <option key={priority} value={priority}>
-                  {humanizeToken(priority)}
+                  {TASK_PRIORITY_LABELS[priority]}
                 </option>
               ))}
             </select>

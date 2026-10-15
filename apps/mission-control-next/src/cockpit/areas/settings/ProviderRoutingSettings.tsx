@@ -12,6 +12,9 @@ import { ProviderChangeStatus } from "./ProviderChangeStatus";
 import { ProviderOutcomeCheck } from "./ProviderOutcomeCheck";
 import { providerFieldClass } from "./ProviderProfileFields";
 import { ProviderModelSearch } from "./ProviderModelSearch";
+import { useModelLabel } from "../../data/use-model-label";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { MODEL_DISCOVERY_SOURCE_LABELS, MODEL_REFRESH_STATUS_LABELS } from "./settings-vocabulary";
 
 export function ProviderRoutingSettings() {
   const catalog = useProviderModelCatalog("system");
@@ -32,6 +35,11 @@ export function ProviderRoutingSettings() {
   });
   const { routingEditor, routingProvider, routingModel, routingProviderId, routingChange } = routing;
   const { loadModelsForProvider } = catalog;
+  const activeProviderId = catalog.config?.activeProviderId;
+  const gatewayDefaultLabel = useModelLabel(activeProviderId, catalog.config?.activeModel);
+  const reviewModelLabel = useModelLabel(review?.providerId, review?.model, Boolean(review));
+  const reviewProviderLabel =
+    catalog.providers.find((provider) => provider.providerId === review?.providerId)?.label ?? "Selected provider";
   useEffect(() => {
     if (open && routingProviderId) void loadModelsForProvider(routingProviderId);
   }, [open, routingProviderId, loadModelsForProvider]);
@@ -62,8 +70,8 @@ export function ProviderRoutingSettings() {
     >
       <h3 className="font-display text-md font-semibold text-fg">Installation default routing</h3>
       <p className="text-sm text-fg-secondary">
-        Gateway default: {catalog.config?.activeProviderId ?? "Unavailable"} ·{" "}
-        {catalog.config?.activeModel ?? "Unavailable"}. Existing saved Chat choices retain their own routing.
+        Gateway default: {activeProviderId ? gatewayDefaultLabel : "Unavailable"}. Existing saved Chat choices retain
+        their own routing.
       </p>
       <Button size="sm" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         Review installation routing
@@ -115,8 +123,15 @@ export function ProviderRoutingSettings() {
           </select>
         </label>
         <p className="text-xs text-fg-muted">
-          Catalog: {routingProvider?.modelProbeSource ?? "Unavailable"} ·{" "}
-          {routingProvider?.modelRefreshStatus ?? "Unverified"}. Refresh does not substitute your selected model.
+          Model list:{" "}
+          {routingProvider?.modelProbeSource
+            ? (MODEL_DISCOVERY_SOURCE_LABELS[routingProvider.modelProbeSource] ?? "Unknown source")
+            : "Unavailable"}{" "}
+          ·{" "}
+          {routingProvider?.modelRefreshStatus
+            ? (MODEL_REFRESH_STATUS_LABELS[routingProvider.modelRefreshStatus] ?? "unverified")
+            : "unverified"}
+          . Refresh does not substitute your selected model.
         </p>
         {routing.routingModelUnavailable || routing.routingModelNeedsRefresh || routing.routingLlamaNeedsSetup ? (
           <p role="status" className="text-sm text-status-waiting">
@@ -177,8 +192,15 @@ export function ProviderRoutingSettings() {
         }}
       >
         <p className="mb-3 text-sm text-fg-secondary">
-          Provider: {review?.providerId} · Model: {review?.model} · Settings revision {review?.revision}.
+          Provider: {reviewProviderLabel} · Model: {reviewModelLabel}.
         </p>
+        <div className="mb-3">
+          <TechnicalDetails>
+            <p className="break-all font-mono text-xs">
+              {review?.providerId} · {review?.model} · settings revision {review?.revision}
+            </p>
+          </TechnicalDetails>
+        </div>
         {routing.routingUsesFallbackModels || routing.routingUsesStaleCatalog ? (
           <p className="mb-3 text-sm text-status-waiting">
             This uses suggested or last-known model evidence; refresh has not verified availability.
@@ -213,10 +235,15 @@ export function ProviderRoutingSettings() {
         onClose={() => setPlan(null)}
         onConfirm={actions.confirm}
         onSubmitSecureInput={actions.secure}
-        renderApprovalAction={(reviewed, pending) => <SettingsApprovalOwnerAction
-          plan={reviewed} owner="provider-routing" workspaceId="default" disabled={pending}
-          viewIdentity={[open, routingProviderId, routingModel, routingEditor.baseRevision]}
-        />}
+        renderApprovalAction={(reviewed, pending) => (
+          <SettingsApprovalOwnerAction
+            plan={reviewed}
+            owner="provider-routing"
+            workspaceId="default"
+            disabled={pending}
+            viewIdentity={[open, routingProviderId, routingModel, routingEditor.baseRevision]}
+          />
+        )}
         onContinueOAuth={() => undefined}
         onSubmitPublicForm={() => undefined}
         onReviewArtifacts={() => undefined}

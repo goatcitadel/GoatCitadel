@@ -6,10 +6,36 @@ import { ChannelJourneyEvidence } from "../../../features/native-routes/settings
 import { TelegramPairingPanel } from "../../../features/native-routes/settings/channel-setup/TelegramPairingPanel";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { TimeText } from "../../ui/TimeText";
+import type { AgenticChannelDeliveryRuntimeStatus } from "@goatcitadel/mission-control-shared/api/client";
+
+const PAIRING_STATUS_LABELS: Record<DiscordPairingRecord["status"], string> = {
+  pending: "Waiting for approval",
+  approved: "Approved",
+  revoked: "Revoked",
+};
+const DELIVERY_STATUS_LABELS: Record<AgenticChannelDeliveryRuntimeStatus, string> = {
+  queued: "Queued",
+  running: "Sending",
+  retrying: "Retrying",
+  waiting_approval: "Waiting on you",
+  sent: "Sent",
+  failed: "Failed",
+  stale: "Out of date",
+  manual_reconciliation_required: "Needs a manual check",
+};
 
 const timestamp = (value?: string) =>
-  value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : "Not observed";
-export function ChannelOperations({ connection, onUpdated, connectorDiagnosticsEnabled }: { connection: IntegrationConnection; onUpdated?: () => Promise<unknown>; connectorDiagnosticsEnabled?: boolean }) {
+  value && Number.isFinite(Date.parse(value)) ? <TimeText value={value} /> : "Not observed";
+export function ChannelOperations({
+  connection,
+  onUpdated,
+  connectorDiagnosticsEnabled,
+}: {
+  connection: IntegrationConnection;
+  onUpdated?: () => Promise<unknown>;
+  connectorDiagnosticsEnabled?: boolean;
+}) {
   const journey = useChannelJourney([connection], connectorDiagnosticsEnabled);
   const discord = useDiscordOperations([connection]);
   const [review, setReview] = useState<{
@@ -37,15 +63,19 @@ export function ChannelOperations({ connection, onUpdated, connectorDiagnosticsE
               {error}
             </p>
           ))}
-          <ChannelJourneyEvidence journey={journey.result?.journey} diagnostics={journey.result?.diagnostics} diagnosticsAvailability={journey.result?.diagnosticsAvailability} />
+          <ChannelJourneyEvidence
+            journey={journey.result?.journey}
+            diagnostics={journey.result?.diagnostics}
+            diagnosticsAvailability={journey.result?.diagnosticsAvailability}
+          />
           <p className="text-fg-muted">
             A sent receipt records provider acceptance; it does not confirm that a person read the message.
           </p>
           <ul className="space-y-2">
             {journey.result?.deliveries.slice(0, 10).map((item) => (
               <li key={item.deliveryId}>
-                {item.status.replaceAll("_", " ")} · {timestamp(item.updatedAt)} · attempt {item.attempts}/
-                {item.maxAttempts}
+                {DELIVERY_STATUS_LABELS[item.status] ?? "Unknown"} · {timestamp(item.updatedAt)} · attempt{" "}
+                {item.attempts}/{item.maxAttempts}
                 {item.providerMessageId ? " · provider receipt recorded" : ""}
                 {item.error || item.staleReason ? <p>{item.error ?? item.staleReason}</p> : null}
               </li>
@@ -89,7 +119,8 @@ export function ChannelOperations({ connection, onUpdated, connectorDiagnosticsE
               {[...discord.pendingPairings, ...discord.approvedPairings].map((pairing) => (
                 <li key={pairing.pairingId} className="rounded-md border border-line p-3">
                   <p>
-                    {pairing.displayName || pairing.userId} · {pairing.status}
+                    {pairing.displayName || "Unnamed Discord user"} ·{" "}
+                    {PAIRING_STATUS_LABELS[pairing.status] ?? "Unknown"}
                   </p>
                   <p className="break-all text-xs text-fg-muted">
                     User {pairing.userId} · pairing {pairing.code}

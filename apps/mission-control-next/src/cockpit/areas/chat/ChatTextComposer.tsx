@@ -19,6 +19,8 @@ import { ChatMediaControls } from "./ChatMediaControls";
 import type { ChatCompletionReasoningEffort } from "@goatcitadel/contracts";
 import { ChatLegacyInputNotice } from "./ChatLegacyInputNotice";
 import { Dialog } from "../../ui/Dialog";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 
 const REASON_ID = "cockpit-chat-send-reason";
 /** Short route checks are not worth announcing; only a check that outlasts this delay is shown. */
@@ -219,13 +221,16 @@ export function ChatTextComposer({
         />
         {props.attachmentUpload?.pending ? (
           <p role="status" className="text-sm text-fg-secondary">
-            Uploading {props.attachmentUpload.pending} attachment(s)…
+            Uploading {plural(props.attachmentUpload.pending, "attachment")}…
           </p>
         ) : null}
         {props.attachmentUpload?.error ? (
-          <p role="status" className="text-sm text-status-failed">
-            Attachment upload failed: {props.attachmentUpload.error}. Select the file again to retry.
-          </p>
+          <div role="alert" className="text-sm text-status-failed">
+            <p>The attachment didn’t upload. Select the file again to retry.</p>
+            <TechnicalDetails>
+              <p className="font-mono text-xs wrap-anywhere">{props.attachmentUpload.error}</p>
+            </TechnicalDetails>
+          </div>
         ) : null}
         <ChatMediaControls props={props} />
         <label htmlFor="cockpit-chat-draft" className="sr-only">

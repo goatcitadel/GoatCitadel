@@ -16,6 +16,23 @@ import {
 } from "../../../features/native-routes/settings/sections/PermissionProfileDraftFields";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { TimeText } from "../../ui/TimeText";
+import type { AutonomousActivationGrantStatus, AutonomousActivationKind } from "@goatcitadel/contracts";
+import { formatMoney } from "@goatcitadel/mission-control-shared/content/format";
+import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+
+const GRANT_STATUS_LABELS: Record<AutonomousActivationGrantStatus, string> = {
+  active: "Active",
+  expired: "Expired",
+  revoked: "Revoked",
+};
+const ACTIVATION_KIND_LABELS: Record<AutonomousActivationKind, string> = {
+  capability: "Capabilities",
+  tool: "Tools",
+  mcp_tool: "MCP tools",
+  code_mode: "Code Mode",
+  subagent_fanout: "Helper agents",
+};
 
 export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string }) {
   const [query, setQuery] = useState(""),
@@ -78,15 +95,16 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
               <h4 className="break-words font-semibold">{grant.reason}</h4>
               <p>
                 {workspaceName(grant.workspaceId) ?? "Workspace outside this Citadel"}
-                {grant.projectId ? " · project-scoped" : ""} · {grant.status}
+                {grant.projectId ? " · project-scoped" : ""} · {GRANT_STATUS_LABELS[grant.status] ?? "Unknown"}
               </p>
               <p>
-                {formatPermissionContextList(grant.surfaces)} · {grant.activationKinds.join(", ")} · Maximum risk{" "}
-                {grant.maxRiskLevel}
+                {formatPermissionContextList(grant.surfaces)} ·{" "}
+                {grant.activationKinds.map((kind) => ACTIVATION_KIND_LABELS[kind] ?? "Other").join(", ")} · Maximum risk{" "}
+                {presentRiskLevel(grant.maxRiskLevel).label}
               </p>
               <p>
-                {grant.usedActivations} of {grant.maxActivations ?? "unlimited"} activations used · Expires{" "}
-                {grant.expiresAt}
+                {grant.usedActivations} of {grant.maxActivations ?? "unlimited"} activations used ·{" "}
+                <TimeText absolute prefix="Expires" value={grant.expiresAt} />
               </p>
               {hasLegacyOnlyPermissionContexts(grant.surfaces) ? (
                 <p className="text-status-waiting">This legacy-only grant does not govern current Chat.</p>
@@ -110,18 +128,20 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
                   <dd>{grant.toolPatterns.join(", ") || "None"}</dd>
                   <dt>Budget</dt>
                   <dd>
-                    {grant.budgetUsd === undefined ? "Not specified" : `$${grant.budgetUsd}`} · Used{" "}
-                    {grant.usedBudgetUsd === undefined ? "unavailable" : `$${grant.usedBudgetUsd}`}
+                    {grant.budgetUsd === undefined ? "Not specified" : formatMoney(grant.budgetUsd)} · Used{" "}
+                    {grant.usedBudgetUsd === undefined ? "unavailable" : formatMoney(grant.usedBudgetUsd)}
                   </dd>
                   <dt>Grantor</dt>
                   <dd>{grant.grantor}</dd>
                   <dt>Last owner update</dt>
-                  <dd>{grant.updatedAt}</dd>
+                  <dd>
+                    <TimeText absolute value={grant.updatedAt} />
+                  </dd>
                   {grant.revokedAt ? (
                     <>
                       <dt>Revoked</dt>
                       <dd>
-                        {grant.revokedAt} · {grant.revokedBy ?? "Actor unavailable"} ·{" "}
+                        <TimeText absolute value={grant.revokedAt} /> · {grant.revokedBy ?? "Actor unavailable"} ·{" "}
                         {grant.revocationReason ?? "No reason returned"}
                       </dd>
                     </>

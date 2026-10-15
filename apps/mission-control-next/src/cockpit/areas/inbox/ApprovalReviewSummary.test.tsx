@@ -1,8 +1,13 @@
 // @vitest-environment happy-dom
+import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { expect, it } from "vitest";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { ApprovalReviewSummary } from "./ApprovalReviewSummary";
+
+const markup = (node: ReactElement) =>
+  renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>);
 
 it("keeps complete long scope, targets, commands and consequences in the bounded ordinary review", () => {
   const token = "scope_" + "a".repeat(200);
@@ -20,11 +25,13 @@ it("keeps complete long scope, targets, commands and consequences in the bounded
     rollbackNote: `Recover ${token}`,
   };
   const host = document.createElement("div");
-  host.innerHTML = renderToStaticMarkup(<ApprovalReviewSummary approval={record} workspaceId="fallback" />);
+  host.innerHTML = markup(<ApprovalReviewSummary approval={record} workspaceId="fallback" />);
   const review = host.querySelector('section[aria-label="Approval scope and consequences"]')!;
   expect(review.classList.contains("wrap-anywhere")).toBe(true);
   expect(review.classList.contains("min-w-0")).toBe(true);
-  expect(review.textContent).toContain(`workspace ${token} · conversation session_${token}`);
+  // Raw workspace and conversation ids stay in technical details, which are off by default.
+  expect(review.textContent).toContain("Another workspace · one linked conversation.");
+  expect(review.textContent).not.toContain(`session_${token}`);
   expect(review.textContent).toContain(`folder/${token}`);
   expect(review.textContent).toContain(`https://example.invalid/${token}`);
   expect(review.textContent).toContain(`Recover ${token}`);
@@ -58,7 +65,7 @@ it("shows a mail send approval's exact recipients, open message text and intent-
     createdAt: "2026-01-01",
   };
   const host = document.createElement("div");
-  host.innerHTML = renderToStaticMarkup(<ApprovalReviewSummary approval={record} workspaceId="fallback" />);
+  host.innerHTML = markup(<ApprovalReviewSummary approval={record} workspaceId="fallback" />);
   const review = host.querySelector('section[aria-label="Approval scope and consequences"]')!;
   expect(review.textContent).toContain("To: a@example.test");
   expect(review.textContent).toContain("Bcc: hidden@example.test");
@@ -88,7 +95,7 @@ it("labels a memory review target once, keeps the exact title, and shows Gateway
     },
   };
   const host = document.createElement("div");
-  host.innerHTML = renderToStaticMarkup(<ApprovalReviewSummary approval={record} workspaceId="fallback" />);
+  host.innerHTML = markup(<ApprovalReviewSummary approval={record} workspaceId="fallback" />);
   const text = host.textContent ?? "";
   expect(text).toContain("Target: Owned memory A");
   expect(text).not.toContain("Target: Target:");
@@ -96,8 +103,30 @@ it("labels a memory review target once, keeps the exact title, and shows Gateway
   expect(text).not.toMatch(/(Ttl|Scope|Pinned) Summary/);
 
   const titled = { ...record, preview: { ...record.preview, target: "Target: launch plan" } } as ApprovalRequest;
-  host.innerHTML = renderToStaticMarkup(<ApprovalReviewSummary approval={titled} workspaceId="fallback" />);
+  host.innerHTML = markup(<ApprovalReviewSummary approval={titled} workspaceId="fallback" />);
   // A user title that itself starts with "Target:" is shown exactly, after the one generated label.
   expect(host.textContent).toContain("Target: Target: launch plan");
   expect(host.textContent).not.toContain("Target: Target: Target:");
+});
+
+it("names the current workspace and shows expiry as a readable time, not an ISO string", () => {
+  const record: ApprovalRequest = {
+    approvalId: "e",
+    kind: "tool_invoke",
+    status: "pending",
+    riskLevel: "safe",
+    explanationStatus: "not_requested",
+    payload: {},
+    preview: {},
+    createdAt: "2026-01-01",
+    expiresAt: "2026-01-02T10:30:00.000Z",
+    linkage: { workspaceId: "ws_current" },
+  };
+  const host = document.createElement("div");
+  host.innerHTML = markup(<ApprovalReviewSummary approval={record} workspaceId="ws_current" />);
+  const text = host.textContent ?? "";
+  expect(text).toContain("Scope: This workspace.");
+  expect(text).not.toContain("ws_current");
+  expect(text).not.toContain("2026-01-02T10:30:00.000Z");
+  expect(host.querySelector("time")?.getAttribute("dateTime")).toBe("2026-01-02T10:30:00.000Z");
 });

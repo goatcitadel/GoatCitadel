@@ -1,11 +1,12 @@
 import type { CostSummaryResponse } from "../api/types.js";
+import { formatMoney, formatMoneyLowerBound } from "./format.js";
 
-export function formatCostUsd(value: number): string {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: value < 1 ? 6 : 2,
-  }).format(value);
+/**
+ * Operator-facing USD: always two decimals, "<$0.01" for positive amounts under a cent, and "Unknown" (never $0.00)
+ * when the value is missing. Kept as a named export for existing callers; it is the shared formatMoney.
+ */
+export function formatCostUsd(value: number | null | undefined): string {
+  return formatMoney(value);
 }
 
 /** Cost is an exact total only when the Gateway reports complete coverage. */
@@ -35,11 +36,11 @@ export function projectUsageCostSummary(summary: CostSummaryResponse): {
     return {
       tokens: totals.tokens,
       costLabel: formatCostUsd(totals.costUsd),
-      coverageDescription: "Gateway day scope with complete cost coverage.",
+      coverageDescription: "Grouped by day (UTC) with complete cost coverage.",
     };
   }
 
-  const knownCostLabel = totals.costUsd > 0 ? `${formatCostUsd(totals.costUsd)}+` : "Unknown";
+  const knownCostLabel = totals.costUsd > 0 ? formatMoneyLowerBound(totals.costUsd) : "Unknown";
   if (complete === false) {
     const unknownAttempts = canonicalCoverage?.unknownAttemptCount;
     return {
@@ -80,7 +81,7 @@ export function projectDailyCostBars(summary: CostSummaryResponse): DailyCostBar
       key: day.isoDate,
       // Daily ledger buckets are UTC; do not relabel aggregates as local days.
       label: `${day.isoDate} UTC`,
-      costLabel: complete ? formatCostUsd(known) : known > 0 ? `${formatCostUsd(known)}+` : "Unknown",
+      costLabel: complete ? formatCostUsd(known) : known > 0 ? formatMoneyLowerBound(known) : "Unknown",
       percent: maxAmount > 0 ? Math.round((known / maxAmount) * 100) : 0,
     };
   });
@@ -113,12 +114,21 @@ export function projectProviderCostRows(summary: CostSummaryResponse): ProviderC
     }
   }
   const complete = summary.usageAvailability?.metricAvailability?.costUsd?.complete === true;
-  return [...providers.values()].map((row) => ({
-    ...row,
-    costLabel: complete ? formatCostUsd(row.knownCostUsd)
-      : row.knownCostUsd > 0 ? `${formatCostUsd(row.knownCostUsd)}+` : "Unknown",
-  })).sort((left, right) => right.knownCostUsd - left.knownCostUsd
-    || right.tokenTotal - left.tokenTotal || left.providerKey.localeCompare(right.providerKey));
+  return [...providers.values()]
+    .map((row) => ({
+      ...row,
+      costLabel: complete
+        ? formatCostUsd(row.knownCostUsd)
+        : row.knownCostUsd > 0
+          ? formatMoneyLowerBound(row.knownCostUsd)
+          : "Unknown",
+    }))
+    .sort(
+      (left, right) =>
+        right.knownCostUsd - left.knownCostUsd ||
+        right.tokenTotal - left.tokenTotal ||
+        left.providerKey.localeCompare(right.providerKey),
+    );
 }
 
 function finiteNonNegative(value: number | undefined): number {

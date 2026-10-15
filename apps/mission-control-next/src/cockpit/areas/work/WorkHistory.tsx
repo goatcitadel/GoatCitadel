@@ -13,13 +13,8 @@ import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { projectWorkHistory } from "./work-history";
 import { WorkRunHistory } from "./WorkRunHistory";
-
-function formattedTime(iso: string): string {
-  const parsed = Date.parse(iso);
-  return Number.isFinite(parsed)
-    ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(parsed)
-    : "Time unavailable";
-}
+import { TimeText } from "../../ui/TimeText";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 
 export function WorkHistory() {
   const { activeWorkspaceId } = useUiPreferences();
@@ -89,7 +84,7 @@ export function WorkHistory() {
           <p className="text-xs text-fg-muted">
             Showing up to 100 conversations and 100 retained events.{" "}
             {history.omittedUnscopedEvents > 0
-              ? `${history.omittedUnscopedEvents} events without this workspace binding were omitted.`
+              ? `${plural(history.omittedUnscopedEvents, "event")} without this workspace binding ${history.omittedUnscopedEvents === 1 ? "was" : "were"} omitted.`
               : ""}
             {sessions.data?.nextCursor || activity.data?.nextCursor ? " Older entries are not shown." : ""}
           </p>
@@ -114,9 +109,7 @@ export function WorkHistory() {
                       </p>
                       <p className="mt-1 text-sm font-medium text-fg">{entry.title}</p>
                     </div>
-                    <time className="text-xs text-fg-muted" dateTime={entry.at}>
-                      {formattedTime(entry.at)}
-                    </time>
+                    <TimeText value={entry.at} className="text-xs text-fg-muted" />
                   </div>
                   {entry.href ? (
                     <NativeOwnerLink

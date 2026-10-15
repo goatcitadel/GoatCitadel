@@ -339,7 +339,7 @@ function LibraryMailComposeContent({
                 <dd>
                   {review.account.label}
                   {review.account.address ? ` · ${review.account.address}` : ""} · account status{" "}
-                  {review.account.syncStatus.replaceAll("_", " ")}
+                  {review.account.syncStatus === "not_configured" ? "not set up" : review.account.syncStatus}
                 </dd>
               </div>
               <div>
@@ -364,7 +364,7 @@ function LibraryMailComposeContent({
               </div>
               <div>
                 <dt className="font-medium">Scope</dt>
-                <dd>Workspace {workspaceId}</dd>
+                <dd>This workspace</dd>
               </div>
             </dl>
             <pre

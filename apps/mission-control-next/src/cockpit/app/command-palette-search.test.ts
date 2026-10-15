@@ -94,7 +94,7 @@ describe("palette Gateway object search", () => {
     const signal = new AbortController().signal;
     await searchLibrary("files")(scope, "needle", signal);
     expect(api.resources).toHaveBeenCalledWith({ ...scope, kind: "files", query: "needle", status: "active", signal });
-    const group = paletteGroup("notes", "Library notes", { error: new Error("Directory unavailable") });
+    const group = paletteGroup("notes", "Notes", { error: new Error("Directory unavailable") });
     expect(group.items).toEqual([]);
     expect(group.coverage).toContain("unavailable, not empty");
     expect(group.error).toContain("Directory unavailable");
@@ -141,5 +141,19 @@ describe("palette Gateway object search", () => {
     const result = searchCapabilities(catalog, "needle");
     expect(result.items).toEqual([]);
     expect(result.coverage).toContain("Current callability could not be checked.");
+  });
+
+  it("names the capability kind in plain words, never the wire token", () => {
+    const catalog = {
+      items: [
+        { kind: "mesh_mcp_server", capabilityId: "c1", title: "Needle server", summary: "" },
+        { kind: "tool", capabilityId: "c2", title: "Needle tool", summary: "" },
+      ],
+      issues: [],
+    } as unknown as CapabilityCatalogView;
+    const descriptions = searchCapabilities(catalog, "needle").items.map((item) => item.description);
+    expect(descriptions[0]).toMatch(/^Mesh MCP server · /);
+    expect(descriptions[1]).toMatch(/^Tool · /);
+    expect(descriptions.join(" ")).not.toContain("mesh_mcp_server");
   });
 });

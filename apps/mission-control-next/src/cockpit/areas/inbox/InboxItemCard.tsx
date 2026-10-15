@@ -2,7 +2,8 @@ import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
-import { approvalCreatedLabel, approvalExpiryLabel } from "./approval-preview";
+import { TimeText } from "../../ui/TimeText";
+import { approvalExpiryLabel } from "./approval-preview";
 import { inboxItemKindLabel } from "./inbox-presentation";
 import { InboxOwnerLink } from "./InboxOwnerLink";
 import { InboxSourceContext } from "./InboxSourceContext";
@@ -31,7 +32,7 @@ export function InboxItemCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-fg-muted">
-            {inboxItemKindLabel(item.kind)} · {approvalCreatedLabel(item.createdAt)}
+            {inboxItemKindLabel(item.kind)} · <TimeText value={item.createdAt} />
             {selected ? <span className="font-semibold text-fg"> · Selected</span> : null}
           </p>
           <h3 className="mt-1 font-display text-md font-semibold text-fg">{item.title}</h3>

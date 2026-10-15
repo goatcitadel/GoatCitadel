@@ -270,8 +270,8 @@ it("starts code with the signal while the canonical GET is held, preserves facts
   await vi.waitFor(() => expect(button("Approve once")?.disabled).toBe(false));
   const canonicalReview = host.querySelector('section[aria-label="Approval scope and consequences"]')!;
   expect(canonicalReview.textContent).toContain("canonical-only-target.txt");
-  expect(canonicalReview.textContent).toContain("workspace workspace-a");
-  expect(canonicalReview.textContent).toContain("conversation session-a");
+  expect(canonicalReview.textContent).toContain(" · one linked conversation.");
+  expect(canonicalReview.textContent).not.toContain("Scope: workspace workspace-a");
   expect(canonicalReview.textContent).toContain("Consequence:");
   await act(async () => button("Approve once").click());
   expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");

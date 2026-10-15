@@ -21,6 +21,8 @@ import {
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { documentAuthorLabels, presentDocumentProposalState } from "./inbox-vocabulary";
 import { classifyOperationFailure } from "./approval-operation-attempts";
 import {
   canReviewInboxDocumentProposal,
@@ -202,10 +204,13 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
             {proposal.targetKind === "personal_note" ? "note" : "generated artifact"}.
           </p>
           <DocumentProposalTarget proposal={proposal} />
-          <p className="break-words text-xs text-fg-muted">
-            Target ID: {proposal.targetId} · State: {proposal.state}
-            {proposal.baseRevision ? ` · Base revision ${proposal.baseRevision}` : " · Base content hash recorded"}
-          </p>
+          <p className="text-xs text-fg-muted">State: {presentDocumentProposalState(proposal.state).label}</p>
+          <TechnicalDetails label="Proposal identifiers">
+            <p className="break-all font-mono text-xs">
+              Target {proposal.targetId} · Proposal {proposal.proposalId}
+              {proposal.baseRevision ? ` · Base revision ${proposal.baseRevision}` : " · Base content hash recorded"}
+            </p>
+          </TechnicalDetails>
           <div className="space-y-2 rounded-md border border-line bg-sunken p-3">
             <h4 className="font-medium text-fg">Server-derived replacement diff</h4>
             <DocumentProposalDiff diff={reviewable ? proposal.derivedDiff : proposal.derivedDiff.slice(0, 4_000)} />
@@ -244,8 +249,8 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
       ) : null}
       {result ? (
         <p role="status" className="text-fg-secondary">
-          Gateway recorded this document proposal as {result.state}. Open its owner to inspect the current document
-          version and evidence.
+          Gateway recorded this document proposal as {presentDocumentProposalState(result.state).label.toLowerCase()}.
+          Open its owner to inspect the current document version and evidence.
         </p>
       ) : null}
       {error ? (
@@ -269,9 +274,7 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
           <div className="mb-3 space-y-2 text-sm text-fg-secondary">
             <DocumentProposalTarget proposal={review.proposal} />
             <DocumentProposalDiff diff={review.proposal.derivedDiff} />
-            <p>
-              Author: {review.proposal.authorKind} · Proposal: {review.proposal.proposalId}
-            </p>
+            <p>Author: {documentAuthorLabels[review.proposal.authorKind] ?? "Unknown"}</p>
           </div>
         ) : null}
         <div className="flex flex-wrap gap-2">

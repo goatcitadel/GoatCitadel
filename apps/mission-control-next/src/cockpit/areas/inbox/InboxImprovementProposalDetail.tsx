@@ -8,6 +8,8 @@ import {
   rejectImprovementCandidate,
 } from "@goatcitadel/mission-control-shared/api/improvement";
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
 import {
@@ -21,6 +23,7 @@ import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { classifyOperationFailure } from "./approval-operation-attempts";
+import { callableImpactLabels, curatorRiskAsApprovalRisk, improvementEvaluationLabels } from "./inbox-vocabulary";
 
 type Decision = "approve" | "reject";
 
@@ -233,12 +236,13 @@ export function InboxImprovementProposalDetail({
           {current.observedIssue ? <p>Observed issue: {current.observedIssue}</p> : null}
           {current.proposedChange ? <p>Proposed change: {current.proposedChange}</p> : null}
           <p className="text-xs text-fg-muted">
-            Risk: {current.risk} · Callable impact: {current.callableImpact.replaceAll("_", " ")} · Evidence:{" "}
-            {current.evidence.length} references
+            Risk: {presentRiskLevel(curatorRiskAsApprovalRisk[current.risk]).label} ·{" "}
+            {callableImpactLabels[current.callableImpact] ?? "Callable impact unknown"} · Evidence:{" "}
+            {plural(current.evidence.length, "reference")}
           </p>
           {current.latestEvaluation ? (
             <p className="text-xs text-fg-muted">
-              Latest evaluation: {current.latestEvaluation.status.replaceAll("_", " ")}
+              Latest evaluation: {improvementEvaluationLabels[current.latestEvaluation.status] ?? "Status unknown"}
             </p>
           ) : null}
           {current.corruptionStatus !== "clean" ? (

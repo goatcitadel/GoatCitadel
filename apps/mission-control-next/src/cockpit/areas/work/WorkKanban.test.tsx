@@ -22,6 +22,7 @@ vi.mock("../../../features/native-routes/ops/RunDetailRoutePage", () => ({
     return <p>Existing run evidence owner</p>;
   },
 }));
+vi.mock("../../data/use-workspace-name", () => ({ useActiveWorkspaceLabel: () => "Workspace A" }));
 vi.mock("../../ui/NativeOwnerLink", () => ({
   NativeOwnerLink: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
 }));
@@ -44,6 +45,7 @@ it("keeps task operations with the existing owner and its active workspace", () 
   expect(fixture.task).toHaveBeenCalledWith(
     expect.objectContaining({
       activeWorkspaceId: "workspace-a",
+      activeWorkspaceName: "Workspace A",
       route: expect.objectContaining({ area: "ops", section: "kanban" }),
     }),
   );

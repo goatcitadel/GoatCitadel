@@ -189,10 +189,10 @@ it("shows report findings, proposals and harness evidence visibly, and links to 
     "Routing rule for cache",
     "7 routing-gap events",
     "Evaluations",
-    "Lower threshold · applied · risk medium",
+    "Lower threshold · Applied · medium risk",
   ])
     expect(container.textContent).toContain(text);
-  await act(async () => button("Open replay run run-1")!.click());
+  await act(async () => button("Open the replay run for this report")!.click());
   await vi.waitFor(() => expect(new URLSearchParams(window.location.search).get("replayRunId")).toBe("run-1"));
 });
 

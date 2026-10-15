@@ -40,6 +40,10 @@ vi.mock("@tanstack/react-query", () => ({
     ...controls.read,
   }),
 }));
+vi.mock("../data/use-model-label", () => ({
+  useModelLabel: (providerId?: string, modelId?: string) =>
+    providerId === "local" && modelId === "recorded-model" ? "Recorded Model · Local runtime" : "Unknown model",
+}));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({
     theme: "dark",
@@ -86,7 +90,7 @@ describe("CommandPalette", () => {
       { id: "threads", label: "Conversations", items: [], coverage: "", searching: true },
       {
         id: "notes",
-        label: "Library notes",
+        label: "Notes",
         items: [{ id: "n1", label: "Needle note", description: "Note", target: { href: "/library/notes" } }],
         coverage: "Bounded window.",
       },
@@ -98,17 +102,18 @@ describe("CommandPalette", () => {
     expect(threads.textContent).not.toContain("No matches");
     expect(document.body.textContent).toContain("Needle note");
   });
-  it("keeps the last known Gateway default while it is read again and beside a failed read", async () => {
+  it("keeps the last known default model while it is read again and beside a failed read", async () => {
     controls.read = { isFetching: true, isError: false, dataUpdatedAt: Date.now() };
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
     await ready();
-    expect(document.body.textContent).toContain("Gateway default: local / recorded-model.");
-    expect(document.body.textContent).not.toContain("Reading Gateway default…");
+    expect(document.body.textContent).toContain("Default model: Recorded Model · Local runtime.");
+    expect(document.body.textContent).not.toContain("Reading the default model…");
+    expect(document.body.textContent).not.toContain("recorded-model");
     controls.read = { isFetching: false, isError: true, dataUpdatedAt: Date.now() };
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
     await ready();
     expect(document.body.textContent).toContain(
-      "Gateway default: local / recorded-model. Showing the last version from",
+      "Default model: Recorded Model · Local runtime. Showing the last version from",
     );
   });
 
@@ -308,7 +313,7 @@ describe("CommandPalette", () => {
       expect(body).toContain(label);
     }
     expect(body).toContain("Switch to compact density");
-    expect(body).toContain("Gateway default: local / recorded-model");
+    expect(body).toContain("Default model: Recorded Model · Local runtime");
     expect(body).toContain("Conversation overrides stay in Chat");
     expect(body).toContain("New chat");
   });

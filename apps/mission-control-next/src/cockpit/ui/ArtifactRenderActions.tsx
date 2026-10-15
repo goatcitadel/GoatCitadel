@@ -1,3 +1,4 @@
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useEffect, useState } from "react";
 import type { ChatArtifactRenderRecord, ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import {
@@ -124,7 +125,7 @@ export function ArtifactRenderActions({
       setState({
         activity: "idle",
         renders: response.renders,
-        message: `Rendered ${response.renders.length} snapshot${response.renders.length === 1 ? "" : "s"} (${viewports}).`,
+        message: `Rendered ${plural(response.renders.length, "snapshot")} (${viewports}).`,
       });
     } catch (error) {
       setState((current) => ({ ...current, activity: "idle", error: describeFailure(error) }));

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { DurableBackgroundTaskItem } from "@goatcitadel/contracts";
-import { humanizeToken, presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
 import { useBackgroundTaskSettledRefresh } from "../../../features/threaded-surface/useBackgroundTaskSettledRefresh";
 import {
@@ -12,9 +13,15 @@ import { Dialog } from "../../ui/Dialog";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 
+const ATTENTION_STATES: Record<DurableBackgroundTaskItem["attention"]["state"], string> = {
+  foreground: "Watching here",
+  background: "Continuing in the background",
+  stopped: "Stopped watching",
+};
+
 function taskStatus(task: DurableBackgroundTaskItem) {
   if (task.canonicalStatus === "missing" || task.canonicalStatus === "unknown") {
-    return { label: humanizeToken(task.canonicalStatus), tone: "waiting" as const };
+    return { label: task.canonicalStatus === "missing" ? "Missing" : "Unknown", tone: "waiting" as const };
   }
   return presentRunStatus(task.canonicalStatus, {
     waitingOnOperator: task.blockers.some((item) => item.kind === "approval_required"),
@@ -108,7 +115,7 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
                     <div className="min-w-0">
                       <h3 className="font-medium text-fg">{task.label}</h3>
                       <p className="text-xs text-fg-muted">
-                        {task.role ?? "Delegated task"} · {humanizeToken(task.attention.state)}
+                        {task.role ?? "Delegated task"} · {ATTENTION_STATES[task.attention.state] ?? "Unknown"}
                       </p>
                     </div>
                     <StatusBadge status={taskStatus(task)} />
@@ -192,8 +199,8 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
           ) : null}
           {rail.snapshot.unknowns.length ? (
             <p className="text-xs text-fg-muted">
-              {rail.snapshot.unknowns.length} runtime unknown{rail.snapshot.unknowns.length === 1 ? "" : "s"} remain.
-              Open the classic view for full diagnostics.
+              {plural(rail.snapshot.unknowns.length, "runtime unknown")} remain. Open the classic view for full
+              diagnostics.
             </p>
           ) : null}
         </>

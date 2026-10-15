@@ -135,7 +135,8 @@ describe("native managed runtime configuration", () => {
     });
     await vi.waitFor(() => expect(container.querySelectorAll("input")).toHaveLength(4));
     expect(container.textContent).not.toContain("Loading runtime configuration");
-    expect(container.textContent).toContain("settings revision 41");
+    expect(container.textContent).toContain("Mode: Managed");
+    expect(container.textContent).not.toContain("settings revision");
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
   it("announces an in-flight refetch without exposing stale controls or losing retained input", async () => {
@@ -164,7 +165,7 @@ describe("native managed runtime configuration", () => {
     });
     await vi.waitFor(() => expect(container.querySelectorAll("input")).toHaveLength(4));
     expect(container.textContent).not.toContain("Loading runtime configuration");
-    expect(container.textContent).toContain("settings revision 41");
+    expect(container.textContent).toContain("Mode: Managed");
     expect(container.querySelectorAll("input")[1]?.value).toBe("retained-runtime-draft");
     expect(button("Review runtime changes").disabled).toBe(false);
     expect(api.patchSettings).not.toHaveBeenCalled();

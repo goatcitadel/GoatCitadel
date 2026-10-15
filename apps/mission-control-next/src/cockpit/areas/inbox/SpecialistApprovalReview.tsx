@@ -1,8 +1,16 @@
-import type { ApprovalRequest } from "@goatcitadel/contracts";
+import type { ApprovalRequest, CodeModeLanguage } from "@goatcitadel/contracts";
 import { nativeRuntimeReviewForApproval } from "../../../features/native-routes/ops/native-runtime-approval-evidence";
+import { formatBytes, formatDuration, plural } from "@goatcitadel/mission-control-shared/content/format";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { handleEvidenceScrollKeyDown } from "../../ui/evidence-scroll";
 import type { SpecialistEvidence } from "./specialist-approval-evidence";
+
+const codeLanguageLabels: Readonly<Record<CodeModeLanguage, string>> = {
+  javascript: "JavaScript",
+  typescript: "TypeScript",
+};
 
 export function SpecialistApprovalReview({
   approval,
@@ -13,6 +21,12 @@ export function SpecialistApprovalReview({
 }) {
   const review = nativeRuntimeReviewForApproval(approval, evidence.replay);
   const native = approval.payload.nativeRuntime as Record<string, unknown> | undefined;
+  const nameOf = useWorkspaceNameLookup(useUiPreferences().activeCitadelId);
+  const workspaceLabel = (workspaceId?: string) =>
+    !workspaceId
+      ? "workspace not recorded"
+      : (nameOf(workspaceId) ??
+        (workspaceId === approval.linkage?.workspaceId ? "this workspace" : "another workspace"));
   if (review)
     return (
       <section
@@ -56,12 +70,12 @@ export function SpecialistApprovalReview({
         <dl>
           {[
             ["Processes", review.limits.processLimit],
-            ["Memory", `${review.limits.memoryBytes / 1024 / 1024} MiB`],
-            ["CPU", `${review.limits.cpuMilli / 1000} cores`],
-            ["Run time", `${review.limits.wallMs / 1000} seconds`],
-            ["Output", `${review.limits.rawOutputBytes} bytes`],
-            ["Diagnostics", `${review.limits.diagnosticBytes} bytes`],
-            ["Input", `${review.limits.inputBytes} bytes`],
+            ["Memory", formatBytes(review.limits.memoryBytes)],
+            ["CPU", plural(review.limits.cpuMilli / 1000, "core")],
+            ["Run time", formatDuration(review.limits.wallMs)],
+            ["Output", formatBytes(review.limits.rawOutputBytes)],
+            ["Diagnostics", formatBytes(review.limits.diagnosticBytes)],
+            ["Input", formatBytes(review.limits.inputBytes)],
           ].map(([key, value]) => (
             <div key={key}>
               <dt>{key}</dt>
@@ -80,12 +94,12 @@ export function SpecialistApprovalReview({
               ))}
             </ul>
             <p>
-              Maximum per file: {review.fileStaging.maximumFileBytes} bytes. Maximum total:{" "}
-              {review.fileStaging.maximumTotalBytes} bytes.
+              Maximum per file: {formatBytes(review.fileStaging.maximumFileBytes)}. Maximum total:{" "}
+              {formatBytes(review.fileStaging.maximumTotalBytes)}.
             </p>
             <p>
               {review.fileDisclosure
-                ? `Transfer to GoatCitadel artifact storage in workspace ${review.fileDisclosure.workspaceId}. This does not authorize model, channel or external publication access.`
+                ? `Transfer to GoatCitadel artifact storage in ${workspaceLabel(review.fileDisclosure.workspaceId)}. This does not authorize model, channel or external publication access.`
                 : "Collection is local; sharing or publishing requires separate authorization."}
             </p>
           </>
@@ -107,7 +121,8 @@ export function SpecialistApprovalReview({
           Approval is separate from execution and its outcome.
         </p>
         <p>
-          Workspace {evidence.code.workspaceId} · {evidence.code.language} ·{" "}
+          Workspace: {workspaceLabel(evidence.code.workspaceId)} ·{" "}
+          {codeLanguageLabels[evidence.code.language] ?? "Code"} ·{" "}
           {evidence.code.permissionProfileLabel ?? "Gateway permission policy"}
         </p>
         <p className="break-all">

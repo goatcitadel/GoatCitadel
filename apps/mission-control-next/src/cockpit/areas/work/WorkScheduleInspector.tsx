@@ -1,14 +1,21 @@
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
-import { WorkScheduleActionButtons, WorkScheduleRecordDetails, formattedTime } from "./WorkScheduleSummary";
+import { ScheduleTime, WorkScheduleActionButtons, WorkScheduleRecordDetails } from "./WorkScheduleSummary";
 import { WorkScheduleEditor } from "./WorkScheduleEditor";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
-import { scheduleTimezoneSummary } from "./schedule-cadence";
+import { scheduleCadence, scheduleTimezoneSummary } from "./schedule-cadence";
+import { presentScheduleAction } from "./work-vocabulary";
 import type { Dispatch, SetStateAction } from "react";
 import type { CronJobRecordResponse } from "@goatcitadel/mission-control-shared/api/types";
 import type { ScheduleAction } from "../../../features/native-routes/ops/schedule-operation";
 import type { useScheduleOperations } from "../../../features/native-routes/ops/use-schedule-operations";
+
+const SCHEDULE_CONFIRM: Readonly<Record<ScheduleAction, string>> = {
+  run: "Run schedule now",
+  pause: "Pause schedule",
+  resume: "Resume schedule",
+  cancel: "Delete schedule",
+};
 
 interface WorkScheduleInspectorProps {
   selected: CronJobRecordResponse;
@@ -60,7 +67,7 @@ export function WorkScheduleInspector({
       <div>
         <h2 className="font-display text-md font-semibold text-fg">{selected.name}</h2>
         <p className="text-xs text-fg-muted">
-          {selected.enabled ? "Enabled" : "Paused"} · {humanizeToken(selected.action)}
+          {selected.enabled ? "Enabled" : "Paused"} · {presentScheduleAction(selected.action)}
         </p>
       </div>
       {selected.description ? <p className="text-sm text-fg-secondary">{selected.description}</p> : null}
@@ -102,13 +109,13 @@ export function WorkScheduleInspector({
           <p className="mb-3 text-sm text-fg-secondary">
             {reviewSnapshot?.name}
             {" · "}
-            {reviewSnapshot?.schedule}
+            {reviewSnapshot ? scheduleCadence(reviewSnapshot.schedule) : "Schedule not reported"}
             {" · "}
-            {humanizeToken(reviewSnapshot?.action ?? "unknown")}
+            {presentScheduleAction(reviewSnapshot?.action)}
             {". Destination: "}
             {reviewSnapshot?.workdir || "Not reported"}
             {". Next run: "}
-            {formattedTime(reviewSnapshot?.nextRunAt)}
+            <ScheduleTime value={reviewSnapshot?.nextRunAt} />
             {". "}
             {scheduleTimezoneSummary(reviewSnapshot?.schedule ?? "")}
             {" Displayed dates use your browser timezone."}
@@ -139,7 +146,7 @@ export function WorkScheduleInspector({
               disabled={busy || actionLocked || reviewChanged}
               onClick={() => void applyAction()}
             >
-              {pending === "cancel" ? "Delete schedule" : `Confirm ${pending}`}
+              {SCHEDULE_CONFIRM[pending]}
             </Button>
             {pending === "cancel" && reviewSnapshot?.enabled ? (
               <Button

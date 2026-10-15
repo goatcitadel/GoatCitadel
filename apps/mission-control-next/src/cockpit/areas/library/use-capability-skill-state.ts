@@ -7,7 +7,7 @@ import {
   type SkillStateMutationOutcome,
 } from "@goatcitadel/mission-control-shared/api/skills";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { skillStateLabel } from "./capability-vocabulary";
 import { classifyOperationFailure } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import type { CapabilityCatalogView } from "./capability-catalog";
 
@@ -152,7 +152,8 @@ export function useCapabilitySkillState({
     const existing = attempts.get(attemptKey);
     if (existing && existing.phase !== "recorded") return;
     const current = () =>
-      access.current() && mounted.current &&
+      access.current() &&
+      mounted.current &&
       lifecycle.current.identity === target.identity &&
       lifecycle.current.generation === target.generation;
     if (!current()) return;
@@ -187,10 +188,10 @@ export function useCapabilitySkillState({
         approvalId: approval?.approvalId,
         message:
           approval?.status === "pending"
-            ? `Approval requested. The reviewed skill remains ${humanizeToken(target.currentState)} until the decision and follow-on effect complete.`
+            ? `Approval requested. The reviewed skill remains ${skillStateLabel(target.currentState).toLowerCase()} until the decision and follow-on effect complete.`
             : approval
               ? "An existing approval request was returned. Inspect its decision and current skill state before another request."
-              : `Gateway reports the skill is already ${humanizeToken(target.state)}; no change was requested.`,
+              : `Gateway reports the skill is already ${skillStateLabel(target.state).toLowerCase()}; no change was requested.`,
       });
       if (current()) {
         setReview(null);
@@ -209,7 +210,8 @@ export function useCapabilitySkillState({
       if (dispatched && classifyOperationFailure(cause) === "refused") {
         // Gateway answered and recorded nothing: no replay lock, the same revision may be reviewed again.
         refused = true;
-        if (current()) setError({ identity, message: `Gateway did not accept the request. ${describeApiError(cause).summary}` });
+        if (current())
+          setError({ identity, message: `Gateway did not accept the request. ${describeApiError(cause).summary}` });
       } else if (dispatched) {
         publish(attemptKey, {
           ...base,

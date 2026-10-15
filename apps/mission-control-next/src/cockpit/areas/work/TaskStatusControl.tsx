@@ -1,13 +1,17 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { TaskRecord } from "@goatcitadel/contracts";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import {
+  presentTaskStatus,
+  type StatusPresentation,
+} from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useTaskDetailReview } from "../../../features/native-routes/ops/use-task-detail-review";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { readCockpitLocation } from "../../app/cockpit-back-guard";
 import { TASK_STATUSES } from "./work-tasks";
+import { NOTICE_TONE_CLASS } from "./work-vocabulary";
 
 export function TaskStatusControl({
   task,
@@ -28,15 +32,17 @@ export function TaskStatusControl({
   const queryClient = useQueryClient();
   const owner = useTaskDetailReview(task, workspaceId);
   const [target, setTarget] = useState(task.status);
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState<{ text: string; status: StatusPresentation } | null>(null);
   const executionOwned = Boolean(task.agenticContext || task.proactiveContext);
   async function changeStatus() {
     await owner.confirm(
       (updated) => {
         setTarget(updated.status);
-        setNotice(
-          `Gateway recorded ${humanizeToken(updated.status).toLowerCase()} for this task. This board change does not control an execution.`,
-        );
+        const recorded = presentTaskStatus(updated.status);
+        setNotice({
+          text: `Task moved to ${recorded.label}. This board change does not control an execution.`,
+          status: recorded,
+        });
         void Promise.allSettled([
           queryClient.invalidateQueries({ queryKey: ["tasks", "work-task", workspaceId, updated.taskId] }),
           queryClient.invalidateQueries({ queryKey: queryKeys.workTasks(workspaceId) }),
@@ -75,7 +81,7 @@ export function TaskStatusControl({
               {TASK_STATUSES.filter((status) => status !== "done" || canMarkDone || task.status === "done").map(
                 (status) => (
                   <option key={status} value={status}>
-                    {humanizeToken(status)}
+                    {presentTaskStatus(status).label}
                   </option>
                 ),
               )}
@@ -86,7 +92,7 @@ export function TaskStatusControl({
             disabled={owner.locked || target === task.status}
             onClick={() => {
               void changeStatus();
-              setNotice("");
+              setNotice(null);
             }}
           >
             Save task status
@@ -104,8 +110,12 @@ export function TaskStatusControl({
         </p>
       ) : null}
       {notice ? (
-        <p role="status" className="mt-2 text-sm text-status-done">
-          {notice}
+        <p
+          role="status"
+          data-tone={notice.status.tone}
+          className={`mt-2 text-sm ${NOTICE_TONE_CLASS[notice.status.tone]}`}
+        >
+          {notice.text}
         </p>
       ) : null}
       {owner.message ? (

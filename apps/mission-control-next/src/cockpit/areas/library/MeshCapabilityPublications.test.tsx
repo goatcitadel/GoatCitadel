@@ -145,15 +145,15 @@ describe("cockpit mesh capability publications", () => {
     ops.value.inspection = inspection([entry()]);
     await render();
     const manifests = container.querySelector('[aria-label="Published mesh capability manifests"]')!;
-    expect(manifests.textContent).toContain("Node node-1");
-    expect(manifests.textContent).toContain("Publisher generation 3");
-    expect(manifests.textContent).toContain(`sha256:${MANIFEST.slice(0, 12)}…`);
-    expect(manifests.textContent).toContain("search");
+    expect(manifests.textContent).toContain("Capabilities from a mesh node");
+    expect(manifests.textContent).toContain("1 capability · Published");
+    expect(manifests.textContent).toContain("Search");
     expect(manifests.textContent).toContain("Review required");
     expect(manifests.textContent).toContain("Inspect only");
     expect(manifests.textContent).toContain("Effects: read only");
     expect(manifests.textContent).toContain("Awaiting operator review; publication alone never grants callability.");
-    expect(manifests.textContent).toContain("mesh:node-1:tool:search");
+    for (const raw of ["node-1", "mesh:node-1:tool:search", "Publisher generation", "pub-1"])
+      expect(manifests.textContent).not.toContain(raw);
     expect(api.requestMeshCapabilityActivation).not.toHaveBeenCalled();
   });
 
@@ -173,8 +173,8 @@ describe("cockpit mesh capability publications", () => {
       entrySha256: ENTRY,
     });
     const receipt = container.querySelector('[aria-label="Activation request receipt"]')!;
-    expect(receipt.textContent).toContain("search: approval is pending");
-    expect(receipt.textContent).toContain("Permissions initial (1 added, 0 removed)");
+    expect(receipt.textContent).toContain("Search: approval is waiting on you");
+    expect(receipt.textContent).toContain("Permissions first grant (1 added, 0 removed)");
     expect([...receipt.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(
       expect.arrayContaining([expect.stringContaining("/inbox?approvalId=ap-1")]),
     );
@@ -290,8 +290,8 @@ describe("cockpit mesh capability publications", () => {
     expect(manifests.textContent).toContain("workflow");
     expect(manifests.textContent).toContain("Effects: network");
     expect(manifests.textContent).not.toContain("undefined");
-    expect(container.querySelector("h3")?.textContent).toContain("Node node-1");
-    expect(container.querySelector("li h4")?.textContent).toBe("search");
+    expect(container.querySelector("h3")?.textContent).toBe("Capabilities from a mesh node");
+    expect(container.querySelector("li h4")?.textContent).toBe("Search");
   });
 
   it("does not request activation while an approval for the same capability is pending", async () => {
@@ -355,6 +355,9 @@ describe("cockpit mesh capability publications", () => {
       "1 invocation settled with an unknown delivery and awaits manual reconciliation.",
     );
     expect(outcomes.textContent).toContain("Manual reconciliation required");
+    expect(outcomes.textContent).toContain("Search");
+    expect(outcomes.textContent).toContain("Settled by the Gateway");
+    expect(outcomes.textContent).not.toContain("node-1");
     expect(outcomes.querySelectorAll("button")).toHaveLength(0);
   });
 

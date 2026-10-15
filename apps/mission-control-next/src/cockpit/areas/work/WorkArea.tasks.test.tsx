@@ -215,7 +215,7 @@ describe("Work task board", () => {
       ),
     );
     await vi.waitFor(() => expect(container.textContent).toContain("Outline release"));
-    expect(container.textContent).toContain("Operator task · Planning");
+    expect(container.textContent).toContain("Operator task Planning");
     expect(container.textContent).toContain("Runtime run");
     expect(container.textContent).toContain("Provider unavailable");
     const select = container.querySelector<HTMLSelectElement>("select")!;

@@ -37,13 +37,21 @@ function Harness() {
   return null;
 }
 const http = (status: number) =>
-  new ApiRequestError(`API error ${status}`, { kind: "http", method: "POST", path: "/api/v1/skills/review/state", status, body: { message: "Expected revision does not match." } });
+  new ApiRequestError(`API error ${status}`, {
+    kind: "http",
+    method: "POST",
+    path: "/api/v1/skills/review/state",
+    status,
+    body: { message: "Expected revision does not match." },
+  });
 
 let renderer: ReactTestRenderer | null = null;
 beforeEach(async () => {
   __resetCapabilitySkillAttemptsForTests();
   onRefresh.mockClear();
-  vi.mocked(fetchSkills).mockReset().mockResolvedValue({ items: [skill] });
+  vi.mocked(fetchSkills)
+    .mockReset()
+    .mockResolvedValue({ items: [skill] });
   vi.mocked(updateSkillState).mockReset();
   await act(async () => {
     renderer = create(<Harness />);
@@ -67,7 +75,9 @@ describe("useCapabilitySkillState failure classification", () => {
     expect(latest.locked).toBe(false);
     expect(latest.pending).toBe(false);
     expect(latest.target).toBeNull();
-    expect(latest.error).toContain(status === 409 ? "This changed somewhere else" : "Expected revision does not match.");
+    expect(latest.error).toContain(
+      status === 409 ? "This changed somewhere else" : "Expected revision does not match.",
+    );
     expect(latest.error).not.toContain("uncertain");
     vi.mocked(updateSkillState).mockResolvedValueOnce({
       pendingApproval: null,
@@ -77,12 +87,14 @@ describe("useCapabilitySkillState failure classification", () => {
     await confirmRequest();
     expect(updateSkillState).toHaveBeenCalledTimes(2);
     expect(latest.error).toBeUndefined();
-    expect(latest.notice).toContain("already Disabled");
+    expect(latest.notice).toContain("already disabled");
   });
 
   it.each(["network", "5xx"])("keeps a %s failure after dispatch uncertain and locked", async (kind) => {
     vi.mocked(updateSkillState).mockRejectedValueOnce(
-      kind === "network" ? new ApiRequestError("Network error", { kind: "network", method: "POST", path: "/x" }) : http(503),
+      kind === "network"
+        ? new ApiRequestError("Network error", { kind: "network", method: "POST", path: "/x" })
+        : http(503),
     );
     await confirmRequest();
     expect(latest.locked).toBe(true);

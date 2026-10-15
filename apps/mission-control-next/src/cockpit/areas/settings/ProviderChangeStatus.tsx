@@ -3,6 +3,8 @@ import { isProviderProfileCheckpoint, type ChangePlanRecord } from "@goatcitadel
 import type { SettingsChangeStatus } from "../../../features/native-routes/settings/use-settings-change";
 import { ApprovedSettingsContinuation } from "./ApprovedSettingsContinuation";
 import { Button } from "../../ui/Button";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { presentChangeStatusLabel } from "./settings-vocabulary";
 
 export function ProviderChangeStatus({
   change,
@@ -33,13 +35,13 @@ export function ProviderChangeStatus({
       className="space-y-2 rounded-md border border-line p-3 text-sm text-fg-secondary"
     >
       <p role="status">
-        <strong>{change.receipt.status.replaceAll("_", " ")}</strong> · {change.message}
+        <strong>{presentChangeStatusLabel(change.receipt.status)}</strong> · {change.message}
       </p>
       {change.blocking ? <p>This action has not settled. Inspect the Gateway step before another save.</p> : null}
       {change.blocking && committedProfile ? (
         <p>
-          Public profile saved at settings revision {checkpoint!.appliedRevision}. Credential setup is not confirmed.
-          Inspect the Gateway's current required action and evidence before continuing.
+          Public profile saved. Credential setup is not confirmed. Inspect the Gateway's current required action and
+          evidence before continuing.
         </p>
       ) : null}
       {change.error ? (
@@ -57,11 +59,20 @@ export function ProviderChangeStatus({
           </Button>
         ) : null}
         {change.blocking && change.receipt.requiredAction?.kind === "approval" ? (
-          <NativeOwnerLink scope={[plan?.origin.workspaceId, change.receipt.planId]} className="text-accent underline" href="/inbox">
+          <NativeOwnerLink
+            scope={[plan?.origin.workspaceId, change.receipt.planId]}
+            className="text-accent underline"
+            href="/inbox"
+          >
             Open approvals in Inbox
           </NativeOwnerLink>
         ) : null}
       </div>
+      {committedProfile ? (
+        <TechnicalDetails>
+          <p className="break-all font-mono text-xs">Saved at settings revision {checkpoint!.appliedRevision}</p>
+        </TechnicalDetails>
+      ) : null}
       <ApprovedSettingsContinuation plan={change.plan} onSettled={onRefresh} />
     </section>
   );

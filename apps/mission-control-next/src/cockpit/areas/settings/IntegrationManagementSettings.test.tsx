@@ -21,6 +21,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
   ...(await original<object>()),
   ...api,
 }));
+// The connection details name the bound workspace through a query; this suite renders without a QueryClient.
+vi.mock("../../data/use-workspace-name", () => ({
+  useWorkspaceNameLookup: () => () => undefined,
+  useWorkspaceName: () => undefined,
+  useActiveWorkspaceLabel: () => "Current workspace",
+}));
 vi.mock("../../ui/Dialog", () => ({
   Dialog: ({ open, title, children }: { open: boolean; title: string; children: ReactNode }) =>
     open ? (
@@ -103,7 +109,7 @@ describe("native integration management", () => {
     });
     expect(api.fetchIntegrationConnection).toHaveBeenCalledWith(saved.connectionId);
     expect(text(view.root)).toContain("Connection Reviewed fixture created.");
-    expect(text(view.root)).toContain("Configured status: connected");
+    expect(text(view.root)).toContain("Configured status: Connected");
     expect(text(view.root)).toContain("Connectivity unverified");
   });
   it("cancels deletion without calling the owner", async () => {

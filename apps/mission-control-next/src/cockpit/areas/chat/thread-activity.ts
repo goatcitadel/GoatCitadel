@@ -4,6 +4,7 @@ import {
   type ChatSessionStatusResponse,
   type ChatSessionStatusWork,
 } from "@goatcitadel/contracts";
+import { formatRelativeTime } from "@goatcitadel/mission-control-shared/content/format";
 
 export interface ThreadActivity {
   label: string;
@@ -62,10 +63,10 @@ export function projectSessionActivity(session: ChatSessionRecord): ThreadActivi
   );
 }
 
-/** "Last response completed · as of 10:42" once a status is no longer known to be current. */
+/** "Last response completed · as of 5 minutes ago" once a status is no longer known to be current. */
 export function threadActivityLabel(activity: ThreadActivity & { stale?: boolean }): string {
   if (!activity.stale || !activity.observedAt) return activity.label;
   const observed = new Date(activity.observedAt);
   if (Number.isNaN(observed.getTime())) return activity.label;
-  return `${activity.label} · as of ${observed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  return `${activity.label} · as of ${formatRelativeTime(observed)}`;
 }

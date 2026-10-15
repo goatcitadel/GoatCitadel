@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import type { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { SessionControlManager } from "./SessionControlManager";
 import * as clientCore from "@goatcitadel/mission-control-shared/api/client-core";
 import {
@@ -108,9 +109,9 @@ describe("cockpit session control", () => {
     await render();
     expect(container.textContent).toContain("You control this conversation · Generation 1");
     const pending = container.querySelector('[aria-label="Pending control requests"]')!;
-    expect(pending.textContent).toContain("client-a");
+    expect(pending.textContent).not.toContain("client-a");
     expect(pending.textContent).toContain("Requested: Send and Read");
-    expect(pending.textContent).toContain("…aaaaaaaa");
+    expect(pending.textContent).not.toContain("…aaaaaaaa");
     expect(api.handoffSessionControl).not.toHaveBeenCalled();
     expect(api.revokeSessionControl).not.toHaveBeenCalled();
   });
@@ -125,7 +126,7 @@ describe("cockpit session control", () => {
     });
     await click("Review handoff");
     expect(api.handoffSessionControl).not.toHaveBeenCalled();
-    expect(modal?.message).toContain("Give control of this conversation to client-a with Send and Read.");
+    expect(modal?.message).toContain("Give control of this conversation to the companion client with Send and Read.");
     expect(modal?.message).toContain("Your own messages stay blocked until you revoke or take over.");
     await confirm();
     expect(api.fetchSessionControlDetail).toHaveBeenCalledWith("session-a");
@@ -167,11 +168,11 @@ describe("cockpit session control", () => {
     api.fetchSessionControlDetail.mockResolvedValue({ control: external(), pendingRequests: [] });
     await render();
     const controller = container.querySelector('[aria-label="Current external controller"]')!;
-    expect(controller.textContent).toContain("client-a");
+    expect(controller.textContent).not.toContain("client-a");
     expect(controller.textContent).toContain("Live lease");
     expect(controller.textContent).toContain("Send + Read");
     await click("Review revoke");
-    expect(modal?.message).toContain("End client-a's control (generation 2).");
+    expect(modal?.message).toContain("End the external client's control (generation 2).");
     await confirm();
     expect(api.revokeSessionControl).toHaveBeenCalledExactlyOnceWith("session-a", {
       target: "current_controller",
@@ -233,13 +234,21 @@ describe("cockpit session control", () => {
       boundExternalController: { ...external().boundExternalController, tokenFingerprint: "" },
     };
     status.value.data = { control, pendingRequests: [] };
-    await render();
+    localStorage.setItem("goatcitadel.ui.technical_details.v1", "true");
+    await act(async () =>
+      root.render(
+        <UiPreferencesProvider>
+          <SessionControlManager sessionId="session-a" />
+        </UiPreferencesProvider>,
+      ),
+    );
+    localStorage.removeItem("goatcitadel.ui.technical_details.v1");
     expect(container.textContent).toContain("Token fingerprint: Not reported");
     expect(container.textContent).not.toContain("…null");
     expect(container.querySelector('[role="group"][aria-label="Current external controller"]')).not.toBeNull();
   });
 
-  it("names each request's actions after its client", async () => {
+  it("names each request's actions without exposing client identifiers", async () => {
     status.value.data = {
       control: operator(),
       pendingRequests: [request(), request({ requestId: "request-b", clientInstanceId: "client-b" })],
@@ -248,12 +257,13 @@ describe("cockpit session control", () => {
     const labels = [...container.querySelectorAll("button")].map((item) => item.getAttribute("aria-label"));
     expect(labels).toEqual(
       expect.arrayContaining([
-        "Review handoff to client-a",
-        "Reject request from client-a",
-        "Review handoff to client-b",
-        "Reject request from client-b",
+        "Review handoff for companion request 1",
+        "Reject companion request 1",
+        "Review handoff for companion request 2",
+        "Reject companion request 2",
       ]),
     );
+    expect(labels.join(" ")).not.toContain("client-a");
   });
 
   it("rejects a pending request without a confirmation", async () => {

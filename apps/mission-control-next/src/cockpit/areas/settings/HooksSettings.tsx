@@ -13,6 +13,8 @@ import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { integrationInputClass } from "./IntegrationFormFields";
 import { HookRecordEvidence, HookRunEvidence } from "./HookEvidence";
 import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { HOOK_MODE_LABELS, presentHookDeliveryStatus, presentHookTrigger } from "./settings-vocabulary";
 
 export function HooksSettings({ workspaceId }: { workspaceId: string }) {
   const workspaceLabel = useActiveWorkspaceLabel();
@@ -20,7 +22,9 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
   const [limit, setLimit] = useState(10),
     [query, setQuery] = useState("");
   const hooks = s.hooks.filter((item) =>
-    `${item.label} ${item.trigger} ${item.mode}`.toLowerCase().includes(query.trim().toLowerCase()),
+    `${item.label} ${item.trigger} ${presentHookTrigger(item.trigger)} ${item.mode} ${HOOK_MODE_LABELS[item.mode] ?? ""}`
+      .toLowerCase()
+      .includes(query.trim().toLowerCase()),
   );
   const fields = s.form;
   return (
@@ -94,7 +98,9 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
                 onChange={(e) => s.setForm({ ...fields, trigger: e.target.value as HookTrigger })}
               >
                 {HOOK_TRIGGER_VALUES.map((value) => (
-                  <option key={value}>{value}</option>
+                  <option key={value} value={value}>
+                    {presentHookTrigger(value)}
+                  </option>
                 ))}
               </select>
             </label>
@@ -107,7 +113,9 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
                 onChange={(e) => s.setForm({ ...fields, mode: e.target.value as HookMode })}
               >
                 {HOOK_MODES.map((value) => (
-                  <option key={value}>{value}</option>
+                  <option key={value} value={value}>
+                    {HOOK_MODE_LABELS[value]}
+                  </option>
                 ))}
               </select>
             </label>
@@ -162,7 +170,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
       {!s.data?.issues.some((issue) => issue.label === "Hooks") && s.data ? (
         <>
           <p className="text-xs text-fg-muted">
-            {hooks.length} matching records in this owner response
+            {plural(hooks.length, "matching hook")} in this owner response
             {s.hooks.length === HOOK_OWNER_LIMIT ? "; response is capped at 500" : ""}.
           </p>
           {!hooks.length ? (
@@ -175,7 +183,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
                     className="h-auto w-full justify-start whitespace-normal text-left"
                     onClick={() => s.selectHook(hook.hookId)}
                   >
-                    {hook.label} · {hook.trigger} · {hook.enabled ? "Enabled" : "Disabled"}
+                    {hook.label} · {presentHookTrigger(hook.trigger)} · {hook.enabled ? "Enabled" : "Disabled"}
                   </Button>
                 </li>
               ))}
@@ -189,7 +197,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
       {s.view === "hook" && s.selectedHook ? (
         <section aria-label="Selected hook" className="space-y-3 rounded-md border border-line-subtle p-3">
           <h4 className="break-words font-display text-md font-semibold">{s.selectedHook.label}</h4>
-          <HookRecordEvidence hook={s.selectedHook} />
+          <HookRecordEvidence hook={s.selectedHook} workspaceLabel={workspaceLabel} />
           <div className="flex flex-wrap gap-2">
             <Button
               disabled={s.mutation.locked || !s.selectedHook.enabled}
@@ -218,8 +226,8 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
           ) : (
             <>
               <p className="text-xs text-fg-muted">
-                Showing at most {limit} of {s.selectedRuns.length} returned deliveries. Payloads and remote response
-                bodies remain in Gateway evidence.
+                Showing at most {limit} of {plural(s.selectedRuns.length, "returned delivery", "returned deliveries")}.
+                Payloads and remote response bodies remain in Gateway evidence.
               </p>
               <ul className="space-y-2">
                 {s.selectedRuns.slice(0, limit).map((run) => (
@@ -228,7 +236,8 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
                       className="h-auto w-full justify-start whitespace-normal text-left"
                       onClick={() => s.setSelectedRunId(run.runId)}
                     >
-                      {run.status} · {run.trigger} · attempt {run.attemptCount}
+                      {presentHookDeliveryStatus(run.status).label} · {presentHookTrigger(run.trigger)} · attempt{" "}
+                      {run.attemptCount}
                     </Button>
                   </li>
                 ))}
@@ -243,7 +252,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
           )}
           {s.selectedRun ? (
             <>
-              <HookRunEvidence run={s.selectedRun} />
+              <HookRunEvidence run={s.selectedRun} workspaceLabel={workspaceLabel} />
               <Button
                 disabled={s.mutation.locked || !s.selectedRunCanRedrive}
                 onClick={() => s.reviewRedrive(s.selectedRun!)}

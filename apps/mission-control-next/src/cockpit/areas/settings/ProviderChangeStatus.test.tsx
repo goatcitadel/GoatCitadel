@@ -52,7 +52,9 @@ function markup(owner = plan) {
 }
 describe("provider partial-commit status", () => {
   it("distinguishes the saved profile from unfinished credential setup", () => {
-    expect(markup()).toContain("Public profile saved at settings revision 8");
+    expect(markup()).toContain("Public profile saved.");
+    expect(markup()).toContain("Needs your input");
+    expect(markup()).not.toContain("settings revision 8");
     expect(markup()).toContain("Credential setup is not confirmed");
   });
   it("withholds committed copy for foreign or unbound checkpoint evidence", () => {

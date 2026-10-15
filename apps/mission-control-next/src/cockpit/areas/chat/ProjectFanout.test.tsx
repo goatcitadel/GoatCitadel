@@ -77,7 +77,7 @@ it("defaults to one hour and reviews exact scope/limits/expiry with Cancel0 and 
   expect(Date.parse(input.value) - start).toBeLessThanOrEqual(60 * 60_000);
   await click("Review automatic fan-out");
   expect(api.create).not.toHaveBeenCalled();
-  expect(document.body.textContent).toContain("Medium risk");
+  expect(document.body.textContent).toContain("Caution risk");
   expect(document.body.textContent).not.toContain("Revision 2");
   expect(document.body.textContent).toContain("F:/authorized/project");
   preferences.showTechnicalDetails = true;

@@ -365,7 +365,7 @@ export function BrowserSessionGrants({
               ? "Review grant rotation"
               : "Review grant revoke"
         }
-        description={`Session ${session.label} · workspace ${workspaceId}.`}
+        description={`Session ${session.label} in this workspace.`}
       >
         {review ? (
           <div className="grid min-w-0 grid-cols-1 gap-3 text-sm wrap-anywhere">

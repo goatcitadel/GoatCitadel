@@ -9,9 +9,11 @@ import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered } from "../../dat
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { StatusBadge } from "../../ui/StatusBadge";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { canConfirmInboxChangePlan } from "./inbox-change-plan-guard";
 import { useInboxChangePlan } from "./use-inbox-change-plan";
 import { InboxSettingsContinuation } from "./InboxSettingsContinuation";
+import { presentChangePlanScope } from "./inbox-vocabulary";
 
 export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInboxItem; workspaceId: string }) {
   const { activeWorkspaceId } = useUiPreferences();
@@ -72,9 +74,10 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
           <p className="font-medium text-fg">{plan.title}</p>
           <p className="whitespace-pre-wrap break-words text-fg-secondary">{plan.summary}</p>
           <p className="whitespace-pre-wrap break-words text-fg-secondary">Impact: {plan.impact}</p>
-          <p className="text-xs text-fg-muted">
-            Scope: {plan.scope.replaceAll("_", " ")} · Revision {plan.revision}
-          </p>
+          <p className="text-xs text-fg-muted">Scope: {presentChangePlanScope(plan.scope)}</p>
+          <TechnicalDetails label="Plan identifiers">
+            <p className="break-all font-mono text-xs">Revision {plan.revision}</p>
+          </TechnicalDetails>
           {confirmation ? (
             <p className="rounded-md border border-line bg-sunken p-3 whitespace-pre-wrap break-words text-fg-secondary">
               {confirmation.confirmationText}
@@ -140,8 +143,11 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
             <p className="whitespace-pre-wrap break-words">{reviewedAction.confirmationText}</p>
             <p className="whitespace-pre-wrap break-words">Impact: {review.impact}</p>
             <p>
-              Scope: {review.scope.replaceAll("_", " ")} · Risk: {review.risk} · Revision {review.revision}
+              Scope: {presentChangePlanScope(review.scope)} · Risk: {presentRiskLevel(review.risk).label}
             </p>
+            <TechnicalDetails label="Plan identifiers">
+              <p className="break-all font-mono text-xs">Revision {review.revision}</p>
+            </TechnicalDetails>
           </div>
         ) : null}
         <div className="flex flex-wrap gap-2">

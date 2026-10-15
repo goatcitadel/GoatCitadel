@@ -4,7 +4,6 @@ import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { fetchIntegrationConnections } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import {
   canToggleIntegration,
   useIntegrationEnabled,
@@ -17,6 +16,8 @@ import { Button } from "../../ui/Button";
 import { IntegrationManagementSettings } from "./IntegrationManagementSettings";
 import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { McpDraftLeave } from "./McpDraftLeave";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { INTEGRATION_CONNECTION_STATUS_LABELS } from "./settings-vocabulary";
 
 const PAGE_SIZE = 20;
 export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: string }) {
@@ -186,8 +187,8 @@ function IntegrationRow({
             {connection.enabled ? "Enabled" : "Disabled"} · Connectivity unverified
           </p>
           <p className="text-xs text-fg-muted">
-            Configured status: {humanizeToken(connection.status)}. A saved status does not verify connectivity; run
-            diagnostics in connection management.
+            Configured status: {INTEGRATION_CONNECTION_STATUS_LABELS[connection.status] ?? "Unknown"}. A saved status
+            does not verify connectivity; run diagnostics in connection management.
           </p>
           <p className="mt-1 break-words text-xs text-fg-muted">
             {connection.workspaceId ? "Workspace-bound connection" : "Unbound · Personal Citadel policy"}
@@ -202,21 +203,22 @@ function IntegrationRow({
           {connection.enabled ? "Review disable" : "Review enable"}
         </Button>
       </div>
-      <details className="mt-2 text-xs text-fg-muted">
-        <summary className="cursor-pointer">Connection details</summary>
-        <dl className="mt-2 grid min-w-0 gap-1">
-          <dt>Connection ID</dt>
-          <dd className="break-all font-mono">{connection.connectionId}</dd>
-          <dt>Revision</dt>
-          <dd className="break-all font-mono">{connection.revision}</dd>
-          {connection.workspaceId ? (
-            <>
-              <dt>Bound workspace</dt>
-              <dd className="break-all font-mono">{connection.workspaceId}</dd>
-            </>
-          ) : null}
-        </dl>
-      </details>
+      <div className="mt-2 text-xs text-fg-muted">
+        <TechnicalDetails label="Connection details">
+          <dl className="grid min-w-0 gap-1">
+            <dt>Connection ID</dt>
+            <dd className="break-all font-mono">{connection.connectionId}</dd>
+            <dt>Revision</dt>
+            <dd className="break-all font-mono">{connection.revision}</dd>
+            {connection.workspaceId ? (
+              <>
+                <dt>Bound workspace</dt>
+                <dd className="break-all font-mono">{connection.workspaceId}</dd>
+              </>
+            ) : null}
+          </dl>
+        </TechnicalDetails>
+      </div>
       {attempt.pending ? (
         <p role="status" className="mt-2 text-sm text-fg-muted">
           Waiting for the Gateway connection owner…

@@ -1,3 +1,4 @@
+import { formatAbsoluteTime } from "@goatcitadel/mission-control-shared/content/format";
 import { threadActivityLabel, UNKNOWN_THREAD_ACTIVITY } from "./thread-activity";
 import type { ThreadActivityRecord } from "./use-thread-activity";
 
@@ -17,7 +18,9 @@ export function ThreadRowStatus({ record }: { record?: ThreadActivityRecord }) {
     <span
       className="flex items-center gap-1 text-xs text-fg-muted"
       title={
-        record?.observedAt ? `Gateway status observed ${record.observedAt}` : "The current status could not be read."
+        record?.observedAt
+          ? `Status checked ${formatAbsoluteTime(record.observedAt)}`
+          : "The current status could not be read."
       }
     >
       <span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${TONE_DOT[shown.tone]}`} />

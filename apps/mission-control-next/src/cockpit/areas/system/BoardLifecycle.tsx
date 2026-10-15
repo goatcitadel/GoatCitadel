@@ -7,6 +7,7 @@ import { useBoardMutationState } from "../../../features/native-routes/ops/board
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 
 type Transition = "archive" | "restore";
 
@@ -98,13 +99,14 @@ export function BoardLifecycle({
           if (!open) close();
         }}
         title={review?.kind === "restore" ? "Review board restore" : "Review board archive"}
-        description={`Saved board ${review?.before.name ?? ""} · workspace ${board.workspaceId}.`}
+        description={`Saved board ${review?.before.name ?? ""} in this workspace.`}
       >
         {review ? (
           <div className="grid min-w-0 grid-cols-1 gap-3 text-sm wrap-anywhere">
             <p>
-              <strong>{review.before.name}</strong> · revision {review.before.revision} · {review.before.status} ·{" "}
-              {review.before.placements.length} {review.before.placements.length === 1 ? "widget" : "widgets"}
+              <strong>{review.before.name}</strong> · revision {review.before.revision} ·{" "}
+              {review.before.status === "archived" ? "Archived" : "Active"} ·{" "}
+              {plural(review.before.placements.length, "widget")}
             </p>
             <p>
               {review.kind === "archive"

@@ -5,6 +5,7 @@ import { MasonAnswerFields } from "../../../features/native-routes/library/Mason
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 
 export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
   const control = useMasonEditor(citadelId),
@@ -47,9 +48,8 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
         </Button>
       ) : (
         <>
-          <details className="text-sm text-fg-secondary">
-            <summary>Session details</summary>
-            <dl className="mt-2 space-y-1">
+          <TechnicalDetails label="Session details">
+            <dl className="space-y-1">
               <dt>Session ID</dt>
               <dd className="break-all font-mono text-xs">{control.session.sessionId}</dd>
               <dt>Captured status</dt>
@@ -57,7 +57,7 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
               <dt>Selected Citadel</dt>
               <dd className="break-all font-mono text-xs">{citadelId}</dd>
             </dl>
-          </details>
+          </TechnicalDetails>
           <MasonAnswerFields
             value={control.answersDraft.value}
             disabled={control.locked}

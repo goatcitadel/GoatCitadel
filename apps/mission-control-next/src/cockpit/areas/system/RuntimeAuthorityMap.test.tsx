@@ -16,7 +16,7 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useRuntimeAuthorityProjection
 const item = (overrides: Partial<RuntimeAuthorityItem> = {}): RuntimeAuthorityItem =>
   ({
     id: "run-ledger",
-    domain: "durable_execution",
+    domain: "runs",
     label: "Durable run ledger",
     authorityClass: "canonical_record",
     owner: "Gateway durable runs",
@@ -77,7 +77,12 @@ describe("cockpit runtime authority map", () => {
     const records = list.querySelectorAll(":scope > li");
     expect(records).toHaveLength(2);
     expect(records[0]!.textContent).toContain("Durable run ledger");
-    expect(records[0]!.textContent).toContain("Canonical record");
+    expect(records[0]!.textContent).toContain("Runs · Canonical record");
+    // Classification is neutral text; only freshness and posture read as status.
+    expect([...records[0]!.querySelectorAll("[data-tone]")].map((badge) => badge.textContent)).toEqual([
+      "Current",
+      "OK",
+    ]);
     expect(records[0]!.textContent).toContain("Current");
     expect(records[0]!.textContent).toContain("OK");
     expect(records[0]!.textContent).toContain("Owner: Gateway durable runs");

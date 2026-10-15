@@ -10,7 +10,6 @@ import { RefreshCw } from "lucide-react";
 import { fetchDevDiagnostics } from "@goatcitadel/mission-control-shared/api/diagnostics";
 import { fetchDaemonLogs } from "@goatcitadel/mission-control-shared/api/platform";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
 import { describeOperatorInboxError } from "../../data/operator-inbox-error";
@@ -20,16 +19,11 @@ import { inboxMatchesWorkspace } from "../inbox/inbox-presentation";
 import { buildRecentDiagnosticsExport } from "./recent-diagnostics-export";
 import { FirstRunVerification } from "../settings/FirstRunVerification";
 import { RuntimeAuthorityMap } from "./RuntimeAuthorityMap";
+import { TimeText } from "../../ui/TimeText";
+import { DIAGNOSTIC_LEVEL, presentDiagnosticCategory, presentDiagnosticEvent } from "./system-vocabulary";
 
 // Segmented control: the pressed view uses a neutral fill and strong border, not the primary accent.
 const EVENT_VIEW_TOGGLE = "aria-[pressed=true]:border-fg aria-[pressed=true]:bg-sunken";
-
-function timestamp(value: string): string {
-  const time = Date.parse(value);
-  return Number.isFinite(time)
-    ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(time)
-    : "Time unavailable";
-}
 
 export function SystemDiagnostics() {
   const location = useCockpitRoute();
@@ -226,7 +220,7 @@ export function SystemDiagnostics() {
               {logs.data.items.map((item, index) => (
                 <li key={`${item.timestamp}:${index}`} className="rounded-md border border-line-subtle bg-sunken p-3">
                   <p className="text-xs font-medium text-fg-muted">
-                    {humanizeToken(item.level)} · {timestamp(item.timestamp)}
+                    {DIAGNOSTIC_LEVEL[item.level] ?? "Log"} · <TimeText value={item.timestamp} />
                   </p>
                   <p className="mt-2 break-words text-sm text-fg-secondary">{item.message}</p>
                 </li>
@@ -287,13 +281,11 @@ export function SystemDiagnostics() {
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>
                           <p className="text-xs font-medium text-fg-muted">
-                            {humanizeToken(item.level)} · {humanizeToken(item.category)}
+                            {DIAGNOSTIC_LEVEL[item.level] ?? "Event"} · {presentDiagnosticCategory(item.category)}
                           </p>
-                          <h3 className="mt-1 text-sm font-semibold text-fg">{humanizeToken(item.event)}</h3>
+                          <h3 className="mt-1 text-sm font-semibold text-fg">{presentDiagnosticEvent(item.event)}</h3>
                         </div>
-                        <time dateTime={item.timestamp} className="text-xs text-fg-muted">
-                          {timestamp(item.timestamp)}
-                        </time>
+                        <TimeText value={item.timestamp} className="text-xs text-fg-muted" />
                       </div>
                       <p className="mt-2 break-words text-sm text-fg-secondary">{item.message}</p>
                       <TechnicalDetails label="Event technical details">

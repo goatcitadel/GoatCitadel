@@ -1,8 +1,13 @@
 // @vitest-environment happy-dom
+import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE, type ApprovalRequest, type OperatorInboxItem } from "@goatcitadel/contracts";
+import {
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE,
+  type ApprovalRequest,
+  type OperatorInboxItem,
+} from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxApprovalActions } from "./InboxApprovalActions";
 import { ApprovalDecisionBar } from "./ApprovalDecisionBar";
@@ -114,58 +119,93 @@ async function typeConfirmation(value: string) {
 describe("Inbox approval decisions", () => {
   function knowledgeApproval(legacy = false): ApprovalRequest {
     const payload = {
-      workspaceId: "default", sessionId: "session", sessionIncarnationId: "incarnation", sourceId: "source",
-      importId: "import", itemId: "item", attachmentId: "attachment", attachmentRevision: 1,
-      rawSha256: "b".repeat(64), normalizedArtifactSha256: "a".repeat(64),
+      workspaceId: "default",
+      sessionId: "session",
+      sessionIncarnationId: "incarnation",
+      sourceId: "source",
+      importId: "import",
+      itemId: "item",
+      attachmentId: "attachment",
+      attachmentRevision: 1,
+      rawSha256: "b".repeat(64),
+      normalizedArtifactSha256: "a".repeat(64),
     };
-    return { ...approval, kind: "external_source.knowledge_snapshot", payload,
+    return {
+      ...approval,
+      kind: "external_source.knowledge_snapshot",
+      payload,
       linkage: { workspaceId: "default", sessionId: "session" },
-      preview: { sourceId: "source", importId: "import", itemId: "item", attachmentId: "attachment",
-        normalizedArtifactSha256: payload.normalizedArtifactSha256, normalizedByteCount: 512,
-        ...(!legacy ? { review: { version: 1, sourceLabel: "Original source", itemPath: "sessions/original.jsonl",
-          target: "Knowledge copy of sessions/original.jsonl from Original source",
-          scopeSummary: "Workspace default; conversation session.", consequence: EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE,
-        } } : {}),
+      preview: {
+        sourceId: "source",
+        importId: "import",
+        itemId: "item",
+        attachmentId: "attachment",
+        normalizedArtifactSha256: payload.normalizedArtifactSha256,
+        normalizedByteCount: 512,
+        ...(!legacy
+          ? {
+              review: {
+                version: 1,
+                sourceLabel: "Original source",
+                itemPath: "sessions/original.jsonl",
+                target: "Knowledge copy of sessions/original.jsonl from Original source",
+                scopeSummary: "Workspace default; conversation session.",
+                consequence: EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE,
+              },
+            }
+          : {}),
       },
     };
   }
-  it.each([false, true])("reviews the exact %s legacy Knowledge copy: Cancel sends zero decisions; confirm sends the original once", async legacy => {
-    const record = knowledgeApproval(legacy);
-    api.fetchApproval.mockResolvedValue(record);
-    api.resolveApproval.mockResolvedValue({ approval: { ...record, status: "approved" }, effects: [] });
-    renderActions(record);
-    await act(async () => button("Review approval").click());
-    const dialog = document.querySelector('[role="dialog"]')!;
-    expect(dialog.textContent).toContain(legacy ? "Knowledge copy of imported item item" : "Knowledge copy of sessions/original.jsonl from Original source");
-    expect(dialog.textContent).toContain("Workspace default; conversation session.");
-    expect(dialog.textContent).toContain(EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE);
-    expect(dialog.textContent).toContain("This decision authorizes this request once.");
-    expect(dialog.textContent).not.toContain("Snapshot provenance");
-    expect(dialog.textContent).not.toContain("Normalized SHA-256");
-    preferences.showTechnicalDetails = true;
-    renderActions(record);
-    const provenance = [...dialog.querySelectorAll("details")].find(detail => detail.querySelector("summary")?.textContent === "Snapshot provenance")!;
-    expect(provenance.open).toBe(false);
-    expect(provenance.textContent).toContain(`Normalized SHA-256: ${"a".repeat(64)}`);
-    expect(provenance.textContent).toContain("Normalized bytes: 512");
-    await act(async () => button("Cancel").click());
-    expect(api.fetchApproval).not.toHaveBeenCalled();
-    expect(api.resolveApproval).not.toHaveBeenCalled();
-    await approve();
-    expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval-a", { workspaceId: "default" });
-    expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
-  });
-  it.each(["missing", "changed-path", "changed-hash", "foreign-scope"])("blocks a Knowledge decision after %s preflight", async kind => {
-    const record = knowledgeApproval();
-    const changed = structuredClone(record);
-    if (kind === "changed-path") (changed.preview!.review as Record<string, unknown>).itemPath = "other.jsonl";
-    if (kind === "changed-hash") changed.payload.normalizedArtifactSha256 = "f".repeat(64);
-    if (kind === "foreign-scope") changed.linkage!.workspaceId = "foreign";
-    api.fetchApproval.mockResolvedValue(kind === "missing" ? undefined : changed);
-    renderActions(record);
-    await approve();
-    expect(api.resolveApproval).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "reviews the exact %s legacy Knowledge copy: Cancel sends zero decisions; confirm sends the original once",
+    async (legacy) => {
+      const record = knowledgeApproval(legacy);
+      api.fetchApproval.mockResolvedValue(record);
+      api.resolveApproval.mockResolvedValue({ approval: { ...record, status: "approved" }, effects: [] });
+      renderActions(record);
+      await act(async () => button("Review approval").click());
+      const dialog = document.querySelector('[role="dialog"]')!;
+      expect(dialog.textContent).toContain(
+        legacy
+          ? "Knowledge copy of imported item item"
+          : "Knowledge copy of sessions/original.jsonl from Original source",
+      );
+      expect(dialog.textContent).toContain("Workspace default; conversation session.");
+      expect(dialog.textContent).toContain(EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE);
+      expect(dialog.textContent).toContain("This decision authorizes this request once.");
+      expect(dialog.textContent).not.toContain("Snapshot provenance");
+      expect(dialog.textContent).not.toContain("Normalized SHA-256");
+      preferences.showTechnicalDetails = true;
+      renderActions(record);
+      const provenance = [...dialog.querySelectorAll("details")].find(
+        (detail) => detail.querySelector("summary")?.textContent === "Snapshot provenance",
+      )!;
+      expect(provenance.open).toBe(false);
+      expect(provenance.textContent).toContain(`Normalized SHA-256: ${"a".repeat(64)}`);
+      expect(provenance.textContent).toContain("Normalized bytes: 512");
+      await act(async () => button("Cancel").click());
+      expect(api.fetchApproval).not.toHaveBeenCalled();
+      expect(api.resolveApproval).not.toHaveBeenCalled();
+      await approve();
+      expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval-a", { workspaceId: "default" });
+      expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
+    },
+  );
+  it.each(["missing", "changed-path", "changed-hash", "foreign-scope"])(
+    "blocks a Knowledge decision after %s preflight",
+    async (kind) => {
+      const record = knowledgeApproval();
+      const changed = structuredClone(record);
+      if (kind === "changed-path") (changed.preview!.review as Record<string, unknown>).itemPath = "other.jsonl";
+      if (kind === "changed-hash") changed.payload.normalizedArtifactSha256 = "f".repeat(64);
+      if (kind === "foreign-scope") changed.linkage!.workspaceId = "foreign";
+      api.fetchApproval.mockResolvedValue(kind === "missing" ? undefined : changed);
+      renderActions(record);
+      await approve();
+      expect(api.resolveApproval).not.toHaveBeenCalled();
+    },
+  );
   it("keeps missing or contradictory Knowledge preview unavailable", () => {
     const record = knowledgeApproval();
     renderActions({ ...record, preview: {} });
@@ -247,18 +287,20 @@ describe("Inbox approval decisions", () => {
       api.resolveApproval.mockResolvedValue({ approval: { ...approval, status: "approved" }, effects: [] });
       await approve();
       expect(api.resolveApproval).toHaveBeenCalledTimes(2);
-      expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("Decision recorded: approved"));
+      expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("Decision recorded: Approved"));
     });
 
     it("shows the settled outcome and keeps the lock when the owner record was decided", async () => {
       const { onResolved, onInvalidated } = await reachUncertain();
       api.fetchApproval.mockResolvedValue({ ...approval, status: "approved" });
       await act(async () => button("Check again").click());
-      expect(container.textContent).toContain("Decision recorded: approved");
+      expect(container.textContent).toContain("Decision recorded: Approved");
       expect(container.textContent).not.toContain("Decision outcome is uncertain");
       expect(button("Review approval").disabled).toBe(true);
       expect(button("Deny").disabled).toBe(true);
-      expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Check again")).toBe(false);
+      expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Check again")).toBe(
+        false,
+      );
       expect(onResolved).not.toHaveBeenCalled();
       expect(onInvalidated).not.toHaveBeenCalled();
       expect(api.resolveApproval).toHaveBeenCalledOnce();
@@ -301,7 +343,10 @@ describe("Inbox approval decisions", () => {
 
   it("withholds specialist approval without matching evidence", () => {
     renderActions({ ...approval, kind: "code_mode.run" });
-    expect(Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Review approval")?.disabled).toBe(true);
+    expect(
+      Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Review approval")
+        ?.disabled,
+    ).toBe(true);
     expect(api.resolveApproval).not.toHaveBeenCalled();
   });
 
@@ -473,38 +518,75 @@ describe("Inbox approval decisions", () => {
     expect(api.resolveApproval).not.toHaveBeenCalled();
   });
 });
-it.each(["Use the local store for project decisions", "  First line\nSecond line\n", "Decision: password=[REDACTED]"])("shows the exact redacted memory body before the native decision: %s", content => {
-  const memory: ApprovalRequest = { ...approval, kind: "memory.write", riskLevel: "caution", preview: { toolName: "memory.write", target: "Memory namespace: project-memory", content, summary: "Persist this exact memory document after approval" } };
-  renderActions(memory);
-  const details = [...container.querySelectorAll("details")].find(node => node.querySelector("summary")?.textContent === "Memory content");
-  expect(details?.open).toBe(true);
-  expect(details?.querySelector("pre")?.textContent).toBe(content);
-  expect(button("Approve once").disabled).toBe(false);
-  expect(api.resolveApproval).not.toHaveBeenCalled();
-});
+it.each(["Use the local store for project decisions", "  First line\nSecond line\n", "Decision: password=[REDACTED]"])(
+  "shows the exact redacted memory body before the native decision: %s",
+  (content) => {
+    const memory: ApprovalRequest = {
+      ...approval,
+      kind: "memory.write",
+      riskLevel: "caution",
+      preview: {
+        toolName: "memory.write",
+        target: "Memory namespace: project-memory",
+        content,
+        summary: "Persist this exact memory document after approval",
+      },
+    };
+    renderActions(memory);
+    const details = [...container.querySelectorAll("details")].find(
+      (node) => node.querySelector("summary")?.textContent === "Memory content",
+    );
+    expect(details?.open).toBe(true);
+    expect(details?.querySelector("pre")?.textContent).toBe(content);
+    expect(button("Approve once").disabled).toBe(false);
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+  },
+);
 
-it.each(["One sentence", "  First line\nSecond line\n", "password=[REDACTED]"])("opens exact persisted lifecycle values for independent Inbox review: %s", async content => {
-  renderActions({ ...approval, kind: "memory.lifecycle", riskLevel: "danger", preview: { reviewKind: "memory.lifecycle.patch", target: "Original title", requestedTitle: "New title", requestedContent: content, pinnedSummary: "Requested pinned state: pinned", ttlSummary: "Requested TTL: clear override", withheldSummary: "Metadata withheld" } });
-  await act(async () => button("Review approval").click());
-  const dialog = document.querySelector('[role="dialog"]')!;
-  const details = [...dialog.querySelectorAll("details")].find(node => node.querySelector("summary")?.textContent === "Requested memory content");
-  expect(details?.open).toBe(true);
-  expect(details?.querySelector("pre")?.textContent).toBe(content);
-  expect(dialog.textContent).toContain("New title");
-  expect(dialog.textContent).toContain("Requested pinned state: pinned");
-  expect(dialog.textContent).toContain("Requested TTL: clear override");
-  expect(api.resolveApproval).not.toHaveBeenCalled();
-});
+it.each(["One sentence", "  First line\nSecond line\n", "password=[REDACTED]"])(
+  "opens exact persisted lifecycle values for independent Inbox review: %s",
+  async (content) => {
+    renderActions({
+      ...approval,
+      kind: "memory.lifecycle",
+      riskLevel: "danger",
+      preview: {
+        reviewKind: "memory.lifecycle.patch",
+        target: "Original title",
+        requestedTitle: "New title",
+        requestedContent: content,
+        pinnedSummary: "Requested pinned state: pinned",
+        ttlSummary: "Requested TTL: clear override",
+        withheldSummary: "Metadata withheld",
+      },
+    });
+    await act(async () => button("Review approval").click());
+    const dialog = document.querySelector('[role="dialog"]')!;
+    const details = [...dialog.querySelectorAll("details")].find(
+      (node) => node.querySelector("summary")?.textContent === "Requested memory content",
+    );
+    expect(details?.open).toBe(true);
+    expect(details?.querySelector("pre")?.textContent).toBe(content);
+    expect(dialog.textContent).toContain("New title");
+    expect(dialog.textContent).toContain("Requested pinned state: pinned");
+    expect(dialog.textContent).toContain("Requested TTL: clear override");
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+  },
+);
 
-it.each(["approved", "rejected", "edited"] as const)("makes a newly loaded %s record visibly non-actionable without a local attempt", status => {
-  renderActions({ ...approval, status });
-  expect(container.textContent).toContain(`Decision recorded: ${status}`);
-  expect(container.querySelector("button")).toBeNull();
-  expect(api.resolveApproval).not.toHaveBeenCalled();
-});
+it.each(["approved", "rejected", "edited"] as const)(
+  "makes a newly loaded %s record visibly non-actionable without a local attempt",
+  (status) => {
+    renderActions({ ...approval, status });
+    expect(container.textContent).toContain(`Decision recorded: ${presentApprovalStatus(status).label}`);
+    expect(container.querySelector("button")).toBeNull();
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+  },
+);
 
 it("removes decision dialogs when a still-pending record expires in the mounted review", async () => {
-  vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-06T00:00:00Z"));
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-06T00:00:00Z"));
   renderActions({ ...approval, expiresAt: "2026-10-06T00:00:01Z" });
   await act(async () => button("Deny").click());
   expect(document.querySelector('[role="dialog"]')).not.toBeNull();
@@ -515,23 +597,39 @@ it("removes decision dialogs when a still-pending record expires in the mounted 
   expect(api.resolveApproval).not.toHaveBeenCalled();
 });
 
-it.each(["approved", "rejected"] as const)("closes both kinds of dialog when external %s settlement arrives", async status => {
-  for (const opener of ["Review approval", "Deny"]) {
-    renderActions(approval);
-    await act(async () => button(opener).click());
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-    renderActions({ ...approval, status });
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(container.querySelector("button")).toBeNull();
-    expect(container.textContent).toContain(`Decision recorded: ${status}`);
-  }
-  expect(api.fetchApproval).not.toHaveBeenCalled();
-  expect(api.resolveApproval).not.toHaveBeenCalled();
-});
+it.each(["approved", "rejected"] as const)(
+  "closes both kinds of dialog when external %s settlement arrives",
+  async (status) => {
+    for (const opener of ["Review approval", "Deny"]) {
+      renderActions(approval);
+      await act(async () => button(opener).click());
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+      renderActions({ ...approval, status });
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(container.querySelector("button")).toBeNull();
+      expect(container.textContent).toContain(`Decision recorded: ${presentApprovalStatus(status).label}`);
+    }
+    expect(api.fetchApproval).not.toHaveBeenCalled();
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+  },
+);
 
 it("keeps the shared Library and Chat owner decidable while its record is re-read, and locks it after canonical settlement", async () => {
   const onResolved = vi.fn();
-  const renderShared = (record: ApprovalRequest, checking: boolean) => act(() => root.render(<QueryClientProvider client={client}><ApprovalDecisionBar approval={record} workspaceId="default" checking={checking} onResolved={onResolved} onInvalidated={vi.fn()} /></QueryClientProvider>));
+  const renderShared = (record: ApprovalRequest, checking: boolean) =>
+    act(() =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ApprovalDecisionBar
+            approval={record}
+            workspaceId="default"
+            checking={checking}
+            onResolved={onResolved}
+            onInvalidated={vi.fn()}
+          />
+        </QueryClientProvider>,
+      ),
+    );
   renderShared(approval, true);
   // A background re-read is not a reason to swallow the click: the decision re-reads the owner record itself.
   expect(button("Review approval").disabled).toBe(false);
@@ -539,16 +637,34 @@ it("keeps the shared Library and Chat owner decidable while its record is re-rea
   await approve();
   expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval-a", { workspaceId: "default" });
   expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
-  expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("Decision recorded: approved"));
+  expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("Decision recorded: Approved"));
   renderShared({ ...approval, status: "approved" }, false);
   expect(container.querySelector("button")).toBeNull();
-  expect(container.textContent).toContain("Decision recorded: approved");
+  expect(container.textContent).toContain("Decision recorded: Approved");
 });
 
 it("explains an expiry sweep on a settled record instead of presenting it as an operator rejection", () => {
-  act(() => root.render(<QueryClientProvider client={client}><ApprovalDecisionBar approval={{ ...approval, status: "rejected", resolvedBy: "system:approval-expiry", resolutionNote: "Approval approval-a expired before operator resolution." }} workspaceId="default" onResolved={vi.fn()} onInvalidated={vi.fn()} /></QueryClientProvider>));
-  expect(container.textContent).toContain("Expired before an operator decision; recorded as rejected.");
-  expect(container.textContent).toContain("Expired without an operator decision. Approval approval-a expired before operator resolution.");
-  expect(container.textContent).not.toContain("Decision recorded: rejected");
+  act(() =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ApprovalDecisionBar
+          approval={{
+            ...approval,
+            status: "rejected",
+            resolvedBy: "system:approval-expiry",
+            resolutionNote: "Approval approval-a expired before operator resolution.",
+          }}
+          workspaceId="default"
+          onResolved={vi.fn()}
+          onInvalidated={vi.fn()}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  expect(container.textContent).toContain("Expired before an operator decision; recorded as denied.");
+  expect(container.textContent).toContain(
+    "Expired without an operator decision. Approval approval-a expired before operator resolution.",
+  );
+  expect(container.textContent).not.toContain("Decision recorded: Denied");
   expect(container.querySelector("button")).toBeNull();
 });

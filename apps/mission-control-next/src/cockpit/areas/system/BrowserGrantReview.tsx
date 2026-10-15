@@ -1,4 +1,5 @@
 import type { BrowserSessionGrantRecord } from "@goatcitadel/contracts";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { formatTime, type GrantDraft, type GrantRequest } from "./browser-sessions-model";
 
 export type GrantReview =
@@ -57,7 +58,7 @@ export function GrantReviewBody({ review }: { review: GrantReview }) {
         <p>
           Revokes this grant now. {grant.actorId} loses this grant&apos;s access
           {review.otherActiveForActor
-            ? `, but ${review.otherActiveForActor} other active grant${review.otherActiveForActor === 1 ? "" : "s"} for this actor remain.`
+            ? `, but ${plural(review.otherActiveForActor, "other active grant")} for this actor ${review.otherActiveForActor === 1 ? "remains" : "remain"}.`
             : " and has no other active grant on this session."}
         </p>
       )}

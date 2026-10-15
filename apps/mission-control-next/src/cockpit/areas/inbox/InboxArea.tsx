@@ -2,6 +2,7 @@ import { LinkedApproval } from "./LinkedApproval";
 import { InboxApprovalHistory } from "./InboxApprovalHistory";
 import { InboxBulkRejectZone } from "./InboxBulkRejectZone";
 import { markOperatorInboxUpdatesRead } from "@goatcitadel/mission-control-shared/api/operator-inbox";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { WindowedRecordList, type WindowedRecordListHandle } from "../../ui/WindowedRecordList";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
@@ -83,7 +84,9 @@ export function InboxArea() {
           skipped += result.skipped.length;
         }
         if (skipped)
-          setReadNotice(`${skipped} updates were not acknowledged. Changed or unavailable updates remain unread.`);
+          setReadNotice(
+            `${plural(skipped, "update was", "updates were")} not acknowledged. Changed or unavailable updates remain unread.`,
+          );
         await inbox.refetch();
       } else setReadNotice("Read storage unavailable. Unacknowledged updates remain unread.");
     } catch {

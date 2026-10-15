@@ -12,6 +12,7 @@ import { Callout } from "../../ui/Callout";
 import { useLibraryOperation } from "./use-library-operation";
 import { LibrarySourceRegistration } from "./LibrarySourceRegistration";
 import { SourceOperations } from "./LibrarySourceOperations";
+import { scanStatusLabel, sourceKindLabel, sourceStatusLabel } from "./library-vocabulary";
 
 export function LibraryExternalSources({ workspaceId }: { workspaceId: string }) {
   const operation = useLibraryOperation(JSON.stringify(["external-sources", workspaceId]));
@@ -72,7 +73,8 @@ function ExternalSources({ workspaceId }: { workspaceId: string }) {
             <li key={item.sourceId} className="min-w-0 rounded-md border border-line p-3">
               <h3>{item.label}</h3>
               <p>
-                {item.kind.replaceAll("_", " ")} · {item.status} · {item.latestScan?.status ?? "No scan recorded"}
+                {sourceKindLabel(item.kind)} · {sourceStatusLabel(item.status)} ·{" "}
+                {scanStatusLabel(item.latestScan?.status)}
               </p>
               <Button
                 size="sm"

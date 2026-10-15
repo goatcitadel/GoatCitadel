@@ -4,6 +4,7 @@ import type {
   BrowserSessionStateProjection,
 } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Callout } from "../../ui/Callout";
 import { buildSessionPosture, describeContext, formatTime, LIST_LIMIT } from "./browser-sessions-model";
 
@@ -72,7 +73,7 @@ export function BrowserSessionStateView({
             <div>
               <dt className="font-medium">Retained evidence</dt>
               <dd>
-                {posture.grantedAccessCount} granted · {posture.guardBlockCount} guard blocks · last access{" "}
+                {posture.grantedAccessCount} granted · {plural(posture.guardBlockCount, "guard block")} · last access{" "}
                 {formatTime(posture.lastAccessAt) ?? "none recorded"}
               </dd>
             </div>
@@ -107,13 +108,14 @@ export function BrowserSessionStateView({
             <div>
               <dt className="font-medium">Local storage</dt>
               <dd className="wrap-anywhere">
-                {state.localStorage.keyCount} keys · {state.localStorage.origins.join(", ") || "no origins"}
+                {plural(state.localStorage.keyCount, "key")} · {state.localStorage.origins.join(", ") || "no origins"}
               </dd>
             </div>
             <div>
               <dt className="font-medium">Session storage</dt>
               <dd className="wrap-anywhere">
-                {state.sessionStorage.keyCount} keys · {state.sessionStorage.origins.join(", ") || "no origins"}
+                {plural(state.sessionStorage.keyCount, "key")} ·{" "}
+                {state.sessionStorage.origins.join(", ") || "no origins"}
               </dd>
             </div>
             <div>

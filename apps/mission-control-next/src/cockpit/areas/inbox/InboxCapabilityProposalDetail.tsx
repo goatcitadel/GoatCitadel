@@ -3,9 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import type { CapabilityProposalDetailRecord, OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
 import { fetchCapabilityProposal } from "@goatcitadel/mission-control-shared/api/capabilities";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
 import {
   CHECKING_FOR_CHANGES,
@@ -16,6 +16,7 @@ import {
 } from "../../data/record-view";
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { inboxMatchesWorkspace } from "./inbox-presentation";
+import { capabilityProposalKindLabels, presentCapabilityProposalStatus } from "./inbox-vocabulary";
 
 const ACTIVE_STATUSES = new Set(["proposed", "validating", "pending_approval"]);
 
@@ -122,7 +123,8 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
       {proposal ? (
         <div className="space-y-2 text-fg-secondary">
           <p className="text-xs text-fg-muted">
-            {humanizeToken(proposal.proposalKind)} proposal · {humanizeToken(proposal.status)}
+            {capabilityProposalKindLabels[proposal.proposalKind] ?? "Capability"} proposal ·{" "}
+            {presentCapabilityProposalStatus(proposal.status).label}
           </p>
           {proposal.candidateId ? (
             <p>
@@ -131,8 +133,7 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
             </p>
           ) : null}
           <p className="text-xs text-fg-muted">
-            {current.events.length} recorded {current.events.length === 1 ? "event" : "events"}. Proposal review here
-            does not activate a capability.
+            {plural(current.events.length, "recorded event")}. Proposal review here does not activate a capability.
           </p>
           <p className="text-xs text-fg-muted">
             Decisions for this proposal are unavailable in Inbox. Candidate promotion uses the governed Library flow.

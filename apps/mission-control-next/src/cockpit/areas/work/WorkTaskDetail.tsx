@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { fetchTask, fetchTaskActivities, fetchTaskDeliverables } from "@goatcitadel/mission-control-shared/api/tasks";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { presentTaskStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
@@ -12,13 +12,9 @@ import { taskMatchesWorkspace } from "./work-tasks";
 import { TaskAssignmentControl } from "./TaskAssignmentControl";
 import { TaskDetailsEditor } from "./TaskDetailsEditor";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
-
-function formattedTime(iso: string): string {
-  const parsed = Date.parse(iso);
-  return Number.isFinite(parsed)
-    ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(parsed)
-    : "Time unavailable";
-}
+import { StatusBadge } from "../../ui/StatusBadge";
+import { TimeText } from "../../ui/TimeText";
+import { TASK_ACTIVITY_LABELS, TASK_DELIVERABLE_LABELS, TASK_PRIORITY_LABELS } from "./work-vocabulary";
 
 export function WorkTaskDetail({ taskId }: { taskId: string }) {
   const { navigate } = useCockpitRoute();
@@ -88,9 +84,12 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
           <header>
             <p className="text-xs font-semibold text-accent">Task record</p>
             <h1 className="font-display text-xl font-semibold text-fg">{task.title}</h1>
-            <p className="mt-1 text-xs text-fg-muted">
-              {humanizeToken(task.status)} · {humanizeToken(task.priority)} priority · Updated{" "}
-              {formattedTime(task.updatedAt)}
+            <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-fg-muted">
+              <StatusBadge status={presentTaskStatus(task.status)} />
+              <span>
+                {TASK_PRIORITY_LABELS[task.priority] ?? "Unknown"} priority ·{" "}
+                <TimeText value={task.updatedAt} prefix="Updated" />
+              </span>
             </p>
           </header>
           {task.distressSignals
@@ -162,7 +161,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
                     <li key={item.activityId} className="border-b border-line-subtle py-2 text-sm">
                       <p className="break-words text-fg">{item.message}</p>
                       <p className="text-xs text-fg-muted">
-                        {humanizeToken(item.activityType)} · {formattedTime(item.createdAt)}
+                        {TASK_ACTIVITY_LABELS[item.activityType] ?? "Activity"} · <TimeText value={item.createdAt} />
                       </p>
                     </li>
                   ))}
@@ -189,7 +188,8 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
                       <p className="break-words font-medium text-fg">{item.title}</p>
                       {item.description ? <p className="break-words text-fg-secondary">{item.description}</p> : null}
                       <p className="text-xs text-fg-muted">
-                        {humanizeToken(item.deliverableType)} · {formattedTime(item.createdAt)}
+                        {TASK_DELIVERABLE_LABELS[item.deliverableType] ?? "Deliverable"} ·{" "}
+                        <TimeText value={item.createdAt} />
                       </p>
                     </li>
                   ))}

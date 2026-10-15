@@ -136,6 +136,7 @@ it("inspects a selected event's evidence, references and provenance without raw 
           health: "missing_approval",
           approvalLinked: false,
           trustContribution: "blocked",
+          blockerCodes: ["recurrence_scan_incomplete"],
         },
       }),
     ]),
@@ -146,9 +147,19 @@ it("inspects a selected event's evidence, references and provenance without raw 
     expect(region).not.toBeNull();
     return region!;
   });
-  for (const text of ["missing approval", "blocked", "approval-7", "chat-turn", "Saved preference"])
+  for (const text of [
+    "missing approval",
+    "Blocked",
+    "1 evidence reference recorded",
+    "An operator",
+    "The recurrence scan was incomplete",
+    "This workspace",
+    "chat-turn",
+    "Saved preference",
+  ])
     expect(inspector.textContent).toContain(text);
-  expect(inspector.textContent).not.toContain('"eventFingerprint"');
+  for (const raw of ['"eventFingerprint"', "approval-7", "recurrence_scan_incomplete", "memory_item"])
+    expect(inspector.textContent).not.toContain(raw);
 });
 
 it("keeps the session field in step with the URL on Back and normalizes the applied value", async () => {

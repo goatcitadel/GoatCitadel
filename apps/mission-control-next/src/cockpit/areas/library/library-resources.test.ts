@@ -127,7 +127,7 @@ describe("scoped native Library owner reads", () => {
     expect(page.items.map(resourceId)).toEqual(["owned", "global", "legacy"]);
     expect(page.nextCursor).toBe("opaque-next");
     expect(page.coverage).toContain("inconsistent scope records were withheld");
-    expect(resourceDescription(page.items[1]!)).toContain("Global memory");
+    expect(resourceDescription(page.items[1]!)).toContain("Shared across workspaces");
   });
   it("filters notes by workspace before applying the display bound and preserves lifecycle query", async () => {
     api.notes.mockResolvedValue({
@@ -155,7 +155,8 @@ describe("scoped native Library owner reads", () => {
     const page = await loadLibraryResources({ ...query, kind: "files" });
     expect(api.files).toHaveBeenCalledExactlyOnceWith(".", 100);
     expect(page.coverage).toContain("shared across workspaces");
-    expect(resourceDescription(page.items[0]!)).toContain("Installation shared files");
+    expect(resourceDescription(page.items[0]!)).toBe("In notes · 3 B · Installation shared files");
+    expect(resourceTitle(page.items[0]!)).toBe("test.md");
   });
   it("withholds artifacts without exact workspace binding", async () => {
     api.artifacts.mockResolvedValue({
@@ -250,21 +251,21 @@ it("preserves the existing public resourceTitle binding as the pure leaf used by
   expect(publicResourceTitle).toBe(resourceTitle);
 });
 it.each(["memory", "notes", "files", "artifacts"] as const)(
-  "preserves the exact title and 300-character bound for %s without a resource read",
+  "bounds the %s title at 300 characters with an ellipsis without a resource read",
   (kind) => {
     const value = "界".repeat(301);
     const resource: LibraryResource =
       kind === "files"
         ? {
             kind,
-            item: { relativePath: value, size: 0, modifiedAt: "2026-10-13" },
+            item: { relativePath: `folder/${value}`, size: 0, modifiedAt: "2026-10-13" },
           }
         : kind === "memory"
           ? { kind, item: { ...memory("m"), title: value } }
           : kind === "notes"
             ? { kind, item: { ...note("n"), title: value } }
             : { kind, item: { ...artifact(), title: value } };
-    expect(resourceTitle(resource)).toBe(value.slice(0, 300));
+    expect(resourceTitle(resource)).toBe(`${value.slice(0, 299)}…`);
     expect(publicResourceTitle(resource)).toBe(resourceTitle(resource));
     expect(Object.values(api).every((call) => call.mock.calls.length === 0)).toBe(true);
   },

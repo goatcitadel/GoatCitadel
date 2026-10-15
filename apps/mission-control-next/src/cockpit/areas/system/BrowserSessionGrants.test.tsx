@@ -102,7 +102,13 @@ it("reviews the exact grant, Cancel requests nothing, and Confirm sends one requ
   await type("Allowed hosts", "https://Example.com/x");
   await click("Review grant");
   const text = dialog()!.textContent!;
-  for (const fragment of ["agent", "read", "example.com", "does not open, bind or control a browser", "workspace one"])
+  for (const fragment of [
+    "agent",
+    "read",
+    "example.com",
+    "does not open, bind or control a browser",
+    "in this workspace",
+  ])
     expect(text).toContain(fragment);
   await click("Cancel");
   expect(createBrowserSessionGrant).not.toHaveBeenCalled();

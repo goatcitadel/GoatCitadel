@@ -9,6 +9,12 @@ import {
   ROUTE_CHECK_HINT_DELAY_MS,
   type ComposerProps,
 } from "./ChatTextComposer";
+// Catalog labels read the query cache; these tests exercise the controls, so the model id stands in for its name.
+vi.mock("../../data/use-model-label", () => ({
+  useModelLabel: (_providerId?: string, modelId?: string) => modelId ?? "Unknown model",
+  useProviderLabelLookup: () => () => undefined,
+}));
+vi.mock("./use-chat-model-labels", () => ({ useChatModelLabels: () => (modelId: string) => modelId }));
 
 const shell = vi.hoisted(() => ({ switchShell: vi.fn<typeof import("../../../shell-preference").switchShell>() }));
 vi.mock("../../../shell-preference", async (importOriginal) => ({

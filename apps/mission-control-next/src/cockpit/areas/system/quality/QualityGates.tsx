@@ -1,6 +1,7 @@
 import { WindowedRecordList } from "../../../ui/WindowedRecordList";
 import { useState } from "react";
 import type { OpsQualitySnapshotResponse } from "@goatcitadel/contracts";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import {
   formatSecurityGateStatus,
   formatSecurityExecutionState,
@@ -99,7 +100,11 @@ export function QualityGates({
             {(pack) => (
               <article className="rounded-md border border-line-subtle p-3">
                 <h3 className="font-medium text-fg">{pack.name}</h3>
-                <p className="mt-1 text-sm text-fg-muted">{pack.testCount ?? "Unknown"} defined tests</p>
+                <p className="mt-1 text-sm text-fg-muted">
+                  {typeof pack.testCount === "number"
+                    ? plural(pack.testCount, "defined test")
+                    : "Defined tests unknown"}
+                </p>
                 <Button
                   size="sm"
                   className="mt-2 mr-3"

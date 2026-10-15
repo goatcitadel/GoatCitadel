@@ -8,9 +8,11 @@ import {
   resourceBinding,
   resourceDescription,
   resourceId,
+  resourceTime,
   resourceTitle,
   type LibraryResource,
 } from "./library-resources";
+import { TimeText } from "../../ui/TimeText";
 import { readLibraryResource, type ResourcePreview } from "./library-resource-preview";
 import { LibraryFileDownload } from "./LibraryFileDownload";
 import { LibraryArtifactDownload } from "./LibraryArtifactDownload";
@@ -80,6 +82,9 @@ export function LibraryResourceDetail({
     <div className="grid min-w-0 gap-3">
       <h3 className="break-words font-display text-lg font-semibold text-fg">{resourceTitle(resource)}</h3>
       <p className="text-sm text-fg-secondary">{resourceDescription(resource)}</p>
+      <p className="text-sm text-fg-secondary">
+        <TimeText prefix={resourceTime(resource).label} value={resourceTime(resource).value} absolute />
+      </p>
       <TechnicalDetails label="Exact resource timestamps">
         <p>{resource.kind === "files" ? resource.item.modifiedAt : resource.item.createdAt}</p>
       </TechnicalDetails>
@@ -113,10 +118,9 @@ export function LibraryResourceDetail({
           <GeneratedArtifactViewer artifact={active.data.artifact} compact />
         </div>
       ) : null}
-      <details className="text-xs text-fg-muted">
-        <summary>Resource identity</summary>
-        <code className="mt-2 block break-all font-mono">{resourceId(resource)}</code>
-      </details>
+      <TechnicalDetails label="Resource identity">
+        <code className="block break-all font-mono text-xs">{resourceId(resource)}</code>
+      </TechnicalDetails>
       {resource.kind === "artifacts" ? (
         <TechnicalDetails label="Artifact provenance">
           <pre className="whitespace-pre-wrap break-all">{formatArtifactProvenance(resource.item)}</pre>

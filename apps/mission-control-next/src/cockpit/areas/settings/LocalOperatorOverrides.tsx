@@ -9,6 +9,15 @@ import { usePermissionManagement } from "../../../features/native-routes/setting
 import { PermissionManagementReview } from "../../../features/native-routes/settings/PermissionManagementReview";
 import type { PermissionManagementOperation } from "../../../features/native-routes/settings/permission-management-binding";
 import { Button } from "../../ui/Button";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+
+const OVERRIDE_SCOPE_LABELS: Record<LocalOperatorOverrideScope, string> = {
+  workspace: "Selected workspace",
+  session: "Exact session",
+  run: "Exact run",
+  operator: "This operator across workspaces",
+};
 
 const inputClass = "mt-1 min-h-10 w-full rounded border border-line-control bg-canvas px-2 text-sm text-fg";
 export function LocalOperatorOverrides({ workspaceId }: { workspaceId: string }) {
@@ -86,10 +95,11 @@ export function LocalOperatorOverrides({ workspaceId }: { workspaceId: string })
               }))
             }
           >
-            <option value="workspace">Selected workspace</option>
-            <option value="session">Exact session</option>
-            <option value="run">Exact run</option>
-            <option value="operator">This operator across workspaces</option>
+            {(["workspace", "session", "run", "operator"] as const).map((scope) => (
+              <option key={scope} value={scope}>
+                {OVERRIDE_SCOPE_LABELS[scope]}
+              </option>
+            ))}
           </select>
         </label>
         {editor.value.scope !== "operator" ? (
@@ -165,14 +175,14 @@ export function LocalOperatorOverrides({ workspaceId }: { workspaceId: string })
             <li key={item.overrideId} className="rounded border border-line p-3 text-sm">
               <p>{item.reason}</p>
               <p>
-                {item.scope} · Expires {new Date(item.expiresAt).toLocaleString()}
+                {OVERRIDE_SCOPE_LABELS[item.scope] ?? "Unknown scope"} ·{" "}
+                <TimeText absolute prefix="Expires" value={item.expiresAt} />
               </p>
-              <details>
-                <summary>Override identity</summary>
+              <TechnicalDetails label="Override identity">
                 <p className="break-all font-mono text-xs">
-                  {item.overrideId} · {item.scopeRef ?? item.operatorId}
+                  {item.overrideId} · {item.scope} · {item.scopeRef ?? item.operatorId}
                 </p>
-              </details>
+              </TechnicalDetails>
               <Button
                 size="sm"
                 disabled={!available || Boolean(attempt) || control.checking}

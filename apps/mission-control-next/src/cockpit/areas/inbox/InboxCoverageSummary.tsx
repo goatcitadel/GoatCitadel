@@ -1,4 +1,5 @@
 import type { OperatorInboxResponse } from "@goatcitadel/contracts";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { inboxCountIsExact, inboxKnownCount, inboxReadGaps } from "./inbox-presentation";
 
 function summaryLine(projection: OperatorInboxResponse): string {
@@ -9,10 +10,9 @@ function summaryLine(projection: OperatorInboxResponse): string {
       ? "No known items, but some sources could not be read completely."
       : "Nothing needs your attention in the checked sources.";
   }
-  const noun = total.known === 1 ? "item" : "items";
   return inboxCountIsExact(projection, total.complete)
-    ? `${total.known} ${noun} in this workspace.`
-    : `${total.known} known ${noun}; more may be outside this view.`;
+    ? `${plural(total.known, "item")} in this workspace.`
+    : `${plural(total.known, "known item")}; more may be outside this view.`;
 }
 
 export function InboxCoverageSummary({ projection }: { projection: OperatorInboxResponse }) {
@@ -26,7 +26,7 @@ export function InboxCoverageSummary({ projection }: { projection: OperatorInbox
       {gaps.length > 0 ? (
         <details className="mt-2 text-xs text-fg-muted">
           <summary className="cursor-pointer font-medium text-fg-secondary">
-            Coverage is incomplete for {gaps.length} {gaps.length === 1 ? "source" : "sources"}
+            Coverage is incomplete for {plural(gaps.length, "source")}
           </summary>
           <ul className="mt-2 list-disc space-y-1 pl-5">
             {gaps.map((source) => (

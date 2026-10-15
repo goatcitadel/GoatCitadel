@@ -1,14 +1,15 @@
 import { APPROVAL_EXPIRY_ACTOR_ID, type ApprovalRequest, type ApprovalEffectRecord } from "@goatcitadel/contracts";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { presentActor } from "./inbox-vocabulary";
 
 /** The Gateway sweeps an approval that expired before any operator decision as a rejection by its expiry actor. */
 export function approvalExpiredUnresolved(approval: ApprovalRequest): boolean {
   return approval.status === "rejected" && approval.resolvedBy === APPROVAL_EXPIRY_ACTOR_ID;
 }
 
-/** "Expired" for an expiry sweep; otherwise the recorded status ("Approved", "Rejected", "Edited"). */
+/** "Expired" for an expiry sweep; otherwise the shared status label ("Approved", "Denied", "Approved with edits"). */
 export function approvalOutcomeLabel(approval: ApprovalRequest): string {
-  return approvalExpiredUnresolved(approval) ? "Expired" : humanizeToken(approval.status);
+  return approvalExpiredUnresolved(approval) ? "Expired" : presentApprovalStatus(approval.status).label;
 }
 
 function sentence(text: string): string {
@@ -16,19 +17,26 @@ function sentence(text: string): string {
   return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
-/** Who settled a decided record and the note they left, or null while nothing was recorded. */
+function decidedBy(actorId: string): string {
+  const actor = presentActor(actorId);
+  return `Decided by ${actor === "An operator" ? "an operator" : actor}`;
+}
+
+/** Who settled a decided record, in plain words (the actor id stays in technical details), and their note. */
 export function approvalResolutionLine(approval: ApprovalRequest): string | null {
   if (approval.status === "pending") return null;
   const parts: string[] = [];
   if (approval.resolvedBy)
-    parts.push(approvalExpiredUnresolved(approval) ? "Expired without an operator decision" : `Decided by ${approval.resolvedBy}`);
+    parts.push(
+      approvalExpiredUnresolved(approval) ? "Expired without an operator decision" : decidedBy(approval.resolvedBy),
+    );
   if (approval.resolutionNote?.trim()) parts.push(approval.resolutionNote);
   return parts.length ? parts.map(sentence).join(" ") : null;
 }
 
 export function approvalDecisionMessage(approval: ApprovalRequest, effects: ApprovalEffectRecord[] = []): string {
-  if (approvalExpiredUnresolved(approval)) return "Expired before an operator decision; recorded as rejected.";
-  const decision = `Decision recorded: ${approval.status}. `;
+  if (approvalExpiredUnresolved(approval)) return "Expired before an operator decision; recorded as denied.";
+  const decision = `Decision recorded: ${presentApprovalStatus(approval.status).label}. `;
   if (approval.actionOutcome === "policy_blocked") return decision + "Follow-on action is blocked by policy.";
   if (
     approval.actionOutcome === "delivery_failed" ||

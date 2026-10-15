@@ -17,10 +17,11 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useLibraryOperation } from "../library/use-library-operation";
 import { ReportEvidence } from "./ImprovementReportEvidence";
+import { TimeText } from "../../ui/TimeText";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { AUTO_TUNE_STATUS, CANDIDATE_RISK, CANDIDATE_STATUS, REPLAY_RUN_STATUS } from "./system-vocabulary";
 
 const CARD = "grid min-w-0 grid-cols-1 gap-3 rounded-lg border border-line p-3";
-const formatTime = (iso?: string) =>
-  iso && Number.isFinite(Date.parse(iso)) ? new Date(iso).toLocaleString() : undefined;
 export const improvementRequestText = (item: CuratorReviewItem) =>
   `Apply improvement candidate ${item.candidate.candidateId}: ${item.candidate.summary}`;
 
@@ -69,7 +70,7 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
         <div className="grid min-w-0 grid-cols-1 content-start gap-4">
           <section className={CARD} aria-label="Improvement inbox">
             <h2 className="font-display text-md font-semibold">Improvement inbox</h2>
-            <p className="text-sm text-fg-secondary">Deduplicated suggestions for workspace {workspaceId}.</p>
+            <p className="text-sm text-fg-secondary">Deduplicated suggestions for this workspace.</p>
             <div>
               <Button disabled={inbox.isFetching} onClick={() => void inbox.refetch()}>
                 Refresh inbox
@@ -131,7 +132,7 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
                     className="grid min-h-11 w-full min-w-0 rounded-md border border-line p-2 text-left wrap-anywhere aria-[current=true]:border-accent"
                   >
                     <strong>
-                      {item.status.replaceAll("_", " ")} · {formatTime(item.startedAt)}
+                      {REPLAY_RUN_STATUS[item.status] ?? "Replay run"} · <TimeText value={item.startedAt} />
                     </strong>
                     <span className="text-sm text-fg-secondary">
                       {item.totalScored} scored · {item.likelyWrongCount} likely wrong
@@ -187,9 +188,9 @@ function Suggestion({ item, workspaceId }: { item: CuratorReviewItem; workspaceI
           ? "Skill revision"
           : ready
             ? "Ready for a Change Plan"
-            : item.candidate.status.replaceAll("_", " ")}{" "}
-        · risk {item.risk} · {item.candidate.supportingSignalCount} supporting signal
-        {item.candidate.supportingSignalCount === 1 ? "" : "s"}
+            : (CANDIDATE_STATUS[item.candidate.status] ?? "Under review")}{" "}
+        · {CANDIDATE_RISK[item.risk] ?? "Risk not reported"} ·{" "}
+        {plural(item.candidate.supportingSignalCount, "supporting signal")}
       </p>
       {needsCodeMode ? (
         <p>
@@ -254,7 +255,7 @@ function ReportDetail({
           </p>
           <div>
             <Button variant="ghost" onClick={() => onOpenReplay(data.runId)}>
-              Open replay run {data.runId}
+              Open the replay run for this report
             </Button>
           </div>
           <ReportEvidence data={data} />
@@ -263,7 +264,8 @@ function ReportDetail({
             <ul className="grid min-w-0 gap-1 text-sm">
               {data.queuedRecommendations.map((tune) => (
                 <li key={tune.tuneId} className="wrap-anywhere">
-                  {tune.description} · {tune.status} · risk {tune.riskLevel}
+                  {tune.description} · {AUTO_TUNE_STATUS[tune.status] ?? "Recorded"} ·{" "}
+                  {(CANDIDATE_RISK[tune.riskLevel] ?? "Risk not reported").toLowerCase()}
                 </li>
               ))}
             </ul>
@@ -275,7 +277,8 @@ function ReportDetail({
             <ul className="grid min-w-0 gap-1 text-sm">
               {data.appliedAutoTunes.map((tune) => (
                 <li key={tune.tuneId} className="wrap-anywhere">
-                  {tune.description} · {tune.status} · risk {tune.riskLevel}
+                  {tune.description} · {AUTO_TUNE_STATUS[tune.status] ?? "Recorded"} ·{" "}
+                  {(CANDIDATE_RISK[tune.riskLevel] ?? "Risk not reported").toLowerCase()}
                 </li>
               ))}
             </ul>
@@ -320,17 +323,24 @@ function ReplayDetail({ runId, identity }: { runId: string; identity: string }) 
       {run && replay.data ? (
         <>
           <p className="text-sm">
-            {run.status.replaceAll("_", " ")} · {run.totalCandidates} candidates · {run.totalScored} scored ·{" "}
-            {run.likelyWrongCount} likely wrong · {run.modelJudgedCount} model-judged
+            {REPLAY_RUN_STATUS[run.status] ?? "Replay run"} · {plural(run.totalCandidates, "candidate")} ·{" "}
+            {run.totalScored} scored · {run.likelyWrongCount} likely wrong · {run.modelJudgedCount} model-judged
           </p>
           <p className="text-sm">
-            Started {formatTime(run.startedAt)}
-            {run.finishedAt ? ` · finished ${formatTime(run.finishedAt)}` : " · not finished"}
+            <TimeText value={run.startedAt} prefix="Started" />
+            {run.finishedAt ? (
+              <>
+                {" · "}
+                <TimeText value={run.finishedAt} prefix="finished" />
+              </>
+            ) : (
+              " · not finished"
+            )}
             {run.error ? ` · error: ${run.error}` : ""}
           </p>
           <p className="text-sm">
-            {replay.data.findings.length} findings · {replay.data.items.length} scored items ·{" "}
-            {replay.data.autoTunes.length} auto-tunes
+            {plural(replay.data.findings.length, "finding")} · {plural(replay.data.items.length, "scored item")} ·{" "}
+            {plural(replay.data.autoTunes.length, "auto-tune")}
           </p>
           <TechnicalDetails label="Retained replay record">
             <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-sunken p-2 font-mono text-xs">

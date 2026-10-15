@@ -5,12 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
-import { ChatSessionHeader } from "./ChatAreaChrome";
+import { ChatHeaderSubtitle, ChatSessionHeader } from "./ChatAreaChrome";
 
 const media = vi.hoisted(() => ({ phone: false }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({
   useMediaQuery: (query: string) =>
     media.phone && (query === RESPONSIVE_QUERIES.phone || query === RESPONSIVE_QUERIES.belowDesktop),
+}));
+
+vi.mock("../../data/use-model-label", () => ({
+  useModelLabel: (providerId?: string, modelId?: string) =>
+    providerId === "anthropic" && modelId === "claude-sonnet" ? "Claude Sonnet · Anthropic" : "Unknown model",
 }));
 
 let root: Root;
@@ -98,7 +103,9 @@ describe("ChatSessionHeader", () => {
     const [titleRow, conversationRow] = [...header.children] as [HTMLElement, HTMLElement];
     expect(titleRow.querySelector("h1")?.textContent).toBe("Chat");
     expect(titleRow.textContent).toContain("No messages yet");
-    expect(titleRow.querySelector('[aria-label="Selected conversation activity"]')?.parentElement?.className).toContain("truncate");
+    expect(titleRow.querySelector('[aria-label="Selected conversation activity"]')?.parentElement?.className).toContain(
+      "truncate",
+    );
     expect(titleRow.querySelector("h1")?.closest(".min-w-0.flex-1")).not.toBeNull();
 
     const select = conversationRow.querySelector('select[aria-label="Choose conversation"]') as HTMLSelectElement;
@@ -112,12 +119,31 @@ describe("ChatSessionHeader", () => {
     expect(conversationRow.querySelector('button[aria-label="Build editor"]')).not.toBeNull();
     expect(conversationRow.querySelector('button[aria-label="Choose conversation"]')).toBeNull();
 
-    const projects = [...titleRow.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Projects");
+    const projects = [...titleRow.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Projects",
+    );
     await act(async () => projects!.click());
     expect(onOpenProjects).toHaveBeenCalledOnce();
-    await act(async () => (conversationRow.querySelector('button[aria-label="Build editor"]') as HTMLButtonElement).click());
+    await act(async () =>
+      (conversationRow.querySelector('button[aria-label="Build editor"]') as HTMLButtonElement).click(),
+    );
     expect(onToggle).toHaveBeenCalledOnce();
-    await act(async () => (conversationRow.querySelector('button[aria-label="New conversation"]') as HTMLButtonElement).click());
+    await act(async () =>
+      (conversationRow.querySelector('button[aria-label="New conversation"]') as HTMLButtonElement).click(),
+    );
     expect(rail.onCreateSession).toHaveBeenCalledOnce();
   });
+});
+
+it("names the model and run status in plain words, never their wire values", () => {
+  const active = {
+    activePersonality: { name: "Researcher" },
+    selectedProviderId: "anthropic",
+    selectedModel: "claude-sonnet",
+    delegationRun: { status: "waiting_for_approval" },
+  } as unknown as Parameters<typeof ChatHeaderSubtitle>[0]["active"];
+  act(() => root.render(<ChatHeaderSubtitle active={active} projectName="Launch" />));
+  expect(container.textContent).toBe("Launch · Researcher · Claude Sonnet · Anthropic · Run · Waiting on you");
+  expect(container.textContent).not.toContain("waiting_for_approval");
+  expect(container.textContent).not.toContain("claude-sonnet");
 });

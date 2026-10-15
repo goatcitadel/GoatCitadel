@@ -64,7 +64,7 @@ it("waits for the owner read and suppresses missing state during refresh", async
 it("requires visible scope review before revealing a cross-workspace record", async () => {
   api.read.mockResolvedValue({ approvalId: "a/1", status: "pending", linkage: { workspaceId: "other" } });
   await render();
-  await vi.waitFor(() => expect(host.textContent).toContain("workspace other"));
+  await vi.waitFor(() => expect(host.textContent).toContain("belongs to another workspace"));
   expect(host.textContent).not.toContain("Scoped approval details");
   expect(api.workspaceId).toBe("active");
   await act(async () => host.querySelector("button")!.click());

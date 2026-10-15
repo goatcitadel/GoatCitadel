@@ -8,6 +8,12 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // The unchanged evidence/editor owner is covered here; code readiness has a separate held-loader proof.
 import { ChatInspector } from "./ChatInspectorBody";
+// Catalog labels read the query cache; these tests exercise the controls, so the model id stands in for its name.
+vi.mock("../../data/use-model-label", () => ({
+  useModelLabel: (_providerId?: string, modelId?: string) => modelId ?? "Unknown model",
+  useProviderLabelLookup: () => () => undefined,
+}));
+vi.mock("./use-chat-model-labels", () => ({ useChatModelLabels: () => (modelId: string) => modelId }));
 
 const { documentsPanel } = vi.hoisted(() => ({ documentsPanel: vi.fn() }));
 vi.mock("../../../features/threaded-surface/ThreadedDocumentsPanel", () => ({
@@ -80,7 +86,7 @@ describe("conversation inspector", () => {
       (container.querySelector('[role="tab"][aria-controls="cockpit-inspector-turn"]') as HTMLButtonElement).click(),
     );
     expect(container.textContent).toContain("example-model");
-    expect(container.textContent).toContain("$0.0123");
+    expect(container.textContent).toContain("$0.01");
     const panel = container.querySelector('[role="tabpanel"]')!;
     expect(panel.getAttribute("aria-labelledby")).toBe("cockpit-inspector-tab-turn");
     expect(panel.hasAttribute("aria-label")).toBe(false);

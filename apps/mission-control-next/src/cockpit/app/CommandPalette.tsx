@@ -17,6 +17,7 @@ import { useInspector } from "./inspector";
 import { useCommandPaletteSearch } from "./use-command-palette-search";
 import { useCommandNewChat } from "./use-command-new-chat";
 import { useWorkspaceName } from "../data/use-workspace-name";
+import { useModelLabel } from "../data/use-model-label";
 import { lastVersionNote, recordView } from "../data/record-view";
 import { useCommandPaletteViewCode } from "./use-command-palette-view-code";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
@@ -75,6 +76,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const configView = recordView(config);
   const currentConfig = open ? configView.record : undefined;
   const configAge = lastVersionNote(configView);
+  const defaultModelLabel = useModelLabel(currentConfig?.activeProviderId, currentConfig?.activeModel, open);
   useEffect(() => {
     if (!open) setQuery("");
   }, [open]);
@@ -159,10 +161,10 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     </div>
   ) : null;
   const modelSummary = currentConfig
-    ? `Gateway default: ${currentConfig.activeProviderId} / ${currentConfig.activeModel}.${configAge ? ` ${configAge}` : ""}`
+    ? `Default model: ${defaultModelLabel}.${configAge ? ` ${configAge}` : ""}`
     : config.isError
-      ? "Gateway default unavailable."
-      : "Reading Gateway default…";
+      ? "Default model unavailable."
+      : "Reading the default model…";
   function selectObject(item: PaletteObject) {
     run(() => {
       if ("href" in item.target) navigate(item.target.href);

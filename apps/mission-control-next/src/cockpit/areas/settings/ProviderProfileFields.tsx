@@ -5,6 +5,7 @@ import {
   type ProviderEditorDraft,
 } from "../../../features/native-routes/settings/helpers/provider-drafts";
 import { ProviderTransportFields } from "./ProviderTransportFields";
+import { LLM_API_STYLE_LABELS, LLM_API_STYLES } from "./settings-vocabulary";
 
 export const providerFieldClass =
   "mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 py-1 text-sm text-fg disabled:opacity-60";
@@ -50,14 +51,10 @@ export function ProviderProfileFields(
             disabled={props.disabled}
             onChange={(event) => patch("apiStyle", event.target.value as ProviderEditorDraft["apiStyle"])}
           >
-            {[
-              "openai-responses",
-              "openai-codex-responses",
-              "anthropic-messages",
-              "openai-chat-completions",
-              "bedrock-messages",
-            ].map((value) => (
-              <option key={value}>{value}</option>
+            {LLM_API_STYLES.map((value) => (
+              <option key={value} value={value}>
+                {LLM_API_STYLE_LABELS[value]}
+              </option>
             ))}
           </select>
         </label>

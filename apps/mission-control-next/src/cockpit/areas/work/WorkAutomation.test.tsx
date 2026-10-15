@@ -150,7 +150,7 @@ it("keeps the previewed recipe and both export results across navigation, withou
   const text = JSON.stringify(renderer.toJSON());
   expect(text).toContain("Recipe");
   expect(headings()).toEqual(
-    expect.arrayContaining(["Activepieces export validation: ready", "n8n export validation: ready"]),
+    expect.arrayContaining(["Activepieces export validation: Ready", "n8n export validation: Ready"]),
   );
   expect(draftAutomationRecipe).toHaveBeenCalledOnce();
 });
@@ -160,7 +160,7 @@ it("shows both platforms' export results side by side", async () => {
   await click("Copy Activepieces template");
   await click("Copy n8n template");
   expect(headings()).toEqual(
-    expect.arrayContaining(["Activepieces export validation: ready", "n8n export validation: ready"]),
+    expect.arrayContaining(["Activepieces export validation: Ready", "n8n export validation: Ready"]),
   );
 });
 
@@ -176,13 +176,18 @@ it("hides a kept preview once the draft changes", async () => {
   );
   expect(JSON.stringify(renderer.toJSON())).not.toContain("tool:unavailable");
 });
-it("names the workspace in the designer intro and keeps its id as a technical title", async () => {
-  const scope = () => renderer.root.findByProps({ title: "default" });
-  expect(scope().children.join("")).toBe("Default workspace");
+it("names the workspace in the designer intro without showing its id", async () => {
+  const intro = () =>
+    renderer.root
+      .findAllByType("p")
+      .map((node) => node.children.join(""))
+      .find((text) => text.startsWith("Draft a reviewable recipe for")) ?? "";
+  expect(intro()).toContain("Draft a reviewable recipe for Default workspace.");
+  expect(renderer.root.findAll((node) => node.props.title === "default")).toHaveLength(0);
   workspaceNames.byId = {};
   await act(async () => {
     renderer.update(<WorkAutomation />);
   });
-  expect(scope().children.join("")).toBe("workspace default");
+  expect(intro()).toContain("Draft a reviewable recipe for this workspace.");
   workspaceNames.byId = { default: "Default workspace" };
 });

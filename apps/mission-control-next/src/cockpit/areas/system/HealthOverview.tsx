@@ -27,7 +27,9 @@ import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { healthOverviewState, type HealthCheck } from "./health-overview";
-import { deriveSystemHealthChecks } from "./system-health";
+import { deriveSystemHealthChecks, HEALTH_SOURCE_LABELS } from "./system-health";
+import { formatAbsoluteTime } from "@goatcitadel/mission-control-shared/content/format";
+import { TimeText } from "../../ui/TimeText";
 import { backupTrustFromInbox } from "./backup-trust";
 import { useOperatorInbox } from "../../data/use-operator-inbox";
 import { inboxMatchesWorkspace } from "../inbox/inbox-presentation";
@@ -124,8 +126,7 @@ export function HealthOverview() {
           </p>
           {Number.isFinite(generatedAt) ? (
             <p className="mt-1 text-xs text-fg-muted">
-              Gateway snapshot{" "}
-              {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(generatedAt)}
+              <TimeText value={generatedAt} prefix="Gateway snapshot" />
             </p>
           ) : null}
         </div>
@@ -160,9 +161,10 @@ export function HealthOverview() {
               <ul className="mt-2 list-disc space-y-1 pl-5">
                 {unavailable.map(([name, source]) => (
                   <li key={name}>
-                    {name.replaceAll("_", " ")}: {source.state === "unavailable" ? source.detail : "Unknown"}
+                    {HEALTH_SOURCE_LABELS[name as keyof typeof HEALTH_SOURCE_LABELS] ?? "Health source"}:{" "}
+                    {source.state === "unavailable" ? source.detail : "Unknown"}
                     {source.state === "unavailable" && source.lastKnown
-                      ? ` Retained observation is stale; last observed ${source.lastKnown.observedAt ? new Date(source.lastKnown.observedAt).toLocaleString() : "at an unavailable time"}.`
+                      ? ` Retained observation is stale; last observed ${source.lastKnown.observedAt ? formatAbsoluteTime(source.lastKnown.observedAt) : "at an unavailable time"}.`
                       : ""}
                     {source.state === "unavailable" && source.retryable === false
                       ? " This source will be checked again after Gateway access or workspace scope changes; other sources continue refreshing."

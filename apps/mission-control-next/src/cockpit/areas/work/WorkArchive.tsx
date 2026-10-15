@@ -3,6 +3,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import type { TaskRecord } from "@goatcitadel/contracts";
 import { fetchTasksByView } from "@goatcitadel/mission-control-shared/api/tasks";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { presentTaskStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { performTaskArchiveAction } from "../../../features/native-routes/ops/task-archive-operation";
@@ -17,15 +18,12 @@ import { Dialog } from "../../ui/Dialog";
 import { EmptyState } from "../../ui/EmptyState";
 import { Field } from "../../ui/Field";
 import { WindowedRecordList } from "../../ui/WindowedRecordList";
+import { StatusBadge } from "../../ui/StatusBadge";
+import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
 
 export function WorkArchive() {
   const { activeWorkspaceId } = useUiPreferences();
-  return (
-    <ArchiveWorkspace
-      key={activeWorkspaceId ?? "default"}
-      workspaceId={activeWorkspaceId ?? "default"}
-    />
-  );
+  return <ArchiveWorkspace key={activeWorkspaceId ?? "default"} workspaceId={activeWorkspaceId ?? "default"} />;
 }
 function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
   const [view, setView] = useState<"active" | "trash">("trash");
@@ -36,6 +34,7 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
   const mounted = useIsMounted();
   useTaskMutations();
   const base = getGatewayApiBaseUrl();
+  const workspaceLabel = useActiveWorkspaceLabel();
   const tasks = useInfiniteQuery({
     queryKey: ["tasks", "archive", workspaceId, view],
     initialPageParam: "",
@@ -47,11 +46,8 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
     getNextPageParam: (page) => page.nextCursor,
     refetchOnMount: "always",
   });
-  const available =
-    tasks.isSuccess && tasks.isFetchedAfterMount && !tasks.isFetching && !tasks.isPlaceholderData;
-  const locked = review
-    ? readTaskMutation(taskMutationKey(base, workspaceId, review.taskId)).phase !== "idle"
-    : false;
+  const available = tasks.isSuccess && tasks.isFetchedAfterMount && !tasks.isFetching && !tasks.isPlaceholderData;
+  const locked = review ? readTaskMutation(taskMutationKey(base, workspaceId, review.taskId)).phase !== "idle" : false;
   async function confirm() {
     if (!review || !available || locked) return;
     const identity = generation.current;
@@ -79,8 +75,8 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
     <section className="mx-auto grid max-w-5xl gap-4 p-4 sm:p-6">
       <h1 className="font-display text-xl font-semibold text-fg">Task archive and restore</h1>
       <p className="text-sm text-fg-secondary">
-        Workspace operator tasks. Archive removes a task from active lists and can be reversed. It
-        does not cancel a runtime run.
+        Workspace operator tasks. Archive removes a task from active lists and can be reversed. It does not cancel a
+        runtime run.
       </p>
       <Field label="Task list">
         {(props) => (
@@ -122,10 +118,7 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
       {message ? <p role="status">{message}</p> : null}
       {tasks.isLoading ? <p role="status">Loading tasks…</p> : null}
       {tasks.isError ? (
-        <EmptyState
-          title="Task archive unavailable"
-          description={describeApiError(tasks.error).summary}
-        />
+        <EmptyState title="Task archive unavailable" description={describeApiError(tasks.error).summary} />
       ) : null}
       {tasks.isSuccess ? (
         <WindowedRecordList
@@ -142,12 +135,13 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
           {(task) => (
             <article className="rounded-md border border-line p-3">
               <h2 className="text-sm font-medium text-fg">{task.title}</h2>
-              <p className="text-xs text-fg-secondary">Operator task · {task.status}</p>
+              <p className="flex flex-wrap items-center gap-2 text-xs text-fg-secondary">
+                Operator task <StatusBadge status={presentTaskStatus(task.status)} />
+              </p>
               <Button
                 disabled={
                   !available ||
-                  readTaskMutation(taskMutationKey(base, workspaceId, task.taskId)).phase !==
-                    "idle" ||
+                  readTaskMutation(taskMutationKey(base, workspaceId, task.taskId)).phase !== "idle" ||
                   Boolean(task.agenticContext || task.proactiveContext)
                 }
                 onClick={() => {
@@ -180,7 +174,7 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
           }
         }}
         title={view === "trash" ? "Restore this task?" : "Archive this task?"}
-        description={`${review?.title ?? "Task"} · Workspace ${workspaceId}. Revision is rechecked before persistence.`}
+        description={`${review?.title ?? "Task"} · ${workspaceLabel}. The task is rechecked before anything is saved.`}
       >
         <div className="grid gap-3 text-sm">
           <p>
@@ -188,9 +182,7 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
               ? "This task returns to active task lists."
               : "This task leaves active task lists. You can restore it from Archived tasks."}
           </p>
-          {review ? (
-            <p>{readTaskMutation(taskMutationKey(base, workspaceId, review.taskId)).message}</p>
-          ) : null}
+          {review ? <p>{readTaskMutation(taskMutationKey(base, workspaceId, review.taskId)).message}</p> : null}
           <Button disabled={!available || locked} onClick={() => void confirm()}>
             {view === "trash" ? "Restore task" : "Archive task"}
           </Button>

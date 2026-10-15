@@ -1,17 +1,10 @@
 import type { ChatCitationRecord, ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { StatusBadge } from "../../ui/StatusBadge";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { useModelLabel } from "../../data/use-model-label";
+import { presentDelegationRunStatus, presentDelegationStepStatus, presentSourceType } from "./chat-vocabulary";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
-export function statusTone(status: string): "running" | "waiting" | "done" | "failed" | "neutral" {
-  if (status === "running" || status === "started" || status === "streaming") return "running";
-  if (status === "waiting" || status === "approval_required" || status === "blocked" || status === "paused")
-    return "waiting";
-  if (status === "completed" || status === "done" || status === "executed") return "done";
-  if (status === "failed" || status === "cancelled") return "failed";
-  return "neutral";
-}
-
 export function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-3 border-b border-line-subtle py-2 text-sm">
@@ -40,9 +33,7 @@ export function SourcesPanel({ turn }: { turn: ChatThreadTurnRecord | undefined 
         const href = safeSourceHref(source.url);
         return (
           <li key={source.citationId} className="rounded-md border border-line bg-raised p-3 text-sm">
-            <p className="mb-1 text-xs text-fg-muted">
-              {source.sourceType ? humanizeToken(source.sourceType) : "Source"}
-            </p>
+            <p className="mb-1 text-xs text-fg-muted">{presentSourceType(source.sourceType)}</p>
             {href ? (
               <a
                 href={href}
@@ -71,7 +62,7 @@ export function renderInspectorRunEvidence(
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="font-display text-md font-semibold text-fg">{run.label}</h3>
-        <StatusBadge status={{ label: humanizeToken(run.status), tone: statusTone(run.status) }} />
+        <StatusBadge status={presentDelegationRunStatus(run.status)} />
       </div>
       <p className="text-sm text-fg-secondary">{run.objective}</p>
       <ol className="space-y-2">
@@ -79,7 +70,7 @@ export function renderInspectorRunEvidence(
           <li key={step.stepId} className="rounded-md border border-line bg-raised p-3">
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm font-medium text-fg">{step.label ?? `Step ${step.index + 1}`}</span>
-              <StatusBadge status={{ label: humanizeToken(step.status), tone: statusTone(step.status) }} />
+              <StatusBadge status={presentDelegationStepStatus(step.status)} />
             </div>
             {step.summary ? <p className="mt-1 text-sm text-fg-secondary">{step.summary}</p> : null}
             {step.error ? <p className="mt-1 text-sm text-status-failed">{step.error}</p> : null}
@@ -131,14 +122,49 @@ export const TABS: readonly { id: ChatInspectorTab; label: string }[] = [
   { id: "background", label: "Background" },
 ];
 
-export function inspectorFallbackLabel(selectedTurn: ChatThreadTurnRecord): string {
-  return selectedTurn.trace.routing?.fallbackUsed
-    ? [
-        selectedTurn.trace.routing.fallbackProviderId,
-        selectedTurn.trace.routing.fallbackModel,
-        selectedTurn.trace.routing.fallbackReason,
-      ]
-        .filter(Boolean)
-        .join(" · ") || "Used; destination not recorded"
-    : "No fallback recorded";
+/** The catalog name of a recorded or selected model ("Claude Sonnet · Anthropic"); ids stay in technical details. */
+export function ModelDetailRow({
+  providerId,
+  modelId,
+  missing,
+  label = "Model",
+}: {
+  providerId?: string | null;
+  modelId?: string | null;
+  missing: string;
+  label?: string;
+}) {
+  const recorded = Boolean(providerId || modelId);
+  const name = useModelLabel(providerId ?? undefined, modelId ?? undefined, recorded);
+  return <DetailRow label={label} value={recorded ? name : missing} />;
+}
+
+export function ModelTechnicalDetails({
+  providerId,
+  modelId,
+}: {
+  providerId?: string | null;
+  modelId?: string | null;
+}) {
+  if (!providerId && !modelId) return null;
+  return (
+    <TechnicalDetails label="Model technical details">
+      <dl className="font-mono text-xs">
+        <DetailRow label="Provider ID" value={providerId || "Not recorded"} />
+        <DetailRow label="Model ID" value={modelId || "Not recorded"} />
+      </dl>
+    </TechnicalDetails>
+  );
+}
+
+export function FallbackDetailRow({ turn }: { turn: ChatThreadTurnRecord }) {
+  const routing = turn.trace.routing;
+  const used = Boolean(routing?.fallbackUsed);
+  const destination = Boolean(routing?.fallbackProviderId || routing?.fallbackModel);
+  const name = useModelLabel(routing?.fallbackProviderId, routing?.fallbackModel, used && destination);
+  const value = !used
+    ? "No fallback recorded"
+    : [destination ? name : null, routing?.fallbackReason].filter(Boolean).join(" · ") ||
+      "Used; destination not recorded";
+  return <DetailRow label="Fallback" value={value} />;
 }

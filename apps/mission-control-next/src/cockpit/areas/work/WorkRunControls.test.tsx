@@ -101,13 +101,13 @@ describe("Work run controls", () => {
     await renderControls();
     await act(async () => button("Pause").click());
     expect(api.pauseDurableRun).not.toHaveBeenCalled();
-    await act(async () => button("Confirm pause").click());
+    await act(async () => button("Pause run").click());
     expect(api.fetchDurableRun.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(api.fetchDurableRun.mock.invocationCallOrder[1]!).toBeLessThan(
       api.pauseDurableRun.mock.invocationCallOrder[0]!,
     );
     expect(api.pauseDurableRun).toHaveBeenCalledWith("run-a");
-    expect(container.textContent).toContain("Gateway returned paused");
+    expect(container.textContent).toContain("Run moved to Paused");
   });
 
   it("asks a capitalized question and never pairs two Cancel buttons", async () => {
@@ -125,7 +125,7 @@ describe("Work run controls", () => {
     api.fetchDurableRun.mockResolvedValueOnce(run).mockResolvedValueOnce({ ...run, status: "completed", version: 3 });
     await renderControls();
     await act(async () => button("Cancel").click());
-    await act(async () => button("Confirm cancel").click());
+    await act(async () => button("Cancel run").click());
     expect(api.cancelDurableRun).not.toHaveBeenCalled();
     expect(container.textContent).toContain("The run changed");
   });
@@ -134,7 +134,7 @@ describe("Work run controls", () => {
     api.cancelDurableRun.mockRejectedValue(new Error("Connection lost"));
     await renderControls();
     await act(async () => button("Cancel").click());
-    await act(async () => button("Confirm cancel").click());
+    await act(async () => button("Cancel run").click());
     expect(api.cancelDurableRun).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("Action outcome is uncertain");
     expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Cancel")).toBe(false);
@@ -152,9 +152,21 @@ describe("Work run controls", () => {
     await renderControls();
     await act(async () => button("Retry").click());
     expect(api.retryDurableRun).not.toHaveBeenCalled();
-    await act(async () => button("Confirm retry").click());
+    await act(async () => button("Retry run").click());
     expect(api.retryDurableRun).toHaveBeenCalledWith("run-a", { reason: "operator_work_retry" });
-    expect(container.textContent).toContain("Gateway returned queued");
+    expect(container.textContent).toContain("Run moved to Queued");
+  });
+
+  it("tones the result notice by the returned status instead of always reporting success", async () => {
+    api.pauseDurableRun.mockResolvedValueOnce({ ...run, status: "failed", version: 3 });
+    await renderControls();
+    await act(async () => button("Pause").click());
+    await act(async () => button("Pause run").click());
+    const notice = [...container.querySelectorAll('[role="status"]')].find((entry) =>
+      entry.textContent?.startsWith("Run moved to Failed"),
+    );
+    expect(notice?.getAttribute("data-tone")).toBe("failed");
+    expect(notice?.className).toContain("text-status-failed");
   });
 
   it("does not offer manual replay for an admitted Chat run", async () => {
@@ -174,7 +186,7 @@ describe("Work run controls", () => {
     await renderControls();
     await act(async () => button("Recover").click());
     expect(api.recoverDurableDeadLetter).not.toHaveBeenCalled();
-    await act(async () => button("Confirm recover").click());
+    await act(async () => button("Recover run").click());
     expect(api.fetchDurableDeadLetters.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(api.recoverDurableDeadLetter).toHaveBeenCalledWith("dead-a");
   });
@@ -194,7 +206,7 @@ describe("Work run controls", () => {
       .mockResolvedValueOnce({ items: [{ ...letter, resolvedAt: "later" }] });
     await renderControls();
     await act(async () => button("Recover").click());
-    await act(async () => button("Confirm recover").click());
+    await act(async () => button("Recover run").click());
     expect(api.recoverDurableDeadLetter).not.toHaveBeenCalled();
     expect(container.textContent).toContain("The run changed or its recovery record changed");
   });
@@ -245,9 +257,9 @@ describe("Work run controls", () => {
     );
     await invalidateAll(client);
     expect(document.body.textContent).toContain("Pause this run?");
-    expect(button("Confirm pause").disabled).toBe(true);
+    expect(button("Pause run").disabled).toBe(true);
     await act(async () => release());
-    await vi.waitFor(() => expect(button("Confirm pause").disabled).toBe(false));
+    await vi.waitFor(() => expect(button("Pause run").disabled).toBe(false));
   });
 
   it("keeps the run beside a failed recheck", async () => {
@@ -255,7 +267,7 @@ describe("Work run controls", () => {
     api.fetchDurableRun.mockRejectedValueOnce(new Error("Gateway offline"));
     await invalidateAll(client);
     await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
-    expect(container.textContent).toContain("Last known status: running");
+    expect(container.textContent).toContain("Last known status: Running");
     expect(container.textContent).toContain("Showing the last version from");
     expect(button("Pause")).toBeDefined();
   });

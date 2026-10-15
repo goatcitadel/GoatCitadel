@@ -11,6 +11,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/system", () => ({
   fetchModelUsageEvents: api.fetchModelUsageEvents,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/settings", () => ({ fetchSettings: api.fetchSettings }));
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn().mockResolvedValue({ items: [] }),
+}));
 
 describe("cockpit Spend", () => {
   it("shows provider evidence as a lower bound and does not imply the routing mode is a cap", async () => {
@@ -69,7 +72,9 @@ describe("cockpit Spend", () => {
       expect(container.textContent).toContain("The mode is not a spend limit");
       expect(container.textContent).toContain("does not supply per-model cost totals");
       expect(container.textContent).toContain("2026-09-28 UTC");
+      expect(container.textContent).toContain("Grouped by day (UTC) ·");
       expect(container.textContent).toContain("currency USD");
+      expect(container.textContent).not.toContain("Installation scope");
       expect(container.textContent).toContain("(local time)");
       expect(container.textContent).toContain("does not make an estimate a measured bill");
     } finally {

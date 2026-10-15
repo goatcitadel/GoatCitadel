@@ -12,7 +12,7 @@ import {
   presentCapabilityStatus,
   presentCapabilityTitle,
 } from "@goatcitadel/mission-control-shared/content/capability-rows";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { capabilityCategoryLabel, capabilityKindLabel, freeText } from "./capability-vocabulary";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
@@ -41,6 +41,13 @@ import {
 } from "./capability-catalog";
 import { catalogHref, readCatalogLocation } from "./capability-catalog-route";
 import { AREA_COLUMN } from "../../ui/area-layout";
+const TAB_LABELS = {
+  overview: "Overview",
+  policy: "Policy",
+  usage: "Usage",
+  source: "Source",
+  settings: "Settings",
+} as const;
 
 const EMPTY_ITEMS: CapabilityCatalogEntry[] = [];
 const COUNT_ANNOUNCE_DELAY_MS = 500;
@@ -76,17 +83,17 @@ function CatalogDetail({
       <div className="flex flex-wrap gap-2">
         <StatusBadge status={presented} />
         <span className="rounded-full border border-line px-2 py-0.5 text-xs text-fg-muted">
-          {humanizeToken(item.kind)}
+          {capabilityKindLabel(item.kind)}
         </span>
         <span className="rounded-full border border-line px-2 py-0.5 text-xs text-fg-muted">
-          {item.trustLabel ? humanizeToken(item.trustLabel) : "Trust not labeled"}
+          {item.trustLabel ? freeText(item.trustLabel) : "Trust not labeled"}
         </span>
       </div>
       <Tabs defaultValue="overview">
         <TabsList className="justify-between" aria-label="Capability details">
           {(["overview", "policy", "usage", "source", "settings"] as const).map((tab) => (
             <TabsTrigger className="whitespace-nowrap px-1 text-xs" key={tab} value={tab}>
-              {humanizeToken(tab)}
+              {TAB_LABELS[tab]}
             </TabsTrigger>
           ))}
         </TabsList>
@@ -96,7 +103,7 @@ function CatalogDetail({
               ? status.reason
               : "The callable catalog is unavailable. Refresh before relying on this status."}
           </p>
-          <p>Category: {humanizeToken(item.category)}</p>
+          <p>Category: {capabilityCategoryLabel(item.category)}</p>
           {item.reviewWarning ? (
             <p role="alert" className="text-status-waiting">
               {item.reviewWarning}
@@ -285,9 +292,7 @@ export function CapabilityCatalog() {
                           ) : null}
                         </span>
                         {item.trustLabel ? (
-                          <span className="hidden text-xs text-fg-muted md:block">
-                            {humanizeToken(item.trustLabel)}
-                          </span>
+                          <span className="hidden text-xs text-fg-muted md:block">{freeText(item.trustLabel)}</span>
                         ) : null}
                         <StatusBadge status={presented} />
                       </button>

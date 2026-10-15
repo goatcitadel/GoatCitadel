@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RiskApprovalAction } from "./RiskApprovalAction";
 
 let root: Root;
@@ -41,7 +42,13 @@ async function typeConfirmation(value: string) {
 beforeEach(() => {
   container = document.createElement("div");
   document.body.appendChild(container);
-  root = createRoot(container);
+  // The review summary reads workspace names through the query cache; give every render one.
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const raw = createRoot(container);
+  root = {
+    render: (node) => raw.render(<QueryClientProvider client={client}>{node}</QueryClientProvider>),
+    unmount: () => raw.unmount(),
+  } as Root;
 });
 
 afterEach(() => {
@@ -200,7 +207,9 @@ describe("risk approval action", () => {
     );
     await act(async () => container.querySelector("button")?.click());
     expect(onApprove).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Confirm high risk action");
+    expect(document.body.textContent).toContain("Confirm danger-level action");
+    expect(document.body.textContent).toContain("Action: Write file");
+    expect(document.body.textContent).not.toContain("write_file");
     expect(document.body.textContent).toContain("pnpm test");
     expect(document.body.textContent).toContain("workspace/note.txt");
     const confirm = [...document.body.querySelectorAll("button")].find(
@@ -286,7 +295,7 @@ describe("risk approval action", () => {
       ),
     );
     await act(async () => container.querySelector("button")?.click());
-    expect(document.body.textContent).toContain("Confirm critical risk action");
+    expect(document.body.textContent).toContain("Confirm nuclear-level action");
     expect(document.body.textContent).toContain("pnpm test");
     const confirm = () =>
       [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Approve once")!;
@@ -446,7 +455,7 @@ describe("risk approval action", () => {
     expect(review.textContent).toBe("Review approval");
     await act(async () => review.click());
     expect(onApprove).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Confirm critical risk action");
+    expect(document.body.textContent).toContain("Confirm critical-level action");
     expect(document.body.textContent).toContain("pnpm test");
     expect(dialogButton("Approve once").disabled).toBe(true);
     await typeConfirmation("approve");

@@ -9,6 +9,7 @@ import { fetchFilesList, uploadFile } from "@goatcitadel/mission-control-shared/
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { LibraryFileUpload } from "./LibraryFileUpload";
+import { formatAbsoluteTime } from "@goatcitadel/mission-control-shared/content/format";
 vi.mock("@goatcitadel/mission-control-shared/api/operators-agents-files", () => ({
   fetchFilesList: vi.fn(),
   uploadFile: vi.fn(),
@@ -76,7 +77,7 @@ it("retains a successful owner receipt inside the actual portal after query inva
   await vi.waitFor(() => expect(client.isFetching()).toBe(0));
   const dialog = document.querySelector('[role="dialog"]')!;
   expect(dialog.closest('[aria-hidden="true"]')).toBeNull();
-  expect(dialog.textContent).toContain("Gateway accepted proof.txt (5 bytes)");
+  expect(dialog.textContent).toContain("Gateway accepted proof.txt (5 B)");
   expect(dialog.textContent).not.toContain("private");
   expect(uploadFile).toHaveBeenCalledExactlyOnceWith("proof.txt", "proof", { expectAbsent: true });
   await click("Upload file");
@@ -136,7 +137,7 @@ it("names the replaced file with its size and date and makes the replace explici
   await setup();
   expect(fetchFilesList).toHaveBeenCalledExactlyOnceWith(".", 1000);
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
-    `This replaces proof.txt (2.0 KB, modified ${new Date(modifiedAt).toLocaleString()}).`,
+    `This replaces proof.txt (2.0 KB, modified ${formatAbsoluteTime(modifiedAt)}).`,
   );
   expect(cta("Replace file")?.className).toContain("border-status-failed");
   expect(cta("Upload file")).toBeUndefined();

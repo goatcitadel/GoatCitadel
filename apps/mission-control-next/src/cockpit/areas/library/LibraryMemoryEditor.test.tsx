@@ -170,7 +170,9 @@ it("governs forget and reads bounded history separately from item content", asyn
   });
   await render();
   await click("Memory history");
-  await vi.waitFor(() => expect(container.textContent).toContain("operator"));
+  await vi.waitFor(() =>
+    expect(document.querySelector('[aria-label="Memory history"] h3')?.textContent).toBe("Created"),
+  );
   await click("Review forget");
   const named = (name: string) =>
     [...document.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name)!;
@@ -181,11 +183,23 @@ it("governs forget and reads bounded history separately from item content", asyn
   expect(forgetMemoryItem).toHaveBeenCalledExactlyOnceWith("m-a");
   expect(patchMemoryItem).not.toHaveBeenCalled();
 });
+it("describes the item with plain status, namespace and scope words, keeping identifiers out of view", async () => {
+  vi.mocked(fetchMemoryItems).mockResolvedValue({
+    items: [{ ...item, namespace: "user_prefs" }],
+    total: 1,
+    snapshotAt: "now",
+  });
+  await render();
+  expect(container.textContent).toContain("Active · User preferences · This workspace");
+  expect(container.textContent).not.toContain("user_prefs");
+  expect(container.textContent).not.toContain("m-a");
+});
 it("keeps global memory read-only here because the Gateway only mutates exact workspace-owned items", async () => {
   const { workspaceId: _owned, ...global } = item;
   vi.mocked(fetchMemoryItems).mockResolvedValue({ items: [global as MemoryItemRecord], total: 1, snapshotAt: "now" });
   await render();
   expect(container.textContent).toContain("Global memory is read-only here.");
+  expect(container.textContent).toContain("Shared across workspaces");
   const button = (name: string) =>
     [...container.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name)!;
   expect(button("Review memory changes").disabled).toBe(true);
@@ -307,7 +321,7 @@ it.each(["save", "forget"] as const)(
       ),
     );
     expect(document.querySelector('[aria-label="Memory request receipt"]')?.textContent).toContain(
-      `Current memory record: ${action === "forget" ? "forgotten" : "active"}`,
+      `Current memory record: ${action === "forget" ? "Forgotten" : "Active"}`,
     );
     expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("No memory change is confirmed yet");
     expect(patchMemoryItem).toHaveBeenCalledTimes(action === "save" ? 1 : 0);
@@ -350,7 +364,7 @@ it("tracks an independent decision, running effect, completed history and later 
     ),
   );
   expect(document.querySelector('[aria-label="Library approval"]')?.textContent).toContain(
-    "Decision recorded: approved",
+    "Decision recorded: Approved",
   );
   expect(document.querySelector('[aria-label="Library approval"] [aria-label="Approval decisions"]')).toBeNull();
   vi.mocked(fetchApprovalReplay).mockResolvedValue(replay("approved", "completed"));
@@ -394,7 +408,7 @@ it.each(["rejected", "blocked", "wrong-request", "foreign-effect"])(
     });
     const text =
       state === "rejected"
-        ? "Memory request rejected"
+        ? "Memory request denied"
         : state === "blocked"
           ? "blocked by policy"
           : state === "wrong-request"
@@ -516,7 +530,7 @@ it("captures reviewed TTL seconds in the governed patch", async () => {
   });
   await click("Review memory changes");
   expect(document.querySelector('[aria-label="Proposed memory changes"]')?.textContent).toContain(
-    "Requested TTL: 7200 seconds",
+    "Requested expiry: 2 h",
   );
   await click("Request edit approval");
   expect(patchMemoryItem).toHaveBeenCalledExactlyOnceWith("m-a", {

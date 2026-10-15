@@ -10,12 +10,13 @@ import {
   projectProviderCostRows,
   projectUsageCostSummary,
 } from "@goatcitadel/mission-control-shared/content/cost-summary";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { formatAbsoluteTime, plural } from "@goatcitadel/mission-control-shared/content/format";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { SpendAttempts } from "./SpendAttempts";
+import { BUDGET_MODE } from "./system-vocabulary";
 
 export function SpendOverview() {
   const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
@@ -43,7 +44,7 @@ export function SpendOverview() {
   const dates = summary ? [Date.parse(summary.from), Date.parse(summary.to)] : [];
   const period =
     dates.length === 2 && dates.every(Number.isFinite)
-      ? `${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(dates[0])} – ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(dates[1])} (local time)`
+      ? `${formatAbsoluteTime(dates[0])} – ${formatAbsoluteTime(dates[1])} (local time)`
       : "Latest seven days";
 
   return (
@@ -53,9 +54,7 @@ export function SpendOverview() {
           <h1 className="font-display text-xl font-semibold text-fg">Spend</h1>
           <p className="text-sm text-fg-secondary">Gateway usage and known cost for the latest seven days.</p>
           {summary ? (
-            <p className="mt-1 text-xs text-fg-muted">
-              Installation scope · {summary.scope} groups · {period} · currency USD
-            </p>
+            <p className="mt-1 text-xs text-fg-muted">Grouped by day (UTC) · {period} · currency USD</p>
           ) : null}
         </div>
         <Button size="sm" onClick={() => void costs.refetch()} disabled={costs.isFetching}>
@@ -144,9 +143,7 @@ export function SpendOverview() {
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div className="min-w-0">
                         <h3 className="break-words text-sm font-semibold text-fg">{provider.label}</h3>
-                        <p className="text-xs text-fg-muted">
-                          {new Intl.NumberFormat().format(provider.tokenTotal)} recorded tokens
-                        </p>
+                        <p className="text-xs text-fg-muted">{plural(provider.tokenTotal, "recorded token")}</p>
                       </div>
                       <strong className="text-sm tabular-nums text-fg">{provider.costLabel}</strong>
                     </div>
@@ -170,7 +167,9 @@ export function SpendOverview() {
             <p className="mt-1 text-sm text-fg-secondary">
               {"Gateway budget preference: "}
               <strong className="text-fg">
-                {settings.data && !settings.isError ? humanizeToken(settings.data.budgetMode) : "Unavailable"}
+                {settings.data && !settings.isError
+                  ? (BUDGET_MODE[settings.data.budgetMode] ?? "Unrecognized mode")
+                  : "Unavailable"}
               </strong>
             </p>
             {settings.isError ? (

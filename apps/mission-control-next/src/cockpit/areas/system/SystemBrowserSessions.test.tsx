@@ -132,7 +132,7 @@ it("creates an inert session with a request ID and replays only that ID after a 
   });
   await click("Create session");
   expect(button("Create session")).toBeUndefined();
-  expect(container.textContent).toContain("Pending request: a session labelled “Research” in workspace one.");
+  expect(container.textContent).toContain("Pending request: a session labelled “Research” in this workspace.");
   expect(input.readOnly).toBe(true);
   await click("Replay exact session request");
   const calls = vi.mocked(createBrowserSession).mock.calls;
@@ -145,7 +145,7 @@ it("creates an inert session with a request ID and replays only that ID after a 
 it("refuses to manage a deep-linked session from another workspace", async () => {
   vi.mocked(fetchBrowserSession).mockResolvedValue({ ...session, workspaceId: "two" });
   await open("/system/browser-sessions?sessionId=s-1");
-  await vi.waitFor(() => expect(container.textContent).toContain("belongs to workspace two, not workspace one"));
+  await vi.waitFor(() => expect(container.textContent).toContain("belongs to another workspace, not the selected one"));
   expect(fetchBrowserSessionGrants).not.toHaveBeenCalled();
 });
 

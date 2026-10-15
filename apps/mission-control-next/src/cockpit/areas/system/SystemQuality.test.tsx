@@ -13,7 +13,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/ops-quality", () => ({
   fetchOpsQualitySnapshot: api.snapshot,
   exportOpsQualityEvidence: api.qualityExport,
 }));
-vi.mock("@goatcitadel/mission-control-shared/api/platform", () => ({ exportLlmEvalProofRuns: api.evalExport }));
+vi.mock("@goatcitadel/mission-control-shared/api/platform", () => ({
+  exportLlmEvalProofRuns: api.evalExport,
+  fetchLlmConfig: async () => ({ providerConfigs: [{ providerId: "fixture", label: "Fixture Provider" }] }),
+  fetchLlmModels: async () => ({ items: [] }),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/prompt-packs", () => ({ fetchPromptPackReport: api.packReport }));
 
 const stamp = "2026-09-30T14:00:00.000Z";
@@ -266,6 +270,7 @@ describe("native Quality owner evidence", () => {
     expect(region("Selected evaluation").textContent).toContain("Only second evidence");
     expect(region("Selected evaluation").textContent).toContain("Not recorded");
     expect(region("Selected evaluation").textContent).not.toContain("Only first evidence");
+    await vi.waitFor(() => expect(region("Selected evaluation").textContent).toContain("second · Fixture Provider"));
     const data = snapshot();
     data.evalProof.items = data.evalProof.items.slice(0, 1);
     await act(async () => {

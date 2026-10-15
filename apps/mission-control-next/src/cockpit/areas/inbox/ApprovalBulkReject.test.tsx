@@ -112,11 +112,12 @@ it("states how many requests it rejects, across which workspaces, before confirm
   expect(dialogText()).toContain("Pending requests may change while this review is open.");
 });
 
-it("uses singular wording and names a workspace by ID when it has no name here", async () => {
+it("uses singular wording and counts a workspace with no name here without printing its ID", async () => {
   api.list.mockResolvedValue({ items: [pending("a", "unknown")] });
   await click("Review installation-wide rejection");
   expect(dialogText()).toContain("Rejects 1 pending request across 1 workspace.");
-  expect(dialogText()).toContain("Workspaces: workspace ID unknown.");
+  expect(dialogText()).toContain("Workspaces: 1 unnamed workspace.");
+  expect(dialogText()).not.toContain("unknown");
 });
 
 it("says at least 200 when more pending requests exist than one read returns", async () => {

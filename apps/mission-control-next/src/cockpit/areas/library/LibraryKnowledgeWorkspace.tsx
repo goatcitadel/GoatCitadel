@@ -12,6 +12,8 @@ import { LibraryExternalSources } from "./LibraryExternalSources";
 import { LibraryKnowledgeActions } from "./LibraryKnowledgeActions";
 import { LibraryFileDownload } from "./LibraryFileDownload";
 import { Callout } from "../../ui/Callout";
+import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
+import { TimeText } from "../../ui/TimeText";
 
 export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string }) {
   const access = useLibraryOperation(JSON.stringify(["knowledge", workspaceId]));
@@ -54,9 +56,11 @@ export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string
             .map((file) => (
               <li key={file.relativePath} className="rounded-md border border-line p-3">
                 <h3 className="break-words">{file.relativePath}</h3>
-                <p>{file.size.toLocaleString()} bytes</p>
+                <p>{formatBytes(file.size)}</p>
                 <Button onClick={() => setSelectedPath(file.relativePath)}>Preview {file.relativePath}</Button>
-                <p>Modified {new Date(file.modifiedAt).toLocaleString()}</p>
+                <p>
+                  <TimeText prefix="Modified" value={file.modifiedAt} />
+                </p>
                 <LibraryFileDownload key={`${file.relativePath}:${file.modifiedAt}`} file={file} />
               </li>
             ))}

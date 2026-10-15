@@ -1,5 +1,13 @@
 import { readApprovalFollowOn } from "./approval-follow-on";
-import { useApprovalOperationAttempt, beginApprovalOperation, updateApprovalOperation, releaseApprovalOperationCheck, releaseRefusedApprovalOperation, canReviewApprovalOperation, classifyOperationFailure } from "./approval-operation-attempts";
+import {
+  useApprovalOperationAttempt,
+  beginApprovalOperation,
+  updateApprovalOperation,
+  releaseApprovalOperationCheck,
+  releaseRefusedApprovalOperation,
+  canReviewApprovalOperation,
+  classifyOperationFailure,
+} from "./approval-operation-attempts";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { canonicalJsonString, type ApprovalRequest } from "@goatcitadel/contracts";
@@ -10,23 +18,52 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { findTraceMetadata } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { TimeText } from "../../ui/TimeText";
+import {
+  presentActor,
+  presentApprovalEffectKind,
+  presentApprovalEffectStatus,
+  presentApprovalEvent,
+  presentPendingActionResolution,
+} from "./inbox-vocabulary";
 
-export function ApprovalAuditRecovery({ approval, workspaceId, checking = false }: { approval: ApprovalRequest; workspaceId: string; checking?: boolean }) {
+export function ApprovalAuditRecovery({
+  approval,
+  workspaceId,
+  checking = false,
+}: {
+  approval: ApprovalRequest;
+  workspaceId: string;
+  checking?: boolean;
+}) {
   const access = useProjectAccess(JSON.stringify([workspaceId, approval.approvalId]));
   return <AuditRecovery key={access.identity} approval={approval} workspaceId={workspaceId} checking={checking} />;
 }
-function AuditRecovery({ approval, workspaceId, checking }: { approval: ApprovalRequest; workspaceId: string; checking: boolean }) {
+function AuditRecovery({
+  approval,
+  workspaceId,
+  checking,
+}: {
+  approval: ApprovalRequest;
+  workspaceId: string;
+  checking: boolean;
+}) {
   const access = useProjectAccess(JSON.stringify([workspaceId, approval.approvalId]));
   const [open, setOpen] = useState(false),
     [traceOpen, setTraceOpen] = useState(false);
   const [review, setReview] = useState<string>(),
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState("");
+  const { activeCitadelId } = useUiPreferences();
+  const workspaceName = useWorkspaceNameLookup(activeCitadelId)(workspaceId) ?? "This workspace";
 
   async function read() {
     const state = await readApprovalFollowOn(approval, workspaceId, access.current);
@@ -41,7 +78,11 @@ function AuditRecovery({ approval, workspaceId, checking }: { approval: Approval
     retry: false,
     staleTime: 0,
   });
-  const traceMetadata = (approval.linkage?.correlationId || approval.linkage?.traceId ? approval.linkage : undefined) ?? findTraceMetadata(audit.data?.replay.pendingAction?.request) ?? findTraceMetadata(approval.payload) ?? findTraceMetadata(approval.preview);
+  const traceMetadata =
+    (approval.linkage?.correlationId || approval.linkage?.traceId ? approval.linkage : undefined) ??
+    findTraceMetadata(audit.data?.replay.pendingAction?.request) ??
+    findTraceMetadata(approval.payload) ??
+    findTraceMetadata(approval.preview);
   const correlationId = traceMetadata?.correlationId;
   const trace = useQuery({
     queryKey: ["approvals", "audit-trace", access.identity, correlationId],
@@ -61,7 +102,8 @@ function AuditRecovery({ approval, workspaceId, checking }: { approval: Approval
   async function resume() {
     if (
       !review ||
-      checking || !canReview ||
+      checking ||
+      !canReview ||
       !access.current() ||
       audit.isError ||
       audit.isFetching ||
@@ -82,8 +124,14 @@ function AuditRecovery({ approval, workspaceId, checking }: { approval: Approval
       sent = true;
       updateApprovalOperation(attemptKey, token, "submitted", "Resume request submitted; outcome is not yet verified.");
       const receipt = await resumeDurableRun(fresh.run.runId, "operator");
-      if (receipt.runId !== fresh.run.runId || receipt.workflowKey !== fresh.run.workflowKey) throw new Error("Resume receipt does not identify the original workflow.");
-      updateApprovalOperation(attemptKey, token, "resolved", "Resume request recorded. Read the original linked work for its current outcome.");
+      if (receipt.runId !== fresh.run.runId || receipt.workflowKey !== fresh.run.workflowKey)
+        throw new Error("Resume receipt does not identify the original workflow.");
+      updateApprovalOperation(
+        attemptKey,
+        token,
+        "resolved",
+        "Resume request recorded. Read the original linked work for its current outcome.",
+      );
       if (!access.current()) return;
       setReview(undefined);
 
@@ -92,7 +140,13 @@ function AuditRecovery({ approval, workspaceId, checking }: { approval: Approval
       // Gateway answered and recorded nothing: no replay lock, the same checkpoint may be reviewed again.
       const refused = sent && classifyOperationFailure(cause) === "refused";
       if (refused) releaseRefusedApprovalOperation(attemptKey, token);
-      else if (sent) updateApprovalOperation(attemptKey, token, "uncertain", `Resume outcome is uncertain. Inspect current work before another request. ${describeApiError(cause).summary}`);
+      else if (sent)
+        updateApprovalOperation(
+          attemptKey,
+          token,
+          "uncertain",
+          `Resume outcome is uncertain. Inspect current work before another request. ${describeApiError(cause).summary}`,
+        );
       if (access.current()) {
         setNotice(
           `${refused ? "Gateway did not accept the resume request. " : sent ? "Resume outcome is uncertain. Inspect current work before another request. " : ""}${describeApiError(cause).summary}`,
@@ -128,23 +182,35 @@ function AuditRecovery({ approval, workspaceId, checking }: { approval: Approval
               <ol className="grid gap-2">
                 {audit.data.replay.events.map((event) => (
                   <li key={event.eventId}>
-                    {event.eventType.replaceAll("_", " ")} · {event.actorId} · {event.timestamp}
+                    {presentApprovalEvent(event.eventType)} ·{" "}
+                    {presentActor(event.actorId, event.eventType === "resolved" ? "decision" : "event")} ·{" "}
+                    <TimeText value={event.timestamp} />
                   </li>
                 ))}
               </ol>
-              <p>Pending action: {audit.data.replay.pendingAction?.resolutionStatus ?? "No pending action record"}</p>
+              <p>Pending action: {presentPendingActionResolution(audit.data.replay.pendingAction?.resolutionStatus)}</p>
               {audit.data.replay.effects.map((effect) => (
                 <p key={effect.effectId}>
-                  Follow-on work: {effect.effectKind.replaceAll("_", " ")} · {effect.status} · {effect.lastError}
+                  Follow-on work: {presentApprovalEffectKind(effect.effectKind)} ·{" "}
+                  {presentApprovalEffectStatus(effect.status).label}
+                  {effect.lastError ? ` · ${effect.lastError}` : ""}
                 </p>
               ))}
               {run ? (
                 <>
                   <p>
-                    Original linked work: {run.status}. {run.lastError}
+                    Original linked work: {presentRunStatus(run.status).label}. {run.lastError}
                   </p>
                   <Button
-                    disabled={run.status !== "paused" || audit.isError || audit.isFetching || busy || checking || !canReview || Boolean(notice)}
+                    disabled={
+                      run.status !== "paused" ||
+                      audit.isError ||
+                      audit.isFetching ||
+                      busy ||
+                      checking ||
+                      !canReview ||
+                      Boolean(notice)
+                    }
                     onClick={() => setReview(canonicalJsonString(run))}
                   >
                     Resume paused run
@@ -171,7 +237,13 @@ function AuditRecovery({ approval, workspaceId, checking }: { approval: Approval
               </TechnicalDetails>
             </>
           ) : null}
-          {traceMetadata ? <TechnicalDetails label="Trace linkage"><p className="break-all">Trace: {traceMetadata.traceId ?? "Not recorded"} · Correlation: {correlationId ?? "Not recorded"}</p></TechnicalDetails> : null}
+          {traceMetadata ? (
+            <TechnicalDetails label="Trace linkage">
+              <p className="break-all">
+                Trace: {traceMetadata.traceId ?? "Not recorded"} · Correlation: {correlationId ?? "Not recorded"}
+              </p>
+            </TechnicalDetails>
+          ) : null}
           {correlationId ? (
             <>
               <Button
@@ -205,12 +277,18 @@ function AuditRecovery({ approval, workspaceId, checking }: { approval: Approval
         title="Resume paused run"
         description="Request continuation of the original canonical checkpoint. Approval decisions and actual resumed work remain separate."
       >
-        <p>
-          Workspace {workspaceId} · Run {run?.runId}
-        </p>
+        <p>Workspace: {workspaceName}</p>
+        <TechnicalDetails label="Run identifiers">
+          <p className="break-all font-mono text-xs">
+            Workspace {workspaceId} · Run {run?.runId}
+          </p>
+        </TechnicalDetails>
         <p>{run?.lastError}</p>
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button disabled={busy || checking || !canReview || audit.isFetching || audit.isError} onClick={() => void resume()}>
+          <Button
+            disabled={busy || checking || !canReview || audit.isFetching || audit.isError}
+            onClick={() => void resume()}
+          >
             Confirm resume
           </Button>
           <Button disabled={busy} onClick={() => setReview(undefined)}>

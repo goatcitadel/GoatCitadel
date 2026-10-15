@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchSettings, isApiRequestError, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
 import {
   settingsChangeIsConfirmed,
@@ -14,9 +13,13 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import { ApprovedSettingsContinuation } from "./ApprovedSettingsContinuation";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { presentChangeStatusLabel } from "./settings-vocabulary";
 
 type BudgetMode = RuntimeSettingsResponse["budgetMode"];
-const MODES: readonly BudgetMode[] = ["saver", "balanced", "power"];
+const BUDGET_MODE_LABELS: Record<BudgetMode, string> = { saver: "Saver", balanced: "Balanced", power: "Power" };
+const MODES = Object.keys(BUDGET_MODE_LABELS) as BudgetMode[];
+const budgetModeLabel = (mode: BudgetMode | undefined) => (mode ? (BUDGET_MODE_LABELS[mode] ?? "Unknown") : "Unknown");
 
 function isBudgetMode(value: unknown): value is BudgetMode {
   return MODES.includes(value as BudgetMode);
@@ -161,9 +164,10 @@ export function BudgetModeControl() {
       ) : null}
       {ready ? (
         <>
-          <p className="mt-3 text-xs text-fg-muted">
-            Current: {humanizeToken(current)} · settings revision {settings.data?.revision}
-          </p>
+          <p className="mt-3 text-xs text-fg-muted">Current: {budgetModeLabel(current)}</p>
+          <TechnicalDetails>
+            <p className="break-all font-mono text-xs">Settings revision {settings.data?.revision}</p>
+          </TechnicalDetails>
           <label className="mt-3 block max-w-sm text-sm font-medium text-fg">
             Mode
             <select
@@ -177,7 +181,7 @@ export function BudgetModeControl() {
             >
               {MODES.map((mode) => (
                 <option key={mode} value={mode}>
-                  {humanizeToken(mode)}
+                  {BUDGET_MODE_LABELS[mode]}
                 </option>
               ))}
             </select>
@@ -189,7 +193,7 @@ export function BudgetModeControl() {
           ) : null}
           {draft.hasRemoteChanges ? (
             <div role="status" className="mt-2 space-y-2 text-sm text-fg-secondary">
-              <p>The saved setting changed after this draft began. Current: {humanizeToken(current)}.</p>
+              <p>The saved setting changed after this draft began. Current: {budgetModeLabel(current)}.</p>
               <Button size="sm" onClick={draft.rebaseToCurrent}>
                 Review draft against current revision
               </Button>
@@ -215,7 +219,8 @@ export function BudgetModeControl() {
       {change.change ? (
         <div className="mt-3 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
           <p role="status">
-            <strong className="text-fg">{humanizeToken(change.change.receipt.status)}</strong> · {change.change.message}
+            <strong className="text-fg">{presentChangeStatusLabel(change.change.receipt.status)}</strong> ·{" "}
+            {change.change.message}
           </p>
           {change.change.error ? (
             <p role="alert" className="mt-1 text-status-failed">

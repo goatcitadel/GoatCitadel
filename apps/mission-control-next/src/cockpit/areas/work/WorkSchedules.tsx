@@ -225,7 +225,7 @@ export function WorkSchedules() {
         setSelectedId(null, "Schedule deleted.");
         setNotice("Schedule deleted.");
       } else if (receipt.kind === "run") {
-        setNotice(`Run request acknowledged as ${receipt.run.runId}. Check Work for its outcome.`);
+        setNotice("Run request acknowledged. Check Work for its outcome.");
       } else {
         setNotice(receipt.kind === "pause" ? "Schedule paused." : "Schedule resumed.");
       }
@@ -377,7 +377,7 @@ export function WorkSchedules() {
           />
         )
       ) : null}
-      <SchedulerReviewQueue />
+      <SchedulerReviewQueue scheduleName={(jobId) => schedules.data?.items.find((job) => job.jobId === jobId)?.name} />
     </section>
   );
 }

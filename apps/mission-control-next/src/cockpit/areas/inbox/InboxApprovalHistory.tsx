@@ -4,17 +4,23 @@ import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { fetchApprovals } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { hasRecoveryLinkage } from "@goatcitadel/mission-control-shared/content/approval-helpers";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+// Approval kinds are open strings (tool ids, "code_mode.run"), so they keep the generic humanizer.
+import { humanizeToken, presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
-import { approvalCreatedLabel } from "./approval-preview";
 import { approvalOutcomeLabel, approvalResolutionLine } from "./approval-settlement";
 import { Button } from "../../ui/Button";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
 import { WindowedRecordList } from "../../ui/WindowedRecordList";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 
 type View = "all" | "recovery" | ApprovalRequest["status"];
+function historyViewLabel(view: View): string {
+  if (view === "all") return "All records";
+  if (view === "recovery") return "Recovery";
+  return presentApprovalStatus(view).label;
+}
 export function InboxApprovalHistory({ workspaceId }: { workspaceId: string }) {
   const access = useProjectAccess(workspaceId);
   return <ScopedHistory key={access.identity} workspaceId={workspaceId} identity={access.identity} />;
@@ -148,7 +154,7 @@ function ScopedHistory({ workspaceId, identity }: { workspaceId: string; identit
             >
               {(["all", "pending", "approved", "rejected", "edited", "recovery"] as const).map((value) => (
                 <option key={value} value={value}>
-                  {value === "all" ? "All records" : humanizeToken(value)}
+                  {historyViewLabel(value)}
                 </option>
               ))}
             </select>
@@ -174,20 +180,21 @@ function ScopedHistory({ workspaceId, identity }: { workspaceId: string; identit
                   {" · "}
                   {approvalOutcomeLabel(record)}
                   {" · "}
-                  {approvalCreatedLabel(record.createdAt)}
+                  <TimeText value={record.createdAt} />
                 </p>
                 {approvalResolutionLine(record) ? (
                   <p className="text-sm text-fg-secondary">{approvalResolutionLine(record)}</p>
                 ) : null}
                 <Button
                   className="justify-self-start"
-                  aria-label={`Inspect decision ${record.approvalId}`}
+                  aria-label={`Inspect decision: ${record.explanation?.summary || humanizeToken(record.kind)}`}
                   onClick={() => inspect(record.approvalId)}
                 >
                   Inspect decision
                 </Button>
                 <TechnicalDetails>
                   <p className="break-all">Approval {record.approvalId}</p>
+                  {record.resolvedBy ? <p className="break-all">Actor {record.resolvedBy}</p> : null}
                 </TechnicalDetails>
               </article>
             )}

@@ -5,12 +5,13 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useState } from "react";
 import { ChatApprovalRenderer } from "./ChatApprovalRenderer";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
 import { ChatPendingQuestion } from "./ChatPendingQuestion";
+import { presentApprovalAction } from "./chat-vocabulary";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 
 type Blockers = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -80,9 +81,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <h3 className="font-display font-semibold text-fg">Approval needed</h3>
-              <p className="mt-1 text-fg-secondary">
-                {approval.toolName || (approval.kind ? humanizeToken(approval.kind) : "Action request")}
-              </p>
+              <p className="mt-1 text-fg-secondary">{presentApprovalAction(approval.toolName, approval.kind)}</p>
             </div>
             {approval.riskLevel ? <RiskBadge risk={approval.riskLevel} /> : null}
           </div>
@@ -99,6 +98,15 @@ export function ChatBlockers({ props }: { props: Blockers }) {
             </details>
           ) : null}
           {expiry ? <p className="mt-2 text-xs text-fg-muted">{expiry}</p> : null}
+          {approval.toolName || approval.kind ? (
+            <TechnicalDetails label="Action technical details">
+              <p className="font-mono text-xs wrap-anywhere">
+                {[approval.toolName && `Tool: ${approval.toolName}`, approval.kind && `Kind: ${approval.kind}`]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            </TechnicalDetails>
+          ) : null}
           {notice ? <p role="status">{notice}</p> : null}
           <ChatApprovalRenderer
             approvalId={approval.approvalId}

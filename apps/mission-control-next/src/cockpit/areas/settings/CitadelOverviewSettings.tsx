@@ -1,9 +1,18 @@
 import { useId, useState } from "react";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import {
+  presentChamberSensitivity,
+  presentCitadelKind,
+  presentCitadelLifecycle,
+  presentGatehouseExternalWrites,
+  presentGatehouseSharing,
+  presentModelPolicy,
+  presentRiskPosture,
+} from "./citadel-vocabulary";
 import { useCitadelOverview } from "../../../features/native-routes/library/use-citadel-overview";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { CitadelBrief } from "./CitadelBrief";
 import { TemplateCard, TemplateContents } from "./CitadelTemplateCard";
 
@@ -81,9 +90,9 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
                 <h4 className="font-medium text-fg">Charter</h4>
                 <p className="break-words text-sm text-fg">{charter.purpose}</p>
                 <p className="text-xs text-fg-muted">
-                  {humanizeToken(charter.kind)} · {humanizeToken(charter.riskPosture)} ·{" "}
-                  {humanizeToken(charter.modelPolicyDefault)} ·{" "}
-                  {humanizeToken(state.snapshot.record?.lifecycleStatus ?? "active")}
+                  {presentCitadelKind(charter.kind)} · {presentRiskPosture(charter.riskPosture)} ·{" "}
+                  {presentModelPolicy(charter.modelPolicyDefault)} ·{" "}
+                  {presentCitadelLifecycle(state.snapshot.record?.lifecycleStatus ?? "active")}
                 </p>
                 <dl className="space-y-2 text-sm text-fg-secondary">
                   {(["goals", "boundaries", "successDefinition"] as const).map((field) => (
@@ -117,12 +126,11 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
                       <li key={chamber.chamberId} className="rounded-md border border-line-subtle bg-sunken p-3">
                         <p className="break-words text-sm font-medium text-fg">{chamber.name}</p>
                         <p className="text-xs text-fg-muted">
-                          {humanizeToken(chamber.sensitivity)} · {chamber.sealed ? "Sealed" : "Unsealed"}
+                          {presentChamberSensitivity(chamber.sensitivity)} · {chamber.sealed ? "Sealed" : "Unsealed"}
                         </p>
-                        <details className="mt-1 text-xs text-fg-muted">
-                          <summary className="cursor-pointer">Chamber identity</summary>
-                          <p className="break-all">{chamber.chamberId}</p>
-                        </details>
+                        <TechnicalDetails label="Chamber identity">
+                          <p className="break-all font-mono text-xs">{chamber.chamberId}</p>
+                        </TechnicalDetails>
                       </li>
                     ))}
                   </ul>
@@ -140,10 +148,10 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
               state.gatehouse ? (
                 <dl className="grid gap-3 text-sm sm:grid-cols-2">
                   {[
-                    ["Risk posture", humanizeToken(state.gatehouse.riskPosture)],
-                    ["Model policy", humanizeToken(state.gatehouse.modelPolicyDefault)],
-                    ["Sharing", humanizeToken(state.gatehouse.sharingDefault)],
-                    ["External writes", humanizeToken(state.gatehouse.externalWritesDefault)],
+                    ["Risk posture", presentRiskPosture(state.gatehouse.riskPosture)],
+                    ["Model policy", presentModelPolicy(state.gatehouse.modelPolicyDefault)],
+                    ["Sharing", presentGatehouseSharing(state.gatehouse.sharingDefault)],
+                    ["External writes", presentGatehouseExternalWrites(state.gatehouse.externalWritesDefault)],
                     ["Wards", String(state.gatehouse.wardCount)],
                     ["Sealed Chambers", String(state.gatehouse.sealedChamberCount)],
                   ].map(([label, value]) => (

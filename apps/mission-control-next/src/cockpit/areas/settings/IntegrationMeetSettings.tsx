@@ -4,6 +4,10 @@ import { MEET_OWNER_BOUNDARY } from "../../../features/native-routes/settings/se
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { integrationInputClass } from "./IntegrationFormFields";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+import { MEET_SESSION_STATE_LABELS } from "./integration-vocabulary";
 
 export function IntegrationMeetSettings({ owner: s }: { owner: IntegrationSettingsOwner }) {
   const [limit, setLimit] = useState(10);
@@ -89,16 +93,20 @@ export function IntegrationMeetSettings({ owner: s }: { owner: IntegrationSettin
             <li key={session.sessionId} className="rounded-md border border-line-subtle p-3">
               <h5 className="break-words text-sm font-semibold">{session.displayName || session.meetingUrl}</h5>
               <p className="text-sm text-fg-secondary">
-                Recorded state: {session.state} · {session.transcript.length} transcript chunks
+                Recorded state: {MEET_SESSION_STATE_LABELS[session.state] ?? "Unknown"} ·{" "}
+                {plural(session.transcript.length, "transcript chunk")}
               </p>
               {session.failureReason ? (
                 <p className="break-words text-sm text-status-waiting">{session.failureReason}</p>
               ) : null}
               <details className="mt-2 text-sm">
                 <summary className="cursor-pointer">Meeting record and handoff</summary>
-                <p className="mt-2 break-all">
-                  Record {session.sessionId} · Updated {session.updatedAt}
+                <p className="mt-2">
+                  <TimeText prefix="Updated" value={session.updatedAt} />
                 </p>
+                <TechnicalDetails>
+                  <p className="break-all font-mono text-xs">Record {session.sessionId}</p>
+                </TechnicalDetails>
                 {session.consultHandoff ? (
                   <>
                     <p>Chat handoff: {session.consultHandoff.handoffId}</p>

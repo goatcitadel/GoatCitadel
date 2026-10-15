@@ -1,6 +1,7 @@
 import { NOTIFICATION_EVENT_TYPES, type NotificationTargetKind } from "@goatcitadel/contracts";
 import type { NotificationRoutingOwner } from "../../../features/native-routes/settings/sections/use-notification-routing";
 import { integrationInputClass } from "./IntegrationFormFields";
+import { INTEGRATION_CONNECTION_STATUS_LABELS } from "./settings-vocabulary";
 
 export function NotificationRoutingFields({ owner: s }: { owner: NotificationRoutingOwner }) {
   return (
@@ -47,7 +48,7 @@ export function NotificationRoutingFields({ owner: s }: { owner: NotificationRou
                 <option value="">Choose an enabled channel</option>
                 {s.channels.map((item) => (
                   <option key={item.connectionId} value={item.connectionId}>
-                    {item.label} · {item.status}
+                    {item.label} · {INTEGRATION_CONNECTION_STATUS_LABELS[item.status] ?? "Unknown"}
                   </option>
                 ))}
               </select>

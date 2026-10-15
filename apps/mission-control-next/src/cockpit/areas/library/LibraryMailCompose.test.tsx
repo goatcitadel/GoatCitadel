@@ -114,7 +114,7 @@ it("shows the exact Gateway draft, its scope and consequences, and Cancel reques
     "b@example.test",
     "c@example.test",
     "Quarterly status",
-    "Workspace one",
+    "This workspace",
     "No attachments",
     "does not send this message",
     "Delivery is never confirmed",

@@ -12,7 +12,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
   resolveApproval: api.resolve,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({ fetchDurableRun: api.run }));
-vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({fetchApprovalReplay:api.replay,fetchRuntimeLifecycle:api.lifecycle,fetchDurableRun:api.run,resolveApproval:api.resolve}));
+vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  fetchApprovalReplay: api.replay,
+  fetchRuntimeLifecycle: api.lifecycle,
+  fetchDurableRun: api.run,
+  resolveApproval: api.resolve,
+}));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "active" }),
 }));
@@ -67,20 +72,40 @@ it("keeps the current canonical decision and linked execution visible after leav
   const settled = { ...approval, status: "approved", followUp: { status: "completed" } };
   api.read.mockResolvedValue(settled);
   api.replay.mockResolvedValue({ approval: settled, effects: [], events: [], durableRunId: "wait" });
-  api.lifecycle.mockResolvedValue({approval:settled,canonical:{approvalId:"a",runId:"original-run"},turns:[]});
-  api.run.mockImplementation(async id => id === "wait" ? {runId:"wait",workflowKey:"approval.wait",payload:{approvalId:"a"},status:"completed"} : {runId:"original-run",workflowKey:"orchestration.plan.execute",payload:{workspaceId:"active"},status:"completed"});
+  api.lifecycle.mockResolvedValue({
+    approval: settled,
+    canonical: { approvalId: "a", runId: "original-run" },
+    turns: [],
+  });
+  api.run.mockImplementation(async (id) =>
+    id === "wait"
+      ? { runId: "wait", workflowKey: "approval.wait", payload: { approvalId: "a" }, status: "completed" }
+      : {
+          runId: "original-run",
+          workflowKey: "orchestration.plan.execute",
+          payload: { workspaceId: "active" },
+          status: "completed",
+        },
+  );
   // InboxArea switches to LinkedApproval when the refreshed pending projection removes this selection.
   await render(false);
-  await vi.waitFor(() => expect(host.textContent).toContain("Original linked work: completed"));
-  expect(host.textContent).toContain("Decision recorded: approved");
+  await vi.waitFor(() => expect(host.textContent).toContain("Original linked work: Done"));
+  expect(host.textContent).toContain("Decision recorded: Approved");
   expect(host.textContent).not.toContain("requires the full approval view");
   expect(api.read).toHaveBeenCalledWith("a", expect.objectContaining({ workspaceId: "active" }));
   expect(api.replay).toHaveBeenCalledWith("a");
   expect(api.run).toHaveBeenCalledWith("original-run");
   expect(api.resolve).not.toHaveBeenCalled();
-  expect(host.textContent).toContain("Approval wait settlement: completed");
-  api.lifecycle.mockResolvedValue({approval:settled,canonical:{approvalId:"a",runId:"wait"},resolution:{runIdSource:"approval_wait_run"},turns:[]});
-  await act(async()=>{await client.invalidateQueries({queryKey:["approval-settlement"]});});
-  await vi.waitFor(()=>expect(host.textContent).toContain("No original durable execution was returned"));
-  expect(host.textContent).not.toContain("Original linked work: completed");
+  expect(host.textContent).toContain("Approval wait settlement: Done");
+  api.lifecycle.mockResolvedValue({
+    approval: settled,
+    canonical: { approvalId: "a", runId: "wait" },
+    resolution: { runIdSource: "approval_wait_run" },
+    turns: [],
+  });
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: ["approval-settlement"] });
+  });
+  await vi.waitFor(() => expect(host.textContent).toContain("No original durable execution was returned"));
+  expect(host.textContent).not.toContain("Original linked work: Done");
 });

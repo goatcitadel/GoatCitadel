@@ -5,6 +5,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
+import { presentCodeRunStatus } from "./inbox-vocabulary";
 export function ApprovalCodeOutcome({ approval, workspaceId }: { approval: ApprovalRequest; workspaceId: string }) {
   const access = useProjectAccess(workspaceId),
     runId = typeof approval.payload.runId === "string" ? approval.payload.runId : undefined;
@@ -42,7 +43,7 @@ export function ApprovalCodeOutcome({ approval, workspaceId }: { approval: Appro
       ) : query.data ? (
         <>
           <p role="status">
-            Code work: {query.data.status.replaceAll("_", " ")}. {query.data.error}
+            Code work: {presentCodeRunStatus(query.data.status).label}. {query.data.error}
           </p>
           <p>Approval does not by itself confirm completion.</p>
           {query.data.stdoutPreview ? (

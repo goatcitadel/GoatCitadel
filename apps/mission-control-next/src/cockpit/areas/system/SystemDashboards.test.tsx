@@ -268,20 +268,11 @@ describe("saved board details", () => {
       expect(node).toBeDefined();
       return node!;
     });
-    for (const text of [
-      "Board ID",
-      "board-1",
-      "Revision",
-      "3",
-      "Status",
-      "Archived",
-      "Created by",
-      "operator",
-      "Last updated by",
-      "operator-2",
-      "Archived by",
-    ])
+    for (const text of ["Revision", "3", "Status", "Archived", "Created", "Last updated"])
       expect(details.textContent).toContain(text);
+    // Board and actor IDs stay in technical details, which are off by default.
+    expect(details.textContent).not.toContain("board-1");
+    expect(details.textContent).not.toContain("operator-2");
     expect(details.textContent).toContain("A saved board is a layout only");
     expect(details.textContent).not.toContain("test-hash");
   });

@@ -47,7 +47,7 @@ describe("system health reads", () => {
     const check = deriveSystemHealthChecks(next, null).find((item) => item.id === "channels");
     expect(check?.status).toEqual({ label: "Needs review", tone: "waiting" });
     expect(check?.detail).toContain("1 enabled channel is not ready");
-    expect(check?.detail).toContain("Retained observation is stale (last observed channels:");
+    expect(check?.detail).toContain("Retained observation is stale (last observed Channels:");
   });
   it("the digest makes exactly four reads and defers channels and workers", async () => {
     const digest = await loadSystemHealthDigest();
@@ -79,8 +79,14 @@ describe("system health reads", () => {
     api.fetchHealthSummary.mockRejectedValue(new TypeError("Failed to fetch"));
     api.fetchNpuStatus.mockResolvedValue({ enabled: true, healthy: true });
     const failed = await loadSystemHealthDigest(first);
-    expect(failed.summary).toMatchObject({ state: "unavailable", retryable: true,
-      lastKnown: { value: { ok: true }, observedAt: first.summary.state === "current" ? first.summary.observedAt : undefined } });
+    expect(failed.summary).toMatchObject({
+      state: "unavailable",
+      retryable: true,
+      lastKnown: {
+        value: { ok: true },
+        observedAt: first.summary.state === "current" ? first.summary.observedAt : undefined,
+      },
+    });
     expect(failed.npu).toMatchObject({ state: "current", value: { enabled: true } });
     api.fetchHealthSummary.mockResolvedValue({ recovered: true });
     const recovered = await loadSystemHealthDigest(failed);
@@ -89,7 +95,9 @@ describe("system health reads", () => {
   });
 
   it.each([401, 403])("does not repeat a permanently denied source %s while other sources refresh", async (status) => {
-    api.fetchRemoteWorkerRegistry.mockRejectedValue(new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/workers", status }));
+    api.fetchRemoteWorkerRegistry.mockRejectedValue(
+      new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/workers", status }),
+    );
     const first = await loadSystemHealthSources("w");
     const next = await loadSystemHealthSources("w", first);
     expect(api.fetchRemoteWorkerRegistry).toHaveBeenCalledTimes(1);
@@ -97,7 +105,9 @@ describe("system health reads", () => {
     expect(next.workers).toMatchObject({ state: "unavailable", retryable: false });
   });
   it("keeps denied channel runtime reads suppressed without suppressing the connection directory", async () => {
-    api.fetchChannelRuntimeStatus.mockRejectedValue(new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/channels/c1/runtime", status: 403 }));
+    api.fetchChannelRuntimeStatus.mockRejectedValue(
+      new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/channels/c1/runtime", status: 403 }),
+    );
     const first = await loadSystemHealthSources("w");
     await loadSystemHealthSources("w", first);
     expect(api.fetchChannelRuntimeStatus).toHaveBeenCalledTimes(1);

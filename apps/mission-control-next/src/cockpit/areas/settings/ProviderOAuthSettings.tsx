@@ -3,6 +3,7 @@ import type { useProviderOAuthFlow } from "../../../features/native-routes/setti
 import type { useProviderCodexSetup } from "../../../features/native-routes/settings/sections/use-provider-codex-setup";
 import { Button } from "../../ui/Button";
 import { ProviderChangeStatus } from "./ProviderChangeStatus";
+import { presentChangeStatusLabel } from "./settings-vocabulary";
 
 export function ProviderOAuthSettings({
   oauth,
@@ -90,7 +91,7 @@ export function ProviderOAuthSettings({
       {plan ? (
         <div className="space-y-2 rounded-md border border-line p-3 text-sm text-fg-secondary">
           <p role="status">
-            <strong>{plan.status.replaceAll("_", " ")}</strong> · {plan.result?.summary ?? plan.summary}
+            <strong>{presentChangeStatusLabel(plan.status)}</strong> · {plan.result?.summary ?? plan.summary}
           </p>
           <div className="flex flex-wrap gap-2">
             {plan.requiredAction ? (

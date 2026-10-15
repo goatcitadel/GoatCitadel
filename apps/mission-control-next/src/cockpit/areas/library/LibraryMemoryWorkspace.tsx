@@ -10,6 +10,8 @@ import { Field } from "../../ui/Field";
 import { loadLibraryResources } from "./library-resources";
 import { LibraryMemoryEditor } from "./LibraryMemoryEditor";
 import { LibraryMemoryProposals } from "./LibraryMemoryProposals";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { memoryNamespaceLabel, memoryScopeLabel, presentMemoryLifecycle } from "./library-vocabulary";
 
 const Diagnostics = lazy(() =>
   import("./LibraryMemoryDiagnostics").then((module) => ({ default: module.LibraryMemoryDiagnostics })),
@@ -120,7 +122,9 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
                   [],
               ),
             ].map((value) => (
-              <option key={value}>{value}</option>
+              <option key={value} value={value}>
+                {memoryNamespaceLabel(value)}
+              </option>
             ))}
           </select>
         )}
@@ -185,12 +189,17 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
                 {resource.item.title}
               </label>
               <p className="text-sm text-fg-secondary">
-                {resource.item.lifecycleState}
+                {presentMemoryLifecycle(resource.item.lifecycleState).label}
                 {" · "}
-                {resource.item.namespace}
+                {memoryNamespaceLabel(resource.item.namespace)}
                 {" · "}
-                {resource.item.workspaceId ?? String(resource.item.metadata.workspaceId ?? "Global")}
+                {memoryScopeLabel(resource.item, workspaceId)}
               </p>
+              <TechnicalDetails label="Memory identifiers">
+                <p>Item ID: {resource.item.itemId}</p>
+                <p>Namespace: {resource.item.namespace}</p>
+                <p>Owner: {String(resource.item.workspaceId ?? resource.item.metadata.workspaceId ?? "global")}</p>
+              </TechnicalDetails>
               <Button size="sm" onClick={() => select(resource.item.itemId)}>
                 Open {resource.item.title}
               </Button>

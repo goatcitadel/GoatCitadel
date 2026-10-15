@@ -1,6 +1,11 @@
 import { useId } from "react";
 import type { CitadelBlueprint } from "@goatcitadel/contracts";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import {
+  presentChamberSensitivity,
+  presentCitadelKind,
+  presentModelPolicy,
+  presentRiskPosture,
+} from "./citadel-vocabulary";
 import { useCitadelBlueprint, parseBlueprint } from "../../../features/native-routes/library/use-citadel-blueprint";
 import {
   buildBlueprintProofItems,
@@ -242,14 +247,14 @@ function BlueprintSummary({ blueprint }: { blueprint: CitadelBlueprint }) {
       <p>{blueprint.metadata?.description}</p>
       <p>{blueprint.charter?.purpose}</p>
       <p>
-        {humanizeToken(blueprint.charter?.kind)} · {humanizeToken(blueprint.charter?.riskPosture)} ·{" "}
-        {humanizeToken(blueprint.charter?.modelPolicyDefault)}
+        {presentCitadelKind(blueprint.charter?.kind)} · {presentRiskPosture(blueprint.charter?.riskPosture)} ·{" "}
+        {presentModelPolicy(blueprint.charter?.modelPolicyDefault)}
       </p>
       <p>{blueprint.chambers?.length ?? 0} Chambers will be added.</p>
       <ul className="space-y-1">
         {blueprint.chambers?.slice(0, 20).map((chamber, index) => (
           <li key={index} className="break-words">
-            {chamber.name} · {humanizeToken(chamber.sensitivity)} · {chamber.sealed ? "Sealed" : "Unsealed"}
+            {chamber.name} · {presentChamberSensitivity(chamber.sensitivity)} · {chamber.sealed ? "Sealed" : "Unsealed"}
           </li>
         ))}
       </ul>

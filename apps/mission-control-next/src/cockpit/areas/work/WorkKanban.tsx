@@ -7,19 +7,21 @@ import type { NativeRoutePagesProps } from "../../../features/native-routes/type
 import { KanbanRoutePage } from "../../../features/native-routes/ops/KanbanRoutePage";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
 import { WorkArchive } from "./WorkArchive";
 
 /** Reuse the revision-aware action owner and its self-contained native styles. */
 export function WorkKanban() {
   const { activeWorkspaceId, activeCitadelId, setActiveWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
+  const workspaceLabel = useActiveWorkspaceLabel();
   const location = useCockpitRoute();
   const route = parseAppRoute(new URL("/ops/kanban" + location.search + location.hash, "http://cockpit.invalid"));
   const taskId = new URLSearchParams(location.search).get("taskId");
   const access = useProjectAccess(JSON.stringify(["work-kanban", activeCitadelId, workspaceId, taskId]));
   const props: NativeRoutePagesProps = {
     activeWorkspaceId: workspaceId,
-    activeWorkspaceName: workspaceId,
+    activeWorkspaceName: workspaceLabel,
     activeCitadelId: activeCitadelId ?? undefined,
     pendingApprovals: 0,
     setActiveWorkspaceId,

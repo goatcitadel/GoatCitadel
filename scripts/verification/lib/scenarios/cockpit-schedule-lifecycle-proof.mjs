@@ -174,17 +174,24 @@ export async function runCockpitScheduleLifecycleProof({
           await page.getByRole("button", { name: "New schedule", exact: true }).click();
           const draftForm = page.getByRole("form", { name: "New schedule", exact: true });
           const scheduleDraftProof = await runWorkDraftLeaveProof({
-            page, form: draftForm, label: "New schedule",
-            fields: [{ label: "Name", value: "Unsent schedule " + suffix },
+            page,
+            form: draftForm,
+            label: "New schedule",
+            fields: [
+              { label: "Name", value: "Unsent schedule " + suffix },
               { label: "Cron schedule", value: "0 12 * * 1 UTC" },
-              { label: "Action", value: "cost_report", select: true }],
+              { label: "Action", value: "cost_report", select: true },
+            ],
             clearedFields: { Name: "", "Cron schedule": "0 9 * * *", Action: "task" },
-            destinationLink: page.getByRole("navigation", { name: "Work views", exact: true })
+            destinationLink: page
+              .getByRole("navigation", { name: "Work views", exact: true })
               .getByRole("link", { name: "History", exact: true }),
             destinationPath: "/work/history?shell=cockpit",
             destinationReady: () => page.getByRole("heading", { name: "Work history", exact: true }).waitFor(),
             reopen: () => page.getByRole("button", { name: "New schedule", exact: true }).click(),
-            selection, writes, documentCount: () => navigations,
+            selection,
+            writes,
+            documentCount: () => navigations,
             capture: (name, target) => capture("schedule-create-" + name, target),
           });
           assert.deepEqual(await read(seed.jobId), seed);
@@ -233,7 +240,7 @@ export async function runCockpitScheduleLifecycleProof({
             body: { expectedRevision: seed.revision, description: "Concurrent fixture metadata edit" },
           });
           const beforeStale = writes.length;
-          await detail.getByRole("button", { name: "Confirm pause", exact: true }).click();
+          await detail.getByRole("button", { name: "Pause schedule", exact: true }).click();
           await page
             .getByText(/This schedule changed during review/)
             .first()
@@ -245,7 +252,7 @@ export async function runCockpitScheduleLifecycleProof({
           stage = "pause and resume with exact CAS and independent readback";
           await detail.getByRole("button", { name: "Pause", exact: true }).click();
           let changed = await responseFor("POST", `${routeFor(seed.jobId)}/pause`, () =>
-            detail.getByRole("button", { name: "Confirm pause", exact: true }).click(),
+            detail.getByRole("button", { name: "Pause schedule", exact: true }).click(),
           );
           let owner = await read(seed.jobId);
           assertScheduleToggle({ before: current, enabled: false, ...changed, owner });
@@ -254,7 +261,7 @@ export async function runCockpitScheduleLifecycleProof({
           await capture("paused", detail);
           await detail.getByRole("button", { name: "Resume", exact: true }).click();
           changed = await responseFor("POST", `${routeFor(seed.jobId)}/start`, () =>
-            detail.getByRole("button", { name: "Confirm resume", exact: true }).click(),
+            detail.getByRole("button", { name: "Resume schedule", exact: true }).click(),
           );
           owner = await read(seed.jobId);
           assertScheduleToggle({ before: current, enabled: true, ...changed, owner });
@@ -276,7 +283,7 @@ export async function runCockpitScheduleLifecycleProof({
           };
           await page.route(`**${routeFor(seed.jobId)}`, holdGet, { times: 1 });
           await detail.getByRole("button", { name: "Run now", exact: true }).click();
-          await detail.getByRole("button", { name: "Confirm run", exact: true }).click();
+          await detail.getByRole("button", { name: "Run schedule now", exact: true }).click();
           await observed;
           await page
             .getByRole("navigation", { name: "Work views", exact: true })
@@ -311,7 +318,7 @@ export async function runCockpitScheduleLifecycleProof({
             { times: 1 },
           );
           await detail.getByRole("button", { name: "Pause", exact: true }).click();
-          await detail.getByRole("button", { name: "Confirm pause", exact: true }).click();
+          await detail.getByRole("button", { name: "Pause schedule", exact: true }).click();
           await page
             .getByText(/action outcome is unconfirmed/)
             .first()

@@ -60,3 +60,36 @@ it("does not request the queue when the settings refresh fails, even though the 
 
   expect(fetchCronReviewQueue).toHaveBeenCalledTimes(1);
 });
+
+it("names a flagged run in plain words and keeps job and run ids out of the primary text", async () => {
+  vi.mocked(fetchSettings).mockResolvedValue({ features: { cronReviewQueueV1Enabled: true } } as Awaited<
+    ReturnType<typeof fetchSettings>
+  >);
+  vi.mocked(fetchCronReviewQueue).mockResolvedValue({
+    items: [
+      {
+        itemId: "item-a",
+        jobId: "job-nightly-7f3a",
+        runId: "cron-run-9c1d",
+        severity: "high",
+        status: "open",
+        summary: { trigger: "scheduled_due", childDurableRunId: "durable-1234", childDurableStatus: "dead_lettered" },
+        createdAt: "2026-10-14T09:00:00.000Z",
+        updatedAt: "2026-10-14T09:05:00.000Z",
+      },
+    ],
+  } as unknown as Awaited<ReturnType<typeof fetchCronReviewQueue>>);
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <SchedulerReviewQueue scheduleName={(jobId) => (jobId === "job-nightly-7f3a" ? "Nightly digest" : undefined)} />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).toContain("Nightly digest · Scheduled due"));
+  expect(container.textContent).toContain("High severity");
+  expect(container.textContent).toContain("Needs review");
+  expect(container.textContent).toContain("Child run: Failed · needs recovery.");
+  for (const raw of ["job-nightly-7f3a", "cron-run-9c1d", "durable-1234", "open", "2026-10-14T"])
+    expect(container.textContent).not.toContain(raw);
+});

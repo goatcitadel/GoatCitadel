@@ -15,6 +15,9 @@ import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { BROWSER_SESSION_EVENT } from "./system-vocabulary";
 import { handleEvidenceScrollKeyDown } from "../../ui/evidence-scroll";
 import { useLibraryOperation } from "../library/use-library-operation";
 import { BrowserSessionGrants, browserSessionOperationScope } from "./BrowserSessionGrants";
@@ -79,8 +82,8 @@ export function BrowserSessionDetail({
   if (record.workspaceId !== workspaceId)
     return (
       <Callout tone="warning">
-        This browser session belongs to {record.workspaceId ? `workspace ${record.workspaceId}` : "no workspace"}, not
-        workspace {workspaceId}. Switch workspace to manage it.
+        This browser session belongs to {record.workspaceId ? "another workspace" : "no workspace"}, not the selected
+        one. Switch workspace to manage it.
       </Callout>
     );
   return (
@@ -161,11 +164,13 @@ export function BrowserSessionDetail({
               <ol className="grid min-w-0 grid-cols-1 gap-2">
                 {events.data.map((event) => (
                   <li key={event.eventId} className="min-w-0 rounded-md border border-line p-2 text-sm wrap-anywhere">
-                    <p className="font-medium">{event.eventType.replaceAll("_", " ")}</p>
-                    <p className="text-fg-secondary">
-                      {[event.actorId, formatTime(event.createdAt)].filter(Boolean).join(" · ")}
-                    </p>
+                    <p className="font-medium">{BROWSER_SESSION_EVENT[event.eventType] ?? "Session event"}</p>
+                    <TimeText value={event.createdAt} className="text-fg-secondary" />
                     <p>{describeEventPayload(event)}</p>
+                    <TechnicalDetails label="Event record">
+                      <p>Actor {event.actorId ?? "not recorded"}</p>
+                      <p>Event {event.eventId}</p>
+                    </TechnicalDetails>
                   </li>
                 ))}
               </ol>
@@ -255,12 +260,12 @@ function SessionPosture({
       <dl className="grid min-w-0 grid-cols-1 gap-2 text-sm sm:grid-cols-2">
         <div>
           <dt className="font-medium">Workspace</dt>
-          <dd className="wrap-anywhere">{session.workspaceId}</dd>
+          <dd className="wrap-anywhere">This workspace</dd>
         </div>
         <div>
           <dt className="font-medium">Created</dt>
           <dd>
-            {formatTime(session.createdAt)} by {session.createdBy}
+            <TimeText value={session.createdAt} />
           </dd>
         </div>
         <div>
@@ -269,7 +274,7 @@ function SessionPosture({
         </div>
         <div>
           <dt className="font-medium">Closed</dt>
-          <dd>{formatTime(session.closedAt) ?? "Not closed"}</dd>
+          <dd>{session.closedAt ? <TimeText value={session.closedAt} /> : "Not closed"}</dd>
         </div>
       </dl>
       <p className="text-sm text-fg-secondary">
@@ -277,6 +282,8 @@ function SessionPosture({
       </p>
       <TechnicalDetails label="Session record">
         <p>Session {session.sessionId}</p>
+        <p>Workspace {session.workspaceId}</p>
+        <p>Created by {session.createdBy}</p>
       </TechnicalDetails>
       {operation.locked && pending ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
       {outcome && !reviewOpen ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
@@ -303,13 +310,13 @@ function SessionPosture({
           }
         }}
         title="Review closing this session"
-        description={`Session ${session.label} · workspace ${workspaceId}.`}
+        description={`Session ${session.label} in this workspace.`}
       >
         <div className="grid min-w-0 grid-cols-1 gap-3 text-sm wrap-anywhere">
           <p>
-            Closes this session and revokes its {activeGrants.length} active grant{activeGrants.length === 1 ? "" : "s"}
-            . New tool access through this session is refused once it closes; calls already admitted are not
-            interrupted, and browser state is not cleared. A closed session cannot be reopened or receive new grants.
+            Closes this session and revokes its {plural(activeGrants.length, "active grant")}. New tool access through
+            this session is refused once it closes; calls already admitted are not interrupted, and browser state is not
+            cleared. A closed session cannot be reopened or receive new grants.
           </p>
           {outcome ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
           <div className="flex flex-wrap gap-2">

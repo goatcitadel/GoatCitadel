@@ -64,8 +64,13 @@ it("shows structured owner evidence and requires explicit review for a real test
   await act(async () => {
     root = create(<HooksSettings workspaceId="fixture" />);
   });
-  await act(async () => button("Observer · tool.call.after · Enabled").props.onClick());
+  await act(async () => button("Observer · After a tool call · Enabled").props.onClick());
   expect(text(root.root)).toContain("Keychain reference recorded");
+  expect(text(root.root)).toContain("Observe only");
+  expect(text(root.root)).toContain("Continue if the hook fails");
+  expect(text(root.root)).toContain("5 s");
+  expect(text(root.root)).not.toContain("tool.call.after");
+  expect(text(root.root)).not.toContain("2026-09-30T12:00:00Z");
   expect(text(root.root)).not.toContain("hidden-keychain-reference");
   expect(root.root.findAllByType("pre")).toHaveLength(0);
   await act(async () => button("Review real test delivery").props.onClick());
@@ -88,6 +93,13 @@ it("keeps new signing input out of review copy and out of a remounted native edi
     ["Signing secret", "synthetic-private-input"],
   ])
     await act(async () => root.root.findByProps({ "aria-label": name }).props.onChange({ target: { value } }));
+  const optionText = (label: string) =>
+    root.root
+      .findByProps({ "aria-label": label })
+      .findAllByType("option")
+      .map((option) => [option.props.value, text(option).trim()]);
+  expect(optionText("Lifecycle event")).toContainEqual(["tool.call.after", "After a tool call"]);
+  expect(optionText("Hook mode")).toContainEqual(["intercept", "Can block the action"]);
   await act(async () => button("Review hook registration").props.onClick());
   const review = root.root.findAllByType(Dialog).find((item) => item.props.title === "Register this hook?");
   expect(review?.props.description).not.toContain("synthetic-private-input");
@@ -110,7 +122,7 @@ it.each(["mutate", "intercept"] as const)("keeps %s delivery consequence styled 
   await act(async () => {
     root = create(<HooksSettings workspaceId="fixture" />);
   });
-  await act(async () => button("Observer · tool.call.before · Enabled").props.onClick());
+  await act(async () => button("Observer · Before a tool call · Enabled").props.onClick());
   await act(async () => button("Review real test delivery").props.onClick());
   const review = root.root.findAllByType(Dialog).find((item) => item.props.title === "Send a real hook test?");
   expect(review?.props.open).toBe(true);
@@ -122,7 +134,7 @@ it("keeps observer deletion explicitly dangerous", async () => {
   await act(async () => {
     root = create(<HooksSettings workspaceId="fixture" />);
   });
-  await act(async () => button("Observer · tool.call.after · Enabled").props.onClick());
+  await act(async () => button("Observer · After a tool call · Enabled").props.onClick());
   await act(async () => button("Review hook deletion").props.onClick());
   const review = root.root.findAllByType(Dialog).find((item) => item.props.open && item.props.title.includes("Delete"));
   expect(review).toBeDefined();

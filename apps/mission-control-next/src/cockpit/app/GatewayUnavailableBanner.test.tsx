@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { formatClockTime } from "@goatcitadel/mission-control-shared/content/format";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -61,7 +62,7 @@ describe("Gateway unavailable banner", () => {
       ),
     );
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
-      `Still unreachable · checked ${new Date(checkedAt).toLocaleTimeString()}`,
+      `Still unreachable · checked ${formatClockTime(checkedAt)}`,
     );
     expect(container.querySelector("button")?.getAttribute("aria-busy")).toBeNull();
   });

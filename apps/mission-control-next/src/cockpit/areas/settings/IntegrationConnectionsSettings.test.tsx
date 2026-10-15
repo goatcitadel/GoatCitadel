@@ -102,7 +102,7 @@ describe("native integration connections", () => {
     expect(modal().props.open).toBe(true);
     expect(modal().props.message).toContain("Personal Citadel policy applies");
     expect(modal().props.message).not.toContain("a".repeat(64));
-    expect(text(view.root.findByType("details"))).toContain("a".repeat(64));
+    expect(text(view.root)).not.toContain("a".repeat(64));
     expect(modal().props.className).toContain("grid-cols-1");
     expect(modal().props.message).toContain("runtime synchronization");
     expect(api.updateIntegrationConnection).not.toHaveBeenCalled();

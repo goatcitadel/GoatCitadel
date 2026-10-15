@@ -1,5 +1,5 @@
 import type { CitadelTemplateSnapshot } from "@goatcitadel/contracts";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { presentChamberSensitivity, presentModelPolicy, presentRiskPosture } from "./citadel-vocabulary";
 import { Button } from "../../ui/Button";
 
 export function TemplateCard({
@@ -33,14 +33,14 @@ export function TemplateContents({ template }: { template: CitadelTemplateSnapsh
         ["Goals", template.goals.join(" · ")],
         ["Boundaries", template.boundaries.join(" · ")],
         ["Success", template.successDefinition.join(" · ")],
-        ["Risk posture", humanizeToken(template.riskPosture ?? "balanced")],
-        ["Model policy", humanizeToken(template.modelPolicyDefault ?? "hybrid_guarded")],
+        ["Risk posture", presentRiskPosture(template.riskPosture ?? "balanced")],
+        ["Model policy", presentModelPolicy(template.modelPolicyDefault ?? "hybrid_guarded")],
         [
           "Chambers",
           template.chambers
             .map(
               (chamber) =>
-                `${chamber.name} (${humanizeToken(chamber.sensitivity ?? "private")}${chamber.sealed ? ", sealed" : ""})`,
+                `${chamber.name} (${presentChamberSensitivity(chamber.sensitivity ?? "private")}${chamber.sealed ? ", sealed" : ""})`,
             )
             .join(" · "),
         ],

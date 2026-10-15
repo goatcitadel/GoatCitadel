@@ -8,8 +8,10 @@ import { fetchMemoryItems } from "@goatcitadel/mission-control-shared/api/memory
 import { listNotes } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import { fetchChatGeneratedArtifacts } from "@goatcitadel/mission-control-shared/api/chat";
 import { fetchFilesList } from "@goatcitadel/mission-control-shared/api/operators-agents-files";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
-export { resourceTitle } from "./resource-title";
+import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
+import { resourceFolder } from "./resource-title";
+import { artifactKindLabel, memoryNamespaceLabel, noteLifecycleLabel, presentMemoryStatus } from "./library-vocabulary";
+export { resourceFolder, resourceTitle } from "./resource-title";
 
 export const RESOURCE_KINDS = ["memory", "notes", "files", "artifacts"] as const;
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
@@ -69,13 +71,26 @@ export function resourceId(resource: LibraryResource) {
 export function resourceDescription(resource: LibraryResource) {
   switch (resource.kind) {
     case "memory":
-      return `${humanizeToken(resource.item.namespace)} · ${humanizeToken(resource.item.status)} · ${memoryScope(resource.item) === undefined ? "Global memory" : "Workspace memory"}`;
+      return `${memoryNamespaceLabel(resource.item.namespace)} · ${presentMemoryStatus(resource.item.status).label} · ${memoryScope(resource.item) === undefined ? "Shared across workspaces" : "Workspace memory"}`;
     case "notes":
-      return `${humanizeToken(resource.item.lifecycleStatus)} · Revision ${resource.item.revision}`;
-    case "files":
-      return `${resource.item.size.toLocaleString()} bytes · Installation shared files`;
+      return `${noteLifecycleLabel(resource.item.lifecycleStatus)} · Version ${resource.item.revision}`;
+    case "files": {
+      const folder = resourceFolder(resource);
+      return `${folder ? `In ${folder} · ` : ""}${formatBytes(resource.item.size)} · Installation shared files`;
+    }
     case "artifacts":
-      return `${humanizeToken(resource.item.kind)} · Version ${resource.item.version}`;
+      return `${artifactKindLabel(resource.item.kind)} · Version ${resource.item.version}`;
+  }
+}
+/** When a resource last changed, for a `TimeText` beside it in lists and previews. */
+export function resourceTime(resource: LibraryResource): { label: string; value: string } {
+  switch (resource.kind) {
+    case "files":
+      return { label: "Modified", value: resource.item.modifiedAt };
+    case "artifacts":
+      return { label: "Created", value: resource.item.createdAt };
+    default:
+      return { label: "Updated", value: resource.item.updatedAt };
   }
 }
 export function resourceBinding(resource: LibraryResource) {
