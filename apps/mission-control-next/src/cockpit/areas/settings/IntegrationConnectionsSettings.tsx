@@ -56,7 +56,10 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
           availability still apply.
         </p>
       </header>
-      <Button aria-expanded={managementOpen} onClick={() => managementOpen ? leave.request(() => setManagementOpen(false)) : setManagementOpen(true)}>
+      <Button
+        aria-expanded={managementOpen}
+        onClick={() => (managementOpen ? leave.request(() => setManagementOpen(false)) : setManagementOpen(true))}
+      >
         {managementOpen ? "Hide connection management" : "Add and manage integrations"}
       </Button>
       {managementOpen ? <IntegrationManagementSettings workspaceId={workspaceId} /> : null}
@@ -182,7 +185,10 @@ function IntegrationRow({
           <p className="mt-1 text-sm text-fg-secondary">
             {connection.enabled ? "Enabled" : "Disabled"} · Connectivity unverified
           </p>
-          <p className="text-xs text-fg-muted">Configured status: {humanizeToken(connection.status)}. A saved status does not verify connectivity; run diagnostics in connection management.</p>
+          <p className="text-xs text-fg-muted">
+            Configured status: {humanizeToken(connection.status)}. A saved status does not verify connectivity; run
+            diagnostics in connection management.
+          </p>
           <p className="mt-1 break-words text-xs text-fg-muted">
             {connection.workspaceId ? "Workspace-bound connection" : "Unbound · Personal Citadel policy"}
           </p>

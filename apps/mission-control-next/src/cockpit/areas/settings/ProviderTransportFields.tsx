@@ -33,9 +33,9 @@ export function ProviderTransportFields({
         environment references; inline tokens and credentials are rejected. File paths refer to the Gateway host.
       </p>
       <p className="my-3 text-xs text-fg-muted">
-        Header values are write-only: the Gateway acknowledges accepted names and keeps saved values hidden.
-        Save public profile edits first, then review transport separately. The owner merges transport fields; clearing
-        an existing field is not a supported removal.
+        Header values are write-only: the Gateway acknowledges accepted names and keeps saved values hidden. Save public
+        profile edits first, then review transport separately. The owner merges transport fields; clearing an existing
+        field is not a supported removal.
       </p>
       <div className="space-y-3">
         <label className="block text-sm text-fg-secondary">

@@ -55,35 +55,56 @@ export function ThreadList({
             label="Recent conversations"
             threshold={100}
             bounded
-            scopeKey={JSON.stringify([[...new Set(sessions.map(session => session.workspaceId))].sort(), rail.historyView, rail.selectedProjectId, rail.selectedFolderId, rail.selectedTag, rail.search])}
+            scopeKey={JSON.stringify([
+              [...new Set(sessions.map((session) => session.workspaceId))].sort(),
+              rail.historyView,
+              rail.selectedProjectId,
+              rail.selectedFolderId,
+              rail.selectedTag,
+              rail.search,
+            ])}
             className="h-full min-h-0"
           >
             {(session) => (
               <div>
-              <button
-                type="button"
-                onClick={() => rail.onSelectSession(session.sessionId)}
-                aria-label={rail.renderSessionLabel(session.sessionId)}
-                aria-current={session.sessionId === rail.selectedSessionId ? "page" : undefined}
-                className="flex w-full items-start rounded-md p-2 text-left hover:bg-sunken aria-[current=page]:bg-sunken"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="line-clamp-2 break-words text-sm font-medium text-fg">{rail.renderSessionLabel(session.sessionId)}</span>
-                  <span className="block truncate text-xs text-fg-muted">
-                    {session.projectName ?? humanizeToken(session.lifecycleStatus)}
+                <button
+                  type="button"
+                  onClick={() => rail.onSelectSession(session.sessionId)}
+                  aria-label={rail.renderSessionLabel(session.sessionId)}
+                  aria-current={session.sessionId === rail.selectedSessionId ? "page" : undefined}
+                  className="flex w-full items-start rounded-md p-2 text-left hover:bg-sunken aria-[current=page]:bg-sunken"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="line-clamp-2 break-words text-sm font-medium text-fg">
+                      {rail.renderSessionLabel(session.sessionId)}
+                    </span>
+                    <span className="block truncate text-xs text-fg-muted">
+                      {session.projectName ?? humanizeToken(session.lifecycleStatus)}
+                    </span>
+                    <time dateTime={session.lastActivityAt} className="block text-xs text-fg-muted">
+                      {Number.isFinite(Date.parse(session.lastActivityAt))
+                        ? new Date(session.lastActivityAt).toLocaleString()
+                        : "Activity time unavailable"}
+                    </time>
+                    {session.lastMessagePreview ? (
+                      <span className="line-clamp-2 break-words text-xs text-fg-secondary">
+                        {session.lastMessagePreview}
+                      </span>
+                    ) : null}
+                    <ThreadRowStatus record={activity[session.sessionId]} />
                   </span>
-                  <time dateTime={session.lastActivityAt} className="block text-xs text-fg-muted">
-                    {Number.isFinite(Date.parse(session.lastActivityAt)) ? new Date(session.lastActivityAt).toLocaleString() : "Activity time unavailable"}
-                  </time>
-                  {session.lastMessagePreview ? <span className="line-clamp-2 break-words text-xs text-fg-secondary">{session.lastMessagePreview}</span> : null}
-                  <ThreadRowStatus record={activity[session.sessionId]} />
-                </span>
-              </button>
-              {session.searchHits?.map((hit) => <button key={hit.messageId} type="button"
-                onClick={() => rail.onSelectSession(session.sessionId, { searchHit: hit })}
-                className="block w-full rounded-md px-2 py-1 text-left text-xs text-fg-secondary hover:bg-sunken">
-                <span className="line-clamp-2">{hit.excerpt}</span><span className="text-accent">Open matching message</span>
-              </button>)}
+                </button>
+                {session.searchHits?.map((hit) => (
+                  <button
+                    key={hit.messageId}
+                    type="button"
+                    onClick={() => rail.onSelectSession(session.sessionId, { searchHit: hit })}
+                    className="block w-full rounded-md px-2 py-1 text-left text-xs text-fg-secondary hover:bg-sunken"
+                  >
+                    <span className="line-clamp-2">{hit.excerpt}</span>
+                    <span className="text-accent">Open matching message</span>
+                  </button>
+                ))}
               </div>
             )}
           </WindowedRecordList>

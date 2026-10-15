@@ -1,4 +1,9 @@
-import { useApprovalOperationAttempt, beginApprovalOperation, updateApprovalOperation, canReviewApprovalOperation } from "./approval-operation-attempts";
+import {
+  useApprovalOperationAttempt,
+  beginApprovalOperation,
+  updateApprovalOperation,
+  canReviewApprovalOperation,
+} from "./approval-operation-attempts";
 import { useState } from "react";
 import { resolveApprovalsBulk } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -17,7 +22,7 @@ function BulkReject({ onResolved }: { onResolved: () => void }) {
     [freshReview, setFreshReview] = useState(false);
   const attemptKey = JSON.stringify([access.presentationScope, "bulk-reject"]);
   const attempt = useApprovalOperationAttempt(attemptKey);
-  const outcome = attempt?.phase === "resolved" && freshReview ? "" : attempt?.message ?? "";
+  const outcome = attempt?.phase === "resolved" && freshReview ? "" : (attempt?.message ?? "");
   const canReview = canReviewApprovalOperation(attempt, "installation", true);
   async function reject() {
     if (review !== access.token || !access.current() || typed !== "reject all" || !canReview || outcome) return;
@@ -32,12 +37,22 @@ function BulkReject({ onResolved }: { onResolved: () => void }) {
         status: "pending",
         resolutionNote: "Bulk rejected from the approvals queue.",
       });
-      updateApprovalOperation(attemptKey, token, "resolved", `Rejected ${result.resolvedCount}. Skipped ${result.skippedCount}. Failed ${result.failedCount}.`);
+      updateApprovalOperation(
+        attemptKey,
+        token,
+        "resolved",
+        `Rejected ${result.resolvedCount}. Skipped ${result.skippedCount}. Failed ${result.failedCount}.`,
+      );
       if (access.current()) {
         onResolved();
       }
     } catch (cause) {
-      updateApprovalOperation(attemptKey, token, "uncertain", `Bulk rejection outcome is not confirmed. A history refresh cannot settle this request. ${describeApiError(cause).summary}`);
+      updateApprovalOperation(
+        attemptKey,
+        token,
+        "uncertain",
+        `Bulk rejection outcome is not confirmed. A history refresh cannot settle this request. ${describeApiError(cause).summary}`,
+      );
     } finally {
       if (access.current()) setBusy(false);
     }

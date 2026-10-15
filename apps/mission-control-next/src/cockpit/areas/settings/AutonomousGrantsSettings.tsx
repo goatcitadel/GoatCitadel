@@ -21,7 +21,10 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
   const [query, setQuery] = useState(""),
     [limit, setLimit] = useState(30);
   const base = getGatewayApiBaseUrl();
-  const snapshot = useQuery({ queryKey: ["settings", "autonomous-grants", base], queryFn: () => readAutonomousGrants() });
+  const snapshot = useQuery({
+    queryKey: ["settings", "autonomous-grants", base],
+    queryFn: () => readAutonomousGrants(),
+  });
   const control = useAutonomousGrantRevocation({ scope: workspaceId, reload: () => snapshot.refetch() });
   const { activeCitadelId } = useUiPreferences();
   const workspaceName = useWorkspaceNameLookup(activeCitadelId);

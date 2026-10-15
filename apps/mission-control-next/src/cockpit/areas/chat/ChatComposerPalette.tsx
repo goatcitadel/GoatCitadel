@@ -6,7 +6,13 @@ type PaletteProps = Pick<
   "commandSuggestions" | "commandIndex" | "composerPalette" | "onApplyDraftCommand" | "composerRef"
 >;
 
-export function ChatComposerPalette({ props, onSelect }: { props: PaletteProps; onSelect?: (item: PaletteProps["commandSuggestions"][number]) => void }) {
+export function ChatComposerPalette({
+  props,
+  onSelect,
+}: {
+  props: PaletteProps;
+  onSelect?: (item: PaletteProps["commandSuggestions"][number]) => void;
+}) {
   const palette = props.composerPalette;
   if (!palette?.globalOpen && props.commandSuggestions.length === 0) return null;
   const choose = (index: number) => {
@@ -23,9 +29,13 @@ export function ChatComposerPalette({ props, onSelect }: { props: PaletteProps; 
           Find a command, model, file, or variable
           <input
             autoFocus
-            role="combobox" aria-autocomplete="list" aria-expanded={true}
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={true}
             aria-controls="cockpit-composer-suggestions"
-            aria-activedescendant={props.commandSuggestions[props.commandIndex] ? `cockpit-suggestion-${props.commandIndex}` : undefined}
+            aria-activedescendant={
+              props.commandSuggestions[props.commandIndex] ? `cockpit-suggestion-${props.commandIndex}` : undefined
+            }
             value={palette.query}
             onChange={(event) => palette.onQueryChange(event.target.value)}
             onKeyDown={(event) => {
@@ -57,7 +67,12 @@ export function ChatComposerPalette({ props, onSelect }: { props: PaletteProps; 
           Searching…
         </p>
       ) : null}
-      <div id="cockpit-composer-suggestions" role="listbox" aria-label="Composer suggestions" className="mt-1 grid gap-0.5">
+      <div
+        id="cockpit-composer-suggestions"
+        role="listbox"
+        aria-label="Composer suggestions"
+        className="mt-1 grid gap-0.5"
+      >
         {props.commandSuggestions.map((item, index) => (
           <button
             type="button"

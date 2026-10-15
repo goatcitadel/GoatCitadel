@@ -46,7 +46,10 @@ export function ScopeSwitcher({
   useEffect(() => {
     if (open) {
       const requested = new URL(destination ?? window.location.href, window.location.origin).searchParams;
-      setTarget({ citadelId: requested.get("citadelId") || activeCitadelId, workspaceId: requested.get("workspaceId") || activeWorkspaceId });
+      setTarget({
+        citadelId: requested.get("citadelId") || activeCitadelId,
+        workspaceId: requested.get("workspaceId") || activeWorkspaceId,
+      });
     }
   }, [open, activeCitadelId, activeWorkspaceId, destination]);
   const owner = useCockpitScope(open, target, () => setOpen(false), destination);

@@ -13,7 +13,9 @@ export function ChatMobileConversationSelect({
   onOpenFilters: () => void;
 }) {
   const sessions = [...rail.missionSessions, ...(rail.externalSessions ?? [])];
-  const hits = sessions.flatMap((session) => (session.searchHits ?? []).map((hit) => ({ sessionId: session.sessionId, hit })));
+  const hits = sessions.flatMap((session) =>
+    (session.searchHits ?? []).map((hit) => ({ sessionId: session.sessionId, hit })),
+  );
   const selectedSessionId = sessions.some((item) => item.sessionId === rail.selectedSessionId)
     ? (rail.selectedSessionId ?? "")
     : "";
@@ -42,27 +44,33 @@ export function ChatMobileConversationSelect({
           Choose
         </option>
         <optgroup label="Conversations">
-        {[...rail.missionSessions, ...(rail.externalSessions ?? [])].map((session) => (
-          <option key={session.sessionId} value={session.sessionId}>
-            {rail.renderSessionLabel(session.sessionId)}
-          </option>
-        ))}
+          {[...rail.missionSessions, ...(rail.externalSessions ?? [])].map((session) => (
+            <option key={session.sessionId} value={session.sessionId}>
+              {rail.renderSessionLabel(session.sessionId)}
+            </option>
+          ))}
         </optgroup>
-        {hits.length ? <optgroup label="Matching messages">{hits.map((match, index) => <option key={`${match.sessionId}:${match.hit.messageId}`} value={`match:${index}`}>
-          {rail.renderSessionLabel(match.sessionId)} — {match.hit.excerpt} — Open matching message
-        </option>)}</optgroup> : null}
-        <optgroup label="Conversation actions">
-        {rail.historyView === "archived" ? (
-          <option value={MOBILE_SHOW_RECENT}>Show recent conversations</option>
-        ) : (
-          <option value={MOBILE_SHOW_ARCHIVED}>Show archived conversations</option>
-        )}
-        {rail.hasMoreSessions && rail.onLoadMoreSessions ? (
-          <option value={MOBILE_LOAD_MORE} disabled={rail.loadingMoreSessions}>
-            {rail.loadingMoreSessions ? "Loading conversations…" : "Load more conversations"}
-          </option>
+        {hits.length ? (
+          <optgroup label="Matching messages">
+            {hits.map((match, index) => (
+              <option key={`${match.sessionId}:${match.hit.messageId}`} value={`match:${index}`}>
+                {rail.renderSessionLabel(match.sessionId)} — {match.hit.excerpt} — Open matching message
+              </option>
+            ))}
+          </optgroup>
         ) : null}
-        <option value={MOBILE_FILTERS}>Filter conversations…</option>
+        <optgroup label="Conversation actions">
+          {rail.historyView === "archived" ? (
+            <option value={MOBILE_SHOW_RECENT}>Show recent conversations</option>
+          ) : (
+            <option value={MOBILE_SHOW_ARCHIVED}>Show archived conversations</option>
+          )}
+          {rail.hasMoreSessions && rail.onLoadMoreSessions ? (
+            <option value={MOBILE_LOAD_MORE} disabled={rail.loadingMoreSessions}>
+              {rail.loadingMoreSessions ? "Loading conversations…" : "Load more conversations"}
+            </option>
+          ) : null}
+          <option value={MOBILE_FILTERS}>Filter conversations…</option>
         </optgroup>
       </select>
     </label>
