@@ -72,7 +72,7 @@ export function hasUnsettledChatContextMutation(): boolean {
       const scope: unknown = JSON.parse(presentation[2]);
       if (Array.isArray(scope) && scope[0] === "chat-context") return true;
     } catch {
-      /* A different operation owner's key is outside this narrowly scoped guard. */
+      // Ignore keys from other operation owners: they are outside this narrowly scoped guard.
     }
   }
   return false;
