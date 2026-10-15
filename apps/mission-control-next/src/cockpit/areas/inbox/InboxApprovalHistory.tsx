@@ -153,7 +153,7 @@ function ScopedHistory({ workspaceId, identity }: { workspaceId: string; identit
                 next.set("historyView", event.target.value);
                 route.navigate(`/inbox?${next}${route.hash}`);
               }}
-              className="rounded-md border border-line bg-raised p-2"
+              className="rounded-md border border-line-control bg-raised p-2"
             >
               {(["all", "pending", "approved", "rejected", "edited", "recovery"] as const).map((value) => (
                 <option key={value} value={value}>

@@ -10,7 +10,7 @@ import { PermissionManagementReview } from "../../../features/native-routes/sett
 import type { PermissionManagementOperation } from "../../../features/native-routes/settings/permission-management-binding";
 import { Button } from "../../ui/Button";
 
-const inputClass = "mt-1 min-h-10 w-full rounded border border-line bg-canvas px-2 text-sm text-fg";
+const inputClass = "mt-1 min-h-10 w-full rounded border border-line-control bg-canvas px-2 text-sm text-fg";
 export function LocalOperatorOverrides({ workspaceId }: { workspaceId: string }) {
   const snapshot = useQuery({
     queryKey: ["settings", "local-operator-overrides", workspaceId],

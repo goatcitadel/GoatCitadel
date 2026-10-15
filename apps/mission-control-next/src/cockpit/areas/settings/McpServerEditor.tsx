@@ -13,7 +13,7 @@ import { McpDraftLeave } from "./McpDraftLeave";
 import { McpPolicyFields, McpPolicySummary } from "../../../features/native-routes/settings/McpPolicyFields";
 
 const fieldClass =
-  "mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-3 text-fg disabled:opacity-60";
+  "mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-fg disabled:opacity-60";
 const categories: McpServerRecord["category"][] = [
   "development",
   "browser",

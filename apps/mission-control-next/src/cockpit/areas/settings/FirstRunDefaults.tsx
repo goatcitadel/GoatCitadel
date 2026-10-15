@@ -59,7 +59,7 @@ export function FirstRunDefaults({ workspaceId }: { workspaceId: string }) {
         <label className="grid gap-1 text-sm text-fg-secondary">
           Tool approvals
           <select
-            className="min-h-10 rounded-md border border-line bg-sunken p-2 text-fg"
+            className="min-h-10 rounded-md border border-line-control bg-sunken p-2 text-fg"
             value={value.toolApprovalMode}
             onChange={(event) =>
               control.edit({ ...value, toolApprovalMode: normalizeToolApprovalMode(event.target.value) })
@@ -76,7 +76,7 @@ export function FirstRunDefaults({ workspaceId }: { workspaceId: string }) {
         <label className="grid gap-1 text-sm text-fg-secondary">
           Budget mode
           <select
-            className="min-h-10 rounded-md border border-line bg-sunken p-2 text-fg"
+            className="min-h-10 rounded-md border border-line-control bg-sunken p-2 text-fg"
             value={value.budgetMode}
             onChange={(event) => control.edit({ ...value, budgetMode: normalizeBudgetMode(event.target.value) })}
           >
@@ -91,7 +91,7 @@ export function FirstRunDefaults({ workspaceId }: { workspaceId: string }) {
         <label className="grid gap-1 text-sm text-fg-secondary sm:col-span-2">
           Network allowlist
           <input
-            className="min-h-10 rounded-md border border-line bg-sunken p-2 text-fg"
+            className="min-h-10 rounded-md border border-line-control bg-sunken p-2 text-fg"
             value={value.networkAllowlist}
             onChange={(event) => control.edit({ ...value, networkAllowlist: event.target.value })}
             placeholder="example.com, api.example.com"

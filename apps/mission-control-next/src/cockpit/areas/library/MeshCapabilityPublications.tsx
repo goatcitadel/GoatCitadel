@@ -122,7 +122,7 @@ function EntryRow({
           <label className="block">
             Revocation reason
             <input
-              className="mt-1 block min-h-11 w-full rounded-md border border-line bg-canvas px-2 text-fg"
+              className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
               value={reason}
               maxLength={2_000}
               disabled={busy}

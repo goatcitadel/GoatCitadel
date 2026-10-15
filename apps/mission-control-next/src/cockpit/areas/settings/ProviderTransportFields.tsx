@@ -2,7 +2,7 @@ import { useId } from "react";
 import type { LlmTransportDraft } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
 
 const fieldClass =
-  "mt-1 block min-h-11 w-full rounded-md border border-line bg-canvas px-2 py-1 text-sm text-fg disabled:opacity-60";
+  "mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 py-1 text-sm text-fg disabled:opacity-60";
 export function ProviderTransportFields({
   draft,
   onChange,
@@ -33,9 +33,9 @@ export function ProviderTransportFields({
         environment references; inline tokens and credentials are rejected. File paths refer to the Gateway host.
       </p>
       <p className="my-3 text-xs text-fg-muted">
-        Header values are write-only: the Gateway acknowledges accepted names and keeps saved values hidden.
-        Save public profile edits first, then review transport separately. The owner merges transport fields; clearing
-        an existing field is not a supported removal.
+        Header values are write-only: the Gateway acknowledges accepted names and keeps saved values hidden. Save public
+        profile edits first, then review transport separately. The owner merges transport fields; clearing an existing
+        field is not a supported removal.
       </p>
       <div className="space-y-3">
         <label className="block text-sm text-fg-secondary">

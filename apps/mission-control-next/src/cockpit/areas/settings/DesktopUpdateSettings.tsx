@@ -46,7 +46,7 @@ export function DesktopUpdateSettings() {
                   ? setReview(binding)
                   : void act("channel", event.target.value as DesktopUpdateChannel)
               }
-              className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-fg"
+              className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
             >
               <option value="stable">Stable releases</option>
               <option value="preview">Preview — unsigned builds from main</option>

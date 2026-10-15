@@ -4,7 +4,8 @@ import type { useCitadelEditor } from "../../../features/native-routes/settings/
 import { CITADEL_KINDS } from "../../../features/native-routes/settings/citadel-editor-binding";
 import { CHECKING_FOR_CHANGES } from "../../../features/native-routes/settings/use-directory-lifecycle";
 import type { CitadelRecord } from "@goatcitadel/contracts";
-const inputClass = "mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-fg";
+const inputClass =
+  "mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg";
 
 export function CitadelMetadataEditor({
   editor,

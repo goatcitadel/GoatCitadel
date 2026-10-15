@@ -70,7 +70,7 @@ export function TaskStatusControl({
                 owner.invalidate();
                 setTarget(event.target.value as TaskRecord["status"]);
               }}
-              className="min-h-10 rounded-md border border-line bg-sunken px-3 text-fg"
+              className="min-h-10 rounded-md border border-line-control bg-sunken px-3 text-fg"
             >
               {TASK_STATUSES.filter((status) => status !== "done" || canMarkDone || task.status === "done").map(
                 (status) => (

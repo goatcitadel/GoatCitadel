@@ -127,7 +127,7 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
                   setSource(event.target.value as typeof source);
                   setRemoteLimit(PAGE_SIZE);
                 }}
-                className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-3 text-fg focus-visible:outline-accent"
+                className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-fg focus-visible:outline-accent"
               >
                 <option value="all">All remote records</option>
                 <option value="server">Saved remote servers</option>

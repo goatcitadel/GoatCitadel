@@ -77,7 +77,7 @@ export function CitadelCouncilSettings({ citadelId }: { citadelId: string }) {
               id={selectId}
               aria-label="Council agent"
               value={c.selectedAgentId}
-              className="mt-1 block w-full rounded-md border border-line bg-canvas px-3 py-2 text-fg"
+              className="mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-fg"
               onChange={(e) => c.setSelectedAgentId(e.target.value)}
             >
               <option value="">Select agent</option>

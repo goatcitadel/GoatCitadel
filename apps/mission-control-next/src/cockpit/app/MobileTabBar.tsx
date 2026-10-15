@@ -61,9 +61,11 @@ export function MobileTabBar({
   return (
     <>
       <div className="shrink-0 border-t border-line-subtle bg-raised sm:hidden">
-        <p aria-label="Current operating scope" className="truncate px-3 text-xs text-fg-secondary">{citadelName} / {workspaceName ?? "Workspace name unavailable"}</p>
+        <p aria-label="Current operating scope" className="truncate px-3 text-xs text-fg-secondary">
+          {citadelName} / {workspaceName ?? "Workspace name unavailable"}
+        </p>
         {phone ? <MobileStatusStrip workspaceId={workspaceId} streamState={streamState} /> : null}
-        <nav aria-label="Areas on small screens" className="flex">
+        <nav aria-label="Areas on small screens" data-cockpit-tabbar="" className="flex">
           {TABS.map(({ area, label, path, Icon }) => (
             <button
               key={area}
@@ -113,7 +115,10 @@ export function MobileTabBar({
         </nav>
       </div>
       <Sheet open={moreOpen} onOpenChange={setMoreOpen} title="More">
-        <TechnicalDetails label="Operating scope identifiers"><p>Citadel: {activeCitadelId}</p><p>Workspace: {workspaceId}</p></TechnicalDetails>
+        <TechnicalDetails label="Operating scope identifiers">
+          <p>Citadel: {activeCitadelId}</p>
+          <p>Workspace: {workspaceId}</p>
+        </TechnicalDetails>
         <div className="grid gap-1">
           <button
             type="button"

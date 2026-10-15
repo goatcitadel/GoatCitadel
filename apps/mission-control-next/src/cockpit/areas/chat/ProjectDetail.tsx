@@ -188,7 +188,7 @@ export function ProjectDetail({
           Conversation to assign
           <select
             aria-label="Conversation to assign"
-            className="min-w-0 rounded-md border border-line bg-raised p-2"
+            className="min-w-0 rounded-md border border-line-control bg-raised p-2"
             value={assignment}
             onChange={(event) => setAssignment(event.target.value)}
           >

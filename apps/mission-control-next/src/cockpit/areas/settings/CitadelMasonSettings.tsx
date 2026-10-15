@@ -65,7 +65,11 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
             onChange={control.changeAnswer}
           />
           {control.answersDraft.isDirty ? <p className="text-xs text-fg-muted">Unsaved structured answers</p> : null}
-          {control.cannotClearName ? <p role="alert" className="text-sm text-status-waiting">A captured Blueprint name cannot be cleared. Enter its new name.</p> : null}
+          {control.cannotClearName ? (
+            <p role="alert" className="text-sm text-status-waiting">
+              A captured Blueprint name cannot be cleared. Enter its new name.
+            </p>
+          ) : null}
           {control.answersDraft.hasRemoteChanges ? (
             <p role="alert" className="text-sm text-status-waiting">
               Saved answers changed. Your draft is preserved. Compare the captured answers before discarding or revising
@@ -107,7 +111,7 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
               disabled={control.locked}
               value={control.messageDraft.value}
               onChange={(event) => control.changeMessage(event.target.value)}
-              className="mt-1 block w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-fg"
+              className="mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg"
             />
             <div className="mt-2 flex flex-wrap gap-2">
               <Button
@@ -146,9 +150,25 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
         <div className="space-y-3 rounded-md border border-line bg-sunken p-3" aria-label="Drafted Blueprint">
           <h4 className="text-sm font-semibold text-fg">{control.review.summary.name}</h4>
           <p className="text-sm text-fg-secondary">{control.review.blueprint.charter.purpose}</p>
-          <p className="text-sm text-fg-secondary">Risk posture: {control.review.blueprint.charter.riskPosture}. Model policy: {control.review.blueprint.charter.modelPolicyDefault}.</p>
-          <dl className="space-y-2 text-sm text-fg-secondary">{(["goals", "boundaries", "successDefinition"] as const).map(key => <div key={key}><dt>{key}</dt><dd className="break-words">{control.review?.blueprint.charter[key].join("; ") || "None specified"}</dd></div>)}</dl>
-          <ul className="space-y-1 text-sm text-fg-secondary" aria-label="Reviewed Chambers">{control.review.blueprint.chambers.map((chamber, index) => <li key={index}>{chamber.name} · {chamber.sensitivity} · {chamber.sealed ? "Sealed" : "Not sealed"}</li>)}</ul>
+          <p className="text-sm text-fg-secondary">
+            Risk posture: {control.review.blueprint.charter.riskPosture}. Model policy:{" "}
+            {control.review.blueprint.charter.modelPolicyDefault}.
+          </p>
+          <dl className="space-y-2 text-sm text-fg-secondary">
+            {(["goals", "boundaries", "successDefinition"] as const).map((key) => (
+              <div key={key}>
+                <dt>{key}</dt>
+                <dd className="break-words">{control.review?.blueprint.charter[key].join("; ") || "None specified"}</dd>
+              </div>
+            ))}
+          </dl>
+          <ul className="space-y-1 text-sm text-fg-secondary" aria-label="Reviewed Chambers">
+            {control.review.blueprint.chambers.map((chamber, index) => (
+              <li key={index}>
+                {chamber.name} · {chamber.sensitivity} · {chamber.sealed ? "Sealed" : "Not sealed"}
+              </li>
+            ))}
+          </ul>
           <ul className="list-disc space-y-1 pl-5 text-sm text-fg-secondary">
             {control.review.summary.lines.map((line, index) => (
               <li key={index}>{line}</li>

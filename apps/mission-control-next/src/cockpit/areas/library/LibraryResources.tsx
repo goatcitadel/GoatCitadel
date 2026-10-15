@@ -160,7 +160,7 @@ function LibraryResourceDirectory({
         <label className="min-w-0 flex-1 text-sm text-fg-secondary">
           Filter {TITLES[kind].toLowerCase()}
           <input
-            className="mt-1 block min-h-10 w-full rounded-md border border-line bg-raised px-3 text-fg"
+            className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-raised px-3 text-fg"
             maxLength={200}
             value={draftQuery}
             onChange={(event) => setDraftQuery(event.target.value)}
@@ -170,7 +170,7 @@ function LibraryResourceDirectory({
           <label className="text-sm text-fg-secondary">
             Status
             <select
-              className="mt-1 block min-h-10 rounded-md border border-line bg-raised px-2 text-fg"
+              className="mt-1 block min-h-10 rounded-md border border-line-control bg-raised px-2 text-fg"
               value={status}
               onChange={(event) => {
                 reset();

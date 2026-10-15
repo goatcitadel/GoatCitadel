@@ -206,7 +206,7 @@ export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: s
               <select
                 value={selectedArtifactId}
                 onChange={(event) => setSelectedArtifactId(event.target.value)}
-                className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-fg"
+                className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
               >
                 {artifacts.map((artifact) => (
                   <option key={artifact.artifactId} value={artifact.artifactId}>

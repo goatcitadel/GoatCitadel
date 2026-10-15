@@ -192,7 +192,7 @@ export function ChatLegacyInputNotice({
             readOnly
             rows={6}
             value={review?.scope === scope ? review.text : ""}
-            className="mt-1 block w-full rounded-md border border-line bg-canvas p-2 text-fg"
+            className="mt-1 block w-full rounded-md border border-line-control bg-canvas p-2 text-fg"
           />
         </label>
         <label className="my-3 flex items-center gap-2 text-sm">

@@ -36,7 +36,7 @@ export function ChatSessionTitle({ title, dock }: { title: string; dock: Mission
           onKeyDown={(event) => {
             if (event.key === "Escape") cancel();
           }}
-          className="min-w-0 flex-1 rounded-md border border-line bg-canvas px-2 py-1 text-sm text-fg"
+          className="min-w-0 flex-1 rounded-md border border-line-control bg-canvas px-2 py-1 text-sm text-fg"
         />
         <Button type="submit" size="sm" disabled={busy || !dock.renameTitle.trim()}>
           Save

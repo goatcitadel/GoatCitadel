@@ -6,7 +6,8 @@ import { Button } from "../../ui/Button";
 import { Sheet } from "../../ui/Sheet";
 import { Dialog } from "../../ui/Dialog";
 
-const inputClass = "mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-fg";
+const inputClass =
+  "mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg";
 export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
   const editor = useCitadelVaultEditor(citadelId),
     { vault, selectedSecret } = editor;

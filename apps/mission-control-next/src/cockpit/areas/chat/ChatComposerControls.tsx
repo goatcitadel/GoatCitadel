@@ -93,7 +93,7 @@ export function ChatComposerControls({
         aria-pressed={props.planningMode === "advisory"}
         disabled={disabled}
         onClick={props.onTogglePlanningMode}
-        className="rounded-md border border-line px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
+        className="rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
       >
         Plan {props.planningMode === "advisory" ? "on" : "off"}
       </button>
@@ -105,7 +105,7 @@ export function ChatComposerControls({
           value={props.currentWebMode}
           disabled={disabled || !props.onSetWebMode}
           onChange={(event) => props.onSetWebMode?.(event.target.value as ChatWebMode)}
-          className="rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11"
+          className="rounded-md border border-line-control bg-canvas px-1 py-1 text-fg max-sm:min-h-11"
         >
           {WEB_MODES.map((mode) => (
             <option key={mode.value} value={mode.value}>
@@ -120,7 +120,7 @@ export function ChatComposerControls({
         aria-pressed={props.currentReviewDepth !== "off"}
         disabled={disabled}
         onClick={props.onToggleReviewMode}
-        className="rounded-md border border-line px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
+        className="rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
       >
         Review {props.currentReviewDepth === "off" ? "off" : "on"}
       </button>
@@ -190,7 +190,7 @@ export function ChatComposerControls({
           type="button"
           disabled={disabled}
           onClick={props.onAttachFiles}
-          className="rounded-md border border-line px-2 py-1 text-fg-secondary hover:border-line-strong max-sm:min-h-11 max-sm:px-3"
+          className="rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-fg max-sm:min-h-11 max-sm:px-3"
           aria-label="Attach files"
         >
           + Attach
@@ -207,7 +207,7 @@ export function ChatComposerControls({
           aria-busy={options.loading || undefined}
           data-state={options.open ? "open" : "closed"}
           onClick={() => options.request(!options.open)}
-          className="inline-flex min-h-9 min-w-0 max-w-64 items-center gap-2 max-sm:max-w-full max-sm:basis-1/2 max-sm:flex-1 rounded-md border border-line px-2 text-left text-fg-secondary hover:border-line-strong max-sm:min-h-11"
+          className="inline-flex min-h-9 min-w-0 max-w-64 items-center gap-2 max-sm:max-w-full max-sm:basis-1/2 max-sm:flex-1 rounded-md border border-line-control px-2 text-left text-fg-secondary hover:border-line-strong max-sm:min-h-11"
         >
           <SlidersHorizontal aria-hidden="true" className="size-4 shrink-0" />
           <span className="min-w-0 truncate">{optionsSummary}</span>

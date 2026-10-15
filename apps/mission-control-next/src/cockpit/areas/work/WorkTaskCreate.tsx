@@ -102,7 +102,7 @@ export function WorkTaskCreate({
             onChange={(event) => {
               edit((value) => ({ ...value, title: event.target.value }));
             }}
-            className="rounded-md border border-line bg-canvas p-2 text-fg"
+            className="rounded-md border border-line-control bg-canvas p-2 text-fg"
           />
         </label>
         <label className="grid gap-1 text-sm text-fg-secondary">
@@ -115,7 +115,7 @@ export function WorkTaskCreate({
             onChange={(event) => {
               edit((value) => ({ ...value, description: event.target.value }));
             }}
-            className="rounded-md border border-line bg-canvas p-2 text-fg"
+            className="rounded-md border border-line-control bg-canvas p-2 text-fg"
           />
         </label>
         <label className="grid gap-1 text-sm text-fg-secondary">
@@ -126,7 +126,7 @@ export function WorkTaskCreate({
             onChange={(event) => {
               edit((value) => ({ ...value, priority: event.target.value as TaskRecord["priority"] }));
             }}
-            className="rounded-md border border-line bg-canvas p-2 text-fg"
+            className="rounded-md border border-line-control bg-canvas p-2 text-fg"
           >
             {PRIORITIES.map((item) => (
               <option key={item} value={item}>

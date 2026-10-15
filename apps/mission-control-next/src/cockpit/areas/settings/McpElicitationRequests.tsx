@@ -86,7 +86,7 @@ export function McpElicitationRequests({ workspaceId }: { workspaceId: string })
             void query.refetch();
           }}
           className="space-y-3 rounded-md border border-line bg-sunken p-3"
-          fieldClass="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-3 py-2 text-fg"
+          fieldClass="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-fg"
           button={(label, click, disabled) => (
             <Button size="sm" onClick={click} disabled={disabled}>
               {label}

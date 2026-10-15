@@ -6,7 +6,7 @@ export type ButtonSize = "sm" | "md";
 
 const VARIANTS: Readonly<Record<ButtonVariant, string>> = {
   primary: "bg-accent text-accent-ink hover:underline underline-offset-2",
-  secondary: "border border-line bg-raised text-fg hover:border-line-strong",
+  secondary: "border border-line-control bg-raised text-fg hover:border-fg",
   ghost: "text-fg-secondary hover:bg-sunken hover:text-fg",
   danger: "border border-status-failed text-status-failed hover:bg-sunken",
 };
@@ -22,10 +22,20 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { variant = "secondary", size = "md", className, type = "button", ...props }, ref,
+  { variant = "secondary", size = "md", className, type = "button", ...props },
+  ref,
 ) {
-  return <button ref={ref} type={type} className={cn(
-    "inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-    VARIANTS[variant], SIZES[size], className,
-  )} {...props} />;
+  return (
+    <button
+      ref={ref}
+      type={type}
+      className={cn(
+        "inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        VARIANTS[variant],
+        SIZES[size],
+        className,
+      )}
+      {...props}
+    />
+  );
 });

@@ -219,7 +219,7 @@ export function collectContrastViolations(themes) {
 
 export function collectCockpitContrastViolations(themes) {
   const violations = [];
-  const foregrounds = ["--cockpit-text", "--cockpit-text-secondary", "--cockpit-text-muted", "--cockpit-accent", "--cockpit-running", "--cockpit-waiting", "--cockpit-done", "--cockpit-failed"];
+  const foregrounds = ["--cockpit-text", "--cockpit-text-secondary", "--cockpit-text-muted", "--cockpit-border-control", "--cockpit-accent", "--cockpit-running", "--cockpit-waiting", "--cockpit-done", "--cockpit-failed"];
   const backgrounds = ["--cockpit-canvas", "--cockpit-raised", "--cockpit-sunken", "--cockpit-overlay"];
   for (const [theme, tokens] of Object.entries(themes)) {
     const pairs = foregrounds.flatMap((fg) => backgrounds.map((bg) => [fg, bg]));

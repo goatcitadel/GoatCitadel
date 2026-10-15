@@ -53,7 +53,7 @@ export function ProviderConnectionSettings() {
       <label className="mt-3 block text-sm font-medium text-fg">
         Edit provider
         <select
-          className="mt-1 block min-h-11 w-full rounded-md border border-line bg-canvas px-2 text-fg"
+          className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
           value={id ?? ""}
           disabled={!ready}
           onChange={(event) => setSelectedId(event.target.value)}
@@ -147,7 +147,7 @@ function ProviderConnectionEditor({
           disabled={disabled}
           maxLength={2048}
           onChange={(event) => draft.setValue(event.target.value)}
-          className="mt-1 block min-h-11 w-full min-w-0 rounded-md border border-line bg-canvas px-3 text-fg"
+          className="mt-1 block min-h-11 w-full min-w-0 rounded-md border border-line-control bg-canvas px-3 text-fg"
         />
       </label>
       <p className="text-xs text-fg-muted">
@@ -191,7 +191,7 @@ function ProviderConnectionEditor({
           <label className="block text-sm text-fg">
             Credential storage
             <select
-              className="mt-1 block min-h-11 w-full rounded-md border border-line bg-canvas px-2 text-fg"
+              className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
               value={shownStorage}
               onChange={(event) => setCredentialStorage(event.target.value as "keychain" | "env")}
             >
@@ -212,7 +212,7 @@ function ProviderConnectionEditor({
                   readOnly
                   autoComplete="off"
                   spellCheck={false}
-                  className="mt-1 block min-h-11 w-full rounded-md border border-line bg-canvas px-3 text-fg"
+                  className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-3 text-fg"
                 />
               </label>
               <p className="text-xs text-fg-muted">

@@ -250,7 +250,7 @@ export function ChatTextComposer({
           onCompositionEnd={() => setComposing(false)}
           onPaste={props.onComposerPaste}
           placeholder="Message GoatCitadel…"
-          className="cockpit-chat-draft mt-2 block min-h-10 w-full resize-y rounded-md border border-line bg-canvas px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60"
+          className="cockpit-chat-draft mt-2 block min-h-10 w-full resize-y rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60"
         />
         {capture ? (
           <section

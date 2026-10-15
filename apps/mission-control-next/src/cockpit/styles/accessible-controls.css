@@ -1,11 +1,14 @@
 /* Shared control states across native Cockpit consumers and their portalled primitives. */
-html[data-shell="cockpit"]
-  :is(button, select, input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea) {
-  border-color: var(--cockpit-text-muted);
-}
-html[data-shell="cockpit"] :is(button, select) {
-  height: auto;
-  min-height: 2em;
+/* Defaults sit in the base layer so Tailwind utilities (h-8, min-h-11, border-status-failed, border-accent) win. */
+@layer base {
+  html[data-shell="cockpit"]
+    :is(button, select, input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea) {
+    border-color: var(--cockpit-border-control);
+  }
+  html[data-shell="cockpit"] :is(button, select) {
+    height: auto;
+    min-height: 2em;
+  }
 }
 /* Deferred recovery controls retain their targets above the shared unlayered minimum. */
 html[data-shell="cockpit"] .cockpit-deferred-recovery-control {
@@ -18,9 +21,10 @@ html[data-shell="cockpit"] .cockpit-deferred-recovery-control {
     min-width: 44px;
   }
 }
-html[data-shell="cockpit"] :is([aria-current="page"], [aria-selected="true"], [aria-pressed="true"]) {
-  box-shadow: inset 0 -2px var(--cockpit-accent);
-  font-weight: 600;
+@layer base {
+  html[data-shell="cockpit"] :is([role="tab"][aria-selected="true"], [data-cockpit-tabbar] [aria-current="page"]) {
+    box-shadow: inset 0 -2px var(--cockpit-accent);
+  }
 }
 html[data-shell="cockpit"] :is([data-highlighted], [cmdk-item][data-selected="true"]) {
   outline: 2px solid var(--cockpit-accent);

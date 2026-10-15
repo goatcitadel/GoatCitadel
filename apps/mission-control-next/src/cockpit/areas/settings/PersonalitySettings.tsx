@@ -11,8 +11,14 @@ import { Button } from "../../ui/Button";
 
 export function PersonalitySettings() {
   const editor = usePersonalityEditor();
-  const catalog = { data: editor.data ?? undefined, isError: Boolean(editor.error), isFetching: editor.loading,
-    isLoading: editor.loading && !editor.data, error: new Error(editor.error ?? "Catalog unavailable"), refetch: editor.reload };
+  const catalog = {
+    data: editor.data ?? undefined,
+    isError: Boolean(editor.error),
+    isFetching: editor.loading,
+    isLoading: editor.loading && !editor.data,
+    error: new Error(editor.error ?? "Catalog unavailable"),
+    refetch: editor.reload,
+  };
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const data = catalog.data;
   const available = !catalog.isError && !catalog.isFetching && hasPersonalityCatalog(data);
@@ -58,7 +64,9 @@ export function PersonalitySettings() {
           <p className="text-sm text-fg-secondary">Current global default: {current?.label}</p>
           <details className="text-xs text-fg-muted">
             <summary className="cursor-pointer">Catalog details</summary>
-            <p className="mt-2">Catalog revision: <code className="break-all font-mono">{data.revision}</code></p>
+            <p className="mt-2">
+              Catalog revision: <code className="break-all font-mono">{data.revision}</code>
+            </p>
           </details>
           <label className="block text-sm text-fg-secondary">
             Saved personality
@@ -66,7 +74,7 @@ export function PersonalitySettings() {
               value={selectedId ?? data.defaultPersonalityId}
               disabled={!available || action.locked}
               onChange={(event) => setSelectedId(event.target.value)}
-              className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-fg"
+              className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
             >
               {selectedId && !selected ? (
                 <option value={selectedId} disabled>
@@ -115,8 +123,16 @@ export function PersonalitySettings() {
             Review global default
           </Button>
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={!available || editor.locked} onClick={editor.beginCustomPersonality}>Add custom personality</Button>
-            <Button size="sm" disabled={!available || !selected} onClick={() => selected && editor.personalityTransitionGuard.requestTransition({ kind: "select", id: selected.id })}>
+            <Button size="sm" disabled={!available || editor.locked} onClick={editor.beginCustomPersonality}>
+              Add custom personality
+            </Button>
+            <Button
+              size="sm"
+              disabled={!available || !selected}
+              onClick={() =>
+                selected && editor.personalityTransitionGuard.requestTransition({ kind: "select", id: selected.id })
+              }
+            >
               Edit selected personality
             </Button>
           </div>
@@ -137,8 +153,16 @@ export function PersonalitySettings() {
           Waiting for the Gateway to confirm the default change…
         </p>
       ) : null}
-      {editor.notice && !editor.editorOpen ? <p role={editor.notice.tone === "error" ? "alert" : "status"} className="text-sm text-fg-secondary">{editor.notice.message}</p> : null}
-      {editor.mutation.uncertain && !editor.editorOpen ? <p role="alert" className="text-sm text-status-waiting">{editor.mutation.uncertain}</p> : null}
+      {editor.notice && !editor.editorOpen ? (
+        <p role={editor.notice.tone === "error" ? "alert" : "status"} className="text-sm text-fg-secondary">
+          {editor.notice.message}
+        </p>
+      ) : null}
+      {editor.mutation.uncertain && !editor.editorOpen ? (
+        <p role="alert" className="text-sm text-status-waiting">
+          {editor.mutation.uncertain}
+        </p>
+      ) : null}
       <PersonalityEditor control={editor} />
       <ConfirmModal
         open={action.review !== null}

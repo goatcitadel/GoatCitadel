@@ -25,7 +25,7 @@ import {
 } from "../../../features/native-routes/settings/trust-policy-types";
 
 const PAGE_SIZE = 48;
-const fieldClass = "mt-1 block min-h-11 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg";
+const fieldClass = "mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg";
 const OWNER_LINKS: Record<string, string> = {
   "Settings / Permissions": "/settings/safety#permission-profile",
   "Settings / Tools": "/settings/safety#approval-mode",
