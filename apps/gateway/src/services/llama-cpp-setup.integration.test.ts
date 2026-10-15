@@ -17,7 +17,6 @@ const envKeys = [
   "GOATCITADEL_DATABASE_DRIVER",
   "GOATCITADEL_RATE_LIMIT_ENABLED",
   "GOATCITADEL_ROOT_DIR",
-  "GOATCITADEL_SURFACE_ROUTER_JUDGE_ENABLED",
 ] as const;
 const originalEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
 let gateway: GatewayService | undefined;
@@ -103,7 +102,6 @@ describe("llama.cpp setup Chat diagnostic against a task-owned server", { timeou
     process.env.GOATCITADEL_DATABASE_DRIVER = "sqlite";
     process.env.GOATCITADEL_RATE_LIMIT_ENABLED = "false";
     process.env.GOATCITADEL_ROOT_DIR = root;
-    process.env.GOATCITADEL_SURFACE_ROUTER_JUDGE_ENABLED = "0";
     gateway = new GatewayService(await loadGatewayConfig(root));
     await gateway.initCritical();
     const service = new LlamaCppSetupService({

@@ -2,17 +2,8 @@
 import React from "react";
 import { act, create, type ReactTestInstance } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
-import type { SurfaceClassifyResponse } from "@goatcitadel/contracts";
 
 import { ThreadedModeControl } from "./ThreadedModeControl";
-
-const PREVIEW: SurfaceClassifyResponse = {
-  mode: "code",
-  confidence: 0.82,
-  source: "heuristic",
-  rationale: "The draft asks for a code change with validation.",
-  alternatives: ["cowork", "chat"],
-};
 
 function textOf(node: ReactTestInstance): string {
   return node.children
@@ -71,23 +62,10 @@ describe("ThreadedModeControl", () => {
     expect(onOverride).not.toHaveBeenCalled();
   });
 
-  it("renders Chat confidence and rationale", async () => {
-    let renderer: ReturnType<typeof create> | null = null;
-    await act(async () => {
-      renderer = create(<ThreadedModeControl mode={undefined} preview={PREVIEW} onOverride={() => {}} />);
-    });
-
-    expect(findByText(renderer!.root, /Chat · 82% heuristic/i)).toBeDefined();
-    expect(findByText(renderer!.root, /draft asks for a code change/i)).toBeDefined();
-    expect(renderer!.root.findAll((node) => node.props.role === "menuitem")).toHaveLength(0);
-  });
-
   it("renders a compact non-interactive mirror for the composer", async () => {
     let renderer: ReturnType<typeof create> | null = null;
     await act(async () => {
-      renderer = create(
-        <ThreadedModeControl mode={undefined} preview={PREVIEW} variant="compact" interactive={false} />,
-      );
+      renderer = create(<ThreadedModeControl mode={undefined} variant="compact" interactive={false} />);
     });
 
     expect(findByText(renderer!.root, /Surface Chat/i)).toBeDefined();

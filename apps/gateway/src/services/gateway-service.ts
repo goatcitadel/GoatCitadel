@@ -115,8 +115,6 @@ import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
 import * as approvalRemoteTokenService from "./approval-remote-token-service.js";
 import { hashSensitiveToken } from "./device-access-helpers.js";
-import { SurfaceRouterService } from "./surface-router-service.js";
-import { buildSurfaceRouterJudge } from "./surface-router-judge.js";
 import { CapabilityScopeResolver, isCapabilityAllowed } from "./capability-scope-resolver.js";
 import { resolveCallableSkillSelection } from "./callable-skill-activation.js";
 import { ChatCapabilityDiscoveryService } from "./chat-capability-discovery-service.js";
@@ -3726,23 +3724,10 @@ export class GatewayService {
       withChatTurnWriteLeaseStream: (sessionId, operation, factory) =>
         this.withChatTurnWriteLeaseStream(sessionId, operation, factory),
       withEphemeralStreamEnvelope: (stream, runId) => this.withEphemeralStreamEnvelope(stream, runId),
-      surfaceRouter: new SurfaceRouterService({
-        traceRepo: this.storage.runtimeDecisionTraces,
-        fetchExemplars: (citadelId: string) => this.improvementService.listSurfaceRouteOverrideExemplars(citadelId),
-        judge:
-          process.env.GOATCITADEL_SURFACE_ROUTER_JUDGE_ENABLED === "1"
-            ? buildSurfaceRouterJudge({
-                createChatCompletion: async (request, attribution) =>
-                  await this.createChatCompletion(request, attribution),
-                resolveModelDefaults: async () => await this.getPromptJudgeModelDefaults(),
-              })
-            : undefined,
-      }),
       readChatSessionMode: async (sessionId: string) => (await this.storage.chatSessionPrefs.get(sessionId))?.mode,
       persistChatSessionMode: async (sessionId: string, mode: ChatMode) => {
         await this.updateChatSessionPrefs(sessionId, buildChatModePrefsPatch(mode));
       },
-      recordSurfaceRouteOverrideSignal: (input) => this.improvementService.recordSurfaceRouteOverrideSignal(input),
     } as Omit<ChatTurnRuntimeHost, "config">;
     Object.defineProperty(host, "config", {
       configurable: false,

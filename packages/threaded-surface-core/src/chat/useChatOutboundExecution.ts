@@ -39,28 +39,6 @@ export type {
   UseChatOutboundExecutionInput,
 } from "./useChatOutboundExecution.types";
 
-/**
- * Chat is the only operator conversation surface, so sends no longer ask the
- * gateway to auto-route a thread into a separate work surface.
- *
- * Exported for unit testing. The hook inlines this logic directly for
- * performance (avoid an extra call in the hot send path).
- */
-export function shouldAutoRouteSend({
-  action,
-  threadEmpty,
-  surfaceMode,
-}: {
-  action: string;
-  threadEmpty: boolean;
-  surfaceMode: string | undefined;
-}): boolean {
-  void action;
-  void threadEmpty;
-  void surfaceMode;
-  return false;
-}
-
 export function abortActiveChatStream(stream: ActiveChatStreamState | null): void {
   if (!stream || stream.controller.signal.aborted) {
     return;
@@ -511,7 +489,6 @@ export function useChatOutboundExecution(
           fullWebAccess,
         });
       const effectiveMode: ChatMode = requestPrefs.mode;
-      const shouldAutoRoute = false;
       const executionProviderId = requestPrefs.providerId;
       const executionModel = requestPrefs.model;
       const outboundPrefs = resolveOutboundExecutionPrefs(requestPrefs);
@@ -674,7 +651,6 @@ export function useChatOutboundExecution(
           workspaceSnapshotOptIn,
           requestPrefs,
           effectiveMode,
-          shouldAutoRoute,
           executionProviderId,
           executionModel,
           outboundPrefs,

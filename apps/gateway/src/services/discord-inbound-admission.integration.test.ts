@@ -22,7 +22,6 @@ const ENV_KEYS = [
   "GOATCITADEL_DATABASE_DRIVER",
   "GOATCITADEL_RATE_LIMIT_ENABLED",
   "GOATCITADEL_ROOT_DIR",
-  "GOATCITADEL_SURFACE_ROUTER_JUDGE_ENABLED",
 ] as const;
 const originalEnv = new Map<string, string | undefined>(ENV_KEYS.map((key) => [key, process.env[key]]));
 const tempRoots: string[] = [];
@@ -306,7 +305,6 @@ function configureGateway(root: string): void {
   process.env.GOATCITADEL_DATABASE_DRIVER = "sqlite";
   process.env.GOATCITADEL_RATE_LIMIT_ENABLED = "false";
   process.env.GOATCITADEL_ROOT_DIR = root;
-  process.env.GOATCITADEL_SURFACE_ROUTER_JUDGE_ENABLED = "0";
 }
 
 function createIsolatedConfigRoot(providerBaseUrl: string): string {

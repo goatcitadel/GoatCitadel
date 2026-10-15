@@ -42,15 +42,13 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
     const created = harness.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     harness.storage.cronJobs.upsert({ ...created!, enabled: true }, new Date().toISOString());
 
-    await harness.service.recordSurfaceRouteOverrideSignal({
+    await harness.service.recordFocusedToolFailureSignal({
       workspaceId: "workspace-1",
       sessionId: "session-1",
       turnId: "turn-1",
-      citadelId: "citadel-1",
-      fromMode: "chat",
-      toMode: "code",
-      autoConfidence: 0.5,
-      promptFeatureHash: "feature-hash-1",
+      toolName: "fs.read",
+      failureClass: "tool_error",
+      operationPhase: "execute",
     });
     await expect(harness.service.runWeeklyImprovementSchedulerIfDue()).resolves.toEqual({
       status: "skipped",

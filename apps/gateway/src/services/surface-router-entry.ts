@@ -1,23 +1,19 @@
 import type { ChatMode, ChatSendMessageRequest } from "@goatcitadel/contracts";
-import { DEFAULT_CITADEL_ID } from "@goatcitadel/contracts";
-import type { SurfaceClassification } from "./surface-router-heuristics.js";
-import type { SurfaceRouteRequest } from "./surface-router-service.js";
-import type { SurfaceRouteOverrideSignalInput } from "./improvement-service.js";
 
 export interface AutoRouteHost {
-  surfaceRouter?: { route(req: SurfaceRouteRequest): Promise<SurfaceClassification> };
   readChatSessionMode?(sessionId: string): Promise<ChatMode | undefined>;
   persistChatSessionMode?(sessionId: string, mode: ChatMode): Promise<void>;
-  normalizeWorkspaceId(workspaceId?: string): string;
-  storage: {
-    chatSessionMeta: { ensure(sessionId: string): Promise<{ workspaceId?: string }> };
-    workspaces?: { find(workspaceId: string): Promise<{ citadelId?: string } | undefined> };
-  };
 }
 
+export type ModeOverrideHost = AutoRouteHost;
+
+const CHAT_ONLY = { mode: "chat", autoRoute: false } as const;
+
 /**
- * If the turn requested auto-routing (and carries no explicit mode), classify the first turn,
- * persist the chosen mode (sticky), and return input with `mode` set. Otherwise returns input unchanged.
+ * Chat is the only conversation surface. Legacy `mode`/`autoRoute` inputs are
+ * normalized to `{ mode: "chat", autoRoute: false }` and a stale persisted mode
+ * is re-pinned to chat. The `autoRoute:false` marker is kept on purpose: stored
+ * durable surface derivations (durable-chat-turn-payload.ts) require it.
  */
 export async function applyAutoRouteToInput(
   host: AutoRouteHost,
@@ -26,51 +22,19 @@ export async function applyAutoRouteToInput(
 ): Promise<ChatSendMessageRequest> {
   if (input.mode !== undefined && input.mode !== "chat") {
     await host.persistChatSessionMode?.(sessionId, "chat");
-    return { ...input, mode: "chat", autoRoute: false };
+    return { ...input, ...CHAT_ONLY };
   }
-  if (!input.autoRoute || input.mode !== undefined || !host.surfaceRouter || !host.persistChatSessionMode) {
+  if (!input.autoRoute || input.mode !== undefined) {
     return input.mode === undefined ? input : { ...input, mode: "chat" };
   }
   const persistedMode = await host.readChatSessionMode?.(sessionId);
-  if (persistedMode !== undefined) {
-    if (persistedMode !== "chat") {
-      await host.persistChatSessionMode(sessionId, "chat");
-    }
-    return { ...input, mode: "chat", autoRoute: false };
+  if (persistedMode !== "chat") {
+    await host.persistChatSessionMode?.(sessionId, "chat");
   }
-  const sessionMeta = await host.storage.chatSessionMeta.ensure(sessionId);
-  const workspaceId = host.normalizeWorkspaceId(sessionMeta.workspaceId);
-  const citadelId = (await host.storage.workspaces?.find(workspaceId))?.citadelId ?? DEFAULT_CITADEL_ID;
-  const classified = await host.surfaceRouter.route({
-    prompt: input.content,
-    citadelId,
-    workspaceId,
-    sessionId,
-    turnId: `${sessionId}:pending`,
-    context: { hasBoundProject: false }, // TODO(#136 Phase 2): resolve the session's project binding to improve code-intent routing
-  });
-  void classified;
-  await host.persistChatSessionMode(sessionId, "chat");
-  return { ...input, mode: "chat", autoRoute: false };
+  return { ...input, ...CHAT_ONLY };
 }
 
-export interface ModeOverrideHost {
-  readChatSessionMode?(sessionId: string): Promise<ChatMode | undefined>;
-  persistChatSessionMode?(sessionId: string, mode: ChatMode): Promise<void>;
-  recordSurfaceRouteOverrideSignal?(input: SurfaceRouteOverrideSignalInput): Promise<void>;
-  normalizeWorkspaceId(workspaceId?: string): string;
-  storage: {
-    chatSessionMeta: { ensure(sessionId: string): Promise<{ workspaceId?: string }> };
-    workspaces?: { find(workspaceId: string): Promise<{ citadelId?: string } | undefined> };
-  };
-}
-
-/**
- * When the client supplies an explicit mode that differs from the session's
- * already-persisted (sticky) mode, the user overrode the router: re-pin the new
- * mode and record a learning signal. No-op on the first turn (no persisted mode)
- * or a sticky turn (mode unchanged).
- */
+/** Re-pin a stale persisted legacy mode to chat when the client sends an explicit mode. */
 export async function recordModeOverrideIfChanged(
   host: ModeOverrideHost,
   sessionId: string,
@@ -80,21 +44,17 @@ export async function recordModeOverrideIfChanged(
     return;
   }
   const persistedMode = await host.readChatSessionMode(sessionId);
-  if (persistedMode === undefined) {
-    return;
-  }
-  if (persistedMode !== "chat") {
+  if (persistedMode !== undefined && persistedMode !== "chat") {
     await host.persistChatSessionMode(sessionId, "chat");
   }
 }
 
 /**
- * Run surface auto-routing + override-recording for a send turn, error-isolated.
- * Returns input (possibly with `mode` filled by the router); on any failure,
+ * Normalize the send turn's surface fields, error-isolated. On any failure,
  * calls onError and returns the input unchanged so the turn always proceeds.
  */
 export async function applySurfaceRoutingPreflight(
-  host: AutoRouteHost & ModeOverrideHost,
+  host: AutoRouteHost,
   sessionId: string,
   input: ChatSendMessageRequest,
   onError?: (error: unknown) => void,
@@ -107,10 +67,4 @@ export async function applySurfaceRoutingPreflight(
     onError?.(error);
     return input;
   }
-}
-
-/** Stable, low-resolution bucket of a prompt's shape (first word + capped length). The first word is stored in plaintext, so this is NOT a cryptographic hash. */
-export function hashPromptFeatures(content: string): string {
-  const firstWord = (content.trim().split(/\s+/)[0] ?? "").toLowerCase().slice(0, 24);
-  return `${firstWord}:${Math.min(content.length, 4000)}`;
 }

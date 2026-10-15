@@ -93,9 +93,6 @@ const callChatMultimodalControlsMock = useChatMultimodalControlsMock;
 
 let mockSurfaceMode: ChatMode = "chat";
 let mockCompact = false;
-let mockSurfacePreview:
-  | { mode: ChatMode; confidence: number; source?: string; rationale?: string; alternatives?: unknown[] }
-  | undefined;
 const handleSendMock = vi.fn(async () => undefined);
 // HX-411: mutable session-control status the mocked hook returns. Defaults to
 // operator/absent (unlocked) in setupMocks so the other suites are unaffected.
@@ -437,7 +434,6 @@ vi.mock("./chat/useExternalSourceAttachments", () => ({
   useExternalSourceAttachments: (...args: unknown[]) => useExternalSourceAttachmentsMock(...args),
 }));
 
-vi.mock("./chat/useSurfaceClassifyPreview", () => ({ useSurfaceClassifyPreview: () => mockSurfacePreview }));
 
 vi.mock("./chat/useMissionControlSurfaceState", () => ({
   formatSessionLabel: (session: any) => session?.title ?? session?.sessionId ?? "Session",
@@ -1109,7 +1105,6 @@ describe("MissionThreadedControllerHost", () => {
     latestSurfaceInput = null;
     mockSurfaceMode = "chat";
     mockCompact = false;
-    mockSurfacePreview = undefined;
     mockSelectedTurn = selectedTurn;
     installBrowserGlobals();
     setupMocks();
@@ -4596,12 +4591,9 @@ describe("MissionThreadedControllerHost", () => {
     expect(latestSurfaceInput?.sessionRail.selectedSessionId).toBe("session-b");
   });
 
-  describe("auto-route surfaceMode wiring guard (#136)", () => {
-    it("passes surfaceMode=undefined to the outbound hook on a new unlocked thread (auto-route guard)", async () => {
-      // Render unlocked (no lockSurface, no surface) — modeOverride starts null,
-      // so resolveOutboundSurfaceMode returns undefined, which is what shouldAutoRouteSend
-      // gates on. This test will FAIL if MissionThreadedControllerHost is reverted to
-      // passing executionSurfaceMode (always defined) instead of outboundSurfaceMode.
+  describe("outbound surfaceMode wiring guard", () => {
+    it("passes surfaceMode=chat to the outbound hook on a new unlocked thread", async () => {
+      // Chat is the only surface, so an unlocked thread still resolves to chat.
       await renderHost();
       const lastInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
         sessionConfig: { surfaceMode?: string };
@@ -4857,121 +4849,12 @@ describe("MissionThreadedControllerHost", () => {
       });
       expect(latestSurfaceInput?.activeSessionSurfaceProps?.modeOverridePending).toBe("chat");
     });
-
-    it("exposes autoRouteActive=true on activeSessionSurfaceProps for a new unlocked empty thread", async () => {
-      // Override the session data mock to return an empty thread.
-      // We must keep all fields from setupMocks but replace thread with an empty one.
-      useChatSessionDataMock.mockReturnValue({
-        projects: { items: [selectedProject] },
-        setProjects: vi.fn(),
-        sessions: { items: [selectedSession] },
-        setSessions: vi.fn(),
-        thread: { sessionId: "session-1", selectedTurnId: null, activeLeafTurnId: null, turns: [] },
-        setThread: vi.fn(),
-        prefs,
-        setPrefs: vi.fn(),
-        binding: { sessionId: "session-1", target: null },
-        setBinding: vi.fn(),
-        generatedArtifacts: { items: [generatedArtifact] },
-        setGeneratedArtifacts: vi.fn(),
-        threadKnowledgeAttachments: {
-          items: [{ attachmentId: "knowledge-1", sourceRef: "file.pdf", retrievalMode: "retrieval" }],
-        },
-        setThreadKnowledgeAttachments: vi.fn(),
-        settings: { llm: { activeProviderId: "openai", activeModel: "gpt-5.5" } },
-        setSettings: vi.fn(),
-        commandCatalog: [{ command: "/plan", usage: "/plan", description: "Plan" }],
-        proactiveStatus: { mode: "off" },
-        setProactiveStatus: vi.fn(),
-        proactiveRuns: [],
-        setProactiveRuns: vi.fn(),
-        learnedMemory: [],
-        setLearnedMemory: vi.fn(),
-        specialistCandidates: [],
-        setSpecialistCandidates: vi.fn(),
-        installedSkills: [],
-        setInstalledSkills: vi.fn(),
-        mcpServers: [],
-        setMcpServers: vi.fn(),
-        mcpTemplates: [],
-        setMcpTemplates: vi.fn(),
-        loading: false,
-        isRefreshing: false,
-        messagesLoading: false,
-        secondaryLoading: false,
-        loadSidebar: vi.fn(async () => undefined),
-        loadRuntimeCatalog: vi.fn(async () => undefined),
-        loadSessionCoreState: vi.fn(async () => undefined),
-        loadSessionSecondaryState: vi.fn(async () => undefined),
-        loadSessionState: vi.fn(async () => undefined),
-        refreshViewState: vi.fn(async () => undefined),
-      });
-      await renderHost();
-      // Auto-route surface switching is disabled; Chat remains the only routed surface.
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(false);
-      // surfaceRoutePreview is undefined because the mock returns undefined (draft is empty, hook returns undefined).
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.surfaceRoutePreview).toBeUndefined();
-    });
-
-    it("exposes autoRouteActive=false when the thread has turns", async () => {
-      // Default mock has thread with one turn (selectedTurn) → threadIsEmpty = false.
-      await renderHost();
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(false);
-    });
-
-    it("exposes autoRouteActive=false when surface is locked", async () => {
-      useChatSessionDataMock.mockReturnValue({
-        projects: { items: [selectedProject] },
-        setProjects: vi.fn(),
-        sessions: { items: [selectedSession] },
-        setSessions: vi.fn(),
-        thread: { sessionId: "session-1", selectedTurnId: null, activeLeafTurnId: null, turns: [] },
-        setThread: vi.fn(),
-        prefs,
-        setPrefs: vi.fn(),
-        binding: { sessionId: "session-1", target: null },
-        setBinding: vi.fn(),
-        generatedArtifacts: { items: [] },
-        setGeneratedArtifacts: vi.fn(),
-        threadKnowledgeAttachments: { items: [] },
-        setThreadKnowledgeAttachments: vi.fn(),
-        settings: { llm: { activeProviderId: "openai", activeModel: "gpt-5.5" } },
-        setSettings: vi.fn(),
-        commandCatalog: [],
-        proactiveStatus: { mode: "off" },
-        setProactiveStatus: vi.fn(),
-        proactiveRuns: [],
-        setProactiveRuns: vi.fn(),
-        learnedMemory: [],
-        setLearnedMemory: vi.fn(),
-        specialistCandidates: [],
-        setSpecialistCandidates: vi.fn(),
-        installedSkills: [],
-        setInstalledSkills: vi.fn(),
-        mcpServers: [],
-        setMcpServers: vi.fn(),
-        mcpTemplates: [],
-        setMcpTemplates: vi.fn(),
-        loading: false,
-        isRefreshing: false,
-        messagesLoading: false,
-        secondaryLoading: false,
-        loadSidebar: vi.fn(async () => undefined),
-        loadRuntimeCatalog: vi.fn(async () => undefined),
-        loadSessionCoreState: vi.fn(async () => undefined),
-        loadSessionSecondaryState: vi.fn(async () => undefined),
-        loadSessionState: vi.fn(async () => undefined),
-        refreshViewState: vi.fn(async () => undefined),
-      });
-      await renderHost({ lockSurface: true, surface: "chat" });
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(false);
-    });
   });
 
-  describe("unified auto-route send path", () => {
-    // Reconfigure the session-data mock to an EMPTY thread (no turns) so
-    // autoRouteActive is true, and point the thread controller at a session
-    // whose projectId reflects the desired bound/unbound state.
+  describe("empty-thread first-turn send path", () => {
+    // Reconfigure the session-data mock to an EMPTY thread (no turns) and point
+    // the thread controller at a session whose projectId reflects the desired
+    // bound/unbound state.
     function setupEmptyThread(options: { hasBoundProject: boolean }) {
       const base = callChatSessionDataMock();
       useChatSessionDataMock.mockReturnValue({
@@ -4994,9 +4877,7 @@ describe("MissionThreadedControllerHost", () => {
 
     it("sends an unbound predicted-code first turn without asking for a mode switch", async () => {
       setupEmptyThread({ hasBoundProject: false });
-      mockSurfacePreview = { mode: "code", confidence: 0.9, source: "classifier" };
       await renderHost();
-      expect(latestSurfaceInput?.activeSessionSurfaceProps?.autoRouteActive).toBe(false);
 
       await act(async () => {
         latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
@@ -5008,7 +4889,6 @@ describe("MissionThreadedControllerHost", () => {
 
     it("sends a low-confidence predicted-code first turn without asking for a mode switch", async () => {
       setupEmptyThread({ hasBoundProject: true });
-      mockSurfacePreview = { mode: "code", confidence: 0.5, source: "classifier" };
       await renderHost();
 
       await act(async () => {
@@ -5021,7 +4901,6 @@ describe("MissionThreadedControllerHost", () => {
 
     it("sends normally when predicted code is bound and confident (no gate)", async () => {
       setupEmptyThread({ hasBoundProject: true });
-      mockSurfacePreview = { mode: "code", confidence: 0.95, source: "classifier" };
       await renderHost();
 
       await act(async () => {
@@ -5034,7 +4913,6 @@ describe("MissionThreadedControllerHost", () => {
 
     it("sends normally when there is no preview (fail-open)", async () => {
       setupEmptyThread({ hasBoundProject: false });
-      mockSurfacePreview = undefined;
       await renderHost();
 
       await act(async () => {

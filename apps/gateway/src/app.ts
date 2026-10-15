@@ -91,7 +91,6 @@ import { hooksRoutes } from "./routes/hooks.js";
 import { durableRoutes } from "./routes/durable.js";
 import { connectorsRoutes } from "./routes/connectors.js";
 import { trustRoutes } from "./routes/trust.js";
-import { surfaceRoutes } from "./routes/surface.js";
 import { createGatewayLogger, isVerboseLoggingEnabled } from "./runtime-ux.js";
 import { isLoopbackDevOrigin, isTailnetDevOrigin, resolveTailnetShortHostAllowlist } from "./cors-origin-guard.js";
 import { projectPublicErrorValue } from "./services/public-secret-projection.js";
@@ -479,7 +478,6 @@ export async function buildApp(options: GatewayPluginOptions = {}) {
     await app.register(durableRoutes);
     await app.register(connectorsRoutes);
     await app.register(trustRoutes);
-    await app.register(surfaceRoutes);
     await app.register(addonsRoutes);
     await app.register(capabilityPacksRoutes);
     await app.register(evidenceRoutes);

@@ -594,8 +594,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
               <div className="mc-next-composer-title">
                 {/* The compact mode label keeps the current surface inspectable. */}
                 <ThreadedModeControl
-                  mode={props.modeOverridePending ?? (props.autoRouteActive ? undefined : props.mode)}
-                  preview={props.surfaceRoutePreview}
+                  mode={props.modeOverridePending ?? props.mode}
                   variant="compact"
                   interactive={false}
                 />
