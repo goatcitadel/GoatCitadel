@@ -1,5 +1,5 @@
 import type { AgentCommitmentRecord } from "@goatcitadel/contracts";
-import type { SessionAutonomyPrefsRecord } from "@goatcitadel/storage";
+import { resolveHourInTimeZone, type SessionAutonomyPrefsRecord } from "@goatcitadel/storage";
 
 /**
  * Commitment sweep (P1-F3).
@@ -141,7 +141,7 @@ export function getCooldownRemainingSeconds(
 export function isWithinActiveHours(now: Date, window: ActiveHoursWindow): boolean {
   const start = clampHour(window.startHour);
   const end = clampHour(window.endHour);
-  const hour = resolveHour(now, window.tz);
+  const hour = resolveHourInTimeZone(now, window.tz);
   if (start === end) {
     return true; // full-day / always active
   }
@@ -150,24 +150,6 @@ export function isWithinActiveHours(now: Date, window: ActiveHoursWindow): boole
   }
   // Overnight window wraps past midnight.
   return hour >= start || hour < end;
-}
-
-function resolveHour(now: Date, tz: string | undefined): number {
-  if (!tz) {
-    return now.getHours();
-  }
-  try {
-    const formatted = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      hour: "numeric",
-      hourCycle: "h23",
-    }).format(now);
-    const hour = Number.parseInt(formatted, 10);
-    return Number.isFinite(hour) ? hour % 24 : now.getHours();
-  } catch {
-    // RangeError for an unknown zone: keep wakes running on host time.
-    return now.getHours();
-  }
 }
 
 function clampHour(value: number): number {

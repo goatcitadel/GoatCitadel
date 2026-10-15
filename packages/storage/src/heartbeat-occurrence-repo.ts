@@ -9,7 +9,11 @@ import {
   type VerifiedTerminalTurnWriteHandoff,
   type VerifyTerminalTurnWriteHandoffInput,
 } from "./session-mutation-admission-repo.js";
-import { SessionAutonomyPrefsRepository, type SessionAutonomyPrefsRecord } from "./session-autonomy-prefs-repo.js";
+import {
+  resolveHourInTimeZone,
+  SessionAutonomyPrefsRepository,
+  type SessionAutonomyPrefsRecord,
+} from "./session-autonomy-prefs-repo.js";
 
 export const HEARTBEAT_SYSTEM_ACTOR_ID = "system-heartbeat" as const;
 export const HEARTBEAT_ADMISSION_OPERATION = "chat_system_heartbeat" as const;
@@ -1088,7 +1092,7 @@ function parseUnknownObject(value: unknown): Record<string, unknown> | undefined
 }
 
 function isWithinActiveHours(databaseNow: string, prefs: SessionAutonomyPrefsRecord): boolean {
-  const hour = new Date(databaseNow).getHours();
+  const hour = resolveHourInTimeZone(new Date(databaseNow), prefs.activeHours.tz);
   const { start, end } = prefs.activeHours;
   if (start === end) return true;
   return start < end ? hour >= start && hour < end : hour >= start || hour < end;

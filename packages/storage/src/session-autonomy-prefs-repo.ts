@@ -437,6 +437,23 @@ const DEFAULT_HEARTBEAT_INTERVAL_SECONDS_FLOOR = 15 * 60;
 /** Interval ceiling (24 h). */
 const DEFAULT_HEARTBEAT_INTERVAL_SECONDS_CEILING = 24 * 60 * 60;
 
+/**
+ * Hour [0, 23] of `now` in the IANA zone `tz`; host-local when `tz` is absent
+ * or unknown, so a bad zone never stops self-wake.
+ */
+export function resolveHourInTimeZone(now: Date, tz: string | undefined): number {
+  if (!tz) {
+    return now.getHours();
+  }
+  try {
+    const formatted = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hourCycle: "h23" }).format(now);
+    const hour = Number.parseInt(formatted, 10);
+    return Number.isFinite(hour) ? hour % 24 : now.getHours();
+  } catch {
+    return now.getHours();
+  }
+}
+
 /** Clamp an active-hours window into integer hours in [0, 24]. */
 function normalizeActiveHours(window: SessionActiveHoursWindow): SessionActiveHoursWindow {
   const start = clampInt(window.start, DEFAULT_SESSION_ACTIVE_HOURS.start, 0, 24);
