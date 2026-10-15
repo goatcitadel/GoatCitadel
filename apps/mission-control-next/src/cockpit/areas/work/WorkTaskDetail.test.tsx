@@ -102,7 +102,9 @@ describe("Work task detail", () => {
       select.value = "blocked";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Save task status");
+    const review = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Save task status",
+    );
     if (!review) throw new Error("Missing review control");
     await act(async () => review.click());
     await vi.waitFor(() => expect(container.textContent).toContain("This task changed"));
@@ -124,7 +126,9 @@ describe("Work task detail", () => {
       select.value = "blocked";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Save task status");
+    const review = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Save task status",
+    );
     if (!review) throw new Error("Missing review control");
     await act(async () => review.click());
     await vi.waitFor(() =>

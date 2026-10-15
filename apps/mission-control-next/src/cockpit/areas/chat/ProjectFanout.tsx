@@ -22,7 +22,10 @@ export function ProjectFanout({
 }) {
   const owner = useProjectFanout(project, workspaceId, citadelId);
   return (
-    <section aria-label="Automatic fan-out" className="grid min-w-0 grid-cols-1 gap-3 rounded-lg border border-line p-4">
+    <section
+      aria-label="Automatic fan-out"
+      className="grid min-w-0 grid-cols-1 gap-3 rounded-lg border border-line p-4"
+    >
       <h2 className="font-display text-lg">Automatic fan-out</h2>
       <p className="text-sm text-fg-secondary">
         Allow automatic child work for this project until a finite expiry. Every launch reserves child slots and cost

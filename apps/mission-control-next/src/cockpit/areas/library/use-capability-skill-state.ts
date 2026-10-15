@@ -152,7 +152,8 @@ export function useCapabilitySkillState({
     const existing = attempts.get(attemptKey);
     if (existing && existing.phase !== "recorded") return;
     const current = () =>
-      access.current() && mounted.current &&
+      access.current() &&
+      mounted.current &&
       lifecycle.current.identity === target.identity &&
       lifecycle.current.generation === target.generation;
     if (!current()) return;
@@ -209,7 +210,8 @@ export function useCapabilitySkillState({
       if (dispatched && classifyOperationFailure(cause) === "refused") {
         // Gateway answered and recorded nothing: no replay lock, the same revision may be reviewed again.
         refused = true;
-        if (current()) setError({ identity, message: `Gateway did not accept the request. ${describeApiError(cause).summary}` });
+        if (current())
+          setError({ identity, message: `Gateway did not accept the request. ${describeApiError(cause).summary}` });
       } else if (dispatched) {
         publish(attemptKey, {
           ...base,

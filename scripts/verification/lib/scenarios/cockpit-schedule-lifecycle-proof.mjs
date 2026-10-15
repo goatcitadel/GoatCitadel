@@ -174,17 +174,24 @@ export async function runCockpitScheduleLifecycleProof({
           await page.getByRole("button", { name: "New schedule", exact: true }).click();
           const draftForm = page.getByRole("form", { name: "New schedule", exact: true });
           const scheduleDraftProof = await runWorkDraftLeaveProof({
-            page, form: draftForm, label: "New schedule",
-            fields: [{ label: "Name", value: "Unsent schedule " + suffix },
+            page,
+            form: draftForm,
+            label: "New schedule",
+            fields: [
+              { label: "Name", value: "Unsent schedule " + suffix },
               { label: "Cron schedule", value: "0 12 * * 1 UTC" },
-              { label: "Action", value: "cost_report", select: true }],
+              { label: "Action", value: "cost_report", select: true },
+            ],
             clearedFields: { Name: "", "Cron schedule": "0 9 * * *", Action: "task" },
-            destinationLink: page.getByRole("navigation", { name: "Work views", exact: true })
+            destinationLink: page
+              .getByRole("navigation", { name: "Work views", exact: true })
               .getByRole("link", { name: "History", exact: true }),
             destinationPath: "/work/history?shell=cockpit",
             destinationReady: () => page.getByRole("heading", { name: "Work history", exact: true }).waitFor(),
             reopen: () => page.getByRole("button", { name: "New schedule", exact: true }).click(),
-            selection, writes, documentCount: () => navigations,
+            selection,
+            writes,
+            documentCount: () => navigations,
             capture: (name, target) => capture("schedule-create-" + name, target),
           });
           assert.deepEqual(await read(seed.jobId), seed);

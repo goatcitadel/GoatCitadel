@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
-import { approvalCreatedLabel, approvalExpiryLabel, approvalExplanationLine, approvalPreview } from "./approval-preview";
+import {
+  approvalCreatedLabel,
+  approvalExpiryLabel,
+  approvalExplanationLine,
+  approvalPreview,
+} from "./approval-preview";
 
 const approval = {
   approvalId: "approval/one?two",
@@ -25,10 +30,12 @@ describe("approval preview", () => {
   });
 
   it("uses a generated explanation when available, without making a decision", () => {
-    expect(approvalPreview({
-      ...approval,
-      explanation: { summary: "Run a command", riskExplanation: "Changes files", generatedAt: approval.createdAt },
-    }).summary).toBe("Run a command");
+    expect(
+      approvalPreview({
+        ...approval,
+        explanation: { summary: "Run a command", riskExplanation: "Changes files", generatedAt: approval.createdAt },
+      }).summary,
+    ).toBe("Run a command");
   });
 
   it("makes expired and unknown expiry states explicit", () => {

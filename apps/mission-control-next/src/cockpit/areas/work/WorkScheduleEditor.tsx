@@ -34,12 +34,9 @@ export function WorkScheduleEditor({
     actionConfig: record.actionConfig ? JSON.stringify(record.actionConfig, null, 2) : "",
   });
   const empty = fromJob(job);
-  const editor = useSessionDraft(
-    `schedule-edit:${getGatewayApiBaseUrl()}:${job.jobId}`,
-    empty,
-    job.revision,
-    { label: "Schedule settings" },
-  );
+  const editor = useSessionDraft(`schedule-edit:${getGatewayApiBaseUrl()}:${job.jobId}`, empty, job.revision, {
+    label: "Schedule settings",
+  });
   const draft = editor.value;
   const [review, setReview] = useState<{ value: typeof draft; expires: number } | null>(null);
   const [notice, setNotice] = useState("");
@@ -62,9 +59,7 @@ export function WorkScheduleEditor({
       settings = scheduleSettingsInput(
         review.value,
         review.value.action,
-        review.value.base.action === review.value.action
-          ? review.value.base.actionConfig
-          : undefined,
+        review.value.base.action === review.value.action ? review.value.base.actionConfig : undefined,
       );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Invalid advanced settings.");
@@ -96,8 +91,7 @@ export function WorkScheduleEditor({
       <h3 className="font-medium text-fg">Edit schedule</h3>
       <UnattributedDraftRecovery editor={editor} />
       <p className="text-sm text-fg-secondary">
-        Gateway-wide configuration. Changing timing affects future runs; it does not prove any run
-        executed.
+        Gateway-wide configuration. Changing timing affects future runs; it does not prove any run executed.
       </p>
       <Field label="Schedule name">
         {(props) => (
@@ -158,8 +152,8 @@ export function WorkScheduleEditor({
       />
       {stale ? (
         <p role="alert">
-          This schedule changed. Your draft is preserved. Review the latest settings and explicitly
-          rebase your draft before saving.
+          This schedule changed. Your draft is preserved. Review the latest settings and explicitly rebase your draft
+          before saving.
         </p>
       ) : null}
       {stale ? (
@@ -176,7 +170,10 @@ export function WorkScheduleEditor({
       {!review && feedback ? <p role={feedbackFailed ? "alert" : "status"}>{feedback}</p> : null}
       <Button
         disabled={!available || stale || locked || !draft.name.trim() || !draft.schedule.trim()}
-        onClick={() => { setNotice(""); setReview({ value: structuredClone(draft), expires: Date.now() + 60_000 }); }}
+        onClick={() => {
+          setNotice("");
+          setReview({ value: structuredClone(draft), expires: Date.now() + 60_000 });
+        }}
       >
         Review schedule changes
       </Button>
@@ -198,20 +195,16 @@ export function WorkScheduleEditor({
               Gateway-wide · {review.value.name} · {review.value.schedule}
             </p>
             <p>
-              Action: {review.value.action}. Destination: {review.value.workdir || "Not specified"}.
-              Context: {review.value.contextFrom || "Not specified"}. End:{" "}
-              {review.value.endAt || "No end date"}. {scheduleTimezoneSummary(review.value.schedule)}
+              Action: {review.value.action}. Destination: {review.value.workdir || "Not specified"}. Context:{" "}
+              {review.value.contextFrom || "Not specified"}. End: {review.value.endAt || "No end date"}.{" "}
+              {scheduleTimezoneSummary(review.value.schedule)}
               Displayed dates use your browser timezone. Review expires after one minute.
             </p>
             <p className="break-words">
               Description: {review.value.description || "None"}. Action configuration:{" "}
               {review.value.actionConfig || "None"}
             </p>
-            <Button
-              variant="primary"
-              disabled={!available || locked || stale}
-              onClick={() => void save()}
-            >
+            <Button variant="primary" disabled={!available || locked || stale} onClick={() => void save()}>
               Save schedule changes
             </Button>
             <Button

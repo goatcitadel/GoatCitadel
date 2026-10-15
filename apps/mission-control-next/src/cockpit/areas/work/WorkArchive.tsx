@@ -20,12 +20,7 @@ import { WindowedRecordList } from "../../ui/WindowedRecordList";
 
 export function WorkArchive() {
   const { activeWorkspaceId } = useUiPreferences();
-  return (
-    <ArchiveWorkspace
-      key={activeWorkspaceId ?? "default"}
-      workspaceId={activeWorkspaceId ?? "default"}
-    />
-  );
+  return <ArchiveWorkspace key={activeWorkspaceId ?? "default"} workspaceId={activeWorkspaceId ?? "default"} />;
 }
 function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
   const [view, setView] = useState<"active" | "trash">("trash");
@@ -47,11 +42,8 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
     getNextPageParam: (page) => page.nextCursor,
     refetchOnMount: "always",
   });
-  const available =
-    tasks.isSuccess && tasks.isFetchedAfterMount && !tasks.isFetching && !tasks.isPlaceholderData;
-  const locked = review
-    ? readTaskMutation(taskMutationKey(base, workspaceId, review.taskId)).phase !== "idle"
-    : false;
+  const available = tasks.isSuccess && tasks.isFetchedAfterMount && !tasks.isFetching && !tasks.isPlaceholderData;
+  const locked = review ? readTaskMutation(taskMutationKey(base, workspaceId, review.taskId)).phase !== "idle" : false;
   async function confirm() {
     if (!review || !available || locked) return;
     const identity = generation.current;
@@ -79,8 +71,8 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
     <section className="mx-auto grid max-w-5xl gap-4 p-4 sm:p-6">
       <h1 className="font-display text-xl font-semibold text-fg">Task archive and restore</h1>
       <p className="text-sm text-fg-secondary">
-        Workspace operator tasks. Archive removes a task from active lists and can be reversed. It
-        does not cancel a runtime run.
+        Workspace operator tasks. Archive removes a task from active lists and can be reversed. It does not cancel a
+        runtime run.
       </p>
       <Field label="Task list">
         {(props) => (
@@ -122,10 +114,7 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
       {message ? <p role="status">{message}</p> : null}
       {tasks.isLoading ? <p role="status">Loading tasks…</p> : null}
       {tasks.isError ? (
-        <EmptyState
-          title="Task archive unavailable"
-          description={describeApiError(tasks.error).summary}
-        />
+        <EmptyState title="Task archive unavailable" description={describeApiError(tasks.error).summary} />
       ) : null}
       {tasks.isSuccess ? (
         <WindowedRecordList
@@ -146,8 +135,7 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
               <Button
                 disabled={
                   !available ||
-                  readTaskMutation(taskMutationKey(base, workspaceId, task.taskId)).phase !==
-                    "idle" ||
+                  readTaskMutation(taskMutationKey(base, workspaceId, task.taskId)).phase !== "idle" ||
                   Boolean(task.agenticContext || task.proactiveContext)
                 }
                 onClick={() => {
@@ -188,9 +176,7 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
               ? "This task returns to active task lists."
               : "This task leaves active task lists. You can restore it from Archived tasks."}
           </p>
-          {review ? (
-            <p>{readTaskMutation(taskMutationKey(base, workspaceId, review.taskId)).message}</p>
-          ) : null}
+          {review ? <p>{readTaskMutation(taskMutationKey(base, workspaceId, review.taskId)).message}</p> : null}
           <Button disabled={!available || locked} onClick={() => void confirm()}>
             {view === "trash" ? "Restore task" : "Archive task"}
           </Button>

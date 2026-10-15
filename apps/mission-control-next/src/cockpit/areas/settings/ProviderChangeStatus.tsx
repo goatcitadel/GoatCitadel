@@ -57,7 +57,11 @@ export function ProviderChangeStatus({
           </Button>
         ) : null}
         {change.blocking && change.receipt.requiredAction?.kind === "approval" ? (
-          <NativeOwnerLink scope={[plan?.origin.workspaceId, change.receipt.planId]} className="text-accent underline" href="/inbox">
+          <NativeOwnerLink
+            scope={[plan?.origin.workspaceId, change.receipt.planId]}
+            className="text-accent underline"
+            href="/inbox"
+          >
             Open approvals in Inbox
           </NativeOwnerLink>
         ) : null}

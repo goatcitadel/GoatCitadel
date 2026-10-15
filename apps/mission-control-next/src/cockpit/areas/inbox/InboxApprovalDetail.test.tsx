@@ -8,18 +8,33 @@ import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-in
 import { InboxApprovalDetail } from "./InboxApprovalDetail";
 
 const api = vi.hoisted(() => ({
-  fetchApprovalReplay: vi.fn(async () => ({ approval: { ...approval, status: "approved", linkage: {workspaceId:"default"} }, effects: [], events: [] })),
+  fetchApprovalReplay: vi.fn(async () => ({
+    approval: { ...approval, status: "approved", linkage: { workspaceId: "default" } },
+    effects: [],
+    events: [],
+  })),
   fetchApproval: vi.fn(),
   fetchApprovals: vi.fn(),
   fetchOperatorInbox: vi.fn(),
   fetchDurableRun: vi.fn(),
-  fetchRuntimeLifecycle: vi.fn(async (): Promise<Record<string, unknown>> => ({ approval: { ...approval, linkage: { workspaceId: "default" } }, canonical: { approvalId: approval.approvalId }, turns: [] })),
+  fetchRuntimeLifecycle: vi.fn(
+    async (): Promise<Record<string, unknown>> => ({
+      approval: { ...approval, linkage: { workspaceId: "default" } },
+      canonical: { approvalId: approval.approvalId },
+      turns: [],
+    }),
+  ),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
   fetchApproval: api.fetchApproval,
   fetchApprovalReplay: api.fetchApprovalReplay,
 }));
-vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ fetchApprovals: api.fetchApprovals, fetchApprovalReplay: api.fetchApprovalReplay, fetchRuntimeLifecycle: api.fetchRuntimeLifecycle, fetchDurableRun: api.fetchDurableRun }));
+vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  fetchApprovals: api.fetchApprovals,
+  fetchApprovalReplay: api.fetchApprovalReplay,
+  fetchRuntimeLifecycle: api.fetchRuntimeLifecycle,
+  fetchDurableRun: api.fetchDurableRun,
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({
   fetchOperatorInbox: api.fetchOperatorInbox,
 }));
@@ -45,7 +60,14 @@ vi.mock("./InboxApprovalActions", () => ({
       <button type="button" onClick={() => onInvalidated()}>
         Report changed record
       </button>
-      <button type="button" onClick={() => onInvalidated("Specialist evidence changed. Refresh and review the current target before approving.")}>Report specialist change</button>
+      <button
+        type="button"
+        onClick={() =>
+          onInvalidated("Specialist evidence changed. Refresh and review the current target before approving.")
+        }
+      >
+        Report specialist change
+      </button>
     </>
   ),
 }));
@@ -103,14 +125,30 @@ afterEach(() => {
 });
 
 describe("Inbox approval detail", () => {
-  it.each(["llama_cpp_setup", "llama_cpp_configuration", "unrelated"])("exposes the native setup return only for the supported %s target", async targetResourceId => {
-    api.fetchApproval.mockResolvedValue({...approval,kind:"change_plan_effect",payload:{targetResourceId},linkage:{workspaceId:"default"}});
-    await act(async()=>root.render(<QueryClientProvider client={client}><InboxApprovalDetail item={item} workspaceId="default"/></QueryClientProvider>));
-    await settleUntil(()=>Boolean(container.textContent?.includes("Decision controls")));
-    const link=[...container.querySelectorAll('a')].find(item=>item.textContent==='Return to llama.cpp setup');
-    if(targetResourceId==='unrelated') expect(link).toBeUndefined();
-    else expect(link?.getAttribute('href')).toBe('/settings/models?shell=cockpit#local-ai');
-  });
+  it.each(["llama_cpp_setup", "llama_cpp_configuration", "unrelated"])(
+    "exposes the native setup return only for the supported %s target",
+    async (targetResourceId) => {
+      api.fetchApproval.mockResolvedValue({
+        ...approval,
+        kind: "change_plan_effect",
+        payload: { targetResourceId },
+        linkage: { workspaceId: "default" },
+      });
+      await act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <InboxApprovalDetail item={item} workspaceId="default" />
+          </QueryClientProvider>,
+        ),
+      );
+      await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+      const link = [...container.querySelectorAll("a")].find(
+        (item) => item.textContent === "Return to llama.cpp setup",
+      );
+      if (targetResourceId === "unrelated") expect(link).toBeUndefined();
+      else expect(link?.getAttribute("href")).toBe("/settings/models?shell=cockpit#local-ai");
+    },
+  );
   it("keeps the approval and its decision controls while the record is rechecked", async () => {
     await act(async () =>
       root.render(
@@ -168,7 +206,10 @@ describe("Inbox approval detail", () => {
   it.each([
     ["Record decision", "Approved decision recorded."],
     ["Report changed record", "The approval changed. Review the refreshed record before deciding."],
-    ["Report specialist change", "Specialist evidence changed. Refresh and review the current target before approving."],
+    [
+      "Report specialist change",
+      "Specialist evidence changed. Refresh and review the current target before approving.",
+    ],
   ])("drops the settled record while the queue is re-read after %s", async (action, notice) => {
     await act(async () =>
       root.render(

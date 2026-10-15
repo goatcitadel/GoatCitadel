@@ -80,7 +80,9 @@ export function CitadelAccessReview({
           </div>
         ))}
       </details>
-      <TechnicalDetails><p className="break-all font-mono text-xs">Version: {snapshot.revision}</p></TechnicalDetails>
+      <TechnicalDetails>
+        <p className="break-all font-mono text-xs">Version: {snapshot.revision}</p>
+      </TechnicalDetails>
       <Button disabled={snapshot.structure.record?.lifecycleStatus === "archived"} onClick={onAccept}>
         Use current access review
       </Button>

@@ -113,12 +113,21 @@ export function projectProviderCostRows(summary: CostSummaryResponse): ProviderC
     }
   }
   const complete = summary.usageAvailability?.metricAvailability?.costUsd?.complete === true;
-  return [...providers.values()].map((row) => ({
-    ...row,
-    costLabel: complete ? formatCostUsd(row.knownCostUsd)
-      : row.knownCostUsd > 0 ? `${formatCostUsd(row.knownCostUsd)}+` : "Unknown",
-  })).sort((left, right) => right.knownCostUsd - left.knownCostUsd
-    || right.tokenTotal - left.tokenTotal || left.providerKey.localeCompare(right.providerKey));
+  return [...providers.values()]
+    .map((row) => ({
+      ...row,
+      costLabel: complete
+        ? formatCostUsd(row.knownCostUsd)
+        : row.knownCostUsd > 0
+          ? `${formatCostUsd(row.knownCostUsd)}+`
+          : "Unknown",
+    }))
+    .sort(
+      (left, right) =>
+        right.knownCostUsd - left.knownCostUsd ||
+        right.tokenTotal - left.tokenTotal ||
+        left.providerKey.localeCompare(right.providerKey),
+    );
 }
 
 function finiteNonNegative(value: number | undefined): number {

@@ -9,7 +9,15 @@ import { Dialog } from "../../ui/Dialog";
 
 const timestamp = (value?: string) =>
   value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : "Not observed";
-export function ChannelOperations({ connection, onUpdated, connectorDiagnosticsEnabled }: { connection: IntegrationConnection; onUpdated?: () => Promise<unknown>; connectorDiagnosticsEnabled?: boolean }) {
+export function ChannelOperations({
+  connection,
+  onUpdated,
+  connectorDiagnosticsEnabled,
+}: {
+  connection: IntegrationConnection;
+  onUpdated?: () => Promise<unknown>;
+  connectorDiagnosticsEnabled?: boolean;
+}) {
   const journey = useChannelJourney([connection], connectorDiagnosticsEnabled);
   const discord = useDiscordOperations([connection]);
   const [review, setReview] = useState<{
@@ -37,7 +45,11 @@ export function ChannelOperations({ connection, onUpdated, connectorDiagnosticsE
               {error}
             </p>
           ))}
-          <ChannelJourneyEvidence journey={journey.result?.journey} diagnostics={journey.result?.diagnostics} diagnosticsAvailability={journey.result?.diagnosticsAvailability} />
+          <ChannelJourneyEvidence
+            journey={journey.result?.journey}
+            diagnostics={journey.result?.diagnostics}
+            diagnosticsAvailability={journey.result?.diagnosticsAvailability}
+          />
           <p className="text-fg-muted">
             A sent receipt records provider acceptance; it does not confirm that a person read the message.
           </p>

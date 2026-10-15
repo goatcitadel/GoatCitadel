@@ -1,10 +1,14 @@
 import type { ApprovalExplanationStatus, ApprovalRequest } from "@goatcitadel/contracts";
 
 /** Exactly one explanation line: the summary when present, otherwise one status-specific sentence. */
-export function approvalExplanationLine(summary: string | undefined, status: ApprovalExplanationStatus | undefined): string {
+export function approvalExplanationLine(
+  summary: string | undefined,
+  status: ApprovalExplanationStatus | undefined,
+): string {
   const text = summary?.trim();
   if (text) return text;
-  if (status === "pending") return "The explanation is still being prepared. Review the action preview before deciding.";
+  if (status === "pending")
+    return "The explanation is still being prepared. Review the action preview before deciding.";
   if (status === "failed") return "The explanation could not be generated. Inspect the action preview before deciding.";
   return "No explanation was requested. Review the action preview before deciding.";
 }

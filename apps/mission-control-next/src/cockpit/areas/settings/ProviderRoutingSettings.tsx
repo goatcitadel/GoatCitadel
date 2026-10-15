@@ -213,10 +213,15 @@ export function ProviderRoutingSettings() {
         onClose={() => setPlan(null)}
         onConfirm={actions.confirm}
         onSubmitSecureInput={actions.secure}
-        renderApprovalAction={(reviewed, pending) => <SettingsApprovalOwnerAction
-          plan={reviewed} owner="provider-routing" workspaceId="default" disabled={pending}
-          viewIdentity={[open, routingProviderId, routingModel, routingEditor.baseRevision]}
-        />}
+        renderApprovalAction={(reviewed, pending) => (
+          <SettingsApprovalOwnerAction
+            plan={reviewed}
+            owner="provider-routing"
+            workspaceId="default"
+            disabled={pending}
+            viewIdentity={[open, routingProviderId, routingModel, routingEditor.baseRevision]}
+          />
+        )}
         onContinueOAuth={() => undefined}
         onSubmitPublicForm={() => undefined}
         onReviewArtifacts={() => undefined}

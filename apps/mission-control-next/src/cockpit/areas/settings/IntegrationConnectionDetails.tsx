@@ -13,9 +13,11 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
       <p className="text-sm text-fg-secondary">
         {connection.enabled ? "Enabled" : "Disabled"} · Configured status: {connection.status}
       </p>
-      <p className="text-sm text-fg-secondary">{s.diagnostics?.connectorId === connection.connectionId
-        ? `Latest diagnostics: ${s.diagnostics.status}, observed ${s.diagnostics.checkedAt}. This result does not establish ongoing connectivity.`
-        : "Connectivity unverified. Saved configuration does not prove a working connection."}</p>
+      <p className="text-sm text-fg-secondary">
+        {s.diagnostics?.connectorId === connection.connectionId
+          ? `Latest diagnostics: ${s.diagnostics.status}, observed ${s.diagnostics.checkedAt}. This result does not establish ongoing connectivity.`
+          : "Connectivity unverified. Saved configuration does not prove a working connection."}
+      </p>
       <p className="text-xs text-fg-muted">
         {connection.workspaceId
           ? `Bound workspace: ${connection.workspaceId}`

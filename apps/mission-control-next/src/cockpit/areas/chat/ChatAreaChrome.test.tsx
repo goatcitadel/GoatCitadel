@@ -98,7 +98,9 @@ describe("ChatSessionHeader", () => {
     const [titleRow, conversationRow] = [...header.children] as [HTMLElement, HTMLElement];
     expect(titleRow.querySelector("h1")?.textContent).toBe("Chat");
     expect(titleRow.textContent).toContain("No messages yet");
-    expect(titleRow.querySelector('[aria-label="Selected conversation activity"]')?.parentElement?.className).toContain("truncate");
+    expect(titleRow.querySelector('[aria-label="Selected conversation activity"]')?.parentElement?.className).toContain(
+      "truncate",
+    );
     expect(titleRow.querySelector("h1")?.closest(".min-w-0.flex-1")).not.toBeNull();
 
     const select = conversationRow.querySelector('select[aria-label="Choose conversation"]') as HTMLSelectElement;
@@ -112,12 +114,18 @@ describe("ChatSessionHeader", () => {
     expect(conversationRow.querySelector('button[aria-label="Build editor"]')).not.toBeNull();
     expect(conversationRow.querySelector('button[aria-label="Choose conversation"]')).toBeNull();
 
-    const projects = [...titleRow.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Projects");
+    const projects = [...titleRow.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Projects",
+    );
     await act(async () => projects!.click());
     expect(onOpenProjects).toHaveBeenCalledOnce();
-    await act(async () => (conversationRow.querySelector('button[aria-label="Build editor"]') as HTMLButtonElement).click());
+    await act(async () =>
+      (conversationRow.querySelector('button[aria-label="Build editor"]') as HTMLButtonElement).click(),
+    );
     expect(onToggle).toHaveBeenCalledOnce();
-    await act(async () => (conversationRow.querySelector('button[aria-label="New conversation"]') as HTMLButtonElement).click());
+    await act(async () =>
+      (conversationRow.querySelector('button[aria-label="New conversation"]') as HTMLButtonElement).click(),
+    );
     expect(rail.onCreateSession).toHaveBeenCalledOnce();
   });
 });

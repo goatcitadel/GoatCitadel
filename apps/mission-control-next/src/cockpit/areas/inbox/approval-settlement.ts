@@ -21,7 +21,11 @@ export function approvalResolutionLine(approval: ApprovalRequest): string | null
   if (approval.status === "pending") return null;
   const parts: string[] = [];
   if (approval.resolvedBy)
-    parts.push(approvalExpiredUnresolved(approval) ? "Expired without an operator decision" : `Decided by ${approval.resolvedBy}`);
+    parts.push(
+      approvalExpiredUnresolved(approval)
+        ? "Expired without an operator decision"
+        : `Decided by ${approval.resolvedBy}`,
+    );
   if (approval.resolutionNote?.trim()) parts.push(approval.resolutionNote);
   return parts.length ? parts.map(sentence).join(" ") : null;
 }

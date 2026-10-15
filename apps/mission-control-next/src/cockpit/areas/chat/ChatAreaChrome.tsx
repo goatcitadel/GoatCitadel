@@ -131,7 +131,9 @@ export function ChatHeaderSubtitle({
   const parts = [
     projectName,
     active?.activePersonality?.name,
-    active?.selectedProviderId && active?.selectedModel ? `${active.selectedProviderId} · ${active.selectedModel}` : null,
+    active?.selectedProviderId && active?.selectedModel
+      ? `${active.selectedProviderId} · ${active.selectedModel}`
+      : null,
     active?.delegationRun?.status ? `Run ${active.delegationRun.status}` : null,
   ].filter(Boolean);
   const text = parts.length ? parts.join(" · ") : loading ? "Loading conversations…" : null;

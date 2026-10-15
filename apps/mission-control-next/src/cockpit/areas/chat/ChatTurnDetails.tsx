@@ -4,7 +4,9 @@ import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/compone
 import { getChatToolRunDiagnostics } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
 import { projectChatToolEffectTruth } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-effect-truth";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-const ChatOpenCodeEvidence = lazy(async () => ({ default: (await import("./ChatOpenCodeEvidence")).ChatOpenCodeEvidence }));
+const ChatOpenCodeEvidence = lazy(async () => ({
+  default: (await import("./ChatOpenCodeEvidence")).ChatOpenCodeEvidence,
+}));
 import { ChatTurnActions } from "./ChatTurnActions";
 
 type TurnActions = Pick<
@@ -180,7 +182,14 @@ export function ChatTurnDetails({
           </button>
         </details>
       ) : null}
-      {turn.toolRuns.some((run) => run.result?.externalAgent !== undefined) ? <Suspense fallback={<p role="status">Loading tool report…</p>}><ChatOpenCodeEvidence toolRuns={turn.toolRuns} onOpenRunDetails={() => actions.onOpenRunDetails(turn.turnId)} /></Suspense> : null}
+      {turn.toolRuns.some((run) => run.result?.externalAgent !== undefined) ? (
+        <Suspense fallback={<p role="status">Loading tool report…</p>}>
+          <ChatOpenCodeEvidence
+            toolRuns={turn.toolRuns}
+            onOpenRunDetails={() => actions.onOpenRunDetails(turn.turnId)}
+          />
+        </Suspense>
+      ) : null}
       {turn.generatedArtifacts?.length ? (
         <section aria-label="Saved artifacts" className="rounded-md border border-line-subtle bg-raised p-2">
           <h3 className="font-medium text-fg">Saved artifacts</h3>

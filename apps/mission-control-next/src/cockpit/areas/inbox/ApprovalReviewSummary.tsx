@@ -4,7 +4,9 @@ import { humanizeToken } from "@goatcitadel/mission-control-shared/content/statu
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 export function ApprovalReviewSummary({ approval, workspaceId }: { approval: ApprovalRequest; workspaceId: string }) {
   const evidence = buildApprovalRequestReviewEvidenceModel(approval);
-  const scope = evidence?.scopeSummary ?? `workspace ${approval.linkage?.workspaceId ?? workspaceId}${approval.linkage?.sessionId ? ` · conversation ${approval.linkage.sessionId}` : ""}.`;
+  const scope =
+    evidence?.scopeSummary ??
+    `workspace ${approval.linkage?.workspaceId ?? workspaceId}${approval.linkage?.sessionId ? ` · conversation ${approval.linkage.sessionId}` : ""}.`;
   return (
     <section
       aria-label="Approval scope and consequences"
@@ -57,7 +59,8 @@ export function ApprovalReviewSummary({ approval, workspaceId }: { approval: App
       ))}
       <p>
         <strong>Consequence:</strong>{" "}
-        {evidence?.consequence ?? approval.explanation?.riskExplanation ??
+        {evidence?.consequence ??
+          approval.explanation?.riskExplanation ??
           "Gateway may execute the exact reviewed action after approval; deny withholds authorization. The decision alone does not prove work resumed or completed."}
       </p>
       {approval.rollbackNote ? (

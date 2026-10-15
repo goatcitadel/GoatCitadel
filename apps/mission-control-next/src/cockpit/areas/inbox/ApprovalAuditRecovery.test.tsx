@@ -32,7 +32,14 @@ const approval = {
   linkage: { workspaceId: "one", durableRunId: "original" },
   createdAt: "now",
 } as ApprovalRequest;
-const run = { runId: "original", workflowKey: "orchestration.plan.execute", status: "paused", version: 2, payload: { workspaceId: "one" }, updatedAt: "now" };
+const run = {
+  runId: "original",
+  workflowKey: "orchestration.plan.execute",
+  status: "paused",
+  version: 2,
+  payload: { workspaceId: "one" },
+  updatedAt: "now",
+};
 let root: Root, host: HTMLDivElement, client: QueryClient;
 beforeEach(() => {
   vi.resetAllMocks();
@@ -116,7 +123,9 @@ it("retains uncertainty on lost resume response and never retries automatically"
 it("does not lock after the owner refuses the resume request", async () => {
   await render();
   api.resume
-    .mockRejectedValueOnce(new ApiRequestError("API error 409", { kind: "http", method: "POST", path: "/x", status: 409 }))
+    .mockRejectedValueOnce(
+      new ApiRequestError("API error 409", { kind: "http", method: "POST", path: "/x", status: 409 }),
+    )
     .mockResolvedValue(run);
   await click("Resume paused run");
   await click("Confirm resume");
@@ -129,22 +138,38 @@ it("does not lock after the owner refuses the resume request", async () => {
   expect(host.textContent).toContain("Resume request recorded");
 });
 
-it.each(["changed", "unavailable"])("permits explicit healthy refresh after an unsent %s preflight", async failure => {
-  await render(); await click("Resume paused run");
-  if (failure === "changed") api.run.mockResolvedValue({ ...run, version: 3 });
-  else api.run.mockRejectedValueOnce(new Error("Temporary read failure"));
-  await click("Confirm resume"); expect(api.resume).not.toHaveBeenCalled();
-  await click("Refresh audit and recovery");
-  await click("Resume paused run"); await click("Confirm resume");
-  expect(api.resume).toHaveBeenCalledOnce(); expect(host.textContent).toContain("Resume request recorded");
-});
+it.each(["changed", "unavailable"])(
+  "permits explicit healthy refresh after an unsent %s preflight",
+  async (failure) => {
+    await render();
+    await click("Resume paused run");
+    if (failure === "changed") api.run.mockResolvedValue({ ...run, version: 3 });
+    else api.run.mockRejectedValueOnce(new Error("Temporary read failure"));
+    await click("Confirm resume");
+    expect(api.resume).not.toHaveBeenCalled();
+    await click("Refresh audit and recovery");
+    await click("Resume paused run");
+    await click("Confirm resume");
+    expect(api.resume).toHaveBeenCalledOnce();
+    expect(host.textContent).toContain("Resume request recorded");
+  },
+);
 
 it("records a late lost response for the original scope after unmount", async () => {
-  await render(); let fail!: (error: Error) => void;
-  api.resume.mockImplementation(() => new Promise((_, reject) => { fail = reject; }));
-  await click("Resume paused run"); await click("Confirm resume");
+  await render();
+  let fail!: (error: Error) => void;
+  api.resume.mockImplementation(
+    () =>
+      new Promise((_, reject) => {
+        fail = reject;
+      }),
+  );
+  await click("Resume paused run");
+  await click("Confirm resume");
   await act(async () => root.render(null));
   await act(async () => fail(new Error("late lost response")));
-  await render(); await click("Resume paused run");
-  expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(api.resume).toHaveBeenCalledOnce();
+  await render();
+  await click("Resume paused run");
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(api.resume).toHaveBeenCalledOnce();
 });
