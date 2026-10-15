@@ -454,6 +454,11 @@ describe("AddonsService", () => {
     ).toBe(false);
   });
 
+  it("declares a launch spec for every catalog add-on", async () => {
+    const { listAddonLaunchSpecIds, listAddonCatalogIds } = await import("./addons-service.js");
+    expect(listAddonLaunchSpecIds().sort()).toEqual(listAddonCatalogIds().sort());
+  });
+
   it("launches Arena with the local web origin and persists the launch URL when uiReady is true", async () => {
     const addonsRoot = path.join(goatHome, "addons");
     const addonPath = path.join(addonsRoot, "arena");
