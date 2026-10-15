@@ -9,6 +9,12 @@ import path from "node:path";
  *
  * The module only classifies paths; it never widens access by itself. Callers
  * stay responsible for deny-wins, approvals, and the path-jail checks.
+ *
+ * Enforcement status: nothing calls this module yet, so it does not protect
+ * any write today. The policy engine and tool executor adopt
+ * `classifyHardForbiddenWritePath` for every write and delete target when
+ * operator write roots land; until then `assertWritePathInJail` and the
+ * configured `writeJailRoots` remain the only write boundary.
  */
 export type WriteRootRejection =
   | "control_characters"
@@ -110,7 +116,9 @@ export function canonicalizeOperatorWriteRoot(input: string, ctx: WriteRootSafet
 
 /**
  * Classify a resolved runtime write or delete target. Returns a rejection when
- * the target must never be written, even inside an allowed root or grant.
+ * the target is one that write enforcement should refuse even inside an
+ * allowed root or grant. This is a classifier only: it blocks nothing until a
+ * write gate calls it (see the enforcement status note above).
  * Pass a path already resolved through links (for example via the closest
  * existing ancestor), since this check is lexical.
  */
