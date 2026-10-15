@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
-import {
-  approvalCreatedLabel,
-  approvalExpiryLabel,
-  approvalExplanationLine,
-  approvalPreview,
-} from "./approval-preview";
+import { approvalExpiryLabel, approvalExplanationLine, approvalPreview } from "./approval-preview";
 
 const approval = {
   approvalId: "approval/one?two",
@@ -43,7 +38,8 @@ describe("approval preview", () => {
     expect(approvalExpiryLabel("2026-09-28T18:02:00Z", now)).toBe("Expires in 2 minutes");
     expect(approvalExpiryLabel("2026-09-28T17:59:00Z", now)).toBe("Expiry passed; verify its current status");
     expect(approvalExpiryLabel("invalid", now)).toBeNull();
-    expect(approvalCreatedLabel("invalid")).toBe("Time unavailable");
+    expect(approvalExpiryLabel("2026-09-28T19:30:00Z", now)).toBe("Expires in about 2 hours");
+    expect(approvalExpiryLabel("2026-09-28T18:01:00Z", now)).toBe("Expires in 1 minute");
   });
 });
 

@@ -1,6 +1,6 @@
 import type { CapabilityCatalogEntry } from "@goatcitadel/contracts";
 import type { CapabilityStatusFilter } from "@goatcitadel/mission-control-shared/content/capability-rows";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { capabilityKindLabel, freeText } from "./capability-vocabulary";
 import type { CatalogFilters } from "./capability-catalog";
 
 const STATUS_OPTIONS: readonly { value: CapabilityStatusFilter; label: string }[] = [
@@ -50,7 +50,7 @@ export function CapabilityCatalogFilters({
           ) : null}
           {kinds.map((value) => (
             <option key={value} value={value}>
-              {humanizeToken(value)}
+              {capabilityKindLabel(value)}
             </option>
           ))}
         </select>
@@ -87,7 +87,7 @@ export function CapabilityCatalogFilters({
           ) : null}
           {trustLabels.map((value) => (
             <option key={value} value={value}>
-              {value === "unlabeled" ? "Not labeled" : humanizeToken(value)}
+              {value === "unlabeled" ? "Not labeled" : freeText(value)}
             </option>
           ))}
         </select>

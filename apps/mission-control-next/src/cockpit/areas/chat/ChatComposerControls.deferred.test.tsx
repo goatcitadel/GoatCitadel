@@ -2,6 +2,12 @@
 import { act, createRef, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Catalog labels read the query cache; these tests exercise the controls, so the model id stands in for its name.
+vi.mock("../../data/use-model-label", () => ({
+  useModelLabel: (_providerId?: string, modelId?: string) => modelId ?? "Unknown model",
+  useProviderLabelLookup: () => () => undefined,
+}));
+vi.mock("./use-chat-model-labels", () => ({ useChatModelLabels: () => (modelId: string) => modelId }));
 
 const load = vi.hoisted(() => ({ started: vi.fn<() => Promise<void>>(), completed: vi.fn() }));
 const custody = vi.hoisted(() => ({

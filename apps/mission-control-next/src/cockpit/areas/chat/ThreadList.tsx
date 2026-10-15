@@ -2,7 +2,7 @@ import { WindowedRecordList } from "../../ui/WindowedRecordList";
 import { useThreadActivity } from "./use-thread-activity";
 import { ThreadRowStatus } from "./ThreadRowStatus";
 import type { MissionThreadedSessionRailData } from "@goatcitadel/threaded-surface-core";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { TimeText } from "../../ui/TimeText";
 import { ChatConversationFilters, type ChatProjectFilterOption } from "./ChatConversationFilters";
 
 export function ThreadList({
@@ -79,13 +79,9 @@ export function ThreadList({
                       {rail.renderSessionLabel(session.sessionId)}
                     </span>
                     <span className="block truncate text-xs text-fg-muted">
-                      {session.projectName ?? humanizeToken(session.lifecycleStatus)}
+                      {session.projectName ?? (session.lifecycleStatus === "archived" ? "Archived" : "Active")}
                     </span>
-                    <time dateTime={session.lastActivityAt} className="block text-xs text-fg-muted">
-                      {Number.isFinite(Date.parse(session.lastActivityAt))
-                        ? new Date(session.lastActivityAt).toLocaleString()
-                        : "Activity time unavailable"}
-                    </time>
+                    <TimeText value={session.lastActivityAt} className="block text-xs text-fg-muted" />
                     {session.lastMessagePreview ? (
                       <span className="line-clamp-2 break-words text-xs text-fg-secondary">
                         {session.lastMessagePreview}
@@ -102,7 +98,10 @@ export function ThreadList({
                     className="block w-full rounded-md px-2 py-1 text-left text-xs text-fg-secondary hover:bg-sunken"
                   >
                     <span className="line-clamp-2">{hit.excerpt}</span>
-                    <span className="text-accent">Open matching message</span>
+                    <span className="sr-only"> · </span>
+                    <span className="mt-1 block border-t border-line-subtle pt-1 text-accent">
+                      Open matching message
+                    </span>
                   </button>
                 ))}
               </div>

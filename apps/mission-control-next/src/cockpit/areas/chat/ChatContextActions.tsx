@@ -1,4 +1,6 @@
 import { useChatBindingDraftReceipt } from "./useChatBindingDraftReceipt";
+import { presentSpecialistCandidateStatus } from "./chat-vocabulary";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
 import {
   ChatContextMemoryPages,
@@ -197,17 +199,16 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
             <li key={candidate.candidateId}>
               <strong>{candidate.title}</strong>
               <p>
-                {candidate.status};{" "}
+                {presentSpecialistCandidateStatus(candidate.status)} ·{" "}
                 {candidate.routingMode === "manual_only"
                   ? "manual-only routing"
                   : candidate.routingMode === "disabled"
                     ? "routing disabled"
                     : "strong-match routing"}
               </p>
-              <details>
-                <summary>Record identifiers</summary>
-                <p className="break-all text-sm text-fg-muted">{candidate.candidateId}</p>
-              </details>
+              <TechnicalDetails label="Record identifiers">
+                <p className="break-all font-mono text-xs text-fg-muted">{candidate.candidateId}</p>
+              </TechnicalDetails>
             </li>
           ))}
         </ul>

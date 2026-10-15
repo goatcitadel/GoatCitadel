@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchDaemonStatus } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { formatSeconds } from "@goatcitadel/mission-control-shared/content/format";
 import { Button } from "../../ui/Button";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { DAEMON_SEVERITY_LABELS, DAEMON_STATE_LABELS } from "./settings-vocabulary";
 
 export function DaemonDiagnostics() {
   const daemon = useQuery({ queryKey: ["settings", "daemon-diagnostics"], queryFn: fetchDaemonStatus });
@@ -26,8 +28,16 @@ export function DaemonDiagnostics() {
       {status ? (
         <>
           <p>
-            {humanizeToken(status.state)} · {status.host} · process {status.pid}
+            {DAEMON_STATE_LABELS[status.state] ?? "Unknown"}
+            {status.state === "running" && Number.isFinite(status.uptimeSeconds)
+              ? ` · up ${formatSeconds(status.uptimeSeconds)}`
+              : ""}
           </p>
+          <TechnicalDetails label="Process details">
+            <p className="break-all font-mono text-xs">
+              {status.host} · process {status.pid}
+            </p>
+          </TechnicalDetails>
           <p>{status.controlMessage}</p>
           <p>
             Start, stop and restart remain with the external process owner. Commands below are manual handoffs and are
@@ -36,7 +46,7 @@ export function DaemonDiagnostics() {
           <ul className="space-y-2" aria-label="Gateway process diagnostics">
             {(status.diagnostics ?? []).slice(0, 30).map((item) => (
               <li key={item.id}>
-                <strong>{item.title}</strong> · {humanizeToken(item.severity)}
+                <strong>{item.title}</strong> · {DAEMON_SEVERITY_LABELS[item.severity] ?? "Unknown"}
                 <p>{item.detail}</p>
               </li>
             ))}

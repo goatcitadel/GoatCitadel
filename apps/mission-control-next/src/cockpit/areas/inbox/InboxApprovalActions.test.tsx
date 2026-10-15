@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -286,14 +287,14 @@ describe("Inbox approval decisions", () => {
       api.resolveApproval.mockResolvedValue({ approval: { ...approval, status: "approved" }, effects: [] });
       await approve();
       expect(api.resolveApproval).toHaveBeenCalledTimes(2);
-      expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("Decision recorded: approved"));
+      expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("Decision recorded: Approved"));
     });
 
     it("shows the settled outcome and keeps the lock when the owner record was decided", async () => {
       const { onResolved, onInvalidated } = await reachUncertain();
       api.fetchApproval.mockResolvedValue({ ...approval, status: "approved" });
       await act(async () => button("Check again").click());
-      expect(container.textContent).toContain("Decision recorded: approved");
+      expect(container.textContent).toContain("Decision recorded: Approved");
       expect(container.textContent).not.toContain("Decision outcome is uncertain");
       expect(button("Review approval").disabled).toBe(true);
       expect(button("Deny").disabled).toBe(true);
@@ -577,7 +578,7 @@ it.each(["approved", "rejected", "edited"] as const)(
   "makes a newly loaded %s record visibly non-actionable without a local attempt",
   (status) => {
     renderActions({ ...approval, status });
-    expect(container.textContent).toContain(`Decision recorded: ${status}`);
+    expect(container.textContent).toContain(`Decision recorded: ${presentApprovalStatus(status).label}`);
     expect(container.querySelector("button")).toBeNull();
     expect(api.resolveApproval).not.toHaveBeenCalled();
   },
@@ -606,7 +607,7 @@ it.each(["approved", "rejected"] as const)(
       renderActions({ ...approval, status });
       expect(document.querySelector('[role="dialog"]')).toBeNull();
       expect(container.querySelector("button")).toBeNull();
-      expect(container.textContent).toContain(`Decision recorded: ${status}`);
+      expect(container.textContent).toContain(`Decision recorded: ${presentApprovalStatus(status).label}`);
     }
     expect(api.fetchApproval).not.toHaveBeenCalled();
     expect(api.resolveApproval).not.toHaveBeenCalled();
@@ -636,10 +637,10 @@ it("keeps the shared Library and Chat owner decidable while its record is re-rea
   await approve();
   expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval-a", { workspaceId: "default" });
   expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
-  expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("Decision recorded: approved"));
+  expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("Decision recorded: Approved"));
   renderShared({ ...approval, status: "approved" }, false);
   expect(container.querySelector("button")).toBeNull();
-  expect(container.textContent).toContain("Decision recorded: approved");
+  expect(container.textContent).toContain("Decision recorded: Approved");
 });
 
 it("explains an expiry sweep on a settled record instead of presenting it as an operator rejection", () => {
@@ -660,10 +661,10 @@ it("explains an expiry sweep on a settled record instead of presenting it as an 
       </QueryClientProvider>,
     ),
   );
-  expect(container.textContent).toContain("Expired before an operator decision; recorded as rejected.");
+  expect(container.textContent).toContain("Expired before an operator decision; recorded as denied.");
   expect(container.textContent).toContain(
     "Expired without an operator decision. Approval approval-a expired before operator resolution.",
   );
-  expect(container.textContent).not.toContain("Decision recorded: rejected");
+  expect(container.textContent).not.toContain("Decision recorded: Denied");
   expect(container.querySelector("button")).toBeNull();
 });

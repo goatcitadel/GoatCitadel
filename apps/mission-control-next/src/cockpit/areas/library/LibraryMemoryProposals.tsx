@@ -14,6 +14,9 @@ import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { StatusBadge } from "../../ui/StatusBadge";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { presentProposalStatus, proposalAuthorityLabel } from "./library-vocabulary";
 
 export function LibraryMemoryProposals(props: Parameters<typeof LibraryMemoryProposalsContent>[0]) {
   const access = useLibraryOperation(JSON.stringify(["memory-proposals", props.workspaceId]));
@@ -34,6 +37,7 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
   });
   const enabled =
     settings.data?.features.memoryLifecycleAdminV1Enabled === true && !settings.isError && !settings.isFetching;
+  const proposals = query.data?.items.filter((item) => item.workspaceId === workspaceId) ?? [];
   const [review, setReview] = useState<{ item: TraceMemoryCandidateRecord; action: "promote" | "reject" }>(),
     [busy, setBusy] = useState(false),
     [outcome, setOutcome] = useState<{ error: boolean; text: string }>();
@@ -106,39 +110,43 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
       <Button disabled={query.isFetching} onClick={() => void query.refetch()}>
         Refresh memory proposals
       </Button>
+      {query.data && !proposals.length ? (
+        <p className="text-sm text-fg-muted">No proposals waiting for review.</p>
+      ) : null}
       <ul className="grid gap-2">
-        {query.data?.items
-          .filter((item) => item.workspaceId === workspaceId)
-          .map((item) => (
-            <li key={item.candidateId} className="rounded-md border border-line p-3">
-              <p className="whitespace-pre-wrap break-words">{item.proposedInsight}</p>
-              <p className="text-sm text-fg-secondary">
-                {item.status} · {item.authority.replaceAll("_", " ")} · {item.sourceRefs.length} source references
-              </p>
-              <TechnicalDetails label="Proposal provenance">
-                <p>Conversation: {item.sourceSessionId ?? "Not recorded"}</p>
-                <p>Message: {item.sourceMessageId ?? item.sourceTurnId ?? "Not recorded"}</p>
-                <p>Candidate: {item.candidateId}</p>
-              </TechnicalDetails>
-              {item.status === "proposed" ? (
-                <div className="flex gap-2">
-                  {(["promote", "reject"] as const).map((action) => (
-                    <Button
-                      key={action}
-                      disabled={!enabled || query.isFetching || query.isError || busy}
-                      onClick={() => {
-                        if (operation.locked || !operation.current()) return;
-                        setOutcome(undefined);
-                        setReview({ item, action });
-                      }}
-                    >
-                      {action === "promote" ? "Review promotion" : "Review rejection"}
-                    </Button>
-                  ))}
-                </div>
-              ) : null}
-            </li>
-          ))}
+        {proposals.map((item) => (
+          <li key={item.candidateId} className="rounded-md border border-line p-3">
+            <p className="whitespace-pre-wrap break-words">{item.proposedInsight}</p>
+            <div className="flex flex-wrap items-center gap-1 text-sm text-fg-secondary">
+              <StatusBadge status={presentProposalStatus(item.status)} />
+              <span>
+                {proposalAuthorityLabel(item.authority)} · {plural(item.sourceRefs.length, "source reference")}
+              </span>
+            </div>
+            <TechnicalDetails label="Proposal provenance">
+              <p>Conversation: {item.sourceSessionId ?? "Not recorded"}</p>
+              <p>Message: {item.sourceMessageId ?? item.sourceTurnId ?? "Not recorded"}</p>
+              <p>Candidate: {item.candidateId}</p>
+            </TechnicalDetails>
+            {item.status === "proposed" ? (
+              <div className="flex gap-2">
+                {(["promote", "reject"] as const).map((action) => (
+                  <Button
+                    key={action}
+                    disabled={!enabled || query.isFetching || query.isError || busy}
+                    onClick={() => {
+                      if (operation.locked || !operation.current()) return;
+                      setOutcome(undefined);
+                      setReview({ item, action });
+                    }}
+                  >
+                    {action === "promote" ? "Review promotion" : "Review rejection"}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
+          </li>
+        ))}
       </ul>
       <Dialog
         open={Boolean(review)}
@@ -149,7 +157,7 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
         description="Review the insight, workspace and durable-memory consequence."
       >
         <div className="grid gap-3">
-          <p>Workspace {workspaceId}</p>
+          <p>Applies to this workspace.</p>
           <p className="whitespace-pre-wrap break-words">{review?.item.proposedInsight}</p>
           <Callout tone="warning">
             {review?.action === "promote"

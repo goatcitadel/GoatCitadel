@@ -9,6 +9,7 @@ import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
+import { formatAbsoluteTime, formatBytes } from "@goatcitadel/mission-control-shared/content/format";
 
 const EMPTY = { path: "", content: "" };
 const INPUT = "w-full rounded-md border border-line bg-raised p-2 text-fg";
@@ -22,9 +23,6 @@ function splitUploadPath(path: string) {
     .replace(/^(\.\/)+/, "");
   const slash = normalized.lastIndexOf("/");
   return { dir: slash > 0 ? normalized.slice(0, slash) : ".", name: normalized.slice(slash + 1) };
-}
-function formatSize(bytes: number) {
-  return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${(bytes / 1024).toFixed(1)} KB`;
 }
 
 export function LibraryFileUpload(props: Parameters<typeof LibraryFileUploadContent>[0]) {
@@ -63,7 +61,7 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
   });
   const checking = Boolean(target?.name) && existing.isPending;
   const replaces = existing.data
-    ? `This replaces ${existing.data.relativePath} (${formatSize(existing.data.size)}, modified ${new Date(existing.data.modifiedAt).toLocaleString()}).`
+    ? `This replaces ${existing.data.relativePath} (${formatBytes(existing.data.size)}, modified ${formatAbsoluteTime(existing.data.modifiedAt)}).`
     : undefined;
   async function submit() {
     if (!review || operation.locked || result) return;
@@ -90,7 +88,7 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
       draft.acceptSaved(EMPTY, undefined, review);
       setResult({
         error: false,
-        message: `Gateway accepted ${receipt.relativePath} (${receipt.bytes.toLocaleString()} bytes).`,
+        message: `Gateway accepted ${receipt.relativePath} (${formatBytes(receipt.bytes)}).`,
       });
       await client.invalidateQueries({ queryKey: ["library", "resources", "files"] });
     } catch (cause) {

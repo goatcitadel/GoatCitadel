@@ -4,7 +4,8 @@ import { useState, type CSSProperties } from "react";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { fetchOpsSavedBoard, fetchOpsSavedBoards } from "@goatcitadel/mission-control-shared/api/ops-saved-boards";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { formatOpsSavedBoardsWidgetLabel } from "../../../features/native-routes/ops/OpsSavedBoardsModel";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
@@ -138,16 +139,14 @@ function BoardIndex({
                   ) : null}
                 </h2>
                 {board.description ? <p className="mt-1 text-sm text-fg-secondary">{board.description}</p> : null}
-                <p className="mt-2 text-xs text-fg-muted">
-                  {board.placements.length} {board.placements.length === 1 ? "widget" : "widgets"}
-                </p>
+                <p className="mt-2 text-xs text-fg-muted">{plural(board.placements.length, "widget")}</p>
                 <ul className="mt-2 flex flex-wrap gap-1">
                   {board.placements.map((placement) => (
                     <li
                       key={placement.widgetId}
                       className="rounded-full border border-line px-2 py-0.5 text-xs text-fg-secondary"
                     >
-                      {humanizeToken(placement.kind)}
+                      {formatOpsSavedBoardsWidgetLabel(placement.kind)}
                     </li>
                   ))}
                 </ul>
@@ -255,8 +254,9 @@ function BoardDetail({
               <h1 className="font-display text-xl font-semibold text-fg">{record.name}</h1>
               {record.description ? <p className="mt-1 text-sm text-fg-secondary">{record.description}</p> : null}
               <p className="mt-1 text-xs text-fg-muted">
-                Saved layout revision {record.revision} · {record.status}. Desktop follows saved positions; phone stacks
-                widgets. Values read current owner APIs and are not historical snapshots.
+                Saved layout revision {record.revision} · {record.status === "archived" ? "archived" : "active"}.
+                Desktop follows saved positions; phone stacks widgets. Values read current owner APIs and are not
+                historical snapshots.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">

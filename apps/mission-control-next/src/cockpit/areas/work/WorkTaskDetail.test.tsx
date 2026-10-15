@@ -138,7 +138,7 @@ describe("Work task detail", () => {
         status: "blocked",
       }),
     );
-    await vi.waitFor(() => expect(container.textContent).toContain("Gateway recorded blocked"));
+    await vi.waitFor(() => expect(container.textContent).toContain("Task moved to Blocked"));
   });
 
   it("keeps the edit form enabled and the typed draft intact during a background refetch", async () => {

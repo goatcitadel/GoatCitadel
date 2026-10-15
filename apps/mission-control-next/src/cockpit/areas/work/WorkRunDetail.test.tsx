@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkRunDetail } from "./WorkRunDetail";
-import { formatCostUsd } from "@goatcitadel/mission-control-shared/content/cost-summary";
+import { formatMoney } from "@goatcitadel/mission-control-shared/content/format";
 
 const api = vi.hoisted(() => ({ fetch: vi.fn() }));
 const route = vi.hoisted(() => ({ search: "", hash: "" }));
@@ -202,5 +202,5 @@ it("shows a recorded zero provider cost instead of Unknown", async () => {
     ),
   );
   await vi.waitFor(() => expect(container.textContent).toContain("Recorded cost"));
-  expect(container.textContent).toContain(`${formatCostUsd(0)}+`);
+  expect(container.textContent).toContain(formatMoney(0, { atLeast: true }));
 });

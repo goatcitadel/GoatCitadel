@@ -3,7 +3,11 @@ import type { ModelUsageEventRecord } from "@goatcitadel/contracts";
 import { fetchModelUsageEvents } from "@goatcitadel/mission-control-shared/api/system";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { formatCostUsd } from "@goatcitadel/mission-control-shared/content/cost-summary";
+import { formatDuration, plural } from "@goatcitadel/mission-control-shared/content/format";
+import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
+import { useModelLabel } from "../../data/use-model-label";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
 import { SystemOwnerLink } from "./SystemOwnerLink";
 
 export function attemptCostLabel(record: Pick<ModelUsageEventRecord, "costSource" | "costUsd">) {
@@ -14,13 +18,12 @@ export function attemptCostLabel(record: Pick<ModelUsageEventRecord, "costSource
     record.costUsd < 0
   )
     return "Price unavailable";
-  return `${formatCostUsd(record.costUsd)} USD · ${record.costSource === "provider_reported" ? "Provider reported" : "Gateway estimate"}`;
+  return `${formatCostUsd(record.costUsd)} · ${record.costSource === "provider_reported" ? "Provider reported" : "Gateway estimate"}`;
 }
 const tokens = (value: number | undefined) =>
-  typeof value === "number" && Number.isFinite(value)
-    ? `${new Intl.NumberFormat().format(value)} tokens`
-    : "Unavailable";
+  typeof value === "number" && Number.isFinite(value) ? plural(value, "token") : "Unavailable";
 export function SpendAttempts({ workspaceId, from, to }: { workspaceId: string; from: string; to: string }) {
+  const workspaceLabel = useActiveWorkspaceLabel();
   const attempts = useQuery({
     queryKey: ["system", "spend-attempts", workspaceId, from, to],
     queryFn: () => fetchModelUsageEvents(workspaceId, from, to),
@@ -31,9 +34,8 @@ export function SpendAttempts({ workspaceId, from, to }: { workspaceId: string; 
         Cost provenance by call attempt
       </h2>
       <p className="mt-1 text-sm text-fg-secondary">
-        Workspace {workspaceId} · same period · latest 50 attempts. These scoped records are separate from installation
-        totals. Estimates are priced by the Gateway; provider-reported amounts are accounted usage, not a billing
-        invoice.
+        {workspaceLabel} · same period · latest 50 attempts. These scoped records are separate from installation totals.
+        Estimates are priced by the Gateway; provider-reported amounts are accounted usage, not a billing invoice.
       </p>
       {attempts.isLoading ? <p role="status">Loading recorded call attempts…</p> : null}
       {attempts.isError ? (
@@ -45,61 +47,14 @@ export function SpendAttempts({ workspaceId, from, to }: { workspaceId: string; 
       {attempts.data && !attempts.isError ? (
         <>
           <p className="mt-2 text-sm text-fg-secondary">
-            {attempts.data.summary.attemptCount} recorded call attempts · {attempts.data.summary.uncertainDispatchCount}{" "}
-            dispatch outcomes uncertain. {attempts.data.nextCursor ? "Older attempts are not shown." : ""}
+            {plural(attempts.data.summary.attemptCount, "recorded call attempt")} ·{" "}
+            {plural(attempts.data.summary.uncertainDispatchCount, "dispatch outcome")} uncertain.{" "}
+            {attempts.data.nextCursor ? "Older attempts are not shown." : ""}
           </p>
           {attempts.data.items.length ? (
             <ol className="mt-3 grid gap-3">
               {attempts.data.items.map((record) => (
-                <li
-                  key={record.eventId}
-                  className="grid gap-2 rounded-md border border-line bg-sunken p-3 text-sm text-fg-secondary"
-                >
-                  <div className="flex flex-wrap justify-between gap-2">
-                    <strong className="break-words text-fg">
-                      {record.effectiveProviderId ?? record.requestedProviderId ?? "Provider unavailable"} ·{" "}
-                      {record.effectiveModelId ??
-                        record.dispatchedModelId ??
-                        record.requestedModelId ??
-                        "Model unavailable"}
-                    </strong>
-                    <time dateTime={record.startedAt}>
-                      {Number.isFinite(Date.parse(record.startedAt))
-                        ? new Date(record.startedAt).toLocaleString()
-                        : "Time unavailable"}
-                    </time>
-                  </div>
-                  <p>{attemptCostLabel(record)}</p>
-                  <p>
-                    Input: {tokens(record.inputTokens)} · Output: {tokens(record.outputTokens)} · Cached input:{" "}
-                    {tokens(record.cachedInputTokens)} · Duration:{" "}
-                    {typeof record.durationMs === "number"
-                      ? `${new Intl.NumberFormat().format(record.durationMs)} ms`
-                      : "Unavailable"}
-                  </p>
-                  {record.sessionId ? (
-                    <SystemOwnerLink
-                      href={`/chat?sessionId=${encodeURIComponent(record.sessionId)}&workspaceId=${encodeURIComponent(workspaceId)}`}
-                      scope={[workspaceId, record.eventId]}
-                    >
-                      Open conversation
-                    </SystemOwnerLink>
-                  ) : null}
-                  <TechnicalDetails label="Call accounting provenance">
-                    <dl>
-                      <dt>Event ID</dt>
-                      <dd>{record.eventId}</dd>
-                      <dt>Cost source</dt>
-                      <dd>{record.costSource}</dd>
-                      <dt>Pricing source</dt>
-                      <dd>{record.pricingSource}</dd>
-                      <dt>Transport</dt>
-                      <dd>{record.transportStatus}</dd>
-                      <dt>UTC start</dt>
-                      <dd>{record.startedAt}</dd>
-                    </dl>
-                  </TechnicalDetails>
-                </li>
+                <AttemptRow key={record.eventId} record={record} workspaceId={workspaceId} />
               ))}
             </ol>
           ) : (
@@ -110,5 +65,50 @@ export function SpendAttempts({ workspaceId, from, to }: { workspaceId: string; 
         </>
       ) : null}
     </section>
+  );
+}
+function AttemptRow({ record, workspaceId }: { record: ModelUsageEventRecord; workspaceId: string }) {
+  const providerId = record.effectiveProviderId ?? record.requestedProviderId;
+  const modelId = record.effectiveModelId ?? record.dispatchedModelId ?? record.requestedModelId;
+  const modelLabel = useModelLabel(providerId, modelId);
+  return (
+    <li className="grid gap-2 rounded-md border border-line bg-sunken p-3 text-sm text-fg-secondary">
+      <div className="flex flex-wrap justify-between gap-2">
+        <strong className="break-words text-fg">{modelLabel}</strong>
+        <TimeText value={record.startedAt} />
+      </div>
+      <p>{attemptCostLabel(record)}</p>
+      <p>
+        Input: {tokens(record.inputTokens)} · Output: {tokens(record.outputTokens)} · Cached input:{" "}
+        {tokens(record.cachedInputTokens)} · Duration:{" "}
+        {typeof record.durationMs === "number" ? formatDuration(record.durationMs) : "Unavailable"}
+      </p>
+      {record.sessionId ? (
+        <SystemOwnerLink
+          href={`/chat?sessionId=${encodeURIComponent(record.sessionId)}&workspaceId=${encodeURIComponent(workspaceId)}`}
+          scope={[workspaceId, record.eventId]}
+        >
+          Open conversation
+        </SystemOwnerLink>
+      ) : null}
+      <TechnicalDetails label="Call accounting provenance">
+        <dl>
+          <dt>Provider ID</dt>
+          <dd>{providerId ?? "Not recorded"}</dd>
+          <dt>Model ID</dt>
+          <dd>{modelId ?? "Not recorded"}</dd>
+          <dt>Event ID</dt>
+          <dd>{record.eventId}</dd>
+          <dt>Cost source</dt>
+          <dd>{record.costSource}</dd>
+          <dt>Pricing source</dt>
+          <dd>{record.pricingSource}</dd>
+          <dt>Transport</dt>
+          <dd>{record.transportStatus}</dd>
+          <dt>UTC start</dt>
+          <dd>{record.startedAt}</dd>
+        </dl>
+      </TechnicalDetails>
+    </li>
   );
 }

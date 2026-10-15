@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   canonicalJsonString,
@@ -36,6 +36,28 @@ import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { StatusBadge } from "../../ui/StatusBadge";
+import { TimeText } from "../../ui/TimeText";
+import { formatDuration, plural } from "@goatcitadel/mission-control-shared/content/format";
+import {
+  ADMIN_STATE,
+  RUN_MODE,
+  authorityLabel,
+  evidenceKindLabel,
+  feedbackKindLabel,
+  feedbackStatusLabel,
+  freeformLabel,
+  maintenancePolicySentence,
+  maintenanceSourceLabel,
+  presentIssueSeverity,
+  presentIssueStatus,
+  presentMaintenanceRun,
+  presentRecommendation,
+  retrospectiveLabel,
+  signatureLabel,
+  structuredScopeLabel,
+  structuredStatusLabel,
+} from "./memory-diagnostics-vocabulary";
 
 type Review = {
   label: string;
@@ -54,7 +76,15 @@ function readableValues(value: unknown): string {
       .join("; ");
   return value == null ? "Default" : String(value);
 }
-const stamp = (value?: string) => (value ? new Date(value).toLocaleString() : "Not recorded");
+const stamp = (value?: string) => (value ? <TimeText value={value} /> : "Not recorded");
+/** One labelled fact in a diagnostics record. */
+const Fact = ({ term, children }: { term: string; children: ReactNode }) => (
+  <div className="flex min-w-0 flex-wrap gap-x-2">
+    <dt className="text-fg-secondary">{term}</dt>
+    <dd className="min-w-0">{children}</dd>
+  </div>
+);
+const FACTS = "grid min-w-0 grid-cols-1 gap-1 text-sm";
 function same(actual: unknown, reviewed: unknown) {
   if (canonicalJsonString(actual) !== canonicalJsonString(reviewed))
     throw new Error("The reviewed record changed. Refresh and review the current record.");
@@ -149,7 +179,7 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
       {memory.loading ? <p role="status">Reading canonical memory diagnostics…</p> : null}
       {memory.error ? <Callout tone="error">{memory.error}</Callout> : null}
       {data && !data.memoryAdminEnabled ? (
-        <Callout>Memory administration is {data.memoryAdminState}. Mutation controls remain locked.</Callout>
+        <Callout>Memory administration is {ADMIN_STATE[data.memoryAdminState]}. Changes stay locked.</Callout>
       ) : null}
       {Object.entries(data?.sectionErrors ?? {})
         .filter(([, value]) => value)
@@ -169,8 +199,7 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
           <ul className="grid min-w-0 max-w-full grid-cols-1 gap-2">
             {evidence.data?.items.map((item) => (
               <li key={item.envelopeId}>
-                {item.eventKind.replaceAll("_", " ")} · {item.signatureStatus.replaceAll("_", " ")} ·{" "}
-                {stamp(item.createdAt)}
+                {evidenceKindLabel(item.eventKind)} · {signatureLabel(item.signatureStatus)} · {stamp(item.createdAt)}
                 <TechnicalDetails label="Write evidence provenance">
                   <p>
                     {item.envelopeId} · {item.contentHash} · {item.createdAt}
@@ -192,7 +221,7 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
                 apply: async () => {
                   const result = await runMemoryQualityScan({ workspaceId });
                   if (result.workspaceId !== workspaceId) throw new Error("Foreign quality scan receipt.");
-                  return "Quality scan recorded " + result.issueCount + " issue(s).";
+                  return "Quality scan recorded " + plural(result.issueCount, "issue") + ".";
                 },
               })
             }
@@ -205,9 +234,11 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
               .map((item) => (
                 <li key={item.issueId} className="rounded-md border border-line p-3">
                   <h4>{item.summary}</h4>
-                  <p>
-                    {item.severity} · {item.status} · {stamp(item.updatedAt)}
-                  </p>
+                  <div className="flex flex-wrap items-center gap-1">
+                    <StatusBadge status={presentIssueSeverity(item.severity)} />
+                    <StatusBadge status={presentIssueStatus(item.status)} />
+                    <span className="text-sm text-fg-secondary">Updated {stamp(item.updatedAt)}</span>
+                  </div>
                   <p>{item.rationale}</p>
                   <TechnicalDetails label="Quality issue provenance">
                     <pre className="min-w-0 max-w-full whitespace-pre-wrap wrap-anywhere">
@@ -254,7 +285,7 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
                                 next.status !== status
                               )
                                 throw new Error("Quality receipt mismatch.");
-                              return "Quality issue " + status + ".";
+                              return "Quality issue " + presentIssueStatus(status).label.toLowerCase() + ".";
                             },
                           })
                         }
@@ -269,7 +300,7 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
           <ul>
             {data?.memoryFeedback.map((item) => (
               <li key={item.feedbackId}>
-                {item.kind} · {item.status} · {stamp(item.createdAt)}
+                {feedbackKindLabel(item.kind)} · {feedbackStatusLabel(item.status)} · {stamp(item.createdAt)}
                 <TechnicalDetails label="Feedback provenance">
                   <pre className="min-w-0 max-w-full whitespace-pre-wrap wrap-anywhere">
                     {JSON.stringify(item, null, 2)}
@@ -315,7 +346,7 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
           {benchmark ? (
             <section aria-label="Recall probe result">
               <p>
-                {benchmark.itemCount} probes · {benchmark.avgLatencyMs.toFixed(0)} ms average · overlap{" "}
+                {plural(benchmark.itemCount, "probe")} · {formatDuration(benchmark.avgLatencyMs)} on average · overlap{" "}
                 {benchmark.avgOverlapScore.toFixed(2)}
               </p>
               <p>{benchmark.semanticCoverageNote}</p>
@@ -341,10 +372,13 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
               <li key={item.id} className="rounded-md border border-line p-3">
                 <h4>{item.title}</h4>
                 <p>{item.summary}</p>
-                <p>
-                  {item.entityType} · {item.scope} · {item.authority} · {item.status}
-                </p>
-                <p>Aliases: {item.aliases.join(", ") || "None"}</p>
+                <dl className={FACTS}>
+                  <Fact term="Type">{freeformLabel(item.entityType, "Not typed")}</Fact>
+                  <Fact term="Scope">{structuredScopeLabel(item.scope)}</Fact>
+                  <Fact term="Source">{authorityLabel(item.authority)}</Fact>
+                  <Fact term="Status">{structuredStatusLabel(item.status)}</Fact>
+                  <Fact term="Aliases">{item.aliases.join(", ") || "None"}</Fact>
+                </dl>
                 <TechnicalDetails label="Entity provenance">
                   <pre className="min-w-0 max-w-full whitespace-pre-wrap wrap-anywhere">
                     {JSON.stringify(item.sourceRefs, null, 2)}
@@ -363,12 +397,14 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
                 <h4>{item.title}</h4>
                 <p>
                   {data.memoryEntities.find((entity) => entity.id === item.fromEntityId)?.title ?? "Unknown entity"} →{" "}
-                  {item.relationType} →{" "}
+                  {freeformLabel(item.relationType, "Related to")} →
                   {data.memoryEntities.find((entity) => entity.id === item.toEntityId)?.title ?? "Unknown entity"}
                 </p>
-                <p>
-                  {item.status} · {item.scope} · {item.degradedReason}
-                </p>
+                <dl className={FACTS}>
+                  <Fact term="Status">{structuredStatusLabel(item.status)}</Fact>
+                  <Fact term="Scope">{structuredScopeLabel(item.scope)}</Fact>
+                  {item.degradedReason ? <Fact term="Degraded because">{item.degradedReason}</Fact> : null}
+                </dl>
                 <TechnicalDetails label="Relation provenance">
                   <pre className="min-w-0 max-w-full whitespace-pre-wrap wrap-anywhere">
                     {JSON.stringify(item.sourceRefs, null, 2)}
@@ -386,17 +422,19 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
               <li key={item.id} className="rounded-md border border-line p-3">
                 <h4>{item.title}</h4>
                 <p>{item.decision}</p>
-                <p>Rationale: {item.rationale}</p>
-                <p>Alternatives: {item.alternatives.join(", ")}</p>
-                <p>Expected outcome: {item.expectedOutcome ?? "Not recorded"}</p>
-                <p>
-                  Review: {stamp(item.reviewAt)} · {item.status} · {item.scope}
-                </p>
-                {item.retrospective ? (
-                  <p>
-                    {item.retrospective.outcome} · {item.retrospective.notes}
-                  </p>
-                ) : null}
+                <dl className={FACTS}>
+                  <Fact term="Rationale">{item.rationale}</Fact>
+                  <Fact term="Alternatives">{item.alternatives.join(", ") || "None recorded"}</Fact>
+                  <Fact term="Expected outcome">{item.expectedOutcome ?? "Not recorded"}</Fact>
+                  <Fact term="Review due">{stamp(item.reviewAt)}</Fact>
+                  <Fact term="Status">{structuredStatusLabel(item.status)}</Fact>
+                  <Fact term="Scope">{structuredScopeLabel(item.scope)}</Fact>
+                  {item.retrospective ? (
+                    <Fact term="Retrospective">
+                      {retrospectiveLabel(item.retrospective.outcome)} · {item.retrospective.notes}
+                    </Fact>
+                  ) : null}
+                </dl>
                 <TechnicalDetails label="Decision provenance">
                   <pre className="min-w-0 max-w-full whitespace-pre-wrap wrap-anywhere">
                     {JSON.stringify(item.sourceRefs, null, 2)}
@@ -485,10 +523,11 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
                   <li key={item.recommendationId} className="rounded-md border border-line p-3">
                     <h4>{item.summary}</h4>
                     <p>{item.rationale}</p>
-                    <p>
-                      {item.status} · {stamp(item.updatedAt)}
-                    </p>
-                    <dl>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <StatusBadge status={presentRecommendation(item.status)} />
+                      <span className="text-sm text-fg-secondary">Updated {stamp(item.updatedAt)}</span>
+                    </div>
+                    <dl className={FACTS}>
                       {Object.entries(item.proposedPatch).map(([key, value]) => (
                         <div key={key}>
                           <dt>{key.replace(/([A-Z])/g, " $1")}</dt>
@@ -580,9 +619,11 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
           <ul>
             {data?.maintenanceRuns.map((run) => (
               <li key={run.runId}>
-                <p>
-                  {run.status} · {stamp(run.createdAt)} · {run.summary ?? run.error}
-                </p>
+                <div className="flex flex-wrap items-center gap-1">
+                  <StatusBadge status={presentMaintenanceRun(run.status)} />
+                  <span className="text-sm text-fg-secondary">Started {stamp(run.createdAt)}</span>
+                </div>
+                {(run.summary ?? run.error) ? <p>{run.summary ?? run.error}</p> : null}
                 <Button onClick={() => memory.setSelectedRunId(run.runId)}>Inspect maintenance run</Button>
                 {run.durableRunId ? (
                   <NativeOwnerLink
@@ -601,15 +642,16 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
               className="grid min-w-0 max-w-full grid-cols-1 gap-2 wrap-anywhere"
               aria-label="Maintenance run provenance"
             >
-              <p>
-                {data.selectedRunProvenance.run.status} · {data.selectedRunProvenance.run.summary}
-              </p>
+              <div className="flex flex-wrap items-center gap-1">
+                <StatusBadge status={presentMaintenanceRun(data.selectedRunProvenance.run.status)} />
+                <span>{data.selectedRunProvenance.run.summary}</span>
+              </div>
               <h4>Sources</h4>
               <ul className="grid min-w-0 grid-cols-1 gap-2">
                 {data.selectedRunProvenance.sources.map((source) => (
                   <li className="min-w-0" key={source.sourceId}>
                     <p className="whitespace-pre-wrap wrap-anywhere">
-                      {source.sourceKind} · {source.excerpt}
+                      {maintenanceSourceLabel(source.sourceKind)} · {source.excerpt}
                     </p>
                     <TechnicalDetails label="Source reference">
                       <p>
@@ -645,7 +687,7 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
         title={review?.label ?? "Review memory operation"}
       >
         <div className="grid min-w-0 max-w-full grid-cols-1 gap-3">
-          <p>Workspace {workspaceId}</p>
+          <p>Applies to this workspace.</p>
           <p>{review?.consequence}</p>
           {review?.values ? (
             <dl>
@@ -706,8 +748,10 @@ function MemoryPolicy({
                 draft.setValue((value) => ({ ...value, runMode: event.target.value as typeof value.runMode }))
               }
             >
-              {["manual", "scheduled", "hybrid"].map((mode) => (
-                <option key={mode}>{mode}</option>
+              {(Object.keys(RUN_MODE) as (keyof typeof RUN_MODE)[]).map((mode) => (
+                <option key={mode} value={mode}>
+                  {RUN_MODE[mode]}
+                </option>
               ))}
             </select>
           )}
@@ -728,8 +772,10 @@ function MemoryPolicy({
           <Callout tone="warning">
             The policy changed. Your draft remains separate. Review current policy before rebasing.
             <p>
-              Current: {policy.enabled ? "enabled" : "disabled"} · {policy.runMode} ·{" "}
-              {policy.providerId ?? "default provider"} · {policy.model ?? "default model"}
+              Current: {maintenancePolicySentence(policy.enabled, policy.runMode)}{" "}
+              {policy.providerId || policy.model
+                ? "It uses a chosen provider and model."
+                : "It uses the default provider and model."}
             </p>
             <Button onClick={draft.rebaseToCurrent}>Use current policy revision and keep draft</Button>
           </Callout>
@@ -741,15 +787,12 @@ function MemoryPolicy({
             request({
               label: "Save maintenance policy",
               consequence:
-                "Enablement: " +
-                draft.value.enabled +
-                "; mode: " +
-                draft.value.runMode +
-                "; provider: " +
-                (draft.value.providerId || "default") +
-                "; model: " +
-                (draft.value.model || "default") +
-                ". Apply the exact reviewed policy values below.",
+                maintenancePolicySentence(draft.value.enabled, draft.value.runMode) +
+                " " +
+                (draft.value.providerId || draft.value.model
+                  ? "It uses the provider and model you chose."
+                  : "It uses the default provider and model.") +
+                " The exact reviewed policy values below are applied.",
               values: patch as Record<string, unknown>,
               revision: policy.revision,
               maintenance: true,

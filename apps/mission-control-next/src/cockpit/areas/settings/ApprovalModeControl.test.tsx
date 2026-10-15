@@ -119,6 +119,9 @@ describe("cockpit tool approval rule", () => {
     expect(container.textContent).toContain(
       "Tool grants, deny rules, and required high-risk approvals remain authoritative",
     );
+    expect(container.textContent).toContain("Deployment: Trusted local");
+    expect(container.textContent).not.toContain("trusted_local");
+    expect(container.textContent).not.toContain("settings revision");
   });
 
   it("retains a pending owner approval and exposes its exact approval link without claiming saved", async () => {
@@ -238,8 +241,8 @@ describe("cockpit tool approval rule", () => {
     expect(actions.map((item) => item.textContent)).toEqual(["Skip normal prompts", "Keep current rule"]);
     expect(actions[0]!.className).toContain("border-status-failed");
     expect(actions[0]!.disabled).toBe(false);
-    expect(dialog()!.textContent).toContain("settings revision 2");
-    expect(dialog()!.textContent).toContain("Deny rules, Critical risk and risky-shell approvals");
+    expect(dialog()!.textContent).not.toContain("revision");
+    expect(dialog()!.textContent).toContain("Deny rules, Nuclear risk and risky-shell approvals");
     await click("Skip normal prompts");
     expect(api.patchSettings).toHaveBeenCalledExactlyOnceWith({ expectedRevision: 2, toolApprovalMode: "bypass" });
     expect(container.textContent).toContain("draft remains unsaved");

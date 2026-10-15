@@ -8,6 +8,9 @@ import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { TimeText } from "../../ui/TimeText";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { freeformLabel } from "./memory-diagnostics-vocabulary";
 
 type CitationExcerpt = { role?: string; text: string; raw?: string };
 
@@ -92,7 +95,8 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
         {retrieval.data?.recent.map((pack) => (
           <li key={pack.contextId} className="rounded-md border border-line p-3">
             <p>
-              {pack.citations.length} citations · {new Date(pack.createdAt).toLocaleString()} · {pack.scope}
+              {plural(pack.citations.length, "citation")} · <TimeText value={pack.createdAt} /> ·{" "}
+              {freeformLabel(pack.scope, "Scope not recorded")}
             </p>
             <p>
               Context tokens: {pack.originalTokenEstimate} original → {pack.distilledTokenEstimate} retained
@@ -102,7 +106,7 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
                 const excerpt = describeCitationSnippet(citation.snippet);
                 return (
                   <li key={index} className="my-2">
-                    <h3>{citation.sourceType.replaceAll("_", " ")}</h3>
+                    <h3>{freeformLabel(citation.sourceType, "Source")}</h3>
                     <p className="whitespace-pre-wrap break-words">
                       {excerpt ? (
                         <>
@@ -160,9 +164,11 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
                 ? "Snapshot created"
                 : event.action === "approval_requested"
                   ? "Approval requested"
-                  : event.action.replaceAll("_", " ")}
+                  : freeformLabel(event.action, "Snapshot event")}
             </h3>
-            <p>{new Date(event.occurredAt).toLocaleString()}</p>
+            <p>
+              <TimeText value={event.occurredAt} absolute />
+            </p>
             <p>
               {event.action === "snapshot_created" && typeof event.summary.knowledgeDocumentId === "string"
                 ? "Knowledge document materialized with " + String(event.summary.chunkCount ?? "unknown") + " chunks."

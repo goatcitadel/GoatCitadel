@@ -3,7 +3,7 @@ import { ArrowLeft } from "lucide-react";
 import { fetchObserveRunTrace } from "@goatcitadel/mission-control-shared/api/durable";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { formatCostUsd } from "@goatcitadel/mission-control-shared/content/cost-summary";
+import { formatMoney, plural } from "@goatcitadel/mission-control-shared/content/format";
 import {
   humanizeToken,
   presentApprovalStatus,
@@ -25,8 +25,9 @@ import { WorkRunControls } from "./WorkRunControls";
 import { RunArtifacts } from "./RunArtifacts";
 import { RunWorkspaceContext } from "./RunWorkspaceContext";
 import { RunLineage } from "./RunLineage";
-import { formattedWorkTime } from "./work-format";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+import { EVIDENCE_STATE_WORDS, RUN_ERROR_SOURCES } from "./work-vocabulary";
 
 export function WorkRunDetail({ runId }: { runId: string }) {
   const { navigate, search, hash } = useCockpitRoute();
@@ -45,7 +46,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
   const recordedCost = run && data?.providerUsage.state === "available" ? data.providerUsage.totals.costUsd : undefined;
   const costLabel =
     typeof recordedCost === "number" && Number.isFinite(recordedCost) && recordedCost >= 0
-      ? `${formatCostUsd(recordedCost)}+`
+      ? formatMoney(recordedCost, { atLeast: true })
       : "Unknown";
   const ownerScope = JSON.stringify([workspaceId, runId]);
   const runContextParams = new URLSearchParams(search);
@@ -108,7 +109,9 @@ export function WorkRunDetail({ runId }: { runId: string }) {
             <div>
               <p className="text-xs font-semibold text-accent">Durable run</p>
               <h1 className="max-w-3xl font-display text-xl font-semibold text-fg">{workRunTitle(run)}</h1>
-              <p className="mt-1 text-xs text-fg-muted">Updated {formattedWorkTime(run.updatedAt)}</p>
+              <p className="mt-1 text-xs text-fg-muted">
+                <TimeText value={run.updatedAt} prefix="Updated" />
+              </p>
             </div>
             <StatusBadge status={presentRunStatus(run.status, { waitingOnOperator: pendingApproval })} />
           </header>
@@ -162,7 +165,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
                       className="flex justify-between gap-3 border-b border-line-subtle py-2 text-sm"
                     >
                       <span className="text-fg">{presentEventType(event.eventType)}</span>
-                      <time className="shrink-0 text-xs text-fg-muted">{formattedWorkTime(event.createdAt)}</time>
+                      <TimeText value={event.createdAt} className="shrink-0 text-xs text-fg-muted" />
                     </li>
                   ))}
                 </ol>
@@ -171,7 +174,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
               )
             ) : (
               <p className="mt-2 text-sm text-fg-muted">
-                Timeline evidence is {humanizeToken(data.durable.timeline.state).toLowerCase()}.
+                Timeline evidence is {EVIDENCE_STATE_WORDS[data.durable.timeline.state] ?? "unknown"}.
               </p>
             )}
           </section>
@@ -195,7 +198,11 @@ export function WorkRunDetail({ runId }: { runId: string }) {
             </div>
             {data.approvals.state !== "available" || data.approvals.missingIds?.length ? (
               <p className="mt-2 text-sm text-fg-muted">
-                Approval evidence is {humanizeToken(data.approvals.state).toLowerCase()}.{" "}
+                Approval evidence is{" "}
+                {data.approvals.state === "available"
+                  ? "incomplete"
+                  : (EVIDENCE_STATE_WORDS[data.approvals.state] ?? "unknown")}
+                .{" "}
                 {data.approvals.items.length
                   ? "Known linked approvals remain available below; this list may be incomplete."
                   : ""}
@@ -236,12 +243,12 @@ export function WorkRunDetail({ runId }: { runId: string }) {
               className="rounded-md border border-status-failed p-3 text-sm text-fg"
             >
               <h2 className="font-display text-lg font-semibold text-fg">Recorded run errors</h2>
-              {data.errors.items.length} recorded {data.errors.items.length === 1 ? "error needs" : "errors need"}{" "}
+              {plural(data.errors.items.length, "recorded error")} {data.errors.items.length === 1 ? "needs" : "need"}{" "}
               review.
               <ul className="mt-3 space-y-2">
                 {data.errors.items.map((error) => (
                   <li key={`${error.source}:${error.id}`} className="break-words">
-                    <strong>{humanizeToken(error.source)}:</strong> {error.message}
+                    <strong>{RUN_ERROR_SOURCES[error.source] ?? "Run"}:</strong> {error.message}
                   </li>
                 ))}
               </ul>

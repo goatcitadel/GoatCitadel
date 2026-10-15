@@ -6,6 +6,8 @@ import { Button } from "../../ui/Button";
 import { ChatMobileConversationSelect } from "./ChatMobileConversationSelect";
 import { ChatSessionOverflow, ChatSessionTitle } from "./ChatSessionControls";
 import { SelectedThreadActivity } from "./SelectedThreadActivity";
+import { useModelLabel } from "../../data/use-model-label";
+import { presentDelegationRunStatus } from "./chat-vocabulary";
 
 type ActiveSession = MissionThreadedRenderSurfaceInput["activeSessionSurfaceProps"];
 
@@ -128,13 +130,13 @@ export function ChatHeaderSubtitle({
   projectName?: string | null;
   loading?: boolean;
 }) {
+  const hasModel = Boolean(active?.selectedProviderId && active?.selectedModel);
+  const modelLabel = useModelLabel(active?.selectedProviderId, active?.selectedModel ?? undefined, hasModel);
   const parts = [
     projectName,
     active?.activePersonality?.name,
-    active?.selectedProviderId && active?.selectedModel
-      ? `${active.selectedProviderId} · ${active.selectedModel}`
-      : null,
-    active?.delegationRun?.status ? `Run ${active.delegationRun.status}` : null,
+    hasModel ? modelLabel : null,
+    active?.delegationRun?.status ? `Run · ${presentDelegationRunStatus(active.delegationRun.status).label}` : null,
   ].filter(Boolean);
   const text = parts.length ? parts.join(" · ") : loading ? "Loading conversations…" : null;
   return text ? <p className="hidden truncate text-xs text-fg-muted md:block">{text}</p> : null;

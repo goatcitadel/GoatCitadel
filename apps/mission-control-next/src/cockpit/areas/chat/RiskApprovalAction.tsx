@@ -10,6 +10,7 @@ import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { handleEvidenceScrollKeyDown } from "../../ui/evidence-scroll";
 import { TypedConfirmation, typedConfirmationMatches } from "../../ui/TypedConfirmation";
+import { presentApprovalAction } from "./chat-vocabulary";
 
 /** The deliberate, untimed confirmation word for nuclear risk and for risk levels this build doesn't know. */
 const CRITICAL_CONFIRMATION = "approve";
@@ -59,6 +60,8 @@ export function RiskApprovalAction({
   if (specialistReview || (approval.riskLevel !== "safe" && approval.riskLevel !== "caution")) {
     const critical = !["safe", "caution", "danger"].includes(approval.riskLevel);
     const riskName = presentRiskLevel(approval.riskLevel).label;
+    const actionToolName = reviewed?.linkage?.toolName ?? approval.toolName;
+    const actionKind = reviewed?.kind ?? approval.kind;
     const confirmed = !critical || typedConfirmationMatches(typed, CRITICAL_CONFIRMATION);
     return (
       <>
@@ -79,7 +82,7 @@ export function RiskApprovalAction({
         <Dialog
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
-          title={`Confirm ${riskName.toLowerCase()} risk action`}
+          title={`Confirm ${riskName.toLowerCase()}-level action`}
           description="Review the exact action before approving once."
         >
           {specialistReview}
@@ -97,8 +100,7 @@ export function RiskApprovalAction({
             className="mb-3 min-w-0 max-w-full max-h-72 space-y-2 overflow-y-auto wrap-anywhere text-sm text-fg-secondary"
           >
             <p>
-              <strong>Action:</strong>{" "}
-              {reviewed?.linkage?.toolName ?? approval.toolName ?? reviewed?.kind ?? approval.kind ?? "Action request"}
+              <strong>Action:</strong> {presentApprovalAction(actionToolName, actionKind)}
             </p>
             <p>
               <strong>Risk:</strong> {riskName}
@@ -150,6 +152,15 @@ export function RiskApprovalAction({
                   ))}
                 </ul>
               </div>
+            ) : null}
+            {actionToolName || actionKind ? (
+              <TechnicalDetails label="Action technical details">
+                <p className="font-mono text-xs wrap-anywhere">
+                  {[actionToolName && `Tool: ${actionToolName}`, actionKind && `Kind: ${actionKind}`]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              </TechnicalDetails>
             ) : null}
             {reviewed ? (
               <TechnicalDetails label="Full persisted action preview">

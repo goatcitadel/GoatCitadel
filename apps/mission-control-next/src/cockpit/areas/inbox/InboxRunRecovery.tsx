@@ -8,11 +8,14 @@ import {
   recoverDurableDeadLetter,
   retryDurableRun,
 } from "@goatcitadel/mission-control-shared/api/durable";
+import { presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { presentWorkflow } from "./inbox-vocabulary";
 import { classifyOperationFailure } from "./approval-operation-attempts";
 import { canRequestRunRecovery, sameRunRecoveryEvidence, type RunRecoveryEvidence } from "./run-recovery-guard";
 import { nullWhenMissing } from "./inbox-record-read";
@@ -83,7 +86,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
       setReviewed(null);
       setCompleted(true);
       setNotice(
-        `Gateway recorded the request; the run is ${result.status}. Inspect the current run to verify execution and effects.`,
+        `Gateway recorded the request. Current run status: ${presentRunStatus(result.status).label}. Inspect the current run to verify execution and effects.`,
       );
       rereadSuperseded();
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
@@ -141,15 +144,21 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {!item.source.runId ? (
         <p role="alert" className="text-status-failed">
-          This Inbox item has no run ID.
+          This Inbox item is not linked to a run.
         </p>
       ) : null}
       {evidence ? (
         <>
           <p className="text-fg-secondary">
-            Workflow: {evidence.run.workflowKey}. Status: {evidence.run.status}. Attempts: {evidence.run.attemptCount}{" "}
-            of {evidence.run.maxAttempts}.
+            Workflow: {presentWorkflow(evidence.run.workflowKey)}. Status: {presentRunStatus(evidence.run.status).label}
+            . Attempts: {evidence.run.attemptCount} of {evidence.run.maxAttempts}.
           </p>
+          <TechnicalDetails label="Run identifiers">
+            <p className="break-all font-mono text-xs">
+              Workflow {evidence.run.workflowKey} · Run {evidence.run.runId}
+              {evidence.deadLetter ? ` · Dead letter ${item.source.deadLetterId}` : ""}
+            </p>
+          </TechnicalDetails>
           {item.kind === "dead_letter" && !evidence.deadLetter ? (
             <p className="text-fg-muted">
               This stopped run is no longer waiting for recovery. Open Ops for its current record.

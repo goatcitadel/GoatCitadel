@@ -3,7 +3,8 @@ import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
-import { approvalCreatedLabel, approvalExpiryLabel } from "./approval-preview";
+import { TimeText } from "../../ui/TimeText";
+import { approvalExpiryLabel } from "./approval-preview";
 import { inboxItemKindLabel } from "./inbox-presentation";
 import { inboxUpdateVersion } from "./inbox-viewed-updates";
 import { InboxApprovalDetail } from "./InboxApprovalDetail";
@@ -41,7 +42,7 @@ export function InboxInspectorBody({
     <div className="grid gap-4 text-sm">
       <div>
         <p className="text-xs font-medium text-fg-muted">
-          {inboxItemKindLabel(item.kind)} · {approvalCreatedLabel(item.createdAt)}
+          {inboxItemKindLabel(item.kind)} · <TimeText value={item.createdAt} />
         </p>
         <p className="mt-2 text-fg-secondary">{item.summary}</p>
         {item.expiresAt ? <p className="mt-2 text-fg-muted">{approvalExpiryLabel(item.expiresAt)}</p> : null}

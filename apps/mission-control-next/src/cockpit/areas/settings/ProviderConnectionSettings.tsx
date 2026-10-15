@@ -4,14 +4,15 @@ import {
   type ProviderModelCatalogOption,
 } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { RiskBadge } from "../../ui/RiskBadge";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import { canReviewConnectionPlan, connectionPlanCompleted } from "./provider-connection-state";
 import { useProviderConnectionEditor } from "./use-provider-connection-editor";
+import { presentChangeStatusLabel, PROVIDER_AUTH_MODE_LABELS } from "./settings-vocabulary";
 
 export function ProviderConnectionSettings() {
   const catalog = useProviderModelCatalog("system");
@@ -240,8 +241,9 @@ function ProviderConnectionEditor({
       ) : null}
       {!credentialEditable ? (
         <p className="text-sm text-fg-muted">
-          This provider uses {humanizeToken(provider.authMode ?? "managed authentication")}. Use its existing
-          authentication setup below.
+          This provider uses{" "}
+          {(provider.authMode ? PROVIDER_AUTH_MODE_LABELS[provider.authMode] : undefined) ?? "managed authentication"}.
+          Use its existing authentication setup below.
         </p>
       ) : null}
       {draft.isDirty ? (
@@ -262,7 +264,7 @@ function ProviderConnectionEditor({
           {plan ? (
             <>
               <p className="font-medium text-fg">
-                {plan.title} · {humanizeToken(plan.status)}
+                {plan.title} · {presentChangeStatusLabel(plan.status)}
               </p>
               <p className="break-words">{plan.summary}</p>
               <p className="break-words">Impact: {plan.impact}</p>
@@ -305,15 +307,14 @@ function ProviderConnectionEditor({
                   />
                 ) : null}
               </div>
-              <details>
-                <summary className="cursor-pointer text-fg-muted">Change evidence</summary>
-                <p className="mt-2 break-all">
+              <TechnicalDetails label="Change evidence">
+                <p className="break-all font-mono text-xs">
                   Plan {plan.planId} · installation workspace {plan.origin.workspaceId}
                 </p>
-                <p className="break-all">
+                <p className="break-all font-mono text-xs">
                   {plan.evidenceRefs.length ? plan.evidenceRefs.join(", ") : "No evidence recorded yet"}
                 </p>
-              </details>
+              </TechnicalDetails>
             </>
           ) : null}
         </div>

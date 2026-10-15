@@ -1,6 +1,33 @@
 import { describe, expect, it } from "vitest";
 import type { CostSummaryResponse } from "../api/types.js";
-import { projectDailyCostBars, projectProviderCostRows } from "./cost-summary.js";
+import {
+  formatCostUsd,
+  projectDailyCostBars,
+  projectProviderCostRows,
+  projectUsageCostSummary,
+} from "./cost-summary.js";
+
+describe("formatCostUsd", () => {
+  it("uses one two-decimal precision and never prints sub-cent digits or a fake zero", () => {
+    expect(formatCostUsd(12.345)).toBe("$12.35");
+    expect(formatCostUsd(0.000123)).toBe("<$0.01");
+    expect(formatCostUsd(0)).toBe("$0.00");
+    expect(formatCostUsd(undefined)).toBe("Unknown");
+    expect(formatCostUsd(Number.NaN)).toBe("Unknown");
+  });
+
+  it("keeps tiny lower bounds short in the narrow cost column", () => {
+    const summary: CostSummaryResponse = {
+      scope: "day",
+      from: "2026-09-27T00:00:00.000Z",
+      to: "2026-09-28T00:00:00.000Z",
+      items: [
+        { key: "2026-09-27", tokenInput: 0, tokenOutput: 0, tokenCachedInput: 0, tokenTotal: 5, costUsd: 0.000123 },
+      ],
+    };
+    expect(projectUsageCostSummary(summary).costLabel).toBe("<$0.01+");
+  });
+});
 
 describe("projectDailyCostBars", () => {
   it("keeps incomplete zero unknown and known incomplete cost as a lower bound", () => {

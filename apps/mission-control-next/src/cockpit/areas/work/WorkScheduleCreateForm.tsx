@@ -1,5 +1,5 @@
 import type { FormEvent } from "react";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { SCHEDULE_ACTION_LABELS } from "./work-vocabulary";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { ScheduleAdvancedFields, type ScheduleSettingsDraft } from "./ScheduleAdvancedFields";
@@ -80,7 +80,7 @@ export function WorkScheduleCreateForm({
         >
           {CREATE_ACTIONS.map((action) => (
             <option key={action} value={action}>
-              {humanizeToken(action)}
+              {SCHEDULE_ACTION_LABELS[action]}
             </option>
           ))}
         </select>

@@ -298,7 +298,7 @@ describe("Work schedules", () => {
     await click("Pause");
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
-    await click("Confirm pause");
+    await click("Pause schedule");
     clock.mockRestore();
     expect(pauseCronJob).not.toHaveBeenCalled();
     expect(container.textContent).toContain("review expired");
@@ -375,7 +375,7 @@ describe("Work schedules", () => {
           finish = resolve;
         }),
     );
-    await click("Confirm run");
+    await click("Run schedule now");
     await act(async () =>
       root.render(
         <QueryClientProvider client={client}>
@@ -392,7 +392,7 @@ describe("Work schedules", () => {
     await render();
     await review();
     await click("Run now");
-    await click("Confirm run");
+    await click("Run schedule now");
     await vi.waitFor(() => expect(container.textContent).toContain("action outcome is unconfirmed"));
     await act(async () => root.render(<p>Another route</p>));
     await render();
@@ -415,7 +415,7 @@ describe("Work schedules", () => {
     await review();
     await click("Pause");
     expect(pauseCronJob).not.toHaveBeenCalled();
-    await click("Confirm pause");
+    await click("Pause schedule");
     await vi.waitFor(() => expect(pauseCronJob).toHaveBeenCalledWith("job-a", 2));
     await vi.waitFor(() => expect(container.textContent).toContain("Schedule paused."));
     expect(fetchCronJob).toHaveBeenCalledTimes(4);
@@ -428,7 +428,7 @@ describe("Work schedules", () => {
     await render();
     await review();
     await click("Run now");
-    await click("Confirm run");
+    await click("Run schedule now");
     await vi.waitFor(() => expect(container.textContent).toContain("changed during review"));
     expect(runCronJobNow).not.toHaveBeenCalled();
   });
@@ -443,14 +443,14 @@ describe("Work schedules", () => {
     await render();
     await review();
     await click("Run now");
-    await click("Confirm run");
+    await click("Run schedule now");
     await vi.waitFor(() => expect(container.textContent).toContain("action outcome is unconfirmed"));
     expect(container.querySelector<HTMLButtonElement>("button[disabled]")?.disabled).toBe(true);
     const dialog = container.querySelector('[role="dialog"]')!;
     expect(dialog.querySelector('[role="alert"]')?.textContent).toContain("outcome is unconfirmed");
     expect(
       [...dialog.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Confirm run",
+        (button) => button.textContent?.trim() === "Run schedule now",
       )?.disabled,
     ).toBe(true);
     await click("Keep schedule");
@@ -671,8 +671,11 @@ describe("scheduler review and run evidence", () => {
       expect(region?.textContent).toContain("Child run failed");
       return region!;
     });
-    expect(queue.textContent).toContain("job-a · scheduled");
-    expect(queue.textContent).toContain("high");
+    // The schedule list names the job; ids stay in technical details.
+    expect(queue.textContent).toContain("Daily review · Scheduled");
+    expect(queue.textContent).toContain("High severity");
+    expect(queue.textContent).not.toContain("job-a");
+    expect(queue.textContent).not.toContain("run-12345678");
     expect(queue.textContent).toContain("Retrying is not offered here");
     expect([...queue.querySelectorAll("button")].map((b) => b.textContent)).not.toContain("Retry");
     expect(fetchCronReviewQueue).toHaveBeenCalledWith(200);
@@ -790,13 +793,16 @@ describe("scheduler review and run evidence", () => {
     expect(container.textContent).not.toContain("No scheduler review items");
   });
 
-  it("shows the last run's evidence envelope in schedule detail", async () => {
+  it("notes the last run's signed evidence in schedule detail and keeps its id out of the primary text", async () => {
     vi.mocked(fetchCronJob).mockResolvedValue(job({ lastRunEvidenceEnvelopeId: "env-abcdef123456" }));
     await render();
     await click("Review schedule");
     await vi.waitFor(() =>
-      expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).toContain("env-abcdef123456"),
+      expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).toContain(
+        "Signed evidence recorded",
+      ),
     );
+    expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).not.toContain("env-abcdef123456");
     expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).toContain("Last run evidence");
   });
 });

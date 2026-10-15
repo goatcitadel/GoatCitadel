@@ -47,7 +47,7 @@ describe("system health reads", () => {
     const check = deriveSystemHealthChecks(next, null).find((item) => item.id === "channels");
     expect(check?.status).toEqual({ label: "Needs review", tone: "waiting" });
     expect(check?.detail).toContain("1 enabled channel is not ready");
-    expect(check?.detail).toContain("Retained observation is stale (last observed channels:");
+    expect(check?.detail).toContain("Retained observation is stale (last observed Channels:");
   });
   it("the digest makes exactly four reads and defers channels and workers", async () => {
     const digest = await loadSystemHealthDigest();

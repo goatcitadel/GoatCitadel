@@ -3,8 +3,39 @@ import type { LlamaCppRuntimeLeaseDiagnostics, LlamaCppRuntimeStatus } from "@go
 import { refreshLlamaCppRuntime, stopLlamaCppRuntime } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Button } from "../../ui/Button";
+import { TimeText } from "../../ui/TimeText";
+
+type LeaseEvidenceRecord = LlamaCppRuntimeLeaseDiagnostics["evidence"];
+const LEASE_STATES: Record<LlamaCppRuntimeLeaseDiagnostics["state"], string> = {
+  idle: "Idle",
+  starting: "Starting",
+  active: "Active",
+  idle_pending: "Idle, shutting down soon",
+  persistent: "Kept running",
+  closed: "Closed",
+};
+const START_REASONS: Record<NonNullable<LeaseEvidenceRecord["lastStart"]>["reason"], string> = {
+  manual: "Manual start",
+  api: "API request",
+  autostart: "Autostart",
+  lease: "Incoming request",
+  restart: "Restart",
+  other: "Other",
+};
+const START_OUTCOMES: Record<NonNullable<LeaseEvidenceRecord["lastStart"]>["outcome"], string> = {
+  requested: "Requested",
+  ready: "Ready",
+  failed: "Failed",
+};
+const RESTART_OUTCOMES: Record<NonNullable<LeaseEvidenceRecord["lastRestart"]>["outcome"], string> = {
+  scheduled: "Scheduled",
+  attempting: "Attempting",
+  ready: "Ready",
+  failed: "Failed",
+  exhausted: "Gave up after retries",
+};
 
 const STOPPABLE = new Set<LlamaCppRuntimeStatus["processState"]>(["starting", "running", "error"]);
 const OWNERSHIP: Record<LlamaCppRuntimeLeaseDiagnostics["ownership"], string> = {
@@ -14,7 +45,7 @@ const OWNERSHIP: Record<LlamaCppRuntimeLeaseDiagnostics["ownership"], string> = 
 };
 
 function requests(count: number) {
-  return `${count} active request${count === 1 ? " is" : "s are"}`;
+  return `${plural(count, "active request")} ${count === 1 ? "is" : "are"}`;
 }
 
 /** What keeps the runtime alive besides individual requests. */
@@ -28,7 +59,7 @@ function LeaseEvidence({ diagnostics }: { diagnostics: LlamaCppRuntimeLeaseDiagn
   const purposes = diagnostics.purposes.map((item) => `${item.purpose} ${item.count}`).join(", ");
   return (
     <ul aria-label="llama.cpp lease lifecycle" className="space-y-1 text-sm text-fg-secondary">
-      <li>Lifecycle: {humanizeToken(diagnostics.state)}</li>
+      <li>Lifecycle: {LEASE_STATES[diagnostics.state] ?? "Unknown"}</li>
       <li>Ownership: {OWNERSHIP[diagnostics.ownership]}</li>
       <li>
         Active requests: {diagnostics.activeLeaseCount}
@@ -37,22 +68,17 @@ function LeaseEvidence({ diagnostics }: { diagnostics: LlamaCppRuntimeLeaseDiagn
       <li>Kept running by: {demandLabel(diagnostics.persistentDemand)}</li>
       <li>
         Idle shutdown:{" "}
-        {diagnostics.idleDeadline ? (
-          <time dateTime={diagnostics.idleDeadline}>{diagnostics.idleDeadline}</time>
-        ) : (
-          "Not scheduled"
-        )}
+        {diagnostics.idleDeadline ? <TimeText absolute value={diagnostics.idleDeadline} /> : "Not scheduled"}
       </li>
       {evidence.lastStart ? (
         <li>
-          Latest start: {humanizeToken(evidence.lastStart.reason)} · {humanizeToken(evidence.lastStart.outcome)} ·{" "}
-          <time dateTime={evidence.lastStart.at}>{evidence.lastStart.at}</time>
+          Latest start: {START_REASONS[evidence.lastStart.reason] ?? "Unknown"} ·{" "}
+          {START_OUTCOMES[evidence.lastStart.outcome] ?? "Unknown"} · <TimeText value={evidence.lastStart.at} />
         </li>
       ) : null}
       {evidence.lastProbe ? (
         <li>
-          Latest probe: {evidence.lastProbe.healthy ? "healthy" : "failed"} ·{" "}
-          <time dateTime={evidence.lastProbe.at}>{evidence.lastProbe.at}</time>
+          Latest probe: {evidence.lastProbe.healthy ? "healthy" : "failed"} · <TimeText value={evidence.lastProbe.at} />
         </li>
       ) : null}
       {evidence.lastExit ? (
@@ -60,13 +86,13 @@ function LeaseEvidence({ diagnostics }: { diagnostics: LlamaCppRuntimeLeaseDiagn
           Latest process exit: {evidence.lastExit.unexpected ? "unexpected" : "expected"}
           {typeof evidence.lastExit.code === "number" ? ` · code ${evidence.lastExit.code}` : ""}
           {evidence.lastExit.signal ? ` · signal ${evidence.lastExit.signal}` : ""} ·{" "}
-          <time dateTime={evidence.lastExit.at}>{evidence.lastExit.at}</time>
+          <TimeText value={evidence.lastExit.at} />
         </li>
       ) : null}
       {evidence.lastRestart ? (
         <li>
-          Latest restart: {humanizeToken(evidence.lastRestart.outcome)} ·{" "}
-          <time dateTime={evidence.lastRestart.at}>{evidence.lastRestart.at}</time>
+          Latest restart: {RESTART_OUTCOMES[evidence.lastRestart.outcome] ?? "Unknown"} ·{" "}
+          <TimeText value={evidence.lastRestart.at} />
         </li>
       ) : null}
     </ul>

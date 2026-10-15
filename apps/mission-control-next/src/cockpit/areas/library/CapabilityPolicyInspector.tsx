@@ -1,6 +1,7 @@
 import { RiskBadge } from "../../ui/RiskBadge";
 import { useEffect, useRef, useState } from "react";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { freeText, wardEffectLabel } from "./capability-vocabulary";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { Button } from "../../ui/Button";
 import {
@@ -181,7 +182,7 @@ function PolicyForm({ workspaceId, toolName }: { workspaceId: string; toolName: 
               <option value="">Choose a conversation in this workspace</option>
               {options.sessions.map((session) => (
                 <option key={session.sessionId} value={session.sessionId}>
-                  {bounded(session.title ?? "Untitled conversation", 80)} · {bounded(session.sessionId, 80)}
+                  {bounded(session.title ?? "Untitled conversation", 80)}
                 </option>
               ))}
             </select>
@@ -338,16 +339,21 @@ function PolicyResult({ value }: { value: PolicyInspectionResult }) {
           : "No local operator override was reported."}
       </p>
       {decision.matchedGrantId ? (
-        <p className="break-all text-xs">Matched grant: {bounded(decision.matchedGrantId)}</p>
+        <>
+          <p className="text-xs">A tool grant matched this call.</p>
+          <TechnicalDetails label="Matched grant">
+            <p className="break-all text-xs">Grant ID: {bounded(decision.matchedGrantId)}</p>
+          </TechnicalDetails>
+        </>
       ) : null}
       {decision.wardEffect ? (
-        <p className="text-xs">Ward effect: {bounded(humanizeToken(decision.wardEffect))}</p>
+        <p className="text-xs">Ward effect: {bounded(wardEffectLabel(decision.wardEffect))}</p>
       ) : null}
       {decision.reasonCodes.length ? (
         <ul className="list-disc space-y-1 pl-4 text-xs">
           {decision.reasonCodes.slice(0, 12).map((reason, index) => (
             <li className="break-words" key={index}>
-              {bounded(humanizeToken(reason))}
+              {bounded(freeText(reason))}
             </li>
           ))}
         </ul>

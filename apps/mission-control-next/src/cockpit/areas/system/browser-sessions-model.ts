@@ -1,3 +1,4 @@
+import { formatAbsoluteTime, plural } from "@goatcitadel/mission-control-shared/content/format";
 import type {
   BrowserSessionEventRecord,
   BrowserSessionEventSummary,
@@ -218,11 +219,11 @@ export function describeEventPayload(event: BrowserSessionEventRecord): string {
     .filter(([key, value]) => !SENSITIVE_PAYLOAD_KEY.test(key) && value !== undefined && value !== null && value !== "")
     .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`);
   const hidden = Object.keys(event.payload).filter((key) => SENSITIVE_PAYLOAD_KEY.test(key)).length;
-  const parts = [...visible, ...(hidden ? [`${hidden} browser state value${hidden === 1 ? "" : "s"} hidden`] : [])];
+  const parts = [...visible, ...(hidden ? [`${plural(hidden, "browser state value")} hidden`] : [])];
   return parts.length ? parts.join(" · ") : "No payload detail recorded.";
 }
 
+/** Plain-text time for sentences and receipts; undefined when the record has no valid time. */
 export function formatTime(iso?: string): string | undefined {
-  const date = iso ? new Date(iso) : undefined;
-  return date && Number.isFinite(date.getTime()) ? date.toLocaleString() : undefined;
+  return iso && Number.isFinite(Date.parse(iso)) ? formatAbsoluteTime(iso) : undefined;
 }

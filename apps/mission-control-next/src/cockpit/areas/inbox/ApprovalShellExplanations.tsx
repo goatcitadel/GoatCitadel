@@ -1,5 +1,8 @@
 import type { ShellCommandExplanation } from "@goatcitadel/contracts";
 import { explainShellCommand } from "@goatcitadel/mission-control-shared";
+import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { RiskBadge } from "../../ui/RiskBadge";
+import { shellRiskAsApprovalRisk } from "./inbox-vocabulary";
 
 export function ApprovalShellExplanations({
   commands,
@@ -16,7 +19,7 @@ export function ApprovalShellExplanations({
         return (
           <details key={`${index}:${command}`} className="min-w-0 rounded border border-line p-2">
             <summary>
-              {explanation.summary} · {explanation.highestRisk}
+              {explanation.summary} · <RiskBadge risk={shellRiskAsApprovalRisk[explanation.highestRisk]} />
             </summary>
             <pre className="overflow-auto whitespace-pre-wrap break-all">{command}</pre>
             <dl>
@@ -31,7 +34,7 @@ export function ApprovalShellExplanations({
             </dl>
             {explanation.risks.map((risk, i) => (
               <p key={i}>
-                {risk.level}: {risk.label}. {risk.explanation}
+                {presentRiskLevel(shellRiskAsApprovalRisk[risk.level]).label}: {risk.label}. {risk.explanation}
               </p>
             ))}
           </details>

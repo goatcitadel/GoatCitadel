@@ -153,7 +153,7 @@ it.each([false, true])("%s shell separates read refresh from reviewed owner veri
   await click("Verify current owner evidence");
   await click("Submit reviewed plan action");
   expect(api.verify).toHaveBeenCalledWith("plan", { workspaceId: "a" }, 5);
-  expect(host.textContent).toContain("completed");
+  expect(host.textContent).toContain(native ? "Done" : "completed");
   if (native) expect(host.querySelector('[class*="mc-next"]')).toBeNull();
 });
 it.each([false, true])(
@@ -169,7 +169,7 @@ it.each([false, true])(
     await click("Create reviewed setup plan");
     expect(api.create).toHaveBeenCalledWith({ workspaceId: "a", surface: "settings", request: saved.request });
     expect(api.confirm).not.toHaveBeenCalled();
-    expect(host.textContent).toContain("awaiting confirmation");
+    expect(host.textContent).toContain(native ? "Needs confirmation" : "awaiting confirmation");
   },
 );
 it("native child inspection hands off only the canonical linked proposal and current workspace", async () => {

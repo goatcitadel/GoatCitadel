@@ -54,7 +54,9 @@ it("shows actual owner diagnostics and manual handoffs without process mutation 
     },
   });
   await mount();
-  await vi.waitFor(() => expect(JSON.stringify(renderer.toJSON())).toContain("fixture-host"));
+  await vi.waitFor(() => expect(JSON.stringify(renderer.toJSON())).toContain("Current process"));
+  expect(JSON.stringify(renderer.toJSON())).toContain("Passed");
+  expect(JSON.stringify(renderer.toJSON())).not.toContain("fixture-host");
   expect(renderer.root.findAllByType("button").map((item) => item.children.join(""))).toEqual([
     "Refresh Gateway process",
   ]);

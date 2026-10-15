@@ -128,7 +128,7 @@ it("cancelling review writes nothing and history renders owner provenance", asyn
   expect(updateNote).not.toHaveBeenCalled();
   expect(createNote).not.toHaveBeenCalled();
   await click("Note history");
-  await vi.waitFor(() => expect(container.textContent).toContain("operator-a"));
+  await vi.waitFor(() => expect(container.textContent).toContain("Edited by an operator"));
   expect(listNoteRevisions).toHaveBeenCalledExactlyOnceWith("a", "one");
   expect(container.textContent).not.toContain("hash-a");
 });

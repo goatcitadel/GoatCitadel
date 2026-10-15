@@ -1,4 +1,4 @@
-import type { ChatProjectRecord } from "@goatcitadel/contracts";
+import type { AutonomousActivationGrantRecord, ChatProjectRecord } from "@goatcitadel/contracts";
 import {
   useProjectFanout,
   defaultExpiryValue,
@@ -10,6 +10,12 @@ import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
 import { RiskBadge } from "../../ui/RiskBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+
+const GRANT_HEADINGS: Record<AutonomousActivationGrantRecord["status"], string> = {
+  active: "Active project grant",
+  expired: "Expired project grant",
+  revoked: "Revoked project grant",
+};
 
 export function ProjectFanout({
   project,
@@ -42,7 +48,7 @@ export function ProjectFanout({
       </Button>
       {owner.grants.map((grant) => (
         <article key={grant.grantId} className="grid min-w-0 grid-cols-1 gap-2 border-t border-line pt-3">
-          <h3>{grant.status === "active" ? "Active project grant" : `Grant ${grant.status}`}</h3>
+          <h3>{GRANT_HEADINGS[grant.status] ?? "Project grant"}</h3>
           <p className="text-sm">{formatGrantStatus(grant)}</p>
           <p className="break-words text-sm">{grant.reason}</p>
           <p className="break-words text-sm">Recorded caller: {grant.grantor}</p>

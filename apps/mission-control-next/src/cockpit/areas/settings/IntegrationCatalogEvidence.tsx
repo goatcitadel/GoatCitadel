@@ -8,6 +8,9 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { integrationInputClass } from "./IntegrationFormFields";
 import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
 import { ExtensionConfigurationGuidance } from "./ExtensionConfigurationGuidance";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+import { RESUME_STATE_LABELS, SIDE_EFFECT_STATUS_LABELS } from "./integration-vocabulary";
 
 export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSettingsOwner }) {
   const workspaceLabel = useActiveWorkspaceLabel();
@@ -202,11 +205,17 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
           {runs.slice(0, 25).map((run) => (
             <article key={run.runId} className="space-y-2 rounded-md border border-line-subtle p-3">
               <p className="break-all text-sm font-medium">
-                {run.actionId ?? run.boundary} · {run.status}
+                {run.actionId ?? run.boundary} · {SIDE_EFFECT_STATUS_LABELS[run.status] ?? "Unknown"}
               </p>
-              <p className="break-all text-xs text-fg-muted">
-                {run.runId} · observed {run.updatedAt} · {run.resumeState}
+              <p className="break-words text-xs text-fg-muted">
+                <TimeText prefix="Observed" value={run.updatedAt} /> ·{" "}
+                {RESUME_STATE_LABELS[run.resumeState] ?? "Unknown"}
               </p>
+              <TechnicalDetails label="Record details">
+                <p className="break-all font-mono text-xs">
+                  {run.runId} · {run.status} · {run.resumeState}
+                </p>
+              </TechnicalDetails>
               {run.errorText ? <p className="text-sm text-status-waiting">{run.errorText}</p> : null}
               <Button
                 disabled={s.replayMutation.locked || s.loading || !isReplayAuditCandidate(run)}

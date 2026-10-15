@@ -778,7 +778,7 @@ it("acknowledges only shown update references and reports skipped operator recei
   const before = JSON.stringify({ ...localStorage });
   await clickButton("Mark all shown updates read");
   expect(apiMocks.markRead).toHaveBeenCalledWith("default", [{ id: update.id, version: update.version }]);
-  expect(container.textContent).toContain("1 updates were not acknowledged");
+  expect(container.textContent).toContain("1 update was not acknowledged");
   expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(1);
   expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
   expect(JSON.stringify({ ...localStorage })).toBe(before);
@@ -795,7 +795,7 @@ it("shows server-scoped approval history with an older-page continuation", async
   });
   expect(apiMocks.fetchApprovals).toHaveBeenCalledWith({ workspaceId: "default", limit: 100 });
   expect(container.textContent).toContain("Load older pages to inspect the full retained history");
-  expect(container.textContent).toContain("Rejected");
+  expect(container.textContent).toContain("Denied");
   expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
 });
 

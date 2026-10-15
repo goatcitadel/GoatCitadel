@@ -99,7 +99,8 @@ describe("Chat blockers", () => {
         </QueryClientProvider>,
       ),
     );
-    expect(container.textContent).toContain("Tool invoke");
+    expect(container.textContent).toContain("Use a tool");
+    expect(container.textContent).not.toContain("tool_invoke");
     expect(container.textContent).toContain("Which path?");
     const anchors = [...container.querySelectorAll("a")];
     expect(anchors).toHaveLength(2);
@@ -128,7 +129,7 @@ describe("Chat blockers", () => {
     const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
     await act(async () => review?.click());
     expect(onApprovePending).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Confirm high risk action");
+    expect(document.body.textContent).toContain("Confirm danger-level action");
     expect(document.body.textContent).toContain("pnpm test");
   });
 
@@ -194,7 +195,7 @@ describe("Chat blockers", () => {
     const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
     await act(async () => review?.click());
     await vi.waitFor(() => expect(document.body.textContent).toContain("rm -rf build"));
-    expect(document.body.textContent).toContain("Confirm critical risk action");
+    expect(document.body.textContent).toContain("Confirm nuclear-level action");
   });
 
   it("loads persisted evidence for a risk level this build does not know", async () => {

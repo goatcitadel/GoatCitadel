@@ -2,7 +2,58 @@ import type {
   MeshCapabilityInvocationActivityItem,
   MeshCapabilityOpsEntry,
 } from "@goatcitadel/mission-control-shared/api/mesh-capabilities";
-import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import type {
+  MeshCapabilityEffectDiffDisposition,
+  MeshCapabilityPermissionDiffDisposition,
+} from "@goatcitadel/contracts";
+import {
+  humanizeToken,
+  presentApprovalStatus,
+  type StatusPresentation,
+} from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+
+/**
+ * Publications carry no display name, so an entry is named from its publisher-local name ("repo_search" reads
+ * "Repo search"); the exact local and capability ids stay in Technical details.
+ */
+export const meshEntryName = (localId: string) => humanizeToken(localId) || "Unnamed capability";
+
+/** The entry name inside a Gateway capability id (`mesh:<node>:<kind>:<localId>`). */
+export const meshNameFromCapabilityId = (capabilityId: string) =>
+  meshEntryName(capabilityId.split(":").slice(3).join(":"));
+
+export const meshApprovalStatus = (status: string): StatusPresentation =>
+  status === "pending" || status === "approved" || status === "rejected" || status === "edited"
+    ? presentApprovalStatus(status)
+    : { label: "Status unknown", tone: "neutral" };
+
+const PERMISSION_DIFF: Record<MeshCapabilityPermissionDiffDisposition, string> = {
+  initial: "first grant",
+  unchanged: "unchanged",
+  narrowed: "narrowed",
+  widened: "widened",
+  mixed: "changed both ways",
+};
+export const meshPermissionDiffLabel = (value: string) =>
+  (PERMISSION_DIFF as Record<string, string | undefined>)[value] ?? "change unknown";
+
+const EFFECT_DIFF: Record<MeshCapabilityEffectDiffDisposition, string> = {
+  initial: "first review",
+  unchanged: "unchanged",
+  reduced: "reduced",
+  increased: "increased",
+  changed: "changed",
+};
+export const meshEffectDiffLabel = (value: string) =>
+  (EFFECT_DIFF as Record<string, string | undefined>)[value] ?? "change unknown";
+
+export const MESH_SETTLED_BY: Record<"node" | "gateway", string> = {
+  node: "Settled by the node",
+  gateway: "Settled by the Gateway",
+};
+
+/** Error codes are open producer strings. */
+export const meshErrorLabel = (code: string) => humanizeToken(code) || "Unnamed error";
 
 /** The Gateway's capability id for one exact entry, as the Classic owner derives it. */
 export function meshCapabilityId(entry: MeshCapabilityOpsEntry): string {
@@ -60,7 +111,7 @@ const REASONS: Record<string, string> = {
   manifest_superseded: "A newer manifest superseded this one; supersession never mutates the prior bytes.",
 };
 
-export const meshReason = (reason: string) => REASONS[reason] ?? reason.replaceAll("_", " ");
+export const meshReason = (reason: string) => REASONS[reason] ?? (humanizeToken(reason) || "Unnamed reason");
 
 export function invocationState(item: MeshCapabilityInvocationActivityItem): StatusPresentation {
   if (item.phase === "dispatched") return { label: "Dispatched", tone: "running" };

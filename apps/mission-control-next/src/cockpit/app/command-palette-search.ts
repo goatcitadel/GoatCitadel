@@ -1,4 +1,4 @@
-import type { OperatorInboxResponse } from "@goatcitadel/contracts";
+import type { CapabilityKind, OperatorInboxResponse } from "@goatcitadel/contracts";
 import { fetchChatSessionSearch } from "@goatcitadel/mission-control-shared/api/chat";
 import { fetchWorkspaces } from "@goatcitadel/mission-control-shared/api/workspaces";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -113,6 +113,22 @@ export function searchInbox(result: OperatorInboxResponse, scope: PaletteScope, 
   };
 }
 
+/** Plain names for capability kinds; the wire kind stays in the result id and catalog link. */
+const CAPABILITY_KIND_LABELS: Record<CapabilityKind, string> = {
+  tool: "Tool",
+  skill: "Skill",
+  code_mode: "Code Mode",
+  proposal: "Proposal",
+  candidate_skill: "Candidate skill",
+  mesh_tool: "Mesh tool",
+  mesh_mcp_server: "Mesh MCP server",
+  mesh_skill: "Mesh skill",
+};
+
+function capabilityKindLabel(kind: string): string {
+  return CAPABILITY_KIND_LABELS[kind as CapabilityKind] ?? "Capability";
+}
+
 /** Filters the installation capability catalog the cockpit already caches. */
 export function searchCapabilities(catalog: CapabilityCatalogView, text: string): PaletteSourceResult {
   const filters = { search: text, kind: "all", status: "all" as const, trust: "all" };
@@ -120,7 +136,7 @@ export function searchCapabilities(catalog: CapabilityCatalogView, text: string)
     items: filterCapabilities(catalog.items, filters).map((item) => ({
       id: `${item.kind}:${item.capabilityId}`,
       label: presentCapabilityTitle(item),
-      description: `${item.kind} · Installation catalog; availability is reviewed in Library`,
+      description: `${capabilityKindLabel(item.kind)} · Installation catalog; availability is reviewed in Library`,
       target: { href: catalogHref(filters, item) },
     })),
     coverage: [

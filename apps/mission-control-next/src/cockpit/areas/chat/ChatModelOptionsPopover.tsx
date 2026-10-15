@@ -2,7 +2,9 @@ import { Root, Anchor, Portal, Content, Close } from "@radix-ui/react-popover";
 import { useMemo, type RefObject } from "react";
 import type { ChatCompletionReasoningEffort } from "@goatcitadel/contracts";
 import type { ChatModelOptionsControls as Controls } from "./ChatComposerControls";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { useProviderLabelLookup } from "../../data/use-model-label";
+import { presentThinkingLevel } from "./chat-vocabulary";
+import { useChatModelLabels } from "./use-chat-model-labels";
 import { GUIDED_THINKING_LEVELS } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
 
 /** Every effort stays selectable while the catalog records no reasoning metadata; the Gateway still gates the send. */
@@ -58,6 +60,8 @@ export function ChatModelOptionsPopover({
   const thinkingLevels = supported ?? ALL_THINKING_LEVELS;
   const selectedProvider = props.providerOptions.find((provider) => provider.providerId === props.selectedProviderId);
   const disabled = props.historicalReadOnly || props.sending;
+  const providerLabel = useProviderLabelLookup(open && Boolean(props.selectedProviderId) && !selectedProvider);
+  const modelLabel = useChatModelLabels(props.selectedProviderId ?? undefined, open);
   const modelOptions = (
     <>
       <label className="flex items-center gap-1">
@@ -73,7 +77,9 @@ export function ChatModelOptionsPopover({
         >
           <option value="">Choose</option>
           {props.selectedProviderId && !selectedProvider ? (
-            <option value={props.selectedProviderId}>{props.selectedProviderId} · current, catalog unavailable</option>
+            <option value={props.selectedProviderId}>
+              {providerLabel(props.selectedProviderId) ?? "Current provider"} · catalog unavailable
+            </option>
           ) : null}
           {props.providerOptions.map((provider) => (
             <option key={provider.providerId} value={provider.providerId} disabled={provider.disabled}>
@@ -96,11 +102,11 @@ export function ChatModelOptionsPopover({
         >
           <option value="">Choose</option>
           {props.selectedModel && !selectedProvider?.models.includes(props.selectedModel) ? (
-            <option value={props.selectedModel}>{props.selectedModel} · current, unverified</option>
+            <option value={props.selectedModel}>{modelLabel(props.selectedModel)} · current, unverified</option>
           ) : null}
           {selectedProvider?.models.map((model) => (
             <option key={model} value={model}>
-              {model}
+              {modelLabel(model)}
             </option>
           ))}
         </select>
@@ -119,12 +125,12 @@ export function ChatModelOptionsPopover({
         >
           {supported && !supported.includes(props.currentThinkingLevel) ? (
             <option value={props.currentThinkingLevel} disabled>
-              {humanizeToken(props.currentThinkingLevel)} · current, unsupported by this model
+              {presentThinkingLevel(props.currentThinkingLevel)} · current, unsupported by this model
             </option>
           ) : null}
           {thinkingLevels.map((level) => (
             <option key={level} value={level}>
-              {humanizeToken(level)}
+              {presentThinkingLevel(level)}
             </option>
           ))}
         </select>

@@ -14,7 +14,16 @@ import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Field } from "../../ui/Field";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useLibraryOperation } from "./use-library-operation";
+import {
+  JOURNEY_ACTOR,
+  JOURNEY_CATEGORY,
+  JOURNEY_TRUST,
+  journeyBlockerLabel,
+  journeyWords,
+} from "./library-vocabulary";
 
 const CATEGORIES = [
   ["all", "All events"],
@@ -39,11 +48,7 @@ const INPUT = "w-full min-w-0 rounded-md border border-line bg-raised p-2";
 
 const pick = <T extends string>(value: string | null, allowed: readonly (readonly [T, string])[], fallback: T): T =>
   allowed.some(([id]) => id === value) ? (value as T) : fallback;
-const humanize = (value: string) => {
-  const words = value.replaceAll("_", " ").trim();
-  return words ? words[0]!.toUpperCase() + words.slice(1) : "Journey event";
-};
-const formatTime = (iso: string) => (Number.isFinite(Date.parse(iso)) ? new Date(iso).toLocaleString() : iso);
+const humanize = (value: string) => journeyWords(value, "Journey event");
 
 /** Read-only governance history. Every read is bound to the current workspace and access identity. */
 export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
@@ -102,9 +107,9 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
       <header className="grid min-w-0 gap-2">
         <h1 className="font-display text-xl font-semibold">Journey timeline</h1>
         <p className="text-sm text-fg-secondary">
-          Experimental, read-only governance history for workspace {workspaceId}. Journey explains evidence from the
-          canonical producers currently wired; it never activates skills or promotes memory. Blocked, quarantined,
-          conflicting, foreign-scope and incomplete evidence stays visible and marked.
+          Experimental, read-only governance history for this workspace. Journey explains evidence from the canonical
+          producers currently wired; it never activates skills or promotes memory. Blocked, quarantined, conflicting,
+          foreign-scope and incomplete evidence stays visible and marked.
         </p>
         <p className="text-sm text-fg-secondary">
           Coverage is not yet complete: broader memory lifecycle, legacy imports, direct skill state, improvement
@@ -185,7 +190,7 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
           <section className={CARD} aria-label="Journey events">
             <h2 className="font-display text-md font-semibold">Events</h2>
             <p className="text-sm text-fg-secondary">
-              {items.length} loaded · {blocked} with blocked evidence
+              {plural(items.length, "event")} loaded · {blocked} with blocked evidence
             </p>
             {!items.length ? <p className="text-sm text-fg-muted">No Journey events match these filters.</p> : null}
             <ul className="grid min-w-0 grid-cols-1 gap-2">
@@ -199,7 +204,7 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
                   >
                     <strong>{humanize(event.action)}</strong>
                     <span className="text-sm text-fg-secondary">
-                      {formatTime(event.recordedAt)} · {event.category.replaceAll("_", " ")} ·{" "}
+                      <TimeText value={event.recordedAt} /> · {JOURNEY_CATEGORY[event.category] ?? "Other"} ·{" "}
                       {formatJourneyEvidenceHealth(event.evidence.health)}
                     </span>
                   </button>
@@ -268,8 +273,8 @@ function JourneyEventDetail({ item }: { item: JourneyTimelineItem }) {
     <section className={CARD} aria-label="Journey event detail">
       <h2 className="font-display text-md font-semibold wrap-anywhere">{humanize(item.action)}</h2>
       <p className="text-sm text-fg-secondary wrap-anywhere">
-        {item.eventType} · {item.subjectKind} ·{" "}
-        {item.scopeKind === "global" ? "global evidence" : `workspace ${item.workspaceId ?? "unknown"}`}
+        {journeyWords(item.eventType, "Event")} · {journeyWords(item.subjectKind, "Subject")} ·{" "}
+        {item.scopeKind === "global" ? "Global evidence" : "This workspace"}
       </p>
       <dl className="grid min-w-0 grid-cols-1 gap-2 text-sm sm:grid-cols-2">
         <div>
@@ -278,7 +283,7 @@ function JourneyEventDetail({ item }: { item: JourneyTimelineItem }) {
         </div>
         <div>
           <dt className="font-medium">Trust contribution</dt>
-          <dd>{evidence.trustContribution.replaceAll("_", " ")}</dd>
+          <dd>{JOURNEY_TRUST[evidence.trustContribution] ?? "Unknown"}</dd>
         </div>
         <div>
           <dt className="font-medium">Source</dt>
@@ -290,33 +295,47 @@ function JourneyEventDetail({ item }: { item: JourneyTimelineItem }) {
         </div>
         <div>
           <dt className="font-medium">Actor</dt>
-          <dd className="wrap-anywhere">
-            {item.actorType} · {item.actorId}
-          </dd>
+          <dd className="wrap-anywhere">{JOURNEY_ACTOR[item.actorType] ?? "An unknown actor"}</dd>
         </div>
         <div>
           <dt className="font-medium">Recorded</dt>
-          <dd>{formatTime(item.recordedAt)}</dd>
+          <dd>
+            <TimeText value={item.recordedAt} absolute />
+          </dd>
         </div>
         <div>
           <dt className="font-medium">Recurrence</dt>
           <dd>
             {recurrence
-              ? `${recurrence.observationCount} observations in ${recurrence.distinctSessionCount} sessions · ${recurrence.complete ? "complete scan" : "bounded, partial scan"}`
+              ? `${plural(recurrence.observationCount, "observation")} in ${plural(recurrence.distinctSessionCount, "session")} · ${recurrence.complete ? "complete scan" : "bounded, partial scan"}`
               : "No evidence fingerprint"}
           </dd>
         </div>
         {evidence.blockerCodes.length ? (
           <div>
             <dt className="font-medium">Blockers</dt>
-            <dd className="wrap-anywhere">{evidence.blockerCodes.join(", ")}</dd>
+            <dd className="wrap-anywhere">
+              <ul className="grid gap-1">
+                {evidence.blockerCodes.map((code) => (
+                  <li key={code}>{journeyBlockerLabel(code)}</li>
+                ))}
+              </ul>
+            </dd>
           </div>
         ) : null}
       </dl>
-      <Rows title="Evidence references" rows={item.evidenceRefs.map((ref) => [ref.owner, ref.refId] as const)} />
+      <p className="text-sm text-fg-secondary">
+        {item.evidenceRefs.length
+          ? `${plural(item.evidenceRefs.length, "evidence reference")} recorded.`
+          : "No evidence references recorded."}
+      </p>
       <Rows title="Provenance" rows={semanticRecordRows(item.provenance)} />
       <Rows title="Event summary" rows={semanticRecordRows(item.summary)} />
       <TechnicalDetails label="Fingerprints and full event">
+        <p className="break-all">
+          Actor ID: {item.actorId} · Blocker codes: {evidence.blockerCodes.join(", ") || "none"}
+        </p>
+        <Rows title="Evidence references" rows={item.evidenceRefs.map((ref) => [ref.owner, ref.refId] as const)} />
         <p className="break-all">Event fingerprint {item.eventFingerprint}</p>
         {item.evidenceFingerprint ? <p className="break-all">Evidence fingerprint {item.evidenceFingerprint}</p> : null}
         <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-sunken p-2 font-mono text-xs">

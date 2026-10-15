@@ -20,6 +20,7 @@ import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { AGENT_CATALOG_STATE, AGENT_PARSE_STATUS } from "./library-vocabulary";
 
 export function LibraryImportedAgents({ workspaceId }: { workspaceId: string }) {
   const access = useProjectAccess(workspaceId);
@@ -85,7 +86,7 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
           throw new Error("Catalog receipt does not confirm the requested state.");
         setOutcome({
           error: false,
-          text: `Gateway confirmed catalog state: ${result.state}. Session activation is a separate Chat action.`,
+          text: `Gateway confirmed catalog state: ${AGENT_CATALOG_STATE[result.state]}. Session activation is a separate Chat action.`,
         });
       }
       await client.invalidateQueries({ queryKey: ["library", "agent-catalog"] });
@@ -164,7 +165,7 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
             <li key={item.entryId} className="rounded-lg border border-line p-3">
               <h3>{item.definition.frontmatter.name}</h3>
               <p className="text-sm text-fg-secondary">
-                {item.division} · {item.state} · {item.definition.parseStatus.replaceAll("_", " ")}
+                {item.division} · {AGENT_CATALOG_STATE[item.state]} · {AGENT_PARSE_STATUS[item.definition.parseStatus]}
               </p>
               <Button
                 size="sm"
@@ -194,7 +195,8 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
           <h3 className="font-semibold">{selected.definition.frontmatter.name}</h3>
           <p>{selected.definition.frontmatter.description}</p>
           <p className="text-sm text-fg-secondary">
-            Workspace {workspaceId} · {selected.state} · {selected.definition.parseStatus}
+            This workspace · {AGENT_CATALOG_STATE[selected.state]} ·{" "}
+            {AGENT_PARSE_STATUS[selected.definition.parseStatus]}
           </p>
           {selected.definition.parseWarnings.map((warning, index) => (
             <Callout key={index} tone="warning">
@@ -239,11 +241,11 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
         description="The Gateway remains responsible for import validation, lifecycle policy and activation."
       >
         <div className="grid gap-3">
-          <p>Workspace {workspaceId}</p>
+          <p>Applies to this workspace.</p>
           <p className="break-words">
             {review?.kind === "import"
               ? `${review.repoUrl || "Gateway configured source"} · ${review.ref || "Gateway default reference"}`
-              : `${review?.entry.definition.frontmatter.name} → ${review?.state}`}
+              : `${review?.entry.definition.frontmatter.name} → ${review ? AGENT_CATALOG_STATE[review.state] : ""}`}
           </p>
           <Callout tone="warning">
             Imported definitions are untrusted until their lifecycle and parser checks permit use. Catalog state is not

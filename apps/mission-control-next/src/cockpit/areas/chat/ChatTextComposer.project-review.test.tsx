@@ -9,6 +9,12 @@ import { CockpitNavigationContext, type CockpitNavigationOwner } from "../../app
 import { ProjectAssignmentReview } from "./ProjectAssignmentReview";
 import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { ChatTextComposer, type ComposerProps } from "./ChatTextComposer";
+// Catalog labels read the query cache; these tests exercise the controls, so the model id stands in for its name.
+vi.mock("../../data/use-model-label", () => ({
+  useModelLabel: (_providerId?: string, modelId?: string) => modelId ?? "Unknown model",
+  useProviderLabelLookup: () => () => undefined,
+}));
+vi.mock("./use-chat-model-labels", () => ({ useChatModelLabels: () => (modelId: string) => modelId }));
 
 const api = vi.hoisted(() => ({ assign: vi.fn(), refresh: vi.fn(), error: vi.fn() }));
 const scope = vi.hoisted(() => ({ activeCitadelId: "citadel-a", activeWorkspaceId: "workspace-a" }));

@@ -45,6 +45,11 @@ describe("complete cockpit health projection", () => {
     expect(checks.find((check) => check.id === "integrations")?.status.tone).toBe("failed");
     expect(checks.find((check) => check.id === "updates")?.status.tone).toBe("waiting");
     expect(checks.find((check) => check.id === "remote_workers")?.status.tone).toBe("neutral");
+    // Counts read naturally for one (GL-12).
+    expect(checks.find((check) => check.id === "integrations")?.detail).toBe(
+      "1 connection error and 0 disconnected connections recorded.",
+    );
+    expect(checks.find((check) => check.id === "remote_workers")?.detail).toContain("1 worker record is visible.");
   });
 
   it("labels known-off features 'Not set up' and keeps them out of the missing-proof summary", () => {

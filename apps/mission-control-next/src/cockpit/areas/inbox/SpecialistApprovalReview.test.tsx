@@ -28,6 +28,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({
   fetchCodeModeRunArtifact: api.source,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ resolveApproval: api.decide }));
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [] })),
+}));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "one" }),
 }));
@@ -187,26 +190,29 @@ it("bounds long Code metadata while retaining complete source bytes and keyboard
   const content = `// ${token}\nreturn 1;\n`;
   await act(async () =>
     root.render(
-      <SpecialistApprovalReview
-        approval={approval}
-        evidence={{
-          ...evidence,
-          code: {
-            ...code,
-            workspaceId: token,
-            permissionProfileLabel: token,
-            requestedOutputIntent: token,
-            codeArtifact: { ...code.codeArtifact, relPath: `folder/${token}.js` },
-          },
-          source: { ...source, content },
-        }}
-      />,
+      <QueryClientProvider client={client}>
+        <SpecialistApprovalReview
+          approval={approval}
+          evidence={{
+            ...evidence,
+            code: {
+              ...code,
+              workspaceId: token,
+              permissionProfileLabel: token,
+              requestedOutputIntent: token,
+              codeArtifact: { ...code.codeArtifact, relPath: `folder/${token}.js` },
+            },
+            source: { ...source, content },
+          }}
+        />
+      </QueryClientProvider>,
     ),
   );
   const review = host.querySelector('[aria-label="Governed code review"]')!;
   expect(review.classList.contains("grid-cols-1")).toBe(true);
   expect(review.classList.contains("wrap-anywhere")).toBe(true);
-  expect(review.textContent).toContain(`Workspace ${token}`);
+  expect(review.textContent).toContain("Workspace: another workspace · JavaScript");
+  expect(review.textContent).not.toContain(`Workspace ${token}`);
   expect(review.textContent).toContain(`folder/${token}.js`);
   const region = host.querySelector<HTMLElement>('[aria-label="Reviewed code source"]')!;
   expect(region.textContent).toBe(content);
@@ -290,15 +296,23 @@ it("native launch hash and file disclosure remain exact and expiring evidence", 
       },
     },
   };
-  await act(async () => root.render(<SpecialistApprovalReview approval={worker} evidence={reviewed} />));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <SpecialistApprovalReview approval={worker} evidence={reviewed} />
+      </QueryClientProvider>,
+    ),
+  );
   const section = host.querySelector('[aria-label="Native launch details"]')!;
   expect(section.classList.contains("grid-cols-1")).toBe(true);
   expect(section.classList.contains("wrap-anywhere")).toBe(true);
   expect(section.textContent).toContain(path);
   expect(section.querySelector("pre")?.textContent).toBe(`${path} --inspect`);
-  expect(section.textContent).toContain("1 MiB");
-  expect(section.textContent).toContain("1 cores");
-  expect(section.textContent).toContain("1 seconds");
+  expect(section.textContent).toContain("1.0 MB");
+  expect(section.textContent).toContain("1 core");
+  expect(section.textContent).not.toContain("1 cores");
+  expect(section.textContent).toContain("1 s");
+  expect(section.textContent).toContain("100 B");
 });
 
 function observed(value: SpecialistEvidence, stamp: string): SpecialistEvidence {

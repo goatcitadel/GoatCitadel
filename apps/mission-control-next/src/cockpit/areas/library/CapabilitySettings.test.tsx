@@ -157,8 +157,8 @@ describe("Library skill state requests", () => {
     expect(fetchSkills).toHaveBeenCalledOnce();
     expect(updateSkillState).toHaveBeenCalledWith("review", { expectedRevision: 4, state: "disabled" });
     expect(container.textContent).toContain("Approval requested");
-    expect(container.querySelector("details")?.textContent).toContain("approval-7");
-    expect(container.textContent).toContain("remains Enabled until the decision and follow-on effect complete");
+    expect(container.textContent).not.toContain("approval-7");
+    expect(container.textContent).toContain("remains enabled until the decision and follow-on effect complete");
     expect(onRefresh).toHaveBeenCalledOnce();
   });
 

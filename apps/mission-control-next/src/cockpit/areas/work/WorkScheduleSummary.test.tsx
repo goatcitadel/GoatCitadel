@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CronJobRecordResponse } from "@goatcitadel/mission-control-shared/api/types";
 import {
+  lastRunFailureReason,
   lastRunOutcomeLabel,
   lastRunPartial,
   lastRunSkipReason,
@@ -59,6 +60,25 @@ describe("schedule last-run outcome", () => {
   });
 });
 
+describe("schedule last-run failure reason", () => {
+  it("reads a human reason from the output and falls back to plain words", () => {
+    const failed = (lastRunOutput?: string) => buildJob({ lastRunStatus: "failed", lastRunOutput });
+    expect(lastRunFailureReason(failed(JSON.stringify({ error: "Backup target is full." })))).toBe(
+      "Backup target is full.",
+    );
+    expect(lastRunFailureReason(failed(JSON.stringify({ error: { message: "Disk unavailable." } })))).toBe(
+      "Disk unavailable.",
+    );
+    expect(lastRunFailureReason(failed(JSON.stringify({ message: "Timed out." })))).toBe("Timed out.");
+    expect(lastRunFailureReason(failed(JSON.stringify({ result: "failed", action: "backup" })))).toBe(
+      "The last run failed.",
+    );
+    expect(lastRunFailureReason(failed("Provider refused the request."))).toBe("Provider refused the request.");
+    expect(lastRunFailureReason(failed("{not json"))).toBe("The last run failed.");
+    expect(lastRunFailureReason(failed())).toBe("The last run failed.");
+  });
+});
+
 describe("schedule summary rendering", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -72,6 +92,27 @@ describe("schedule summary rendering", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+  });
+
+  it("shows a failed run's reason in the alert and never its raw output", () => {
+    const output = JSON.stringify({ result: "failed", action: "backup", error: "Backup target is full." });
+    const job = buildJob({ lastRunStatus: "failed", lastRunOutput: output, failureCount: 1 });
+
+    act(() =>
+      root.render(
+        <ul>
+          <WorkScheduleListItem job={job} onReview={() => {}} />
+        </ul>,
+      ),
+    );
+    expect(container.textContent).toContain("1 recorded failure");
+    expect(container.textContent).not.toContain("1 recorded failures");
+
+    act(() => root.render(<WorkScheduleRecordDetails selected={job} />));
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toBe("Last scheduled run failed. Backup target is full.");
+    expect(container.textContent).not.toContain(output);
+    expect(container.textContent).not.toContain("memory_consolidation");
   });
 
   it("shows a skipped last run and its reason instead of success", () => {

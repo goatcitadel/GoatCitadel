@@ -10,7 +10,9 @@ import { Field } from "../../ui/Field";
 import { Dialog } from "../../ui/Dialog";
 import { ScheduleAdvancedFields, scheduleSettingsInput } from "./ScheduleAdvancedFields";
 import { CRON_ACTION_OPTIONS } from "../../../features/native-routes/ops/runtime-schedule-model";
-import { scheduleTimezoneSummary } from "./schedule-cadence";
+import { scheduleCadence, scheduleTimezoneSummary } from "./schedule-cadence";
+import { TimeText } from "../../ui/TimeText";
+import { presentScheduleAction } from "./work-vocabulary";
 import { ScheduleTiming } from "./ScheduleTiming";
 
 export function WorkScheduleEditor({
@@ -135,7 +137,7 @@ export function WorkScheduleEditor({
           >
             {[...new Set([job.action, ...CRON_ACTION_OPTIONS])].map((action) => (
               <option key={action} value={action}>
-                {action}
+                {presentScheduleAction(action)}
               </option>
             ))}
           </select>
@@ -192,11 +194,13 @@ export function WorkScheduleEditor({
           <div className="grid gap-3 text-sm">
             {feedback ? <p role={feedbackFailed ? "alert" : "status"}>{feedback}</p> : null}
             <p>
-              Gateway-wide · {review.value.name} · {review.value.schedule}
+              Gateway-wide · {review.value.name} · {scheduleCadence(review.value.schedule)} ·{" "}
+              <span className="font-mono">{review.value.schedule}</span>
             </p>
             <p>
-              Action: {review.value.action}. Destination: {review.value.workdir || "Not specified"}. Context:{" "}
-              {review.value.contextFrom || "Not specified"}. End: {review.value.endAt || "No end date"}.{" "}
+              Action: {presentScheduleAction(review.value.action)}. Destination:{" "}
+              {review.value.workdir || "Not specified"}. Context: {review.value.contextFrom || "Not specified"}. End:{" "}
+              {review.value.endAt ? <TimeText value={review.value.endAt} absolute /> : "No end date"}.{" "}
               {scheduleTimezoneSummary(review.value.schedule)}
               Displayed dates use your browser timezone. Review expires after one minute.
             </p>

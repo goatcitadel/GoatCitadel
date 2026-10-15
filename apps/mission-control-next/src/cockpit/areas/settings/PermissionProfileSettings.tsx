@@ -7,6 +7,8 @@ import { usePermissionProfileActivation } from "../../../features/native-routes/
 import { profileCanBeSelected } from "../../../features/native-routes/settings/permission-activation-binding";
 import { describeToolApprovalMode } from "../../../features/native-routes/settings/helpers/permission-helpers";
 import { Button } from "../../ui/Button";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { PermissionProfileEditor } from "./PermissionProfileEditor";
 import { LocalOperatorOverrides } from "./LocalOperatorOverrides";
@@ -236,17 +238,13 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
               </div>
             ))}
           </dl>
-          <p>
-            {reviewed.activeProfiles.length} current explicit selection{reviewed.activeProfiles.length === 1 ? "" : "s"}{" "}
-            in the reviewed scope.
-          </p>
-          <details>
-            <summary>Reviewed identity</summary>
+          <p>{plural(reviewed.activeProfiles.length, "current explicit selection")} in the reviewed scope.</p>
+          <TechnicalDetails label="Reviewed identity">
             <code className="block break-all font-mono">
               Workspace {reviewed.target.workspaceId} · Profile {reviewed.profile.profileId} · Selection revision{" "}
               {reviewed.revision}
             </code>
-          </details>
+          </TechnicalDetails>
           <div className="flex flex-wrap gap-2">
             <Button variant="primary" disabled={!available || control.locked} onClick={() => void control.confirm()}>
               Apply reviewed {contextLabel} profile

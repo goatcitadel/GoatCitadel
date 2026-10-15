@@ -12,7 +12,10 @@ import {
   ChatThreadNotices,
   ChatNoticeTechnicalDetails,
 } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadReadingPrimitives";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { presentChatTurnStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
+import { CircleAlert, OctagonAlert, TriangleAlert } from "lucide-react";
+import { presentFailureClass, presentFileType } from "./chat-vocabulary";
 import { useChatStreamingPreviewSnapshot } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 import type {
   MissionThreadedActiveSessionSurfaceProps,
@@ -79,7 +82,7 @@ export function Turn({
           <ul aria-label="Sent attachments">
             {turn.userMessage.attachments.map((file) => (
               <li key={file.attachmentId}>
-                {file.fileName} · {file.mimeType}
+                {file.fileName} · {presentFileType(file.mimeType)} · {formatBytes(file.sizeBytes)}
               </li>
             ))}
           </ul>
@@ -93,9 +96,8 @@ export function Turn({
               {turn.assistantMessage?.timestamp ? <ActorTimestamp timestamp={turn.assistantMessage.timestamp} /> : null}
             </p>
             {streaming ? <StatusBadge status={{ label: "Responding", tone: "running" }} /> : null}
-            {!streaming && stopped ? <StatusBadge status={{ label: "Stopped", tone: "neutral" }} /> : null}
-            {!streaming && (failed || partial) ? (
-              <StatusBadge status={{ label: failed ? "Failed" : "Partial", tone: failed ? "failed" : "waiting" }} />
+            {!streaming && (stopped || failed || partial) ? (
+              <StatusBadge status={presentChatTurnStatus(turn.trace.status)} />
             ) : null}
           </div>
           {assistantText ? (
@@ -111,21 +113,28 @@ export function Turn({
           {turn.assistantMessage && !streaming ? <TurnReceipt turn={turn} /> : null}
         </div>
       ) : !failed && !partial ? (
-        <p className="text-xs text-fg-muted">{stopped ? "Stopped" : humanizeToken(turn.trace.status)}</p>
+        <p className="text-xs text-fg-muted">{presentChatTurnStatus(turn.trace.status).label}</p>
       ) : null}
       {failed || partial ? (
         <div
           role="note"
-          className="rounded-md border border-status-waiting p-2 text-sm text-fg-secondary"
+          className={`flex gap-2 rounded-md border p-2 text-sm text-fg-secondary ${failed ? "border-status-failed" : "border-status-waiting"}`}
           aria-label="Response recovery"
         >
-          {partial ? "This answer may be incomplete." : !assistantText ? "This response failed." : ""}
-          {turn.trace.failure?.failureClass && turn.trace.failure.failureClass !== "unknown"
-            ? ` Cause: ${humanizeToken(turn.trace.failure.failureClass)}.`
-            : ""}{" "}
-          {turn.trace.failure?.recommendedAction
-            ? getChatTurnRecoveryActionSummary(turn.trace.failure.recommendedAction)
-            : "Review run details or retry when available."}
+          {failed ? (
+            <CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-status-failed" />
+          ) : (
+            <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-status-waiting" />
+          )}
+          <p>
+            {partial ? "This answer may be incomplete." : !assistantText ? "This response failed." : ""}
+            {turn.trace.failure?.failureClass && turn.trace.failure.failureClass !== "unknown"
+              ? ` Cause: ${presentFailureClass(turn.trace.failure.failureClass)}.`
+              : ""}{" "}
+            {turn.trace.failure?.recommendedAction
+              ? getChatTurnRecoveryActionSummary(turn.trace.failure.recommendedAction)
+              : "Review run details or retry when available."}
+          </p>
         </div>
       ) : null}
       {turn.assistantMessage ||
@@ -262,17 +271,29 @@ export function ChatTranscriptFooter({ context }: { context?: TranscriptFooterCo
               : undefined
           }
         />
-        {importantNotices.map((notice) => (
-          <div
-            role="note"
-            key={notice.id}
-            className="rounded-md border border-status-waiting p-2 text-sm text-fg-secondary"
-            aria-label="Conversation warning"
-          >
-            {notice.content}
-            <ChatNoticeTechnicalDetails key={`${props.selectedSessionId}:${notice.id}`} notice={notice} />
-          </div>
-        ))}
+        {importantNotices.map((notice) => {
+          // Critical differs from a warning by its label and icon, not only by colour.
+          const critical = notice.tone === "critical";
+          const Icon = critical ? OctagonAlert : TriangleAlert;
+          return (
+            <div
+              role="note"
+              key={notice.id}
+              className={`flex gap-2 rounded-md border p-2 text-sm text-fg-secondary ${critical ? "border-status-failed" : "border-status-waiting"}`}
+              aria-label={critical ? "Critical conversation notice" : "Conversation warning"}
+            >
+              <Icon
+                aria-hidden="true"
+                className={`mt-0.5 size-4 shrink-0 ${critical ? "text-status-failed" : "text-status-waiting"}`}
+              />
+              <div className="min-w-0">
+                <strong className="font-medium text-fg">{critical ? "Critical: " : "Warning: "}</strong>
+                {notice.content}
+                <ChatNoticeTechnicalDetails key={`${props.selectedSessionId}:${notice.id}`} notice={notice} />
+              </div>
+            </div>
+          );
+        })}
         {latestRoutine ? (
           <div
             role="note"

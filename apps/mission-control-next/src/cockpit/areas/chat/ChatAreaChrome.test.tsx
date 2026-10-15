@@ -5,12 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
-import { ChatSessionHeader } from "./ChatAreaChrome";
+import { ChatHeaderSubtitle, ChatSessionHeader } from "./ChatAreaChrome";
 
 const media = vi.hoisted(() => ({ phone: false }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({
   useMediaQuery: (query: string) =>
     media.phone && (query === RESPONSIVE_QUERIES.phone || query === RESPONSIVE_QUERIES.belowDesktop),
+}));
+
+vi.mock("../../data/use-model-label", () => ({
+  useModelLabel: (providerId?: string, modelId?: string) =>
+    providerId === "anthropic" && modelId === "claude-sonnet" ? "Claude Sonnet · Anthropic" : "Unknown model",
 }));
 
 let root: Root;
@@ -128,4 +133,17 @@ describe("ChatSessionHeader", () => {
     );
     expect(rail.onCreateSession).toHaveBeenCalledOnce();
   });
+});
+
+it("names the model and run status in plain words, never their wire values", () => {
+  const active = {
+    activePersonality: { name: "Researcher" },
+    selectedProviderId: "anthropic",
+    selectedModel: "claude-sonnet",
+    delegationRun: { status: "waiting_for_approval" },
+  } as unknown as Parameters<typeof ChatHeaderSubtitle>[0]["active"];
+  act(() => root.render(<ChatHeaderSubtitle active={active} projectName="Launch" />));
+  expect(container.textContent).toBe("Launch · Researcher · Claude Sonnet · Anthropic · Run · Waiting on you");
+  expect(container.textContent).not.toContain("waiting_for_approval");
+  expect(container.textContent).not.toContain("claude-sonnet");
 });

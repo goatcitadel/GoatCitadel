@@ -2,6 +2,9 @@ import type { ExternalSourceImportDetailResponse } from "@goatcitadel/contracts"
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { Callout } from "../../ui/Callout";
+import { TimeText } from "../../ui/TimeText";
+import { formatBytes, plural } from "@goatcitadel/mission-control-shared/content/format";
+import { importDispositionLabel } from "./library-vocabulary";
 
 export function LibraryImportProvenance({
   detail,
@@ -16,12 +19,18 @@ export function LibraryImportProvenance({
     <section className="grid min-w-0 max-w-full grid-cols-1 gap-3 wrap-anywhere" aria-label="Import provenance">
       <h3 className="font-semibold">Import provenance</h3>
       <p>
-        Canonical import settlement: {detail.settlement?.disposition ?? "Not recorded"}. {detail.items.length} immutable
-        item records.
+        Canonical import settlement:{" "}
+        {detail.settlement ? importDispositionLabel(detail.settlement.disposition) : "Not recorded"}.{" "}
+        {plural(detail.items.length, "immutable item record")}.
       </p>
       <p>
-        Admitted {new Date(detail.intent.admittedAt).toLocaleString()}
-        {detail.settlement ? ` · Settled ${new Date(detail.settlement.settledAt).toLocaleString()}` : ""}
+        <TimeText prefix="Admitted" value={detail.intent.admittedAt} absolute />
+        {detail.settlement ? (
+          <>
+            {" "}
+            · <TimeText prefix="Settled" value={detail.settlement.settledAt} absolute />
+          </>
+        ) : null}
       </p>
       <TechnicalDetails label="Import technical provenance">
         <p>Import: {detail.intent.importId}</p>
@@ -35,7 +44,7 @@ export function LibraryImportProvenance({
         {detail.items.map((item, index) => (
           <li key={item.itemId} className="min-w-0 rounded-md border border-line p-3">
             <h4>Imported item {index + 1}</h4>
-            <p>{item.normalizedByteCount.toLocaleString()} normalized bytes · Managed immutable artifact</p>
+            <p>{formatBytes(item.normalizedByteCount)} normalized · Managed immutable artifact</p>
             <TechnicalDetails label={`Imported item ${index + 1} provenance`}>
               <p>Item: {item.itemId}</p>
               <p className="break-all">Raw SHA-256: {item.rawSha256}</p>

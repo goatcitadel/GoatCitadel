@@ -1,11 +1,11 @@
+import { formatClockTime } from "@goatcitadel/mission-control-shared/content/format";
 import { Button } from "../ui/Button";
 import { currentGatewayHost, gatewayStartHint } from "./gateway-host-hint";
 import type { GatewayReachability } from "./use-gateway-reachability";
 
 function checkResult(reachability: GatewayReachability): string {
   if (reachability.checking) return "Checking…";
-  if (reachability.lastCheckedAt)
-    return `Still unreachable · checked ${new Date(reachability.lastCheckedAt).toLocaleTimeString()}`;
+  if (reachability.lastCheckedAt) return `Still unreachable · checked ${formatClockTime(reachability.lastCheckedAt)}`;
   return "";
 }
 
@@ -22,7 +22,7 @@ export function GatewayUnavailableBanner({
   inChat: boolean;
 }) {
   const lastConfirmed = reachability.lastConfirmedAt
-    ? `Last connection confirmed at ${new Date(reachability.lastConfirmedAt).toLocaleTimeString()}.`
+    ? `Last connection confirmed at ${formatClockTime(reachability.lastConfirmedAt)}.`
     : "No confirmed connection yet.";
   return (
     <div

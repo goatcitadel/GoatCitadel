@@ -1,3 +1,4 @@
+import { formatClockTime } from "@goatcitadel/mission-control-shared/content/format";
 import type { UseQueryResult } from "@tanstack/react-query";
 
 /**
@@ -56,7 +57,7 @@ export function recordAnswered(view: RecordView<unknown>): boolean {
 
 /** "10:42" in the viewer's locale. */
 export function recordTime(at: number): string {
-  return new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return formatClockTime(at);
 }
 
 /** "Showing the last version from 10:42." when an error left an older record on screen. */

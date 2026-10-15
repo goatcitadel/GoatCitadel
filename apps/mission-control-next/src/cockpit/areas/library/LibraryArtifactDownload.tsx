@@ -5,6 +5,8 @@ import { readArtifactDownload, saveLibraryDownload } from "./library-download";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+import { artifactSourceLabel } from "./library-vocabulary";
 
 export function LibraryArtifactDownload({
   artifact,
@@ -48,7 +50,8 @@ export function LibraryArtifactDownload({
   return (
     <div className="grid gap-2">
       <p className="text-sm text-fg-secondary">
-        Version {artifact.version} · Created {artifact.createdAt} · Source {artifact.sourceSurface}
+        Version {artifact.version} · <TimeText prefix="Created" value={artifact.createdAt} /> · Source:{" "}
+        {artifactSourceLabel(artifact.sourceSurface)}
       </p>
       <TechnicalDetails label="Artifact provenance identifiers">
         <dl>

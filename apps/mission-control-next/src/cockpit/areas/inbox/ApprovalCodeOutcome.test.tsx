@@ -52,7 +52,7 @@ async function render() {
 it("keeps canonical failed code execution separate from approval success", async () => {
   read.mockResolvedValue(run);
   await render();
-  await vi.waitFor(() => expect(host.textContent).toContain("Code work: failed"));
+  await vi.waitFor(() => expect(host.textContent).toContain("Code work: Failed"));
   expect(host.textContent).toContain("Policy blocked execution");
   expect(host.textContent).toContain("Approval does not by itself confirm completion");
 });
@@ -60,5 +60,5 @@ it("withholds a mismatched code artifact outcome", async () => {
   read.mockResolvedValue({ ...run, codeHash: "changed", status: "completed" });
   await render();
   await vi.waitFor(() => expect(host.textContent).toContain("does not match"));
-  expect(host.textContent).not.toContain("Code work: completed");
+  expect(host.textContent).not.toContain("Code work: Done");
 });

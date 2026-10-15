@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type { OpsQualityAvailabilityState } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { formatAbsoluteTime } from "@goatcitadel/mission-control-shared/content/format";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRoute } from "../../../app/use-cockpit-route";
 import { resolveCockpitCompatibility } from "../../../app/cockpit-compatibility";
@@ -66,11 +67,9 @@ export function QualityFacts({ items }: { items: readonly { label: string; value
   );
 }
 
+/** Plain-text time for evidence sentences; markup that can hold a <time> element uses TimeText instead. */
 export function qualityTimestamp(value: string): string {
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed)
-    ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(parsed)
-    : "Time unavailable";
+  return formatAbsoluteTime(value);
 }
 
 export function qualityNumber(value: number | undefined, suffix = ""): string {

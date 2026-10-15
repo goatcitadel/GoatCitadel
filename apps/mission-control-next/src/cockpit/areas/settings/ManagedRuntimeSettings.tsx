@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useManagedRuntimeSettings } from "../../../features/native-routes/settings/use-managed-runtime-settings";
 import { ManagedRuntimeReview } from "../../../features/native-routes/settings/ManagedRuntimeReview";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
@@ -10,6 +9,8 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { Button } from "../../ui/Button";
 import { LlamaRuntimeLifecycle } from "./LlamaRuntimeLifecycle";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { presentChangeStatusLabel, RUNTIME_PROCESS_STATE_LABELS } from "./settings-vocabulary";
 
 const inputClass =
   "mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg disabled:opacity-60";
@@ -68,9 +69,14 @@ export function ManagedRuntimeSettings() {
       {control.ready ? (
         <>
           <p className="text-xs text-fg-muted">
-            Mode: {control.managed ? "Managed" : "External"} · settings revision {settings.data?.revision} · Process:{" "}
-            {humanizeToken(runtime?.status?.processState ?? "unknown")}
+            Mode: {control.managed ? "Managed" : "External"} · Process:{" "}
+            {runtime?.status?.processState
+              ? (RUNTIME_PROCESS_STATE_LABELS[runtime.status.processState] ?? "Unknown")
+              : "Unknown"}
           </p>
+          <TechnicalDetails>
+            <p className="break-all font-mono text-xs">Settings revision {settings.data?.revision}</p>
+          </TechnicalDetails>
           {control.managed ? (
             <>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -173,7 +179,7 @@ export function ManagedRuntimeSettings() {
       {change.change ? (
         <div className="space-y-2 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
           <p role="status">
-            {humanizeToken(change.change.receipt.status)} · {change.change.message}
+            {presentChangeStatusLabel(change.change.receipt.status)} · {change.change.message}
           </p>
           {change.change.error ? <p role="alert">{change.change.error}</p> : null}
           <Button size="sm" onClick={() => void change.refresh()}>

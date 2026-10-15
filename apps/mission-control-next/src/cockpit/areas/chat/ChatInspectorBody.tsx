@@ -2,24 +2,29 @@ import { ChatConversationSettings } from "./ChatConversationSettings";
 import {
   DetailRow,
   SourcesPanel,
-  statusTone,
   renderInspectorRunEvidence,
-  inspectorFallbackLabel,
+  ModelDetailRow,
+  ModelTechnicalDetails,
   TABS,
   type ChatInspectorTab,
 } from "./chat-inspector-evidence";
-import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useEffect, useState } from "react";
-import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import {
+  presentMemoryMode,
+  presentPlanningMode,
+  presentRoutedContextKind,
+  presentRoutedDisposition,
+  presentToolAutonomy,
+  presentWebMode,
+} from "./chat-vocabulary";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
 import { ThreadedDocumentsPanel } from "../../../features/threaded-surface/ThreadedDocumentsPanel";
 import { ThreadedContextConflictNotices } from "../../../features/threaded-surface/ThreadedContextConflictNotices";
-import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBackgroundTasks } from "./ChatBackgroundTasks";
 import { SessionControlManager } from "./SessionControlManager";
-import { recordedCostLabel } from "./recorded-cost";
+import { ChatInspectorTurnPanel } from "./ChatInspectorTurnPanel";
 
 export function ChatInspector({
   input,
@@ -127,69 +132,7 @@ export function ChatInspector({
       >
         {tab === "run" ? renderInspectorRunEvidence(run, selectedTurn) : null}
 
-        {tab === "turn" ? (
-          selectedTurn ? (
-            <div className="space-y-3">
-              <StatusBadge
-                status={{
-                  label: humanizeToken(selectedTurn.trace.status),
-                  tone: statusTone(selectedTurn.trace.status),
-                }}
-              />
-              <dl>
-                <DetailRow
-                  label="Model"
-                  value={selectedTurn.trace.routing?.effectiveModel ?? selectedTurn.trace.model ?? "Not recorded"}
-                />
-                <DetailRow label="Provider" value={selectedTurn.trace.routing?.effectiveProviderId ?? "Not recorded"} />
-                <DetailRow label="Fallback" value={inspectorFallbackLabel(selectedTurn)} />
-                <DetailRow label="Tools" value={String(selectedTurn.toolRuns.length)} />
-                <DetailRow label="Sources" value={String(selectedTurn.citations.length)} />
-                <DetailRow
-                  label="Duration"
-                  value={
-                    selectedTurn.trace.completion?.latencyMs === undefined
-                      ? "Not recorded"
-                      : `${(selectedTurn.trace.completion.latencyMs / 1000).toFixed(1)} seconds`
-                  }
-                />
-                <DetailRow
-                  label="Cost"
-                  value={recordedCostLabel(
-                    selectedTurn.trace.completion?.usage?.costUsd,
-                    selectedTurn.trace.completion?.usage?.costSource,
-                  )}
-                />
-              </dl>
-              {selectedTurn.trace.failure?.message ? (
-                <p className="rounded-md border border-status-failed p-2 text-sm text-fg-secondary">
-                  {selectedTurn.trace.failure.message}
-                </p>
-              ) : null}
-              {selectedTurn.toolRuns.length ? (
-                <ol className="space-y-1">
-                  {selectedTurn.toolRuns.map((tool) => (
-                    <li key={tool.toolRunId} className="flex justify-between gap-2 text-sm">
-                      <span>{chatToolDisplayName(tool)}</span>
-                      <span className="text-fg-muted">{humanizeToken(tool.status)}</span>
-                    </li>
-                  ))}
-                </ol>
-              ) : null}
-              {selectedTurn.trace.durable?.runId ? (
-                <NativeOwnerLink
-                  scope={[selectedTurn.trace.sessionId, selectedTurn.turnId, selectedTurn.trace.durable.runId]}
-                  className="text-sm font-medium text-accent hover:underline"
-                  href={`/work/runs/${encodeURIComponent(selectedTurn.trace.durable.runId)}`}
-                >
-                  Open durable evidence
-                </NativeOwnerLink>
-              ) : null}
-            </div>
-          ) : (
-            <p className="text-sm text-fg-muted">No message is available yet.</p>
-          )
-        ) : null}
+        {tab === "turn" ? <ChatInspectorTurnPanel selectedTurn={selectedTurn} /> : null}
 
         {tab === "sources" ? <SourcesPanel turn={selectedTurn} /> : null}
 
@@ -200,8 +143,8 @@ export function ChatInspector({
               {selectedTurn ? (
                 <>
                   <dl>
-                    <DetailRow label="Memory mode" value={humanizeToken(selectedTurn.trace.memoryMode)} />
-                    <DetailRow label="Web mode" value={humanizeToken(selectedTurn.trace.webMode)} />
+                    <DetailRow label="Memory mode" value={presentMemoryMode(selectedTurn.trace.memoryMode)} />
+                    <DetailRow label="Web mode" value={presentWebMode(selectedTurn.trace.webMode)} />
                     <DetailRow
                       label="Prompt estimate"
                       value={
@@ -218,11 +161,13 @@ export function ChatInspector({
                           : "Not recorded"
                       }
                     />
-                    <DetailRow
-                      label="Routed snapshot"
-                      value={routedContext ? `${routedContext.snapshotHash.slice(0, 12)}…` : "Not recorded"}
-                    />
+                    <DetailRow label="Routed snapshot" value={routedContext ? "Recorded" : "Not recorded"} />
                   </dl>
+                  {routedContext ? (
+                    <TechnicalDetails label="Routed snapshot details">
+                      <p className="font-mono text-xs wrap-anywhere">Snapshot hash: {routedContext.snapshotHash}</p>
+                    </TechnicalDetails>
+                  ) : null}
                   {verifiedRoutedContext ? (
                     <div className="rounded-md border border-line bg-raised p-3" aria-label="Verified routed context">
                       <p className="text-fg-secondary">
@@ -245,7 +190,7 @@ export function ChatInspector({
                         <ul className="mt-2 space-y-1">
                           {verifiedRoutedContext.entries.map((entry) => (
                             <li key={`${entry.index}:${entry.sourceHash}`} className="text-fg-secondary">
-                              {entry.label} · {humanizeToken(entry.disposition)}
+                              {entry.label} · {presentRoutedDisposition(entry.disposition)}
                             </li>
                           ))}
                         </ul>
@@ -268,7 +213,7 @@ export function ChatInspector({
                   <dl>
                     <DetailRow
                       label="Memory mode"
-                      value={dock?.prefs?.memoryMode ? humanizeToken(dock.prefs.memoryMode) : "Not available"}
+                      value={dock?.prefs?.memoryMode ? presentMemoryMode(dock.prefs.memoryMode) : "Not available"}
                     />
                     <DetailRow label="Selected messages" value={String(active.selectedContextTurnIds.length)} />
                     <DetailRow label="Included documents" value={String(dock?.documents?.includedRefs.length ?? 0)} />
@@ -286,7 +231,7 @@ export function ChatInspector({
                           key={`${ref.kind}:${ref.ref}`}
                           className="rounded-md border border-line bg-raised p-2 text-fg-secondary"
                         >
-                          {ref.label ?? humanizeToken(ref.kind)}
+                          {ref.label ?? presentRoutedContextKind(ref.kind)}
                         </li>
                       ))}
                     </ul>
@@ -333,18 +278,22 @@ export function ChatInspector({
             <dl>
               <DetailRow label="Project" value={dock?.selectedProject?.name ?? "No project"} />
               <DetailRow label="Personality" value={active.activePersonality?.name ?? "Default"} />
-              <DetailRow label="Provider" value={active.selectedProviderId ?? "Not selected"} />
-              <DetailRow label="Model" value={active.selectedModel ?? "Not selected"} />
+              <ModelDetailRow
+                providerId={active.selectedProviderId}
+                modelId={active.selectedModel}
+                missing="Not selected"
+              />
               <DetailRow
                 label="Planning"
-                value={dock?.prefs ? humanizeToken(dock.prefs.planningMode) : "Not available"}
+                value={dock?.prefs ? presentPlanningMode(dock.prefs.planningMode) : "Not available"}
               />
               <DetailRow
                 label="Tool autonomy"
-                value={dock?.effectiveToolAutonomy ? humanizeToken(dock.effectiveToolAutonomy) : "Not available"}
+                value={dock?.effectiveToolAutonomy ? presentToolAutonomy(dock.effectiveToolAutonomy) : "Not available"}
               />
-              <DetailRow label="Web" value={dock?.prefs ? humanizeToken(dock.prefs.webMode) : "Not available"} />
+              <DetailRow label="Web" value={dock?.prefs ? presentWebMode(dock.prefs.webMode) : "Not available"} />
             </dl>
+            <ModelTechnicalDetails providerId={active.selectedProviderId} modelId={active.selectedModel} />
             {dock ? (
               <form
                 className="space-y-2"

@@ -146,7 +146,7 @@ export async function runUxBudgetWork(environment) {
             .getByRole("dialog", { name: "Change task status" })
             .getByRole("button", { name: "Confirm status change" })
             .click();
-          await page.getByText("Gateway recorded blocked", { exact: false }).waitFor();
+          await page.getByText("Task moved to Blocked", { exact: false }).waitFor();
           const owner = await requestJson(
             stack.gatewayUrl,
             `/api/v1/tasks/${encodeURIComponent(taskId)}?workspaceId=${encodeURIComponent(fixture.workspaceId)}`,
@@ -265,7 +265,7 @@ export async function runUxBudgetWork(environment) {
           const detail = page.getByLabel("Schedule detail");
           await detail.getByRole("heading", { name: scheduleName }).waitFor();
           await detail.getByRole("button", { name: "Pause", exact: true }).click();
-          await detail.getByRole("button", { name: "Confirm pause" }).waitFor();
+          await detail.getByRole("button", { name: "Pause schedule", exact: true }).waitFor();
           const before = await requestJson(stack.gatewayUrl, `/api/v1/cron/jobs/${encodeURIComponent(created.jobId)}`);
           assertOk(before, `read ${variant} schedule before confirmation`);
           if (before.body?.revision !== created.revision || !before.body?.enabled) {
@@ -287,7 +287,7 @@ export async function runUxBudgetWork(environment) {
           const reviewShot = path.join(screenshotDir, `ux-budgets-cockpit-work-schedule-review-${variant}.png`);
           const confirmedShot = path.join(screenshotDir, `ux-budgets-cockpit-work-schedule-confirmed-${variant}.png`);
           await page.screenshot({ path: reviewShot, fullPage: false });
-          await detail.getByRole("button", { name: "Confirm pause" }).click();
+          await detail.getByRole("button", { name: "Pause schedule", exact: true }).click();
           await page.getByText("Schedule paused.").waitFor();
           const after = await requestJson(stack.gatewayUrl, `/api/v1/cron/jobs/${encodeURIComponent(created.jobId)}`);
           assertOk(after, `read ${variant} paused schedule`);

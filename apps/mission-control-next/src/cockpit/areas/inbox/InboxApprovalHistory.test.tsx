@@ -27,6 +27,8 @@ const record = (id: string, workspaceId = "one"): ApprovalRequest => ({
   preview: {},
   linkage: { workspaceId },
   createdAt: "2026-01-01T00:00:00Z",
+  // The accessible name carries the readable summary, never the approval id.
+  explanation: { summary: id, riskExplanation: "", generatedAt: "2026-01-01T00:00:00Z" },
 });
 let root: Root, host: HTMLDivElement, client: QueryClient;
 beforeEach(() => {
@@ -77,14 +79,14 @@ it("uses workspace-bound server cursors and server status filters, including emp
   await click("Approval history and replay");
   await click("Load more approvals");
   expect(api.list).toHaveBeenNthCalledWith(2, { workspaceId: "one", limit: 100, cursor: "cursor-one" });
-  await click("Inspect decision older");
+  await click("Inspect decision: older");
   expect(new URLSearchParams(window.location.search).get("approvalId")).toBe("older");
   expect(window.location.search).toContain("keep=yes");
   expect(window.location.hash).toBe("#anchor");
   expect(host.textContent).toContain("End of retained approval history");
   expect(api.list).toHaveBeenCalledTimes(2);
-  expect(host.querySelector('[aria-label="Inspect decision recent"]')).not.toBeNull();
-  expect(host.querySelector('[aria-label="Inspect decision older"]')).not.toBeNull();
+  expect(host.querySelector('[aria-label="Inspect decision: recent"]')).not.toBeNull();
+  expect(host.querySelector('[aria-label="Inspect decision: older"]')).not.toBeNull();
   expect(new URLSearchParams(window.location.search).get("view")).toBe("history");
   expect(new URLSearchParams(window.location.search).get("historyView")).toBe("all");
   await act(async () => {
@@ -115,7 +117,7 @@ it("withholds foreign pages and retains useful pagination failures", async () =>
   await render("other-scope");
   await click("Approval history and replay");
   expect(host.textContent).toContain("outside this workspace");
-  expect(host.querySelector('[aria-label="Inspect decision foreign"]')).toBeNull();
+  expect(host.querySelector('[aria-label="Inspect decision: foreign"]')).toBeNull();
 });
 it("labels an expiry sweep as expired and shows who settled an operator decision", async () => {
   api.list.mockResolvedValue({
@@ -132,7 +134,7 @@ it("labels an expiry sweep as expired and shows who settled an operator decision
   await render();
   await click("Approval history and replay");
   const card = (id: string) =>
-    host.querySelector(`[aria-label="Inspect decision ${id}"]`)?.closest("article")?.textContent ?? "";
+    host.querySelector(`[aria-label="Inspect decision: ${id}"]`)?.closest("article")?.textContent ?? "";
   const expired = card("expired");
   const bulk = card("bulk");
   const plain = card("plain");
@@ -141,11 +143,14 @@ it("labels an expiry sweep as expired and shows who settled an operator decision
   expect(expired).toContain(
     "Expired without an operator decision. Approval expired expired before operator resolution.",
   );
-  expect(expired).not.toContain("Rejected");
-  expect(bulk).toContain("Tool invoke · Rejected ·");
-  expect(bulk).toContain("Decided by operator:ana. Bulk rejected from the approvals queue.");
-  expect(plain).toContain("Tool invoke · Rejected ·");
+  expect(expired).not.toContain("Denied");
+  expect(bulk).toContain("Tool invoke · Denied ·");
+  expect(bulk).toContain("Decided by an operator. Bulk rejected from the approvals queue.");
+  expect(bulk).not.toContain("Decided by operator:ana");
+  expect(plain).toContain("Tool invoke · Denied ·");
   expect(plain).not.toContain("Decided by");
+  const options = [...host.querySelectorAll("option")].map((option) => option.textContent);
+  expect(options).toEqual(["All records", "Waiting on you", "Approved", "Denied", "Approved with edits", "Recovery"]);
 });
 
 it("keeps the installation-wide rejection out of the workspace history", async () => {
@@ -162,9 +167,9 @@ it("does not expose retained history after a caller transition", async () => {
   api.list.mockResolvedValue({ items: [record("private")] });
   await render();
   await click("Approval history and replay");
-  expect(host.querySelector('[aria-label="Inspect decision private"]')).not.toBeNull();
+  expect(host.querySelector('[aria-label="Inspect decision: private"]')).not.toBeNull();
   await act(async () => notifyGatewayAccessChanged());
-  expect(host.querySelector('[aria-label="Inspect decision private"]')).toBeNull();
+  expect(host.querySelector('[aria-label="Inspect decision: private"]')).toBeNull();
 });
 
 it("opens native run history from its bookmark and preserves exact scope, selection, cursor and fragment", async () => {
@@ -182,7 +187,7 @@ it("opens native run history from its bookmark and preserves exact scope, select
     .mockResolvedValueOnce({ items: [linked("recent")], nextCursor: "old-page" })
     .mockResolvedValueOnce({ items: [linked("historical")] });
   await render();
-  await vi.waitFor(() => expect(host.querySelector('[aria-label="Inspect decision recent"]')).not.toBeNull());
+  await vi.waitFor(() => expect(host.querySelector('[aria-label="Inspect decision: recent"]')).not.toBeNull());
   expect(api.list).toHaveBeenNthCalledWith(1, {
     workspaceId: "one",
     limit: 100,
@@ -201,7 +206,7 @@ it("opens native run history from its bookmark and preserves exact scope, select
     sessionId: "session:two",
   });
   expect(host.textContent).toContain("Only records canonically linked to this run are included");
-  await click("Inspect decision historical");
+  await click("Inspect decision: historical");
   const params = new URLSearchParams(window.location.search);
   expect(params.get("approvalId")).toBe("historical");
   expect(params.get("runId")).toBe("run/one");
@@ -229,7 +234,7 @@ it.each(["foreign-run", "foreign-session"])(
     });
     await render();
     await vi.waitFor(() => expect(host.textContent).toContain("outside the linked run or session"));
-    expect(host.querySelector('[aria-label="Inspect decision foreign"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Inspect decision: foreign"]')).toBeNull();
     expect(host.textContent).not.toContain("End of retained");
     expect(api.bulk).not.toHaveBeenCalled();
   },
@@ -277,7 +282,7 @@ it.each([
   api.list.mockResolvedValue({ items: [record("unrequested")] });
   await render();
   expect(api.list).not.toHaveBeenCalled();
-  expect(host.querySelector('[aria-label="Inspect decision unrequested"]')).toBeNull();
+  expect(host.querySelector('[aria-label="Inspect decision: unrequested"]')).toBeNull();
   expect(host.textContent).not.toContain("End of retained approval history");
   expect(host.querySelector('[role="status"]')).not.toBeNull();
   const link = host.querySelector<HTMLAnchorElement>("a")!;
@@ -310,7 +315,7 @@ it("masks retained and late history pages immediately after a bookmarked workspa
   });
   expect(host.textContent).toContain("Review the linked scope");
   await act(async () => finish({ items: [{ ...record("late"), linkage: { workspaceId: "one", runId: "run" } }] }));
-  expect(host.querySelector('[aria-label="Inspect decision late"]')).toBeNull();
+  expect(host.querySelector('[aria-label="Inspect decision: late"]')).toBeNull();
   expect(api.list).toHaveBeenCalledOnce();
   expect(host.textContent).not.toContain("End of retained");
 });

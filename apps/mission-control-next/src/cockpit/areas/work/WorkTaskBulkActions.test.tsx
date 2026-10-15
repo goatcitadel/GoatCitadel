@@ -62,8 +62,9 @@ it("reviews exactly the selected tasks, sends nothing on Cancel and one request 
   expect(container.textContent).toContain("2 tasks selected");
   expect(container.textContent).toContain("Runtime runs are not affected");
   await act(async () => button("Unblock…")!.click());
-  for (const text of ["Task a", "Task b", "revision 3", "Returns each task to assigned", "nothing is applied"])
+  for (const text of ["Task a", "Task b", "Blocked", "Returns each task to assigned", "nothing is applied"])
     expect(dialog()?.textContent).toContain(text);
+  expect(dialog()?.textContent).not.toContain("revision 3");
   await act(async () => button("Cancel")!.click());
   expect(dialog()).toBeNull();
   expect(commitTaskBulkAction).not.toHaveBeenCalled();

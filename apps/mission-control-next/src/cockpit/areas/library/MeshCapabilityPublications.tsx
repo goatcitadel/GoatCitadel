@@ -4,149 +4,35 @@ import {
   requestMeshCapabilityActivation,
   revokeMeshCapabilityActivation,
   type MeshCapabilityActivationRequestResponse,
-  type MeshCapabilityOpsEntry,
   type MeshCapabilityPublicationInspectionResponse,
 } from "@goatcitadel/mission-control-shared/api/mesh-capabilities";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { useMeshCapabilityOps } from "@goatcitadel/mission-control-shared/hooks/useMeshCapabilityOps";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Button } from "../../ui/Button";
-import { StatusBadge } from "../../ui/StatusBadge";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
 import { SystemOwnerLink } from "../system/SystemOwnerLink";
+import { MeshCapabilityEntryRow } from "./MeshCapabilityEntryRow";
 import { MeshInvocationOutcomes } from "./MeshInvocationOutcomes";
 import {
+  meshApprovalStatus,
   meshCapabilityId,
-  meshReason,
+  meshEffectDiffLabel,
+  meshEntryName,
+  meshPermissionDiffLabel,
   meshEffectsLabel,
-  meshKindLabel,
-  meshStatus,
   shortDigest,
 } from "./mesh-capability-labels";
 import { pendingActivationApproval, refused, stillCurrent, type Review } from "./mesh-activation-gates";
 
-type Receipt = { localId: string; response: MeshCapabilityActivationRequestResponse };
+type Receipt = { name: string; response: MeshCapabilityActivationRequestResponse };
 
 const time = (value?: string) =>
-  value && Number.isFinite(Date.parse(value)) ? (
-    <time dateTime={value}>{new Date(value).toLocaleString()}</time>
-  ) : (
-    "Not reported"
-  );
+  value && Number.isFinite(Date.parse(value)) ? <TimeText value={value} absolute /> : "Not reported";
 const UNKNOWN =
   "The outcome is unknown. Publications were read again. Retry re-reads the publication first and sends the same request only if this entry is unchanged.";
 const REFUSED = "The Gateway refused this request, so nothing was changed. Review the current publication.";
-function EntryRow({
-  entry,
-  busy,
-  reason,
-  onReason,
-  onReview,
-}: {
-  entry: MeshCapabilityOpsEntry;
-  busy: boolean;
-  reason: string;
-  onReason: (value: string) => void;
-  onReview: (review: Review) => void;
-}) {
-  const canActivate = entry.status === "review_required" && entry.capabilityKind !== "skill";
-  const activation = entry.activation;
-  return (
-    <li className="space-y-2 rounded-md border border-line p-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <h4 className="break-words font-semibold text-fg">{entry.localId}</h4>
-        <div className="flex flex-wrap gap-1">
-          <StatusBadge status={{ label: meshKindLabel(entry.capabilityKind), tone: "neutral" }} />
-          <StatusBadge status={meshStatus(entry.status)} />
-          <StatusBadge
-            status={{
-              label: entry.status === "active" ? "Callable" : "Inspect only",
-              tone: entry.status === "active" ? "running" : "neutral",
-            }}
-          />
-          <StatusBadge
-            status={{
-              label: `Effects: ${meshEffectsLabel(entry.effectPosture)}`,
-              tone:
-                entry.effectPosture === "external_side_effect" || entry.effectPosture === "unknown"
-                  ? "waiting"
-                  : "neutral",
-            }}
-          />
-        </div>
-      </div>
-      <ul aria-label={`Status reasons for ${entry.localId}`} className="list-disc space-y-1 pl-5">
-        {entry.reasons.map((item) => (
-          <li key={item}>{meshReason(item)}</li>
-        ))}
-      </ul>
-      <ul className="space-y-1 break-words text-fg-secondary">
-        <li>
-          Entry digest: <code title={`sha256:${entry.entrySha256}`}>{shortDigest(entry.entrySha256)}</code>
-        </li>
-        <li>
-          Capability ID: <code className="wrap-anywhere">{meshCapabilityId(entry)}</code>
-        </li>
-        {activation ? (
-          <li>
-            Activation <code className="wrap-anywhere">{activation.activationId}</code> · revision{" "}
-            {activation.activationRevision}
-            {activation.revoked ? " · revoked" : ""}
-          </li>
-        ) : null}
-      </ul>
-      {activation ? (
-        <SystemOwnerLink
-          href={`/inbox?approvalId=${encodeURIComponent(activation.approvalId)}`}
-          scope={[entry.entrySha256, activation.approvalId]}
-        >
-          Open activation approval
-        </SystemOwnerLink>
-      ) : null}
-      {entry.capabilityKind === "skill" ? (
-        <p className="text-fg-muted">
-          Skill descriptors are review-only: activation can only stage an inactive candidate through the governed skill
-          lifecycle and is deferred until exact byte transfer ships.
-        </p>
-      ) : null}
-      {canActivate ? (
-        <Button
-          size="sm"
-          disabled={busy}
-          aria-label={`Review activation request for ${entry.localId}`}
-          onClick={() => onReview({ kind: "activate", entry })}
-        >
-          Review activation request
-        </Button>
-      ) : null}
-      {activation && !activation.revoked ? (
-        <div className="space-y-2">
-          <label className="block">
-            Revocation reason
-            <input
-              className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
-              value={reason}
-              maxLength={2_000}
-              disabled={busy}
-              placeholder="Why callability must end"
-              onChange={(event) => onReason(event.target.value)}
-            />
-          </label>
-          <Button
-            size="sm"
-            variant="danger"
-            disabled={busy || !reason.trim()}
-            aria-label={`Review revoke of ${entry.localId}`}
-            onClick={() =>
-              onReview({ kind: "revoke", entry, activationId: activation.activationId, reason: reason.trim() })
-            }
-          >
-            Review revoke
-          </Button>
-        </div>
-      ) : null}
-    </li>
-  );
-}
-
 /**
  * Governed mesh capability publications for one workspace: manifests and exact entries, a reviewed activation request
  * (it creates an approval; nothing becomes callable until it is decided) and a reasoned, reviewed revocation. Each
@@ -188,7 +74,7 @@ export function MeshCapabilityPublications({ workspaceId }: { workspaceId: strin
           manifestSha256: reviewed.entry.manifestSha256,
           entrySha256: reviewed.entry.entrySha256,
         });
-        setReceipt({ localId: reviewed.entry.localId, response });
+        setReceipt({ name: meshEntryName(reviewed.entry.localId), response });
         return "The activation request was recorded. Publications were read again.";
       }
       await revokeMeshCapabilityActivation({
@@ -239,13 +125,13 @@ export function MeshCapabilityPublications({ workspaceId }: { workspaceId: strin
       ? {
           title: "Request activation of this mesh capability?",
           confirm: "Request activation",
-          message: `Request activation of ${review.entry.localId} (${shortDigest(review.entry.entrySha256)}, effects: ${meshEffectsLabel(review.entry.effectPosture)}). This creates an approval for this exact entry. Nothing becomes callable until that approval is decided. Publications are re-read first; if the entry changed, nothing is sent.`,
+          message: `Request activation of ${meshEntryName(review.entry.localId)} (${shortDigest(review.entry.entrySha256)}, effects: ${meshEffectsLabel(review.entry.effectPosture)}). This creates an approval for this exact entry. Nothing becomes callable until that approval is decided. Publications are re-read first; if the entry changed, nothing is sent.`,
         }
       : review?.kind === "revoke"
         ? {
             title: "Revoke this mesh capability activation?",
             confirm: "Revoke activation",
-            message: `Revoke the activation of ${review.entry.localId}. Callability ends before its next dispatch, and a new exact-entry review is needed to restore it. Reason: ${review.reason}`,
+            message: `Revoke the activation of ${meshEntryName(review.entry.localId)}. Callability ends before its next dispatch, and a new exact-entry review is needed to restore it. Reason: ${review.reason}`,
           }
         : { title: "", confirm: "", message: "" };
 
@@ -274,14 +160,15 @@ export function MeshCapabilityPublications({ workspaceId }: { workspaceId: strin
           className="space-y-1 rounded-md border border-line bg-raised p-3"
         >
           <p className="font-medium text-fg">
-            {receipt.localId}: approval is {receipt.response.approvalStatus}
+            {receipt.name}: approval is {meshApprovalStatus(receipt.response.approvalStatus).label.toLowerCase()}
             {receipt.response.replayed ? " (an existing request was returned)" : ""}
           </p>
           <p>
-            Permissions {receipt.response.diff.permissionDisposition} ({receipt.response.diff.permissionsAdded.length}{" "}
-            added, {receipt.response.diff.permissionsRemoved.length} removed) · effects{" "}
-            {receipt.response.diff.effectDisposition} ({meshEffectsLabel(receipt.response.diff.currentEffectPosture)}) ·
-            expires {time(receipt.response.approvalExpiresAt)}
+            Permissions {meshPermissionDiffLabel(receipt.response.diff.permissionDisposition)} (
+            {receipt.response.diff.permissionsAdded.length} added, {receipt.response.diff.permissionsRemoved.length}{" "}
+            removed) · effects {meshEffectDiffLabel(receipt.response.diff.effectDisposition)} (
+            {meshEffectsLabel(receipt.response.diff.currentEffectPosture)}) · expires{" "}
+            {time(receipt.response.approvalExpiresAt)}
           </p>
           <SystemOwnerLink
             href={`/inbox?approvalId=${encodeURIComponent(receipt.response.approvalId)}`}
@@ -332,26 +219,33 @@ export function MeshCapabilityPublications({ workspaceId }: { workspaceId: strin
               className="space-y-2 rounded-md border border-line bg-raised p-3"
             >
               <h3 className="font-medium text-fg">
-                {manifest.entries[0]?.nodeId ? `Node ${manifest.entries[0].nodeId} · ` : ""}Publisher generation{" "}
-                {manifest.publisherGeneration} · Admission generation {manifest.admissionGeneration}
-                {manifest.supersededByManifestSha256 ? " · Superseded" : ""}
+                Capabilities from a mesh node{manifest.supersededByManifestSha256 ? " · Superseded" : ""}
               </h3>
-              <ul className="space-y-1 break-words text-fg-secondary">
-                <li>
-                  Manifest digest:{" "}
-                  <code title={`sha256:${manifest.manifestSha256}`}>{shortDigest(manifest.manifestSha256)}</code>
-                </li>
-                {manifest.supersedesManifestSha256 ? (
+              <p className="text-fg-secondary">
+                {plural(manifest.entries.length, "capability", "capabilities")} · Published {time(manifest.createdAt)}
+              </p>
+              <TechnicalDetails label="Manifest identifiers">
+                <ul className="space-y-1 break-words">
+                  {manifest.entries[0]?.nodeId ? <li>Node ID: {manifest.entries[0].nodeId}</li> : null}
                   <li>
-                    Supersedes: <code>{shortDigest(manifest.supersedesManifestSha256)}</code>
+                    Publisher generation {manifest.publisherGeneration} · Admission generation{" "}
+                    {manifest.admissionGeneration}
                   </li>
-                ) : null}
-                <li>Publication key: {manifest.publicationKey}</li>
-                <li>Published: {time(manifest.createdAt)}</li>
-              </ul>
-              <ul aria-label={`Entries of manifest ${manifest.publicationKey}`} className="space-y-2">
+                  <li>
+                    Manifest digest:{" "}
+                    <code title={`sha256:${manifest.manifestSha256}`}>{shortDigest(manifest.manifestSha256)}</code>
+                  </li>
+                  {manifest.supersedesManifestSha256 ? (
+                    <li>
+                      Supersedes: <code>{shortDigest(manifest.supersedesManifestSha256)}</code>
+                    </li>
+                  ) : null}
+                  <li>Publication key: {manifest.publicationKey}</li>
+                </ul>
+              </TechnicalDetails>
+              <ul aria-label="Capabilities in this manifest" className="space-y-2">
                 {manifest.entries.map((entry) => (
-                  <EntryRow
+                  <MeshCapabilityEntryRow
                     key={entry.entrySha256}
                     entry={entry}
                     busy={busy}

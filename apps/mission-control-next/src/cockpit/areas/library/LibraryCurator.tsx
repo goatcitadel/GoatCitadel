@@ -17,6 +17,9 @@ import { Field } from "../../ui/Field";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { RiskBadge } from "../../ui/RiskBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { curatorRecommendationLabel, skillStateLabel } from "./capability-vocabulary";
 import { catalogHref } from "./capability-catalog-route";
 import { useLibraryOperation } from "./use-library-operation";
 
@@ -25,13 +28,14 @@ type Outcome = { error: boolean; text: string };
 const ARCHIVE_REASON = "manual archive from Mission Control";
 const CARD = "grid min-w-0 grid-cols-1 gap-3 rounded-lg border border-line p-3";
 
-const humanize = (value: string) => value.replaceAll("_", " ");
-const formatTime = (iso?: string) => {
-  const date = iso ? new Date(iso) : undefined;
-  return date && Number.isFinite(date.getTime()) ? date.toLocaleString() : undefined;
-};
+const humanize = curatorRecommendationLabel;
+const validTime = (iso?: string): iso is string => Boolean(iso && Number.isFinite(Date.parse(iso)));
 const statusOf = (item: CuratorSkillStatusItem) =>
-  item.immune ? `Immune: ${item.immunityReason ?? "protected"}` : item.archived ? "Archived" : humanize(item.state);
+  item.immune
+    ? `Immune: ${item.immunityReason ?? "protected"}`
+    : item.archived
+      ? "Archived"
+      : skillStateLabel(item.state);
 
 function sortSkills(items: CuratorSkillStatusItem[], sort: Sort) {
   return [...items].sort((a, b) =>
@@ -86,8 +90,8 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
       setOutcome({
         error: false,
         text: result.report
-          ? `Report ${result.runId}: ${result.report.proposalCount} archive proposals, ${result.report.immuneCount} immune. Nothing was archived.`
-          : `Report ${result.runId} scheduled. Refresh to see its results. Nothing was archived.`,
+          ? `Curator report ready: ${plural(result.report.proposalCount, "archive proposal")}, ${result.report.immuneCount} immune. Nothing was archived.`
+          : `Curator report scheduled. Refresh to see its results. Nothing was archived.`,
       });
       await refresh();
     } catch (cause) {
@@ -174,8 +178,8 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
           <section className={CARD} aria-label="Curated skills">
             <h2 className="font-display text-md font-semibold">Skills, sorted by {sort}</h2>
             <p className="text-sm text-fg-secondary">
-              {status.data.items.length} skills · {status.data.cycleDays}-day cycle · graded{" "}
-              {formatTime(status.data.generatedAt)}
+              {plural(status.data.items.length, "skill")} · {status.data.cycleDays}-day cycle ·{" "}
+              <TimeText prefix="graded" value={status.data.generatedAt} />
             </p>
             <Field label="Sort skills">
               {(props) => (
@@ -203,7 +207,7 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
                   >
                     <strong>{item.name}</strong>
                     <span className="text-sm text-fg-secondary">
-                      {item.usageCount} uses · {humanize(item.recommendation)} · {statusOf(item)}
+                      {plural(item.usageCount, "use")} · {humanize(item.recommendation)} · {statusOf(item)}
                     </span>
                   </button>
                 </li>
@@ -226,7 +230,12 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
                   <div>
                     <dt className="font-medium">Usage</dt>
                     <dd>
-                      {selected.usageCount} uses · last used {formatTime(selected.lastUsedAt) ?? "never recorded"}
+                      {plural(selected.usageCount, "use")} ·{" "}
+                      {validTime(selected.lastUsedAt) ? (
+                        <TimeText prefix="last used" value={selected.lastUsedAt} />
+                      ) : (
+                        "last use never recorded"
+                      )}
                     </dd>
                   </div>
                   <div>
@@ -304,8 +313,8 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
         {review ? (
           <div className="grid min-w-0 grid-cols-1 gap-3 text-sm wrap-anywhere">
             <p>
-              <strong>Skill:</strong> {review.name} · {review.source} · {review.usageCount} uses · recommendation{" "}
-              {humanize(review.recommendation)}
+              <strong>Skill:</strong> {review.name} · {review.source} · {plural(review.usageCount, "use")} ·
+              recommendation {humanize(review.recommendation)}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <RiskBadge risk="caution" />

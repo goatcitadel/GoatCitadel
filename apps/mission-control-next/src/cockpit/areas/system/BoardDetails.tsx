@@ -1,18 +1,17 @@
+import type { ReactNode } from "react";
 import type { OpsSavedBoardRecord } from "@goatcitadel/contracts";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
 
-const formatTime = (iso: string) => (Number.isFinite(Date.parse(iso)) ? new Date(iso).toLocaleString() : iso);
-
-/** The saved layout record's identity and history, in plain language. Request hashes stay in Technical details. */
+/** The saved layout record's history, in plain language. IDs, actors and request hashes stay in Technical details. */
 export function BoardDetails({ board }: { board: OpsSavedBoardRecord }) {
-  const rows: Array<[string, string]> = [
-    ["Board ID", board.boardId],
+  const rows: Array<[string, ReactNode]> = [
     ["Revision", String(board.revision)],
     ["Status", board.status === "archived" ? "Archived" : "Active"],
-    ["Created by", `${board.createdByActorId} · ${formatTime(board.createdAt)}`],
-    ["Last updated by", `${board.updatedByActorId} · ${formatTime(board.updatedAt)}`],
+    ["Created", <TimeText key="created" value={board.createdAt} />],
+    ["Last updated", <TimeText key="updated" value={board.updatedAt} />],
     ...(board.archivedByActorId && board.archivedAt
-      ? ([["Archived by", `${board.archivedByActorId} · ${formatTime(board.archivedAt)}`]] as Array<[string, string]>)
+      ? ([["Archived", <TimeText key="archived" value={board.archivedAt} />]] as Array<[string, ReactNode]>)
       : []),
   ];
   return (
@@ -29,7 +28,11 @@ export function BoardDetails({ board }: { board: OpsSavedBoardRecord }) {
       <p className="mt-2 text-fg-secondary">
         A saved board is a layout only: its widgets read their own owners, and the board never controls the runtime.
       </p>
-      <TechnicalDetails label="Request identity">
+      <TechnicalDetails label="Record identity">
+        <p className="wrap-anywhere">Board ID {board.boardId}</p>
+        <p className="wrap-anywhere">Created by {board.createdByActorId}</p>
+        <p className="wrap-anywhere">Last updated by {board.updatedByActorId}</p>
+        {board.archivedByActorId ? <p className="wrap-anywhere">Archived by {board.archivedByActorId}</p> : null}
         <p className="wrap-anywhere">Create request {board.idempotencyKey}</p>
         <p className="wrap-anywhere">Request hash {board.requestSha256}</p>
       </TechnicalDetails>

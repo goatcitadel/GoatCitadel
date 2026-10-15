@@ -8,7 +8,8 @@ import {
   type EvidenceReceiptVerification,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { TimeText } from "../../ui/TimeText";
+import { RECEIPT_OUTCOMES } from "./work-vocabulary";
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 
@@ -76,7 +77,7 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
       anchor.click();
       anchor.remove();
       setError(null);
-      setNotice(`Downloaded the inspected receipt as ${filename}.`);
+      setNotice("Downloaded the inspected receipt.");
     } catch (cause) {
       setError(describeApiError(cause).summary);
     } finally {
@@ -136,7 +137,7 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
           <dl className="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <dt className="text-fg-muted">Outcome</dt>
-              <dd className="font-medium text-fg">{humanizeToken(receipt.manifest.lineage.outcome)}</dd>
+              <dd className="font-medium text-fg">{RECEIPT_OUTCOMES[receipt.manifest.lineage.outcome] ?? "Unknown"}</dd>
             </div>
             <div>
               <dt className="text-fg-muted">Approval effects</dt>
@@ -152,7 +153,7 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
             </div>
           </dl>
           <p className="text-xs text-fg-muted">
-            Generated {receipt.manifest.generatedAt} · {receipt.signatureAlgorithm} signature
+            <TimeText value={receipt.manifest.generatedAt} prefix="Generated" />
           </p>
           {verification.reasons.length ? (
             <ul className="list-disc pl-5 text-sm text-status-failed">
@@ -168,6 +169,7 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
             </p>
           )}
           <TechnicalDetails label="Receipt technical details">
+            <p className="font-mono text-xs">Signature algorithm: {receipt.signatureAlgorithm}</p>
             <pre className="mt-2 max-h-80 overflow-auto rounded-md border border-line-subtle bg-sunken p-3 text-xs">
               {JSON.stringify(receipt, null, 2)}
             </pre>

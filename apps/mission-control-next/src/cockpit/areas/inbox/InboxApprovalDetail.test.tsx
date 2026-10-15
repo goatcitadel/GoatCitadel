@@ -277,7 +277,7 @@ describe("Inbox approval detail", () => {
       ),
     );
     expect(container.textContent).toContain(
-      _label === "a decided approval" ? "Decision recorded: approved" : "This approval is no longer waiting.",
+      _label === "a decided approval" ? "Decision recorded: Approved" : "This approval is no longer waiting.",
     );
     expect(container.textContent).not.toContain("Decision controls");
     expect(container.querySelector('[role="alert"]')).toBeNull();
@@ -320,8 +320,8 @@ it("shows linked execution independently of the approved decision", async () => 
       </QueryClientProvider>,
     ),
   );
-  await settleUntil(() => Boolean(container.textContent?.includes("Original linked work: waiting")));
-  expect(container.textContent).toContain("Original linked work: waiting");
+  await settleUntil(() => Boolean(container.textContent?.includes("Original linked work: Waiting")));
+  expect(container.textContent).toContain("Original linked work: Waiting");
   expect(container.textContent).toContain("Approved");
   expect(container.textContent).not.toContain("Decision controls");
 });

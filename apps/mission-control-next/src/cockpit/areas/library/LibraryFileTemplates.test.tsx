@@ -124,7 +124,7 @@ it("re-reads the exact immutable template and creates once with a distinct canon
   await openReview();
   await click("Create reviewed file");
   await vi.waitFor(() =>
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Gateway accepted proof.md (27 bytes)"),
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Gateway accepted proof.md (27 B)"),
   );
   expect(fetchFileTemplates).toHaveBeenCalledTimes(2);
   expect(createFileFromTemplate).toHaveBeenCalledExactlyOnceWith("brief", "proof.md");

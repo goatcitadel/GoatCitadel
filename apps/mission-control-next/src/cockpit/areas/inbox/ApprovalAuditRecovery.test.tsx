@@ -68,7 +68,7 @@ async function render() {
     ),
   );
   await click("Audit and recovery");
-  await vi.waitFor(() => expect(host.textContent).toContain("Original linked work: paused"));
+  await vi.waitFor(() => expect(host.textContent).toContain("Original linked work: Paused"));
 }
 async function click(name: string) {
   const button = [...document.querySelectorAll("button")].find(
@@ -88,7 +88,7 @@ it("rechecks the original canonical checkpoint, Cancel has no effect, and resume
   await click("Resume paused run");
   await click("Confirm resume");
   expect(api.resume).toHaveBeenCalledExactlyOnceWith("original", "operator");
-  expect(host.textContent).toContain("Original linked work: paused");
+  expect(host.textContent).toContain("Original linked work: Paused");
   expect(host.textContent).toContain("Resume request recorded");
 });
 it("blocks stale checkpoint and current scope changes", async () => {
@@ -172,4 +172,28 @@ it("records a late lost response for the original scope after unmount", async ()
   await click("Resume paused run");
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(api.resume).toHaveBeenCalledOnce();
+});
+it("describes decision history in plain words without actor ids, raw events or ISO times", async () => {
+  api.replay.mockResolvedValue({
+    approval,
+    events: [
+      {
+        eventId: "e1",
+        approvalId: "approval",
+        eventType: "resolved",
+        actorId: "operator:ana",
+        timestamp: "2026-01-01T10:00:00.000Z",
+        payload: {},
+      },
+    ],
+    effects: [{ effectId: "f1", effectKind: "approval_wait_wake", status: "failed", lastError: "Run is gone" }],
+  });
+  await render();
+  const text = host.textContent ?? "";
+  expect(text).toContain("Decision recorded · An operator ·");
+  expect(text).toContain("Follow-on work: Wake the waiting run · Failed · Run is gone");
+  expect(text).toContain("Pending action: No pending action record");
+  expect(text).not.toContain("operator:ana");
+  expect(text).not.toContain("2026-01-01T10:00:00.000Z");
+  expect(text).not.toContain("approval_wait_wake");
 });

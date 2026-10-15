@@ -2,25 +2,46 @@ import type { IntegrationSettingsOwner } from "../../../features/native-routes/s
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { IntegrationFormFields, integrationInputClass } from "./IntegrationFormFields";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+import {
+  CONNECTOR_CHECK_STATUS_LABELS,
+  CONNECTOR_DIAGNOSTIC_STATUS_LABELS,
+  INTEGRATION_ACTION_STATUS_LABELS,
+  INTEGRATION_CONNECTION_STATUS_LABELS,
+  WRITEBACK_REPLAY_OUTCOME_LABELS,
+  WRITEBACK_STATUS_LABELS,
+} from "./settings-vocabulary";
 
 export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationSettingsOwner }) {
   const connection = s.selectedConnection;
+  const { activeCitadelId } = useUiPreferences();
+  const workspaceName = useWorkspaceNameLookup(activeCitadelId, Boolean(connection?.workspaceId));
   if (!connection) return <p role="status">Choose a saved connection.</p>;
   const blocked = s.connectionMutation.locked || s.review.required;
   return (
     <section aria-label="Integration connection details" className="space-y-4 rounded-md border border-line p-4">
       <h3 className="break-words font-semibold">{connection.label}</h3>
       <p className="text-sm text-fg-secondary">
-        {connection.enabled ? "Enabled" : "Disabled"} · Configured status: {connection.status}
+        {connection.enabled ? "Enabled" : "Disabled"} · Configured status:{" "}
+        {INTEGRATION_CONNECTION_STATUS_LABELS[connection.status] ?? "Unknown"}
       </p>
       <p className="text-sm text-fg-secondary">
-        {s.diagnostics?.connectorId === connection.connectionId
-          ? `Latest diagnostics: ${s.diagnostics.status}, observed ${s.diagnostics.checkedAt}. This result does not establish ongoing connectivity.`
-          : "Connectivity unverified. Saved configuration does not prove a working connection."}
+        {s.diagnostics?.connectorId === connection.connectionId ? (
+          <>
+            Latest diagnostics: {CONNECTOR_DIAGNOSTIC_STATUS_LABELS[s.diagnostics.status] ?? "Unknown"},{" "}
+            <TimeText prefix="observed" value={s.diagnostics.checkedAt} />. This result does not establish ongoing
+            connectivity.
+          </>
+        ) : (
+          "Connectivity unverified. Saved configuration does not prove a working connection."
+        )}
       </p>
       <p className="text-xs text-fg-muted">
         {connection.workspaceId
-          ? `Bound workspace: ${connection.workspaceId}`
+          ? `Bound workspace: ${workspaceName(connection.workspaceId) ?? "Another workspace"}.`
           : "Unbound connection · Personal Citadel policy applies."}{" "}
         Runtime health and policy still govern use.
       </p>
@@ -57,12 +78,16 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
       )}
       {s.diagnostics ? (
         <section aria-label="Integration diagnostic result" className="space-y-2 text-sm">
-          <h4 className="font-semibold">Diagnostics: {s.diagnostics.status}</h4>
-          <p className="text-xs text-fg-muted">Observed {s.diagnostics.checkedAt}</p>
+          <h4 className="font-semibold">
+            Diagnostics: {CONNECTOR_DIAGNOSTIC_STATUS_LABELS[s.diagnostics.status] ?? "Unknown"}
+          </h4>
+          <p className="text-xs text-fg-muted">
+            <TimeText prefix="Observed" value={s.diagnostics.checkedAt} />
+          </p>
           <ul className="space-y-1">
             {s.diagnostics.checks.map((check, index) => (
               <li key={`${check.key}:${index}`} className="break-words">
-                {check.status} · {check.message}
+                {CONNECTOR_CHECK_STATUS_LABELS[check.status] ?? "Unknown"} · {check.message}
               </li>
             ))}
           </ul>
@@ -127,10 +152,13 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
       {s.lastOperatorActionResult ? (
         <section aria-label="Integration action result" className="space-y-2 text-sm">
           <h4 className="font-semibold">
-            {s.lastOperatorActionResult.actionLabel}: {s.lastOperatorActionResult.status}
+            {s.lastOperatorActionResult.actionLabel}:{" "}
+            {INTEGRATION_ACTION_STATUS_LABELS[s.lastOperatorActionResult.status] ?? "Unknown"}
           </h4>
           <p className="break-words">{s.lastOperatorActionResult.message}</p>
-          <p className="text-xs text-fg-muted">Observed {s.lastOperatorActionResult.checkedAt}</p>
+          <p className="text-xs text-fg-muted">
+            <TimeText prefix="Observed" value={s.lastOperatorActionResult.checkedAt} />
+          </p>
           <p>
             Undo:{" "}
             {s.lastOperatorActionResult.reversibility?.label ??
@@ -139,21 +167,23 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
           </p>
           {s.lastOperatorActionResult.durableWriteback ? (
             <p className="break-words">
-              Writeback: {s.lastOperatorActionResult.durableWriteback.status} · Replay:{" "}
-              {s.lastOperatorActionResult.durableWriteback.replayOutcome ?? "Not reported"}
+              Writeback: {WRITEBACK_STATUS_LABELS[s.lastOperatorActionResult.durableWriteback.status] ?? "Unknown"} ·
+              Replay:{" "}
+              {s.lastOperatorActionResult.durableWriteback.replayOutcome
+                ? (WRITEBACK_REPLAY_OUTCOME_LABELS[s.lastOperatorActionResult.durableWriteback.replayOutcome] ??
+                  "Unknown")
+                : "Not reported"}
             </p>
           ) : null}
-          <details>
-            <summary className="cursor-pointer">Owner evidence</summary>
-            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">
+          <TechnicalDetails label="Owner evidence">
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">
               {JSON.stringify(s.lastOperatorActionResult, null, 2)}
             </pre>
-          </details>
+          </TechnicalDetails>
         </section>
       ) : null}
-      <details className="text-xs text-fg-muted">
-        <summary className="cursor-pointer">Connection identity and revision</summary>
-        <dl className="mt-2 space-y-1">
+      <TechnicalDetails label="Connection identity and revision">
+        <dl className="space-y-1 font-mono text-xs">
           <dt>Connection</dt>
           <dd className="break-all">{connection.connectionId}</dd>
           <dt>Catalog</dt>
@@ -161,9 +191,13 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
           <dt>Revision</dt>
           <dd className="break-all">{connection.revision}</dd>
           <dt>Updated</dt>
-          <dd>{connection.updatedAt}</dd>
+          <dd>
+            <TimeText absolute value={connection.updatedAt} />
+          </dd>
+          <dt>Bound workspace</dt>
+          <dd className="break-all">{connection.workspaceId ?? "None"}</dd>
         </dl>
-      </details>
+      </TechnicalDetails>
       <Dialog
         open={s.operatorReview !== null}
         title="Run reviewed integration action?"

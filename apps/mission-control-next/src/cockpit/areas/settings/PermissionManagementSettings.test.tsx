@@ -142,7 +142,8 @@ it("pages active override records without losing access to later exact targets",
   expect(view!.root.findAllByType("li")).toHaveLength(30);
   await click("Show more temporary overrides");
   expect(view!.root.findAllByType("li")).toHaveLength(35);
-  expect(text(view!.root)).toContain("override-34");
+  expect(text(view!.root)).not.toContain("override-34");
+  expect(text(view!.root)).toContain("Selected workspace · Expires");
   expect(api.revokeLocalOperatorOverride).not.toHaveBeenCalled();
 });
 

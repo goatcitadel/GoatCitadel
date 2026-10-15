@@ -4,6 +4,7 @@ import type { DesktopUpdateChannel } from "@goatcitadel/contracts";
 import { useDesktopUpdates } from "../../../features/desktop-updates/desktop-update-bridge";
 import { useDesktopUpdateActions } from "../../../features/desktop-updates/use-desktop-update-actions";
 import { Button } from "../../ui/Button";
+import { TimeText } from "../../ui/TimeText";
 
 export function DesktopUpdateSettings() {
   const status = useDesktopUpdates();
@@ -57,7 +58,7 @@ export function DesktopUpdateSettings() {
           </p>
           <p className="text-xs text-fg-muted">
             Last successful check:{" "}
-            {status.lastSuccessfulCheck ? new Date(status.lastSuccessfulCheck).toLocaleString() : "Not checked yet"}
+            {status.lastSuccessfulCheck ? <TimeText value={status.lastSuccessfulCheck} /> : "Not checked yet"}
           </p>
           {offered ? (
             <>

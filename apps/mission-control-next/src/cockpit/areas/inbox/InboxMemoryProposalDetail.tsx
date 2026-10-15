@@ -7,6 +7,7 @@ import {
   promoteTraceMemoryCandidate,
   rejectTraceMemoryCandidate,
 } from "@goatcitadel/mission-control-shared/api/memory";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
@@ -15,6 +16,7 @@ import { Dialog } from "../../ui/Dialog";
 import { classifyOperationFailure } from "./approval-operation-attempts";
 import { canResolveInboxMemoryProposal } from "./memory-proposal-guard";
 import { nullWhenMissing } from "./inbox-record-read";
+import { memoryCandidateAuthorityLabels, memoryCandidateTypeLabels } from "./inbox-vocabulary";
 
 /** The proposal by id; one that was decided or left this workspace is no longer waiting here. */
 async function readCandidate(
@@ -174,8 +176,9 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
         <>
           <p className="text-fg-secondary">Proposed insight: {candidate.proposedInsight}</p>
           <p className="text-xs text-fg-muted">
-            Type: {candidate.candidateType.replaceAll("_", " ")} · Source: {candidate.authority.replaceAll("_", " ")} ·{" "}
-            {candidate.sourceRefs.length} source {candidate.sourceRefs.length === 1 ? "reference" : "references"}
+            Type: {memoryCandidateTypeLabels[candidate.candidateType] ?? "Other"} · Source:{" "}
+            {memoryCandidateAuthorityLabels[candidate.authority] ?? "Unknown source"} ·{" "}
+            {plural(candidate.sourceRefs.length, "source reference")}
           </p>
           {candidate.sourceText ? (
             <details className="rounded-md border border-line bg-sunken p-3 text-fg-secondary">

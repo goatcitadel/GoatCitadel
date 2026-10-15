@@ -91,7 +91,7 @@ it("notifies Chat when a slow effect or linked run changes, without refreshing o
   expect(notify).toHaveBeenCalledTimes(2);
   await refresh(state("completed", "completed"));
   expect(notify).toHaveBeenCalledTimes(3);
-  expect(container.textContent).toContain("Original linked work: completed");
+  expect(container.textContent).toContain("Original linked work: Done");
 });
 
 it("shows background checking as quiet text instead of a live region", async () => {
@@ -116,7 +116,7 @@ it("shows background checking as quiet text instead of a live region", async () 
   await act(async () => resolve(state("completed", "completed")));
   await waitForRefresh(false);
   const live = [...container.querySelectorAll('[role="status"]')].map((node) => node.textContent);
-  expect(live.some((text) => text?.includes("Original linked work: completed"))).toBe(true);
+  expect(live.some((text) => text?.includes("Original linked work: Done"))).toBe(true);
   expect(live.some((text) => text?.includes("Checking canonical"))).toBe(false);
 });
 
@@ -190,7 +190,7 @@ it("keeps settlement inspection in native history while preserving scoped conver
     expect(target.searchParams.get("shell")).toBe("cockpit");
     expect(target.searchParams.has("shellScope")).toBe(false);
     expect(target.hash).toBe("#receipt");
-    expect(container.textContent).toContain("Original linked work: completed");
+    expect(container.textContent).toContain("Original linked work: Done");
     expect(notify).toHaveBeenCalled();
     expect(window.history.state).toEqual({ retained: "state" });
   } finally {

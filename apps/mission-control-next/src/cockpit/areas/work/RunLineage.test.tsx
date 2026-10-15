@@ -170,7 +170,7 @@ describe("Work delegation lineage", () => {
     expect(container.textContent).toContain("Verify changes");
     expect(container.textContent).toContain("Focused checks passed.");
     expect(container.textContent).toContain("The parent cited the verified checks.");
-    expect(container.textContent).toContain("22 bytes · SHA-256");
+    expect(container.textContent).toContain("22 B · SHA-256");
     expect(container.textContent).toContain("Run status is current; output references describe recorded evidence");
     expect(container.querySelector('a[href="/work/runs/child%2Fa?shell=cockpit"]')).not.toBeNull();
     expect(container.querySelector('a[href="/chat?sessionId=child-session&shell=cockpit"]')).not.toBeNull();
@@ -235,7 +235,7 @@ describe("Work delegation lineage", () => {
     expect(container.textContent).toContain("Status unavailable");
     expect(container.textContent).toContain("Output unknown");
     expect(container.textContent).toContain("Synthesis is partial");
-    expect(container.textContent).toContain("does not cover 1 watched children and 1 delegation steps");
+    expect(container.textContent).toContain("does not cover 1 watched child and 1 delegation step");
     expect(container.textContent).not.toContain("Focused checks passed.");
   });
 

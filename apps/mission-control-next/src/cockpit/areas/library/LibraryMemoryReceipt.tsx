@@ -11,6 +11,9 @@ import { readLibraryMemoryItem } from "./library-memory-owner";
 import { Callout } from "../../ui/Callout";
 import { recordView } from "../../data/record-view";
 import type { MemoryBatchMutationOperation } from "@goatcitadel/contracts";
+import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { TimeText } from "../../ui/TimeText";
+import { presentMemoryStatus } from "./library-vocabulary";
 
 function sameItemIds(actual: unknown, expected: readonly string[]) {
   return (
@@ -127,7 +130,7 @@ export function LibraryMemoryReceipt({
     if (data.approval.status === "pending")
       message = "Approval requested. No memory change is confirmed yet. Review the persisted request below.";
     else if (data.approval.status !== "approved")
-      message = `Memory request ${data.approval.status}. This request does not confirm a memory change.`;
+      message = `Memory request ${presentApprovalStatus(data.approval.status).label.toLowerCase()}. This request does not confirm a memory change.`;
     else if (data.approval.actionOutcome === "policy_blocked")
       message = "Memory effect blocked by policy. Your draft is retained.";
     else if (data.effect?.status === "failed")
@@ -153,19 +156,21 @@ export function LibraryMemoryReceipt({
       {data ? (
         <>
           <p>
-            {view.stale ? "Last verified memory decision" : "Memory decision"}: {data.approval.status}.
+            {view.stale ? "Last verified memory decision" : "Memory decision"}:{" "}
+            {presentApprovalStatus(data.approval.status).label}.
           </p>
           {view.stale ? <p>Previous readback retained while current owner evidence is checked.</p> : null}
           {data.item ? (
             <details>
               <summary>
-                {view.stale ? "Last verified memory record" : "Current memory record"}: {data.item.status}
+                {view.stale ? "Last verified memory record" : "Current memory record"}:{" "}
+                {presentMemoryStatus(data.item.status).label}
               </summary>
               <p>Readback title: {data.item.title}</p>
               <p className="whitespace-pre-wrap break-words">{data.item.content}</p>
               <p>
-                Updated: {new Date(data.item.updatedAt).toLocaleString()}. Current readback is separate from the
-                original effect.
+                <TimeText prefix="Updated" value={data.item.updatedAt} absolute />. Current readback is separate from
+                the original effect.
               </p>
               <TechnicalDetails label="Memory receipt provenance">
                 <p>Updated: {data.item.updatedAt}</p>

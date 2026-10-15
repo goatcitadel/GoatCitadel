@@ -21,6 +21,9 @@ import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { recordView } from "../../data/record-view";
+import { TimeText } from "../../ui/TimeText";
+import { formatSeconds } from "@goatcitadel/mission-control-shared/content/format";
+import { MEMORY_CHANGE, memoryNamespaceLabel, memoryScopeLabel, presentMemoryLifecycle } from "./library-vocabulary";
 
 export function LibraryMemoryEditor({ itemId, workspaceId }: { itemId: string; workspaceId: string }) {
   const access = useLibraryOperation(JSON.stringify(["memory-item", workspaceId, itemId]));
@@ -160,18 +163,14 @@ function MemoryEditor({
     setOutcome(undefined);
     setReview({ action, item, draft: { ...draft.value } });
   }
-  const scope =
-    item.workspaceId ??
-    (typeof item.metadata.workspaceId === "string"
-      ? item.metadata.workspaceId
-      : "Global memory shared across workspaces");
+  const scope = memoryScopeLabel(item, workspaceId);
   // The Gateway refuses approved mutations unless the item is exactly workspace-owned (409), so do not offer them.
   const globalItem = !item.workspaceId;
   return (
     <>
       <h2 className="font-display text-lg text-fg">{item.title}</h2>
       <p className="text-sm text-fg-secondary">
-        {scope} · {item.namespace} · {item.status} · {item.lifecycleState}
+        {presentMemoryLifecycle(item.lifecycleState).label} · {memoryNamespaceLabel(item.namespace)} · {scope}
       </p>
       {globalItem ? (
         <Callout tone="info">
@@ -260,11 +259,15 @@ function MemoryEditor({
       <details className="break-words text-sm text-fg-secondary">
         <summary>Memory provenance</summary>
         <p>
-          Created {new Date(item.createdAt).toLocaleString()} · Updated {new Date(item.updatedAt).toLocaleString()}
+          <TimeText prefix="Created" value={item.createdAt} /> · <TimeText prefix="Updated" value={item.updatedAt} />
         </p>
-        <p>Expires: {item.expiresAt ? new Date(item.expiresAt).toLocaleString() : "No expiry recorded"}</p>
-        <p>Namespace: {item.namespace}</p>
+        <p>{item.expiresAt ? <TimeText prefix="Expires" value={item.expiresAt} absolute /> : "No expiry recorded"}</p>
+        <p>Namespace: {memoryNamespaceLabel(item.namespace)}</p>
         <TechnicalDetails label="Memory source identifiers">
+          <p>
+            Item ID: {item.itemId} · Namespace: {item.namespace} · Owner:{" "}
+            {String(item.workspaceId ?? item.metadata.workspaceId ?? "global")}
+          </p>
           <p>
             Created: {item.createdAt} · Updated: {item.updatedAt} · Expires: {item.expiresAt ?? "none"}
           </p>
@@ -290,12 +293,14 @@ function MemoryEditor({
               .filter((event) => event.itemId === item.itemId)
               .map((event) => (
                 <li key={event.changeId} className="rounded-md border border-line p-2">
-                  <h3>{event.changeType.replaceAll("_", " ")}</h3>
+                  <h3>{MEMORY_CHANGE[event.changeType]}</h3>
                   <p className="text-sm text-fg-secondary">
-                    {event.actorId ?? "Actor not recorded"} · {new Date(event.createdAt).toLocaleString()}
+                    <TimeText value={event.createdAt} />
                   </p>
                   <TechnicalDetails label="Technical event details">
-                    <p>{event.createdAt}</p>
+                    <p>
+                      {event.createdAt} · Actor ID: {event.actorId ?? "none"}
+                    </p>
                     <pre className="whitespace-pre-wrap break-words">{JSON.stringify(event.payload, null, 2)}</pre>
                   </TechnicalDetails>
                 </li>
@@ -326,9 +331,7 @@ function MemoryEditor({
               <p>Requested content:</p>
               <pre className="whitespace-pre-wrap break-words">{review.draft.content}</pre>
               <p>Requested pinned state: {review.draft.pinned ? "pinned" : "unpinned"}</p>
-              <p>
-                Requested TTL: {review.draft.ttl || "Default"} {review.draft.ttl ? "seconds" : ""}
-              </p>
+              <p>Requested expiry: {review.draft.ttl ? formatSeconds(Number(review.draft.ttl)) : "Default"}</p>
             </section>
           ) : null}
           {outcome?.request ? (

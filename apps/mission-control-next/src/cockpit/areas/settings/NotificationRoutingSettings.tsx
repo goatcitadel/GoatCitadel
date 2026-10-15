@@ -6,6 +6,15 @@ import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { NotificationRoutingFields } from "./NotificationRoutingFields";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import {
+  NOTIFICATION_DELIVERY_POLICY_LABELS,
+  NOTIFICATION_DELIVERY_STATUS_LABELS,
+  NOTIFICATION_LIFECYCLE_LABELS,
+  NOTIFICATION_TARGET_KIND_LABELS,
+} from "./notification-vocabulary";
 
 export function NotificationRoutingSettings({
   workspaceId,
@@ -88,14 +97,16 @@ export function NotificationRoutingSettings({
             {s.targets.slice(0, limit).map((target) => (
               <details className="rounded-md border border-line-subtle p-3" key={target.targetId}>
                 <summary className="cursor-pointer break-words text-sm">
-                  {target.label} · {target.lifecycleState}
+                  {target.label} · {NOTIFICATION_LIFECYCLE_LABELS[target.lifecycleState] ?? "Unknown"}
                 </summary>
                 <p className="my-2 break-words text-sm text-fg-secondary">
-                  {target.kind.replaceAll("_", " ")} · revision {target.revision}
+                  {NOTIFICATION_TARGET_KIND_LABELS[target.kind] ?? "Unknown destination type"}
                 </p>
-                <p className="break-all text-xs text-fg-muted">
-                  {target.channelConnectionId ?? target.webhookUrlSecretRef}
-                </p>
+                <TechnicalDetails>
+                  <p className="break-all font-mono text-xs">
+                    {target.channelConnectionId ?? target.webhookUrlSecretRef} · revision {target.revision}
+                  </p>
+                </TechnicalDetails>
                 {s.testDelivery(target.targetId) ? (
                   <p role="status" className="my-2 text-sm">
                     Latest test for {target.label}: {s.testDelivery(target.targetId)!.status.replaceAll("_", " ")}.{" "}
@@ -135,10 +146,10 @@ export function NotificationRoutingSettings({
             {s.rules.slice(0, limit).map((rule) => (
               <details className="rounded-md border border-line-subtle p-3" key={rule.ruleId}>
                 <summary className="cursor-pointer break-words text-sm">
-                  {rule.label} · {rule.lifecycleState}
+                  {rule.label} · {NOTIFICATION_LIFECYCLE_LABELS[rule.lifecycleState] ?? "Unknown"}
                 </summary>
                 <p className="my-2 text-sm">
-                  {rule.deliveryPolicy.replaceAll("_", " ")} · revision {rule.revision}
+                  {NOTIFICATION_DELIVERY_POLICY_LABELS[rule.deliveryPolicy] ?? "Unknown delivery policy"}
                 </p>
                 <p className="break-words text-sm text-fg-secondary">{rule.eventTypes.join(", ")}</p>
                 <p className="my-2 break-words text-sm">
@@ -168,18 +179,20 @@ export function NotificationRoutingSettings({
           <details>
             <summary className="cursor-pointer text-sm">Recent delivery evidence</summary>
             <p className="my-2 text-xs text-fg-muted">
-              Latest {s.deliveries.length} returned records; this is a bounded history window.
+              Latest {plural(s.deliveries.length, "returned record")}; this is a bounded history window.
             </p>
             <ul className="space-y-3">
               {s.deliveries.map((delivery) => (
                 <li className="break-words text-sm" key={delivery.deliveryId}>
-                  <strong>{delivery.status.replaceAll("_", " ")}</strong>
+                  <strong>{NOTIFICATION_DELIVERY_STATUS_LABELS[delivery.status] ?? "Unknown"}</strong>
                   <p>
                     Destination:{" "}
-                    {s.targets.find((item) => item.targetId === delivery.targetId)?.label ?? delivery.targetId} ·
+                    {s.targets.find((item) => item.targetId === delivery.targetId)?.label ?? "Another destination"} ·
                     attempt {delivery.attemptCount}
                   </p>
-                  <p className="text-xs text-fg-muted">{delivery.updatedAt}</p>
+                  <p className="text-xs text-fg-muted">
+                    <TimeText value={delivery.updatedAt} />
+                  </p>
                   {delivery.lastError ? <p>{delivery.lastError}</p> : null}
                 </li>
               ))}

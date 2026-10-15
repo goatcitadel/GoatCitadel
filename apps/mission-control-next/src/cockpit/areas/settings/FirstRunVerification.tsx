@@ -4,7 +4,6 @@ import {
   fetchAgenticRuns,
   fetchEvidenceEnvelopes,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import {
   deriveEcosystemProofLaneItems,
   deriveOnboardingProviderSmokeEvidenceItems,
@@ -14,6 +13,18 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { McpDraftLeave } from "./McpDraftLeave";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { useModelLabel } from "../../data/use-model-label";
+import {
+  AGENTIC_RUN_STATUS_LABELS,
+  AUTH_MODE_LABELS,
+  CHECKLIST_STATUS_LABELS,
+  DEPLOYMENT_POSTURE_LABELS,
+  EVIDENCE_EVENT_KIND_LABELS,
+  presentSetupLabel,
+  READINESS_STATUS_LABELS,
+  SETUP_STEP_STATE_LABELS,
+} from "./setup-vocabulary";
 
 async function optional<T>(read: Promise<T>): Promise<{ value: T; error?: never } | { value?: never; error: true }> {
   try {
@@ -46,6 +57,9 @@ export function FirstRunVerification() {
   });
   const data = query.isError ? undefined : query.data,
     state = data?.state;
+  const verifiedTask = state?.firstTask?.status === "verified" ? state.firstTask : undefined;
+  const firstTaskVerified = Boolean(verifiedTask);
+  const firstTaskModel = useModelLabel(verifiedTask?.providerId, verifiedTask?.model, firstTaskVerified);
   return (
     <section
       aria-label="First-run verification evidence"
@@ -63,9 +77,7 @@ export function FirstRunVerification() {
         <>
           <p className="text-sm text-fg-secondary">
             Setup marker: {state.completed ? "recorded" : "not recorded"}. First Chat response:{" "}
-            {state.firstTask?.status === "verified"
-              ? `verified by the Gateway with ${state.firstTask.providerId} / ${state.firstTask.model}`
-              : "not observed"}
+            {state.firstTask?.status === "verified" ? `verified by the Gateway with ${firstTaskModel}` : "not observed"}
             . Neither sample records nor configured credentials certify execution.
           </p>
           <EvidenceList title="Setup Center" items={deriveSetupCenterItems(state)} />
@@ -85,14 +97,14 @@ export function FirstRunVerification() {
                   Gateway: <span className="break-all font-mono">{state.setupReadiness.profile.gatewayUrl}</span>
                 </p>
                 <p>
-                  Auth: {humanizeToken(state.setupReadiness.profile.authMode)} · Posture:{" "}
-                  {humanizeToken(state.setupReadiness.profile.deploymentPosture)}
+                  Auth: {presentSetupLabel(AUTH_MODE_LABELS, state.setupReadiness.profile.authMode)} · Posture:{" "}
+                  {presentSetupLabel(DEPLOYMENT_POSTURE_LABELS, state.setupReadiness.profile.deploymentPosture)}
                 </p>
                 <ul className="grid gap-3">
                   {state.setupReadiness.items.map((item) => (
                     <li key={item.id}>
                       <p className="font-medium text-fg">
-                        {item.label} — {humanizeToken(item.status)}
+                        {item.label} — {presentSetupLabel(READINESS_STATUS_LABELS, item.status)}
                       </p>
                       <p className="break-words">
                         {item.value}: {item.detail}
@@ -111,7 +123,7 @@ export function FirstRunVerification() {
               {state.firstRunChecklist?.map((item) => (
                 <li key={item.id}>
                   <p className="font-medium text-fg">
-                    {item.label} — {humanizeToken(item.status)}
+                    {item.label} — {presentSetupLabel(CHECKLIST_STATUS_LABELS, item.status)}
                   </p>
                   <p>{item.detail}</p>
                   <ul className="mt-1 grid gap-1">
@@ -140,7 +152,11 @@ export function FirstRunVerification() {
               <ul className="mt-3 grid gap-2 text-sm text-fg-secondary">
                 {data?.runs.value?.items.map((run) => (
                   <li key={run.runId}>
-                    <span className="break-all font-mono">{run.runId}</span> — {humanizeToken(run.status ?? "unknown")}
+                    <span className="break-words">{run.title || "Untitled run"}</span> —{" "}
+                    {presentSetupLabel(AGENTIC_RUN_STATUS_LABELS, run.status)}
+                    <TechnicalDetails label="Run details">
+                      <span className="break-all font-mono text-xs">{run.runId}</span>
+                    </TechnicalDetails>
                   </li>
                 ))}
               </ul>
@@ -151,7 +167,10 @@ export function FirstRunVerification() {
               <ul className="mt-3 grid gap-2 text-sm text-fg-secondary">
                 {data?.envelopes.value?.items.map((item) => (
                   <li key={item.envelopeId}>
-                    <span className="break-all font-mono">{item.envelopeId}</span> — {humanizeToken(item.eventKind)}
+                    {presentSetupLabel(EVIDENCE_EVENT_KIND_LABELS, item.eventKind)}
+                    <TechnicalDetails label="Envelope details">
+                      <span className="break-all font-mono text-xs">{item.envelopeId}</span>
+                    </TechnicalDetails>
                   </li>
                 ))}
               </ul>
@@ -198,7 +217,7 @@ function EvidenceList({
         {items.map((item) => (
           <li key={item.label}>
             <p className="font-medium text-fg">
-              {item.label} — {humanizeToken(item.state)}
+              {item.label} — {presentSetupLabel(SETUP_STEP_STATE_LABELS, item.state)}
             </p>
             <p>{item.description}</p>
           </li>

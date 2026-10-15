@@ -24,6 +24,15 @@ import { LibraryCandidatePlan } from "./LibraryCandidatePlan";
 import { useLibraryOperation } from "./use-library-operation";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { LibraryApproval } from "./LibraryApproval";
+import { TimeText } from "../../ui/TimeText";
+import {
+  capabilityProposalEventLabel,
+  capabilityProposalStatusLabel,
+  lifecycleActionLabel,
+  lineageLabel,
+  skillLifecycleLabel,
+  versionSourceLabel,
+} from "./capability-vocabulary";
 
 export function CapabilityLifecycleInspector({
   item,
@@ -63,11 +72,14 @@ function LifecycleInspector({ item, workspaceId }: { item: CapabilityCatalogEntr
         <>
           <h3 className="font-semibold">{proposal.data.proposal.title}</h3>
           <p>{proposal.data.proposal.summary}</p>
-          <p>Proposal status: {proposal.data.proposal.status}. A proposal is not a callable capability.</p>
+          <p>
+            Proposal status: {capabilityProposalStatusLabel(proposal.data.proposal.status)}. A proposal is not a
+            callable capability.
+          </p>
           <ul>
             {proposal.data.events.map((event) => (
               <li key={event.eventId}>
-                {event.eventType} · {new Date(event.createdAt).toLocaleString()}
+                {capabilityProposalEventLabel(event.eventType)} · <TimeText value={event.createdAt} />
                 <TechnicalDetails label="Proposal event timestamp">
                   <p>{event.createdAt}</p>
                 </TechnicalDetails>
@@ -195,8 +207,8 @@ function CandidateVersions({
             <h4 className="font-semibold">{version.title}</h4>
             <p>{version.summary}</p>
             <p className="text-sm text-fg-secondary">
-              {version.lifecycleState} · {version.sourceKind.replaceAll("_", " ")} ·{" "}
-              {version.lineageStatus ?? "Lineage unavailable"} · {new Date(version.createdAt).toLocaleString()}
+              {skillLifecycleLabel(version.lifecycleState)} · {versionSourceLabel(version.sourceKind)} ·{" "}
+              {lineageLabel(version.lineageStatus)} · <TimeText prefix="Created" value={version.createdAt} />
             </p>
             <TechnicalDetails label="Immutable version identifiers">
               <p>Version: {version.versionId}</p>
@@ -262,9 +274,9 @@ function CandidateVersions({
       >
         <div className="grid gap-3">
           <p>
-            {review?.action}: {review?.version.title}
+            {review ? lifecycleActionLabel(review.action) : ""}: {review?.version.title}
           </p>
-          <p>Workspace {review?.version.workspaceId ?? "Installation scope"}</p>
+          <p>{review?.version.workspaceId ? "This workspace" : "Installation scope"}</p>
           <Callout tone="warning">
             Activation remains subject to policy, approvals, provenance, health and grants. A pending request is never
             callable.

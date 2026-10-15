@@ -158,7 +158,7 @@ const batch = () => (
 it("reviews exact batch targets, cancels without mutation, and requests the existing atomic owner once", async () => {
   await render(batch());
   await click("Review pin selected memory");
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Reviewed memory · workspace · Unpinned");
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Reviewed memory · Workspace · Unpinned");
   await click("Cancel");
   expect(mocks.batch).not.toHaveBeenCalled();
   mocks.batch.mockResolvedValue({

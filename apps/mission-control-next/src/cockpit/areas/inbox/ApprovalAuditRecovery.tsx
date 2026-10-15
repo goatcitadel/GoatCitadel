@@ -18,11 +18,22 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { findTraceMetadata } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { TimeText } from "../../ui/TimeText";
+import {
+  presentActor,
+  presentApprovalEffectKind,
+  presentApprovalEffectStatus,
+  presentApprovalEvent,
+  presentPendingActionResolution,
+} from "./inbox-vocabulary";
 
 export function ApprovalAuditRecovery({
   approval,
@@ -51,6 +62,8 @@ function AuditRecovery({
   const [review, setReview] = useState<string>(),
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState("");
+  const { activeCitadelId } = useUiPreferences();
+  const workspaceName = useWorkspaceNameLookup(activeCitadelId)(workspaceId) ?? "This workspace";
 
   async function read() {
     const state = await readApprovalFollowOn(approval, workspaceId, access.current);
@@ -169,20 +182,23 @@ function AuditRecovery({
               <ol className="grid gap-2">
                 {audit.data.replay.events.map((event) => (
                   <li key={event.eventId}>
-                    {event.eventType.replaceAll("_", " ")} · {event.actorId} · {event.timestamp}
+                    {presentApprovalEvent(event.eventType)} · {presentActor(event.actorId)} ·{" "}
+                    <TimeText value={event.timestamp} />
                   </li>
                 ))}
               </ol>
-              <p>Pending action: {audit.data.replay.pendingAction?.resolutionStatus ?? "No pending action record"}</p>
+              <p>Pending action: {presentPendingActionResolution(audit.data.replay.pendingAction?.resolutionStatus)}</p>
               {audit.data.replay.effects.map((effect) => (
                 <p key={effect.effectId}>
-                  Follow-on work: {effect.effectKind.replaceAll("_", " ")} · {effect.status} · {effect.lastError}
+                  Follow-on work: {presentApprovalEffectKind(effect.effectKind)} ·{" "}
+                  {presentApprovalEffectStatus(effect.status).label}
+                  {effect.lastError ? ` · ${effect.lastError}` : ""}
                 </p>
               ))}
               {run ? (
                 <>
                   <p>
-                    Original linked work: {run.status}. {run.lastError}
+                    Original linked work: {presentRunStatus(run.status).label}. {run.lastError}
                   </p>
                   <Button
                     disabled={
@@ -260,9 +276,12 @@ function AuditRecovery({
         title="Resume paused run"
         description="Request continuation of the original canonical checkpoint. Approval decisions and actual resumed work remain separate."
       >
-        <p>
-          Workspace {workspaceId} · Run {run?.runId}
-        </p>
+        <p>Workspace: {workspaceName}</p>
+        <TechnicalDetails label="Run identifiers">
+          <p className="break-all font-mono text-xs">
+            Workspace {workspaceId} · Run {run?.runId}
+          </p>
+        </TechnicalDetails>
         <p>{run?.lastError}</p>
         <div className="mt-3 flex flex-wrap gap-2">
           <Button

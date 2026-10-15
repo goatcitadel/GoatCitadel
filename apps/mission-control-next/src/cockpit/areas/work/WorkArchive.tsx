@@ -3,6 +3,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import type { TaskRecord } from "@goatcitadel/contracts";
 import { fetchTasksByView } from "@goatcitadel/mission-control-shared/api/tasks";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { presentTaskStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { performTaskArchiveAction } from "../../../features/native-routes/ops/task-archive-operation";
@@ -17,6 +18,8 @@ import { Dialog } from "../../ui/Dialog";
 import { EmptyState } from "../../ui/EmptyState";
 import { Field } from "../../ui/Field";
 import { WindowedRecordList } from "../../ui/WindowedRecordList";
+import { StatusBadge } from "../../ui/StatusBadge";
+import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
 
 export function WorkArchive() {
   const { activeWorkspaceId } = useUiPreferences();
@@ -31,6 +34,7 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
   const mounted = useIsMounted();
   useTaskMutations();
   const base = getGatewayApiBaseUrl();
+  const workspaceLabel = useActiveWorkspaceLabel();
   const tasks = useInfiniteQuery({
     queryKey: ["tasks", "archive", workspaceId, view],
     initialPageParam: "",
@@ -131,7 +135,9 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
           {(task) => (
             <article className="rounded-md border border-line p-3">
               <h2 className="text-sm font-medium text-fg">{task.title}</h2>
-              <p className="text-xs text-fg-secondary">Operator task · {task.status}</p>
+              <p className="flex flex-wrap items-center gap-2 text-xs text-fg-secondary">
+                Operator task <StatusBadge status={presentTaskStatus(task.status)} />
+              </p>
               <Button
                 disabled={
                   !available ||
@@ -168,7 +174,7 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
           }
         }}
         title={view === "trash" ? "Restore this task?" : "Archive this task?"}
-        description={`${review?.title ?? "Task"} · Workspace ${workspaceId}. Revision is rechecked before persistence.`}
+        description={`${review?.title ?? "Task"} · ${workspaceLabel}. The task is rechecked before anything is saved.`}
       >
         <div className="grid gap-3 text-sm">
           <p>

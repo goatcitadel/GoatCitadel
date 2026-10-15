@@ -11,6 +11,7 @@ import {
   removeOpsSavedBoardsWidget,
   type OpsSavedBoardsPlacementAdjustment,
 } from "../../../features/native-routes/ops/OpsSavedBoardsModel";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
@@ -326,8 +327,7 @@ function BoardEditorView({
           data-create-identity={base ? undefined : owner.createIdentity}
         >
           <p className="text-sm text-fg">
-            {base ? "Save changes to" : "Create"} {draft.name.trim()} with {draft.placements.length}{" "}
-            {draft.placements.length === 1 ? "widget" : "widgets"}?{" "}
+            {base ? "Save changes to" : "Create"} {draft.name.trim()} with {plural(draft.placements.length, "widget")}?{" "}
             {base
               ? "The Gateway will check the current version before saving."
               : "The Gateway will validate and save this new layout."}

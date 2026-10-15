@@ -4,7 +4,7 @@ import type { OperatorInboxResponse } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import { loadCapabilityCatalog } from "../areas/library/capability-catalog";
-import { RESOURCE_KINDS } from "../areas/library/library-resources";
+import { RESOURCE_KINDS, type ResourceKind } from "../areas/library/library-resources";
 import { queryKeys } from "../data/query-keys";
 import {
   assertPaletteWorkspace,
@@ -21,9 +21,16 @@ import {
 export const PALETTE_SEARCH_DEBOUNCE_MS = 300;
 const SEARCH_STALE_MS = 30_000;
 type SourceRead = (scope: PaletteScope, text: string, signal?: AbortSignal) => Promise<PaletteSourceResult>;
+/** Group headings for each Library resource kind; the wire kind stays in the group id. */
+const LIBRARY_SOURCE_LABELS: Record<ResourceKind, string> = {
+  memory: "Memory",
+  notes: "Notes",
+  files: "Files",
+  artifacts: "Artifacts",
+};
 const LIBRARY_SOURCES = RESOURCE_KINDS.map((kind) => ({
   id: kind,
-  label: `Library ${kind}`,
+  label: LIBRARY_SOURCE_LABELS[kind],
   read: searchLibrary(kind),
 }));
 

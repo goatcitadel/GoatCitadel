@@ -19,9 +19,15 @@ import { Field } from "../../ui/Field";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useLibraryOperation } from "./use-library-operation";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+const KNOWLEDGE_ACTION = {
+  ingest: "Add to knowledge",
+  index: "Index knowledge",
+  retrieve: "Search knowledge",
+} as const;
 export function LibraryKnowledgeActions({ workspaceId }: { workspaceId: string }) {
   const operation = useLibraryOperation(JSON.stringify(["knowledge", workspaceId]));
   return <KnowledgeActions key={operation.identity} workspaceId={workspaceId} />;
@@ -186,7 +192,7 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
           error: false,
           text:
             review.action === "retrieve" && rows
-              ? `Gateway returned ${rows.length} matches under the source conversation's read policy.`
+              ? `Gateway returned ${plural(rows.length, "match", "matches")} under the source conversation's read policy.`
               : documentId
                 ? "Gateway returned a persisted document receipt. Indexing and context admission remain separate."
                 : response.outcome === "executed"
@@ -338,11 +344,13 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
         description="Tool execution may require approval; source access is evaluated by Gateway."
       >
         <div className="grid min-w-0 grid-cols-1 gap-3 wrap-anywhere">
-          <p>
-            {review?.action} · Workspace {workspaceId}
-          </p>
+          <p>{review ? KNOWLEDGE_ACTION[review.action] : ""} · This workspace</p>
           <p className="break-words">Namespace: {review?.draft.namespace}</p>
-          <p className="break-words">Conversation: {review?.draft.sessionId}</p>
+          <p className="break-words">
+            Conversation:{" "}
+            {sessions.data?.items.find((item) => item.sessionId === review?.draft.sessionId)?.title ||
+              "Untitled conversation"}
+          </p>
           <p className="whitespace-pre-wrap break-words">
             {review?.action === "ingest"
               ? `Source (${review.draft.sourceType}): ${review.draft.source}`

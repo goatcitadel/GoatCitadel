@@ -1,6 +1,7 @@
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { presentDelegationRunStatus } from "./chat-vocabulary";
 import { StatusBadge } from "../../ui/StatusBadge";
 
 export function ChatRunCard({
@@ -33,19 +34,7 @@ export function ChatRunCard({
           <h3 className="truncate font-display font-semibold text-fg">{run?.label ?? "Run evidence"}</h3>
         </div>
         {run ? (
-          <StatusBadge
-            status={{
-              label: run.status === "partial" ? "Partially complete" : humanizeToken(run.status),
-              tone:
-                run.status === "running"
-                  ? "running"
-                  : run.status === "completed"
-                    ? "done"
-                    : run.status === "failed"
-                      ? "failed"
-                      : "waiting",
-            }}
-          />
+          <StatusBadge status={presentDelegationRunStatus(run.status)} />
         ) : (
           <span className="text-xs text-fg-muted">Recorded for this response</span>
         )}

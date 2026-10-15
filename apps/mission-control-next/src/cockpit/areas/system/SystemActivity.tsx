@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { SystemOwnerLink } from "./SystemOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { fetchRealtimeEvents } from "@goatcitadel/mission-control-shared/api/system";
@@ -39,13 +41,6 @@ function writeShowBackground(value: boolean): void {
   }
 }
 
-function formattedTime(iso: string): string {
-  const at = Date.parse(iso);
-  return Number.isFinite(at)
-    ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(at)
-    : "Time unavailable";
-}
-
 function ActivityItem({ row }: { row: ActivityRow }) {
   const { event } = row;
   const source = activityOwnerPath(event);
@@ -57,23 +52,9 @@ function ActivityItem({ row }: { row: ActivityRow }) {
           {row.sentence}
           {run ? <span className="ml-2 text-xs font-normal text-fg-muted">{run}</span> : null}
         </p>
-        <time dateTime={event.timestamp} className="text-xs text-fg-muted">
-          {formattedTime(event.timestamp)}
-        </time>
+        <TimeText value={event.timestamp} className="text-xs text-fg-muted" />
       </div>
       <p className="mt-1 text-xs text-fg-muted">{presentEventClass(event.eventClass)}</p>
-      <dl className="mt-2 grid gap-1 text-xs text-fg-secondary sm:grid-cols-2">
-        {activityMetadata(event).map(([label, value]) => (
-          <div key={label} className="min-w-0">
-            <dt className="font-medium text-fg">{label}</dt>
-            <dd className="break-all">{value}</dd>
-          </div>
-        ))}
-      </dl>
-      <p className="mt-2 text-xs text-fg-muted">
-        Retained Gateway signal; reported host/device metadata does not establish current target health.{" "}
-        {event.eventAuthority ? "Authority is inspectable in technical details." : "Authority was not reported."}
-      </p>
       {source ? (
         <SystemOwnerLink scope={[event.links?.workspaceId, event.eventId]} href={source}>
           Open source
@@ -82,7 +63,15 @@ function ActivityItem({ row }: { row: ActivityRow }) {
         <p className="mt-2 text-xs text-fg-muted">No source record link was supplied by the Gateway.</p>
       )}
       <TechnicalDetails label="Event identifiers and raw payload">
-        <dl>
+        <dl className="grid gap-1 text-xs sm:grid-cols-2">
+          {activityMetadata(event).map(([label, value]) => (
+            <div key={label} className="min-w-0">
+              <dt className="font-medium text-fg">{label}</dt>
+              <dd className="break-all">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        <dl className="mt-2">
           <dt>Event type</dt>
           <dd>{event.eventType}</dd>
           <dt>Event ID</dt>
@@ -120,11 +109,12 @@ export function SystemActivity() {
           <h1 className="font-display text-xl font-semibold text-fg">Activity log</h1>
           <p className="text-sm text-fg-secondary">Recent Gateway signals across this installation.</p>
           <p className="mt-1 text-xs text-fg-muted">
-            This list keeps recent signals only, not the full history. Open the source record for full details.
+            This list keeps recent signals only, not the full history. Open the source record for full details. Signals
+            are retained Gateway records: a reported host or device does not establish its current health.
           </p>
           {events.dataUpdatedAt ? (
             <p className="mt-1 text-xs text-fg-muted">
-              Last owner read {new Date(events.dataUpdatedAt).toLocaleString()}
+              <TimeText value={events.dataUpdatedAt} prefix="Last owner read" />
               {events.isError ? "; retained observations are stale" : ""}. Quiet live events do not prove current
               health.
             </p>
@@ -161,9 +151,9 @@ export function SystemActivity() {
         rows.length ? (
           <>
             <p className="text-xs text-fg-muted">
-              Showing {items.length} recent {items.length === 1 ? "signal" : "signals"}
+              Showing {plural(shown.length, "recent signal")}
               {events.data.nextCursor ? "; older signals are not shown" : ""}.
-              {hidden ? ` ${hidden} background ${hidden === 1 ? "signal is" : "signals are"} hidden.` : ""}
+              {hidden ? ` ${plural(hidden, "background signal")} ${hidden === 1 ? "is" : "are"} hidden.` : ""}
             </p>
             <ol className="grid gap-2">
               {rows.map((row) => (

@@ -4,10 +4,12 @@ import {
   subscribeGatewayAccessChange,
 } from "@goatcitadel/mission-control-shared/api/client-core";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { formatBytes, plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { Callout } from "../../ui/Callout";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
 import { SystemOwnerLink } from "./SystemOwnerLink";
 import { BACKUP_INSPECT_PATH } from "./health-overview";
 import {
@@ -110,18 +112,20 @@ export function HealthBackupAction({
       {receipt ? (
         <section aria-label="Backup creation receipt" className="grid gap-2 text-sm text-fg-secondary">
           <p>
-            Backup ID: <span className="break-all text-fg">{receipt.backupId}</span>
+            <TimeText value={receipt.manifest.createdAt} prefix="Backup created" /> · {formatBytes(receipt.bytes)} ·{" "}
+            {plural(receipt.manifest.files.length, "file")}
           </p>
-          <p>
-            Created {new Date(receipt.manifest.createdAt).toLocaleString()} ·{" "}
-            {new Intl.NumberFormat().format(receipt.bytes)} bytes · {receipt.manifest.files.length} files
-          </p>
-          <p className="break-all">Gateway destination: {receipt.outputPath}</p>
           <p>
             Creation does not prove offline restore or installed-host readiness. Hashes in the manifest are recorded
             values; verification is a separate Gateway operation.
           </p>
           <TechnicalDetails label="Backup manifest and recorded hashes">
+            <dl className="mb-2 grid gap-1 text-xs">
+              <dt>Backup ID</dt>
+              <dd className="break-all font-mono">{receipt.backupId}</dd>
+              <dt>Gateway destination</dt>
+              <dd className="break-all font-mono">{receipt.outputPath}</dd>
+            </dl>
             <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">
               {JSON.stringify(receipt.manifest, null, 2)}
             </pre>

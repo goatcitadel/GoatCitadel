@@ -1,3 +1,4 @@
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Turn, ChatTranscriptEmpty, ChatTranscriptFooter, type TranscriptFooterContext } from "./ChatTranscriptContent";
 import {
   hasUnsettledChatContextMutation,
@@ -246,7 +247,7 @@ export function ChatTranscript({
           onClick={jumpToLatest}
           className="absolute bottom-3 right-3 z-10 rounded-md border border-accent bg-overlay px-3 py-2 text-sm text-accent shadow-overlay"
         >
-          Jump to latest{unread ? ` · ${unread} new message${unread === 1 ? "" : "s"}` : ""}
+          Jump to latest{unread ? ` · ${plural(unread, "new message")}` : ""}
           {props.pendingApproval || props.pendingUserInput ? " · Decision waiting" : ""}
         </button>
       ) : null}

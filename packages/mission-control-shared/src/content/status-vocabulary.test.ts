@@ -28,10 +28,10 @@ describe("status vocabulary", () => {
     expect(presentChangePlanStatus("rollback_failed")).toEqual({ label: "Rollback failed", tone: "failed" });
     expect(presentApprovalStatus("edited")).toEqual({ label: "Approved with edits", tone: "done" });
     expect(presentApprovalOutcome("policy_blocked")).toEqual({ label: "Blocked by policy", tone: "failed" });
-    expect(presentRiskLevel("safe")).toEqual({ label: "Low", tone: "neutral" });
-    expect(presentRiskLevel("caution")).toEqual({ label: "Medium", tone: "waiting" });
-    expect(presentRiskLevel("danger")).toEqual({ label: "High", tone: "failed" });
-    expect(presentRiskLevel("nuclear")).toEqual({ label: "Critical", tone: "failed" });
+    expect(presentRiskLevel("safe")).toEqual({ label: "Safe", tone: "neutral" });
+    expect(presentRiskLevel("caution")).toEqual({ label: "Caution", tone: "waiting" });
+    expect(presentRiskLevel("danger")).toEqual({ label: "Danger", tone: "failed" });
+    expect(presentRiskLevel("nuclear")).toEqual({ label: "Nuclear", tone: "failed" });
     // A level a newer Gateway sends must still render instead of crashing the badge.
     expect(presentRiskLevel("critical_infra" as never)).toEqual({ label: "Critical infra", tone: "failed" });
   });
@@ -42,5 +42,15 @@ describe("status vocabulary", () => {
     expect(presentEventType("change_plan.awaiting_approval")).toBe("Change plan awaiting approval");
     expect(humanizeToken("remote_worker.assignment-changed")).toBe("Remote worker assignment changed");
     expect(presentToolEffectOutcome("uncertain")).toBe("Outcome uncertain. Check before retrying.");
+  });
+});
+
+describe("presentTaskStatus", () => {
+  it("labels every task status and keeps unknown values readable", async () => {
+    const { presentTaskStatus } = await import("./status-vocabulary");
+    expect(presentTaskStatus("in_progress")).toEqual({ label: "In progress", tone: "running" });
+    expect(presentTaskStatus("blocked")).toEqual({ label: "Blocked", tone: "failed" });
+    expect(presentTaskStatus("inbox")).toEqual({ label: "Not started", tone: "neutral" });
+    expect(presentTaskStatus("archived_soon")).toEqual({ label: "Archived soon", tone: "neutral" });
   });
 });

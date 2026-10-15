@@ -3,7 +3,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { humanizeToken, presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { presentRunStatus, presentTaskStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { WindowedRecordList } from "../../ui/WindowedRecordList";
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -15,8 +15,8 @@ import { projectWorkTasks } from "./work-tasks";
 import { WorkTaskCreate } from "./WorkTaskCreate";
 import { useWorkspaceDurableRuns } from "./useWorkspaceDurableRuns";
 import { workspaceTasksOptions } from "./work-queries";
-import { formattedWorkTime } from "./work-format";
 import { Field } from "../../ui/Field";
+import { TimeText } from "../../ui/TimeText";
 import { WorkWaitingDecisions } from "./WorkWaitingDecisions";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { recordView } from "../../data/record-view";
@@ -63,7 +63,9 @@ export function WorkBoard() {
   const runView = recordView(runs);
   const query = search.trim().toLowerCase();
   const taskMatches = (task: (typeof loadedTasks)[number]) =>
-    `${task.title} ${task.status} ${task.description ?? ""}`.toLowerCase().includes(query);
+    `${task.title} ${task.status} ${presentTaskStatus(task.status).label} ${task.description ?? ""}`
+      .toLowerCase()
+      .includes(query);
   // A bulk action applies only to the selected tasks the operator can see; the filter never hides a target.
   const visibleTaskIds = new Set(
     kind === "run"
@@ -258,7 +260,7 @@ export function WorkBoard() {
                             item.kind === recordKind &&
                             (item.kind === "task"
                               ? taskMatches(item.task)
-                              : `${workRunTitle(item.run)} ${item.run.status} ${item.run.lastError ?? ""}`
+                              : `${workRunTitle(item.run)} ${item.run.status} ${presentRunStatus(item.run.status).label} ${item.run.lastError ?? ""}`
                                   .toLowerCase()
                                   .includes(query)),
                         )
@@ -282,8 +284,8 @@ export function WorkBoard() {
                                   onChange={() => toggle(task.taskId)}
                                 />
                                 <span className="min-w-0">
-                                  <span className="text-xs font-semibold text-accent">
-                                    Operator task · {humanizeToken(task.status)}
+                                  <span className="flex flex-wrap items-center gap-2 text-xs font-semibold text-accent">
+                                    Operator task <StatusBadge status={presentTaskStatus(task.status)} />
                                   </span>
                                   <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">
                                     {task.title}
@@ -293,13 +295,15 @@ export function WorkBoard() {
                             );
                           return (
                             <a key={`task:${task.taskId}`} href={path} onClick={open(path)} className={CARD}>
-                              <span className="text-xs font-semibold text-accent">
-                                Operator task · {humanizeToken(task.status)}
+                              <span className="flex flex-wrap items-center gap-2 text-xs font-semibold text-accent">
+                                Operator task <StatusBadge status={presentTaskStatus(task.status)} />
                               </span>
                               <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">{task.title}</span>
-                              <span className="mt-2 block text-xs text-fg-muted">
-                                Updated {formattedWorkTime(task.updatedAt)}
-                              </span>
+                              <TimeText
+                                value={task.updatedAt}
+                                prefix="Updated"
+                                className="mt-2 block text-xs text-fg-muted"
+                              />
                             </a>
                           );
                         }
@@ -311,7 +315,7 @@ export function WorkBoard() {
                             <span className="line-clamp-3 text-sm font-medium text-fg">{workRunTitle(run)}</span>
                             <span className="mt-2 flex flex-wrap items-center justify-between gap-2">
                               <StatusBadge status={presentRunStatus(run.status)} />
-                              <span className="text-xs text-fg-muted">{formattedWorkTime(run.updatedAt)}</span>
+                              <TimeText value={run.updatedAt} className="text-xs text-fg-muted" />
                             </span>
                             {run.lastError || run.recoverySummary ? (
                               <span className="mt-2 block text-xs text-status-failed">

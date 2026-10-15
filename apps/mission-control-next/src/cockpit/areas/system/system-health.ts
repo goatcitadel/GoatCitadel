@@ -1,8 +1,18 @@
 import type { DesktopUpdateStatus } from "@goatcitadel/contracts";
+import { formatAbsoluteTime, plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { BackupTrustState } from "./backup-trust";
 import type { HealthCheck } from "./health-overview";
 import { backupHealthCheck, BACKUP_INSPECT_PATH, RUNTIME_INSPECT_PATH, deriveHealthChecks } from "./health-overview";
 import { retainedHealthObservations, staleHealthSources, type SystemHealthSources } from "./system-health-sources";
+
+export const HEALTH_SOURCE_LABELS: Readonly<Record<keyof SystemHealthSources, string>> = {
+  summary: "Health summary",
+  llama: "Local models",
+  npu: "NPU sidecar",
+  connections: "Connections",
+  channels: "Channels",
+  workers: "Worker registry",
+};
 
 function unknown(id: HealthCheck["id"], title: string, detail: string, inspectPath: string): HealthCheck {
   return { id, title, detail, inspectPath, status: { label: "Unknown", tone: "neutral" } };
@@ -41,7 +51,8 @@ export function deriveSystemHealthChecks(
     if (!missing.length || (check.id === "backups" && backupTrust && backupTrust !== "unknown")) return check;
     const observed = missing
       .map(
-        ({ name, observedAt }) => `${name}: ${observedAt ? new Date(observedAt).toLocaleString() : "time unavailable"}`,
+        ({ name, observedAt }) =>
+          `${HEALTH_SOURCE_LABELS[name]}: ${observedAt ? formatAbsoluteTime(observedAt) : "time unavailable"}`,
       )
       .join("; ");
     // Current actionable evidence remains authoritative even if another contributing source is stale.
@@ -173,13 +184,13 @@ function deriveCurrentSystemHealthChecks(
         id: "integrations",
         title: "Integrations",
         inspectPath: "/settings/integrations",
-        detail: `${errors} connection errors and ${disconnected} disconnected connections were recorded.`,
+        detail: `${plural(errors, "connection error")} and ${plural(disconnected, "disconnected connection")} recorded.`,
         status: { label: "Needs review", tone: errors ? "failed" : "waiting" },
       } satisfies HealthCheck;
     return unknown(
       "integrations",
       "Integrations",
-      `${enabled.length} enabled connection records have no error status. Live diagnostics were not run.`,
+      `${plural(enabled.length, "enabled connection record")} ${enabled.length === 1 ? "has" : "have"} no error status. Live diagnostics were not run.`,
       "/settings/integrations",
     );
   })();
@@ -213,7 +224,7 @@ function deriveCurrentSystemHealthChecks(
     return unknown(
       "remote_workers",
       "Remote workers",
-      `${registry.items.length}${registry.nextCursor ? "+" : ""} worker records are visible. Connection health is not supplied by this registry.`,
+      `${registry.nextCursor ? "At least " : ""}${plural(registry.items.length, "worker record")} ${registry.items.length === 1 && !registry.nextCursor ? "is" : "are"} visible. Connection health is not supplied by this registry.`,
       RUNTIME_INSPECT_PATH,
     );
   })();

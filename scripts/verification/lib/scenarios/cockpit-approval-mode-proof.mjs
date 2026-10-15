@@ -42,11 +42,14 @@ export function assertApprovedDecisionReceipt({ approvalId, decision, rendered, 
     "The settlement link must identify exactly one canonical approval.",
   );
 }
-export function assertApprovalModeBypassReview(rendered, revision) {
+export function assertApprovalModeBypassReview(rendered) {
+  assert.ok(
+    !/settings revision/i.test(rendered),
+    "The settings revision belongs in technical details, not the review copy.",
+  );
   for (const consequence of [
-    `settings revision ${revision}`,
     "Allowed tools may run without normal prompts.",
-    "Deny rules, Critical risk and risky-shell approvals, read boundaries, and tool grants remain in force.",
+    "Deny rules, Nuclear risk and risky-shell approvals, read boundaries, and tool grants remain in force.",
   ])
     assert.ok(rendered.includes(consequence), `Missing reviewed consequence: ${consequence}`);
 }
@@ -56,10 +59,7 @@ export function assertApprovalModeInspection({ before, after, rendered, mutation
     Number.isSafeInteger(before.revision) && before.revision > 0,
     "The owner settings revision is unavailable.",
   );
-  assert.equal(
-    rendered.current,
-    `Current: ${RULE_LABELS[before.toolApprovalMode]} · settings revision ${before.revision}`,
-  );
+  assert.equal(rendered.current, `Current: ${RULE_LABELS[before.toolApprovalMode]}`);
   assert.equal(rendered.selection, before.toolApprovalMode, "The editor did not return to the saved owner rule.");
   assert.equal(after?.toolApprovalMode, before.toolApprovalMode, "Inspection changed the global approval rule.");
   assert.equal(after?.deploymentProfile, before.deploymentProfile, "Inspection changed the deployment profile.");
@@ -183,7 +183,7 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
           const panel = page.getByRole("region", { name: "Tool approval rule", exact: true });
           const select = panel.getByRole("combobox", { name: /^Approval rule(?:\s|$)/ });
           await select.waitFor();
-          const ownerText = `Current: ${RULE_LABELS[before.body.toolApprovalMode]} · settings revision ${before.body.revision}`;
+          const ownerText = `Current: ${RULE_LABELS[before.body.toolApprovalMode]}`;
           await panel.getByText(ownerText, { exact: true }).waitFor();
           assert.equal(await select.inputValue(), before.body.toolApprovalMode);
           const screenshotDir = path.join(context.artifactRoot, "screenshots");
@@ -230,7 +230,7 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
           await reviewSkipping.click();
           const dialog = page.getByRole("dialog", { name: "Skip normal tool prompts?", exact: true });
           await dialog.waitFor();
-          assertApprovalModeBypassReview(await dialog.innerText(), before.body.revision);
+          assertApprovalModeBypassReview(await dialog.innerText());
           assert.deepEqual(mutations, [], "Opening dangerous review mutated the owner.");
           await audit("bypass-review");
           await dialog.getByRole("button", { name: "Keep current rule", exact: true }).click();
@@ -603,9 +603,7 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
           assert.ok(saved.body.revision > after.body.revision);
           await panel.getByRole("button", { name: "Refresh approval change", exact: true }).click();
           await panel.getByText("Change saved and confirmed.", { exact: false }).waitFor();
-          await panel
-            .getByText(`Current: ${RULE_LABELS[draftMode]} · settings revision ${saved.body.revision}`, { exact: true })
-            .waitFor();
+          await panel.getByText(`Current: ${RULE_LABELS[draftMode]}`, { exact: true }).waitFor();
           assert.equal(await select.inputValue(), draftMode);
           assert.equal(await panel.getByRole("button", { name: "Save approval rule", exact: true }).isDisabled(), true);
           assert.deepEqual(mutations, [

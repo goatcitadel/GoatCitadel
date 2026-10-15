@@ -6,7 +6,7 @@ import { fetchChatGeneratedArtifact } from "@goatcitadel/mission-control-shared/
 import type { ObserveRunTraceArtifact, ObserveRunTraceResponse } from "@goatcitadel/mission-control-shared/api/durable";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { EVIDENCE_STATE_WORDS, presentArtifactKind } from "./work-vocabulary";
 import { durableRunWorkspaceId } from "../../data/durable-run-scope";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
@@ -110,7 +110,7 @@ export function RunArtifacts({ trace, workspaceId }: { trace: ObserveRunTraceRes
         <p className="mt-2 text-sm text-fg-muted">Artifact evidence has no matching run workspace.</p>
       ) : trace.artifacts.state !== "available" ? (
         <p className="mt-2 text-sm text-fg-muted">
-          Artifact evidence is {humanizeToken(trace.artifacts.state).toLowerCase()}.
+          Artifact evidence is {EVIDENCE_STATE_WORDS[trace.artifacts.state] ?? "unknown"}.
         </p>
       ) : artifacts.length ? (
         <ul className="mt-3 grid gap-2">
@@ -120,7 +120,7 @@ export function RunArtifacts({ trace, workspaceId }: { trace: ObserveRunTraceRes
                 <div>
                   <p className="text-sm font-medium text-fg">{artifact.title}</p>
                   <p className="text-xs text-fg-muted">
-                    {humanizeToken(artifact.kind)} · Version {artifact.version}
+                    {presentArtifactKind(artifact.kind)} · Version {artifact.version}
                   </p>
                 </div>
                 <Button size="sm" disabled={!canPreview(artifact)} onClick={() => void inspect(artifact)}>

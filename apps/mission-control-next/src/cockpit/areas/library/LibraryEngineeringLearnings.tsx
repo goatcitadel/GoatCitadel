@@ -22,6 +22,9 @@ import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { StatusBadge } from "../../ui/StatusBadge";
+import { TimeText } from "../../ui/TimeText";
+import { LEARNING_ACTION, presentLearningStatus } from "./library-vocabulary";
 
 import { useLibraryOperation } from "./use-library-operation";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
@@ -181,7 +184,7 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
             <option value="all">All statuses</option>
             {STATUSES.map((value) => (
               <option key={value} value={value}>
-                {value}
+                {presentLearningStatus(value).label}
               </option>
             ))}
           </select>
@@ -196,7 +199,9 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
           .map((record) => (
             <li key={record.learningId} className="rounded-md border border-line p-3">
               <h3>{record.title}</h3>
-              <p>{record.status}</p>
+              <p>
+                <StatusBadge status={presentLearningStatus(record.status)} />
+              </p>
               <Button
                 onClick={() =>
                   route.navigate(`/library/knowledge?learningId=${encodeURIComponent(record.learningId)}&shell=cockpit`)
@@ -215,9 +220,12 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
       {item ? (
         <article className="grid gap-2">
           <h3 className="font-semibold">{item.title}</h3>
-          <p>
-            {item.status} · Workspace {workspaceId} · Updated {new Date(item.updatedAt).toLocaleString()}
-          </p>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-fg-secondary">
+            <StatusBadge status={presentLearningStatus(item.status)} />
+            <span>
+              This workspace · <TimeText prefix="Updated" value={item.updatedAt} />
+            </span>
+          </div>
           {(["problem", "rootCause", "resolution", "prevention"] as const).map((key) => (
             <div key={key}>
               <h4 className="font-medium">
@@ -298,7 +306,7 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
       >
         <div className="grid gap-3">
           <p>
-            {review?.action}: {review?.item.title} · Workspace {workspaceId}
+            {review ? LEARNING_ACTION[review.action] : ""}: {review?.item.title} · This workspace
           </p>
           {review?.updates ? (
             <dl>
@@ -313,7 +321,9 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
           {review?.targets?.length ? (
             <p>
               Targets to supersede:{" "}
-              {review.targets.map((target) => target.title + " (" + target.status + ")").join(", ")}
+              {review.targets
+                .map((target) => target.title + " (" + presentLearningStatus(target.status).label + ")")
+                .join(", ")}
             </p>
           ) : null}
           <Callout tone="warning">

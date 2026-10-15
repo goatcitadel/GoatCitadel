@@ -18,6 +18,8 @@ import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Field } from "../../ui/Field";
+import { TimeText } from "../../ui/TimeText";
+import { NOTE_REVISION_SOURCE, noteLifecycleLabel } from "./library-vocabulary";
 
 const INPUT = "w-full rounded-md border border-line bg-raised p-2 text-fg";
 type Review = { action: "save" | "archive"; note?: NoteRecord; title: string; body: string; revision?: number };
@@ -136,8 +138,7 @@ function LibraryNoteEditorContent({
     <section className="grid gap-3 rounded-lg border border-line p-3" aria-label="Note editor">
       <h2 className="font-display text-lg text-fg">{note?.title ?? "New note"}</h2>
       <p className="text-sm text-fg-secondary">
-        Workspace {workspaceId}
-        {note ? ` · ${note.lifecycleStatus} · Version ${note.revision}` : ""}
+        This workspace{note ? ` · ${noteLifecycleLabel(note.lifecycleStatus)} · Version ${note.revision}` : ""}
       </p>
       {stale ? (
         <Callout tone="warning">
@@ -203,7 +204,7 @@ function LibraryNoteEditorContent({
         <details className="break-words text-sm text-fg-secondary">
           <summary>Note provenance</summary>
           <p>
-            Created {new Date(note.createdAt).toLocaleString()} · Updated {new Date(note.updatedAt).toLocaleString()}
+            <TimeText prefix="Created" value={note.createdAt} /> · <TimeText prefix="Updated" value={note.updatedAt} />
           </p>
           <TechnicalDetails label="Note timestamps">
             <p>
@@ -227,13 +228,15 @@ function LibraryNoteEditorContent({
                     Version {item.revision}: {item.title}
                   </h3>
                   <p className="text-sm text-fg-secondary">
-                    {item.source} · {item.actorId} · {new Date(item.createdAt).toLocaleString()}
+                    {NOTE_REVISION_SOURCE[item.source]} · <TimeText value={item.createdAt} />
                   </p>
                   <details className="text-sm">
                     <summary>Version content and provenance</summary>
                     <p className="whitespace-pre-wrap break-words">{item.body}</p>
                     <TechnicalDetails label="Version technical provenance">
-                      <p>{item.createdAt}</p>
+                      <p>
+                        {item.createdAt} · Actor: {String(item.actorId)}
+                      </p>
                       <p className="break-all">SHA-256: {item.contentHash}</p>
                       <p>Sources: {item.sourceRefs.join(", ") || "None"}</p>
                     </TechnicalDetails>
@@ -252,9 +255,7 @@ function LibraryNoteEditorContent({
         description="Review the exact note and workspace before confirming."
       >
         <div className="grid gap-3">
-          <p className="break-words">
-            {review?.title} · Workspace {workspaceId}
-          </p>
+          <p className="break-words">{review?.title} · This workspace</p>
           <p>
             {review?.action === "archive"
               ? "Archive removes this note from active lists and retains its history."

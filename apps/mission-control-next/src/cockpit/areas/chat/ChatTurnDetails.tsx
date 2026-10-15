@@ -8,6 +8,8 @@ const ChatOpenCodeEvidence = lazy(async () => ({
   default: (await import("./ChatOpenCodeEvidence")).ChatOpenCodeEvidence,
 }));
 import { ChatTurnActions } from "./ChatTurnActions";
+import { presentToolRunStatus } from "./chat-vocabulary";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 
 type TurnActions = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -21,20 +23,7 @@ type TurnActions = Pick<
 >;
 
 function activityLabel(tool: ChatToolRunRecord): string {
-  switch (tool.status) {
-    case "started":
-      return "Running";
-    case "executed":
-      return getChatToolRunDiagnostics(tool).hasFailureSignal ? "Needs review" : "Done";
-    case "failed":
-      return "Failed";
-    case "blocked":
-      return "Blocked";
-    case "approval_required":
-      return "Approval needed";
-    default:
-      return "Unknown";
-  }
+  return presentToolRunStatus(tool).label;
 }
 
 /** Informational design advisories the gateway attached to a governed UI file write; shape-checked, never trusted blindly. */
@@ -95,9 +84,7 @@ export function ChatTurnDetails({
     <div className="mt-3 space-y-2 text-xs text-fg-muted">
       {turn.citations.length ? (
         <details>
-          <summary className="cursor-pointer text-accent">
-            {turn.citations.length} {turn.citations.length === 1 ? "source" : "sources"}
-          </summary>
+          <summary className="cursor-pointer text-accent">{plural(turn.citations.length, "source")}</summary>
           <ul className="mt-1 grid gap-1">
             {turn.citations.map((source) => {
               const href = safeSourceHref(source.url);
@@ -131,7 +118,7 @@ export function ChatTurnDetails({
           aria-label="Tool activity for this turn"
         >
           <summary className="cursor-pointer text-accent">
-            {turn.toolRuns.length} tool {turn.toolRuns.length === 1 ? "call" : "calls"} · {activitySummary}
+            {plural(turn.toolRuns.length, "tool call")} · {activitySummary}
           </summary>
           <ul className="mt-1 grid gap-1">
             {turn.toolRuns.map((tool) => {

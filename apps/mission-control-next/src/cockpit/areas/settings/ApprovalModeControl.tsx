@@ -1,5 +1,4 @@
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import {
   describeToolApprovalMode,
   describeToolApprovalModeHelp,
@@ -15,6 +14,8 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { presentChangeStatusLabel, presentDeploymentProfile } from "./settings-vocabulary";
 
 export function ApprovalModeControl() {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
@@ -81,12 +82,15 @@ export function ApprovalModeEditor({
       ) : null}
       {ready ? (
         <>
-          <p className="mt-3 text-sm text-fg-secondary">
-            Current: {describeToolApprovalMode(current)} · settings revision {settings.data?.revision}
-          </p>
+          <p className="mt-3 text-sm text-fg-secondary">Current: {describeToolApprovalMode(current)}</p>
           <p className="mt-1 text-xs text-fg-muted">
-            Deployment: {humanizeToken(settings.data?.deploymentProfile ?? "unknown")}
+            Deployment: {presentDeploymentProfile(settings.data?.deploymentProfile)}
           </p>
+          <TechnicalDetails>
+            <p className="break-all font-mono text-xs">
+              Settings revision {settings.data?.revision} · {settings.data?.deploymentProfile ?? "unknown"}
+            </p>
+          </TechnicalDetails>
           <label className="mt-3 block max-w-sm text-sm font-medium text-fg">
             Approval rule
             <select
@@ -138,7 +142,8 @@ export function ApprovalModeEditor({
       {change.change ? (
         <div className="mt-3 space-y-2 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
           <p role="status">
-            <strong className="text-fg">{humanizeToken(change.change.receipt.status)}</strong> · {change.change.message}
+            <strong className="text-fg">{presentChangeStatusLabel(change.change.receipt.status)}</strong> ·{" "}
+            {change.change.message}
           </p>
           {change.change.error ? (
             <p role="alert" className="text-status-failed">
@@ -161,12 +166,11 @@ export function ApprovalModeEditor({
             ) : null}
           </div>
           {!confirmed ? <ApprovedSettingsContinuation plan={change.change.plan} onSettled={change.refresh} /> : null}
-          <details>
-            <summary className="cursor-pointer text-fg-muted">Change evidence</summary>
-            <p className="mt-2 break-all">
+          <TechnicalDetails label="Change evidence">
+            <p className="break-all font-mono text-xs">
               Plan {change.change.receipt.planId} · revision {change.change.receipt.revision}
             </p>
-          </details>
+          </TechnicalDetails>
         </div>
       ) : null}
       {notice && !(confirmed && notice.startsWith("Change submitted.")) ? (
@@ -190,11 +194,16 @@ export function ApprovalModeEditor({
       <Dialog
         open={Boolean(review)}
         title="Skip normal tool prompts?"
-        description={`Change the installation default from ${describeToolApprovalMode(review?.current ?? current)} to Skip normal prompts at settings revision ${review?.revision ?? "unknown"}. Allowed tools may run without normal prompts. Deny rules, Critical risk and risky-shell approvals, read boundaries, and tool grants remain in force.`}
+        description={`Change the installation default from ${describeToolApprovalMode(review?.current ?? current)} to Skip normal prompts. Allowed tools may run without normal prompts. Deny rules, Nuclear risk and risky-shell approvals, read boundaries, and tool grants remain in force.`}
         onOpenChange={(open) => {
           if (!open && !control.busy) control.setReview(null);
         }}
       >
+        <div className="mb-3">
+          <TechnicalDetails>
+            <p className="break-all font-mono text-xs">Reviewed at settings revision {review?.revision ?? "unknown"}</p>
+          </TechnicalDetails>
+        </div>
         <div className="flex flex-wrap gap-2">
           <Button
             variant="danger"

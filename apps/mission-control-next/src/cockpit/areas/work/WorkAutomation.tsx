@@ -26,6 +26,8 @@ import { Field } from "../../ui/Field";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { readCockpitLocation } from "../../app/cockpit-back-guard";
+import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { EXPORT_VALIDATION_LABELS, IMPORT_COMPATIBILITY_LABELS } from "./work-vocabulary";
 
 type ExportPlatform = "Activepieces" | "n8n";
 const EXPORT_PLATFORMS: readonly ExportPlatform[] = ["Activepieces", "n8n"];
@@ -137,9 +139,9 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
     <section className="mx-auto grid max-w-5xl gap-4 p-4 sm:p-6">
       <h1 className="font-display text-xl font-semibold text-fg">Automation Designer</h1>
       <p className="text-sm text-fg-secondary">
-        Draft a reviewable recipe for <span title={workspaceId}>{workspaceName ?? `workspace ${workspaceId}`}</span>.
-        Preview and template export do not create a schedule, activate capabilities, import into an external service, or
-        prove execution. Gateway governance still applies.
+        Draft a reviewable recipe for {workspaceName ?? "this workspace"}. Preview and template export do not create a
+        schedule, activate capabilities, import into an external service, or prove execution. Gateway governance still
+        applies.
       </p>
       {(Object.keys(labels) as (keyof typeof labels)[]).map((key) => (
         <Field key={key} label={labels[key]}>
@@ -209,11 +211,15 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
         exported?.identity === identity ? (
           <section key={exported.platform} className="grid gap-2 rounded-md border border-line p-3">
             <h2 className="font-medium text-fg">
-              {exported.platform} export validation: {exported.value.validation.status}
+              {exported.platform} export validation:{" "}
+              {EXPORT_VALIDATION_LABELS[exported.value.validation.status] ??
+                humanizeToken(exported.value.validation.status)}
             </h2>
             <p>
-              Native import compatibility: {exported.value.validation.nativeImportCompatibility}. Operator import
-              required; no webhook trigger.
+              Native import compatibility:{" "}
+              {IMPORT_COMPATIBILITY_LABELS[exported.value.validation.nativeImportCompatibility] ??
+                humanizeToken(exported.value.validation.nativeImportCompatibility)}
+              . Operator import required; no webhook trigger.
             </p>
             <ul>
               {formatWorkflowTemplateExportProofItems(exported.platform, exported.value).map((item, index) => (

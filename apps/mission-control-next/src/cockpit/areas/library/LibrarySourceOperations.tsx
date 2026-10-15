@@ -19,6 +19,7 @@ import { useLibraryOperation } from "./use-library-operation";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { LibraryImportProvenance } from "./LibraryImportProvenance";
 import type { SourceReview, SourceOperationsProps } from "./LibraryExternalSources";
+import * as words from "./library-vocabulary";
 
 export function SourceOperations({ detail, workspaceId, available }: SourceOperationsProps) {
   const client = useQueryClient();
@@ -171,7 +172,11 @@ export function SourceOperations({ detail, workspaceId, available }: SourceOpera
         setImported(result.value);
         setSelected([]);
         setPlan(undefined);
-        text = `Import ${result.value.applyDisposition}; settlement: ${result.value.settlement?.disposition ?? "not yet recorded"}. ${result.value.items.length} item records returned.`;
+        text = words.importReceiptSummary(
+          result.value.applyDisposition,
+          result.value.settlement?.disposition,
+          result.value.items.length,
+        );
       }
       setOutcome({ error: false, text });
       await client.invalidateQueries({ queryKey: ["library", "external-source"] });
@@ -212,7 +217,7 @@ export function SourceOperations({ detail, workspaceId, available }: SourceOpera
       <h3 className="font-semibold">{source.label}</h3>
       <p className="break-words text-sm">Registered root: {source.canonicalRootPath}</p>
       <p className="text-sm text-fg-secondary">
-        Workspace {workspaceId} · {source.status} · Adapter {source.adapterId}
+        This workspace · {words.sourceStatusLabel(source.status)} · {words.sourceAdapterLabel(source.adapterId)}
       </p>
       <TechnicalDetails label="Source provenance">
         <p>Source: {source.sourceId}</p>
@@ -247,10 +252,8 @@ export function SourceOperations({ detail, workspaceId, available }: SourceOpera
               />{" "}
               <span className="min-w-0 wrap-anywhere">{item.normalizedRelativePath}</span>
             </label>
-            <p className="text-sm text-fg-secondary">
-              {item.disposition} · {item.rawByteCount} bytes · {item.messageCount} messages
-            </p>
-            <p>{item.reasonCodes.join(", ")}</p>
+            <p className="text-sm text-fg-secondary">{words.catalogItemSummary(item)}</p>
+            {item.reasonCodes.length ? <p>{item.reasonCodes.map(words.reasonCodeLabel).join("; ")}</p> : null}
           </li>
         ))}
       </ul>
@@ -341,11 +344,11 @@ export function SourceOperations({ detail, workspaceId, available }: SourceOpera
       >
         <div className="grid min-w-0 grid-cols-1 gap-3 wrap-anywhere">
           <p>
-            {review?.action}: {review?.source.label} · Workspace {workspaceId}
+            {review ? words.SOURCE_ACTION[review.action] : ""}: {review?.source.label} · This workspace
           </p>
           <p className="break-words">Root: {review?.source.canonicalRootPath}</p>
           <p>
-            {review?.selected.length ?? 0} selected items. Planning does not import; applying copies exactly the sealed
+            {review?.selected.length ?? 0} selected. Planning does not import; applying copies exactly the sealed
             selection into immutable imported evidence.
           </p>
           <ul>
@@ -360,16 +363,7 @@ export function SourceOperations({ detail, workspaceId, available }: SourceOpera
           </ul>
           {review?.action === "apply" && review.plan ? (
             <>
-              <p>
-                {review.plan.plan.rawByteCount}
-                {" source bytes · "}
-                {review.plan.plan.normalizedByteCount}
-                {" normalized bytes · "}
-                {review.plan.plan.messageCount}
-                {" messages. Sealed staging expires "}
-                {new Date(review.plan.plan.stagingExpiresAt).toLocaleString()}
-                {"."}
-              </p>
+              <p>{words.importPlanSummary(review.plan.plan)}</p>
               <TechnicalDetails label="Reviewed import plan provenance">
                 <p>
                   {review.plan.plan.planId} · {review.plan.plan.planSha256}

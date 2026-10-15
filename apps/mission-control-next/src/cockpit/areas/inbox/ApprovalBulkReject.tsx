@@ -12,6 +12,7 @@ import { useProjectAccess } from "../../../features/native-routes/projects/use-p
 import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TypedConfirmation, typedConfirmationMatches } from "../../ui/TypedConfirmation";
 import { describeInstallationScope, useInstallationPendingApprovals } from "./installation-pending-approvals";
 
@@ -110,6 +111,11 @@ function BulkReject({ onResolved }: { onResolved: () => void }) {
             <div role="status" className="grid gap-1">
               <p className="font-medium text-fg">{scope.summary}</p>
               {scope.workspaces ? <p className="text-sm text-fg-secondary">{scope.workspaces}</p> : null}
+              {scope.unnamedWorkspaceIds.length ? (
+                <TechnicalDetails label="Unnamed workspace IDs">
+                  <p className="break-all font-mono text-xs">{scope.unnamedWorkspaceIds.join(", ")}</p>
+                </TechnicalDetails>
+              ) : null}
             </div>
           ) : null}
           <p>

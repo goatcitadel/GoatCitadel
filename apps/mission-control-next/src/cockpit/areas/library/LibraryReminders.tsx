@@ -8,6 +8,8 @@ import { useSessionDraft } from "../../../features/native-routes/library/session
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Field } from "../../ui/Field";
+import { TimeText } from "../../ui/TimeText";
+import { presentReminderStatus } from "./library-vocabulary";
 import type { NoteRecord } from "@goatcitadel/contracts";
 
 export function LibraryReminders(props: Parameters<typeof LibraryRemindersContent>[0]) {
@@ -71,7 +73,12 @@ function LibraryRemindersContent({ workspaceId, note }: { workspaceId: string; n
       );
       if (!result) return;
       if (!id) draft.acceptSaved(empty, undefined, submitted);
-      setNotice({ error: false, text: `${result.title}: ${result.status}.` });
+      setNotice({
+        error: false,
+        text: id
+          ? `Reminder completed: ${result.title}.`
+          : `Reminder ${presentReminderStatus(result.status).label.toLowerCase()}: ${result.title}.`,
+      });
       await client.invalidateQueries({ queryKey: ["library", "reminders", workspaceId, operation.identity] });
     } catch (cause) {
       if (operation.current())
@@ -167,9 +174,14 @@ function LibraryRemindersContent({ workspaceId, note }: { workspaceId: string; n
           <li key={item.reminderId} className="rounded-md border border-line p-3">
             <h3>{item.title}</h3>
             <p className="text-sm text-fg-secondary">
-              {item.status} · {new Date(item.dueAt).toLocaleString()} · {item.recurrenceRule ?? "One time"}
+              {presentReminderStatus(item.status).label} · <TimeText prefix="Due" value={item.dueAt} absolute /> ·{" "}
+              {item.recurrenceRule ? `Repeats: ${item.recurrenceRule}` : "One time"}
             </p>
-            {item.sourceRef ? <p className="break-words text-sm">Source: {item.sourceRef}</p> : null}
+            {item.sourceRef ? (
+              <p className="break-words text-sm">
+                {item.sourceRef.startsWith("/library/notes") ? "Linked to a note" : `Source: ${item.sourceRef}`}
+              </p>
+            ) : null}
             {item.status === "scheduled" ? (
               <Button
                 disabled={busy || operation.locked || query.isError || query.isFetching}

@@ -1,5 +1,12 @@
 import type { CapabilityCatalogEntry } from "@goatcitadel/contracts";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import {
+  approvalModeLabel,
+  effectReasonLabel,
+  effectSourceLabel,
+  freeText,
+  skillLifecycleLabel,
+} from "./capability-vocabulary";
+import { meshReason, meshStatus } from "./mesh-capability-labels";
 
 export interface WorkspacePolicyEvidence {
   profileLabel: string;
@@ -43,11 +50,11 @@ export function CapabilityPolicyEvidence({
             : "Visible for inspection. It is not listed as callable."
           : "Callability could not be verified."}
       </p>
-      {item.lifecycleState ? <p>Lifecycle: {humanizeToken(item.lifecycleState)}</p> : null}
+      {item.lifecycleState ? <p>Lifecycle: {skillLifecycleLabel(item.lifecycleState)}</p> : null}
       {item.mesh ? (
         <p>
-          Mesh publication: {humanizeToken(item.mesh.status)}
-          {item.mesh.reasons.length ? ` · ${item.mesh.reasons.map(humanizeToken).join("; ")}` : ""}
+          Mesh publication: {meshStatus(item.mesh.status).label}
+          {item.mesh.reasons.length ? ` · ${item.mesh.reasons.map(meshReason).join(" ")}` : ""}
         </p>
       ) : null}
       {item.declaredTools?.length ? (
@@ -55,7 +62,7 @@ export function CapabilityPolicyEvidence({
           <p className="font-medium text-fg">Declared tools, not grants</p>
           <ul className="list-disc pl-5">
             {item.declaredTools.map((tool) => (
-              <li key={tool}>{humanizeToken(tool)}</li>
+              <li key={tool}>{freeText(tool)}</li>
             ))}
           </ul>
         </div>
@@ -65,7 +72,7 @@ export function CapabilityPolicyEvidence({
           <p className="font-medium text-fg">Declared requirements</p>
           <ul className="list-disc pl-5">
             {item.requires.map((requirement) => (
-              <li key={requirement}>{humanizeToken(requirement)}</li>
+              <li key={requirement}>{freeText(requirement)}</li>
             ))}
           </ul>
         </div>
@@ -82,8 +89,8 @@ export function CapabilityPolicyEvidence({
         <p>
           Planning-time effect classification:{" "}
           {item.effectPotential.potential === "none" ? "no outside effect predicted" : "outside effect unknown"} (
-          {item.effectPotential.sourceKind === "builtin" ? "Built-in" : humanizeToken(item.effectPotential.sourceKind)}{" "}
-          source; {humanizeToken(item.effectPotential.reason)}).
+          {effectSourceLabel(item.effectPotential.sourceKind)} source; {effectReasonLabel(item.effectPotential.reason)}
+          ).
         </p>
       ) : null}
       {workspacePolicyState === "loading" ? <p>Checking this workspace's tools policy…</p> : null}
@@ -92,7 +99,7 @@ export function CapabilityPolicyEvidence({
         <div className="rounded-md border border-line-subtle bg-sunken p-2">
           <p>Current workspace tools profile: {workspacePolicy.profileLabel}</p>
           <p>
-            Approval posture: {humanizeToken(workspacePolicy.approvalMode)}
+            Approval posture: {approvalModeLabel(workspacePolicy.approvalMode)}
             {workspacePolicy.localOverride ? " · Local operator override active" : ""}
           </p>
         </div>
@@ -108,7 +115,7 @@ export function CapabilityPolicyEvidence({
 export function CapabilitySourceEvidence({ item }: { item: CapabilityCatalogEntry }) {
   return (
     <>
-      <p>Provider: {item.sourceProvider ? humanizeToken(item.sourceProvider) : "Not recorded"}</p>
+      <p>Provider: {item.sourceProvider ? freeText(item.sourceProvider) : "Not recorded"}</p>
       <p className="wrap-anywhere">
         Source reference: {item.sourceRef ? <code className="text-xs text-fg">{item.sourceRef}</code> : "Not recorded"}
       </p>

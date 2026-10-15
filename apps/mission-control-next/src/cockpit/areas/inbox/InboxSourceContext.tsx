@@ -4,7 +4,9 @@ import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../data/record-view";
+import { TimeText } from "../../ui/TimeText";
 import { readInboxSourceContext } from "./inbox-source-context";
+import { presentMessageRole } from "./inbox-vocabulary";
 
 export function InboxSourceContext({ item, workspaceId }: { item: OperatorInboxItem; workspaceId: string }) {
   const preferences = useUiPreferences();
@@ -69,7 +71,7 @@ export function InboxSourceContext({ item, workspaceId }: { item: OperatorInboxI
       ) : (
         <>
           <p className="mt-2 text-xs text-fg-muted">
-            {message.role} · <time dateTime={message.timestamp}>{new Date(message.timestamp).toLocaleString()}</time>
+            {presentMessageRole(message.role)} · <TimeText value={message.timestamp} absolute />
           </p>
           <blockquote className="mt-2 whitespace-pre-wrap break-words text-sm text-fg-secondary">
             {message.text || "This message has no text content."}

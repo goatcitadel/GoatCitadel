@@ -18,9 +18,12 @@ import {
   resourceBinding,
   resourceDescription,
   resourceId,
+  resourceTime,
   resourceTitle,
   type ResourceKind,
 } from "./library-resources";
+import { TimeText } from "../../ui/TimeText";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 
 const TITLES = {
   memory: "Memory",
@@ -142,7 +145,14 @@ function LibraryResourceDirectory({
           citadelId={citadelId}
         />
       ) : null}
-      {projectId ? <p className="break-all text-sm">Project artifact scope: {projectId}</p> : null}
+      {projectId ? (
+        <div className="grid gap-1 text-sm">
+          <p>Showing artifacts from one project.</p>
+          <TechnicalDetails label="Project scope">
+            <p className="break-all">Project ID: {projectId}</p>
+          </TechnicalDetails>
+        </div>
+      ) : null}
       {kind === "files" ? (
         <>
           <LibraryFileUpload workspaceId={workspaceId} citadelId={citadelId} />
@@ -263,6 +273,9 @@ function LibraryResourceDirectory({
                     <div className="min-w-0 flex-1">
                       <h2 className="break-words text-sm font-semibold text-fg">{resourceTitle(resource)}</h2>
                       <p className="mt-1 text-xs text-fg-muted">{resourceDescription(resource)}</p>
+                      <p className="text-xs text-fg-muted">
+                        <TimeText prefix={resourceTime(resource).label} value={resourceTime(resource).value} />
+                      </p>
                     </div>
                     <Button
                       size="sm"

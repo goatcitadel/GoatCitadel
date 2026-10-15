@@ -4,6 +4,7 @@ import type { FileResource } from "./library-resources";
 import { readFileDownload, saveLibraryDownload } from "./library-download";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
+import { TimeText } from "../../ui/TimeText";
 
 export function LibraryFileDownload({ file }: { file: FileResource }) {
   const [busy, setBusy] = useState(false);
@@ -38,7 +39,9 @@ export function LibraryFileDownload({ file }: { file: FileResource }) {
   }
   return (
     <div className="grid gap-2">
-      <p className="text-sm text-fg-secondary">Shared installation file · Last modified {file.modifiedAt}</p>
+      <p className="text-sm text-fg-secondary">
+        Shared installation file · <TimeText prefix="Last modified" value={file.modifiedAt} />
+      </p>
       <Button disabled={busy} onClick={() => void download()}>
         {busy ? "Reading download…" : "Download file"}
       </Button>

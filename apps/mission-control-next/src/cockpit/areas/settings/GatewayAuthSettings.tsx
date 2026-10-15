@@ -8,6 +8,8 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { GatewayAuthEditor } from "../../../features/native-routes/settings/GatewayAuthEditor";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import { Button } from "../../ui/Button";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { CALLER_SOURCE_LABELS } from "./settings-vocabulary";
 
 export function GatewayAuthSettings() {
   const caller = useCurrentAccess();
@@ -42,9 +44,16 @@ export function GatewayAuthSettings() {
           : caller.isError
             ? "Current caller permissions unavailable. Configured authentication does not establish your access."
             : caller.data?.actorId
-              ? `Current caller: ${caller.data.actorSource}. ${caller.data.operatorAccess ? "Operator routes permitted; individual policy gates still apply." : "Operator changes are not permitted."}`
+              ? `Current caller: ${CALLER_SOURCE_LABELS[caller.data.actorSource] ?? "An operator"}. ${caller.data.operatorAccess ? "Operator routes permitted; individual policy gates still apply." : "Operator changes are not permitted."}`
               : "No identified operator. This Gateway permits anonymous configuration access."}
       </p>
+      {caller.data?.actorId ? (
+        <TechnicalDetails label="Caller details">
+          <p className="break-all font-mono text-xs">
+            {caller.data.actorSource} · {caller.data.actorId}
+          </p>
+        </TechnicalDetails>
+      ) : null}
       {caller.data?.actorId ? (
         <Button size="sm" onClick={() => setLogoutReview(true)}>
           Sign out of this browser

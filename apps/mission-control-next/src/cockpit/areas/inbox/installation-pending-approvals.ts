@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchApprovals } from "@goatcitadel/mission-control-shared/api/approvals";
 import type { ApprovalsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { getGatewayApiBaseUrl, getGatewayAccessRevision } from "@goatcitadel/mission-control-shared/api/client-core";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 
 /** The most pending requests one scope read returns; a continuation cursor means there are more. */
 export const INSTALLATION_SCOPE_LIMIT = 200;
@@ -17,14 +18,12 @@ export function useInstallationPendingApprovals() {
   });
 }
 
-function plural(count: number, noun: string) {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 export interface InstallationRejectionScope {
   count: number;
   summary: string;
   workspaces: string;
+  /** Workspace IDs with no name here, for technical details only. */
+  unnamedWorkspaceIds: string[];
 }
 
 /** Plain-language scope for an installation-wide rejection: how many requests, across how many workspaces. */
@@ -44,8 +43,13 @@ export function describeInstallationScope(
       ? "There is nothing pending to reject."
       : `Rejects ${atLeast}${plural(count, "pending request")} across ${atLeast}${plural(ids.length, "workspace")}.` +
         (unscoped ? " Some requests have no workspace recorded." : "");
-  // Every affected workspace is listed; one without a name here shows its ID so the scope is never ambiguous.
-  const labels = ids.map((id) => nameOf(id) ?? `workspace ID ${id}`);
+  // Named workspaces are listed; unnamed ones are counted here and identified only in technical details.
+  const named = ids.map((id) => nameOf(id)).filter((name): name is string => Boolean(name));
+  const unnamedWorkspaceIds = ids.filter((id) => !nameOf(id));
+  const unnamed = unnamedWorkspaceIds.length
+    ? plural(unnamedWorkspaceIds.length, named.length ? "other workspace" : "unnamed workspace")
+    : "";
+  const labels = [...named, ...(unnamed ? [unnamed] : [])];
   const workspaces = labels.length ? `Workspaces: ${labels.join(", ")}.` : "";
-  return { count, summary, workspaces };
+  return { count, summary, workspaces, unnamedWorkspaceIds };
 }

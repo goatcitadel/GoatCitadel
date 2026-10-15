@@ -135,7 +135,7 @@ describe("native Citadel Overview", () => {
     expect(text(view!.root)).toContain("Retained");
     expect(text(view!.root)).toContain("Sealed");
     await click("Gatehouse");
-    expect(text(view!.root)).toContain("Approval required");
+    expect(text(view!.root)).toContain("External writesNeeds approval");
     expect(api.upsertCitadelCharter).not.toHaveBeenCalled();
     await click("Charter");
     await click("Edit Charter · Unsaved");

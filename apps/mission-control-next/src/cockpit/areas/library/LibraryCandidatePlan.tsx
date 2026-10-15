@@ -9,6 +9,8 @@ import { LibraryApproval } from "./LibraryApproval";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { StatusBadge } from "../../ui/StatusBadge";
+import { presentChangePlanStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useLibraryOperation } from "./use-library-operation";
 
 /** The returned aggregate remains the authority through review, approval and settlement. */
@@ -118,7 +120,7 @@ function CandidatePlan({
       );
       if (!receipt || !operation.current()) return;
       setMessage(
-        `Change plan action recorded: ${receipt.status.replaceAll("_", " ")}. Inspect the canonical result before relying on callability.`,
+        `Change plan action recorded: ${presentChangePlanStatus(receipt.status).label}. Inspect the canonical result before relying on callability.`,
       );
       setReview(null);
       await refresh();
@@ -132,15 +134,18 @@ function CandidatePlan({
   return (
     <section className="grid gap-3 rounded-md border border-line p-3" aria-label="Candidate change plan">
       <h3 className="font-semibold">{plan?.title ?? seed.title}</h3>
-      <p>Workspace {context.workspaceId}</p>
+      <p>Applies to this workspace.</p>
       {query.isFetching ? <p role="status">Reading canonical change plan…</p> : null}
       {query.error ? <Callout tone="error">{describeApiError(query.error).summary}</Callout> : null}
       {plan ? (
         <>
           <p>{plan.summary}</p>
           <p>Impact: {plan.impact}</p>
-          <p>Status: {plan.status.replaceAll("_", " ")}</p>
-          <p>Required action: {plan.requiredAction?.title ?? "No operator action recorded"}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <span>Status:</span>
+            <StatusBadge status={presentChangePlanStatus(plan.status)} />
+          </div>
+          <p>Required action: {plan.requiredAction?.title ?? "Nothing needed from you"}</p>
           {plan.result ? <Callout>{plan.result.summary}</Callout> : null}
           <TechnicalDetails label="Change plan identity">
             <p>

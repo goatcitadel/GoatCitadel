@@ -766,7 +766,7 @@ describe("ChatTranscript", () => {
         </InspectorProvider>,
       ),
     );
-    expect(container.textContent).toContain("Stopped");
+    expect(container.textContent).toContain("Cancelled");
     const retry = [...container.querySelectorAll("button")].find((button) => button.textContent === "Retry");
     expect(retry).toBeDefined();
     await act(async () => retry?.click());
@@ -790,9 +790,9 @@ describe("ChatTranscript", () => {
       ),
     );
     const notes = [...container.querySelectorAll("p")].filter((node) =>
-      ["Preparing response…", "Stopped"].includes(node.textContent ?? ""),
+      ["Preparing response…", "Cancelled"].includes(node.textContent ?? ""),
     );
-    expect(notes.map((node) => node.textContent)).toEqual(["Stopped", "Preparing response…"]);
+    expect(notes.map((node) => node.textContent)).toEqual(["Cancelled", "Preparing response…"]);
     for (const note of notes) expect(note.hasAttribute("role")).toBe(false);
     expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(1);
   });
@@ -988,7 +988,9 @@ it("keeps unresolved warnings visible while only routine updates fold into histo
       </InspectorProvider>,
     ),
   );
-  expect(container.querySelector('[aria-label="Conversation warning"]')?.textContent).toBe("Action blocked by policy");
+  expect(container.querySelector('[aria-label="Conversation warning"]')?.textContent).toBe(
+    "Warning: Action blocked by policy",
+  );
   expect(container.querySelector('[aria-label="Conversation warning"]')?.closest("details")).toBeNull();
   expect(container.querySelector('[aria-label="Latest conversation update"]')?.textContent).toBe(
     "A different action succeeded",
@@ -1221,4 +1223,35 @@ it("preserves the reader's disclosure, focus and scroll anchor when a short tran
   expect(newDisclosure.open).toBe(true);
   expect(document.activeElement).toBe(newDisclosure.querySelector("summary"));
   expect(container.querySelector<HTMLElement>("[data-transcript-scroller]")!.scrollTop).toBe(123);
+});
+
+it("tells a failure from a warning and a critical notice from a warning without relying on colour", async () => {
+  const failed = turn("failed-plain", true, "failed");
+  failed.trace.failure = { failureClass: "provider_timeout", recommendedAction: "retry" } as never;
+  failed.userMessage.attachments = [
+    { attachmentId: "a1", fileName: "brief.pdf", mimeType: "application/pdf", sizeBytes: 2048 },
+  ] as never;
+  const input = sessionProps([failed]);
+  input.notices = [
+    { id: "warn", tone: "warning", content: "Tool output was trimmed", timestamp: "2026-10-06T00:00:00Z" },
+    { id: "crit", tone: "critical", content: "Policy stopped the run", timestamp: "2026-10-06T00:01:00Z" },
+  ];
+  await act(async () =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={input} />
+      </InspectorProvider>,
+    ),
+  );
+  const recovery = container.querySelector('[aria-label="Response recovery"]')!;
+  expect(recovery.className).toContain("border-status-failed");
+  expect(recovery.textContent).toContain("Cause: the model provider timed out.");
+  expect(recovery.textContent).not.toContain("provider_timeout");
+  expect(container.querySelector('[aria-label="Conversation warning"]')?.textContent).toContain("Warning: ");
+  expect(container.querySelector('[aria-label="Critical conversation notice"]')?.textContent).toContain(
+    "Critical: Policy stopped the run",
+  );
+  const attachments = container.querySelector('[aria-label="Sent attachments"]')!.textContent;
+  expect(attachments).toContain("brief.pdf · PDF");
+  expect(attachments).not.toContain("application/pdf");
 });

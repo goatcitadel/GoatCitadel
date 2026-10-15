@@ -567,7 +567,7 @@ it("preserves sealed selection and replays only the exact idempotent import afte
     expectedPlanSha256: "sealed-hash",
     idempotencyKey: "exact-attempt",
   });
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Import replayed"));
+  await vi.waitFor(() => expect(document.body.textContent).toContain("An existing import was returned"));
 });
 
 const recoveryDetail = {
@@ -726,7 +726,7 @@ it.each([
     expect(dialog.textContent).toContain("C:/original");
     expect(dialog.textContent).toContain("original-session.jsonl");
     expect(dialog.textContent).not.toContain("other-session.jsonl");
-    expect(dialog.textContent).toContain("40 source bytes");
+    expect(dialog.textContent).toContain("40 B from the source");
     expect(namedButton("Confirm source action")?.disabled).toBe(true);
     await click("Confirm source action");
     expect(applyExternalSourceImport).toHaveBeenCalledTimes(1);
@@ -741,7 +741,7 @@ it.each([
       expectedPlanSha256: "sealed-hash",
       idempotencyKey: "exact-attempt",
     });
-    await vi.waitFor(() => expect(document.body.textContent).toContain("Import replayed"));
+    await vi.waitFor(() => expect(document.body.textContent).toContain("An existing import was returned"));
     expect(materializations()).toBe(1);
     expect(namedButton("Replay exact import request")).toBeUndefined();
     await click("Close dialog");

@@ -11,6 +11,8 @@ import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { LibraryMailCompose } from "./LibraryMailCompose";
 import { useLibraryOperation } from "./use-library-operation";
+import { TimeText } from "../../ui/TimeText";
+import { mailProviderLabel, triageLabel } from "./library-vocabulary";
 
 const SYNC_STATUS: Readonly<Record<MailAccountRecord["syncStatus"], StatusPresentation>> = {
   ready: { label: "Ready", tone: "done" },
@@ -22,10 +24,7 @@ const SYNC_STATUS: Readonly<Record<MailAccountRecord["syncStatus"], StatusPresen
 const CARD = "grid min-w-0 grid-cols-1 content-start gap-3 rounded-lg border border-line p-3";
 const ITEM = "min-w-0 rounded-md border border-line p-3 wrap-anywhere";
 
-const formatTime = (iso?: string) => {
-  const date = iso ? new Date(iso) : undefined;
-  return date && Number.isFinite(date.getTime()) ? date.toLocaleString() : undefined;
-};
+const validTime = (iso?: string): iso is string => Boolean(iso && Number.isFinite(Date.parse(iso)));
 
 /** Defense in depth: the Gateway already projects only unbound and same-workspace connections. */
 function scopeDashboard(data: CommunicationsDashboardResponse, workspaceId: string): CommunicationsDashboardResponse {
@@ -85,12 +84,17 @@ export function LibraryCommunications({ workspaceId }: { workspaceId: string }) 
                   <h3 className="font-medium">{message.subject || "Untitled message"}</h3>
                   <p className="text-sm text-fg-secondary">
                     {message.from ?? "Unknown sender"}
-                    {formatTime(message.receivedAt) ? ` · ${formatTime(message.receivedAt)}` : ""}
+                    {validTime(message.receivedAt) ? (
+                      <>
+                        {" · "}
+                        <TimeText value={message.receivedAt} />
+                      </>
+                    ) : null}
                   </p>
                   {message.snippet ? <p className="text-sm">{message.snippet}</p> : null}
                   {message.triage ? (
                     <p className="text-sm text-fg-secondary">
-                      Triage: {message.triage.urgency} urgency · {message.triage.category}
+                      Triage: {triageLabel(message.triage)}
                       {message.triage.summary ? ` · ${message.triage.summary}` : ""}
                     </p>
                   ) : null}
@@ -106,7 +110,7 @@ export function LibraryCommunications({ workspaceId }: { workspaceId: string }) 
                 <li key={event.eventId} className={ITEM}>
                   <h3 className="font-medium">{event.title}</h3>
                   <p className="text-sm text-fg-secondary">
-                    {formatTime(event.startIso) ?? event.startIso} to {formatTime(event.endIso) ?? event.endIso}
+                    <TimeText value={event.startIso} absolute /> to <TimeText value={event.endIso} absolute />
                   </p>
                   {event.location ? <p className="text-sm">{event.location}</p> : null}
                   {event.description ? <p className="text-sm">{event.description}</p> : null}
@@ -180,11 +184,13 @@ function AccountItem({
         <StatusBadge status={SYNC_STATUS[account.syncStatus] ?? { label: account.syncStatus, tone: "neutral" }} />
       </div>
       <p className="text-sm text-fg-secondary">
-        {kind} · {account.provider}
+        {kind} · {mailProviderLabel(account.provider)}
         {"address" in account && account.address ? ` · ${account.address}` : ""}
       </p>
-      {formatTime(account.lastSyncedAt) ? (
-        <p className="text-sm text-fg-secondary">Last synced {formatTime(account.lastSyncedAt)}</p>
+      {validTime(account.lastSyncedAt) ? (
+        <p className="text-sm text-fg-secondary">
+          <TimeText prefix="Last synced" value={account.lastSyncedAt} />
+        </p>
       ) : null}
       <TechnicalDetails label="Account record">
         <p>Account {account.accountId}</p>

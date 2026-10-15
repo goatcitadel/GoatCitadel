@@ -4,6 +4,8 @@ import { Button } from "../../ui/Button";
 import { Sheet } from "../../ui/Sheet";
 import { Dialog } from "../../ui/Dialog";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
 
 const inputClass =
   "mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg";
@@ -26,7 +28,7 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
       <ul className="space-y-1 text-sm text-fg-secondary">
         {vault.snapshot?.items.slice(0, 50).map((item) => (
           <li key={item.secretId} className="break-all">
-            {item.secretName} · Updated {item.updatedAt}
+            {item.secretName} · <TimeText prefix="Updated" value={item.updatedAt} />
           </li>
         ))}
       </ul>
@@ -103,7 +105,9 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
                 <li key={item.secretId} className="flex flex-wrap items-center justify-between gap-2 p-3">
                   <div className="min-w-0">
                     <p className="break-all text-sm font-semibold text-fg">{item.secretName}</p>
-                    <p className="text-xs text-fg-muted">Updated {item.updatedAt}</p>
+                    <p className="text-xs text-fg-muted">
+                      <TimeText prefix="Updated" value={item.updatedAt} />
+                    </p>
                   </div>
                   <Button size="sm" onClick={() => editor.inspect(item.secretId)}>
                     Inspect {item.secretName}
@@ -187,15 +191,20 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
               inspection closes.
             </p>
             <dl className="space-y-1 text-xs text-fg-muted">
-              <dt>Secret ID</dt>
-              <dd>
-                <code className="break-all font-mono">{selectedSecret.secretId}</code>
-              </dd>
               <dt>Created</dt>
-              <dd>{selectedSecret.createdAt}</dd>
+              <dd>
+                <TimeText absolute value={selectedSecret.createdAt} />
+              </dd>
               <dt>Updated</dt>
-              <dd>{selectedSecret.updatedAt}</dd>
+              <dd>
+                <TimeText absolute value={selectedSecret.updatedAt} />
+              </dd>
             </dl>
+            <TechnicalDetails>
+              <p className="text-xs">
+                Secret ID <code className="break-all font-mono">{selectedSecret.secretId}</code>
+              </p>
+            </TechnicalDetails>
             <div className="flex flex-wrap gap-2">
               <Button
                 disabled={vault.loading}

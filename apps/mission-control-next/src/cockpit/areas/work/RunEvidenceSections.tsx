@@ -1,16 +1,19 @@
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import type { ObserveRunTraceResponse } from "@goatcitadel/mission-control-shared/api/durable";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { StatusBadge } from "../../ui/StatusBadge";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { useModelLabel } from "../../data/use-model-label";
 import { recordedCostLabel } from "../chat/recorded-cost";
-
-function tone(status: string): "running" | "waiting" | "done" | "failed" | "neutral" {
-  if (["running", "started", "executing"].includes(status)) return "running";
-  if (["waiting", "blocked", "paused", "approval_required"].includes(status)) return "waiting";
-  if (["completed", "done", "executed"].includes(status)) return "done";
-  if (["failed", "partial", "dead_lettered"].includes(status)) return "failed";
-  return "neutral";
-}
+import {
+  DELEGATION_RUN_STATUSES,
+  DELEGATION_STEP_STATUSES,
+  EVIDENCE_STATE_WORDS,
+  PLAN_STATUSES,
+  PLAN_STEP_STATUSES,
+  TOOL_RUN_STATUSES,
+  presentFrom,
+} from "./work-vocabulary";
 
 function EvidenceSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -18,6 +21,30 @@ function EvidenceSection({ title, children }: { title: string; children: React.R
       <h2 className="font-display text-lg font-semibold text-fg">{title}</h2>
       <div className="mt-3">{children}</div>
     </section>
+  );
+}
+
+type ModelUsageItem = ObserveRunTraceResponse["providerUsage"]["items"][number];
+
+function tokenCount(count: number | undefined, noun: string): string {
+  return typeof count === "number" && Number.isFinite(count) ? plural(count, noun) : `Unknown ${noun}s`;
+}
+
+function ModelUsageRow({ item }: { item: ModelUsageItem }) {
+  const model = useModelLabel(item.providerId, item.model);
+  return (
+    <li className="rounded-md border border-line-subtle p-3 text-sm">
+      <p className="font-medium text-fg">{item.providerId || item.model ? model : "Model not recorded"}</p>
+      <p className="mt-1 text-xs text-fg-muted">
+        {tokenCount(item.usage?.inputTokens, "input token")} · {tokenCount(item.usage?.outputTokens, "output token")} ·
+        Cost {recordedCostLabel(item.costUsd, item.usage?.costSource)}
+      </p>
+      {item.providerId || item.model ? (
+        <TechnicalDetails>
+          <p className="font-mono text-xs">{[item.providerId, item.model].filter(Boolean).join(" · ")}</p>
+        </TechnicalDetails>
+      ) : null}
+    </li>
   );
 }
 
@@ -31,7 +58,7 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
       <EvidenceSection title="Plan and steps">
         {trace.lifecycle.state !== "available" ? (
           <p className="text-sm text-fg-muted">
-            Plan evidence is {humanizeToken(trace.lifecycle.state).toLowerCase()}.
+            Plan evidence is {EVIDENCE_STATE_WORDS[trace.lifecycle.state] ?? "unknown"}.
           </p>
         ) : plans.length ? (
           <ol className="grid gap-3">
@@ -39,7 +66,7 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
               <li key={plan.planId} className="rounded-md border border-line-subtle p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-medium text-fg">{plan.objective}</p>
-                  <StatusBadge status={{ label: humanizeToken(plan.status), tone: tone(plan.status) }} />
+                  <StatusBadge status={presentFrom(PLAN_STATUSES, plan.status)} />
                 </div>
                 {plan.summary ? <p className="mt-1 text-sm text-fg-secondary">{plan.summary}</p> : null}
                 {plan.steps.length ? (
@@ -53,7 +80,7 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
                           {step.index + 1}. {step.objective}
                           {step.delegatedRole ? ` · ${step.delegatedRole}` : ""}
                         </span>
-                        <StatusBadge status={{ label: humanizeToken(step.status), tone: tone(step.status) }} />
+                        <StatusBadge status={presentFrom(PLAN_STEP_STATUSES, step.status)} />
                       </li>
                     ))}
                   </ol>
@@ -70,7 +97,7 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
       <EvidenceSection title="Delegation">
         {trace.lifecycle.state !== "available" ? (
           <p className="text-sm text-fg-muted">
-            Delegation evidence is {humanizeToken(trace.lifecycle.state).toLowerCase()}.
+            Delegation evidence is {EVIDENCE_STATE_WORDS[trace.lifecycle.state] ?? "unknown"}.
           </p>
         ) : delegations.length ? (
           <ol className="grid gap-3">
@@ -78,7 +105,7 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
               <li key={run.runId} className="rounded-md border border-line-subtle p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-medium text-fg">{run.objective}</p>
-                  <StatusBadge status={{ label: humanizeToken(run.status), tone: tone(run.status) }} />
+                  <StatusBadge status={presentFrom(DELEGATION_RUN_STATUSES, run.status)} />
                 </div>
                 <p className="mt-1 text-xs text-fg-muted">{run.roles.join(" → ") || "Roles not recorded"}</p>
                 {steps.filter((step) => step.runId === run.runId).length ? (
@@ -89,7 +116,7 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
                         <li key={step.stepId} className="border-t border-line-subtle pt-2 text-sm">
                           <div className="flex justify-between gap-2">
                             <span className="font-medium text-fg">{step.role}</span>
-                            <StatusBadge status={{ label: humanizeToken(step.status), tone: tone(step.status) }} />
+                            <StatusBadge status={presentFrom(DELEGATION_STEP_STATUSES, step.status)} />
                           </div>
                           {step.summary ? <p className="mt-1 text-fg-secondary">{step.summary}</p> : null}
                           {step.error ? <p className="mt-1 text-status-failed">{step.error}</p> : null}
@@ -118,7 +145,7 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
       <EvidenceSection title="Tool activity">
         {trace.toolCalls.state !== "available" ? (
           <p className="text-sm text-fg-muted">
-            Tool evidence is {humanizeToken(trace.toolCalls.state).toLowerCase()}.
+            Tool evidence is {EVIDENCE_STATE_WORDS[trace.toolCalls.state] ?? "unknown"}.
           </p>
         ) : trace.toolCalls.items.length ? (
           <ol className="grid gap-2">
@@ -131,7 +158,7 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
                   {tool.toolName}
                   {tool.reused ? " · Reused" : ""}
                 </span>
-                <StatusBadge status={{ label: humanizeToken(tool.status), tone: tone(tool.status) }} />
+                <StatusBadge status={presentFrom(TOOL_RUN_STATUSES, tool.status)} />
               </li>
             ))}
           </ol>
@@ -142,20 +169,12 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
       <EvidenceSection title="Model usage">
         {trace.providerUsage.state !== "available" ? (
           <p className="text-sm text-fg-muted">
-            Model usage is {humanizeToken(trace.providerUsage.state).toLowerCase()}.
+            Model usage is {EVIDENCE_STATE_WORDS[trace.providerUsage.state] ?? "unknown"}.
           </p>
         ) : trace.providerUsage.items.length ? (
           <ol className="grid gap-2">
             {trace.providerUsage.items.map((item) => (
-              <li key={item.turnId} className="rounded-md border border-line-subtle p-3 text-sm">
-                <p className="font-medium text-fg">
-                  {[item.providerId, item.model].filter(Boolean).join(" · ") || "Model not recorded"}
-                </p>
-                <p className="mt-1 text-xs text-fg-muted">
-                  {item.usage?.inputTokens ?? "Unknown"} input tokens · {item.usage?.outputTokens ?? "Unknown"} output
-                  tokens · Cost {recordedCostLabel(item.costUsd, item.usage?.costSource)}
-                </p>
-              </li>
+              <ModelUsageRow key={item.turnId} item={item} />
             ))}
           </ol>
         ) : (

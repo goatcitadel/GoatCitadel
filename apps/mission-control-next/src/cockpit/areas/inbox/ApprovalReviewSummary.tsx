@@ -1,25 +1,34 @@
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { buildApprovalRequestReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+// Tool names and approval kinds are open strings; the chat presenter names the known ones.
+import { presentApprovalAction } from "../chat/chat-vocabulary";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
 export function ApprovalReviewSummary({ approval, workspaceId }: { approval: ApprovalRequest; workspaceId: string }) {
   const evidence = buildApprovalRequestReviewEvidenceModel(approval);
-  const scope =
-    evidence?.scopeSummary ??
-    `workspace ${approval.linkage?.workspaceId ?? workspaceId}${approval.linkage?.sessionId ? ` · conversation ${approval.linkage.sessionId}` : ""}.`;
+  const { activeCitadelId } = useUiPreferences();
+  const workspaceName = useWorkspaceNameLookup(activeCitadelId);
+  const scopeWorkspaceId = approval.linkage?.workspaceId ?? workspaceId;
+  const sessionId = approval.linkage?.sessionId;
+  const workspaceLabel =
+    workspaceName(scopeWorkspaceId) ?? (scopeWorkspaceId === workspaceId ? "This workspace" : "Another workspace");
+  const scope = evidence?.scopeSummary ?? `${workspaceLabel}${sessionId ? " · one linked conversation" : ""}.`;
   return (
     <section
       aria-label="Approval scope and consequences"
       className="min-w-0 max-w-full space-y-2 wrap-anywhere text-sm text-fg-secondary"
     >
       <p>
-        <strong>Action:</strong> {humanizeToken(approval.linkage?.toolName ?? approval.kind)}
+        <strong>Action:</strong> {presentApprovalAction(approval.linkage?.toolName, approval.kind)}
       </p>
       <p>
         <strong>Scope:</strong> {scope} This decision authorizes this request once.
       </p>
       <p>
-        <strong>Expiry:</strong> {approval.expiresAt ?? "No expiry recorded by Gateway"}
+        <strong>Expiry:</strong>{" "}
+        {approval.expiresAt ? <TimeText value={approval.expiresAt} absolute /> : "No expiry recorded by Gateway"}
         {approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now() ? " · Expired" : ""}
       </p>
       {/* Generic targets arrive already labelled ("Path", "Target"); purpose-specific ones are bare values. */}
@@ -63,6 +72,13 @@ export function ApprovalReviewSummary({ approval, workspaceId }: { approval: App
           approval.explanation?.riskExplanation ??
           "Gateway may execute the exact reviewed action after approval; deny withholds authorization. The decision alone does not prove work resumed or completed."}
       </p>
+      <TechnicalDetails label="Scope identifiers">
+        <p className="break-all font-mono text-xs">
+          Workspace {scopeWorkspaceId}
+          {sessionId ? ` · Conversation ${sessionId}` : ""}
+          {approval.expiresAt ? ` · Expires ${approval.expiresAt}` : ""}
+        </p>
+      </TechnicalDetails>
       {approval.rollbackNote ? (
         <p>
           <strong>Recovery:</strong> {approval.rollbackNote}

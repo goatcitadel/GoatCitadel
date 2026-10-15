@@ -1,3 +1,4 @@
+import { formatAbsoluteTime } from "@goatcitadel/mission-control-shared/content/format";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
@@ -102,7 +103,7 @@ export function useHealthDigestStatus(
         phase: "stale",
         tone: earlierProblems.some((check) => check.status.tone === "failed") ? "failed" : "waiting",
         label: `Earlier system check needs review · ${earlierProblems.map((check) => check.title).join(", ")}`,
-        title: `${earlierProblems.map((check) => check.detail).join(" ")} Last inspected ${new Date(inspected.dataUpdatedAt).toLocaleString()}. Recheck on System › Health; this is retained evidence.`,
+        title: `${earlierProblems.map((check) => check.detail).join(" ")} Last inspected ${formatAbsoluteTime(inspected.dataUpdatedAt)}. Recheck on System › Health; this is retained evidence.`,
         retry: () => void inspected.refetch(),
       };
   }
@@ -130,7 +131,7 @@ export function useHealthDigestStatus(
       const observations = staleSources
         .map(
           ({ name, observedAt }) =>
-            `${name}: last observed ${observedAt ? new Date(observedAt).toLocaleString() : "at an unavailable time"}`,
+            `${name}: last observed ${observedAt ? formatAbsoluteTime(observedAt) : "at an unavailable time"}`,
         )
         .join(". ");
       return {
@@ -142,7 +143,7 @@ export function useHealthDigestStatus(
       };
     }
     const lastChecked = view.checkedAt
-      ? `Last checked ${new Date(view.checkedAt).toLocaleString()}.`
+      ? `Last checked ${formatAbsoluteTime(view.checkedAt)}.`
       : "Last check time unavailable.";
     if (view.stale) {
       const failed = view.phase === "error" && !query.isFetching;

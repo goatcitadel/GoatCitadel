@@ -19,6 +19,7 @@ import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { Callout } from "../../ui/Callout";
+import { memoryNamespaceLabel } from "./library-vocabulary";
 export function LibraryMemoryBatch({
   workspaceId,
   items,
@@ -133,12 +134,13 @@ export function LibraryMemoryBatch({
       >
         <div className="grid gap-3">
           <p>
-            {review?.action} · Workspace {workspaceId}. No item changes until the governed approval effect completes.
+            {review ? { pin: "Pin", unpin: "Unpin", forget: "Forget" }[review.action] : ""} · This workspace. No item
+            changes until the governed approval effect completes.
           </p>
           <ul>
             {review?.items.map((item) => (
               <li key={item.itemId}>
-                {item.title} · {item.namespace} · {item.pinned ? "Pinned" : "Unpinned"}
+                {item.title} · {memoryNamespaceLabel(item.namespace)} · {item.pinned ? "Pinned" : "Unpinned"}
               </li>
             ))}
           </ul>

@@ -5,6 +5,7 @@ import type {
   ChatTurnLifecycleStatus,
   ChangePlanStatus,
   DurableRunStatus,
+  TaskStatus,
 } from "@goatcitadel/contracts";
 
 export type StatusTone = "running" | "waiting" | "done" | "failed" | "neutral";
@@ -74,11 +75,23 @@ const approvalOutcomes: Record<ApprovalResolutionOutcome, StatusPresentation> = 
   unknown: status("Outcome unknown", "waiting"),
 };
 
+// DESIGN.md: risk reads Safe, Caution, Danger, Nuclear everywhere.
 const riskLevels: Record<ApprovalRequest["riskLevel"], StatusPresentation> = {
-  safe: status("Low", "neutral"),
-  caution: status("Medium", "waiting"),
-  danger: status("High", "failed"),
-  nuclear: status("Critical", "failed"),
+  safe: status("Safe", "neutral"),
+  caution: status("Caution", "waiting"),
+  danger: status("Danger", "failed"),
+  nuclear: status("Nuclear", "failed"),
+};
+
+const taskStatuses: Record<TaskStatus, StatusPresentation> = {
+  planning: status("Planning", "neutral"),
+  inbox: status("Not started", "neutral"),
+  assigned: status("Assigned", "neutral"),
+  in_progress: status("In progress", "running"),
+  testing: status("Testing", "running"),
+  review: status("In review", "waiting"),
+  done: status("Done", "done"),
+  blocked: status("Blocked", "failed"),
 };
 
 export function humanizeToken(value: string): string {
@@ -117,6 +130,10 @@ export function presentApprovalOutcome(value: ApprovalResolutionOutcome): Status
 export function presentRiskLevel(value: ApprovalRequest["riskLevel"]): StatusPresentation {
   // A risk level this build doesn't know yet keeps its own name and the most severe tone.
   return riskLevels[value] ?? status(humanizeToken(String(value)), "failed");
+}
+
+export function presentTaskStatus(value: TaskStatus | string): StatusPresentation {
+  return taskStatuses[value as TaskStatus] ?? status(humanizeToken(value), "neutral");
 }
 
 export function presentEventClass(value: string | null | undefined): string {

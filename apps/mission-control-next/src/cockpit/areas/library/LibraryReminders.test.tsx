@@ -85,6 +85,9 @@ it("creates a note-associated reminder with UTC conversion and recurrence preser
     recurrenceRule: "FREQ=DAILY",
     sourceRef: "/library/notes?noteId=note-a&shell=cockpit",
   });
+  expect(container.textContent).toContain("Reminder scheduled: Review note.");
+  expect(container.textContent).toContain("Scheduled · Due ");
+  expect(container.textContent).not.toContain("Review note: scheduled");
 });
 it("checks current scheduled state and rejects inconsistent completion receipts", async () => {
   vi.mocked(completeReminder).mockResolvedValue({ ...reminder, workspaceId: "other", status: "completed" });

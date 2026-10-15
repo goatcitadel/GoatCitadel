@@ -7,6 +7,7 @@ import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/cl
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { ScopeSwitcher } from "../../app/ScopeSwitcher";
+import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { InboxApprovalDetail } from "./InboxApprovalDetail";
@@ -15,7 +16,8 @@ import { nullWhenMissing } from "./inbox-record-read";
 /** Resolve a canonical record, including records outside the bounded pending projection. */
 export function LinkedApproval({ approvalId }: { approvalId: string }) {
   const { search, hash } = useCockpitRoute();
-  const { activeWorkspaceId } = useUiPreferences();
+  const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
+  const workspaceName = useWorkspaceNameLookup(activeCitadelId);
   const workspaceId = activeWorkspaceId ?? "default";
   const installation = getGatewayApiBaseUrl();
   const access = useProjectAccess(workspaceId);
@@ -39,8 +41,8 @@ export function LinkedApproval({ approvalId }: { approvalId: string }) {
     return (
       <section className="space-y-3" aria-label="Approval workspace review">
         <p>
-          This approval belongs to workspace {recordWorkspace}. Review and select that workspace before opening its
-          details.
+          This approval belongs to {workspaceName(recordWorkspace) ?? "another workspace"}. Review and select that
+          workspace before opening its details.
         </p>
         <Button onClick={() => setScopeOpen(true)}>Review workspace</Button>
         <ScopeSwitcher hideTrigger open={scopeOpen} onOpenChange={setScopeOpen} destination={href} />

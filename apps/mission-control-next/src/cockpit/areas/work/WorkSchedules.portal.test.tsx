@@ -10,6 +10,10 @@ import { commitCockpitNavigation } from "../../app/cockpit-history";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { resetScheduleOperationsForTests } from "../../../features/native-routes/ops/use-schedule-operations";
 import { fetchCronJob, fetchCronJobs, updateCronJob, pauseCronJob } from "@goatcitadel/mission-control-shared/api/cron";
+// The scheduler review flag read is not under test here; answer it so no real request stays in flight.
+vi.mock("@goatcitadel/mission-control-shared/api/settings", () => ({
+  fetchSettings: vi.fn(async () => ({ features: { cronReviewQueueV1Enabled: false } })),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/cron", () => ({
   fetchCronJob: vi.fn(),
   fetchCronJobs: vi.fn(),
@@ -73,7 +77,7 @@ it.each(["before confirmation", "after rejected preflight"])(
     const updated = { ...a, revision: 3, name: "Changed schedule", schedule: "0 12 * * * UTC" };
     vi.mocked(fetchCronJob).mockResolvedValue(updated);
     if (timing === "after rejected preflight") {
-      await click("Confirm pause");
+      await click("Pause schedule");
       expect(getByRole("alert").textContent).toContain("changed during review");
     }
     await act(async () => {
@@ -87,12 +91,12 @@ it.each(["before confirmation", "after rejected preflight"])(
     expect(getByRole("alert").textContent).toContain("changed during review");
     expect(getByRole("dialog").textContent).toContain("A schedule");
     expect(getByRole("dialog").textContent).not.toContain("Changed schedule");
-    expect(getByRole("button", { name: "Confirm pause" }).hasAttribute("disabled")).toBe(true);
+    expect(getByRole("button", { name: "Pause schedule" }).hasAttribute("disabled")).toBe(true);
     expect(pauseCronJob).not.toHaveBeenCalled();
     await click("Keep schedule");
     await click("Pause");
     expect(getByRole("dialog").textContent).toContain("Changed schedule");
-    expect(getByRole("button", { name: "Confirm pause" }).hasAttribute("disabled")).toBe(false);
+    expect(getByRole("button", { name: "Pause schedule" }).hasAttribute("disabled")).toBe(false);
   },
 );
 async function render(editor = false) {
@@ -204,7 +208,7 @@ it.each(["stale", "unavailable", "uncertain"])(
     else if (kind === "unavailable")
       vi.mocked(fetchCronJob).mockRejectedValue(new Error("Schedule access unavailable"));
     else vi.mocked(pauseCronJob).mockRejectedValue(new Error("Response lost"));
-    await click("Confirm pause");
+    await click("Pause schedule");
     await vi.waitFor(() => expect(getByRole("dialog").contains(getByRole("alert"))).toBe(true));
     expect(getByRole("alert").textContent).toContain(
       kind === "stale"
@@ -214,6 +218,6 @@ it.each(["stale", "unavailable", "uncertain"])(
           : "outcome is unconfirmed",
     );
     if (kind !== "uncertain") expect(pauseCronJob).not.toHaveBeenCalled();
-    else expect(getByRole("button", { name: "Confirm pause" }).hasAttribute("disabled")).toBe(true);
+    else expect(getByRole("button", { name: "Pause schedule" }).hasAttribute("disabled")).toBe(true);
   },
 );

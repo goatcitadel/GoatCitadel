@@ -1,11 +1,12 @@
 import type { CostSummaryResponse } from "../api/types.js";
+import { formatMoney } from "./format.js";
 
-export function formatCostUsd(value: number): string {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: value < 1 ? 6 : 2,
-  }).format(value);
+/**
+ * Operator-facing USD: always two decimals, "<$0.01" for positive amounts under a cent, and "Unknown" (never $0.00)
+ * when the value is missing. Kept as a named export for existing callers; it is the shared formatMoney.
+ */
+export function formatCostUsd(value: number | null | undefined): string {
+  return formatMoney(value);
 }
 
 /** Cost is an exact total only when the Gateway reports complete coverage. */
@@ -35,7 +36,7 @@ export function projectUsageCostSummary(summary: CostSummaryResponse): {
     return {
       tokens: totals.tokens,
       costLabel: formatCostUsd(totals.costUsd),
-      coverageDescription: "Gateway day scope with complete cost coverage.",
+      coverageDescription: "Grouped by day (UTC) with complete cost coverage.",
     };
   }
 

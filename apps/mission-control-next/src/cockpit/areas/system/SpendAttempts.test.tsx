@@ -6,9 +6,18 @@ import { expect, it, vi } from "vitest";
 import { SpendAttempts, attemptCostLabel } from "./SpendAttempts";
 const api = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/system", () => ({ fetchModelUsageEvents: api.read }));
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn().mockResolvedValue({ items: [{ workspaceId: "default", name: "Lab" }] }),
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/platform", () => ({
+  fetchLlmConfig: vi
+    .fn()
+    .mockResolvedValue({ providerConfigs: [{ providerId: "user-provider", label: "User Provider" }] }),
+  fetchLlmModels: vi.fn().mockResolvedValue({ items: [{ id: "user-model", label: "User Model" }] }),
+}));
 it("distinguishes provider accounting, estimate and missing price with explicit units and bounded scope", async () => {
-  expect(attemptCostLabel({ costSource: "provider_reported", costUsd: 0 })).toBe("$0.00 USD · Provider reported");
-  expect(attemptCostLabel({ costSource: "gateway_estimate", costUsd: 1 })).toBe("$1.00 USD · Gateway estimate");
+  expect(attemptCostLabel({ costSource: "provider_reported", costUsd: 0 })).toBe("$0.00 · Provider reported");
+  expect(attemptCostLabel({ costSource: "gateway_estimate", costUsd: 1 })).toBe("$1.00 · Gateway estimate");
   expect(attemptCostLabel({ costSource: "not_available", costUsd: 100 })).toBe("Price unavailable");
   const start = "2026-10-06T01:02:03.000Z";
   api.read.mockResolvedValue({
@@ -45,12 +54,15 @@ it("distinguishes provider accounting, estimate and missing price with explicit 
     );
     await vi.waitFor(() => expect(container.textContent).toContain("Provider reported"));
     expect(api.read).toHaveBeenCalledWith("workspace-a", start, start);
-    expect(container.textContent).toContain("user-provider · user-model");
+    await vi.waitFor(() => expect(container.textContent).toContain("User Model · User Provider"));
+    expect(container.textContent).not.toContain("user-provider");
+    expect(container.textContent).not.toContain("workspace-a");
+    expect(container.textContent).toContain("3 recorded call attempts · 1 dispatch outcome uncertain");
     expect(container.textContent).toContain("10 tokens");
     expect(container.textContent).toContain("15 ms");
     expect(container.textContent).toContain("Price unavailable");
     expect(container.textContent).toContain("Older attempts are not shown");
-    expect(container.querySelector("time")?.textContent).toBe(new Date(start).toLocaleString());
+    expect(container.querySelector("time")?.getAttribute("dateTime")).toBe(start);
     expect(container.textContent).toContain("separate from installation totals");
   } finally {
     act(() => root.unmount());

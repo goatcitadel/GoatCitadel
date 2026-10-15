@@ -3,9 +3,10 @@ import { useDeferredOverlay } from "../../ui/deferred-overlay-owner";
 import { Dialog } from "../../ui/Dialog";
 import { Button } from "../../ui/Button";
 import { SlidersHorizontal } from "lucide-react";
-import type { ChatCompletionReasoningEffort, ChatWebMode } from "@goatcitadel/contracts";
+import type { ChatCompletionReasoningEffort, ChatWebMode, RoutingPreflightRuntimeClass } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { useModelLabel } from "../../data/use-model-label";
+import { presentThinkingLevel } from "./chat-vocabulary";
 
 type Controls = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -61,6 +62,12 @@ const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
   { value: "deep", label: "Deep" },
 ];
 
+const RUNTIME_CLASS_LABELS: Record<RoutingPreflightRuntimeClass, string> = {
+  local: "Runs on this computer",
+  cloud: "Cloud runtime",
+  unknown: "Runtime location unknown",
+};
+
 type ModelPopover = typeof import("./ChatModelOptionsPopover");
 let modelPopoverLoad: Promise<ModelPopover> | undefined;
 const PLAN_HELP = "Plan before acting. The Gateway still governs every tool and approval.";
@@ -87,7 +94,21 @@ export function ChatComposerControls({
   const modeHelpId = useId();
   const reloadCancel = useRef<HTMLButtonElement>(null);
   const ModelPopover = options.runtime?.ChatModelOptionsPopover;
-  const optionsSummary = [props.selectedModel || "Choose model", humanizeToken(props.currentThinkingLevel)].join(" · ");
+  const modelLabel = useModelLabel(
+    props.selectedProviderId,
+    props.selectedModel ?? undefined,
+    Boolean(props.selectedModel),
+  );
+  const route = props.routePreflight;
+  const routeLabel = useModelLabel(
+    route?.effectiveProviderId,
+    route?.effectiveModel,
+    Boolean(props.routeBoundaryAckRequired && (route?.effectiveProviderId || route?.effectiveModel)),
+  );
+  const optionsSummary = [
+    props.selectedModel ? modelLabel : "Choose model",
+    presentThinkingLevel(props.currentThinkingLevel),
+  ].join(" · ");
   const modeOptions = (
     <>
       {" "}
@@ -166,11 +187,9 @@ export function ChatComposerControls({
         <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-status-waiting bg-sunken p-2 text-xs text-fg-secondary">
           <span>
             {"Route: "}
-            {props.routePreflight?.effectiveProviderId ?? "provider unrecorded"}
-            {" / "}
-            {props.routePreflight?.effectiveModel ?? "model unrecorded"}
+            {route?.effectiveProviderId || route?.effectiveModel ? routeLabel : "model not recorded"}
             {" · "}
-            {humanizeToken(props.routePreflight?.runtimeClass ?? "unknown")}
+            {RUNTIME_CLASS_LABELS[route?.runtimeClass ?? "unknown"] ?? RUNTIME_CLASS_LABELS.unknown}
             {". Fallback may send conversation content to another runtime, including outside this computer. "}
             {props.routePreflight?.degradedReason ?? props.routePreflight?.normalizationReason}
           </span>

@@ -6,10 +6,13 @@ import type {
   DurableBackgroundTaskSemanticLink,
 } from "@goatcitadel/contracts";
 import type { ObserveRunTraceResponse } from "@goatcitadel/mission-control-shared/api/durable";
-import { humanizeToken, presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { formatBytes, plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useDurableBackgroundTaskRail } from "../../../features/threaded-surface/useDurableBackgroundTaskRail";
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
+import { TimeText } from "../../ui/TimeText";
+import { LINEAGE_SOURCE_WORDS, SIGNAL_POSTURE_WORDS, WATCHER_STATE_LABELS } from "./work-vocabulary";
 import { runWorkspaceSession } from "./run-workspace-context";
 
 const MAX_CHILDREN = 40;
@@ -115,8 +118,8 @@ function LineageEvidence({ snapshot }: { snapshot: DurableBackgroundTaskRailResp
         <StatusBadge status={presentRunStatus(snapshot.parent.status)} />
       </div>
       <p className="text-xs text-fg-muted">
-        Gateway snapshot: {snapshot.generatedAt}. Showing up to {MAX_CHILDREN} verified children and {MAX_SOURCES} cited
-        sources.
+        <TimeText value={snapshot.generatedAt} prefix="Gateway snapshot" />. Showing up to {MAX_CHILDREN} verified
+        children and {MAX_SOURCES} cited sources.
       </p>
       {!snapshot.coverage.watchers.complete || !snapshot.coverage.parentSignals.complete ? (
         <p className="text-sm text-status-waiting">
@@ -125,7 +128,8 @@ function LineageEvidence({ snapshot }: { snapshot: DurableBackgroundTaskRailResp
       ) : null}
       {unverified > 0 ? (
         <p className="text-sm text-fg-muted">
-          {unverified} child {unverified === 1 ? "record has" : "records have"} unverified scope; details are withheld.
+          {plural(unverified, "child record")} {unverified === 1 ? "has" : "have"} unverified scope; details are
+          withheld.
         </p>
       ) : null}
       {children.length ? (
@@ -141,7 +145,8 @@ function LineageEvidence({ snapshot }: { snapshot: DurableBackgroundTaskRailResp
       )}
       {children.length > MAX_CHILDREN ? (
         <p className="text-xs text-fg-muted">
-          {children.length - MAX_CHILDREN} additional verified children are outside this display.
+          {plural(children.length - MAX_CHILDREN, "additional verified child", "additional verified children")}{" "}
+          {children.length - MAX_CHILDREN === 1 ? "is" : "are"} outside this display.
         </p>
       ) : null}
       <section aria-label="Recorded synthesis sources" className="min-w-0 rounded-md border border-line-subtle p-3">
@@ -154,9 +159,11 @@ function LineageEvidence({ snapshot }: { snapshot: DurableBackgroundTaskRailResp
           <ol className="mt-3 grid gap-2">
             {sources.slice(0, MAX_SOURCES).map((source) => (
               <li key={source.watcherId} className="min-w-0 rounded-md bg-sunken p-3">
-                <p className="text-sm font-medium text-fg">Cited {humanizeToken(source.source).toLowerCase()} output</p>
+                <p className="text-sm font-medium text-fg">
+                  Cited {LINEAGE_SOURCE_WORDS[source.source] ?? "recorded"} output
+                </p>
                 <p className="mt-1 break-all text-xs text-fg-muted">
-                  {source.byteCount} bytes · SHA-256 {source.sha256}
+                  {formatBytes(source.byteCount)} · SHA-256 <span className="font-mono">{source.sha256}</span>
                 </p>
                 <LineageLinks links={source.links} />
               </li>
@@ -167,18 +174,20 @@ function LineageEvidence({ snapshot }: { snapshot: DurableBackgroundTaskRailResp
         )}
         {sources.length > MAX_SOURCES ? (
           <p className="mt-2 text-xs text-fg-muted">
-            {sources.length - MAX_SOURCES} additional cited sources are outside this display.
+            {plural(sources.length - MAX_SOURCES, "additional cited source")}{" "}
+            {sources.length - MAX_SOURCES === 1 ? "is" : "are"} outside this display.
           </p>
         ) : null}
         {snapshot.synthesis.missingTerminalChildRunIds.length > 0 ? (
           <p className="mt-2 text-sm text-fg-secondary">
-            Output is missing from {snapshot.synthesis.missingTerminalChildRunIds.length} finished child runs.
+            Output is missing from {plural(snapshot.synthesis.missingTerminalChildRunIds.length, "finished child run")}.
           </p>
         ) : null}
         {snapshot.synthesis.uncoveredChildRunIds.length > 0 || snapshot.synthesis.uncoveredStepIds.length > 0 ? (
           <p className="mt-2 text-sm text-fg-secondary">
-            This synthesis does not cover {snapshot.synthesis.uncoveredChildRunIds.length} watched children and{" "}
-            {snapshot.synthesis.uncoveredStepIds.length} delegation steps.
+            This synthesis does not cover{" "}
+            {plural(snapshot.synthesis.uncoveredChildRunIds.length, "watched child", "watched children")} and{" "}
+            {plural(snapshot.synthesis.uncoveredStepIds.length, "delegation step")}.
           </p>
         ) : null}
       </section>
@@ -209,7 +218,7 @@ function ChildEvidence({ task }: { task: DurableBackgroundTaskItem }) {
       </div>
       <p className="mt-1 text-xs text-fg-muted">
         {task.role ? `${task.role} · ` : ""}
-        {humanizeToken(task.watcherState)} watcher · {OUTPUT_LABELS[task.output.availability]}
+        {WATCHER_STATE_LABELS[task.watcherState] ?? "Unknown"} watcher · {OUTPUT_LABELS[task.output.availability]}
       </p>
       {task.output.availability === "available" ? (
         <p className="mt-2 whitespace-pre-wrap break-words text-sm text-fg-secondary">{task.output.summary}</p>
@@ -223,7 +232,7 @@ function ChildEvidence({ task }: { task: DurableBackgroundTaskItem }) {
       ) : null}
       {task.signalIntegrity.posture !== "clean" || !task.signalIntegrity.observationComplete ? (
         <p className="mt-2 text-xs text-fg-muted">
-          Retained child signals are {humanizeToken(task.signalIntegrity.posture).toLowerCase()}
+          Retained child signals are {SIGNAL_POSTURE_WORDS[task.signalIntegrity.posture] ?? "unknown"}
           {!task.signalIntegrity.observationComplete ? " and incomplete" : ""}. Run status comes from its durable
           record.
         </p>

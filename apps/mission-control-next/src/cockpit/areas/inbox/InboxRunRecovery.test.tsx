@@ -115,7 +115,8 @@ describe("Inbox run recovery", () => {
     const client = await renderRecovery();
     const finish = await startRecheck(client);
     expect(container.textContent).toContain("Checking for changes…");
-    expect(container.textContent).toContain("Workflow: maintenance.repair");
+    expect(container.textContent).toContain("Workflow: Background work. Status: Failed.");
+    expect(container.textContent).not.toContain("maintenance.repair");
     expect(button("Retry run").disabled).toBe(true);
     await finish();
     expect(button("Retry run").disabled).toBe(false);
@@ -138,7 +139,7 @@ describe("Inbox run recovery", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
-    expect(container.textContent).toContain("Workflow: maintenance.repair");
+    expect(container.textContent).toContain("Workflow: Background work");
     expect(container.textContent).toContain("Showing the last version from");
   });
 

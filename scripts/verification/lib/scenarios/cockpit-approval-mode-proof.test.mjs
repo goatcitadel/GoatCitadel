@@ -88,25 +88,25 @@ describe("native approved decision receipt", () => {
 const proof = () => ({
   before: { revision: 4, toolApprovalMode: "approve_risky", deploymentProfile: "trusted_local" },
   after: { revision: 4, toolApprovalMode: "approve_risky", deploymentProfile: "trusted_local" },
-  rendered: { current: "Current: Ask for risky work · settings revision 4", selection: "approve_risky" },
+  rendered: { current: "Current: Ask for risky work", selection: "approve_risky" },
   mutations: [],
 });
 describe("approval rule browser owner assertions", () => {
-  it("requires approved Critical risk wording and the complete unchanged consequence and gate disclosure", () => {
+  it("requires approved Nuclear risk wording and the complete unchanged consequence and gate disclosure", () => {
     const current =
-      "Change the installation default at settings revision 4. Allowed tools may run without normal prompts. Deny rules, Critical risk and risky-shell approvals, read boundaries, and tool grants remain in force.";
-    assert.doesNotThrow(() => assertApprovalModeBypassReview(current, 4));
+      "Change the installation default to Skip normal prompts. Allowed tools may run without normal prompts. Deny rules, Nuclear risk and risky-shell approvals, read boundaries, and tool grants remain in force.";
+    assert.doesNotThrow(() => assertApprovalModeBypassReview(current));
     for (const token of [
       "Allowed tools may run without normal prompts.",
       "Deny rules, ",
-      "Critical risk and ",
+      "Nuclear risk and ",
       "risky-shell approvals, ",
       "read boundaries, ",
       "and tool grants ",
     ])
-      assert.throws(() => assertApprovalModeBypassReview(current.replace(token, ""), 4));
-    assert.throws(() => assertApprovalModeBypassReview(current, 5));
-    assert.throws(() => assertApprovalModeBypassReview(current.replace("Critical risk", "nuclear-risk"), 4));
+      assert.throws(() => assertApprovalModeBypassReview(current.replace(token, "")));
+    assert.throws(() => assertApprovalModeBypassReview(`${current} Reviewed at settings revision 4.`));
+    assert.throws(() => assertApprovalModeBypassReview(current.replace("Nuclear risk", "Critical risk")));
   });
   it("accepts exact live owner agreement and a cancelled review without a mutation", () => {
     assert.doesNotThrow(() => assertApprovalModeInspection(proof()));
@@ -118,7 +118,7 @@ describe("approval rule browser owner assertions", () => {
     }
   });
   it("rejects stale or substituted rendered rule evidence", () => {
-    for (const change of [{ current: "Current: Ask every time · settings revision 4" }, { selection: "bypass" }]) {
+    for (const change of [{ current: "Current: Ask every time" }, { selection: "bypass" }]) {
       const input = proof();
       assert.throws(() => assertApprovalModeInspection({ ...input, rendered: { ...input.rendered, ...change } }));
     }

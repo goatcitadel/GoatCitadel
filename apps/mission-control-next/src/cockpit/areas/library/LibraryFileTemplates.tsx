@@ -19,6 +19,7 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useLibraryOperation } from "./use-library-operation";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { readCockpitHistory, subscribeCockpitHistory } from "../../app/cockpit-history";
+import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
 
 const EMPTY = { templateId: "", path: "" };
 const INPUT = "w-full rounded-md border border-line bg-raised p-2 text-fg";
@@ -120,7 +121,7 @@ function LibraryFileTemplatesContent({
       draft.acceptSaved(EMPTY, undefined, submitted.draft);
       setResult({
         error: false,
-        message: `Gateway accepted ${receipt.relativePath} (${receipt.bytes.toLocaleString()} bytes).`,
+        message: `Gateway accepted ${receipt.relativePath} (${formatBytes(receipt.bytes)}).`,
       });
       await client.invalidateQueries({ queryKey: ["library", "resources", "files"] });
     } catch (cause) {

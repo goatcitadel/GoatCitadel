@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { presentTaskStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { commitTaskBulkAction, type TaskBulkAction } from "../../../features/native-routes/ops/task-bulk-operation";
 import {
   readTaskMutation,
@@ -30,7 +31,7 @@ const ACTIONS: ReadonlyArray<{ action: TaskBulkAction; verb: string; consequence
     consequence: "Marks each task done. The Gateway refuses the whole batch if any task has no deliverable.",
   },
 ];
-const count = (n: number) => `${n} ${n === 1 ? "task" : "tasks"}`;
+const count = (n: number) => plural(n, "task");
 
 /** Reviewed bulk task actions for the selected operator tasks. Runtime runs are never part of a task action. */
 export function WorkTaskBulkActions({
@@ -127,14 +128,14 @@ export function WorkTaskBulkActions({
           if (!open) close();
         }}
         title={review ? `Review: ${review.action.verb} ${count(review.tasks.length)}` : "Review task action"}
-        description={`Operator tasks in workspace ${workspaceId}.`}
+        description="Operator tasks in this workspace."
       >
         {review ? (
           <div className="grid min-w-0 gap-3 text-sm wrap-anywhere">
             <ul className="grid max-h-64 min-w-0 gap-1 overflow-y-auto">
               {review.tasks.map((task) => (
                 <li key={task.taskId}>
-                  <strong>{task.title}</strong> · {humanizeToken(task.status)} · revision {task.revision}
+                  <strong>{task.title}</strong> · {presentTaskStatus(task.status).label}
                 </li>
               ))}
             </ul>

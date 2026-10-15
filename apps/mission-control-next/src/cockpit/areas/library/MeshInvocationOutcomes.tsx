@@ -1,13 +1,9 @@
 import type { MeshCapabilityInvocationActivityItem } from "@goatcitadel/mission-control-shared/api/mesh-capabilities";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { StatusBadge } from "../../ui/StatusBadge";
-import { invocationState } from "./mesh-capability-labels";
-
-const time = (value?: string) =>
-  value && Number.isFinite(Date.parse(value)) ? (
-    <time dateTime={value}>{new Date(value).toLocaleString()}</time>
-  ) : (
-    "Not reported"
-  );
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+import { MESH_SETTLED_BY, invocationState, meshErrorLabel, meshNameFromCapabilityId } from "./mesh-capability-labels";
 
 /** Read-only mesh invocation outcomes from retained events; nothing here acknowledges or replays an invocation. */
 export function MeshInvocationOutcomes({
@@ -28,8 +24,8 @@ export function MeshInvocationOutcomes({
       ) : null}
       {reconcile ? (
         <p role="status" className="text-status-waiting">
-          {reconcile} invocation{reconcile === 1 ? "" : "s"} settled with an unknown delivery and await
-          {reconcile === 1 ? "s" : ""} manual reconciliation.
+          {plural(reconcile, "invocation")} settled with an unknown delivery and {reconcile === 1 ? "awaits" : "await"}{" "}
+          manual reconciliation.
         </p>
       ) : null}
       {activity.length ? (
@@ -39,17 +35,22 @@ export function MeshInvocationOutcomes({
               <div className="flex flex-wrap gap-1">
                 <StatusBadge status={invocationState(item)} />
                 {item.settlementAuthority ? (
-                  <StatusBadge status={{ label: `Settled by ${item.settlementAuthority}`, tone: "neutral" }} />
+                  <StatusBadge status={{ label: MESH_SETTLED_BY[item.settlementAuthority], tone: "neutral" }} />
                 ) : null}
                 {item.manualReconciliationRequired ? (
                   <StatusBadge status={{ label: "Manual reconciliation required", tone: "failed" }} />
                 ) : null}
               </div>
               <p className="break-words">
-                <code className="wrap-anywhere">{item.capabilityId}</code> on node {item.nodeId} ·{" "}
-                {time(item.observedAt)}
-                {item.errorCode ? ` · ${item.errorCode.replaceAll("_", " ")}` : ""}
+                {meshNameFromCapabilityId(item.capabilityId)} · <TimeText value={item.observedAt} absolute />
+                {item.errorCode ? ` · ${meshErrorLabel(item.errorCode)}` : ""}
               </p>
+              <TechnicalDetails label="Invocation identifiers">
+                <p className="wrap-anywhere">
+                  Capability: <code>{item.capabilityId}</code> · Node: {item.nodeId} · Invocation: {item.invocationId}
+                  {item.errorCode ? ` · Error code: ${item.errorCode}` : ""}
+                </p>
+              </TechnicalDetails>
             </li>
           ))}
         </ul>

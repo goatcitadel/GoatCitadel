@@ -87,7 +87,7 @@ describe("useCapabilitySkillState failure classification", () => {
     await confirmRequest();
     expect(updateSkillState).toHaveBeenCalledTimes(2);
     expect(latest.error).toBeUndefined();
-    expect(latest.notice).toContain("already Disabled");
+    expect(latest.notice).toContain("already disabled");
   });
 
   it.each(["network", "5xx"])("keeps a %s failure after dispatch uncertain and locked", async (kind) => {

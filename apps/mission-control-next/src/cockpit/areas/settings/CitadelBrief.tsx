@@ -1,13 +1,16 @@
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
-import { formatUsd } from "../../../app/mission-control-shell-model";
+import { formatDuration, formatMoney, plural } from "@goatcitadel/mission-control-shared/content/format";
+import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useCitadelBrief } from "../../../features/native-routes/library/use-citadel-brief";
-import { formatBriefAge } from "../../../features/native-routes/library/citadel-brief-format";
 import { Button } from "../../ui/Button";
+import { TimeText } from "../../ui/TimeText";
+import { presentApprovalAction } from "../chat/chat-vocabulary";
 
 export function CitadelBrief({ citadelId }: { citadelId: string }) {
   const control = useCitadelBrief(citadelId),
     { state } = control,
     brief = state.brief;
+  const workspaceName = (workspaceId: string) =>
+    brief?.workspaces.find((item) => item.workspaceId === workspaceId)?.name ?? "Another workspace";
   return (
     <article aria-label="Daily Citadel brief" className="space-y-3 rounded-md border border-line-subtle bg-sunken p-3">
       <header className="flex flex-wrap items-center justify-between gap-2">
@@ -39,8 +42,8 @@ export function CitadelBrief({ citadelId }: { citadelId: string }) {
       {brief ? (
         <>
           <p className="text-xs text-fg-muted">
-            Window: {new Date(brief.since).toLocaleString()} to {new Date(brief.generatedAt).toLocaleString()} ·{" "}
-            {brief.workspaces.length} workspace{brief.workspaces.length === 1 ? "" : "s"}.
+            Window: <TimeText absolute value={brief.since} /> to <TimeText absolute value={brief.generatedAt} /> ·{" "}
+            {plural(brief.workspaces.length, "workspace")}.
           </p>
           <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
             {[
@@ -48,8 +51,11 @@ export function CitadelBrief({ citadelId }: { citadelId: string }) {
               ["Completed", String(brief.activity.completedSince)],
               ["Failed", String(brief.activity.failedSince)],
               ["Ward hits", String(brief.activity.wardHitsSince)],
-              ["Spend · installation", `${formatUsd(brief.spend.sinceUsd)}${brief.spend.complete ? "" : " · partial"}`],
-              ["Tokens · installation", String(brief.spend.sinceTokens)],
+              [
+                "Spend · installation",
+                `${formatMoney(brief.spend.sinceUsd)}${brief.spend.complete ? "" : " · partial"}`,
+              ],
+              ["Tokens · installation", brief.spend.sinceTokens.toLocaleString()],
             ].map(([label, value]) => (
               <div key={label}>
                 <dt className="text-fg-muted">{label}</dt>
@@ -63,9 +69,10 @@ export function CitadelBrief({ citadelId }: { citadelId: string }) {
           <ul aria-label="Approvals waiting on you" className="max-h-64 space-y-2 overflow-y-auto">
             {brief.approvals.pending.slice(0, 100).map((item) => (
               <li key={item.approvalId} className="rounded-md border border-line-subtle bg-raised p-3">
-                <p className="text-sm font-medium text-fg">{humanizeToken(item.kind)}</p>
+                <p className="text-sm font-medium text-fg">{presentApprovalAction(null, item.kind)}</p>
                 <p className="mt-1 break-words text-xs text-fg-secondary">
-                  {humanizeToken(item.riskLevel)} risk · waiting {formatBriefAge(item.ageMs)} · {item.workspaceId}
+                  {presentRiskLevel(item.riskLevel).label} risk · waiting {formatDuration(item.ageMs)} ·{" "}
+                  {workspaceName(item.workspaceId)}
                 </p>
               </li>
             ))}
@@ -76,7 +83,7 @@ export function CitadelBrief({ citadelId }: { citadelId: string }) {
           <p className="text-sm text-fg-secondary">
             {"unavailable" in brief.memory
               ? `Memory review is unavailable: ${brief.memory.unavailable}`
-              : `${brief.memory.pendingRecommendations} memory recommendation(s) pending review.`}
+              : `${plural(brief.memory.pendingRecommendations, "memory recommendation")} pending review.`}
           </p>
         </>
       ) : null}

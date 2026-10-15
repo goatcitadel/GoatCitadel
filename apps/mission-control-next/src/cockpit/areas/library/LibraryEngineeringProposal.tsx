@@ -191,7 +191,7 @@ export function LibraryEngineeringProposal({
         title="Review learning proposal"
       >
         <div className="grid gap-3">
-          <p>Workspace {workspaceId}. This creates an inactive proposal from the verified source.</p>
+          <p>In this workspace. This creates an inactive proposal from the verified source.</p>
           {TEXT_FIELDS.map((key) => (
             <p key={key}>
               {key === "rootCause" ? "Root cause" : key}: {review?.input[key]}

@@ -9,6 +9,8 @@ import { RecentSessions } from "./RecentSessions";
 
 const api = vi.hoisted(() => ({ fetchSessions: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/sessions", () => api);
+const preferences = vi.hoisted(() => ({ showTechnicalDetails: false }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => preferences }));
 
 const session = (overrides: Partial<SessionMeta> = {}): SessionMeta => ({
   sessionId: "sess_abc123",
@@ -73,12 +75,16 @@ describe("cockpit recent sessions", () => {
     expect(rows[1]!.textContent).toContain("Slack");
     expect(rows[1]!.textContent).toContain("Blocked");
     expect(rows[1]!.textContent).toContain("Budget: hard cap reached");
+    expect(rows[0]!.textContent).toContain("Telegram · Direct message · Last activity");
+    expect(rows[1]!.textContent).toContain("Slack conversation");
+    expect(rows[0]!.textContent).not.toContain("sess_abc123");
     const link = rows[0]!.querySelector("a");
     expect(link?.textContent).toBe("Open in Chat");
     expect(link?.getAttribute("href")).toContain("/chat?sessionId=sess_abc123");
   });
 
   it("keeps identifiers and usage inside technical details", async () => {
+    preferences.showTechnicalDetails = true;
     api.fetchSessions.mockResolvedValue({ items: [session()] });
     await render();
     await settle();
@@ -86,6 +92,7 @@ describe("cockpit recent sessions", () => {
     expect(details.querySelector("summary")?.textContent).toBe("Session details");
     expect(details.textContent).toContain("sess_abc123");
     expect(details.textContent).toContain("30 tokens");
+    preferences.showTechnicalDetails = false;
   });
 
   it("says when there are no sessions and when the list is unavailable", async () => {

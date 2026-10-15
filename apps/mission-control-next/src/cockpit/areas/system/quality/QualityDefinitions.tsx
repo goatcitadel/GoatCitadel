@@ -1,5 +1,5 @@
 import type { PromptPackSecurityEvalPackRecord } from "@goatcitadel/contracts";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import {
   useBuiltinPromptPackImport,
   supportsBuiltinFirstImport,
@@ -8,6 +8,7 @@ import { BuiltinPromptPackImportConfirmation } from "../../../../features/native
 import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { QualityNotes, usePromptPackQualityHref } from "./QualityEvidence";
+import { EVAL_PACK_STATUS } from "../system-vocabulary";
 
 export function QualityDefinitions({
   items,
@@ -28,7 +29,7 @@ export function QualityDefinitions({
             <li key={item.packKey} className="space-y-2 rounded-md border border-line-subtle p-3">
               <h3 className="text-sm font-medium text-fg">{item.title}</h3>
               <p className="text-sm text-fg-secondary">
-                {humanizeToken(item.status)} · {item.testCount} defined tests
+                {EVAL_PACK_STATUS[item.status] ?? "Unknown status"} · {plural(item.testCount, "defined test")}
               </p>
               <QualityNotes items={item.blockers} />
               {present ? (

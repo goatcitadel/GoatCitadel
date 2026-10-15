@@ -1,8 +1,12 @@
 import { useState } from "react";
 import type { OpsQualitySnapshotResponse } from "@goatcitadel/contracts";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { formatMoney, plural } from "@goatcitadel/mission-control-shared/content/format";
+import { useModelLabel } from "../../../data/use-model-label";
 import { Button } from "../../../ui/Button";
-import { QualityFacts, QualityNotes, QualitySource, qualityNumber, qualityTimestamp } from "./QualityEvidence";
+import { TechnicalDetails } from "../../../ui/TechnicalDetails";
+import { TimeText } from "../../../ui/TimeText";
+import { EVAL_RUN_STATUS, MEASUREMENT_SOURCE } from "../system-vocabulary";
+import { QualityFacts, QualityNotes, QualitySource, qualityNumber } from "./QualityEvidence";
 
 export function QualityEvaluations({ source }: { source: OpsQualitySnapshotResponse["evalProof"] }) {
   const [runId, setRunId] = useState<string | null>(null);
@@ -18,10 +22,11 @@ export function QualityEvaluations({ source }: { source: OpsQualitySnapshotRespo
             <li key={run.runId} className="rounded-md border border-line-subtle p-3">
               <h3 className="font-medium text-fg">Evaluation {index + 1}</h3>
               <p className="mt-1 text-sm text-fg-secondary">
-                {humanizeToken(run.status)} · {qualityTimestamp(run.createdAt)}
+                {EVAL_RUN_STATUS[run.status] ?? "Recorded"} · <TimeText value={run.createdAt} />
               </p>
               <p className="mt-1 text-xs text-fg-muted">
-                {run.candidates.length} candidates · {run.results.length} results · {run.warnings.length} warnings
+                {plural(run.candidates.length, "candidate")} · {plural(run.results.length, "result")} ·{" "}
+                {plural(run.warnings.length, "warning")}
               </p>
               <Button size="sm" className="mt-2" aria-pressed={runId === run.runId} onClick={() => setRunId(run.runId)}>
                 Inspect evaluation {index + 1}
@@ -37,7 +42,9 @@ export function QualityEvaluations({ source }: { source: OpsQualitySnapshotRespo
           {selected ? (
             <>
               <h3 className="font-medium text-fg">Recorded evaluation results</h3>
-              <p className="text-sm text-fg-secondary">{qualityTimestamp(selected.createdAt)}</p>
+              <p className="text-sm text-fg-secondary">
+                <TimeText value={selected.createdAt} absolute />
+              </p>
               <QualityNotes items={selected.warnings} />
               {selected.results.length ? (
                 <ul className="grid gap-3">
@@ -46,12 +53,13 @@ export function QualityEvaluations({ source }: { source: OpsQualitySnapshotRespo
                       key={`${result.providerId}:${result.model}:${index}`}
                       className="space-y-2 rounded-md border border-line-subtle bg-raised p-3"
                     >
-                      <h4 className="break-words text-sm font-semibold text-fg">
-                        {result.providerId} · {result.model}
-                      </h4>
+                      <ResultHeading providerId={result.providerId} modelId={result.model} />
                       <QualityFacts
                         items={[
-                          { label: "Measurement source", value: humanizeToken(result.measurementSource) },
+                          {
+                            label: "Measurement source",
+                            value: MEASUREMENT_SOURCE[result.measurementSource] ?? "Not recorded",
+                          },
                           {
                             label: "Operator quality score",
                             value:
@@ -60,7 +68,13 @@ export function QualityEvaluations({ source }: { source: OpsQualitySnapshotRespo
                                 : "Not recorded",
                           },
                           { label: "Latency", value: qualityNumber(result.latencyMs, " ms") },
-                          { label: "Estimated cost", value: qualityNumber(result.estimatedCostUsd, " USD") },
+                          {
+                            label: "Estimated cost",
+                            value:
+                              typeof result.estimatedCostUsd === "number"
+                                ? formatMoney(result.estimatedCostUsd)
+                                : "Not recorded",
+                          },
                           { label: "Energy", value: qualityNumber(result.energyJoules, " J") },
                           { label: "Pareto optimal in this recorded set", value: result.paretoOptimal ? "Yes" : "No" },
                         ]}
@@ -72,15 +86,18 @@ export function QualityEvaluations({ source }: { source: OpsQualitySnapshotRespo
               ) : (
                 <p className="text-sm text-fg-muted">No result rows were recorded for this evaluation.</p>
               )}
-              <details>
-                <summary className="cursor-pointer text-xs text-fg-muted">Technical evidence</summary>
+              <TechnicalDetails label="Technical evidence">
                 <QualityFacts
                   items={[
                     { label: "Evaluation identity", value: selected.runId },
                     { label: "Prompt hash", value: selected.promptHash },
+                    ...selected.results.map((result, index) => ({
+                      label: `Result ${index + 1} provider and model`,
+                      value: `${result.providerId} · ${result.model}`,
+                    })),
                   ]}
                 />
-              </details>
+              </TechnicalDetails>
             </>
           ) : (
             <p role="status" className="text-sm text-fg-secondary">
@@ -91,4 +108,8 @@ export function QualityEvaluations({ source }: { source: OpsQualitySnapshotRespo
       ) : null}
     </QualitySource>
   );
+}
+
+function ResultHeading({ providerId, modelId }: { providerId: string; modelId: string }) {
+  return <h4 className="break-words text-sm font-semibold text-fg">{useModelLabel(providerId, modelId)}</h4>;
 }

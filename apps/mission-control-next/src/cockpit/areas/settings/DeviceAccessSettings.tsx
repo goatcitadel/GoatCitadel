@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchDeviceAccessGrants } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import {
   deviceGrantCanBeRevoked,
   useDeviceAccessRevocation,
@@ -12,10 +11,12 @@ import {
 import { GatewayAuthSettings } from "./GatewayAuthSettings";
 import { Button } from "../../ui/Button";
 import { DeviceContinuityChecks } from "./DeviceContinuityChecks";
+import { TimeText } from "../../ui/TimeText";
+import { DEVICE_PURPOSE_LABELS, DEVICE_TYPE_LABELS } from "./settings-vocabulary";
 
 const PAGE_SIZE = 20;
 const dateLabel = (value?: string) =>
-  value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : "Not recorded";
+  value && Number.isFinite(Date.parse(value)) ? <TimeText value={value} /> : "Not recorded";
 
 export function DeviceAccessSettings() {
   const caller = useCurrentAccess();
@@ -87,7 +88,7 @@ export function DeviceAccessSettings() {
                       {caller.data?.grantId === grant.grantId ? " · This device" : ""}
                     </h4>
                     <p className="mt-1 text-xs text-fg-muted">
-                      {humanizeToken(grant.deviceType)}
+                      {DEVICE_TYPE_LABELS[grant.deviceType] ?? "Unknown device"}
                       {grant.platform ? ` · ${grant.platform}` : ""} · {state}
                     </p>
                   </div>
@@ -115,7 +116,7 @@ export function DeviceAccessSettings() {
                   </div>
                   <div>
                     <dt>Purpose</dt>
-                    <dd>{humanizeToken(grant.principalPurpose || "unavailable")}</dd>
+                    <dd>{DEVICE_PURPOSE_LABELS[grant.principalPurpose] ?? "Unavailable"}</dd>
                   </div>
                 </dl>
                 {attempt ? (

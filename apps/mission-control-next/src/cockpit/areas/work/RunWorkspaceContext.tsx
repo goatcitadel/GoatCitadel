@@ -6,7 +6,8 @@ import type {
 } from "@goatcitadel/contracts";
 import type { ObserveRunTraceResponse } from "@goatcitadel/mission-control-shared/api/durable";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { WORKTREE_STATUS_LABELS } from "./work-vocabulary";
 import { Button } from "../../ui/Button";
 import { Sheet } from "../../ui/Sheet";
 import {
@@ -133,7 +134,7 @@ function WorkspaceInspector({ sessionId, workspaceId }: { sessionId: string; wor
           <dl className="grid min-w-0 gap-3 rounded-md border border-line-subtle p-3 text-sm sm:grid-cols-2">
             <div>
               <dt className="text-xs text-fg-muted">Worktree status</dt>
-              <dd className="text-fg">{humanizeToken(workbench.worktreeStatus)}</dd>
+              <dd className="text-fg">{WORKTREE_STATUS_LABELS[workbench.worktreeStatus] ?? "Unknown"}</dd>
             </div>
             <div>
               <dt className="text-xs text-fg-muted">Base reference</dt>
@@ -145,9 +146,14 @@ function WorkspaceInspector({ sessionId, workspaceId }: { sessionId: string; wor
             </div>
             <div>
               <dt className="text-xs text-fg-muted">Current project</dt>
-              <dd className="break-all text-fg">{workbench.projectId || "No project recorded"}</dd>
+              <dd className="text-fg">{workbench.projectId ? "Project recorded" : "No project recorded"}</dd>
             </div>
           </dl>
+          {workbench.projectId ? (
+            <TechnicalDetails>
+              <p className="break-all font-mono text-xs">Project ID: {workbench.projectId}</p>
+            </TechnicalDetails>
+          ) : null}
           {!canInspectWorkspaceFiles(workbench) ? (
             <p className="text-sm text-fg-muted">
               File inspection needs a ready worktree with a recorded project and path.

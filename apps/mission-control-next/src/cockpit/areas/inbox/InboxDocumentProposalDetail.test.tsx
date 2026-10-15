@@ -19,6 +19,9 @@ const api = vi.hoisted(() => ({
 vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({
   fetchOperatorInbox: api.fetchOperatorInbox,
 }));
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [] })),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
   listDocumentPatchProposals: api.listDocumentPatchProposals,
   fetchDocumentPatchProposal: api.fetchDocumentPatchProposal,
@@ -145,6 +148,10 @@ describe("Inbox document proposal", () => {
     await renderDetail();
     expect(container.textContent).toContain("-Before");
     expect(container.textContent).toContain("+After");
+    // Plain state and author; the target, proposal and conversation ids stay in technical details.
+    expect(container.textContent).toContain("State: Waiting on you");
+    expect(container.textContent).not.toContain("note-a");
+    expect(container.textContent).not.toContain("session-a");
     // Opening reads the proposal by id and checks the cached Inbox: no Inbox or list read.
     expect(api.fetchOperatorInbox).not.toHaveBeenCalled();
     expect(api.listDocumentPatchProposals).not.toHaveBeenCalled();
@@ -153,6 +160,8 @@ describe("Inbox document proposal", () => {
       signal: expect.any(AbortSignal),
     });
     await act(async () => button("Review apply").click());
+    expect(document.body.textContent).toContain("Author: Assistant");
+    expect(document.body.textContent).not.toContain("proposal-a");
     expect(api.applyDocumentPatchProposal).not.toHaveBeenCalled();
     await act(async () => button("Confirm apply").click());
     // The decision re-reads the Inbox once and the proposal again, then the decided record is reset and read.

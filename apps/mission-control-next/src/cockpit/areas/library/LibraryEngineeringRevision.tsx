@@ -5,6 +5,7 @@ import { useLibraryOperation } from "./use-library-operation";
 import { Button } from "../../ui/Button";
 import { Field } from "../../ui/Field";
 import { Callout } from "../../ui/Callout";
+import { presentLearningStatus } from "./library-vocabulary";
 export type EngineeringRevision = {
   action: "update" | "replace" | "consolidate";
   updates: Pick<EngineeringLearningRecord, "title" | "problem" | "rootCause" | "resolution" | "prevention">;
@@ -97,7 +98,7 @@ export function LibraryEngineeringRevision({
                       )
                     }
                   />
-                  {candidate.title} · {candidate.status}
+                  {candidate.title} · {presentLearningStatus(candidate.status).label}
                 </label>
               ))}
           </fieldset>

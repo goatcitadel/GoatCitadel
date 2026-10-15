@@ -21,6 +21,7 @@ import { Field } from "../../ui/Field";
 import { Dialog } from "../../ui/Dialog";
 import { Callout } from "../../ui/Callout";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { PATH_FLAVOR, SOURCE_KIND } from "./library-vocabulary";
 
 const EMPTY = {
   kind: "codex_sessions" as ExternalSourceKind,
@@ -223,7 +224,7 @@ function Registration({
             >
               {(["codex_sessions", "codex_memory", "claude_sessions", "claude_memory"] as const).map((kind) => (
                 <option key={kind} value={kind}>
-                  {kind.replaceAll("_", " ")}
+                  {SOURCE_KIND[kind]}
                 </option>
               ))}
             </select>
@@ -265,7 +266,7 @@ function Registration({
               >
                 {FLAVORS.map((flavor) => (
                   <option key={flavor} value={flavor}>
-                    {flavor.replaceAll("_", " ")}
+                    {PATH_FLAVOR[flavor]}
                   </option>
                 ))}
               </select>
@@ -343,11 +344,9 @@ function Registration({
           description="Register this exact verified root and producer policy."
         >
           <div className="grid min-w-0 grid-cols-1 gap-3 wrap-anywhere">
-            <p>
-              {review?.label} · Workspace {workspaceId}
-            </p>
+            <p>{review?.label} · This workspace</p>
             <p className="break-words">Root: {review?.canonicalRootPath}</p>
-            <p>Source kind: {review?.kind.replaceAll("_", " ")}</p>
+            <p>Source kind: {review ? SOURCE_KIND[review.kind] : ""}</p>
             <p>Accepted producers: {review?.acceptedProducerVersions.join(", ")}</p>
             <p>Git identity required: {review?.requireGitIdentity ? "Yes" : "No"}</p>
             {notice ? <Callout>{notice}</Callout> : null}

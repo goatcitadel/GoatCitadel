@@ -10,6 +10,8 @@ import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/Con
 import { useSessionControlStatus } from "@goatcitadel/mission-control-shared/hooks/useSessionControlStatus";
 import { deriveSessionControlBannerViewModel } from "@goatcitadel/threaded-surface-core";
 import { Button } from "../../ui/Button";
+import { TimeText } from "../../ui/TimeText";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useProjectAccess } from "@goatcitadel/mission-control-shared/hooks/use-current-access";
 
 type Review =
@@ -25,11 +27,7 @@ const CHANGED = "The Gateway refused this because control changed, so nothing wa
 const UNKNOWN =
   "The outcome is unknown. The current state was read again. Retry sends the identical request, which the Gateway applies at most once.";
 const time = (value?: string) =>
-  value && Number.isFinite(Date.parse(value)) ? (
-    <time dateTime={value}>{new Date(value).toLocaleString()}</time>
-  ) : (
-    "Not reported"
-  );
+  value && Number.isFinite(Date.parse(value)) ? <TimeText value={value} /> : "Not reported";
 
 /** The reviewed transition still applies to the freshly read state. */
 function stillCurrent(review: Review, detail: SessionControlDetailResponse) {
@@ -71,7 +69,7 @@ function reviewCopy(review: Review | null) {
     return {
       title: "Hand off control of this conversation?",
       confirm: "Hand off control",
-      message: `Give control of this conversation to ${review.request.clientInstanceId} with ${
+      message: `Give control of this conversation to the companion client with ${
         review.read ? "Send and Read" : "Send only"
       }. Your own messages stay blocked until you revoke or take over. The control state is re-read first; if it changed, nothing is sent.`,
     };
@@ -234,10 +232,14 @@ function SelectedSessionControlManager({
             {model.ownerLabel} · {model.leaseStateLabel} · {model.capabilitiesLabel} · {model.generationLabel}
           </p>
           <p>{model.sendLockReason}</p>
+          <TechnicalDetails label="Controller identifiers">
+            <ul className="space-y-1 break-words font-mono text-xs">
+              <li>Client: {model.clientInstanceId}</li>
+              <li>Companion: {model.companionSessionId}</li>
+              <li>Token fingerprint: {model.tokenFingerprint ? `…${model.tokenFingerprint}` : "Not reported"}</li>
+            </ul>
+          </TechnicalDetails>
           <ul className="space-y-1 break-words text-fg-secondary">
-            <li>Client: {model.clientInstanceId}</li>
-            <li>Companion: {model.companionSessionId}</li>
-            <li>Token fingerprint: {model.tokenFingerprint ? `…${model.tokenFingerprint}` : "Not reported"}</li>
             <li>Last heartbeat: {time(model.lastHeartbeatAt ?? undefined)}</li>
             <li>Lease expires: {time(model.leaseExpiresAt ?? undefined)}</li>
             <li>Reconnect window: {time(model.reconnectExpiresAt ?? undefined)}</li>
@@ -250,7 +252,7 @@ function SelectedSessionControlManager({
                 setReview({
                   kind: "revoke",
                   generation: model.generation!,
-                  client: model.clientInstanceId ?? "the client",
+                  client: "the external client",
                 })
               }
             >
@@ -264,7 +266,7 @@ function SelectedSessionControlManager({
                 setReview({
                   kind: "emergency_takeover",
                   generation: model.generation!,
-                  client: model.clientInstanceId ?? "the client",
+                  client: "the external client",
                 })
               }
             >
@@ -276,16 +278,23 @@ function SelectedSessionControlManager({
       {detail && !model.externalControlActive ? (
         pending.length ? (
           <ul aria-label="Pending control requests" className="space-y-2">
-            {pending.map((request) => {
+            {pending.map((request, index) => {
+              const requestName = pending.length > 1 ? `companion request ${index + 1}` : "the companion request";
               const readRequested = request.requestedCapabilities.length > 1;
               return (
                 <li key={request.requestId} className="space-y-2 rounded-md border border-line p-3">
                   <p className="font-medium text-fg">
-                    {request.clientInstanceId} · Requested: {readRequested ? "Send and Read" : "Send"}
+                    {pending.length > 1 ? `Companion request ${index + 1}` : "Companion request"} · Requested:{" "}
+                    {readRequested ? "Send and Read" : "Send"}
                   </p>
+                  <TechnicalDetails label="Request identifiers">
+                    <ul className="space-y-1 break-words font-mono text-xs">
+                      <li>Client: {request.clientInstanceId}</li>
+                      <li>Companion: {request.companionSessionId}</li>
+                      <li>Token fingerprint: …{request.tokenFingerprint}</li>
+                    </ul>
+                  </TechnicalDetails>
                   <ul className="space-y-1 break-words text-fg-secondary">
-                    <li>Companion: {request.companionSessionId}</li>
-                    <li>Token fingerprint: …{request.tokenFingerprint}</li>
                     <li>Requested: {time(request.createdAt)}</li>
                     <li>Expires: {time(request.expiresAt)}</li>
                   </ul>
@@ -308,7 +317,7 @@ function SelectedSessionControlManager({
                     <Button
                       size="sm"
                       disabled={busy}
-                      aria-label={`Review handoff to ${request.clientInstanceId}`}
+                      aria-label={`Review handoff for ${requestName}`}
                       onClick={() =>
                         setReview({
                           kind: "handoff",
@@ -322,7 +331,7 @@ function SelectedSessionControlManager({
                     <Button
                       size="sm"
                       disabled={busy}
-                      aria-label={`Reject request from ${request.clientInstanceId}`}
+                      aria-label={`Reject ${requestName}`}
                       onClick={() => void reject(request)}
                     >
                       Reject request

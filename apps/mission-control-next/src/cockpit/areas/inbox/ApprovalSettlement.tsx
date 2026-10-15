@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { readApprovalFollowOn } from "./approval-follow-on";
 import { approvalDecisionMessage, approvalResolutionLine } from "./approval-settlement";
@@ -9,6 +10,8 @@ import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+import { presentApprovalEffectKind, presentApprovalEffectStatus, presentApprovalEvent } from "./inbox-vocabulary";
 
 export function ApprovalSettlement({
   approval,
@@ -76,12 +79,15 @@ export function ApprovalSettlement({
           <ol className="space-y-2 pt-2">
             {state.replay.events.map((event) => (
               <li key={event.eventId}>
-                {event.eventType.replaceAll("_", " ")} · {event.timestamp}
+                {presentApprovalEvent(event.eventType)} · <TimeText value={event.timestamp} />
               </li>
             ))}
           </ol>
           {state.replay.effects.map((effect) => (
-            <p key={effect.effectId}>Follow-on effect: {effect.status}</p>
+            <p key={effect.effectId}>
+              Follow-on effect: {presentApprovalEffectKind(effect.effectKind)} ·{" "}
+              {presentApprovalEffectStatus(effect.status).label}
+            </p>
           ))}
         </details>
       ) : null}
@@ -99,11 +105,15 @@ export function ApprovalSettlement({
       {/* Background polling stays quiet; only the outcome lines above and below are live regions. */}
       {query.isFetching ? <p className="text-fg-muted">Checking canonical follow-on work…</p> : null}
       {state?.wait ? (
-        <p>Approval wait settlement: {state.wait.status}. This records approval bookkeeping, not original execution.</p>
+        <p>
+          Approval wait settlement: {presentRunStatus(state.wait.status).label}. This records approval bookkeeping, not
+          original execution.
+        </p>
       ) : null}
       {run ? (
         <p role={run.status === "failed" || run.status === "dead_lettered" ? "alert" : "status"}>
-          Original linked work: {run.status === "running" ? "resumed" : run.status}. {run.lastError}
+          Original linked work: {run.status === "running" ? "Resumed" : presentRunStatus(run.status).label}.{" "}
+          {run.lastError}
         </p>
       ) : state ? (
         <p>No original durable execution was returned. Approval settlement is separate from execution.</p>

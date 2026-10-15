@@ -69,7 +69,11 @@ it("shows governed scope, Cancel sends nothing, pending blocks duplicates, canon
   api.list.mockResolvedValue({ items: [manifest] });
   await act(async () => finish(receipt));
   expect(api.create).toHaveBeenCalledOnce();
-  expect(container.querySelector('[aria-label="Backup creation receipt"]')?.textContent).toContain("10 bytes");
+  const receiptText = container.querySelector('[aria-label="Backup creation receipt"]')?.textContent;
+  expect(receiptText).toContain("Backup created");
+  expect(receiptText).toContain("10 B · 1 file");
+  expect(receiptText).not.toContain("fixture/backups/test");
+  expect(receiptText).not.toContain("backup-test");
   expect(container.textContent).toContain("have not been verified");
   expect(container.textContent).toContain("offline restore or installed-host readiness");
 });

@@ -1,7 +1,8 @@
 import type { CapabilityCatalogEntry, SkillRuntimeState } from "@goatcitadel/contracts";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { presentCapabilityTitle } from "@goatcitadel/mission-control-shared/content/capability-rows";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { skillStateLabel } from "./capability-vocabulary";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { resolveCockpitContinuation } from "../../app/cockpit-compatibility";
@@ -108,7 +109,7 @@ export function CapabilitySettings({
   return (
     <div className="space-y-3">
       <p>
-        Current skill state: <strong className="text-fg">{humanizeToken(skill.state)}</strong>. Changes are
+        Current skill state: <strong className="text-fg">{skillStateLabel(skill.state)}</strong>. Changes are
         approval-first; a request does not change this state.
       </p>
       <div className="flex flex-wrap gap-2">
@@ -131,7 +132,7 @@ export function CapabilitySettings({
           className="space-y-2 rounded-md border border-line bg-sunken p-3"
         >
           <p>
-            Request a change to {humanizeToken(target.state)} for {title}? Gateway will create an approval. This
+            Request a change to {skillStateLabel(target.state)} for {title}? Gateway will create an approval. This
             installation-wide skill state changes only after that approval and its effect complete.
           </p>
           <div className="flex flex-wrap gap-2">
@@ -156,10 +157,9 @@ export function CapabilitySettings({
         </p>
       ) : null}
       {control.approvalId ? (
-        <details className="text-xs text-fg-muted">
-          <summary>Approval details</summary>
-          <p className="mt-1 break-all font-mono">{control.approvalId}</p>
-        </details>
+        <TechnicalDetails label="Approval details">
+          <p className="break-all font-mono text-xs">Approval ID: {control.approvalId}</p>
+        </TechnicalDetails>
       ) : null}
       {error ? (
         <p role="alert" className="text-status-failed">

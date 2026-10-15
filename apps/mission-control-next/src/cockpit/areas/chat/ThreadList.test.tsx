@@ -129,7 +129,7 @@ it("keeps full titles, server previews and exact search targets on desktop and p
   expect([...container.querySelectorAll(".line-clamp-2")].every((node) => !node.classList.contains("block"))).toBe(
     true,
   );
-  expect(container.querySelector("time")?.dateTime).toBe("2026-10-06T01:00:00Z");
+  expect(container.querySelector("time")?.dateTime).toBe("2026-10-06T01:00:00.000Z");
   await act(async () =>
     [...container.querySelectorAll("button")]
       .find((button) => button.textContent?.includes("Open matching message"))

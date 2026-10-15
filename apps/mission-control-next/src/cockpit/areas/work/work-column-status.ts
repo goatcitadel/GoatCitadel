@@ -1,3 +1,4 @@
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { RecordView } from "../../data/record-view";
 
 const NOUNS = { tasks: "Tasks", runs: "Runs" } as const;
@@ -5,7 +6,7 @@ const SINGULAR = { tasks: "task", runs: "run" } as const;
 
 /** "1 task", "0 runs", "2 tasks". */
 function countedNoun(count: number, noun: keyof typeof SINGULAR): string {
-  return `${count} ${count === 1 ? SINGULAR[noun] : noun}`;
+  return plural(count, SINGULAR[noun], noun);
 }
 
 /**

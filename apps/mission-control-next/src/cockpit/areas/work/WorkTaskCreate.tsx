@@ -8,7 +8,7 @@ import type { TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { useTaskCreate } from "../../../features/native-routes/ops/use-task-create";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { readCockpitLocation } from "../../app/cockpit-back-guard";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { TASK_PRIORITY_LABELS } from "./work-vocabulary";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 
@@ -130,7 +130,7 @@ export function WorkTaskCreate({
           >
             {PRIORITIES.map((item) => (
               <option key={item} value={item}>
-                {humanizeToken(item)}
+                {TASK_PRIORITY_LABELS[item]}
               </option>
             ))}
           </select>

@@ -8,13 +8,8 @@ import { EmptyState } from "../../ui/EmptyState";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { workRunTitle } from "./work-board";
 import { useWorkspaceDurableRuns } from "./useWorkspaceDurableRuns";
-
-function formattedTime(iso: string): string {
-  const parsed = Date.parse(iso);
-  return Number.isFinite(parsed)
-    ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(parsed)
-    : "Time unavailable";
-}
+import { TimeText } from "../../ui/TimeText";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 
 export function WorkRunHistory({ workspaceId }: { workspaceId: string }) {
   const query = useWorkspaceDurableRuns(workspaceId);
@@ -63,7 +58,7 @@ export function WorkRunHistory({ workspaceId }: { workspaceId: string }) {
       {runs.length > 0 ? (
         <>
           <p className="text-xs text-fg-muted">
-            {runs.length} saved runs loaded.{" "}
+            {plural(runs.length, "saved run")} loaded.{" "}
             {query.hasNextPage ? "Older runs are available." : "End of saved run history."}
           </p>
           <WindowedRecordList items={runs} itemKey={(run) => run.runId} label="Durable run history" ordered>
@@ -74,8 +69,8 @@ export function WorkRunHistory({ workspaceId }: { workspaceId: string }) {
                   <StatusBadge status={presentRunStatus(run.status)} />
                 </div>
                 <p className="mt-1 text-xs text-fg-muted">
-                  Created <time dateTime={run.createdAt}>{formattedTime(run.createdAt)}</time> · Updated{" "}
-                  <time dateTime={run.updatedAt}>{formattedTime(run.updatedAt)}</time>
+                  <TimeText value={run.createdAt} prefix="Created" /> ·{" "}
+                  <TimeText value={run.updatedAt} prefix="Updated" />
                 </p>
                 <NativeOwnerLink
                   scope={[workspaceId, run.runId]}

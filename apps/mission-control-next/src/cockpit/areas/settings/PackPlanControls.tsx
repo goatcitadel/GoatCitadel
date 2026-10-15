@@ -9,6 +9,8 @@ import {
 } from "../../../features/native-routes/settings/sections/pack-plan-presentation";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { presentChangeStatusLabel } from "./settings-vocabulary";
 
 export function PackPlanControls({
   plan,
@@ -27,16 +29,18 @@ export function PackPlanControls({
     <article className="space-y-3 rounded-md border border-line p-3">
       <header>
         <h5 className="text-sm font-semibold text-fg">{plan.title.slice(0, 240)}</h5>
-        <p className="text-xs text-fg-muted">
-          {plan.status.replaceAll("_", " ")} · revision {plan.revision}
-        </p>
+        <p className="text-xs text-fg-muted">{presentChangeStatusLabel(plan.status)}</p>
       </header>
       <p className="break-words text-sm text-fg-secondary">{plan.summary.slice(0, 3000)}</p>
       <p className="break-words text-sm text-fg-secondary">{plan.impact.slice(0, 3000)}</p>
       {plan.result ? (
         <p className="break-words text-sm text-fg-secondary">{plan.result.summary.slice(0, 3000)}</p>
       ) : null}
-      <code className="block break-all font-mono text-xs text-fg-muted">{plan.planId}</code>
+      <TechnicalDetails>
+        <code className="block break-all font-mono text-xs text-fg-muted">
+          {plan.planId} · revision {plan.revision}
+        </code>
+      </TechnicalDetails>
       <div className="flex flex-wrap gap-2">
         {owner.actions.map((action) => (
           <Button key={action} disabled={owner.attempt.phase !== "idle"} onClick={() => owner.request(action)}>

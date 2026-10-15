@@ -89,14 +89,14 @@ it("keeps the current canonical decision and linked execution visible after leav
   );
   // InboxArea switches to LinkedApproval when the refreshed pending projection removes this selection.
   await render(false);
-  await vi.waitFor(() => expect(host.textContent).toContain("Original linked work: completed"));
-  expect(host.textContent).toContain("Decision recorded: approved");
+  await vi.waitFor(() => expect(host.textContent).toContain("Original linked work: Done"));
+  expect(host.textContent).toContain("Decision recorded: Approved");
   expect(host.textContent).not.toContain("requires the full approval view");
   expect(api.read).toHaveBeenCalledWith("a", expect.objectContaining({ workspaceId: "active" }));
   expect(api.replay).toHaveBeenCalledWith("a");
   expect(api.run).toHaveBeenCalledWith("original-run");
   expect(api.resolve).not.toHaveBeenCalled();
-  expect(host.textContent).toContain("Approval wait settlement: completed");
+  expect(host.textContent).toContain("Approval wait settlement: Done");
   api.lifecycle.mockResolvedValue({
     approval: settled,
     canonical: { approvalId: "a", runId: "wait" },
@@ -107,5 +107,5 @@ it("keeps the current canonical decision and linked execution visible after leav
     await client.invalidateQueries({ queryKey: ["approval-settlement"] });
   });
   await vi.waitFor(() => expect(host.textContent).toContain("No original durable execution was returned"));
-  expect(host.textContent).not.toContain("Original linked work: completed");
+  expect(host.textContent).not.toContain("Original linked work: Done");
 });

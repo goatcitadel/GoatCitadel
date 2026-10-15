@@ -68,6 +68,8 @@ Red (`variant="danger"`) means one thing: this action deletes, forgets, revokes,
 
 Sentence case; buttons are verbs that name their action. The product speaks to "you"; the assistant says "I" only inside chat messages. Errors say what happened and what to do, with no "Error:" prefix. Plain names first, Citadel names second ("Rules · Wards"). Truth beats theater: experimental, compatibility-only, advisory, or manually governed things say so; missing evidence is shown as missing, never as zero, clean, or healthy.
 
+Values are presented, never dumped. Statuses, kinds and risk go through the `status-vocabulary` presenters (risk reads Safe, Caution, Danger, Nuclear). Times use `TimeText`: relative when recent, with the full date and time as its title. Money, sizes, durations and counts use the shared `format` helpers: two-decimal money with "<$0.01" for tiny amounts and "Unknown" rather than $0.00, sizes in KB or MB, and counts through `plural()` instead of "item(s)". Names come before IDs; workspace, provider, model, actor, run and task IDs, revisions, raw ISO times and JSON appear only in `TechnicalDetails`. `scripts/check-mission-control-next-raw-values.mjs` ratchets the remaining exceptions down.
+
 ## Components to reuse
 
 Start from the cockpit primitives in `apps/mission-control-next/src/cockpit/ui` (`Button`, `Field`, `EmptyState`, and their siblings) and the shared components in `packages/mission-control-shared/src/components` before writing a new one. Server state goes through TanStack Query and the shared API clients; realtime events invalidate queries. Keep loading, error, empty, stale, partial, reconnecting, blocked, and unavailable states distinct, and keep dangerous actions explicit with their scope and consequence.
