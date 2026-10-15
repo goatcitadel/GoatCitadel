@@ -10,7 +10,23 @@ import { verificationSourceDigest } from "./source-identity.mjs";
 const git = (cwd, ...args) => promisify(execFile)("git", args, { cwd });
 
 describe("verificationSourceDigest", () => {
-  it("changes with implementation files but not with regenerated baselines", async () => {
+  it("keeps other baselines, such as an API allowlist, in the digest", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "source-identity-"));
+    try {
+      await git(root, "init", "-q");
+      const allowlist = path.join(root, "scripts", "verification", "baselines", "api-compat", "allowlist.json");
+      await fs.mkdir(path.dirname(allowlist), { recursive: true });
+      await fs.writeFile(allowlist, "[]");
+      const before = await verificationSourceDigest(root);
+
+      await fs.writeFile(allowlist, '["GET /api/v1/anything"]');
+      assert.notEqual(await verificationSourceDigest(root), before);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("changes with implementation files but not with regenerated visual baselines", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "source-identity-"));
     try {
       await git(root, "init", "-q");
