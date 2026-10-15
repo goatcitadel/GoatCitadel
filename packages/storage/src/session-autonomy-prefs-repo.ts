@@ -23,10 +23,9 @@ interface SessionAutonomyPrefsRow {
 }
 
 /**
- * Active-hours window for autonomous self-wake (P1-F4). `start`/`end` are local
- * hours; `tz` is an optional IANA timezone hint reserved for future per-session
- * scheduling (the runtime currently evaluates against the host's local hour, so
- * the field is persisted round-trip but not yet consulted).
+ * Active-hours window for autonomous self-wake (P1-F4). `start`/`end` are hours
+ * in `tz` (an IANA zone such as "Europe/Berlin"); when `tz` is absent or unknown
+ * the runtime evaluates against the host's local hour.
  */
 export interface SessionActiveHoursWindow {
   tz?: string;

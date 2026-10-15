@@ -17,10 +17,12 @@ const DEFAULT_DUE_LIMIT = 50;
 const DEFAULT_ACTIVE_HOURS: ActiveHoursWindow = { startHour: 8, endHour: 22 };
 
 export interface ActiveHoursWindow {
-  /** Inclusive local start hour [0, 23]. */
+  /** Inclusive start hour [0, 23] in `tz` (host-local when absent). */
   startHour: number;
-  /** Exclusive local end hour [1, 24]. Supports overnight windows (start > end). */
+  /** Exclusive end hour [1, 24]. Supports overnight windows (start > end). */
   endHour: number;
+  /** Optional IANA timezone. Unknown values fall back to the host's local hour. */
+  tz?: string;
 }
 
 export interface CommitmentSweepDeps {
@@ -132,14 +134,14 @@ export function getCooldownRemainingSeconds(
 }
 
 /**
- * Pure active-hours check against the local hour of `now`. Supports overnight
- * windows (e.g. `{ startHour: 22, endHour: 6 }`). A full-day window
- * (`startHour === endHour`) is always active.
+ * Pure active-hours check against the hour of `now` in `window.tz` (host-local
+ * when absent or invalid). Supports overnight windows (e.g. `{ startHour: 22,
+ * endHour: 6 }`). A full-day window (`startHour === endHour`) is always active.
  */
 export function isWithinActiveHours(now: Date, window: ActiveHoursWindow): boolean {
   const start = clampHour(window.startHour);
   const end = clampHour(window.endHour);
-  const hour = now.getHours();
+  const hour = resolveHour(now, window.tz);
   if (start === end) {
     return true; // full-day / always active
   }
@@ -148,6 +150,24 @@ export function isWithinActiveHours(now: Date, window: ActiveHoursWindow): boole
   }
   // Overnight window wraps past midnight.
   return hour >= start || hour < end;
+}
+
+function resolveHour(now: Date, tz: string | undefined): number {
+  if (!tz) {
+    return now.getHours();
+  }
+  try {
+    const formatted = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "numeric",
+      hourCycle: "h23",
+    }).format(now);
+    const hour = Number.parseInt(formatted, 10);
+    return Number.isFinite(hour) ? hour % 24 : now.getHours();
+  } catch {
+    // RangeError for an unknown zone: keep wakes running on host time.
+    return now.getHours();
+  }
 }
 
 function clampHour(value: number): number {

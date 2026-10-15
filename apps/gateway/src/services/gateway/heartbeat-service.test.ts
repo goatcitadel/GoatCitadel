@@ -140,6 +140,20 @@ describe("runHeartbeatTick", () => {
     expect(enqueueHeartbeatTurn).not.toHaveBeenCalled();
   });
 
+  it("evaluates active hours in the session timezone", async () => {
+    const { deps, enqueueHeartbeatTurn } = createHarness({
+      sessions: [session("s1")],
+      prefsBySession: {
+        s1: prefs({ sessionId: "s1", activeHours: { start: 8, end: 22, tz: "America/Los_Angeles" } }),
+      },
+      now: new Date("2026-06-22T12:00:00.000Z"), // 05:00 in Los Angeles — outside 08–22
+    });
+    const result = await runHeartbeatTick(deps);
+
+    expect(result.skippedActiveHours).toBe(1);
+    expect(enqueueHeartbeatTurn).not.toHaveBeenCalled();
+  });
+
   it("skips a session that is not yet idle enough", async () => {
     const { deps, enqueueHeartbeatTurn } = createHarness({
       sessions: [session("s1")],
