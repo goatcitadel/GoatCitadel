@@ -236,7 +236,13 @@ describe("Inbox memory proposal review", () => {
   it("keeps the decisions available after the owner refuses one", async () => {
     await render();
     api.promoteTraceMemoryCandidate.mockRejectedValueOnce(
-      new ApiRequestError("API error 400", { kind: "http", method: "POST", path: "/x", status: 400, body: { message: "Insight is required." } }),
+      new ApiRequestError("API error 400", {
+        kind: "http",
+        method: "POST",
+        path: "/x",
+        status: 400,
+        body: { message: "Insight is required." },
+      }),
     );
     await act(async () => button("Promote to memory").click());
     await act(async () => button("Confirm promotion").click());

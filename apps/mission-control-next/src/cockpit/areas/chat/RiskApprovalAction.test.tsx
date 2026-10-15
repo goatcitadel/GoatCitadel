@@ -75,7 +75,9 @@ describe("risk approval action", () => {
     region.scrollLeft = 12;
     region.focus();
     const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-    await act(async () => { region.dispatchEvent(event); });
+    await act(async () => {
+      region.dispatchEvent(event);
+    });
     // Happy DOM has no browser scroll default; cancellation is what prevents the native ancestor chain.
     expect(event.defaultPrevented).toBe(true);
     expect(region.scrollTop).toBe(top);
@@ -91,8 +93,12 @@ describe("risk approval action", () => {
   it("leaves page, arrow, Tab, modified shortcuts and nested editing controls to native behavior", async () => {
     await act(async () =>
       root.render(
-        <RiskApprovalAction approval={approval("danger")} reviewedApproval={reviewedApproval}
-          pending={false} onApprove={vi.fn()} />,
+        <RiskApprovalAction
+          approval={approval("danger")}
+          reviewedApproval={reviewedApproval}
+          pending={false}
+          onApprove={vi.fn()}
+        />,
       ),
     );
     await act(async () => container.querySelector("button")?.click());
@@ -103,7 +109,10 @@ describe("risk approval action", () => {
       ...["PageUp", "PageDown", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab"].map((key) => ({ key })),
       { key: "Tab", shiftKey: true },
       ...["Home", "End"].flatMap((key) => [
-        { key, ctrlKey: true }, { key, metaKey: true }, { key, altKey: true }, { key, shiftKey: true },
+        { key, ctrlKey: true },
+        { key, metaKey: true },
+        { key, altKey: true },
+        { key, shiftKey: true },
         { key, isComposing: true },
       ]),
     ];
@@ -134,8 +143,12 @@ describe("risk approval action", () => {
     const onApprove = vi.fn();
     await act(async () =>
       root.render(
-        <RiskApprovalAction approval={approval("danger")} reviewedApproval={reviewedApproval}
-          pending={false} onApprove={onApprove} />,
+        <RiskApprovalAction
+          approval={approval("danger")}
+          reviewedApproval={reviewedApproval}
+          pending={false}
+          onApprove={onApprove}
+        />,
       ),
     );
     await act(async () => container.querySelector("button")?.click());

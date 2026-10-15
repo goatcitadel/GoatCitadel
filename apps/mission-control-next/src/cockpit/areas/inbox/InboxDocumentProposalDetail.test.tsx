@@ -262,7 +262,13 @@ describe("Inbox document proposal", () => {
 
   it("keeps the decision available after the owner refuses it", async () => {
     api.applyDocumentPatchProposal.mockRejectedValueOnce(
-      new ApiRequestError("API error 400", { kind: "http", method: "POST", path: "/x", status: 400, body: { message: "Base revision no longer matches." } }),
+      new ApiRequestError("API error 400", {
+        kind: "http",
+        method: "POST",
+        path: "/x",
+        status: 400,
+        body: { message: "Base revision no longer matches." },
+      }),
     );
     await renderDetail();
     await act(async () => button("Review apply").click());
