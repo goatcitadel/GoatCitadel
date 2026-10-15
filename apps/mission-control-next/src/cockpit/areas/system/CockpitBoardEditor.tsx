@@ -13,6 +13,7 @@ import {
 } from "../../../features/native-routes/ops/OpsSavedBoardsModel";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
+import { Dialog } from "../../ui/Dialog";
 import { SystemDashboardWidget } from "./SystemDashboardWidget";
 
 const ADJUSTMENTS: ReadonlyArray<{ value: OpsSavedBoardsPlacementAdjustment; label: string }> = [
@@ -52,7 +53,7 @@ function BoardEditorView({
     await client.invalidateQueries({ queryKey: ["surface", "saved-board", workspaceId, saved.boardId] });
     if (isCurrent()) onSaved(saved);
   });
-  const { base, draft, setDraft, reviewing, save } = owner;
+  const { base, draft, setDraft, reviewing, save, hasEdits } = owner;
   const busy = owner.attempt.phase === "pending",
     uncertain = owner.attempt.phase === "uncertain";
   const conflict = owner.conflict;
@@ -60,6 +61,12 @@ function BoardEditorView({
   // While a newer revision is offered below, its own recovery copy replaces the owner's generic conflict message.
   const message = owner.attempt.message ?? (conflict ? null : owner.message);
   const [preview, setPreview] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  function closeEditor(discard = false) {
+    if (discard) owner.store.discard();
+    owner.invalidate();
+    onClose();
+  }
   const [widgetKind, setWidgetKind] = useState<OpsSavedBoardWidgetKind>("runtime_truth_summary");
   const [adjustments, setAdjustments] = useState<Record<string, OpsSavedBoardsPlacementAdjustment>>({});
   const setReviewing = (_value: false) => owner.cancelReview();
@@ -280,16 +287,22 @@ function BoardEditorView({
           <Button type="submit" variant="primary" disabled={!accessAvailable || busy || uncertain || stale}>
             {base ? "Review changes" : "Review new board"}
           </Button>
-          <Button
-            onClick={() => {
-              owner.invalidate();
-              onClose();
-            }}
-          >
-            Close editor
-          </Button>
+          <Button onClick={() => (hasEdits ? setConfirmDiscard(true) : closeEditor())}>Close editor</Button>
         </div>
       </form>
+      <Dialog
+        open={confirmDiscard}
+        onOpenChange={setConfirmDiscard}
+        title="Discard layout changes?"
+        description="Your edits to this board layout have not been saved. Discarding them can't be undone."
+      >
+        <div className="flex flex-wrap gap-2">
+          <Button variant="danger" onClick={() => closeEditor(true)}>
+            Discard changes
+          </Button>
+          <Button onClick={() => setConfirmDiscard(false)}>Keep editing</Button>
+        </div>
+      </Dialog>
       {preview ? (
         <section aria-label="Draft live widget preview" className="grid gap-3">
           <p className="text-sm text-fg-secondary">

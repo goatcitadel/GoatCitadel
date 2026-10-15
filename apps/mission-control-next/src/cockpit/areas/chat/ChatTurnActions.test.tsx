@@ -121,4 +121,64 @@ describe("Chat turn actions", () => {
     await act(async () => first.click());
     expect(actions.onSwitchBranch).toHaveBeenCalledWith("turn-0");
   });
+
+  const button = (label: string) =>
+    [...document.body.querySelectorAll("button")].find((entry) => entry.textContent === label);
+
+  async function renderWithTools(toolRuns: unknown[]) {
+    const actions = handlers();
+    const withTools = { ...turn, toolRuns } as unknown as ChatThreadTurnRecord;
+    await act(async () =>
+      root.render(
+        <ChatTurnActions
+          turn={withTools}
+          actions={actions}
+          streaming={false}
+          readOnly={false}
+          hasAnswer
+          onCopy={vi.fn()}
+        />,
+      ),
+    );
+    return actions;
+  }
+
+  it("retries at once when no tool in the turn could change things", async () => {
+    const actions = await renderWithTools([{ toolName: "read", effectPotential: "none", effectOutcomeKind: "none" }]);
+    await act(async () => button("Retry")!.click());
+    expect(actions.onRetryTurn).toHaveBeenCalledWith("turn-1");
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it.each([
+    ["an effect that is not ruled out", { effectPotential: "unknown" }],
+    ["a concrete outside change", { effectPotential: "none", effectOutcomeKind: "concrete" }],
+    ["an uncertain outcome", { effectPotential: "none", effectOutcomeKind: "uncertain" }],
+  ])("confirms a retry when a tool has %s", async (_case, run) => {
+    const actions = await renderWithTools([
+      { toolName: "write", ...run },
+      { toolName: "read", effectPotential: "none", effectOutcomeKind: "none" },
+    ]);
+    await act(async () => button("Retry")!.click());
+    expect(actions.onRetryTurn).not.toHaveBeenCalled();
+    const dialog = document.body.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("1 tool in this answer may change things outside the chat.");
+    expect(dialog.textContent).toContain("Retrying may run them again. Approvals still apply.");
+    const order = [...dialog.querySelectorAll("button")].map((entry) => entry.textContent);
+    expect(order.indexOf("Retry answer")).toBeLessThan(order.indexOf("Cancel"));
+    expect(button("Retry answer")!.className).toContain("bg-accent");
+    await act(async () => button("Cancel")!.click());
+    expect(actions.onRetryTurn).not.toHaveBeenCalled();
+    await act(async () => button("Retry")!.click());
+    await act(async () => button("Retry answer")!.click());
+    expect(actions.onRetryTurn).toHaveBeenCalledExactlyOnceWith("turn-1");
+  });
+
+  it("counts every tool that may change things", async () => {
+    await renderWithTools([{ toolName: "a" }, { toolName: "b", effectPotential: "unknown" }]);
+    await act(async () => button("Retry")!.click());
+    expect(document.body.querySelector('[role="dialog"]')!.textContent).toContain(
+      "2 tools in this answer may change things outside the chat.",
+    );
+  });
 });

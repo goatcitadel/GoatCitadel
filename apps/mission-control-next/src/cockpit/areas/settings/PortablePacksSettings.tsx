@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { usePortablePacks } from "../../../features/native-routes/settings/sections/use-portable-packs";
-import { useDraftLeaveDialogState } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { Sheet } from "../../ui/Sheet";
 import { PortablePackPreview, PortablePackStagedEvidence } from "./PortablePackEvidence";
 import { PortablePackSetup } from "./PortablePackSetup";
@@ -17,8 +17,7 @@ export function PortablePacksSettings() {
 }
 function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
   const { navigate } = useCockpitRoute();
-  const owner = usePortablePacks(workspaceId),
-    leave = useDraftLeaveDialogState(owner.leave.dialogProps);
+  const owner = usePortablePacks(workspaceId);
   const [query, setQuery] = useState(""),
     [limit, setLimit] = useState(30);
   const items = (owner.data?.packs ?? []).filter((item) =>
@@ -257,20 +256,7 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
           </div>
         ) : null}
       </Dialog>
-      <Dialog
-        open={owner.leave.dialogProps.open}
-        title="Unsaved changes"
-        description="Keep this app-session draft, discard it, or return to inspection. Saving requires explicit pack review."
-        onOpenChange={(open) => {
-          if (!open) owner.leave.dialogProps.onCancel();
-        }}
-      >
-        <div className="flex flex-wrap gap-2">
-          {leave.canKeep ? <Button onClick={owner.leave.dialogProps.onContinue}>Keep draft and close</Button> : null}
-          <Button onClick={leave.discard}>Discard changes</Button>
-          <Button onClick={owner.leave.dialogProps.onCancel}>Cancel</Button>
-        </div>
-      </Dialog>
+      <UnsavedChangesDialog {...owner.leave.dialogProps} warning="Saving requires explicit pack review." />
     </section>
   );
 }

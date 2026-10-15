@@ -1,6 +1,5 @@
-import { ApprovalBulkReject } from "./ApprovalBulkReject";
 import { useEffect, useState } from "react";
-import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { fetchApprovals } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -8,7 +7,6 @@ import { hasRecoveryLinkage } from "@goatcitadel/mission-control-shared/content/
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
-import { queryKeys } from "../../data/query-keys";
 import { approvalCreatedLabel } from "./approval-preview";
 import { approvalOutcomeLabel, approvalResolutionLine } from "./approval-settlement";
 import { Button } from "../../ui/Button";
@@ -46,13 +44,6 @@ function ScopedHistory({ workspaceId, identity }: { workspaceId: string; identit
     setOpen(linkedHistory);
     setView(historyView);
   }, [linkedHistory, historyView, runId, sessionId]);
-  const queryClient = useQueryClient();
-  // An installation-wide rejection settles pending records everywhere: the pending Inbox projection, the nav
-  // badge and every approval read (this history included) must re-read, not just this list.
-  function afterBulkRejection() {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
-    void queryClient.invalidateQueries({ queryKey: ["approvals"] });
-  }
   function inspect(approvalId: string) {
     const params = new URLSearchParams(route.search);
     params.set("approvalId", approvalId);
@@ -162,7 +153,6 @@ function ScopedHistory({ workspaceId, identity }: { workspaceId: string; identit
               ))}
             </select>
           </label>
-          <ApprovalBulkReject onResolved={afterBulkRejection} />
           <Button disabled={history.isFetching} onClick={() => void history.refetch()}>
             Refresh approval history
           </Button>

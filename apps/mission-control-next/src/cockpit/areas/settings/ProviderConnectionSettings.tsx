@@ -7,6 +7,7 @@ import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { RiskBadge } from "../../ui/RiskBadge";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import { canReviewConnectionPlan, connectionPlanCompleted } from "./provider-connection-state";
@@ -268,8 +269,9 @@ function ProviderConnectionEditor({
               {plan.result?.summary && plan.result.summary !== plan.summary ? (
                 <p className="break-words">Owner result: {plan.result.summary}</p>
               ) : null}
-              <p className="text-xs">
-                Risk: {humanizeToken(plan.risk)} · Plan revision {plan.revision}
+              <p className="flex flex-wrap items-center gap-2 text-xs">
+                <RiskBadge risk={plan.risk} />
+                <span>Plan revision {plan.revision}</span>
               </p>
               {connectionPlanCompleted(plan) && attempt.verified && !attempt.uncertain ? (
                 <p className="text-status-done">

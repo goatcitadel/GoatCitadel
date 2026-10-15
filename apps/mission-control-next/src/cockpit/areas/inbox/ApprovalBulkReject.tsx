@@ -7,9 +7,16 @@ import {
 import { useState } from "react";
 import { resolveApprovalsBulk } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
+import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { TypedConfirmation, typedConfirmationMatches } from "../../ui/TypedConfirmation";
+import { describeInstallationScope, useInstallationPendingApprovals } from "./installation-pending-approvals";
+
+const CONFIRMATION = "reject all";
+
 export function ApprovalBulkReject({ onResolved }: { onResolved: () => void }) {
   const access = useProjectAccess("installation-approval-rejection");
   return <BulkReject key={access.identity} onResolved={onResolved} />;
@@ -20,12 +27,26 @@ function BulkReject({ onResolved }: { onResolved: () => void }) {
     [typed, setTyped] = useState(""),
     [busy, setBusy] = useState(false),
     [freshReview, setFreshReview] = useState(false);
+  const pending = useInstallationPendingApprovals();
+  const nameOf = useWorkspaceNameLookup(useUiPreferences().activeCitadelId);
+  // The scope is only known once a fresh read settles; a stale, failed or empty read keeps confirm unavailable.
+  const scope =
+    pending.data && !pending.isFetching && !pending.isError ? describeInstallationScope(pending.data, nameOf) : null;
+  const scopeReady = Boolean(scope && scope.count > 0);
   const attemptKey = JSON.stringify([access.presentationScope, "bulk-reject"]);
   const attempt = useApprovalOperationAttempt(attemptKey);
   const outcome = attempt?.phase === "resolved" && freshReview ? "" : (attempt?.message ?? "");
   const canReview = canReviewApprovalOperation(attempt, "installation", true);
   async function reject() {
-    if (review !== access.token || !access.current() || typed !== "reject all" || !canReview || outcome) return;
+    if (
+      review !== access.token ||
+      !access.current() ||
+      !typedConfirmationMatches(typed, CONFIRMATION) ||
+      !scopeReady ||
+      !canReview ||
+      outcome
+    )
+      return;
     const token = beginApprovalOperation(attemptKey, "installation", true);
     if (!token) return;
     setFreshReview(false);
@@ -65,6 +86,7 @@ function BulkReject({ onResolved }: { onResolved: () => void }) {
           setFreshReview(attempt?.phase === "resolved");
           setReview(access.token);
           setTyped("");
+          void pending.refetch();
         }}
       >
         Review installation-wide rejection
@@ -78,22 +100,33 @@ function BulkReject({ onResolved }: { onResolved: () => void }) {
         description="This existing Gateway operation applies across the installation, including other workspaces. It rejects every pending request visible to the authorized operator."
       >
         <div className="grid gap-3">
+          {pending.isFetching ? (
+            <p role="status">Checking how many requests are pending…</p>
+          ) : pending.isError ? (
+            <p role="alert">
+              The scope couldn't be checked, so rejection stays unavailable. {describeApiError(pending.error).summary}
+            </p>
+          ) : scope ? (
+            <div role="status" className="grid gap-1">
+              <p className="font-medium text-fg">{scope.summary}</p>
+              {scope.workspaces ? <p className="text-sm text-fg-secondary">{scope.workspaces}</p> : null}
+            </div>
+          ) : null}
           <p>
             Pending requests may change while this review is open. Rejection withholds authorization; it does not undo
             completed work.
           </p>
-          <label>
-            Type reject all to confirm
-            <input
-              className="block w-full rounded-md border border-line-control bg-raised p-2"
-              value={typed}
-              onChange={(event) => setTyped(event.target.value)}
-            />
-          </label>
+          <TypedConfirmation
+            phrase={CONFIRMATION}
+            value={typed}
+            onChange={setTyped}
+            disabled={busy}
+            consequence="Reject all"
+          />
           {outcome ? <p role="status">{outcome}</p> : null}
           <Button
             variant="danger"
-            disabled={busy || Boolean(outcome) || typed !== "reject all"}
+            disabled={busy || Boolean(outcome) || !scopeReady || !typedConfirmationMatches(typed, CONFIRMATION)}
             onClick={() => void reject()}
           >
             Confirm installation-wide rejection

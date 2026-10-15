@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { NotFoundError, PayloadTooLargeError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, PayloadTooLargeError, ValidationError } from "@goatcitadel/contracts";
 import { assertExistingPathRealpathAllowed, assertWritePathInJail } from "@goatcitadel/policy-engine";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
@@ -82,7 +82,11 @@ export interface FilesRoutePortDependencies {
 }
 
 export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRoutePort {
-  const uploadWorkspaceFile = async (relativePath: string, content: string): Promise<FileUploadResult> => {
+  const uploadWorkspaceFile = async (
+    relativePath: string,
+    content: string,
+    options: { expectAbsent?: boolean } = {},
+  ): Promise<FileUploadResult> => {
     const normalized = normalizeRelativePath(relativePath);
     const bytes = Buffer.byteLength(content, "utf8");
     if (bytes > MAX_FILE_UPLOAD_BYTES) {
@@ -96,7 +100,20 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
     const fullPath = path.resolve(deps.rootDir, deps.workspaceDir, normalized);
     assertWritePathInJail(fullPath, deps.writeJailRoots);
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
-    await fs.writeFile(fullPath, content, "utf8");
+    try {
+      // "wx" creates atomically, so a reviewed "new file" upload never replaces a file that appeared after the review.
+      await fs.writeFile(fullPath, content, { encoding: "utf8", flag: options.expectAbsent ? "wx" : "w" });
+    } catch (error) {
+      if (options.expectAbsent && (error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new ConflictError({
+          code: "ALREADY_EXISTS",
+          message:
+            "A file already exists at this path, so nothing was written. Review the replacement before uploading.",
+          details: { relativePath: normalized },
+        });
+      }
+      throw error;
+    }
 
     const result = {
       relativePath: normalized,

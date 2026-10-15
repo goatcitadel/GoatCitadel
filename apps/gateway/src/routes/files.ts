@@ -23,6 +23,7 @@ const BROWSER_ACTIVE_CONTENT_TYPES = new Set([
 const uploadSchema = z.object({
   relativePath: z.string().min(1).max(2048),
   content: z.string().max(MAX_FILE_UPLOAD_BYTES),
+  expectAbsent: z.boolean().optional(),
 });
 
 const downloadQuerySchema = z.object({
@@ -114,7 +115,9 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const uploaded = await fastify.services.files.uploadWorkspaceFile(parsed.data.relativePath, parsed.data.content);
+      const uploaded = await fastify.services.files.uploadWorkspaceFile(parsed.data.relativePath, parsed.data.content, {
+        expectAbsent: parsed.data.expectAbsent,
+      });
       return reply.code(201).send(uploaded);
     } catch (error) {
       return sendRouteError(reply, error, request.log);

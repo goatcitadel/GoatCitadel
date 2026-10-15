@@ -1,4 +1,5 @@
-import { useId, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { ShieldAlert } from "lucide-react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
 import { buildApprovalRequestReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
@@ -8,6 +9,7 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { handleEvidenceScrollKeyDown } from "../../ui/evidence-scroll";
+import { TypedConfirmation, typedConfirmationMatches } from "../../ui/TypedConfirmation";
 
 /** The deliberate, untimed confirmation word for nuclear risk and for risk levels this build doesn't know. */
 const CRITICAL_CONFIRMATION = "approve";
@@ -29,7 +31,6 @@ export function RiskApprovalAction({
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [typed, setTyped] = useState("");
-  const confirmationHintId = useId();
   const disabled = pending || Boolean(approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now());
   const reviewed =
     reviewedApproval?.approvalId === approval.approvalId &&
@@ -58,7 +59,7 @@ export function RiskApprovalAction({
   if (specialistReview || (approval.riskLevel !== "safe" && approval.riskLevel !== "caution")) {
     const critical = !["safe", "caution", "danger"].includes(approval.riskLevel);
     const riskName = presentRiskLevel(approval.riskLevel).label;
-    const confirmed = !critical || typed.trim().toLowerCase() === CRITICAL_CONFIRMATION;
+    const confirmed = !critical || typedConfirmationMatches(typed, CRITICAL_CONFIRMATION);
     return (
       <>
         <Button
@@ -71,6 +72,8 @@ export function RiskApprovalAction({
             setConfirmOpen(true);
           }}
         >
+          {/* The shield and red styling mark the risk; the label stays "Review approval" for proofs and tests. */}
+          <ShieldAlert aria-hidden="true" className="size-4 shrink-0" />
           Review approval
         </Button>
         <Dialog
@@ -163,21 +166,12 @@ export function RiskApprovalAction({
           </div>
           {critical ? (
             <div className="mb-3">
-              <label className="block text-sm text-fg-secondary">
-                Type <strong className="font-mono text-fg">{CRITICAL_CONFIRMATION}</strong> to approve this action once
-                <input
-                  value={typed}
-                  onChange={(event) => setTyped(event.target.value)}
-                  aria-required="true"
-                  aria-describedby={confirmationHintId}
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="mt-1 block min-h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-fg"
-                />
-              </label>
-              <p id={confirmationHintId} className="mt-1 text-xs text-fg-muted">
-                Approve once stays unavailable until the word matches.
-              </p>
+              <TypedConfirmation
+                phrase={CRITICAL_CONFIRMATION}
+                value={typed}
+                onChange={setTyped}
+                consequence="Approve once"
+              />
             </div>
           ) : null}
           <div className="flex flex-wrap gap-2">

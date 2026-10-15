@@ -61,7 +61,24 @@ export function WorkBoard() {
   const loadedTasks = taskBoard ? Object.values(taskBoard).flat() : [];
   const taskView = recordView(tasks);
   const runView = recordView(runs);
-  const selectedTasks = loadedTasks.filter((task) => selectedIds.has(task.taskId));
+  const query = search.trim().toLowerCase();
+  const taskMatches = (task: (typeof loadedTasks)[number]) =>
+    `${task.title} ${task.status} ${task.description ?? ""}`.toLowerCase().includes(query);
+  // A bulk action applies only to the selected tasks the operator can see; the filter never hides a target.
+  const visibleTaskIds = new Set(
+    kind === "run"
+      ? []
+      : COLUMNS.flatMap((column) =>
+          (taskBoard?.[column.id] ?? [])
+            .filter(taskMatches)
+            .slice(0, column.id === "done" ? 25 : undefined)
+            .map((task) => task.taskId),
+        ),
+  );
+  const selectedTasks = loadedTasks.filter((task) => selectedIds.has(task.taskId) && visibleTaskIds.has(task.taskId));
+  const hiddenSelected = loadedTasks.filter(
+    (task) => selectedIds.has(task.taskId) && !visibleTaskIds.has(task.taskId),
+  ).length;
   const toggle = (taskId: string) =>
     setSelectedIds((current) => {
       const next = new Set(current);
@@ -153,6 +170,13 @@ export function WorkBoard() {
           }}
         />
       ) : null}
+      {selecting && hiddenSelected ? (
+        <p role="status" className="text-sm text-fg-secondary">
+          {hiddenSelected === 1
+            ? "1 selected task is hidden by the filter and won't change."
+            : `${hiddenSelected} selected tasks are hidden by the filter and won't change.`}
+        </p>
+      ) : null}
       {bulkNotice ? (
         <p role="status" className="rounded-md border border-line bg-sunken p-3 text-sm text-fg">
           {bulkNotice}
@@ -233,11 +257,10 @@ export function WorkBoard() {
                           (item) =>
                             item.kind === recordKind &&
                             (item.kind === "task"
-                              ? `${item.task.title} ${item.task.status} ${item.task.description ?? ""}`
+                              ? taskMatches(item.task)
                               : `${workRunTitle(item.run)} ${item.run.status} ${item.run.lastError ?? ""}`
-                            )
-                              .toLowerCase()
-                              .includes(search.trim().toLowerCase()),
+                                  .toLowerCase()
+                                  .includes(query)),
                         )
                         .slice(0, column.id === "done" ? 25 : undefined)}
                       itemKey={(item) => item.key}

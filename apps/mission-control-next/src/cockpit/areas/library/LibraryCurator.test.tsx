@@ -150,7 +150,9 @@ it("reviews an archive with honest re-enable copy: Cancel sends nothing, Confirm
     archivedAt: "2026-10-07T11:00:00.000Z",
     state: "disabled",
   });
+  expect(button("Review archive")!.className).not.toContain("border-status-failed");
   await click("Review archive");
+  expect(button("Archive skill")!.className).toContain("bg-accent");
   await click("Archive skill");
   expect(archiveCuratorSkill).toHaveBeenCalledExactlyOnceWith({
     skillId: "skill-alpha",

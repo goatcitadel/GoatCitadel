@@ -32,6 +32,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
   fetchApproval: apiMocks.fetchApproval,
   fetchApprovals: apiMocks.fetchApprovals,
 }));
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [] })),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
   getGatewayApiBaseUrl: () => inboxMock.installation,
@@ -119,7 +122,8 @@ beforeEach(() => {
   window.history.replaceState(null, "", "/inbox");
   inboxMock.result = { data: projection, isLoading: false, isError: false, isFetching: false, refetch: vi.fn() };
   apiMocks.fetchApproval.mockReset();
-  apiMocks.fetchApprovals.mockReset();
+  // The Inbox reads installation-wide pending approvals for its bulk-rejection zone; none by default.
+  apiMocks.fetchApprovals.mockReset().mockResolvedValue({ items: [] });
   apiMocks.markRead.mockReset();
   apiMocks.resolveApproval.mockReset();
   apiMocks.fetchApproval.mockResolvedValue(approval);
@@ -552,7 +556,8 @@ describe("InboxArea", () => {
       workspaceId: "default",
       signal: expect.any(AbortSignal),
     });
-    expect(apiMocks.fetchApprovals).not.toHaveBeenCalled();
+    // Only the bulk-rejection zone's installation-wide pending read; opening details never lists approvals.
+    for (const [input] of apiMocks.fetchApprovals.mock.calls) expect(input).toEqual({ status: "pending", limit: 200 });
     await act(async () => {
       await apiMocks.fetchApproval.mock.results[0]?.value;
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -792,6 +797,30 @@ it("shows server-scoped approval history with an older-page continuation", async
   expect(container.textContent).toContain("Load older pages to inspect the full retained history");
   expect(container.textContent).toContain("Rejected");
   expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
+});
+
+it("hides the installation-wide rejection while nothing is pending", async () => {
+  await renderUpdates(new QueryClient());
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(apiMocks.fetchApprovals).toHaveBeenCalledWith({ status: "pending", limit: 200 });
+  expect(container.textContent).not.toContain("Reject everything pending");
+  expect(container.textContent).not.toContain("Review installation-wide rejection");
+});
+
+it("puts the installation-wide rejection in its own zone at the bottom when approvals are pending", async () => {
+  apiMocks.fetchApprovals.mockResolvedValue({ items: [approval] });
+  await renderUpdates(new QueryClient());
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  const zone = [...container.querySelectorAll("section")].find(
+    (section) => section.querySelector("h2")?.textContent === "Reject everything pending",
+  )!;
+  expect(zone.textContent).toContain("This applies to every workspace in the installation");
+  expect(zone.textContent).toContain("Review installation-wide rejection");
+  expect(zone.parentElement?.lastElementChild).toBe(zone);
 });
 
 it("lets operators disable single-letter shortcuts", async () => {

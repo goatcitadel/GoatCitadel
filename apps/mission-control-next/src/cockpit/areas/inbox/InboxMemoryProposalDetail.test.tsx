@@ -174,6 +174,18 @@ describe("Inbox memory proposal review", () => {
     expect(button("Confirm promotion").disabled).toBe(false);
   });
 
+  it("promotes with a primary button and rejects with a secondary one, never in the danger style", async () => {
+    await render();
+    expect(button("Promote to memory").className).toContain("bg-accent");
+    expect(button("Reject proposal").className).toContain("bg-raised");
+    await act(async () => button("Promote to memory").click());
+    expect(button("Confirm promotion").className).toContain("bg-accent");
+    await act(async () => button("Cancel").click());
+    await act(async () => button("Reject proposal").click());
+    expect(button("Confirm rejection").className).toContain("bg-accent");
+    expect(document.body.innerHTML).not.toContain("text-status-failed hover:bg-sunken");
+  });
+
   it("keeps the proposal beside a failed recheck", async () => {
     const client = await render();
     api.fetchTraceMemoryCandidate.mockRejectedValueOnce(new Error("Gateway offline"));
@@ -236,7 +248,13 @@ describe("Inbox memory proposal review", () => {
   it("keeps the decisions available after the owner refuses one", async () => {
     await render();
     api.promoteTraceMemoryCandidate.mockRejectedValueOnce(
-      new ApiRequestError("API error 400", { kind: "http", method: "POST", path: "/x", status: 400, body: { message: "Insight is required." } }),
+      new ApiRequestError("API error 400", {
+        kind: "http",
+        method: "POST",
+        path: "/x",
+        status: 400,
+        body: { message: "Insight is required." },
+      }),
     );
     await act(async () => button("Promote to memory").click());
     await act(async () => button("Confirm promotion").click());

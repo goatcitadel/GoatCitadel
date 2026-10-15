@@ -88,9 +88,10 @@ export async function createFileFromTemplate(
 export async function uploadFile(
   relativePath: string,
   content: string,
+  options: { expectAbsent?: boolean } = {},
 ): Promise<{ relativePath: string; fullPath: string; bytes: number }> {
   return request<{ relativePath: string; fullPath: string; bytes: number }>("/api/v1/files/upload", {
     method: "POST",
-    body: JSON.stringify({ relativePath, content }),
+    body: JSON.stringify({ relativePath, content, ...(options.expectAbsent ? { expectAbsent: true } : {}) }),
   });
 }

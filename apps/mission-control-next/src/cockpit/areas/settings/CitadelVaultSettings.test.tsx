@@ -96,7 +96,12 @@ it("renders native leave actions that cancel or discard without writing a secret
       .props.onChange({ target: { value: "synthetic-draft" } }),
   );
   await act(async () => button("Close secret editor").props.onClick());
-  expect(renderer!.root.findByProps({ "aria-label": "Unsaved changes" })).toBeDefined();
+  const leaveActions = renderer!.root
+    .findByProps({ "aria-label": "Unsaved changes" })
+    .findAllByType("button")
+    .map((node) => text(node).replace(/\s+/gu, " ").trim());
+  expect(leaveActions.slice(-2)).toEqual(["Discard changes", "Cancel"]);
+  expect(button("Discard changes").props.className).toContain("border-status-failed");
   await act(async () => button("Cancel").props.onClick());
   expect(renderer!.root.findAllByType("input").find((node) => node.props.type === "password")!.props.value).toBe(
     "synthetic-draft",

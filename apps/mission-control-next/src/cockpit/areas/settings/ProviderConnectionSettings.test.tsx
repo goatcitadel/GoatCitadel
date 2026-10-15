@@ -418,6 +418,8 @@ describe("cockpit provider connection editing", () => {
     });
     await act(async () => dialog.onSubmitSecureInput(dialog.plan!, { credential: "synthetic-test-credential" }));
     expect(container.textContent).toContain("Owner result: Registered environment owner is reserved");
+    expect(container.textContent).toContain("Medium risk");
+    expect(container.textContent).not.toContain("Risk: ");
     expect(container.textContent).not.toContain("Current provider evidence confirms");
   });
 

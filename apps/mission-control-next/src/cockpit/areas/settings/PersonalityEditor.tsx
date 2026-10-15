@@ -1,13 +1,10 @@
 import type { PersonalityPresetCategory } from "@goatcitadel/contracts";
 import { useId } from "react";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import {
-  useDraftLeaveDialogState,
-  type DraftLeaveDialogProps,
-} from "../../../features/native-routes/library/DraftLeaveDialog";
 import { usePersonalityEditor } from "../../../features/native-routes/settings/use-personality-editor";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 
 type Controller = ReturnType<typeof usePersonalityEditor>;
 const categories: PersonalityPresetCategory[] = [
@@ -191,7 +188,7 @@ export function PersonalityEditor({ control }: { control: Controller }) {
           </div>
         </div>
       </Dialog>
-      <PersonalityDraftLeave {...c.leave.dialogProps} />
+      <UnsavedChangesDialog {...c.leave.dialogProps} />
       <ConfirmModal
         open={c.pendingRemove !== null}
         title={c.pendingRemove?.builtin ? "Reset built-in personality?" : "Remove custom personality?"}
@@ -206,43 +203,5 @@ export function PersonalityEditor({ control }: { control: Controller }) {
         onConfirm={() => void c.removeOrResetPersonality()}
       />
     </>
-  );
-}
-
-function PersonalityDraftLeave(props: DraftLeaveDialogProps) {
-  const state = useDraftLeaveDialogState(props);
-  return (
-    <Dialog
-      open={props.open}
-      title="Unsaved changes"
-      description={state.description}
-      onOpenChange={(open) => {
-        if (!open && !state.saving) props.onCancel();
-      }}
-    >
-      {state.error ? (
-        <p role="alert" className="mb-3 text-sm text-status-failed">
-          {state.error}
-        </p>
-      ) : null}
-      <div className="flex flex-wrap gap-2">
-        {state.canSave ? (
-          <Button disabled={state.saving} onClick={() => void state.saveAndContinue()}>
-            Save and continue
-          </Button>
-        ) : null}
-        {state.canKeep ? (
-          <Button disabled={state.saving} onClick={props.onContinue}>
-            Keep draft and close
-          </Button>
-        ) : null}
-        <Button variant="danger" disabled={state.saving} onClick={state.discard}>
-          Discard changes
-        </Button>
-        <Button disabled={state.saving} onClick={props.onCancel}>
-          Cancel
-        </Button>
-      </div>
-    </Dialog>
   );
 }

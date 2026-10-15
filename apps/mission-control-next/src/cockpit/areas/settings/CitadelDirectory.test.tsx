@@ -166,7 +166,10 @@ describe("native Citadel directory", () => {
     await click("Archive Citadel Citadel two");
     await click("Cancel");
     expect(api.archiveCitadel).not.toHaveBeenCalled();
+    expect(String(button("Archive Citadel Citadel two").props.className)).not.toContain("border-status-failed");
     await click("Archive Citadel Citadel two");
+    // Archive is reversible, so neither the trigger nor the confirm is red.
+    expect(String(button("Confirm archive Citadel").props.className)).toContain("bg-accent");
     await click("Confirm archive Citadel");
     expect(api.archiveCitadel).toHaveBeenCalledExactlyOnceWith("two", original.revision);
     await vi.waitFor(() => expect(button("Restore Citadel Citadel two")).toBeTruthy());

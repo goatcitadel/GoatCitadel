@@ -1,5 +1,10 @@
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
-import { readSpecialistEvidence, specialistEvidenceMatches, specialistEvidenceKey, type SpecialistEvidence } from "./specialist-approval-evidence";
+import {
+  readSpecialistEvidence,
+  specialistEvidenceMatches,
+  specialistEvidenceKey,
+  type SpecialistEvidence,
+} from "./specialist-approval-evidence";
 import { SpecialistApprovalReview } from "./SpecialistApprovalReview";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -26,7 +31,8 @@ import {
   useInboxApprovalAttempt,
 } from "./inbox-approval-attempts";
 
-const CHANGED_RECORD = "This approval changed or is no longer in the current pending queue. Refresh it before deciding.";
+const CHANGED_RECORD =
+  "This approval changed or is no longer in the current pending queue. Refresh it before deciding.";
 const STILL_PENDING = "The approval is still pending and unchanged. Decide again when ready.";
 
 interface ApprovalDecisionBarProps {
@@ -52,7 +58,15 @@ export function ApprovalDecisionBar(props: ApprovalDecisionBarProps) {
   const access = useProjectAccess(scope);
   return (
     <ApprovalDecisionReview
-      key={canonicalJsonString([props.item, props.approval, props.workspaceId, scope, props.sessionId, access.identity, props.specialistEvidence ? specialistEvidenceKey(props.specialistEvidence) : undefined])}
+      key={canonicalJsonString([
+        props.item,
+        props.approval,
+        props.workspaceId,
+        scope,
+        props.sessionId,
+        access.identity,
+        props.specialistEvidence ? specialistEvidenceKey(props.specialistEvidence) : undefined,
+      ])}
       {...props}
       activeWorkspaceId={scope}
     />
@@ -116,10 +130,18 @@ function ApprovalDecisionReview({
 
   async function decide(decision: "approve" | "reject") {
     if (
-      !current.current || !access.current() ||
+      !current.current ||
+      !access.current() ||
       (!hasPreview && decision !== "reject") ||
       scopeChanged ||
-      !canResolveInboxApproval(item, approval, approval, workspaceId, Date.now(), specialistReady || decision === "reject")
+      !canResolveInboxApproval(
+        item,
+        approval,
+        approval,
+        workspaceId,
+        Date.now(),
+        specialistReady || decision === "reject",
+      )
     )
       return;
     const token = beginInboxApprovalAttempt(workspaceId, approval.approvalId);
@@ -134,7 +156,16 @@ function ApprovalDecisionReview({
       // Cancel before dispatch; after dispatch retain the original action's outcome.
       if (!current.current || !access.current()) return;
       const record = latest ?? undefined;
-      if (!canResolveInboxApproval(item, approval, record, workspaceId, Date.now(), specialistReady || decision === "reject")) {
+      if (
+        !canResolveInboxApproval(
+          item,
+          approval,
+          record,
+          workspaceId,
+          Date.now(),
+          specialistReady || decision === "reject",
+        )
+      ) {
         setError(CHANGED_RECORD);
         onInvalidated();
         return;
@@ -142,9 +173,15 @@ function ApprovalDecisionReview({
       if (specializedReview && decision === "approve") {
         const fresh = await readSpecialistEvidence(approval);
         if (!current.current || !access.current()) return;
-        if (!canResolveInboxApproval(item, approval, record, workspaceId, Date.now(), true) || !specialistEvidence || !specialistEvidenceMatches(approval, fresh) || specialistEvidenceKey(fresh) !== specialistEvidenceKey(specialistEvidence)) {
+        if (
+          !canResolveInboxApproval(item, approval, record, workspaceId, Date.now(), true) ||
+          !specialistEvidence ||
+          !specialistEvidenceMatches(approval, fresh) ||
+          specialistEvidenceKey(fresh) !== specialistEvidenceKey(specialistEvidence)
+        ) {
           setError("Specialist evidence changed. Refresh and review the current target before approving.");
-          onInvalidated("Specialist evidence changed. Refresh and review the current target before approving."); return;
+          onInvalidated("Specialist evidence changed. Refresh and review the current target before approving.");
+          return;
         }
       }
       updateInboxApprovalAttempt(
@@ -271,19 +308,16 @@ function ApprovalDecisionReview({
               expiresAt: approval.expiresAt,
             }}
             reviewedApproval={approval}
-            specialistReview={specialistReady && specialistEvidence ? <SpecialistApprovalReview approval={approval} evidence={specialistEvidence} /> : undefined}
+            specialistReview={
+              specialistReady && specialistEvidence ? (
+                <SpecialistApprovalReview approval={approval} evidence={specialistEvidence} />
+              ) : undefined
+            }
             pending={Boolean(attempt) || (specializedReview && !specialistReady)}
             onApprove={() => void decide("approve")}
           />
         </span>
-        <Button
-          ref={denyRef}
-          type="button"
-          size="sm"
-          variant="danger"
-          disabled={Boolean(attempt)}
-          onClick={() => setDenyOpen(true)}
-        >
+        <Button ref={denyRef} type="button" size="sm" disabled={Boolean(attempt)} onClick={() => setDenyOpen(true)}>
           Deny
         </Button>
       </div>
@@ -327,7 +361,7 @@ function ApprovalDecisionReview({
         description="The pending action will not be authorized by this decision."
       >
         <div className="flex gap-2">
-          <Button variant="danger" disabled={Boolean(attempt)} onClick={() => void decide("reject")}>
+          <Button variant="primary" disabled={Boolean(attempt)} onClick={() => void decide("reject")}>
             Confirm deny
           </Button>
           <Button disabled={pending} onClick={() => setDenyOpen(false)}>

@@ -171,6 +171,18 @@ describe("Inbox document proposal", () => {
     expect(container.textContent).toContain("Gateway recorded this document proposal as rejected");
   });
 
+  it("applies (a versioned, reversible change) with a primary button and confirms either decision as primary", async () => {
+    await renderDetail();
+    expect(button("Review apply").className).toContain("bg-accent");
+    expect(button("Review rejection").className).toContain("bg-raised");
+    await act(async () => button("Review apply").click());
+    expect(button("Confirm apply").className).toContain("bg-accent");
+    await act(async () => button("Cancel").click());
+    await act(async () => button("Review rejection").click());
+    expect(button("Confirm rejection").className).toContain("bg-accent");
+    expect(document.body.innerHTML).not.toContain("text-status-failed hover:bg-sunken");
+  });
+
   it("refuses a changed diff after review", async () => {
     api.fetchDocumentPatchProposal.mockResolvedValueOnce({ item: proposal }).mockResolvedValueOnce({
       item: { ...proposal, proposedContent: "Different", derivedDiff: "-Before\n+Different" },
@@ -262,7 +274,13 @@ describe("Inbox document proposal", () => {
 
   it("keeps the decision available after the owner refuses it", async () => {
     api.applyDocumentPatchProposal.mockRejectedValueOnce(
-      new ApiRequestError("API error 400", { kind: "http", method: "POST", path: "/x", status: 400, body: { message: "Base revision no longer matches." } }),
+      new ApiRequestError("API error 400", {
+        kind: "http",
+        method: "POST",
+        path: "/x",
+        status: 400,
+        body: { message: "Base revision no longer matches." },
+      }),
     );
     await renderDetail();
     await act(async () => button("Review apply").click());

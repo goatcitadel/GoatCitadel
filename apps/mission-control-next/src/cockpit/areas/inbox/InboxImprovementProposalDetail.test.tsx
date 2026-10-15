@@ -152,6 +152,18 @@ describe("Inbox improvement proposal review", () => {
     expect(button("Confirm keep").disabled).toBe(false);
   });
 
+  it("keeps with a primary button and discards with a secondary one, confirming either as primary", async () => {
+    await render();
+    expect(button("Keep proposal").className).toContain("bg-accent");
+    expect(button("Discard proposal").className).toContain("bg-raised");
+    await act(async () => button("Discard proposal").click());
+    expect(button("Confirm discard").className).toContain("bg-accent");
+    await act(async () => button("Cancel").click());
+    await act(async () => button("Keep proposal").click());
+    expect(button("Confirm keep").className).toContain("bg-accent");
+    expect(document.body.innerHTML).not.toContain("text-status-failed hover:bg-sunken");
+  });
+
   it("keeps the review beside a failed recheck", async () => {
     await render();
     api.fetchCuratorReviewItem.mockRejectedValueOnce(new Error("Gateway offline"));

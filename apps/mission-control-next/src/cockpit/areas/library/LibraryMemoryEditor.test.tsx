@@ -125,7 +125,11 @@ it("treats a 202 memory request as pending, retains the draft and persists the r
     "Requested pinned state: unpinned",
   );
   expect(patchMemoryItem).not.toHaveBeenCalled();
-  await click("Request memory approval");
+  expect(
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find((n) => n.textContent === "Request edit approval")!
+      .className,
+  ).toContain("bg-accent");
+  await click("Request edit approval");
   await act(async () => {
     await client.invalidateQueries({ queryKey: ["library", "memory-item"] });
   });
@@ -149,7 +153,7 @@ it("withholds stale writes and keeps the error through settled canonical refresh
     total: 1,
     snapshotAt: "now",
   });
-  await click("Request memory approval");
+  await click("Request edit approval");
   await act(async () => {
     await client.invalidateQueries({ queryKey: ["library", "memory-item"] });
   });
@@ -168,7 +172,12 @@ it("governs forget and reads bounded history separately from item content", asyn
   await click("Memory history");
   await vi.waitFor(() => expect(container.textContent).toContain("operator"));
   await click("Review forget");
-  await click("Request memory approval");
+  const named = (name: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name)!;
+  expect(named("Review forget").className).toContain("border-status-failed");
+  expect(named("Request forget approval").className).toContain("border-status-failed");
+  expect(document.body.textContent).toContain("A forgotten item can't be restored from the cockpit.");
+  await click("Request forget approval");
   expect(forgetMemoryItem).toHaveBeenCalledExactlyOnceWith("m-a");
   expect(patchMemoryItem).not.toHaveBeenCalled();
 });
@@ -262,7 +271,7 @@ async function requestReview(action: "save" | "forget" = "save") {
   vi.mocked(forgetMemoryItem).mockResolvedValue({ pendingApproval: { ...pendingApproval, action: "items_forgotten" } });
   await render();
   await click(action === "save" ? "Review memory changes" : "Review forget");
-  await click("Request memory approval");
+  await click(action === "save" ? "Request edit approval" : "Request forget approval");
   await vi.waitFor(() =>
     expect(document.querySelector('[aria-label="Memory request receipt"]')?.textContent).toContain(
       "Approval requested.",
@@ -509,7 +518,7 @@ it("captures reviewed TTL seconds in the governed patch", async () => {
   expect(document.querySelector('[aria-label="Proposed memory changes"]')?.textContent).toContain(
     "Requested TTL: 7200 seconds",
   );
-  await click("Request memory approval");
+  await click("Request edit approval");
   expect(patchMemoryItem).toHaveBeenCalledExactlyOnceWith("m-a", {
     title: "A memory",
     content: "Original",
@@ -525,7 +534,7 @@ it("withholds an invalid TTL before the mutation owner", async () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await click("Review memory changes");
-  await click("Request memory approval");
+  await click("Request edit approval");
   expect(patchMemoryItem).not.toHaveBeenCalled();
   expect(document.body.textContent).toContain("TTL must be empty");
 });

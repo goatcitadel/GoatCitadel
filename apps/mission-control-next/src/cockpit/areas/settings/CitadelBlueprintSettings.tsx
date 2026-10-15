@@ -6,15 +6,14 @@ import {
   buildBlueprintProofItems,
   downloadBlueprint,
 } from "../../../features/native-routes/library/citadel-blueprint-artifact";
-import { useDraftLeaveDialogState } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 
 export function CitadelBlueprintSettings({ citadelId }: { citadelId: string }) {
   const control = useCitadelBlueprint(citadelId),
     inputId = useId(),
     fileId = useId();
-  const leave = useDraftLeaveDialogState(control.leave.dialogProps);
   const parsed = parseBlueprint(control.importText);
   const candidate =
     control.importState.validation?.ok && "blueprint" in parsed ? (parsed.blueprint as CitadelBlueprint) : null;
@@ -228,22 +227,7 @@ export function CitadelBlueprintSettings({ citadelId }: { citadelId: string }) {
           </Button>
         </div>
       </Dialog>
-      <Dialog
-        open={control.leave.dialogProps.open}
-        title="Unsaved Blueprint draft"
-        description={leave.description}
-        onOpenChange={(open) => {
-          if (!open) control.leave.dialogProps.onCancel();
-        }}
-      >
-        <div className="flex flex-wrap gap-2">
-          {leave.canKeep ? <Button onClick={control.leave.dialogProps.onContinue}>Keep draft and close</Button> : null}
-          <Button variant="danger" onClick={leave.discard}>
-            Discard changes
-          </Button>
-          <Button onClick={control.leave.dialogProps.onCancel}>Cancel</Button>
-        </div>
-      </Dialog>
+      <UnsavedChangesDialog {...control.leave.dialogProps} />
     </section>
   );
 }

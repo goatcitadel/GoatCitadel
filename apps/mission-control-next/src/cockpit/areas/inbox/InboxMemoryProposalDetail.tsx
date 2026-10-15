@@ -202,6 +202,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
+            variant="primary"
             disabled={pending || checking}
             onClick={() => setReview({ candidate: candidate!, action: "promote" })}
           >
@@ -209,7 +210,6 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
           </Button>
           <Button
             size="sm"
-            variant="danger"
             disabled={pending || checking}
             onClick={() => setReview({ candidate: candidate!, action: "reject" })}
           >
@@ -247,7 +247,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
-            variant={review?.action === "reject" ? "danger" : "primary"}
+            variant="primary"
             disabled={pending || scopeChanged || checking}
             onClick={() => void resolve()}
           >

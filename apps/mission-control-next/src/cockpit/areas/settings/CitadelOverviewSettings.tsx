@@ -1,9 +1,9 @@
 import { useId, useState } from "react";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useCitadelOverview } from "../../../features/native-routes/library/use-citadel-overview";
-import { useDraftLeaveDialogState } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { CitadelBrief } from "./CitadelBrief";
 import { TemplateCard, TemplateContents } from "./CitadelTemplateCard";
 
@@ -12,7 +12,6 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
     purposeId = useId();
   const control = useCitadelOverview(citadelId, view);
   const { state, templateState, lifecycle, lifecycleTarget, charterDraft } = control;
-  const leave = useDraftLeaveDialogState(control.leave.dialogProps);
   const charter = state.citadel?.charter;
   const review = control.review;
   const changeView = (next: string) =>
@@ -349,11 +348,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
           Profile revision: {lifecycle.review?.record.revision}
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button
-            variant={lifecycle.review?.action === "archive" ? "danger" : "primary"}
-            disabled={lifecycle.pending}
-            onClick={() => void lifecycle.confirm()}
-          >
+          <Button variant="primary" disabled={lifecycle.pending} onClick={() => void lifecycle.confirm()}>
             {lifecycle.review?.action === "restore" ? "Confirm restore" : "Confirm archive"}
           </Button>
           <Button disabled={lifecycle.pending} onClick={lifecycle.cancel}>
@@ -361,22 +356,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
           </Button>
         </div>
       </Dialog>
-      <Dialog
-        open={control.leave.dialogProps.open}
-        title="Unsaved Charter draft"
-        description={leave.description}
-        onOpenChange={(open) => {
-          if (!open) control.leave.dialogProps.onCancel();
-        }}
-      >
-        <div className="flex flex-wrap gap-2">
-          {leave.canKeep ? <Button onClick={control.leave.dialogProps.onContinue}>Keep draft and close</Button> : null}
-          <Button variant="danger" onClick={leave.discard}>
-            Discard changes
-          </Button>
-          <Button onClick={control.leave.dialogProps.onCancel}>Cancel</Button>
-        </div>
-      </Dialog>
+      <UnsavedChangesDialog {...control.leave.dialogProps} />
     </section>
   );
 }

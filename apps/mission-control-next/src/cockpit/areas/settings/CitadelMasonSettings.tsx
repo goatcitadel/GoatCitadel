@@ -2,16 +2,15 @@ import { useId, useState } from "react";
 import { useMasonEditor } from "../../../features/native-routes/library/use-mason-editor";
 import { useMasonStaging } from "../../../features/native-routes/library/use-mason-staging";
 import { MasonAnswerFields } from "../../../features/native-routes/library/MasonAnswerFields";
-import { useDraftLeaveDialogState } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 
 export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
   const control = useMasonEditor(citadelId),
     messageId = useId();
   const stage = useMasonStaging(citadelId, control.review, control.identity);
   const [answerReview, setAnswerReview] = useState<string | null>(null);
-  const leave = useDraftLeaveDialogState(control.leave.dialogProps);
   const hasAnswerReview = answerReview === control.identity;
   function closeAnswerReview() {
     // Dismissal during the fresh read cancels that admission, including Escape/X.
@@ -253,22 +252,7 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
           </Button>
         </div>
       </Dialog>
-      <Dialog
-        open={control.leave.dialogProps.open}
-        onOpenChange={(open) => {
-          if (!open) control.leave.dialogProps.onCancel();
-        }}
-        title="Unsaved Mason answers"
-        description={leave.description}
-      >
-        <div className="flex flex-wrap gap-2">
-          {leave.canKeep ? <Button onClick={control.leave.dialogProps.onContinue}>Keep draft</Button> : null}
-          <Button variant="danger" onClick={leave.discard}>
-            Discard changes
-          </Button>
-          <Button onClick={control.leave.dialogProps.onCancel}>Cancel</Button>
-        </div>
-      </Dialog>
+      <UnsavedChangesDialog {...control.leave.dialogProps} />
     </section>
   );
 }

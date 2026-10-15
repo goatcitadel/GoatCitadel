@@ -289,7 +289,6 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
                       </Button>
                       <Button
                         size="sm"
-                        variant={target.action === "archive" ? "danger" : "secondary"}
                         disabled={
                           !canStart || locked || (item.workspaceId === "default" && target.action === "archive")
                         }

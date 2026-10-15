@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "cockpit");
 
-export const LIVE_REGION_BUDGET = 742;
+export const LIVE_REGION_BUDGET = 741;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;
@@ -106,7 +106,10 @@ export function findUnguardedLinkHandlers(contents) {
   for (const match of contents.matchAll(/onClick=\{/g)) {
     const expression = braceBody(contents, match.index + "onClick=".length);
     const tag = contents.slice(contents.lastIndexOf("<", match.index), match.index);
-    if (!/\bhref=/.test(tag) && !/\bhref=/.test(contents.slice(match.index, contents.indexOf(">", match.index + 9 + expression.length))))
+    if (
+      !/\bhref=/.test(tag) &&
+      !/\bhref=/.test(contents.slice(match.index, contents.indexOf(">", match.index + 9 + expression.length)))
+    )
       continue;
     const named = /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(expression);
     const body = named ? namedHandlerBody(contents, named[1]) : expression;
@@ -142,11 +145,16 @@ async function main() {
     if (MODIFIED_CLICK_BASELINE.has(relative) && findUnguardedLinkHandlers(contents).length === 0) stale.push(relative);
   }
   if (liveRegions > LIVE_REGION_BUDGET)
-    findings.push(`live regions grew to ${liveRegions} (budget ${LIVE_REGION_BUDGET}); announce outcomes, not static or polled text`);
+    findings.push(
+      `live regions grew to ${liveRegions} (budget ${LIVE_REGION_BUDGET}); announce outcomes, not static or polled text`,
+    );
   // An exact ratchet: when the count drops, the same change lowers the budget so the slack cannot be reused.
   if (liveRegions < LIVE_REGION_BUDGET)
-    findings.push(`live regions dropped to ${liveRegions}: lower LIVE_REGION_BUDGET from ${LIVE_REGION_BUDGET} to ${liveRegions}`);
-  for (const relative of stale) findings.push(`${relative} has no unguarded link handlers: remove it from MODIFIED_CLICK_BASELINE`);
+    findings.push(
+      `live regions dropped to ${liveRegions}: lower LIVE_REGION_BUDGET from ${LIVE_REGION_BUDGET} to ${liveRegions}`,
+    );
+  for (const relative of stale)
+    findings.push(`${relative} has no unguarded link handlers: remove it from MODIFIED_CLICK_BASELINE`);
   if (findings.length) {
     console.error("[cockpit-semantics] violations:");
     for (const finding of findings) console.error(`- ${finding}`);

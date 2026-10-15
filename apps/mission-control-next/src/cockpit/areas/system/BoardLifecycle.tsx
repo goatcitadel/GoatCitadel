@@ -124,11 +124,7 @@ export function BoardLifecycle({
                 {error || uncertain ? "Close" : "Cancel"}
               </Button>
               {error || uncertain ? null : (
-                <Button
-                  variant={review.kind === "archive" ? "danger" : "primary"}
-                  disabled={busy}
-                  onClick={() => void confirm()}
-                >
+                <Button variant="primary" disabled={busy} onClick={() => void confirm()}>
                   {busy ? "Saving…" : review.kind === "archive" ? "Archive board" : "Restore board"}
                 </Button>
               )}

@@ -257,7 +257,7 @@ export function InboxImprovementProposalDetail({
                   <Button
                     key={decision}
                     size="sm"
-                    variant={decision === "reject" ? "danger" : "primary"}
+                    variant={decision === "reject" ? "secondary" : "primary"}
                     disabled={pending || checking}
                     onClick={() => setReviewing({ review: current, decision })}
                   >
@@ -301,7 +301,7 @@ export function InboxImprovementProposalDetail({
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
-            variant={reviewing?.decision === "reject" ? "danger" : "primary"}
+            variant="primary"
             disabled={pending || scopeChanged || checking}
             onClick={() => void decide()}
           >

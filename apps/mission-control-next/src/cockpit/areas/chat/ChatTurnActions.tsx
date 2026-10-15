@@ -4,6 +4,9 @@ import { canRetryTurn } from "@goatcitadel/mission-control-shared/components/cha
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { MoreHorizontal } from "lucide-react";
+import { useState } from "react";
+import { Button } from "../../ui/Button";
+import { Dialog } from "../../ui/Dialog";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../../ui/Menu";
 
 export type TurnActionHandlers = Pick<
@@ -40,7 +43,14 @@ export function ChatTurnActions({
   onCopy: () => void;
 }) {
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
+  const [confirmRetry, setConfirmRetry] = useState(false);
   const canRetry = canRetryTurn(turn) && !streaming && !readOnly;
+  // A tool that may change things (or did, or might have) can run again on retry, so the retry is confirmed first.
+  const effectfulTools = (turn.toolRuns ?? []).filter(
+    (run) =>
+      run.effectPotential !== "none" || run.effectOutcomeKind === "concrete" || run.effectOutcomeKind === "uncertain",
+  ).length;
+  const retry = () => actions.onRetryTurn(turn.turnId);
   const canBranch = !streaming && !readOnly;
   const canSave = Boolean(turn.assistantMessage) && turn.trace.status !== "failed" && !readOnly;
   const siblings = turn.branch.siblingTurnIds ?? [];
@@ -59,11 +69,34 @@ export function ChatTurnActions({
       {canRetry ? (
         <button
           type="button"
-          onClick={() => actions.onRetryTurn(turn.turnId)}
+          onClick={() => (effectfulTools ? setConfirmRetry(true) : retry())}
           className={phone ? PHONE : `${INLINE} font-medium`}
         >
           Retry
         </button>
+      ) : null}
+      {effectfulTools ? (
+        <Dialog open={confirmRetry && canRetry} onOpenChange={setConfirmRetry} title="Retry this answer?">
+          <p className="mb-3 text-sm text-fg-secondary">
+            {effectfulTools === 1
+              ? "1 tool in this answer may change things outside the chat."
+              : `${effectfulTools} tools in this answer may change things outside the chat.`}{" "}
+            Retrying may run them again. Approvals still apply.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="primary"
+              onClick={() => {
+                setConfirmRetry(false);
+                // Retry eligibility can change while the dialog is open; never dispatch a stale retry.
+                if (canRetry) retry();
+              }}
+            >
+              Retry answer
+            </Button>
+            <Button onClick={() => setConfirmRetry(false)}>Cancel</Button>
+          </div>
+        </Dialog>
       ) : null}
       {hasAnswer ? (
         <button type="button" onClick={onCopy} className={phone ? PHONE : INLINE}>

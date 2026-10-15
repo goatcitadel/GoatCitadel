@@ -46,7 +46,7 @@ describe("files routes additional coverage", () => {
     expect(files.createWorkspaceFileFromTemplate).toHaveBeenCalledWith("note", "notes/new.md");
     expect(files.listWorkspaceFiles).toHaveBeenCalledWith("notes", 5);
     expect(files.listWorkspacePathSuggestions).toHaveBeenCalledWith("notes", 3);
-    expect(files.uploadWorkspaceFile).toHaveBeenCalledWith("notes/upload.md", "hello");
+    expect(files.uploadWorkspaceFile).toHaveBeenCalledWith("notes/upload.md", "hello", { expectAbsent: undefined });
   });
 
   it("returns binary downloads as base64 metadata and raw downloads with source content type", async () => {

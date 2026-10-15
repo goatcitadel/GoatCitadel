@@ -1,10 +1,9 @@
 import { useId, useState } from "react";
-import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { useCitadelVaultEditor } from "../../../features/native-routes/library/use-citadel-vault-editor";
-import { useDraftLeaveDialogState } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { Button } from "../../ui/Button";
 import { Sheet } from "../../ui/Sheet";
 import { Dialog } from "../../ui/Dialog";
+import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 
 const inputClass =
   "mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg";
@@ -14,7 +13,6 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
   const id = useId(),
     [search, setSearch] = useState(""),
     [limit, setLimit] = useState(50);
-  const leave = useDraftLeaveDialogState(editor.leave.dialogProps);
   const filtered = editor.items.filter((item) => item.secretName.toLowerCase().includes(search.toLowerCase()));
   const currentReview = editor.reviewRequired ? (
     <section aria-label="Current Vault review" className="space-y-2 rounded-md border border-status-waiting p-3">
@@ -226,60 +224,47 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
           </div>
         ) : null}
       </Sheet>
-      <ConfirmModal
-        open={editor.pendingStore !== null}
-        pending={editor.busy}
-        danger
-        title="Replace secret?"
-        message={`Replace "${editor.pendingStore?.draft.name.trim()}" with the value you entered? The previous value cannot be recovered.`}
-        confirmLabel="Replace secret"
-        onCancel={editor.cancelStore}
-        onConfirm={() => {
-          if (editor.pendingStore) void editor.save(editor.pendingStore.draft, editor.pendingStore.revision);
-        }}
-      />
-      <ConfirmModal
-        open={editor.pendingDelete !== null}
-        pending={editor.busy}
-        danger
-        title="Delete secret?"
-        message={`Permanently remove "${editor.pendingDelete?.name}" from the selected Citadel? This cannot be undone.`}
-        confirmLabel="Delete"
-        onCancel={editor.cancelDelete}
-        onConfirm={() => void editor.remove()}
-      />
       <Dialog
-        open={editor.leave.dialogProps.open}
-        title="Unsaved changes"
-        description={leave.description}
+        open={editor.pendingStore !== null}
+        title="Replace secret?"
+        description={`Replace "${editor.pendingStore?.draft.name.trim()}" with the value you entered? The previous value cannot be recovered.`}
         onOpenChange={(open) => {
-          if (!open && !leave.saving) editor.leave.dialogProps.onCancel();
+          if (!open && !editor.busy) editor.cancelStore();
         }}
       >
-        {leave.error ? (
-          <p role="alert" className="text-sm text-status-failed">
-            {leave.error}
-          </p>
-        ) : null}
         <div className="flex flex-wrap gap-2">
-          {leave.canKeep ? (
-            <Button disabled={leave.saving} onClick={editor.leave.dialogProps.onContinue}>
-              Keep draft and close
-            </Button>
-          ) : null}
-          {leave.canSave ? (
-            <Button disabled={leave.saving} onClick={() => void leave.saveAndContinue()}>
-              Save and continue
-            </Button>
-          ) : null}
-          <Button variant="danger" disabled={leave.saving} onClick={leave.discard}>
-            Discard changes
+          <Button
+            variant="danger"
+            loading={editor.busy}
+            onClick={() => {
+              if (editor.pendingStore) void editor.save(editor.pendingStore.draft, editor.pendingStore.revision);
+            }}
+          >
+            Replace secret
           </Button>
-          <Button disabled={leave.saving} onClick={editor.leave.dialogProps.onCancel}>
+          <Button disabled={editor.busy} onClick={editor.cancelStore}>
             Cancel
           </Button>
         </div>
       </Dialog>
+      <Dialog
+        open={editor.pendingDelete !== null}
+        title="Delete secret?"
+        description={`Permanently remove "${editor.pendingDelete?.name}" from the selected Citadel? This cannot be undone.`}
+        onOpenChange={(open) => {
+          if (!open && !editor.busy) editor.cancelDelete();
+        }}
+      >
+        <div className="flex flex-wrap gap-2">
+          <Button variant="danger" loading={editor.busy} onClick={() => void editor.remove()}>
+            Delete secret
+          </Button>
+          <Button disabled={editor.busy} onClick={editor.cancelDelete}>
+            Cancel
+          </Button>
+        </div>
+      </Dialog>
+      <UnsavedChangesDialog {...editor.leave.dialogProps} />
       <p className="text-xs text-fg-muted">
         Per-Chamber keys and key rotation are not available here. Keychain unavailability blocks sealing and reveal; no
         plaintext fallback is used.
