@@ -639,7 +639,8 @@ function isExternalReplayOutcome(value: unknown): value is IntegrationExternalWr
     value === "duplicate" ||
     value === "in_progress" ||
     value === "payload_mismatch" ||
-    value === "idempotency_unavailable"
+    value === "idempotency_unavailable" ||
+    value === "unknown_after_send"
   );
 }
 

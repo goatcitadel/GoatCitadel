@@ -594,6 +594,10 @@ async function runLedgeredCommsInvoke(
   const runResult = await runIdempotentExternalSideEffect<Record<string, unknown>>({
     mutationStore,
     sideEffectRunStore,
+    // A plain invoke marks its boundary only after the provider call, so its unmarked
+    // claim must never be taken over. A pre-approved invoke marks before dispatch and
+    // keeps the default takeover lease.
+    disableDefaultClaimLease: spec.preApproval ? undefined : true,
     boundary: spec.boundary,
     catalogId: connection?.catalogId ?? spec.fallbackCatalogId,
     connectionId: spec.connectionId,

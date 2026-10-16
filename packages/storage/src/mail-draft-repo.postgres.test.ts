@@ -101,17 +101,17 @@ test("real PostgreSQL fresh installs persist mail drafts with CAS transitions", 
 });
 
 test(
-  "real PostgreSQL upgraded installs converge the v212 mail_drafts table to the canonical shape",
+  "real PostgreSQL upgraded installs converge the v213 mail_drafts table to the canonical shape",
   { skip },
   async () => {
     await withSchema("mail_drafts_upgrade", async (scoped, admin, schema) => {
       const migrations = new PostgresDatabaseClient({ connectionString: scoped, database: "postgres" });
       try {
         // v2 renders from the current blueprint, so an install whose v2 predates
-        // mail drafts is simulated by removing the table before v212 runs.
+        // mail drafts is simulated by removing the table before v213 runs.
         await runPostgresMigrations(
           migrations,
-          POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 211),
+          POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 212),
         );
         await admin.query(`DROP TABLE ${schema}.mail_drafts`);
         // The full list includes the canonical schema-shape gate.

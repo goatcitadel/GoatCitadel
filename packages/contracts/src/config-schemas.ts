@@ -302,6 +302,17 @@ export const LlmProviderAuthModeSchema = z.enum([
   "aws-bedrock-api-key",
 ]);
 
+/** Returns an operator-facing error when an AWS auth mode is paired with a non-Bedrock API style. */
+export function describeAwsAuthModeApiStyleMismatch(
+  apiStyle: string | undefined,
+  authMode: string | undefined,
+): string | undefined {
+  if ((authMode === "aws-sigv4" || authMode === "aws-bedrock-api-key") && apiStyle !== "bedrock-messages") {
+    return `authMode "${authMode}" is only valid with apiStyle "bedrock-messages" (got "${apiStyle ?? "unset"}").`;
+  }
+  return undefined;
+}
+
 export const LlmProviderConfigSchema = z
   .object({
     providerId: z.string(),
@@ -323,7 +334,13 @@ export const LlmProviderConfigSchema = z
     headers: z.record(z.string(), z.string()).optional(),
     capabilities: LlmProviderCapabilitiesSchema.partial().optional(),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((provider, ctx) => {
+    const message = describeAwsAuthModeApiStyleMismatch(provider.apiStyle, provider.authMode);
+    if (message) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["authMode"], message });
+    }
+  });
 
 export const LlmConfigFileSchema = z
   .object({

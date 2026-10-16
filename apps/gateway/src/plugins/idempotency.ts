@@ -143,7 +143,9 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
         ? "Idempotency-Key was reused with a different payload"
         : claim.outcome === "in_progress"
           ? "Request already in progress for this Idempotency-Key"
-          : "Duplicate mutation blocked for this Idempotency-Key";
+          : claim.outcome === "unknown_after_send"
+            ? "Mutation for this Idempotency-Key may already have been sent; it is not retried automatically"
+            : "Duplicate mutation blocked for this Idempotency-Key";
     await reply.code(409).send({ error });
   });
 
@@ -174,9 +176,12 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
   });
 
   fastify.addHook("onSend", async (request, reply, payload) => {
-    if (isMobilePushRegistrationRequest(request) || getNormalizedRoutePath(request).startsWith("/api/v1/citadels/:citadelId/vault-secrets")
-      || getNormalizedRoutePath(request) === "/api/v1/integrations/connections"
-      || getNormalizedRoutePath(request) === "/api/v1/integrations/connections/:connectionId") {
+    if (
+      isMobilePushRegistrationRequest(request) ||
+      getNormalizedRoutePath(request).startsWith("/api/v1/citadels/:citadelId/vault-secrets") ||
+      getNormalizedRoutePath(request) === "/api/v1/integrations/connections" ||
+      getNormalizedRoutePath(request) === "/api/v1/integrations/connections/:connectionId"
+    ) {
       reply.header("Cache-Control", "no-store");
       reply.header("Pragma", "no-cache");
     }
@@ -192,7 +197,7 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
    *
    * Client rule: "absent" is not proof that nothing ran (a delayed request can still arrive). Settle a lost response
    * by re-sending with the SAME key, which the claim makes safe whatever the answer; never mint a new key because of
-   * "absent". A pending claim with claimExpired is unknown, not failed. `route` must be the registered route pattern
+   * "absent". A pending claim with claimExpired, or an "unknown_after_send" claim, is unknown, not failed. `route` must be the registered route pattern
    * (for example /api/v1/secrets/providers/:providerId), never a concrete URL: anything else is refused, so a wrong
    * route can never read as "absent".
    */
@@ -204,7 +209,9 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
     const method = typeof query.method === "string" ? query.method.toUpperCase() : "";
     const routePath = typeof query.route === "string" ? query.route : "";
     if (!key.trim() || key.length > 256 || !MUTATING_HTTP_METHODS.has(method) || !isTrackedAttemptRoute(routePath)) {
-      return reply.code(400).send({ error: "An attempt read needs its key, a mutating method and a tracked API route." });
+      return reply
+        .code(400)
+        .send({ error: "An attempt read needs its key, a mutating method and a tracked API route." });
     }
     if (!fastify.hasRoute({ method: method as "POST", url: routePath })) {
       return reply.code(400).send({ error: "unknown_route: pass the registered route pattern for this method." });
@@ -328,10 +335,39 @@ function hashCanonicalPayload(value: unknown): string {
  */
 const SECRET_FIELD_NAME = new RegExp(
   [
-    "api[-_]?key", "token", "password", "passwd", "passphrase", "secret", "credential", "private[-_]?key",
-    "authorization", "cookie", "^values?$", "^headers$", "pwd", "passcode", "otp", "^pin$", "^pat$", "bearer", "jwt",
-    "hmac", "signature", "signing", "access[-_]?key", "session[-_]?key", "encryption[-_]?key", "(?:^|[-_])key$",
-    "pem", "certificate", "^dsn$", "connection[-_]?string", "(?:^|[-_])auth$", "^code$", "root[-_]?path",
+    "api[-_]?key",
+    "token",
+    "password",
+    "passwd",
+    "passphrase",
+    "secret",
+    "credential",
+    "private[-_]?key",
+    "authorization",
+    "cookie",
+    "^values?$",
+    "^headers$",
+    "pwd",
+    "passcode",
+    "otp",
+    "^pin$",
+    "^pat$",
+    "bearer",
+    "jwt",
+    "hmac",
+    "signature",
+    "signing",
+    "access[-_]?key",
+    "session[-_]?key",
+    "encryption[-_]?key",
+    "(?:^|[-_])key$",
+    "pem",
+    "certificate",
+    "^dsn$",
+    "connection[-_]?string",
+    "(?:^|[-_])auth$",
+    "^code$",
+    "root[-_]?path",
   ].join("|"),
   "iu",
 );
@@ -368,7 +404,8 @@ function redactSecretFields(value: unknown, depth = 0): unknown {
       if (typeof item === "string") {
         const flag = readSecretFlag(item);
         if (flag?.hasInlineValue) return item.slice(0, item.indexOf("=") + 1) + REDACTED_SECRET_FIELD;
-        if (typeof previous === "string" && readSecretFlag(previous)?.hasInlineValue === false) return REDACTED_SECRET_FIELD;
+        if (typeof previous === "string" && readSecretFlag(previous)?.hasInlineValue === false)
+          return REDACTED_SECRET_FIELD;
       }
       return redactSecretFields(item, depth + 1);
     });
@@ -396,17 +433,24 @@ function hashMutationPayload(request: FastifyRequest): string {
     return hashCanonicalPayload({ kind: "mcp_server_redacted_v1", path: request.url.split("?", 1)[0] || request.url });
   }
   if (routePath === "/api/v1/channels/drafts" || routePath.startsWith("/api/v1/channels/drafts/")) {
-    return hashCanonicalPayload({ kind: "channel_setup_redacted_v1", path: request.url.split("?", 1)[0] || request.url });
+    return hashCanonicalPayload({
+      kind: "channel_setup_redacted_v1",
+      path: request.url.split("?", 1)[0] || request.url,
+    });
   }
-  if (routePath === "/api/v1/citadels/:citadelId/vault-secrets"
-    || routePath === "/api/v1/citadels/:citadelId/vault-secrets/:secretId"
-    || routePath === "/api/v1/integrations/connections"
-    || routePath === "/api/v1/integrations/connections/:connectionId") {
+  if (
+    routePath === "/api/v1/citadels/:citadelId/vault-secrets" ||
+    routePath === "/api/v1/citadels/:citadelId/vault-secrets/:secretId" ||
+    routePath === "/api/v1/integrations/connections" ||
+    routePath === "/api/v1/integrations/connections/:connectionId"
+  ) {
     // A key identifies one attempt. Completed duplicates stay blocked regardless
     // of body changes; an explicit retry uses a new key and the owner's revision.
     // Do not fingerprint values, names, or unvalidated extra fields here.
     return hashCanonicalPayload({
-      kind: routePath.startsWith("/api/v1/integrations/") ? "integration_connection_redacted_v1" : "citadel_vault_redacted_v1",
+      kind: routePath.startsWith("/api/v1/integrations/")
+        ? "integration_connection_redacted_v1"
+        : "citadel_vault_redacted_v1",
       path: request.url.split("?", 1)[0] || request.url,
     });
   }

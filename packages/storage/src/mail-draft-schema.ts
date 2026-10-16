@@ -2,7 +2,7 @@ import type { DatabaseClient } from "./db.js";
 
 // Every column is TEXT, the only unique key is the primary key, and the index
 // has no sort direction, so the PostgreSQL v2 live render of this SQLite table
-// and the additive v212 table have the same canonical shape.
+// and the additive v213 table have the same canonical shape.
 const MAIL_DRAFT_COLUMNS = `
   draft_id TEXT PRIMARY KEY,
   workspace_id TEXT,
@@ -25,12 +25,12 @@ CREATE TABLE IF NOT EXISTS mail_drafts (${MAIL_DRAFT_COLUMNS});
 CREATE INDEX IF NOT EXISTS idx_mail_drafts_approval ON mail_drafts(approval_id);
 `;
 
-/** PostgreSQL v212: additive table for installs whose v2 render predates mail drafts. */
+/** PostgreSQL v213: additive table for installs whose v2 render predates mail drafts. */
 export const MAIL_DRAFTS_POSTGRES_SQL = MAIL_DRAFT_SCHEMA_SQL;
 
 /**
- * PostgreSQL v213: frozen, idempotent, forward-only convergence. Fresh installs
- * get the v2-rendered table (no CHECK); upgraded installs get v212's inline
+ * PostgreSQL v214: frozen, idempotent, forward-only convergence. Fresh installs
+ * get the v2-rendered table (no CHECK); upgraded installs get v213's inline
  * CHECK. Both end with the same TEXT columns, index, and one named CHECK.
  * Rollback is restoration of the pre-migration backup.
  */
