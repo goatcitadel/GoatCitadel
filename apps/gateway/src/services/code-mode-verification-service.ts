@@ -1,7 +1,4 @@
-import fs from "node:fs";
 import path from "node:path";
-import process from "node:process";
-import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   ValidationError,
@@ -20,11 +17,14 @@ import {
   type CodeModeVerificationSubjectBinding,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import {
+  CODE_MODE_GIT_CAPTURE_TIMEOUT_MS,
+  assertPathInside,
+  captureCodeModeWorkbenchWorktree as captureWorktree,
+  readContainedRegularFile,
+} from "./code-mode-worktree-capture.js";
 
-const MAX_GIT_CAPTURE_BYTES = 8 * 1024 * 1024;
-const GIT_CAPTURE_TIMEOUT_MS = 15_000;
 const MAX_MANAGED_ARTIFACT_BYTES = 16 * 1024 * 1024;
-const MAX_CHANGED_FILES_IN_EVIDENCE = 200;
 const MAX_OUTPUT_PREVIEW_CHARS = 4_096;
 
 interface CodeModeVerificationServiceOptions {
@@ -43,17 +43,6 @@ interface CodeModeVerificationServiceOptions {
 
 interface VerificationSubjectCapture {
   subject: CodeModeVerificationSubjectBinding;
-  valid: boolean;
-  reasons: string[];
-}
-
-interface WorktreeCapture {
-  identityHash: string;
-  stateHash: string;
-  baseRef?: string;
-  headHash?: string;
-  changedFiles: string[];
-  changedFilesTruncated: boolean;
   valid: boolean;
   reasons: string[];
 }
@@ -405,176 +394,10 @@ function captureManagedArtifacts(
   return { items, valid: items.every((item) => item.verified), reasons };
 }
 
-async function captureWorktree(
-  storage: Storage,
-  run: CodeModeRunRecord,
-  gitCaptureTimeoutMs: number,
-): Promise<WorktreeCapture> {
-  const fallbackIdentity = sha256(JSON.stringify({ sessionId: run.sessionId ?? null, runId: run.runId }));
-  if (!run.sessionId) {
-    return unavailableWorktree(fallbackIdentity, "worktree_session_missing");
-  }
-  const workbench = await storage.chatSessionWorkbench.get(run.sessionId);
-  if (!workbench?.worktreePath || workbench.worktreeStatus !== "ready") {
-    return unavailableWorktree(fallbackIdentity, "worktree_not_ready", workbench?.baseRef);
-  }
-  try {
-    const realWorktreePath = fs.realpathSync(workbench.worktreePath);
-    const identityHash = sha256(
-      JSON.stringify({
-        sessionId: run.sessionId,
-        projectId: workbench.projectId ?? null,
-        path: normalizePath(realWorktreePath),
-      }),
-    );
-    const headHash = runGit(realWorktreePath, ["rev-parse", "HEAD"], gitCaptureTimeoutMs).trim();
-    const statusRaw = runGit(
-      realWorktreePath,
-      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-      gitCaptureTimeoutMs,
-    );
-    const diffRaw = runGit(
-      realWorktreePath,
-      ["diff", "--no-ext-diff", "--no-textconv", "--binary", "--full-index", "HEAD", "--", "."],
-      gitCaptureTimeoutMs,
-    );
-    const statusEntries = statusRaw.split("\0").filter(Boolean);
-    const changedFiles = statusEntries
-      .map((entry) => entry.slice(3).replaceAll("\\", "/"))
-      .filter(Boolean)
-      .sort();
-    const untrackedDigests = statusEntries
-      .filter((entry) => entry.startsWith("?? "))
-      .map((entry) => hashUntrackedEntry(realWorktreePath, entry.slice(3)))
-      .sort((left, right) => left.path.localeCompare(right.path));
-    const stateHash = sha256(
-      JSON.stringify({
-        headHash,
-        statusSha256: sha256(statusRaw),
-        diffSha256: sha256(diffRaw),
-        untrackedDigests,
-      }),
-    );
-    return {
-      identityHash,
-      stateHash,
-      baseRef: workbench.baseRef,
-      headHash,
-      changedFiles: changedFiles.slice(0, MAX_CHANGED_FILES_IN_EVIDENCE),
-      changedFilesTruncated: changedFiles.length > MAX_CHANGED_FILES_IN_EVIDENCE,
-      valid: true,
-      reasons: [],
-    };
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return {
-      ...unavailableWorktree(fallbackIdentity, "worktree_state_unavailable", workbench.baseRef),
-      stateHash: sha256(detail),
-    };
-  }
-}
-
-function unavailableWorktree(identityHash: string, reason: string, baseRef?: string): WorktreeCapture {
-  return {
-    identityHash,
-    stateHash: sha256(reason),
-    baseRef,
-    changedFiles: [],
-    changedFilesTruncated: false,
-    valid: false,
-    reasons: [reason],
-  };
-}
-
-function hashUntrackedEntry(
-  worktreePath: string,
-  relativePath: string,
-): { path: string; sha256: string; bytes: number } {
-  const normalized = relativePath.replaceAll("\\", "/");
-  const targetPath = path.resolve(worktreePath, relativePath);
-  assertPathInside(targetPath, worktreePath);
-  const content = readContainedRegularFile(targetPath, worktreePath, MAX_MANAGED_ARTIFACT_BYTES);
-  if (content.byteLength > MAX_MANAGED_ARTIFACT_BYTES) {
-    throw new Error(`Untracked file ${normalized} exceeds the verification bound.`);
-  }
-  return { path: normalized, sha256: sha256(content), bytes: content.byteLength };
-}
-
-function runGit(cwd: string, args: string[], timeoutMs: number): string {
-  return execFileSync(
-    "git",
-    [
-      "-C",
-      cwd,
-      "--no-optional-locks",
-      "-c",
-      "core.fsmonitor=false",
-      "-c",
-      "core.untrackedCache=false",
-      "-c",
-      "diff.external=",
-      "-c",
-      "interactive.diffFilter=",
-      ...args,
-    ],
-    {
-      encoding: "utf8",
-      windowsHide: true,
-      maxBuffer: MAX_GIT_CAPTURE_BYTES,
-      timeout: timeoutMs,
-      killSignal: "SIGKILL",
-      env: buildSanitizedGitEnvironment(),
-    },
-  );
-}
-
 function normalizeGitCaptureTimeout(value: number | undefined): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0
     ? Math.min(value, 120_000)
-    : GIT_CAPTURE_TIMEOUT_MS;
-}
-
-function buildSanitizedGitEnvironment(): NodeJS.ProcessEnv {
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")),
-  ) as NodeJS.ProcessEnv;
-  return {
-    ...env,
-    GIT_ATTR_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : "/dev/null",
-    GIT_EXTERNAL_DIFF: "",
-    GIT_OPTIONAL_LOCKS: "0",
-    GIT_PAGER: "cat",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-}
-
-function readContainedRegularFile(candidate: string, root: string, maxBytes: number): Buffer {
-  const lexicalCandidate = path.resolve(candidate);
-  const lexicalRoot = path.resolve(root);
-  assertPathInside(lexicalCandidate, lexicalRoot);
-  const lexicalStat = fs.lstatSync(lexicalCandidate);
-  if (lexicalStat.isSymbolicLink()) {
-    throw new Error("Verification refuses symbolic-link artifacts and worktree entries.");
-  }
-  const canonicalRoot = fs.realpathSync(lexicalRoot);
-  const canonicalCandidate = fs.realpathSync(lexicalCandidate);
-  assertPathInside(canonicalCandidate, canonicalRoot);
-  const canonicalStat = fs.statSync(canonicalCandidate);
-  if (!canonicalStat.isFile() || canonicalStat.size > maxBytes) {
-    throw new Error("Verification file is missing, not regular, or exceeds the byte bound.");
-  }
-  return fs.readFileSync(canonicalCandidate);
-}
-
-function assertPathInside(candidate: string, root: string): void {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
-    return;
-  }
-  throw new Error("Verification path escaped its managed root.");
+    : CODE_MODE_GIT_CAPTURE_TIMEOUT_MS;
 }
 
 function redactPreview(value: string | undefined): string | undefined {
@@ -582,10 +405,6 @@ function redactPreview(value: string | undefined): string | undefined {
     return value;
   }
   return redactStructuredSecrets(value).value.slice(0, MAX_OUTPUT_PREVIEW_CHARS);
-}
-
-function normalizePath(value: string): string {
-  return value.replaceAll("\\", "/");
 }
 
 function sha256(value: string | Buffer): string {
