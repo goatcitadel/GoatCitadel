@@ -138,7 +138,12 @@ describe("channel setup definition loop28 tails", () => {
           ...draft(item.catalogId, hydrated.draft, "edit"),
           hydration: hydrated.hydration,
         }),
-      ).toEqual({ ...item.expected, ...(["whatsapp", "nextcloud-talk"].includes(item.key) ? { inboundAccessMode: "open_legacy" } : {}) });
+      ).toEqual({
+        ...item.expected,
+        ...(["whatsapp", "nextcloud-talk", "mattermost"].includes(item.key)
+          ? { inboundAccessMode: "open_legacy" }
+          : {}),
+      });
       expect(
         definition.validate({
           ...draft(item.catalogId, hydrated.draft, "retest"),

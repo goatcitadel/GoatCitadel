@@ -12,6 +12,7 @@ export const GUIDED_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   "line",
   "nextcloud-talk",
   "ntfy",
+  "mattermost",
 ]);
 
 /** Keep sender policy in its shared owner rather than provider-specific normalizers. */

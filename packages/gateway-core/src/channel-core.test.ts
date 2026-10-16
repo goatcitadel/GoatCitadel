@@ -318,6 +318,46 @@ describe("describeChannelCapabilities", () => {
     expect(notOptedIn.setupDiagnostics).toEqual([]);
   });
 
+  it("enables Mattermost stream inbound only for an opted-in, token-backed server", () => {
+    const outbound = describeChannelCapabilities("mattermost", {
+      serverUrl: "https://chat.example.test",
+      botTokenEnv: "MATTERMOST_TOKEN",
+    });
+    expect(outbound.inboundModes).toEqual(["none"]);
+    expect(outbound.runtimePosture).toMatchObject({ lifecycle: "stateless", inboundReadiness: "unsupported" });
+    expect(outbound.runtimePosture.operatorSummary).not.toContain("not yet wired");
+
+    const enabled = describeChannelCapabilities("mattermost", {
+      serverUrl: "https://chat.example.test",
+      botTokenEnv: "MATTERMOST_TOKEN",
+      inboundStreamEnabled: true,
+    });
+    expect(enabled.inboundModes).toEqual(["stream"]);
+    expect(enabled.runtimePosture).toMatchObject({
+      lifecycle: "persistent",
+      inboundTransport: "stream",
+      inboundReadiness: "ready",
+    });
+    expect(enabled.runtimePosture.operatorSummary).toContain("WebSocket");
+    expect(enabled.supportedActions).toEqual(
+      expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend"]),
+    );
+    expect(enabled.supportNotes.join(" ")).not.toContain("not yet wired");
+
+    const viaString = describeChannelCapabilities("mattermost", {
+      serverUrl: "https://chat.example.test",
+      botToken: "keychain:goatcitadel:channel-x",
+      inboundStreamEnabled: "true",
+    });
+    expect(viaString.inboundModes).toEqual(["stream"]);
+
+    const noToken = describeChannelCapabilities("mattermost", {
+      serverUrl: "https://chat.example.test",
+      inboundStreamEnabled: true,
+    });
+    expect(noToken.inboundModes).toEqual(["none"]);
+  });
+
   it("recognizes every already supported Zalo User credential alias without enabling inbound routing", () => {
     for (const key of [
       "authToken",

@@ -12,7 +12,7 @@ const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
 test("advertised channel parity matrix is complete and internally consistent", () => {
   assert.deepEqual(validateAdvertisedChannelParityMatrix(), []);
-  assert.equal(new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.id)).size, 21);
+  assert.equal(new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.id)).size, 22);
   assert.deepEqual(
     [...new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.family))].sort(),
     [...REQUIRED_CHANNEL_FAMILIES].sort(),

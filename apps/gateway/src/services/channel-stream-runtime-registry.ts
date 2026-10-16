@@ -4,6 +4,7 @@ import {
   type DurableInboundChannelAcceptInput,
   type DurableInboundChannelAcceptResult,
 } from "./channel-inbound-dispatch.js";
+import { createMattermostStreamAdapter } from "./channel-stream-adapters/mattermost-stream-adapter.js";
 import { createNtfyStreamAdapter } from "./channel-stream-adapters/ntfy-stream-adapter.js";
 import { ChannelStreamRuntimeService, type ChannelStreamEvent } from "./channel-stream-runtime-service.js";
 
@@ -65,16 +66,18 @@ function createStreamRuntime(host: ChannelStreamRuntimeHost): ChannelStreamRunti
         message: event.message,
       },
     );
+  const sharedDeps = {
+    // Plain fetch: a persistent stream must not inherit the diagnostics request timeout.
+    fetch: ((input, init) => fetch(input, init)) as typeof fetch,
+    resolveSecret: (config: Record<string, unknown>, directKey: string, envKey: string, catalogId?: string) =>
+      host.resolveConnectionSecret(config, directKey, envKey, catalogId),
+    isUrlAllowlisted: (urlValue: string) => host.isConnectionUrlAllowlisted(urlValue),
+  };
   return new ChannelStreamRuntimeService({
     listConnections: async () => await host.storage.integrationConnections.list(undefined, 1000),
     adapters: [
-      createNtfyStreamAdapter({
-        // Plain fetch: a persistent stream must not inherit the diagnostics request timeout.
-        fetch: (input, init) => fetch(input, init),
-        resolveSecret: (config, directKey, envKey, catalogId) =>
-          host.resolveConnectionSecret(config, directKey, envKey, catalogId),
-        isUrlAllowlisted: (urlValue) => host.isConnectionUrlAllowlisted(urlValue),
-      }),
+      createNtfyStreamAdapter(sharedDeps),
+      createMattermostStreamAdapter({ ...sharedDeps, createWebSocket: (url) => new WebSocket(url) }),
     ],
     dispatch,
     recordDevDiagnostic: (input) => host.recordDevDiagnostic(input),

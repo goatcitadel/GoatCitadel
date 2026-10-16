@@ -86,13 +86,15 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Confirm the sandbox message arrives in Signal. Inbound receive is deliberately unavailable until the bridge provides durable acknowledgement and replay; linking a device does not enable conversations in GoatCitadel.",
   },
   mattermost: {
-    summary: "Send outbound Mattermost posts, replies and files through a bot account.",
+    summary:
+      "Send Mattermost posts, replies and files through a bot account and, optionally, receive posts over the bot WebSocket.",
     prerequisites: [
       "A reachable Mattermost server and bot token.",
       "The bot joined to the intended team/channel, with posting permissions.",
+      "For inbound, the bot must be a member of each channel you want it to hear, and you need the Mattermost user ids allowed to start conversations.",
     ],
     firstMessage:
-      "Confirm the test post arrives in the chosen channel. This adapter has outbound actions but no inbound conversation transport.",
+      "Confirm the test post arrives in the chosen channel. For inbound, allow your Mattermost user id, post in a channel the bot has joined, and confirm its reply; inbound posts from users who are not allowed are dropped.",
   },
   imessage: {
     summary: "Use a reachable BlueBubbles Mac bridge for outbound iMessage delivery.",

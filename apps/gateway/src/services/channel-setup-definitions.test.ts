@@ -452,7 +452,7 @@ describe("channel setup definitions", () => {
     const expectations = [
       { catalogId: "channel.imessage", contentVersion: "2026.08.imessage.v2" },
       { catalogId: "channel.line", contentVersion: "2026.08.line.v2" },
-      { catalogId: "channel.mattermost", contentVersion: "2026.08.mattermost.v2" },
+      { catalogId: "channel.mattermost", contentVersion: "2026.10.mattermost.stream.v3" },
       { catalogId: "channel.signal", contentVersion: "2026.08.signal.v4" },
       { catalogId: "channel.whatsapp", contentVersion: "2026.08.whatsapp.v3" },
       { catalogId: "channel.zalo", contentVersion: "2026.08.zalo.v2" },
@@ -756,6 +756,32 @@ describe("channel setup definitions", () => {
         defaultTeam: "goatcitadel",
       }),
     );
+  });
+
+  it("collects the Mattermost inbound opt-in and defaults new guided setups to a default-deny allowlist", () => {
+    const definition = requireChannelSetupDefinition("channel.mattermost");
+    const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
+    expect(fieldKeys).toEqual(expect.arrayContaining(["inboundStreamEnabled", "allowedSenders"]));
+
+    const draft = createDraft("channel.mattermost", {
+      serverUrl: "https://chat.example.com",
+      botTokenEnv: "MATTERMOST_BOT_TOKEN",
+      defaultChannel: "town-square",
+      inboundStreamEnabled: true,
+    });
+    expect(definition.validate(draft)).toEqual([]);
+    const normalized = definition.normalize(draft);
+    expect(normalized).toMatchObject({ inboundStreamEnabled: true, inboundAccessMode: "allowlist" });
+    expect(normalized.allowedSenders ?? []).toEqual([]);
+
+    const outboundOnly = definition.normalize(
+      createDraft("channel.mattermost", {
+        serverUrl: "https://chat.example.com",
+        botTokenEnv: "MATTERMOST_BOT_TOKEN",
+        defaultChannel: "town-square",
+      }),
+    );
+    expect(outboundOnly).not.toHaveProperty("inboundStreamEnabled");
   });
 
   it("preserves env-backed iMessage bridge auth during edit flows", () => {

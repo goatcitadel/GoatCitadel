@@ -498,6 +498,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   mattermost: {
     supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend"],
     supportedAttachmentSources: ["url", "inline"],
+    resolveInboundModes: (config) => (isMattermostInboundEnabled(config) ? ["stream"] : ["none"]),
     threadCapabilities: {
       rooms: true,
       replies: true,
@@ -506,14 +507,27 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     },
     chunkingMode: "fallback",
     supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "api",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary:
-        "Mattermost is normalized as a stateless outbound bot bridge. Rich outbound post actions are supported, but inbound routing is not yet wired.",
-    },
-    supportNotes: [
+    resolveRuntimePosture: (config) =>
+      isMattermostInboundEnabled(config)
+        ? {
+            outboundTransport: "api",
+            inboundTransport: "stream",
+            lifecycle: "persistent",
+            inboundReadiness: "ready",
+            operatorSummary:
+              "Mattermost sends through the bot REST API and, when inbound is enabled, keeps a persistent bot WebSocket open for posted events. The bot's own posts and system posts are ignored, and the post id dedupes any reconnect overlap.",
+          }
+        : {
+            outboundTransport: "api",
+            lifecycle: "stateless",
+            inboundReadiness: "unsupported",
+            operatorSummary:
+              "Mattermost is normalized as a stateless outbound bot bridge. Inbound is opt-in: enable inboundStreamEnabled with a bot token to receive posted events over the bot WebSocket.",
+          },
+    resolveSupportNotes: (config) => [
+      isMattermostInboundEnabled(config)
+        ? "Mattermost inbound uses the bot WebSocket (/api/v4/websocket); allow the Mattermost user ids that may start turns, because inbound is default-deny."
+        : "Mattermost inbound is off; set inboundStreamEnabled with a bot token to receive posted events over the bot WebSocket.",
       "Mattermost unsend deletes the original post and typically applies only to posts the bot can remove.",
       "Mattermost rich sends upload files to the resolved channel before creating the post.",
     ],
@@ -1159,6 +1173,17 @@ function isNtfyInboundEnabled(config: Record<string, unknown>): boolean {
     hasNtfyToken(config) &&
     hasAnyConfigured(config, ["baseUrl"]) &&
     hasAnyConfigured(config, ["subscribeTopic", "topic", "defaultTopic"])
+  );
+}
+
+/** Mirrors the Mattermost stream adapter: opt-in, server URL and a bot token. */
+function isMattermostInboundEnabled(config: Record<string, unknown>): boolean {
+  const flag = config.inboundStreamEnabled;
+  const optedIn = flag === true || (typeof flag === "string" && flag.trim().toLowerCase() === "true");
+  return (
+    optedIn &&
+    hasAnyConfigured(config, ["serverUrl"]) &&
+    hasAnyConfigured(config, ["botToken", "botTokenEnv", "token", "tokenEnv"])
   );
 }
 

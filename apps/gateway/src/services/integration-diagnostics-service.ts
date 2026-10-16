@@ -27,7 +27,14 @@ import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import { evaluateHostEgress } from "@goatcitadel/policy-engine";
 
-const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set(["slack", "whatsapp", "line", "nextcloud-talk", "ntfy"]);
+const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set([
+  "slack",
+  "whatsapp",
+  "line",
+  "nextcloud-talk",
+  "ntfy",
+  "mattermost",
+]);
 
 export interface IntegrationDiagnosticsPort {
   readonly config: {
