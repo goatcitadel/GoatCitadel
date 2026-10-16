@@ -72,6 +72,8 @@ const effectKinds: Readonly<Record<ApprovalEffectKind, string>> = {
   delegation_scope_expansion_apply: "Widen the delegated scope",
   delegation_scope_expansion_resume: "Resume the delegated work",
   engineering_learning_lifecycle_apply: "Apply the engineering learning",
+  communications_mail_send_apply: "Send the approved email",
+  communications_calendar_create_apply: "Create the approved calendar event",
   approval_observability: "Record the decision trail",
 };
 

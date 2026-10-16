@@ -152,6 +152,8 @@ export type ApprovalEffectKind =
   | "delegation_scope_expansion_apply"
   | "delegation_scope_expansion_resume"
   | "engineering_learning_lifecycle_apply"
+  | "communications_mail_send_apply"
+  | "communications_calendar_create_apply"
   | "approval_observability";
 
 export type ApprovalObservabilityAuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
@@ -215,7 +217,9 @@ export type ApprovalEffectTargetKind =
   | "capability_candidate"
   | "improvement_operation"
   | "delegation_step"
-  | "engineering_learning";
+  | "engineering_learning"
+  | "mail_draft"
+  | "calendar_event";
 
 export interface ApprovalEffectRecord {
   effectId: string;
