@@ -74,6 +74,15 @@ describe("effective tool write roots", () => {
     ]);
   });
 
+  it("admits no operator root when runtime write protection is missing", () => {
+    const sandbox: Sandbox = { ...fixture.sandbox, runtimeWriteProtection: undefined };
+    expect(operatorWriteRootPaths(sandbox, "write")).toEqual([]);
+    expect(effectiveToolWriteRoots(sandbox, "write")).toEqual([fixture.jailRoot]);
+    expect(() => assertToolWritePath(path.join(fixture.writeOnlyRoot, "a.txt"), sandbox)).toThrow(
+      /outside write jail/i,
+    );
+  });
+
   it("behaves exactly like the plain jail when no operator roots are configured", () => {
     const sandbox: Sandbox = { ...fixture.sandbox, operatorWriteRoots: undefined };
     expect(effectiveToolWriteRoots(sandbox, "write")).toEqual([fixture.jailRoot]);

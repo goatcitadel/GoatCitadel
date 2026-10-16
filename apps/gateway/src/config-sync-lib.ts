@@ -118,6 +118,16 @@ export function buildUnifiedConfigPayloadFromRuntime(
       ...persistedSandbox,
       writeJailRoots: runtimeConfig.toolPolicy.sandbox.writeJailRoots.map(serializeSandboxRoot),
       readOnlyRoots: runtimeConfig.toolPolicy.sandbox.readOnlyRoots.map(serializeSandboxRoot),
+      // Persist operator roots like the jail roots (relative inside the
+      // runtime root, absolute outside it). Preset entries drop the resolved
+      // path: it is re-resolved on the server at every load.
+      ...(runtimeConfig.toolPolicy.sandbox.operatorWriteRoots
+        ? {
+            operatorWriteRoots: runtimeConfig.toolPolicy.sandbox.operatorWriteRoots.map(({ path: rootPath, ...root }) =>
+              root.preset ? root : { ...root, path: serializeSandboxRoot(rootPath) },
+            ),
+          }
+        : {}),
     },
   };
   return buildUnifiedConfigPayload(

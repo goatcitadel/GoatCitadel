@@ -25,8 +25,15 @@ export type ToolWriteIntent = "write" | "delete";
 
 type ToolSandbox = ToolPolicyConfig["sandbox"];
 
-/** Operator-opened folders admitted for the given intent. */
+/**
+ * Operator-opened folders admitted for the given intent. Fails closed: without
+ * runtime write protection (set by the gateway at config load) the protected
+ * runtime paths cannot be enforced, so no operator root is admitted.
+ */
 export function operatorWriteRootPaths(sandbox: ToolSandbox, intent: ToolWriteIntent = "write"): string[] {
+  if (!sandbox.runtimeWriteProtection) {
+    return [];
+  }
   return (sandbox.operatorWriteRoots ?? [])
     .filter((root) => intent === "write" || root.allowDelete)
     .map((root) => root.path);
