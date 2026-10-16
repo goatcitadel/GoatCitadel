@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CronJobRecord, CronRunRecord } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { CronAutomationService, type CronAutomationServiceDeps } from "./cron-automation-service.js";
-import { runNoAgentCommand } from "./cron-no-agent-runner.js";
+import { NO_AGENT_DEFAULT_TIMEOUT_MS, NO_AGENT_MAX_TIMEOUT_MS, runNoAgentCommand } from "./cron-no-agent-runner.js";
 import { createTestCronSpecOwner } from "./cron-spec-owner.test-utils.js";
 
 class FakeCronJobs {
@@ -156,7 +156,8 @@ function createProofHarness() {
     curator: forbidden("curator"),
     watchdog: forbidden("watchdog"),
     agentTurn: forbidden("agentTurn"),
-    noAgent: runNoAgentCommand,
+    // Small default-timeout seam so the absent-timeoutMs path is provable without waiting minutes.
+    noAgent: (input: Parameters<typeof runNoAgentCommand>[0]) => runNoAgentCommand({ ...input, defaultTimeoutMs: 600 }),
   } as unknown as CronAutomationServiceDeps["runHandlers"];
   const service = new CronAutomationService({
     storage: { cronJobs, cronRuns } as unknown as Storage,
@@ -173,7 +174,7 @@ function createProofHarness() {
 async function createNoAgentJob(
   service: CronAutomationService,
   jobId: string,
-  noAgent: { args: string[]; timeoutMs?: number },
+  noAgent: { args: string[]; timeoutMs?: number; command?: string },
 ): Promise<void> {
   await service.createCronJob({
     jobId,
@@ -239,7 +240,7 @@ describe("no_agent cron local-only proof", () => {
     const { service, cronJobs, cronRunRows, recordEvidenceEnvelope } = createProofHarness();
     const noisy = "x".repeat(2000);
     await createNoAgentJob(service, "local-fail", {
-      args: ["-e", `process.stderr.write('password=hunter2hunter2 ${noisy}'); process.exit(3)`],
+      args: ["-e", `process.stderr.write('${noisy} password=hunter2hunter2'); process.exit(3)`],
     });
 
     let thrown: Error | undefined;
@@ -251,11 +252,13 @@ describe("no_agent cron local-only proof", () => {
 
     expect(thrown?.message).toContain("exitCode=3");
     expect(thrown?.message).toContain("timedOut=false");
-    expect(thrown?.message.length).toBeLessThan(600);
+    expect(thrown?.message).toContain("[REDACTED]");
     expect(thrown?.message).not.toContain("hunter2hunter2");
+    expect(thrown?.message.length).toBeLessThan(600);
     const job = cronJobs.get("local-fail");
     expect(job).toMatchObject({ lastRunStatus: "failed" });
     expect(job?.lastFailure?.message).toContain("exitCode=3");
+    expect(job?.lastFailure?.message).toContain("[REDACTED]");
     expect(job?.lastFailure?.message).not.toContain("hunter2hunter2");
     const runs = [...cronRunRows.values()];
     expect(runs).toHaveLength(1);
@@ -263,6 +266,76 @@ describe("no_agent cron local-only proof", () => {
     expect(vi.mocked(recordEvidenceEnvelope).mock.calls[0]?.[0]).toMatchObject({
       metadata: { jobId: "local-fail", status: "failed" },
     });
+  });
+
+  it("redacts secrets from stdout before persisting and broadcasting on success", async () => {
+    const { service, cronJobs, publishRealtime, cronRunRows } = createProofHarness();
+    await createNoAgentJob(service, "secret-stdout", {
+      args: ["-e", "process.stdout.write('status ok password=hunter2hunter2')"],
+    });
+
+    const result = await service.runCronJobNow("secret-stdout");
+
+    const output = String(outputEvents(publishRealtime)[0]?.output);
+    expect(output).toContain("[REDACTED]");
+    expect(output).not.toContain("hunter2hunter2");
+    const persisted = String(cronJobs.get("secret-stdout")?.lastRunOutput);
+    expect(persisted).toContain("[REDACTED]");
+    expect(persisted).not.toContain("hunter2hunter2");
+    expect(JSON.stringify(cronRunRows.get(result.runId)?.outcome)).not.toContain("hunter2hunter2");
+  });
+
+  it("bounds oversized stdout in the persisted and broadcast copies", async () => {
+    const { service, cronJobs, publishRealtime } = createProofHarness();
+    await createNoAgentJob(service, "big-stdout", {
+      args: ["-e", "process.stdout.write('a'.repeat(1500000) + 'END')"],
+    });
+
+    await service.runCronJobNow("big-stdout");
+
+    const output = String(outputEvents(publishRealtime)[0]?.output);
+    expect(output.length).toBeLessThan(20000);
+    expect(output.startsWith("[output truncated")).toBe(true);
+    expect(output.endsWith("END")).toBe(true);
+    expect(String(cronJobs.get("big-stdout")?.lastRunOutput).length).toBeLessThan(20000);
+  });
+
+  it("applies a default timeout when none is configured and caps oversized timeouts", async () => {
+    const { service, cronJobs, publishRealtime } = createProofHarness();
+    await createNoAgentJob(service, "defaulted", { args: ["-e", "0"] });
+    expect(cronJobs.get("defaulted")?.actionConfig?.noAgent?.timeoutMs).toBe(NO_AGENT_DEFAULT_TIMEOUT_MS);
+    await createNoAgentJob(service, "capped", { args: ["-e", "0"], timeoutMs: NO_AGENT_MAX_TIMEOUT_MS * 10 });
+    expect(cronJobs.get("capped")?.actionConfig?.noAgent?.timeoutMs).toBe(NO_AGENT_MAX_TIMEOUT_MS);
+
+    // A job stored without timeoutMs (for example pre-existing) still gets the runner default.
+    cronJobs.upsert({
+      jobId: "legacy-no-timeout",
+      name: "legacy-no-timeout",
+      revision: 1,
+      action: "no_agent",
+      schedule: "0 12 * * * UTC",
+      enabled: true,
+      actionConfig: {
+        noAgent: {
+          command: process.execPath,
+          args: ["-e", "process.stdout.write(String(process.pid)); setInterval(() => {}, 1000)"],
+        },
+      },
+    } as CronJobRecord);
+    await expect(service.runCronJobNow("legacy-no-timeout")).rejects.toThrow("timedOut=true");
+    const pid = Number(outputEvents(publishRealtime)[0]?.output);
+    expect(await waitUntilDead(pid)).toBe(false);
+  });
+
+  it("surfaces the spawn error code for a nonexistent command", async () => {
+    const { service, cronJobs } = createProofHarness();
+    await createNoAgentJob(service, "missing-cmd", {
+      command: "goatcitadel-definitely-not-a-command",
+      args: [],
+    });
+
+    await expect(service.runCronJobNow("missing-cmd")).rejects.toThrow("spawnError=ENOENT");
+    expect(cronJobs.get("missing-cmd")).toMatchObject({ lastRunStatus: "failed" });
   });
 
   it("kills the child on timeout and records a failed outcome", async () => {

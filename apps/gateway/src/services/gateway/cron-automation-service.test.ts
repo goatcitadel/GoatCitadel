@@ -968,7 +968,8 @@ describe("CronAutomationService job behavior", () => {
         }),
       );
       await service.runDueTaskCronJobs(new Date("2026-05-15T12:03:00.000Z"));
-      expect(noAgent.mock.calls.length).toBeGreaterThan(1);
+      expect(noAgent).toHaveBeenCalledTimes(2);
+      expect(cronJobs.get("legacy-no-agent")).toMatchObject({ lastRunStatus: "ok", lastRunOutput: "alert" });
       await expect(service.updateCronJob("legacy-no-agent", { enabled: false }, 1)).resolves.toMatchObject({
         enabled: false,
       });

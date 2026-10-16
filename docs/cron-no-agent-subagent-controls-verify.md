@@ -61,7 +61,7 @@ This is the manual-probe checklist for O3/O4/O5/O6 from the 2026-05-15 upstream 
 
 ### `workdir`
 
-1. Create a `no_agent` job with `workdir: "/tmp/test"` (or `C:\\temp` on Windows). Command: `pwd` (Unix) or `cd` (Windows).
+1. Create a `no_agent` job with `workdir: "/tmp/test"` (or `C:\\temp` on Windows). Command: `node` with args `["-e", "process.stdout.write(process.cwd())"]` (portable; commands run with `shell: false`, so shell built-ins such as `cd` do not work).
 2. Trigger. The realtime event's `output` equals the workdir path.
 
 ## O6 — `goatcitadel-cron run --wait` + `cron runs --run-id`

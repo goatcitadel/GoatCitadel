@@ -1,14 +1,17 @@
 import { redactSecretText, type CronJobRecord } from "@goatcitadel/contracts";
 import type { CronJobRuntimeTelemetryPatch } from "@goatcitadel/storage";
+import { resolveNoAgentTimeoutMs, type NoAgentRunResult } from "./cron-no-agent-runner.js";
 
 const NO_AGENT_STDERR_SUMMARY_MAX_LENGTH = 300;
+/** Bound for the persisted and broadcast copies of stdout (after redaction). */
+const NO_AGENT_OUTPUT_MAX_LENGTH = 16 * 1024;
 
 type NoAgentRunHandler = (input: {
   command: string;
   args?: string[];
   workdir?: string;
   timeoutMs?: number;
-}) => Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }>;
+}) => Promise<NoAgentRunResult>;
 
 export function normalizeNoAgentCronActionConfig(rawValue: Record<string, unknown>): CronJobRecord["actionConfig"] {
   const rawNoAgent =
@@ -21,10 +24,10 @@ export function normalizeNoAgentCronActionConfig(rawValue: Record<string, unknow
   const args = Array.isArray(rawNoAgent.args)
     ? rawNoAgent.args.filter((token): token is string => typeof token === "string")
     : undefined;
-  const timeoutMs =
-    typeof rawNoAgent.timeoutMs === "number" && Number.isFinite(rawNoAgent.timeoutMs) && rawNoAgent.timeoutMs > 0
-      ? Math.floor(rawNoAgent.timeoutMs)
-      : undefined;
+  // Always bounded: a missing timeout takes the default, an oversized one is capped.
+  const timeoutMs = resolveNoAgentTimeoutMs(
+    typeof rawNoAgent.timeoutMs === "number" ? rawNoAgent.timeoutMs : undefined,
+  );
   const rawChannel =
     rawNoAgent.deliveryChannel &&
     typeof rawNoAgent.deliveryChannel === "object" &&
@@ -42,7 +45,7 @@ export function normalizeNoAgentCronActionConfig(rawValue: Record<string, unknow
     noAgent: {
       command: rawNoAgent.command.trim(),
       ...(args ? { args } : {}),
-      ...(timeoutMs ? { timeoutMs } : {}),
+      timeoutMs,
       ...(deliveryChannel ? { deliveryChannel } : {}),
     },
   };
@@ -72,7 +75,7 @@ export async function runNoAgentCronJob(input: {
     timeoutMs: noAgentConfig.timeoutMs,
   });
   const finishedAt = new Date().toISOString();
-  const stdoutTrimmed = runResult.stdout.replace(/\r?\n$/, "");
+  const stdoutTrimmed = boundRedactedOutput(runResult.stdout.replace(/\r?\n$/, ""), runResult.stdoutTruncated);
   const hasOutput = stdoutTrimmed.length > 0;
   const failed = runResult.timedOut || (runResult.exitCode !== null && runResult.exitCode !== 0);
   // A spawn error settles with exitCode null and no timeout; that is a failed run too.
@@ -110,8 +113,8 @@ export async function runNoAgentCronJob(input: {
     action: input.job.action,
     exitCode: runResult.exitCode,
     timedOut: false,
-    stdout: runResult.stdout,
-    stderr: runResult.stderr,
+    ...(runResult.stdoutTruncated ? { stdoutTruncated: true } : {}),
+    ...(runResult.stderrTruncated ? { stderrTruncated: true } : {}),
     runId: input.runId,
     hasOutput,
     nextRunAt: saved.nextRunAt,
@@ -121,7 +124,7 @@ export async function runNoAgentCronJob(input: {
 /** Failed-run summary: exit code, timeout flag, and a bounded, redacted stderr tail. */
 function summarizeNoAgentFailure(
   normalizedJobId: string,
-  runResult: { stderr: string; exitCode: number | null; timedOut: boolean },
+  runResult: Pick<NoAgentRunResult, "stderr" | "exitCode" | "timedOut" | "spawnErrorCode">,
 ): string {
   const stderr = redactSecretText(runResult.stderr.replace(/\s+/g, " ").trim()).value;
   const bounded =
@@ -130,5 +133,15 @@ function summarizeNoAgentFailure(
       : stderr;
   return `no_agent cron job failed: ${normalizedJobId} (exitCode=${String(runResult.exitCode)}, timedOut=${String(
     runResult.timedOut,
-  )})${bounded ? ` stderr: ${bounded}` : ""}`;
+  )}${runResult.spawnErrorCode ? `, spawnError=${runResult.spawnErrorCode}` : ""})${bounded ? ` stderr: ${bounded}` : ""}`;
+}
+
+/** Redacts secrets, then keeps the tail within the persisted/broadcast bound. */
+function boundRedactedOutput(text: string, captureTruncated: boolean | undefined): string {
+  const redacted = redactSecretText(text).value;
+  if (redacted.length <= NO_AGENT_OUTPUT_MAX_LENGTH && !captureTruncated) {
+    return redacted;
+  }
+  const tail = redacted.slice(Math.max(0, redacted.length - NO_AGENT_OUTPUT_MAX_LENGTH));
+  return `[output truncated; showing tail]\n${tail}`;
 }
