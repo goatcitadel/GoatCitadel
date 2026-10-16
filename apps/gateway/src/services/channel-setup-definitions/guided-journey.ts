@@ -1,6 +1,7 @@
 import type { ChannelSetupFieldDefinition, ChannelSetupStepDefinition } from "@goatcitadel/contracts";
 import {
   GUIDED_INBOUND_CHANNELS,
+  FORCED_ALLOWLIST_INBOUND_CHANNELS,
   hydrateGuidedChannelInboundAccess,
   normalizeGuidedChannelInboundAccess,
 } from "../channel-setup-inbound-access.js";
@@ -38,7 +39,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
   },
   ntfy: {
     summary:
-      "Publish notifications to an ntfy topic and, optionally, subscribe to a token-protected topic's JSON stream for inbound conversations.",
+      "Publish notifications to an ntfy topic and, optionally, subscribe to a topic's JSON stream for inbound conversations. Anyone able to publish to the subscribed topic can start turns, so limit its write access to trusted publishers; messages published while the gateway is down are skipped.",
     prerequisites: [
       "A reachable ntfy server and topic you control.",
       "Subscribe to that exact topic on a device before testing.",
@@ -266,10 +267,12 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
           defaultValue: "allowlist",
           explanation:
             "Keep allowlist for controlled access. Existing open legacy connections keep their posture until you deliberately change it.",
-          options: [
-            { value: "allowlist", label: "Only allowed senders" },
-            { value: "open_legacy", label: "Open legacy access (advanced)" },
-          ],
+          options: FORCED_ALLOWLIST_INBOUND_CHANNELS.has(key)
+            ? [{ value: "allowlist", label: "Only allowed senders" }]
+            : [
+                { value: "allowlist", label: "Only allowed senders" },
+                { value: "open_legacy", label: "Open legacy access (advanced)" },
+              ],
         },
         {
           key: "allowedSenders",

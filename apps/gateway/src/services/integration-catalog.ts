@@ -58,6 +58,24 @@ function inboundAccessFields(): IntegrationFieldSchema[] {
   ];
 }
 
+/**
+ * Stream and Google Chat app inbound never had a legacy-open default: the runtime always enforces the
+ * allowlist, so these forms offer only the sender list (no open_legacy choice the runtime would ignore).
+ */
+function forcedAllowlistInboundFields(senderHint: string): IntegrationFieldSchema[] {
+  return [
+    json("allowedSenders", "Allowed Senders JSON", {
+      advanced: true,
+      defaultValue: "[]",
+      description: `Inbound on this channel is always allowlist-only; an empty list drops all inbound. ${senderHint}`,
+    }),
+  ];
+}
+
+function inboundOptInField(key: string, label: string, description: string): IntegrationFieldSchema {
+  return { ...bool(key, label, false), description };
+}
+
 const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.discord": {
     catalogId: "channel.discord",
@@ -190,7 +208,8 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.ntfy": {
     catalogId: "channel.ntfy",
     title: "ntfy Notification Connection",
-    description: "Connect an outbound-only ntfy topic for operator-visible notifications.",
+    description:
+      "Connect an ntfy topic for operator-visible notifications, with optional inbound from a subscribed topic. The token gates reading the topic; anyone able to publish to it can start turns, so subscribe only to a topic whose write access is limited to trusted publishers. Messages published while the gateway is disconnected or restarting are skipped (no history is fetched on reconnect after a restart).",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "ntfy" }),
@@ -211,6 +230,17 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       select("priority", "Priority", ["1", "2", "3", "4", "5"], "3", {
         advanced: true,
       }),
+      inboundOptInField(
+        "inboundStreamEnabled",
+        "Receive Inbound Messages",
+        "Opt in to a persistent subscription to the topic's JSON stream. Requires a token. Anyone able to publish to the subscribed topic can start turns, so restrict its write access to trusted publishers.",
+      ),
+      text("subscribeTopic", "Subscribe Topic", {
+        placeholder: "goatcitadel-inbox",
+        advanced: true,
+        description: "Topic to subscribe to for inbound. Defaults to the outbound topic.",
+      }),
+      ...forcedAllowlistInboundFields('The topic is the sender: allow "ntfy-topic:<subscribe topic>".'),
       bool("dryRun", "Dry Run Only", false),
       bool("enabled", "Enabled", true),
     ],
@@ -309,7 +339,9 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         advanced: true,
         description: "Chat app mode. Space used when a send does not name one.",
       }),
-      ...inboundAccessFields(),
+      ...forcedAllowlistInboundFields(
+        "Chat app mode only: add Google Chat user resource names such as users/123456789.",
+      ),
       bool("enabled", "Enabled", true),
     ],
   },
@@ -369,7 +401,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
     catalogId: "channel.signal",
     title: "Signal Connection",
     description:
-      "Configure a Signal JSON-RPC bridge, account, and default recipient. Inbound from the signal-cli daemon event stream is the receiveEvents option in guided setup.",
+      "Configure a Signal JSON-RPC bridge, account, and default recipient. Optional inbound subscribes to the signal-cli daemon (--http) event stream; signal-cli does not replay events, so messages that arrive while the stream is disconnected are lost.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "Signal" }),
@@ -385,13 +417,20 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         placeholder: "+15551234567 or group identifier",
         required: true,
       }),
+      inboundOptInField(
+        "receiveEvents",
+        "Receive Inbound Messages",
+        "Opt in to the signal-cli daemon event stream (signal-cli daemon --http). A silent connection is reconnected after 90 seconds without its SSE keepalive.",
+      ),
+      ...forcedAllowlistInboundFields("Add the sender phone numbers or Signal UUIDs that may start turns."),
       bool("enabled", "Enabled", true),
     ],
   },
   "channel.mattermost": {
     catalogId: "channel.mattermost",
     title: "Mattermost Connection",
-    description: "Connect a Mattermost bot token and default channel target.",
+    description:
+      "Connect a Mattermost bot token and default channel target. Optional inbound listens on the bot WebSocket; Mattermost has no replay, so posts sent while the socket is disconnected are not recovered.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "Mattermost" }),
@@ -412,6 +451,12 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         placeholder: "goatcitadel",
         advanced: true,
       }),
+      inboundOptInField(
+        "inboundStreamEnabled",
+        "Receive Inbound Messages",
+        "Opt in to the bot WebSocket for posted events in channels the bot belongs to.",
+      ),
+      ...forcedAllowlistInboundFields("Add the Mattermost user ids that may start turns."),
       bool("enabled", "Enabled", true),
     ],
   },
@@ -874,7 +919,15 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     ["oauth", "bot-token"],
     ["chat", "threads", "attachments", "reactions", "unsend", "inbound"],
   ),
-  entry("channel", "signal", "Signal", "Signal messenger bridge.", "beta", ["device-link"], ["chat", "groups"]),
+  entry(
+    "channel",
+    "signal",
+    "Signal",
+    "Signal messenger bridge with optional inbound from the signal-cli daemon event stream.",
+    "beta",
+    ["device-link"],
+    ["chat", "groups", "inbound"],
+  ),
   entry(
     "channel",
     "whatsapp",
@@ -897,10 +950,10 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "channel",
     "ntfy",
     "ntfy",
-    "Outbound-only ntfy notification delivery.",
+    "ntfy notification delivery with optional inbound from a write-restricted subscribed topic.",
     "beta",
     ["token", "none"],
-    ["notifications", "outbound"],
+    ["notifications", "outbound", "inbound"],
   ),
   entry(
     "channel",
@@ -952,10 +1005,10 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "channel",
     "mattermost",
     "Mattermost",
-    "Mattermost bot/webhook integration.",
+    "Mattermost bot integration with optional inbound over the bot WebSocket.",
     "beta",
     ["token"],
-    ["chat", "channels", "direct", "attachments", "reactions", "unsend"],
+    ["chat", "channels", "direct", "attachments", "reactions", "unsend", "inbound"],
   ),
   entry(
     "channel",

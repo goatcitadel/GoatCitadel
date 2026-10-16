@@ -360,25 +360,30 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
             lifecycle: "persistent",
             inboundReadiness: "ready",
             operatorSummary:
-              "ntfy publishes notifications to a configured topic and, when inbound is enabled, subscribes to that topic's JSON stream. The sender is the topic itself, so access control is the token-protected topic; outbound publishes are tagged and ignored on the way back in.",
+              "ntfy publishes notifications to a configured topic and, when inbound is enabled, subscribes to that topic's JSON stream. The sender is the topic itself: the token gates reading, but anyone able to publish to the subscribed topic can start turns, so use a topic whose write access is limited to trusted publishers. Messages published while the gateway is disconnected or restarting are skipped. Outbound publishes are tagged and ignored on the way back in.",
           }
         : {
             outboundTransport: "api",
             lifecycle: "stateless",
             inboundReadiness: "unsupported",
             operatorSummary:
-              "ntfy is normalized as a stateless outbound-only notification path. Inbound topic subscription is opt-in: enable inboundStreamEnabled on a token-protected topic to subscribe to its JSON stream.",
+              "ntfy is normalized as a stateless outbound-only notification path. Inbound topic subscription is opt-in: enable inboundStreamEnabled with a token to subscribe to the topic's JSON stream, on a topic whose write access is limited to trusted publishers.",
           },
     resolveSupportNotes: (config) => [
-      isNtfyInboundEnabled(config)
-        ? "ntfy inbound subscribes to the topic's JSON stream; the sender is the topic itself, so access control is the token-protected topic. Outbound publishes are tagged and ignored on the way back in."
-        : "ntfy inbound is off; set inboundStreamEnabled on a token-protected topic to subscribe to its JSON stream. Webhook and remote-command inbound are not supported.",
+      ...(isNtfyInboundEnabled(config)
+        ? [
+            "ntfy inbound subscribes to the topic's JSON stream and the sender is the topic itself. The token gates reading the topic; anyone able to publish to the subscribed topic can start turns, so use a topic whose write access (ACL) is limited to trusted publishers. Outbound publishes are tagged and ignored on the way back in.",
+            "Messages published while the gateway is disconnected or restarting are skipped: a reconnect within one gateway run resumes after the last accepted message, but no history is fetched after a gateway restart or a connection edit. A stream silent for 2 minutes (ntfy keepalives arrive about every 45 seconds) is treated as dropped and reconnected.",
+          ]
+        : [
+            "ntfy inbound is off; set inboundStreamEnabled with a token to subscribe to the topic's JSON stream. Webhook and remote-command inbound are not supported.",
+          ]),
       "Token-backed topics should use tokenEnv so secrets are resolved at the tool host boundary.",
       "Dry-run mode validates routing without publishing to the ntfy server.",
     ],
     resolveSetupDiagnostics: (config) =>
       isNtfyInboundRequested(config) && !hasNtfyToken(config)
-        ? ["ntfy inbound requires a token-protected topic (tokenEnv)"]
+        ? ["ntfy inbound requires a token to read the topic (tokenEnv)"]
         : [],
     requiredAnyOf: [["baseUrl"], ["topic", "defaultTopic"]],
   },
@@ -531,6 +536,11 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
         ? "Signal inbound subscribes to the signal-cli daemon --http event stream (/api/v1/events); allow the sender UUIDs (or numbers for senders without a UUID) that may start turns, because inbound is default-deny."
         : "Signal inbound is off; set receiveEvents on a signal-cli daemon --http bridge to receive messages from its event stream (/api/v1/events).",
       "signal-cli acknowledges messages to the Signal server itself, so messages that arrive while the gateway's event stream is disconnected are not replayed and are lost.",
+      ...(isSignalInboundEnabled(config)
+        ? [
+            "signal-cli sends an SSE keepalive (every 15 seconds by default, --sse-keepalive-interval); an event stream silent for 90 seconds is treated as dropped and reconnected, so keep that interval well below 90 seconds.",
+          ]
+        : []),
     ],
     requiredAnyOf: [["baseUrl", "bridgeUrl"]],
   },
@@ -567,6 +577,11 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       isMattermostInboundEnabled(config)
         ? "Mattermost inbound uses the bot WebSocket (/api/v4/websocket); allow the Mattermost user ids that may start turns, because inbound is default-deny. Posts sent while the socket is disconnected, or that fail acceptance, are not recovered."
         : "Mattermost inbound is off; set inboundStreamEnabled with a bot token to receive posted events over the bot WebSocket.",
+      ...(isMattermostInboundEnabled(config)
+        ? [
+            "The bot pings the WebSocket every 30 seconds; a socket that answers nothing for 90 seconds is treated as dropped and reconnected.",
+          ]
+        : []),
       "Mattermost unsend deletes the original post and typically applies only to posts the bot can remove.",
       "Mattermost rich sends upload files to the resolved channel before creating the post.",
     ],

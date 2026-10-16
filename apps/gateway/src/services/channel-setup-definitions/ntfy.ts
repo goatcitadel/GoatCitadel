@@ -31,7 +31,7 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
       difficulty: "beginner",
       manualModePolicy: "available-secondary",
       introSummary:
-        "Connect ntfy as an outbound notification target for operator-visible status, approvals, and dry-run validation, with optional inbound over a token-protected topic subscription.",
+        "Connect ntfy as an outbound notification target for operator-visible status, approvals, and dry-run validation, with optional inbound from a subscribed topic whose write access is limited to trusted publishers.",
       prerequisites: [
         "An ntfy.sh topic or a self-hosted ntfy base URL.",
         "A topic name that is safe for GoatCitadel to publish to.",
@@ -46,7 +46,7 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
             paragraph("GoatCitadel can send outbound notifications to an ntfy topic using the HTTP publish API."),
             note(
               "warning",
-              "ntfy is outbound-only unless you opt in to inbound. Inbound subscribes to the topic's JSON stream and requires a token-protected topic, because ntfy carries no sender identity: the topic is the sender. Outbound publishes are tagged and ignored on the way back in. Webhooks and remote commands are not supported.",
+              "ntfy is outbound-only unless you opt in to inbound. Inbound subscribes to the topic's JSON stream and requires a token, because ntfy carries no sender identity: the topic is the sender. The token gates reading the topic; anyone able to publish to the subscribed topic can start turns, so use a topic whose write access is limited to trusted publishers. Messages published while the gateway is disconnected or restarting are skipped (no history is fetched on reconnect after a restart). Outbound publishes are tagged and ignored on the way back in. Webhooks and remote commands are not supported.",
             ),
           ],
         },
@@ -110,9 +110,9 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
               required: false,
               defaultValue: false,
               explanation:
-                "Subscribe to the topic's JSON stream so messages published to it start conversations. Requires a token-protected topic.",
+                "Subscribe to the topic's JSON stream so messages published to it start conversations. Requires a token. The token gates reading the topic; anyone able to publish to the subscribed topic can start turns, so use a topic whose write access is limited to trusted publishers. Messages published while the gateway is disconnected or restarting are skipped (no history is fetched on reconnect after a restart).",
               whyNeeded:
-                "ntfy has no sender identity, so anyone who can publish to an unprotected topic could start turns. Inbound is therefore opt-in and needs a token.",
+                "ntfy has no sender identity, so anyone who can publish to the subscribed topic can start turns. Inbound is therefore opt-in, needs a token to read the topic, and should only subscribe to a write-restricted topic.",
               canChangeLater: true,
             },
             {
@@ -176,7 +176,7 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
             "The base URL is an HTTP or HTTPS origin.",
             "A topic is configured.",
             "Dry-run behavior is intentional when enabled.",
-            "Inbound is enabled only for a token-protected topic; no webhook or remote command behavior is claimed.",
+            "Inbound is enabled only with a token and on a topic whose write access is limited to trusted publishers; no webhook or remote command behavior is claimed.",
           ],
         },
       ],
@@ -307,7 +307,7 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
         !readString(draft.draft, "token") &&
         !readLegacyString(draft, "token", "tokenEnv")
       ) {
-        issues.push(requiredFieldIssue("tokenEnv", "ntfy inbound requires a token-protected topic (tokenEnv)."));
+        issues.push(requiredFieldIssue("tokenEnv", "ntfy inbound requires a token to read the topic (tokenEnv)."));
       }
       if (priority && !/^[1-5]$/.test(priority)) {
         issues.push(malformedFieldIssue("priority", "Priority must be an integer from 1 to 5."));

@@ -42,7 +42,8 @@ test("hard quarantine and provider-callability truths cannot drift green", () =>
   const signalStream = byId.get("signal.daemon-events");
   assert.equal(signalStream?.expected.inboundModes[0], "stream");
   assert.equal(signalStream?.expected.lifecycle, "persistent");
-  assert.equal(signalStream?.durability.inboundCommitBeforeAck, true);
+  assert.equal(signalStream?.durability.inboundCommitBeforeAck, false);
+  assert.equal(signalStream?.durability.inboundReplay, "none");
   assert.match(signalStream?.proof.inboundAdapter ?? "", /signal-stream-adapter\.test\.ts$/);
 
   const googleChatWebhook = byId.get("google-chat.webhook");
@@ -64,10 +65,47 @@ test("hard quarantine and provider-callability truths cannot drift green", () =>
   assert.match(photon?.proof.outboundBlocked ?? "", /tool-executor-channel-failures/);
 });
 
+const NO_PROVIDER_ACK_STREAM_ROWS = new Set([
+  "ntfy.publish-and-stream",
+  "signal.daemon-events",
+  "mattermost.bot-websocket",
+]);
+
+test("stream rows without provider acknowledgement or replay state that honestly", () => {
+  const byId = new Map(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => [row.id, row]));
+  for (const id of ["signal.daemon-events", "mattermost.bot-websocket"]) {
+    const row = byId.get(id);
+    assert.equal(row?.durability.inboundCommitBeforeAck, false, id);
+    assert.equal(row?.durability.inboundReplay, "none", id);
+    assert.equal(row?.durability.restartRecovery, "no_provider_replay_messages_lost_while_disconnected", id);
+  }
+  const ntfy = byId.get("ntfy.publish-and-stream");
+  assert.equal(ntfy?.durability.inboundCommitBeforeAck, false);
+  assert.equal(ntfy?.durability.inboundReplay, "in_process_reconnect_only");
+  assert.equal(ntfy?.durability.restartRecovery, "no_replay_after_restart_messages_skipped");
+  for (const row of ADVERTISED_CHANNEL_PARITY_MATRIX) {
+    if (row.expected.lifecycle === "persistent" && !NO_PROVIDER_ACK_STREAM_ROWS.has(row.id)) {
+      assert.equal(row.durability.restartRecovery, "persistent_runtime_plus_shared_durable_recovery", row.id);
+    }
+  }
+});
+
+test("an inbound row that drops commit-before-ack without stating replay fails validation", () => {
+  const signalStream = ADVERTISED_CHANNEL_PARITY_MATRIX.find((row) => row.id === "signal.daemon-events");
+  const { inboundReplay: _omitted, ...durability } = signalStream.durability;
+  assert.deepEqual(validateAdvertisedChannelParityMatrix([{ ...signalStream, durability }]).slice(0, 1), [
+    "signal.daemon-events has inbound without commit-before-ack and must state durability.inboundReplay",
+  ]);
+});
+
 test("inbound-capable rows require commit-before-ack, dedupe, and final-reply recovery proof", () => {
   for (const row of ADVERTISED_CHANNEL_PARITY_MATRIX) {
     const inboundCapable = row.expected.inboundModes.some((mode) => mode !== "none");
-    assert.equal(row.durability.inboundCommitBeforeAck, inboundCapable, row.id);
+    assert.equal(
+      row.durability.inboundCommitBeforeAck,
+      inboundCapable && !NO_PROVIDER_ACK_STREAM_ROWS.has(row.id),
+      row.id,
+    );
     if (inboundCapable) {
       assert.equal(row.durability.dedupeReplay, "persistent_provider_identity", row.id);
       assert.equal(row.durability.finalReplyRecovery, "deterministic_delivery_idempotency", row.id);

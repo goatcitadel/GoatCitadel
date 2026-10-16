@@ -17,6 +17,18 @@ export const GUIDED_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   "google-chat",
 ]);
 
+/**
+ * Channels whose inbound (the ntfy/Mattermost/Signal streams and Google Chat app mode) is new, so the
+ * legacy-open default never applied: the runtime always forces allowlist for them. Setup, hydration and
+ * diagnostics must report that posture rather than a stored open_legacy value the runtime ignores.
+ */
+export const FORCED_ALLOWLIST_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
+  "ntfy",
+  "mattermost",
+  "signal",
+  "google-chat",
+]);
+
 /** Keep sender policy in its shared owner rather than provider-specific normalizers. */
 export function normalizeGuidedChannelInboundAccess(
   channelKey: string,
@@ -47,6 +59,13 @@ export function hydrateGuidedChannelInboundAccess(
   saved: Record<string, unknown>,
 ): Record<string, unknown> {
   if (!GUIDED_INBOUND_CHANNELS.has(channelKey)) return {};
+  if (FORCED_ALLOWLIST_INBOUND_CHANNELS.has(channelKey)) {
+    // open_legacy is never honored for these channels, so never show it as the current posture.
+    return {
+      inboundAccessMode: "allowlist",
+      ...(saved.allowedSenders !== undefined ? { allowedSenders: saved.allowedSenders } : {}),
+    };
+  }
   return {
     inboundAccessMode:
       saved.inboundAccessMode ?? (resolveAllowedSenders(saved).length > 0 ? "allowlist" : "open_legacy"),

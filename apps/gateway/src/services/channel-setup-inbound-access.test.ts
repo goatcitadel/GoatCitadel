@@ -10,7 +10,7 @@ import {
   revokeTelegramPairingActor,
 } from "./telegram-channel-pairing.js";
 describe("guided sender authorization", () => {
-  it.each(["slack", "telegram", "whatsapp", "line", "nextcloud-talk", "ntfy"])(
+  it.each(["slack", "telegram", "whatsapp", "line", "nextcloud-talk"])(
     "defaults %s to deny unknown senders and preserves deliberate fields",
     (key) => {
       const config = normalizeGuidedChannelInboundAccess(key, { draft: {} });
@@ -20,6 +20,20 @@ describe("guided sender authorization", () => {
         allowedSenders: ["777"],
       });
       expect(hydrateGuidedChannelInboundAccess(key, {})).toEqual({ inboundAccessMode: "open_legacy" });
+    },
+  );
+  it.each(["ntfy", "mattermost", "signal", "google-chat"])(
+    "defaults %s to deny and never hydrates a stored open_legacy posture the runtime ignores",
+    (key) => {
+      const config = normalizeGuidedChannelInboundAccess(key, { draft: {} });
+      expect(evaluateChannelInboundAccess({ config, actorId: "777" }).allowed).toBe(false);
+      expect(hydrateGuidedChannelInboundAccess(key, {})).toEqual({ inboundAccessMode: "allowlist" });
+      expect(hydrateGuidedChannelInboundAccess(key, { inboundAccessMode: "open_legacy" })).toEqual({
+        inboundAccessMode: "allowlist",
+      });
+      expect(
+        hydrateGuidedChannelInboundAccess(key, { inboundAccessMode: "open_legacy", allowedSenders: ["u1"] }),
+      ).toEqual({ inboundAccessMode: "allowlist", allowedSenders: ["u1"] });
     },
   );
   it("commits pairing and sender trust together then revokes both without disturbing other users", () => {

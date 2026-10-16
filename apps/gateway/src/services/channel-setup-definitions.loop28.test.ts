@@ -140,9 +140,9 @@ describe("channel setup definition loop28 tails", () => {
         }),
       ).toEqual({
         ...item.expected,
-        ...(["whatsapp", "nextcloud-talk", "mattermost"].includes(item.key)
-          ? { inboundAccessMode: "open_legacy" }
-          : {}),
+        ...(["whatsapp", "nextcloud-talk"].includes(item.key) ? { inboundAccessMode: "open_legacy" } : {}),
+        // Mattermost inbound is always forced allowlist, so legacy rows never round-trip open_legacy.
+        ...(item.key === "mattermost" ? { inboundAccessMode: "allowlist" } : {}),
       });
       expect(
         definition.validate({

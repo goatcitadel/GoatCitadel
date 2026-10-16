@@ -20,6 +20,16 @@ export const REQUIRED_CHANNEL_FAMILIES = Object.freeze([
   "zalouser",
 ]);
 
+/**
+ * Persistent stream inbound has no provider acknowledgement to gate: events are accepted durably before
+ * the cursor advances, but nothing is redelivered for a gap, so these rows override the derived claims.
+ */
+const NO_REPLAY_STREAM_DURABILITY = Object.freeze({
+  inboundCommitBeforeAck: false,
+  inboundReplay: "none",
+  restartRecovery: "no_provider_replay_messages_lost_while_disconnected",
+});
+
 function adapterRow(input) {
   const inboundCapable = input.inboundMode !== "none";
   return Object.freeze({
@@ -38,6 +48,8 @@ function adapterRow(input) {
           : "shared_durable_recovery",
       unknownAfterSend: input.callability === "callable" ? "manual_reconciliation_required" : "blocked_before_send",
       finalReplyRecovery: inboundCapable ? "deterministic_delivery_idempotency" : "not_applicable",
+      // Per-row truth overrides the derived defaults (for example, stream inbound without provider replay).
+      ...input.durability,
     }),
     proof: Object.freeze({
       capability: CAPABILITY_PROOF,
@@ -214,7 +226,7 @@ export const ADVERTISED_CHANNEL_PARITY_MATRIX = Object.freeze([
     family: "ntfy",
     catalogId: "channel.ntfy",
     channelKey: "ntfy",
-    variant: "outbound publish plus token-protected topic JSON stream inbound",
+    variant: "outbound publish plus topic JSON stream inbound (token-read, write-restricted topic)",
     callability: "callable",
     config: {
       baseUrl: "https://ntfy.example.test",
@@ -223,6 +235,12 @@ export const ADVERTISED_CHANNEL_PARITY_MATRIX = Object.freeze([
       inboundStreamEnabled: true,
     },
     inboundMode: "stream",
+    durability: {
+      inboundCommitBeforeAck: false,
+      // since=<last accepted id> only within one gateway run; the cursor is in memory.
+      inboundReplay: "in_process_reconnect_only",
+      restartRecovery: "no_replay_after_restart_messages_skipped",
+    },
     expected: { outboundTransport: "api", lifecycle: "persistent", attachmentSources: ["url"] },
     proof: {
       outboundAdapter: "packages/policy-engine/src/tool-executor-edges.coverage.test.ts",
@@ -334,6 +352,7 @@ export const ADVERTISED_CHANNEL_PARITY_MATRIX = Object.freeze([
       receiveEvents: true,
     },
     inboundMode: "stream",
+    durability: NO_REPLAY_STREAM_DURABILITY,
     expected: { outboundTransport: "api", lifecycle: "persistent", attachmentSources: [] },
     proof: {
       outboundAdapter: "packages/policy-engine/src/tool-executor.test.ts",
@@ -355,6 +374,7 @@ export const ADVERTISED_CHANNEL_PARITY_MATRIX = Object.freeze([
       inboundStreamEnabled: true,
     },
     inboundMode: "stream",
+    durability: NO_REPLAY_STREAM_DURABILITY,
     expected: { outboundTransport: "api", lifecycle: "persistent", attachmentSources: ["url", "inline"] },
     proof: {
       outboundAdapter: "packages/policy-engine/src/tool-executor.test.ts",
@@ -518,6 +538,10 @@ export function validateAdvertisedChannelParityMatrix(rows = ADVERTISED_CHANNEL_
       if (row.durability[key] === undefined) {
         errors.push(`${row.id} is missing durability.${key}`);
       }
+    }
+    const inboundCapable = row.expected.inboundModes.some((mode) => mode !== "none");
+    if (inboundCapable && row.durability.inboundCommitBeforeAck !== true && !row.durability.inboundReplay) {
+      errors.push(`${row.id} has inbound without commit-before-ack and must state durability.inboundReplay`);
     }
     if (!row.proof.capability || !row.proof.setup || !row.proof.diagnostics) {
       errors.push(`${row.id} is missing capability, setup, or diagnostics proof`);

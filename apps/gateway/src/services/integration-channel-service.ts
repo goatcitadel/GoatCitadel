@@ -66,7 +66,6 @@ export interface IntegrationChannelPort {
   ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe?: ConnectorDiagnosticReport["probe"] }>;
   pickConnectorDiagnosticAction(checks: ConnectorDiagnosticReport["checks"]): string | undefined;
   recordConnectorHealthRun(report: ConnectorDiagnosticReport): Promise<void>;
-  /** Historical name: reconciles every persistent channel runtime (Discord gateway plus generic stream runtimes). */
   /** Syncs Discord and the channel stream runtime after a committed connection change. */
   syncChannelRuntimes(): Promise<void>;
   getChannelStreamRuntimeStatus(connectionId: string): ChannelStreamRuntimeStatus | undefined;

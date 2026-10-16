@@ -26,6 +26,7 @@ import { resolveChannelConfigTarget, resolveDefaultNamedTarget } from "./channel
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import { evaluateHostEgress } from "@goatcitadel/policy-engine";
+import { FORCED_ALLOWLIST_INBOUND_CHANNELS } from "./channel-setup-inbound-access.js";
 
 const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set([
   "slack",
@@ -239,7 +240,7 @@ export function buildIntegrationConnectionChecks(
           key: "delivery_posture",
           status: "pass",
           message:
-            "ntfy sandbox diagnostics publish at most once and require manual receipt confirmation. Inbound is a separate opt-in topic subscription (inboundStreamEnabled with a token-protected topic).",
+            "ntfy sandbox diagnostics publish at most once and require manual receipt confirmation. Inbound is a separate opt-in topic subscription (inboundStreamEnabled with a token); anyone able to publish to the subscribed topic can start turns.",
         });
         break;
       case "google-chat":
@@ -521,6 +522,9 @@ function buildChannelInboundAccessDiagnosticChecks(
   if (!channelCapabilities.inboundModes.some((mode) => mode !== "none")) {
     return [];
   }
+  if (FORCED_ALLOWLIST_INBOUND_CHANNELS.has(channelKey)) {
+    return buildForcedAllowlistInboundChecks(config);
+  }
   const decision = evaluateChannelInboundAccess({ config });
   if (decision.legacyWarning) {
     const migratedAt = typeof config.inboundAccessMigratedAt === "string" ? config.inboundAccessMigratedAt : undefined;
@@ -549,6 +553,31 @@ function buildChannelInboundAccessDiagnosticChecks(
       key: "inbound_access",
       status: "pass",
       message: `Inbound allowlist mode is active with ${decision.allowedSenders.length} permitted sender${decision.allowedSenders.length === 1 ? "" : "s"}.`,
+    },
+  ];
+}
+
+/**
+ * Stream and Google Chat app inbound always run with a forced allowlist (the runtime overrides any stored
+ * open_legacy), so report that posture instead of evaluating the stored mode.
+ */
+function buildForcedAllowlistInboundChecks(config: Record<string, unknown>): ConnectorDiagnosticReport["checks"] {
+  const decision = evaluateChannelInboundAccess({ config: { ...config, inboundAccessMode: "allowlist" } });
+  if (decision.allowedSenders.length === 0) {
+    return [
+      {
+        key: "inbound_access_allowlist_empty",
+        status: "warn",
+        message:
+          "Inbound on this channel is always allowlist-only. No senders are listed, so all inbound is dropped until a sender is added to allowedSenders.",
+      },
+    ];
+  }
+  return [
+    {
+      key: "inbound_access",
+      status: "pass",
+      message: `Inbound on this channel is always allowlist-only; ${decision.allowedSenders.length} permitted sender${decision.allowedSenders.length === 1 ? "" : "s"}.`,
     },
   ];
 }

@@ -275,7 +275,7 @@ describe("describeChannelCapabilities", () => {
     );
   });
 
-  it("enables ntfy stream inbound only for an opted-in, token-protected topic", () => {
+  it("enables ntfy stream inbound only for an opted-in topic with a token", () => {
     const enabled = describeChannelCapabilities("ntfy", {
       baseUrl: "https://ntfy.example.com",
       topic: "goatcitadel-ops",
@@ -290,6 +290,15 @@ describe("describeChannelCapabilities", () => {
     });
     expect(enabled.setupReady).toBe(true);
     expect(enabled.runtimePosture.operatorSummary).toContain("JSON stream");
+    // The token only gates reading: the copy must name the publish side and the restart gap.
+    expect(enabled.runtimePosture.operatorSummary).toContain("anyone able to publish to the subscribed topic");
+    expect(enabled.runtimePosture.operatorSummary).not.toContain("token-protected topic");
+    expect(enabled.supportNotes).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("write access (ACL) is limited to trusted publishers"),
+        expect.stringContaining("no history is fetched after a gateway restart"),
+      ]),
+    );
 
     const subscribeOnly = describeChannelCapabilities("ntfy", {
       baseUrl: "https://ntfy.example.com",
@@ -306,7 +315,7 @@ describe("describeChannelCapabilities", () => {
     });
     expect(noToken.inboundModes).toEqual(["none"]);
     expect(noToken.runtimePosture.lifecycle).toBe("stateless");
-    expect(noToken.setupDiagnostics).toContain("ntfy inbound requires a token-protected topic (tokenEnv)");
+    expect(noToken.setupDiagnostics).toContain("ntfy inbound requires a token to read the topic (tokenEnv)");
     expect(noToken.setupReady).toBe(false);
 
     const notOptedIn = describeChannelCapabilities("ntfy", {
@@ -339,6 +348,9 @@ describe("describeChannelCapabilities", () => {
       inboundReadiness: "ready",
     });
     expect(enabled.runtimePosture.operatorSummary).toContain("WebSocket");
+    expect(enabled.supportNotes).toEqual(
+      expect.arrayContaining([expect.stringContaining("pings the WebSocket every 30 seconds")]),
+    );
     expect(enabled.supportedActions).toEqual(
       expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend"]),
     );
@@ -494,7 +506,11 @@ describe("describeChannelCapabilities", () => {
         inboundReadiness: "ready",
       });
       expect(capabilities.supportNotes).toEqual(
-        expect.arrayContaining([expect.stringContaining("/api/v1/events"), expect.stringContaining("not replayed")]),
+        expect.arrayContaining([
+          expect.stringContaining("/api/v1/events"),
+          expect.stringContaining("not replayed"),
+          expect.stringContaining("silent for 90 seconds"),
+        ]),
       );
     }
     expect(describeChannelCapabilities("signal", { receiveEvents: true }).inboundModes).toEqual(["none"]);

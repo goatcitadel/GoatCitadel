@@ -1092,8 +1092,8 @@ describe("channel setup definitions", () => {
     );
     expect(googleHydrated.hydration.status).toBe("opaque-secret");
     expect(googleHydrated.hydration.fieldState.webhookUrl).toBe("configured");
-    // Webhook-only connections hydrate the shared sender-access posture; legacy rows show open_legacy.
-    expect(googleHydrated.draft).toEqual({ defaultThreadKey: "ops-thread", inboundAccessMode: "open_legacy" });
+    // Google Chat inbound is always forced allowlist, so even a legacy webhook row never hydrates as open_legacy.
+    expect(googleHydrated.draft).toMatchObject({ defaultThreadKey: "ops-thread", inboundAccessMode: "allowlist" });
     expect(
       googleChat.normalize(
         createDraft("channel.google-chat", {
