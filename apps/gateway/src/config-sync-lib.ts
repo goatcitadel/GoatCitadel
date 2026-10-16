@@ -108,12 +108,26 @@ export function buildUnifiedConfigPayloadFromRuntime(
   };
   const serializeSandboxRoot = (root: string) =>
     serializeSandboxRootForConfig(runtimeConfig.rootDir, root, serializeRootPath);
+  // Runtime write protection is derived from the runtime root at every load;
+  // persisting it would let a hand-edited file shadow the derived value.
+  const persistedSandbox = { ...runtimeConfig.toolPolicy.sandbox };
+  delete persistedSandbox.runtimeWriteProtection;
   const toolPolicyPayload = {
     ...runtimeConfig.toolPolicy,
     sandbox: {
-      ...runtimeConfig.toolPolicy.sandbox,
+      ...persistedSandbox,
       writeJailRoots: runtimeConfig.toolPolicy.sandbox.writeJailRoots.map(serializeSandboxRoot),
       readOnlyRoots: runtimeConfig.toolPolicy.sandbox.readOnlyRoots.map(serializeSandboxRoot),
+      // Persist operator roots like the jail roots (relative inside the
+      // runtime root, absolute outside it). Preset entries drop the resolved
+      // path: it is re-resolved on the server at every load.
+      ...(runtimeConfig.toolPolicy.sandbox.operatorWriteRoots
+        ? {
+            operatorWriteRoots: runtimeConfig.toolPolicy.sandbox.operatorWriteRoots.map(({ path: rootPath, ...root }) =>
+              root.preset ? root : { ...root, path: serializeSandboxRoot(rootPath) },
+            ),
+          }
+        : {}),
     },
   };
   return buildUnifiedConfigPayload(

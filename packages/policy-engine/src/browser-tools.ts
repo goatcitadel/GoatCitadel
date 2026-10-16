@@ -12,7 +12,7 @@ import { startBrowserEgressProxy, type BrowserEgressProxy } from "./browser-egre
 import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
 import { assertHostAllowed, assertNotPrivateOrReservedHost, fetchAllowlisted } from "./sandbox/network-guard.js";
-import { assertWritePathInJail } from "./sandbox/path-jail.js";
+import { assertToolWritePath } from "./sandbox/tool-write-gate.js";
 import {
   BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE,
   BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE,
@@ -725,7 +725,7 @@ async function executeBrowserScreenshot(
   const url = asNonEmptyString(args.url, "url");
   const outputPath =
     asString(args.outputPath) ?? asString(args.path) ?? `workspace/artifacts/browser-shot-${Date.now()}.png`;
-  assertWritePathInJail(outputPath, config.sandbox.writeJailRoots);
+  assertToolWritePath(outputPath, config.sandbox);
 
   return withBrowserPage(url, args, config, executionContext, async (page, responseStatus, finalUrl) => {
     const resolvedPath = path.resolve(outputPath);
@@ -777,7 +777,7 @@ async function executeBrowserInteract(
   const maxChars = clampInt(args.maxChars, 6000, 200, 30000);
   const outputPath = asString(args.outputPath) ?? asString(args.path);
   if (outputPath) {
-    assertWritePathInJail(outputPath, config.sandbox.writeJailRoots);
+    assertToolWritePath(outputPath, config.sandbox);
   }
 
   return withBrowserPage(

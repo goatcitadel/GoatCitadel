@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
-import { assertWritePathInJail } from "../sandbox/path-jail.js";
+import { assertToolWritePath } from "../sandbox/tool-write-gate.js";
 
 export const FILESYSTEM_TOOL_NAMES = new Set([
   "fs.read",
@@ -221,7 +221,7 @@ async function codeSearchFiles(
 async function fsWrite(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const p = required(args.path, "path");
   const content = String(args.content ?? "");
-  assertWritePathInJail(p, config.sandbox.writeJailRoots);
+  assertToolWritePath(p, config.sandbox);
   const full = path.resolve(p);
   const existing = await readExistingUtf8File(full);
   if (existing === content) {
@@ -243,7 +243,7 @@ async function fsPatch(args: Record<string, unknown>, config: ToolPolicyConfig) 
       typeof newText !== "string" || oldText === newText) {
     throw new Error("fs.patch requires a valid SHA-256 and one non-empty changed text replacement.");
   }
-  assertWritePathInJail(p, config.sandbox.writeJailRoots);
+  assertToolWritePath(p, config.sandbox);
   const full = path.resolve(p);
   if ((await fs.lstat(full)).isSymbolicLink()) {
     throw new Error(`fs.patch does not replace symbolic links: ${full}.`);
@@ -261,7 +261,7 @@ async function fsPatch(args: Record<string, unknown>, config: ToolPolicyConfig) 
   const stat = await fs.stat(full);
   await fs.writeFile(temporary, updated, { encoding: "utf8", flag: "wx", mode: stat.mode });
   try {
-    assertWritePathInJail(full, config.sandbox.writeJailRoots);
+    assertToolWritePath(full, config.sandbox);
     if ((await fs.lstat(full)).isSymbolicLink()) {
       throw new Error(`fs.patch rejected symbolic link at ${full} before replacement.`);
     }
@@ -350,7 +350,7 @@ async function fsCopy(
   const from = required(args.from, "from");
   const to = required(args.to, "to");
   await deps.assertReadPathAllowedForRequest(from, request, config, storage);
-  assertWritePathInJail(to, config.sandbox.writeJailRoots);
+  assertToolWritePath(to, config.sandbox);
   const fullTo = path.resolve(to);
   await fs.mkdir(path.dirname(fullTo), { recursive: true });
   await fs.copyFile(path.resolve(from), fullTo);
@@ -360,8 +360,8 @@ async function fsCopy(
 async function fsMove(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const from = required(args.from, "from");
   const to = required(args.to, "to");
-  assertWritePathInJail(from, config.sandbox.writeJailRoots);
-  assertWritePathInJail(to, config.sandbox.writeJailRoots);
+  assertToolWritePath(from, config.sandbox, "delete");
+  assertToolWritePath(to, config.sandbox);
   const fullTo = path.resolve(to);
   await fs.mkdir(path.dirname(fullTo), { recursive: true });
   await fs.rename(path.resolve(from), fullTo);
@@ -370,7 +370,7 @@ async function fsMove(args: Record<string, unknown>, config: ToolPolicyConfig) {
 
 async function fsDelete(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const p = required(args.path, "path");
-  assertWritePathInJail(p, config.sandbox.writeJailRoots);
+  assertToolWritePath(p, config.sandbox, "delete");
   await fs.rm(path.resolve(p), { recursive: asBoolean(args.recursive, false), force: false });
   return { path: path.resolve(p), deleted: true };
 }

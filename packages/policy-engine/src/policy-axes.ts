@@ -19,11 +19,16 @@ export function deriveToolPolicyAxes(
   config: Pick<ToolPolicyConfig, "sandbox">,
   policy: Pick<EffectiveToolPolicy, "approvalMode" | "readAccessMode">,
 ): ToolPolicyAxes {
+  const operatorWriteRoots = (config.sandbox.operatorWriteRoots ?? []).map(({ path, allowDelete }) => ({
+    path,
+    allowDelete,
+  }));
   const sandbox: SandboxAccessPolicy = {
     filesystemReadMode: policy.readAccessMode ?? config.sandbox.readAccessMode ?? "roots_only",
     networkAllowlist: config.sandbox.networkAllowlist ?? [],
     writeJailRoots: config.sandbox.writeJailRoots ?? [],
     readOnlyRoots: config.sandbox.readOnlyRoots ?? [],
+    ...(operatorWriteRoots.length > 0 ? { operatorWriteRoots } : {}),
     riskyShellPatterns: config.sandbox.riskyShellPatterns ?? [],
     riskyArgumentPatterns: config.sandbox.riskyArgumentPatterns ?? [],
   };

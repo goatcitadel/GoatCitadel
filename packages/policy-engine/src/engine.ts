@@ -71,7 +71,13 @@ import {
   MESH_TOOL_POLICY_DEFINITION,
   type MeshToolPolicyBinding,
 } from "./mesh-tool-policy-binding.js";
-import { assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
+import { resolveReadPathAccess } from "./sandbox/path-jail.js";
+import {
+  assertNotHardForbiddenWritePath,
+  assertToolWritePath,
+  toolReadableWriteRoots,
+  type ToolWriteIntent,
+} from "./sandbox/tool-write-gate.js";
 import {
   assertHostAllowed,
   assertNotPrivateOrReservedHost,
@@ -1668,11 +1674,13 @@ export class ToolPolicyEngine {
       if (requiresExplicitWritePath(request.toolName) && writePathCandidates.length === 0) {
         return `${request.toolName} requires a target path.`;
       }
-      for (const pathValue of writePathCandidates) {
+      for (const candidate of writePathCandidates) {
         const referenceRoots = getReferenceRootPaths(allowGrants?.[0]?.constraints);
-        const targetsReferenceRoot = referenceRoots.length > 0 && isPathWithinAnyRoot(pathValue, referenceRoots);
-        if (!targetsReferenceRoot) {
-          assertWritePathInJail(pathValue, this.config.sandbox.writeJailRoots);
+        const targetsReferenceRoot = referenceRoots.length > 0 && isPathWithinAnyRoot(candidate.path, referenceRoots);
+        if (targetsReferenceRoot) {
+          assertNotHardForbiddenWritePath(path.resolve(candidate.path), this.config.sandbox);
+        } else {
+          assertToolWritePath(candidate.path, this.config.sandbox, candidate.intent);
         }
       }
 
@@ -1733,7 +1741,7 @@ export class ToolPolicyEngine {
     for (const target of extractReadPathCandidates(request)) {
       const access = resolveReadPathAccess(
         target,
-        this.config.sandbox.writeJailRoots,
+        toolReadableWriteRoots(this.config.sandbox),
         this.config.sandbox.readOnlyRoots,
       );
       if (access.withinRoots) {
@@ -1770,7 +1778,7 @@ export class ToolPolicyEngine {
     for (const target of extractReadPathCandidates(request)) {
       const access = resolveReadPathAccess(
         target,
-        this.config.sandbox.writeJailRoots,
+        toolReadableWriteRoots(this.config.sandbox),
         this.config.sandbox.readOnlyRoots,
       );
       if (!access.withinRoots && !this.anyGrantAllowsReadPath(allowGrants, access.resolvedPath)) {
@@ -1844,7 +1852,7 @@ export class ToolPolicyEngine {
     for (const target of extractReadPathCandidates(request)) {
       const access = resolveReadPathAccess(
         target,
-        this.config.sandbox.writeJailRoots,
+        toolReadableWriteRoots(this.config.sandbox),
         this.config.sandbox.readOnlyRoots,
       );
       if (access.withinRoots) {
@@ -2791,29 +2799,39 @@ function readDocsIngestBackendIfValid(
   }
 }
 
-function extractWritePathCandidates(request: ToolAccessEvaluateRequest): string[] {
+interface WritePathCandidate {
+  path: string;
+  intent: ToolWriteIntent;
+}
+
+function extractWritePathCandidates(request: ToolAccessEvaluateRequest): WritePathCandidate[] {
   const args = request.args;
   if (!args) {
     return [];
   }
   const readString = (value: unknown): string | undefined =>
     typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  const candidates = (intent: ToolWriteIntent, ...values: unknown[]): WritePathCandidate[] =>
+    values
+      .map(readString)
+      .filter((value): value is string => Boolean(value))
+      .map((value) => ({ path: value, intent }));
   switch (request.toolName) {
     case "fs.write":
     case "fs.patch":
     case "artifacts.create":
     case "documents.create":
     case "presentations.create":
-      return [readString(args.path)].filter((value): value is string => Boolean(value));
+      return candidates("write", args.path);
     case "fs.delete":
-      return [readString(args.path), readString(args.from)].filter((value): value is string => Boolean(value));
+      return candidates("delete", args.path, args.from);
     case "fs.copy":
-      return [readString(args.to)].filter((value): value is string => Boolean(value));
+      return candidates("write", args.to);
     case "fs.move":
-      return [readString(args.from), readString(args.to)].filter((value): value is string => Boolean(value));
+      return [...candidates("delete", args.from), ...candidates("write", args.to)];
     case "browser.screenshot":
     case "browser.interact":
-      return [readString(args.outputPath), readString(args.path)].filter((value): value is string => Boolean(value));
+      return candidates("write", args.outputPath, args.path);
     default:
       return [];
   }

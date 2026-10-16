@@ -26,6 +26,7 @@ import {
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
+import { toolReadableWriteRoots } from "./sandbox/tool-write-gate.js";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "./sandbox/network-guard.js";
 import {
   assertSafeRedirectTransition,
@@ -1418,7 +1419,7 @@ async function assertReadPathAllowedForRequest(
   if (await canBypassReadPath(targetPath, request, config, storage)) {
     return;
   }
-  assertReadPathAllowed(targetPath, config.sandbox.writeJailRoots, config.sandbox.readOnlyRoots);
+  assertReadPathAllowed(targetPath, toolReadableWriteRoots(config.sandbox), config.sandbox.readOnlyRoots);
 }
 
 async function canBypassReadPath(

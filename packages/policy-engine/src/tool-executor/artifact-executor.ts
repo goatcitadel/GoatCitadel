@@ -35,7 +35,7 @@ import {
   type PresentationVisualAsset,
 } from "../presentation-pptx.js";
 import type { PreparePresentationVisuals, PreparedPresentationVisuals } from "../presentation-visual-runtime.js";
-import { assertWritePathInJail } from "../sandbox/path-jail.js";
+import { assertToolWritePath } from "../sandbox/tool-write-gate.js";
 
 const ARTIFACT_TOOL_NAMES = new Set(["artifacts.create", "documents.create", "presentations.create"]);
 
@@ -69,7 +69,7 @@ export async function executeArtifactTool(
 
 async function artifactsCreate(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const p = required(args.path, "path");
-  assertWritePathInJail(p, config.sandbox.writeJailRoots);
+  assertToolWritePath(p, config.sandbox);
   const title = asString(args.title) ?? "Artifact";
   const template = asString(args.template) ?? "report";
   const body = asString(args.body) ?? "";
@@ -108,7 +108,7 @@ async function documentsCreate(args: Record<string, unknown>, config: ToolPolicy
   const requestedPath = required(args.path, "path");
   const format = resolveDocumentFormat(asString(args.format), requestedPath);
   const p = ensureDocumentPath(requestedPath, format);
-  assertWritePathInJail(p, config.sandbox.writeJailRoots);
+  assertToolWritePath(p, config.sandbox);
   const full = path.resolve(p);
   let title = truncateText(asString(args.title) ?? inferTitleFromPath(full) ?? "Document", 120);
   let body = truncateText(asString(args.body) ?? asString(args.content) ?? "", 12000);
@@ -172,7 +172,7 @@ async function presentationsCreate(
   const requestedPath = required(args.path, "path");
   const format = resolvePresentationFormat(asString(args.format), requestedPath);
   const p = ensurePresentationPath(requestedPath, format);
-  assertWritePathInJail(p, config.sandbox.writeJailRoots);
+  assertToolWritePath(p, config.sandbox);
   assertStructuredResearchGrounding(args, runtime.request);
   assertNoModelCallablePresentationNotes(args.slides);
   const title = normalizePresentationText(required(args.title, "title"));

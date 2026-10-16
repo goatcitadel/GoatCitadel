@@ -1,5 +1,6 @@
 import path from "node:path";
 import os from "node:os";
+import { realpathSync, symlinkSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConfigValidationError } from "@goatcitadel/contracts";
@@ -97,6 +98,113 @@ describe("loadGatewayConfig", () => {
     const config = await loadGatewayConfig(rootDir);
     expect(config.toolPolicy.sandbox.writeJailRoots).toEqual([path.join(rootDir, "workspace"), outsideRoot]);
     expect(config.toolPolicy.sandbox.readOnlyRoots).toEqual([]);
+  });
+
+  it("resolves operator write roots, drops unsafe entries, and derives runtime write protection", async () => {
+    const { rootDir, configDir } = await createConfigFixture();
+    const operatorRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-operator-root-"));
+    TEMP_ROOTS.push(operatorRoot);
+    await mkdir(path.join(rootDir, "workspace", "exports"), { recursive: true });
+    await writeJson(path.join(configDir, "tool-policy.json"), {
+      profiles: {},
+      tools: { profile: "minimal", allow: [], deny: [] },
+      agents: {},
+      sandbox: {
+        writeJailRoots: ["./workspace"],
+        readOnlyRoots: [],
+        operatorWriteRoots: [
+          { path: operatorRoot, allowDelete: true, label: "Scratch" },
+          { path: operatorRoot, allowDelete: false },
+          { path: "./workspace/exports", allowDelete: false },
+          { path: "./config", allowDelete: true },
+          { path: rootDir, allowDelete: true },
+          { path: path.join(rootDir, "missing-folder"), allowDelete: false },
+        ],
+        runtimeWriteProtection: { rootDir: "C:/forged", protectedPaths: [] },
+      },
+    });
+
+    const config = await loadGatewayConfig(rootDir);
+    const realOperatorRoot = realpathSync.native(operatorRoot);
+    const realExports = realpathSync.native(path.join(rootDir, "workspace", "exports"));
+    expect(config.toolPolicy.sandbox.operatorWriteRoots).toEqual([
+      { path: realOperatorRoot, allowDelete: true, label: "Scratch" },
+      { path: realExports, allowDelete: false },
+    ]);
+    const canonicalRoot = realpathSync(rootDir);
+    expect(config.toolPolicy.sandbox.runtimeWriteProtection).toEqual({
+      rootDir: canonicalRoot,
+      protectedPaths: [
+        path.join(canonicalRoot, "config"),
+        path.join(canonicalRoot, "data", "secrets"),
+        path.join(canonicalRoot, "data", "postgres"),
+        path.join(canonicalRoot, "data", "audit"),
+      ],
+    });
+  });
+
+  it("accepts preset-only operator roots and protects a relocated bundled Postgres data dir", async () => {
+    const { rootDir, configDir } = await createConfigFixture();
+    const assistantPath = path.join(configDir, "assistant.config.json");
+    const assistantConfig = JSON.parse(await readFile(assistantPath, "utf8")) as Record<string, unknown>;
+    await writeJson(assistantPath, {
+      ...assistantConfig,
+      database: { bundledPostgres: { dataDir: "./pg-cluster" } },
+    });
+    await writeJson(path.join(configDir, "tool-policy.json"), {
+      profiles: {},
+      tools: { profile: "minimal", allow: [], deny: [] },
+      agents: {},
+      sandbox: {
+        writeJailRoots: ["./workspace"],
+        readOnlyRoots: [],
+        operatorWriteRoots: [{ preset: "os_temp", allowDelete: true }],
+      },
+    });
+
+    // The fixture runtime root lives inside the real OS temp folder, which the
+    // safety rules correctly refuse (it would contain the runtime). Point the
+    // OS temp folder at a sibling directory for this load.
+    const presetTemp = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-preset-temp-"));
+    TEMP_ROOTS.push(presetTemp);
+    const tempEnvKeys = ["TEMP", "TMP", "TMPDIR"] as const;
+    const previousTempEnv = tempEnvKeys.map((key) => [key, process.env[key]] as const);
+    for (const key of tempEnvKeys) {
+      process.env[key] = presetTemp;
+    }
+    let config: Awaited<ReturnType<typeof loadGatewayConfig>>;
+    try {
+      config = await loadGatewayConfig(rootDir);
+    } finally {
+      for (const [key, value] of previousTempEnv) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+    expect(config.toolPolicy.sandbox.operatorWriteRoots).toEqual([
+      { preset: "os_temp", allowDelete: true, path: realpathSync.native(presetTemp) },
+    ]);
+    expect(config.toolPolicy.sandbox.runtimeWriteProtection?.protectedPaths).toContain(
+      path.join(realpathSync(rootDir), "pg-cluster"),
+    );
+  });
+
+  it("records protected paths through a junctioned data dir as their canonical targets", async () => {
+    const { rootDir, configDir } = await createConfigFixture();
+    const realData = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-real-data-"));
+    TEMP_ROOTS.push(realData);
+    symlinkSync(realData, path.join(rootDir, "data-link"), process.platform === "win32" ? "junction" : "dir");
+    const assistantPath = path.join(configDir, "assistant.config.json");
+    const assistantConfig = JSON.parse(await readFile(assistantPath, "utf8")) as Record<string, unknown>;
+    await writeJson(assistantPath, { ...assistantConfig, dataDir: "./data-link" });
+
+    const config = await loadGatewayConfig(rootDir);
+    expect(config.toolPolicy.sandbox.runtimeWriteProtection?.protectedPaths).toContain(
+      path.join(realpathSync(realData), "secrets"),
+    );
   });
 
   it("defaults computer-use guardrails feature flag to true when omitted", async () => {
