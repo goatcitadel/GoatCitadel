@@ -39,7 +39,7 @@ describe("communications approval execution through the real Gateway tool path",
     }
   });
 
-  it("sends an approved mail draft exactly once without minting a second approval", async () => {
+  async function startGatewayWithGmail() {
     const root = createIsolatedConfigRoot();
     process.env.NODE_ENV = "test";
     process.env.GOATCITADEL_DATABASE_DRIVER = "sqlite";
@@ -72,8 +72,15 @@ describe("communications approval execution through the real Gateway tool path",
     const live = gateway;
     const dashboard = new CommunicationsDashboardService({
       createApproval: (input) => live.createApproval(input),
+      listIntegrationConnections: (kind, limit) =>
+        live.routeServices.integrations.listIntegrationConnections(kind, limit),
       mailDrafts: live.storage.mailDrafts,
     });
+    return { live, connection, dashboard, gmailCalls };
+  }
+
+  it("sends an approved mail draft exactly once without minting a second approval", async () => {
+    const { live, connection, dashboard, gmailCalls } = await startGatewayWithGmail();
     const draft = await dashboard.createDraft({
       workspaceId: "default",
       accountId: connection.connectionId,
@@ -106,6 +113,34 @@ describe("communications approval execution through the real Gateway tool path",
     expect(pendingAction?.request).toHaveProperty("policyContext");
     expect(settled).toMatchObject({ status: "sent" });
     expect(settled?.failureReason).toBeUndefined();
+  });
+
+  it("sends nothing when the mail account changed between approval and execution", async () => {
+    const { live, connection, dashboard, gmailCalls } = await startGatewayWithGmail();
+    const draft = await dashboard.createDraft({
+      accountId: connection.connectionId,
+      to: ["recipient@example.com"],
+      subject: "WS2 changed account",
+      bodyText: "Must not be sent.",
+    });
+    expect(draft.workspaceId).toBe("default");
+    const requested = await dashboard.sendDraft(draft.draftId);
+    const approvalId = requested.approvalId!;
+    expect((await live.storage.approvals.get(approvalId)).linkage).toMatchObject({ workspaceId: "default" });
+    await live.storage.integrationConnections.update(connection.connectionId, { label: "Edited after approval" });
+
+    await live.resolveApproval(approvalId, { decision: "approve", resolvedBy: "operator" });
+
+    const settled = await pollFor(
+      async () => await live.storage.mailDrafts.find(draft.draftId),
+      (candidate) => candidate?.status === "sent" || candidate?.status === "failed",
+      "the changed-account draft to settle",
+    );
+    expect(gmailCalls).toHaveLength(0);
+    expect(settled).toMatchObject({
+      status: "failed",
+      failureReason: "The mail account changed after approval; nothing was sent. Request approval again.",
+    });
   });
 });
 

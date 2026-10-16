@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { IntegrationConnection, ToolInvokeRequest } from "@goatcitadel/contracts";
+import { NotFoundError, type IntegrationConnection, type ToolInvokeRequest } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { commsCalendarCreate, commsGmailSend, commsSmtpSend, type CommsHost } from "./comms-service.js";
 import {
   COMMUNICATIONS_IDEMPOTENCY_PREFIX,
   computeCommunicationsPayloadHash,
+  readMailSendApprovalInput,
   type CalendarCreateApprovalInput,
   type MailSendApprovalInput,
 } from "./communications-approval-payload.js";
@@ -28,11 +29,16 @@ const CONNECTIONS: Record<string, Pick<IntegrationConnection, "catalogId" | "key
   "conn-caldav": { catalogId: "automation.caldav", key: "caldav", label: "Work CalDAV" },
 };
 
+/** The connection revision the seeded approvals were requested against. */
+const APPROVED_REVISION = "rev-approved";
+
 function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, unknown>) {
   const raw = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
   openStorages.push(raw);
   const storage = createSqliteAsyncStorage(raw);
   const invokes: ToolInvokeRequest[] = [];
+  /** Current connection revisions; an edit after approval changes one. */
+  const revisions: Record<string, string> = {};
   const host: CommsHost = {
     // Stands in for the policy engine's approval bypass: it only executes a presented
     // `approval:<id>` consent and settles that approval's pending action as executed.
@@ -49,7 +55,16 @@ function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, 
     getIntegrationConnection: async (connectionId) => {
       const known = CONNECTIONS[connectionId];
       if (!known) throw new Error(`Unknown integration connection ${connectionId}`);
-      return { connectionId, kind: "automation", enabled: true, status: "connected", config: {}, ...known } as never;
+      const revision = revisions[connectionId] ?? APPROVED_REVISION;
+      return {
+        connectionId,
+        revision,
+        kind: "automation",
+        enabled: true,
+        status: "connected",
+        config: {},
+        ...known,
+      } as never;
     },
     emitDiscordTyping: vi.fn(),
     emitTelegramTyping: vi.fn(),
@@ -57,15 +72,33 @@ function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, 
     mutationStore: storage.mutationIdempotency,
     sideEffectRunStore: storage.externalSideEffectRuns,
   };
+  /** Errors the next approval reads reject with, in order; empty reads storage. */
+  const approvalReadFailures: unknown[] = [];
   const service = new CommunicationsApprovalEffectService({
-    storage,
+    storage: {
+      approvals: {
+        get: (approvalId: string) =>
+          approvalReadFailures.length
+            ? Promise.reject(approvalReadFailures.shift())
+            : storage.approvals.get(approvalId),
+      } as AsyncStorage["approvals"],
+      mailDrafts: storage.mailDrafts,
+      pendingApprovalActions: storage.pendingApprovalActions,
+      externalSideEffectRuns: storage.externalSideEffectRuns,
+    },
     getIntegrationConnection: (connectionId) => host.getIntegrationConnection(connectionId),
     commsGmailSend: (input, preApproval) => commsGmailSend(host, input, preApproval),
     commsSmtpSend: (input, preApproval) => commsSmtpSend(host, input, preApproval),
     commsCalendarCreate: (input, preApproval) => commsCalendarCreate(host, input, preApproval),
   });
-  return { raw, storage, invokes, service };
+  return { raw, storage, invokes, service, revisions, approvalReadFailures };
 }
+
+const approvedLinkage = (actionType: string, connectorId: string) => ({
+  actionType,
+  connectorId,
+  workspaceId: "default",
+});
 
 async function seedApprovedMailSend(storage: AsyncStorage, accountId = "conn-gmail") {
   const now = new Date().toISOString();
@@ -77,6 +110,7 @@ async function seedApprovedMailSend(storage: AsyncStorage, accountId = "conn-gma
     bcc: [],
     subject: "Status",
     bodyText: "All good",
+    connectionRevision: APPROVED_REVISION,
   };
   await storage.mailDrafts.create({ ...hashed, status: "approval_required", createdAt: now, updatedAt: now });
   const approval = await storage.approvals.create({
@@ -89,6 +123,7 @@ async function seedApprovedMailSend(storage: AsyncStorage, accountId = "conn-gma
       idempotencyKeyPrefix: COMMUNICATIONS_IDEMPOTENCY_PREFIX,
     },
     preview: {},
+    linkage: approvedLinkage("communications.mail.send", accountId),
   });
   await storage.mailDrafts.transition(hashed.draftId, ["approval_required"], {
     status: "approval_required",
@@ -110,6 +145,7 @@ async function seedApprovedCalendarCreate(
     startIso: "2026-10-20T15:00:00.000Z",
     endIso: "2026-10-20T15:30:00.000Z",
     attendees: ["ops@example.test"],
+    connectionRevision: APPROVED_REVISION,
     ...overrides,
   };
   const approval = await storage.approvals.create({
@@ -122,6 +158,7 @@ async function seedApprovedCalendarCreate(
       idempotencyKeyPrefix: COMMUNICATIONS_IDEMPOTENCY_PREFIX,
     },
     preview: {},
+    linkage: approvedLinkage("communications.calendar.create", hashed.accountId),
   });
   await storage.approvals.resolve(approval.approvalId, { decision: "approve", resolvedBy: "operator" });
   return { eventId: hashed.eventId, approvalId: approval.approvalId };
@@ -284,6 +321,73 @@ describe("CommunicationsApprovalEffectService mail send", () => {
     expect(invokes).toHaveLength(0);
   });
 
+  it("refuses a send whose mail account changed after approval and fails the draft", async () => {
+    const { storage, invokes, service, revisions } = createHarness();
+    const { draftId, approvalId } = await seedApprovedMailSend(storage, "conn-smtp");
+    revisions["conn-smtp"] = "rev-edited";
+
+    const error = await expectEffectError(service.executeApprovedMailSend({ approvalId }), "connection_changed");
+
+    expect(error.message).toBe("The mail account changed after approval; nothing was sent. Request approval again.");
+    expect(invokes).toHaveLength(0);
+    expect(await storage.mailDrafts.get(draftId)).toMatchObject({ status: "failed", failureReason: error.message });
+  });
+
+  it("refuses an approval that recorded no connection revision as a changed connection", async () => {
+    const { raw, storage, invokes, service } = createHarness();
+    const { draftId, approvalId } = await seedApprovedMailSend(storage);
+    const approval = await storage.approvals.get(approvalId);
+    const legacy: Record<string, unknown> = { ...approval.payload };
+    delete legacy.connectionRevision;
+    const legacyHashed = readMailSendApprovalInput(legacy)!;
+    raw.db
+      .prepare("UPDATE approvals SET payload_json = ? WHERE approval_id = ?")
+      .run(JSON.stringify({ ...legacy, payloadHash: computeCommunicationsPayloadHash(legacyHashed) }), approvalId);
+
+    await expectEffectError(service.executeApprovedMailSend({ approvalId }), "connection_changed");
+
+    expect(invokes).toHaveLength(0);
+    expect(await storage.mailDrafts.get(draftId)).toMatchObject({ status: "failed" });
+  });
+
+  it("refuses an approval without workspace linkage and fails the draft", async () => {
+    const { raw, storage, invokes, service } = createHarness();
+    const { draftId, approvalId } = await seedApprovedMailSend(storage);
+    raw.db
+      .prepare("UPDATE approvals SET linkage_json = ? WHERE approval_id = ?")
+      .run(JSON.stringify({ actionType: "communications.mail.send" }), approvalId);
+
+    await expectEffectError(service.executeApprovedMailSend({ approvalId }), "invalid_payload");
+
+    expect(invokes).toHaveLength(0);
+    expect(await storage.mailDrafts.get(draftId)).toMatchObject({
+      status: "failed",
+      failureReason: "The mail send approval names no workspace; nothing was sent.",
+    });
+  });
+
+  it("rethrows a transient approval read failure so the effect retries", async () => {
+    const { storage, invokes, service, approvalReadFailures } = createHarness();
+    const { draftId, approvalId } = await seedApprovedMailSend(storage);
+    const outage = new Error("database is locked");
+    approvalReadFailures.push(outage);
+
+    await expect(service.executeApprovedMailSend({ approvalId })).rejects.toBe(outage);
+
+    expect(invokes).toHaveLength(0);
+    expect(await storage.mailDrafts.get(draftId)).toMatchObject({ status: "approval_required" });
+  });
+
+  it("maps only a missing approval to approval_not_approved", async () => {
+    const { service, approvalReadFailures } = createHarness();
+    approvalReadFailures.push(new NotFoundError({ entity: "Approval", id: "approval-missing" }));
+
+    await expectEffectError(
+      service.executeApprovedMailSend({ approvalId: "approval-missing" }),
+      "approval_not_approved",
+    );
+  });
+
   it("refuses an approval that is not approved", async () => {
     const { storage, invokes, service } = createHarness();
     const pending = await storage.approvals.create({
@@ -394,6 +498,30 @@ describe("CommunicationsApprovalEffectService calendar create", () => {
     await service.executeApprovedCalendarCreate({ approvalId });
 
     expect(invokes[0]).toMatchObject({ toolName: "calendar.create_event", args: { location: "Room 4" } });
+  });
+
+  it("refuses a create whose calendar account changed after approval", async () => {
+    const { storage, invokes, service, revisions } = createHarness();
+    const { approvalId } = await seedApprovedCalendarCreate(storage);
+    revisions["conn-calendar"] = "rev-edited";
+
+    const error = await expectEffectError(service.executeApprovedCalendarCreate({ approvalId }), "connection_changed");
+
+    expect(error.message).toBe(
+      "The calendar account changed after approval; nothing was created. Request approval again.",
+    );
+    expect(invokes).toHaveLength(0);
+  });
+
+  it("refuses a calendar approval without workspace linkage", async () => {
+    const { raw, storage, invokes, service } = createHarness();
+    const { approvalId } = await seedApprovedCalendarCreate(storage);
+    raw.db
+      .prepare("UPDATE approvals SET linkage_json = ? WHERE approval_id = ?")
+      .run(JSON.stringify({ actionType: "communications.calendar.create" }), approvalId);
+
+    await expectEffectError(service.executeApprovedCalendarCreate({ approvalId }), "invalid_payload");
+    expect(invokes).toHaveLength(0);
   });
 
   it("refuses a calendar account that cannot create events", async () => {

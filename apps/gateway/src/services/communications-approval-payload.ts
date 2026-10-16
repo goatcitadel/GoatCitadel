@@ -6,6 +6,11 @@ import { canonicalJsonString } from "@goatcitadel/contracts";
  * payload carries `payloadHash` over the hashed fields below; the executor re-reads the
  * payload, recomputes the hash, and refuses to act on a mismatch. The idempotency key
  * needs the approval id, which exists only after creation, so it is derived here.
+ *
+ * `connectionRevision` is the integration connection's storage revision when the
+ * approval was requested, so execution is bound to the account state the operator
+ * approved. It is optional only so a payload without it still parses: the executor
+ * treats a missing or different revision as a changed connection and sends nothing.
  */
 export const COMMUNICATIONS_IDEMPOTENCY_PREFIX = "communications:";
 
@@ -17,6 +22,7 @@ export interface MailSendApprovalInput {
   bcc: string[];
   subject: string;
   bodyText: string;
+  connectionRevision?: string;
 }
 
 export interface CalendarCreateApprovalInput {
@@ -29,11 +35,12 @@ export interface CalendarCreateApprovalInput {
   endIso: string;
   attendees: string[];
   location?: string;
+  connectionRevision?: string;
 }
 
 const MAIL_SEND_ACTION = "mail_send";
 const CALENDAR_CREATE_ACTION = "calendar_event_create";
-const CALENDAR_OPTIONAL_KEYS = ["calendarId", "description", "location"] as const;
+const CALENDAR_OPTIONAL_KEYS = ["calendarId", "description", "location", "connectionRevision"] as const;
 
 export function communicationsIdempotencyKey(approvalId: string): string {
   return `${COMMUNICATIONS_IDEMPOTENCY_PREFIX}${approvalId}`;
@@ -49,7 +56,7 @@ export function readMailSendApprovalInput(payload: Record<string, unknown>): Mai
   if (payload.action !== MAIL_SEND_ACTION) {
     return undefined;
   }
-  const { draftId, accountId, to, cc, bcc, subject, bodyText } = payload;
+  const { draftId, accountId, to, cc, bcc, subject, bodyText, connectionRevision } = payload;
   if (
     !isString(draftId) ||
     !isString(accountId) ||
@@ -57,11 +64,21 @@ export function readMailSendApprovalInput(payload: Record<string, unknown>): Mai
     !isStringArray(cc) ||
     !isStringArray(bcc) ||
     !isString(subject) ||
-    !isString(bodyText)
+    !isString(bodyText) ||
+    (connectionRevision !== undefined && !isString(connectionRevision))
   ) {
     return undefined;
   }
-  return { draftId, accountId, to: [...to], cc: [...cc], bcc: [...bcc], subject, bodyText };
+  return {
+    draftId,
+    accountId,
+    to: [...to],
+    cc: [...cc],
+    bcc: [...bcc],
+    subject,
+    bodyText,
+    ...(connectionRevision === undefined ? {} : { connectionRevision }),
+  };
 }
 
 /** Returns only the hashed calendar-create fields, or undefined when the payload is malformed. */

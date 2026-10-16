@@ -1,5 +1,6 @@
 import {
   ConflictError,
+  NotFoundError,
   type ApprovalEffectRecord,
   type ApprovalRequest,
   type CalendarCreateEventInput,
@@ -50,6 +51,7 @@ export type CommunicationsEffectErrorCode =
   | "approval_not_approved"
   | "invalid_payload"
   | "payload_hash_mismatch"
+  | "connection_changed"
   | "provider_unavailable"
   | "send_unavailable"
   | "delivery_failed"
@@ -84,6 +86,12 @@ export const MAIL_SEND_EXPIRED_REASON = "Send approval expired; nothing was sent
 const MAIL_OUTCOME_UNKNOWN_REASON = "Delivery outcome is unknown; check the mailbox before retrying.";
 const CALENDAR_OUTCOME_UNKNOWN_REASON = "Calendar create outcome is unknown; check the calendar before retrying.";
 const PAYLOAD_HASH_MISMATCH_REASON = "The approved message no longer matches its approval; nothing was sent.";
+export const MAIL_CONNECTION_CHANGED_REASON =
+  "The mail account changed after approval; nothing was sent. Request approval again.";
+export const CALENDAR_CONNECTION_CHANGED_REASON =
+  "The calendar account changed after approval; nothing was created. Request approval again.";
+const MAIL_MISSING_WORKSPACE_REASON = "The mail send approval names no workspace; nothing was sent.";
+const CALENDAR_MISSING_WORKSPACE_REASON = "The calendar create approval names no workspace; nothing was created.";
 /** Thrown by `buildCommsPreApproval` when the approval's pending action is already settled. */
 const PRE_APPROVAL_SETTLED_MESSAGE = "Approved communications action already settled; refusing to invoke again.";
 const SENT_PROVIDER_STATUSES = new Set(["sent", "created"]);
@@ -107,10 +115,15 @@ export class CommunicationsApprovalEffectService {
     if (computeCommunicationsPayloadHash(mail) !== approval.payload.payloadHash) {
       return failDraft(new CommunicationsApprovalEffectError("payload_hash_mismatch", PAYLOAD_HASH_MISMATCH_REASON));
     }
+    const workspaceId = approval.linkage?.workspaceId;
+    if (!workspaceId) {
+      return failDraft(new CommunicationsApprovalEffectError("invalid_payload", MAIL_MISSING_WORKSPACE_REASON));
+    }
     try {
       const connection = await this.readConnection(mail.accountId);
+      assertConnectionUnchanged(connection, mail.connectionRevision, MAIL_CONNECTION_CHANGED_REASON);
       const send = this.selectMailSender(connection);
-      const result = await this.invokeApproved(approval, (preApproval) =>
+      const result = await this.invokeApproved(approval, workspaceId, (preApproval) =>
         send(
           {
             connectionId: mail.accountId,
@@ -162,8 +175,14 @@ export class CommunicationsApprovalEffectService {
         "The approved event no longer matches its approval; nothing was created.",
       );
     }
-    this.assertCalendarCanCreate(await this.readConnection(event.accountId));
-    const result = await this.invokeApproved(approval, (preApproval) =>
+    const workspaceId = approval.linkage?.workspaceId;
+    if (!workspaceId) {
+      throw new CommunicationsApprovalEffectError("invalid_payload", CALENDAR_MISSING_WORKSPACE_REASON);
+    }
+    const connection = await this.readConnection(event.accountId);
+    assertConnectionUnchanged(connection, event.connectionRevision, CALENDAR_CONNECTION_CHANGED_REASON);
+    this.assertCalendarCanCreate(connection);
+    const result = await this.invokeApproved(approval, workspaceId, (preApproval) =>
       this.deps.commsCalendarCreate(
         {
           connectionId: event.accountId,
@@ -209,7 +228,10 @@ export class CommunicationsApprovalEffectService {
     let approval: ApprovalRequest | undefined;
     try {
       approval = await this.deps.storage.approvals.get(approvalId);
-    } catch {
+    } catch (error) {
+      // Only a missing approval is terminal; any other read failure is infrastructure,
+      // so it propagates and the effect worker defers and retries.
+      if (!(error instanceof NotFoundError)) throw error;
       approval = undefined;
     }
     if (approval?.kind !== kind || approval.status !== status) {
@@ -262,10 +284,10 @@ export class CommunicationsApprovalEffectService {
    */
   private async invokeApproved(
     approval: ApprovalRequest,
+    workspaceId: string,
     invoke: (preApproval: CommsPreApproval) => Promise<CommsResult>,
   ): Promise<CommsResult> {
     try {
-      const workspaceId = approval.linkage?.workspaceId;
       return await invoke(buildCommsPreApproval(this.deps.storage, approval.approvalId, () => this.now(), workspaceId));
     } catch (error) {
       if (error instanceof Error && error.message === PRE_APPROVAL_SETTLED_MESSAGE) {
@@ -340,6 +362,21 @@ export class CommunicationsApprovalEffectService {
 
   private nowIso(): string {
     return this.now().toISOString();
+  }
+}
+
+/**
+ * Execution is bound to the connection state the operator approved. A connection edited
+ * since approval (host, sender, credentials, provider, workspace) advances its revision;
+ * that, or an approval that recorded no revision, fails closed before anything is sent.
+ */
+function assertConnectionUnchanged(
+  connection: IntegrationConnection,
+  approvedRevision: string | undefined,
+  reason: string,
+): void {
+  if (!approvedRevision || connection.revision !== approvedRevision) {
+    throw new CommunicationsApprovalEffectError("connection_changed", reason);
   }
 }
 

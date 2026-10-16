@@ -242,7 +242,7 @@ describe("communications dashboard service", () => {
     });
   });
 
-  it("keeps the exact unscoped send linkage for drafts without a workspace", async () => {
+  it("server-binds the default workspace for a draft created without one", async () => {
     const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
     const service = createCommunicationsDashboardService({
       now: () => new Date(NOW),
@@ -256,10 +256,64 @@ describe("communications dashboard service", () => {
       bodyText: "Classic path.",
     });
     await service.sendDraft(draft.draftId);
+    expect(draft.workspaceId).toBe("default");
     expect(createApproval.mock.calls[0]![0].linkage).toEqual({
       actionType: "communications.mail.send",
       connectorId: "acct-unscoped",
+      workspaceId: "default",
     });
+  });
+
+  it("binds the mail account's connection revision into the hashed send approval", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(NOW),
+      createApproval,
+      listIntegrationConnections: () => [createConnection({ revision: "rev-at-approval" })],
+      mailDrafts: createMailDraftStore(),
+    });
+    const draft = await service.createDraft({
+      workspaceId: "workspace-1",
+      accountId: createConnection().connectionId,
+      to: ["operator@example.test"],
+      subject: "Bound",
+      bodyText: "Revision bound.",
+    });
+    await service.sendDraft(draft.draftId);
+    const payload = createApproval.mock.calls[0]![0].payload;
+    expect(payload.connectionRevision).toBe("rev-at-approval");
+    const hashed = readMailSendApprovalInput(payload)!;
+    expect(hashed.connectionRevision).toBe("rev-at-approval");
+    expect(payload.payloadHash).toBe(computeCommunicationsPayloadHash(hashed));
+    expect(computeCommunicationsPayloadHash({ ...hashed, connectionRevision: "rev-other" })).not.toBe(
+      payload.payloadHash,
+    );
+  });
+
+  it("binds the calendar account's revision and the default workspace into a calendar approval", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(NOW),
+      createApproval,
+      listIntegrationConnections: () => [
+        createConnection({
+          connectionId: "cal-1",
+          catalogId: "automation.google-calendar",
+          key: "google-calendar",
+          revision: "rev-cal",
+        }),
+      ],
+    });
+    await service.createCalendarEventPlaceholder({
+      accountId: "cal-1",
+      title: "Planning",
+      startIso: "2026-10-20T15:00:00.000Z",
+      endIso: "2026-10-20T15:30:00.000Z",
+      attendees: [],
+    } as never);
+    const request = createApproval.mock.calls[0]![0];
+    expect(request.payload.connectionRevision).toBe("rev-cal");
+    expect(request.linkage).toMatchObject({ workspaceId: "default" });
   });
 
   it("shares one in-flight send so a concurrent replay never requests a second approval", async () => {

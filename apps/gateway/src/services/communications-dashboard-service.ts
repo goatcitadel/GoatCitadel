@@ -107,7 +107,9 @@ export class CommunicationsDashboardService {
     const now = this.nowIso();
     const draft: MailDraftRecord = {
       draftId: `mail_draft_${randomUUID()}`,
-      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      // Server-bound: a draft without a workspace belongs to the default one, so its
+      // send approval always carries workspace linkage.
+      workspaceId: normalizeWorkspaceId(input.workspaceId),
       accountId: input.accountId,
       to: input.to,
       cc: input.cc ?? [],
@@ -205,7 +207,8 @@ export class CommunicationsDashboardService {
     return settled ?? (await store.find(draftId)) ?? { ...claimed, approvalId };
   }
 
-  private createSendApproval(existing: MailDraftRecord): Promise<string> {
+  private async createSendApproval(existing: MailDraftRecord): Promise<string> {
+    const connectionRevision = await this.findConnectionRevision(existing.accountId);
     const hashed: MailSendApprovalInput = {
       draftId: existing.draftId,
       accountId: existing.accountId,
@@ -214,6 +217,7 @@ export class CommunicationsDashboardService {
       bcc: existing.bcc,
       subject: existing.subject,
       bodyText: existing.bodyText,
+      ...(connectionRevision === undefined ? {} : { connectionRevision }),
     };
     return this.requestApproval(existing.approvalId ?? `approval_required:${existing.draftId}`, {
       kind: "communications.mail.send",
@@ -237,7 +241,7 @@ export class CommunicationsDashboardService {
       linkage: {
         actionType: "communications.mail.send",
         connectorId: existing.accountId,
-        ...(existing.workspaceId ? { workspaceId: existing.workspaceId } : {}),
+        workspaceId: normalizeWorkspaceId(existing.workspaceId),
       },
     });
   }
@@ -246,6 +250,7 @@ export class CommunicationsDashboardService {
     const { workspaceId, ...event } = input;
     const now = this.nowIso();
     const eventId = `calendar_event_${randomUUID()}`;
+    const connectionRevision = await this.findConnectionRevision(event.accountId);
     const hashed: CalendarCreateApprovalInput = {
       eventId,
       accountId: event.accountId,
@@ -256,6 +261,7 @@ export class CommunicationsDashboardService {
       endIso: event.endIso,
       attendees: event.attendees,
       ...(event.location === undefined ? {} : { location: event.location }),
+      ...(connectionRevision === undefined ? {} : { connectionRevision }),
     };
     const approvalId = await this.requestApproval(event.approvalId ?? `approval_required:${eventId}`, {
       kind: "communications.calendar.create",
@@ -281,7 +287,7 @@ export class CommunicationsDashboardService {
       linkage: {
         actionType: "communications.calendar.create",
         connectorId: event.accountId,
-        ...(workspaceId ? { workspaceId } : {}),
+        workspaceId: normalizeWorkspaceId(workspaceId),
       },
     });
     return {
@@ -291,6 +297,15 @@ export class CommunicationsDashboardService {
       createdAt: now,
       updatedAt: now,
     };
+  }
+
+  /**
+   * The connection's storage revision at approval time, which the approval binds. An
+   * unreadable connection records none, and execution then refuses to act.
+   */
+  private async findConnectionRevision(accountId: string): Promise<string | undefined> {
+    const connections = await this.listConnections();
+    return connections.find((connection) => connection.connectionId === accountId)?.revision || undefined;
   }
 
   private requestApproval(fallbackApprovalId: string, input: ApprovalCreateInput): Promise<string> {
