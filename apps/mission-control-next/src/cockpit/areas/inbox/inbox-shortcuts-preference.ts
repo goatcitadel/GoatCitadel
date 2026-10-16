@@ -14,16 +14,22 @@ function readStored(): boolean {
   }
 }
 
+/** Returns whether the choice was saved; when storage is unavailable it still applies for this visit. */
+function writeStored(enabled: boolean): boolean {
+  try {
+    if (enabled) window.localStorage.removeItem(STORAGE_KEY);
+    else window.localStorage.setItem(STORAGE_KEY, "off");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function useInboxShortcutsPreference() {
   const [enabled, setEnabledState] = useState(readStored);
   const setEnabled = useCallback((next: boolean) => {
     setEnabledState(next);
-    try {
-      if (next) window.localStorage.removeItem(STORAGE_KEY);
-      else window.localStorage.setItem(STORAGE_KEY, "off");
-    } catch {
-      // Storage unavailable: the choice still applies for this visit.
-    }
+    writeStored(next);
   }, []);
   return [enabled, setEnabled] as const;
 }
