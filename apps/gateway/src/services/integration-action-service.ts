@@ -1,4 +1,3 @@
-/* eslint-disable max-lines -- The integration-action host contract and its invocation flow stay co-located until a bounded extraction preserves the shared ward, dry-run and side-effect admission ordering. */
 import type {
   IntegrationActionInvokeInput,
   IntegrationActionInvokeResult,
@@ -9,7 +8,6 @@ import type {
 } from "@goatcitadel/contracts";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { invokeActivepiecesRunStatusAction } from "./activepieces-run-status-action.js";
-import { readBoundedResponseText } from "./bounded-response-reader.js";
 import {
   buildExternalSideEffectReplayOutput,
   type ExternalSideEffectRunStore,
@@ -21,6 +19,16 @@ import { getIntegrationOperatorActions, isLocalBridgeCatalogId } from "./integra
 import { invokeGifSearchAction } from "./gif-search-action.js";
 import { buildLocalBridgeActionTargets, isLocalBridgeExternalSideEffectAction } from "./local-bridge-action-policy.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
+import type { ExternalSideEffectReplayRecords } from "./external-side-effect-replay-record.js";
+import {
+  buildGmailSendRunInput,
+  buildLocalBridgeWriteRunInput,
+  buildTrelloCardCreateRunInput,
+  gmailApiBaseUrl,
+  parseProviderResponse as parseResponse,
+  resolveBearerAuth,
+  trelloApiBaseUrl,
+} from "./integration-writeback-run-inputs.js";
 import {
   buildIntegrationWardAction,
   resolveWardEffectForExternalAction,
@@ -62,7 +70,7 @@ export interface IntegrationActionHost {
   mutationStore?: MutationIdempotencyStore;
   sideEffectRunStore?: ExternalSideEffectRunStore;
   /** Encrypted replay copies of runner payloads (WS8); absent on narrow test hosts. */
-  replayRecords?: import("./external-side-effect-replay-record.js").ExternalSideEffectReplayRecords;
+  replayRecords?: ExternalSideEffectReplayRecords;
   /**
    * Optional approval front door (dry-run Stage 2). When present together with
    * `storage.dryRunCommits` + `storage.pendingApprovalActions`, a require_dry_run
@@ -183,90 +191,23 @@ async function invokeLocalBridgeAction(
       "bridge_url_missing",
     );
   }
-  const authHeader = resolveBearerAuth(host, connection);
-  const candidates = buildLocalBridgeActionTargets(
-    bridgeUrl,
-    host.readConnectionConfigValue(connection.config, "actionRoute"),
-  );
-  const selectedSideEffectTarget = candidates[0];
-  const isSideEffectAction = isExternalSideEffectAction(connection, action);
-  const bridgePayload = {
-    integrationKey: connection.key,
-    catalogId: connection.catalogId,
-    connectionId: connection.connectionId,
-    actionId: action.actionId,
-    input: request.input ?? {},
-  };
-  const bridgeTargets = isSideEffectAction ? [selectedSideEffectTarget] : candidates;
-  const executeBridge = () =>
-    sendLocalBridgeAction(
-      host,
-      connection,
-      action.actionId,
+  if (isExternalSideEffectAction(connection, action)) {
+    const parts = buildLocalBridgeWriteRunInput(host, connection, action, {
       checkedAt,
-      bridgeUrl,
-      bridgeTargets,
-      authHeader,
-      bridgePayload,
-    );
-
-  if (isSideEffectAction) {
-    const runImmediateTransaction = host.storage.runImmediateTransaction;
-    if (!host.mutationStore || !host.sideEffectRunStore || !runImmediateTransaction) {
-      return blocked(
-        connection,
-        action.actionId,
-        checkedAt,
-        `${action.label} was not sent because durable external-side-effect authority is unavailable.`,
-        "external_side_effect_durability_unavailable",
-        {
-          provider: "local_bridge",
-          catalogId: connection.catalogId,
-          actionId: action.actionId,
-        },
-      );
-    }
-    const replayRun = await runWardGatedExternalSideEffect<IntegrationActionInvokeResult>(
-      host,
-      ward,
-      {
-        mutationStore: host.mutationStore,
-        sideEffectRunStore: host.sideEffectRunStore,
-        runClaimTransaction: async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> =>
-          await host.storage.runImmediateTransaction!(work),
-        requireMutationClaimOwnership: true,
-        requireDurableBoundaryRecord: true,
-        boundary: "integration_local_bridge_action",
+      idempotencyKey: request.idempotencyKey,
+      payload: {
+        provider: "local_bridge",
         catalogId: connection.catalogId,
-        connectionId: connection.connectionId,
         actionId: action.actionId,
-        checkedAt,
-        workspaceId: connection.workspaceId,
-        idempotencyKey: request.idempotencyKey,
-        externalDestinationFingerprint: fingerprintExternalSideEffectDestination(selectedSideEffectTarget),
-        payload: {
-          provider: "local_bridge",
-          catalogId: connection.catalogId,
-          actionId: action.actionId,
-          input: request.input ?? {},
-        },
-        label: `${action.label} local bridge action`,
-        output: {
-          provider: "local_bridge",
-          catalogId: connection.catalogId,
-          actionId: action.actionId,
-        },
-        execute: async (claim) => {
-          await claim.markExternalCallStarted();
-          const result = await executeBridge();
-          if (result.status === "failed") {
-            throw new Error(result.message);
-          }
-          return result;
-        },
+        input: request.input ?? {},
       },
-      { externalDestination: selectedSideEffectTarget },
-    );
+    });
+    if ("blockedReason" in parts) {
+      return blocked(connection, action.actionId, checkedAt, parts.message, parts.blockedReason, parts.output);
+    }
+    const replayRun = await runWardGatedExternalSideEffect(host, ward, parts.input, {
+      externalDestination: parts.target,
+    });
     if (replayRun.status === "blocked") {
       return blocked(
         connection,
@@ -280,18 +221,39 @@ async function invokeLocalBridgeAction(
     if (replayRun.status === "failed") {
       return failed(connection, action.actionId, checkedAt, replayRun.error.message, replayRun.output);
     }
+    const parsed = replayRun.value;
     return {
-      ...replayRun.value,
+      connectionId: connection.connectionId,
+      catalogId: connection.catalogId,
+      actionId: action.actionId,
+      status: "executed",
+      message: parsed.message ?? `${action.actionId} completed through the local bridge.`,
       output: buildExternalSideEffectReplayOutput(replayRun.claim, {
         provider: "local_bridge",
         catalogId: connection.catalogId,
         actionId: action.actionId,
-        ...(replayRun.value.output ?? {}),
+        ...(normalizeLocalBridgeOutput(parsed.output) ?? {}),
       }),
+      checkedAt,
     };
   }
 
-  return executeBridge();
+  return sendLocalBridgeAction(
+    host,
+    connection,
+    action.actionId,
+    checkedAt,
+    bridgeUrl,
+    buildLocalBridgeActionTargets(bridgeUrl, host.readConnectionConfigValue(connection.config, "actionRoute")),
+    resolveBearerAuth(host, connection),
+    {
+      integrationKey: connection.key,
+      catalogId: connection.catalogId,
+      connectionId: connection.connectionId,
+      actionId: action.actionId,
+      input: request.input ?? {},
+    },
+  );
 }
 
 async function sendLocalBridgeAction(
@@ -559,49 +521,17 @@ async function invokeTrelloAction(
         "trello_list_missing",
       );
     }
-    const url = new URL("/1/cards", trelloApiBaseUrl());
-    url.searchParams.set("key", apiKey);
-    url.searchParams.set("token", token);
-    url.searchParams.set("idList", listId);
-    url.searchParams.set("name", name);
-    url.searchParams.set("desc", desc);
-    const replayRun = await runWardGatedExternalSideEffect(
-      host,
-      ward,
-      {
-        mutationStore: host.mutationStore,
-        sideEffectRunStore: host.sideEffectRunStore,
-        boundary: "integration_operator_action",
-        catalogId: connection.catalogId,
-        connectionId: connection.connectionId,
-        actionId,
-        checkedAt,
-        workspaceId: connection.workspaceId,
-        idempotencyKey: request.idempotencyKey,
-        payload: {
-          provider: "trello",
-          listId,
-          name,
-          desc,
-        },
-        label: "Trello card create",
-        output: {
-          provider: "trello",
-          listId,
-          name,
-        },
-        execute: async (claim) => {
-          await claim.markExternalCallStarted();
-          const response = await host.fetchWithDiagnosticsTimeout(url.toString(), { method: "POST" });
-          const parsed = await parseResponse(response);
-          if (!response.ok) {
-            throw new Error(parsed.message ?? `Trello card create failed (${response.status}).`);
-          }
-          return parsed;
-        },
-      },
-      { externalDestination: url.toString() },
-    );
+    const parts = buildTrelloCardCreateRunInput(host, connection, {
+      checkedAt,
+      idempotencyKey: request.idempotencyKey,
+      payload: { provider: "trello", listId, name, desc },
+    });
+    if ("blockedReason" in parts) {
+      return blocked(connection, actionId, checkedAt, parts.message, parts.blockedReason, parts.output);
+    }
+    const replayRun = await runWardGatedExternalSideEffect(host, ward, parts.input, {
+      externalDestination: parts.target,
+    });
     if (replayRun.status === "blocked") {
       return blocked(connection, actionId, checkedAt, replayRun.message, replayRun.blockedReason, replayRun.output);
     }
@@ -700,60 +630,17 @@ async function invokeGmailAction(
         "gmail_message_incomplete",
       );
     }
-    const rawMessage = [
-      `To: ${to}`,
-      `Subject: ${subject}`,
-      'Content-Type: text/plain; charset="UTF-8"',
-      "",
-      bodyText,
-    ].join("\r\n");
-    const gmailSendUrl = new URL("/gmail/v1/users/me/messages/send", gmailApiBaseUrl()).toString();
-    const replayRun = await runWardGatedExternalSideEffect(
-      host,
-      ward,
-      {
-        mutationStore: host.mutationStore,
-        sideEffectRunStore: host.sideEffectRunStore,
-        boundary: "integration_operator_action",
-        catalogId: connection.catalogId,
-        connectionId: connection.connectionId,
-        actionId,
-        checkedAt,
-        workspaceId: connection.workspaceId,
-        idempotencyKey: request.idempotencyKey,
-        payload: {
-          provider: "gmail",
-          to,
-          subject,
-          bodyText,
-        },
-        label: "Gmail send",
-        output: {
-          provider: "gmail",
-          to,
-          subject,
-        },
-        execute: async (claim) => {
-          await claim.markExternalCallStarted();
-          const response = await host.fetchWithDiagnosticsTimeout(gmailSendUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              raw: Buffer.from(rawMessage).toString("base64url"),
-            }),
-          });
-          const parsed = await parseResponse(response);
-          if (!response.ok) {
-            throw new Error(parsed.message ?? `Gmail send failed (${response.status}).`);
-          }
-          return parsed;
-        },
-      },
-      { externalDestination: gmailSendUrl },
-    );
+    const parts = buildGmailSendRunInput(host, connection, {
+      checkedAt,
+      idempotencyKey: request.idempotencyKey,
+      payload: { provider: "gmail", to, subject, bodyText },
+    });
+    if ("blockedReason" in parts) {
+      return blocked(connection, actionId, checkedAt, parts.message, parts.blockedReason, parts.output);
+    }
+    const replayRun = await runWardGatedExternalSideEffect(host, ward, parts.input, {
+      externalDestination: parts.target,
+    });
     if (replayRun.status === "blocked") {
       return blocked(connection, actionId, checkedAt, replayRun.message, replayRun.blockedReason, replayRun.output);
     }
@@ -990,40 +877,6 @@ function sanitizeReturnedWorkflowUrl(value: string | undefined): string | undefi
   }
 }
 
-function resolveBearerAuth(host: IntegrationActionHost, connection: IntegrationConnection): string | undefined {
-  const token =
-    host.resolveConnectionSecret(connection.config, "authToken", "authTokenEnv", connection.catalogId) ??
-    host.resolveConnectionSecret(connection.config, "accessToken", "accessTokenEnv", connection.catalogId) ??
-    host.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
-  return token ? `Bearer ${token}` : undefined;
-}
-
-async function parseResponse(
-  response: Response,
-): Promise<{ message?: string; output?: Record<string, unknown> | unknown[] | string }> {
-  const raw = await readBoundedResponseText(response, {
-    maxBytes: 256 * 1024,
-    timeoutMs: 5_000,
-    label: "integration action response",
-  });
-  if (!raw.trim()) return {};
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (isRecord(parsed)) {
-      return {
-        message: typeof parsed.message === "string" ? parsed.message : undefined,
-        output: parsed,
-      };
-    }
-    if (Array.isArray(parsed)) {
-      return { output: parsed };
-    }
-  } catch {
-    // fall through to plain text
-  }
-  return { message: raw.trim().slice(0, 400), output: raw.trim().slice(0, 1000) };
-}
-
 function readStringInput(input: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = input?.[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
@@ -1065,13 +918,4 @@ function parseHttpUrl(value: string, label: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-const trelloApiBaseUrl = () => resolveApiBaseUrl("GOATCITADEL_TRELLO_API_BASE_URL", "https://api.trello.com");
-
-const gmailApiBaseUrl = () => resolveApiBaseUrl("GOATCITADEL_GMAIL_API_BASE_URL", "https://gmail.googleapis.com");
-
-function resolveApiBaseUrl(envKey: string, fallback: string): string {
-  const override = process.env[envKey]?.trim();
-  return override && override.length > 0 ? override : fallback;
 }

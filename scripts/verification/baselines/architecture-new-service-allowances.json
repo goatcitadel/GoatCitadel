@@ -2337,6 +2337,14 @@
       "maxDependencyMemberAccesses": 7,
       "reason": "WS8 gap-closure replay program: seals and opens the encrypted replay copy of an external side-effect runner payload (AES-256-GCM, AAD bound to run id and payload hash) in its own service so the runner and composition files do not grow. The accesses are the injected key resolver, the two write-once run-row replay-record methods, and the secret store availability/get/set calls used to hold the generated key.",
       "evidence": "2026-10-16: external-side-effect-replay-record.test.ts covers round-trip, tampered ciphertext, wrong run id, wrong payload hash, malformed and missing records, keyless seal/open, write errors, and generate-once/reuse key resolution; Gateway typecheck passes; repository counter measures 7 dependency accesses and 0 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/integration-writeback-run-inputs.ts",
+      "maxHostCallbacks": 21,
+      "maxDependencyMemberAccesses": 21,
+      "reason": "WS8 gap-closure replay program: the Gmail send, Trello card create and local-bridge write runner inputs move out of integration-action-service so the live invocation path and the durable replay job builder share one input (payload, destination fingerprint, sealed replay record, provider-side dedupe identifiers and read-only probes). integration-action-service drops from 34 to 19 dependency accesses; the accesses here are the moved host fetch, connection config/secret reads, durable stores, transaction owner and the replay-record seal.",
+      "evidence": "2026-10-16: integration-writeback-run-inputs.test.ts covers the derived Gmail Message-ID, rfc822msgid probe, Gmail and Trello replay probe-before-send without resend, Trello marker and secret-free fingerprint, local bridge Idempotency-Key header, enforced-only bridge probe, seal-before-boundary ordering and missing-credential blocks; integration-action-service, integration routes, ward gate, dry-run commit and replay job suites pass unchanged; Gateway typecheck passes; repository counter measures 21 dependency accesses and 21 host callbacks."
     }
   ]
 }
