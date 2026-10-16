@@ -962,6 +962,37 @@ describe("comms pre-approved invocation", () => {
     expect(retry).toMatchObject({ status: "failed", deliveryStatus: "blocked" });
   });
 
+  it.each([
+    ["a policy denial", { outcome: "blocked", policyReason: "denied by ward", auditEventId: "audit-pre-1" }],
+    ["a blocked provider failure", { status: "failed", deliveryStatus: "blocked", error: "SMTP auth rejected" }],
+    ["an unavailable connection", { status: "failed", deliveryStatus: "not_available", error: "not configured" }],
+  ])("keeps %s on the pre-approved path failed before the boundary", async (_label, failure) => {
+    const { host, sideEffectRunStore } = createGmailHost({ invokeAndUnwrap: vi.fn(async () => failure) });
+
+    const result = await commsGmailSend(host, gmailInput({ idempotencyKey: "mail-pre" }), createRecordingPreApproval());
+
+    expect(result).toEqual(failure);
+    expect([...sideEffectRunStore.runs.values()][0]).toMatchObject({ status: "failed_before_boundary" });
+  });
+
+  it.each([
+    ["a degraded failure", { status: "failed", deliveryStatus: "degraded", error: "gateway timeout (503)" }],
+    [
+      "a blocked failure that carries a provider message id",
+      { status: "failed", deliveryStatus: "blocked", error: "late refusal", providerMessageId: "gmail-9" },
+    ],
+  ])("keeps %s on the pre-approved path an unknown outcome that never re-sends", async (_label, failure) => {
+    const { host, sideEffectRunStore } = createGmailHost({ invokeAndUnwrap: vi.fn(async () => failure) });
+    const preApproval = createRecordingPreApproval();
+
+    await commsGmailSend(host, gmailInput({ idempotencyKey: "mail-unknown" }), preApproval);
+    expect([...sideEffectRunStore.runs.values()][0]).toMatchObject({ status: "unknown_external_outcome" });
+
+    const retry = await commsGmailSend(host, gmailInput({ idempotencyKey: "mail-unknown" }), preApproval);
+    expect(host.invokeAndUnwrap).toHaveBeenCalledTimes(1);
+    expect(retry).toMatchObject({ status: "failed", deliveryStatus: "blocked" });
+  });
+
   it("a settled pending action stops the invoke", async () => {
     const { host, sideEffectRunStore } = createGmailHost();
     const preApproval = createRecordingPreApproval("ap-1", async () => {

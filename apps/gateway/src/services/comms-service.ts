@@ -487,9 +487,23 @@ const COMMS_CALENDAR_CREATE_BOUNDARY = "comms_calendar_create";
  * result so refusals and failures are returned byte-compatible with pre-ledger behavior.
  */
 class CommsPreBoundaryResultError extends Error {
-  public constructor(public readonly result: ToolInvokeResult | Record<string, unknown>) {
+  public constructor(
+    public readonly result: ToolInvokeResult | Record<string, unknown>,
+    /** True only when the result itself proves the provider request was never dispatched. */
+    public readonly provenNotDispatched = false,
+  ) {
     super("comms_pre_boundary_result");
   }
+}
+
+/**
+ * The runner's narrow post-boundary escape hatch for a pre-approved invoke, which marks
+ * its boundary before dispatch: only a returned result that the classifier proved
+ * pre-boundary downgrades the run to failed_before_boundary. A thrown error, a crash,
+ * or any other failure stays an unknown external outcome, so nothing is ever re-sent.
+ */
+function isCommsResultProvenNotDispatched(error: unknown): boolean {
+  return error instanceof CommsPreBoundaryResultError && error.provenNotDispatched;
 }
 
 /**
@@ -507,7 +521,7 @@ async function classifyCommsSideEffectResult(
   // required) never crossed the external boundary — the tool executor's commsInvoke
   // was never entered.
   if (isPreBoundaryToolInvokeRefusal(result)) {
-    throw new CommsPreBoundaryResultError(result);
+    throw new CommsPreBoundaryResultError(result, true);
   }
 
   const record = result as Record<string, unknown>;
@@ -516,7 +530,8 @@ async function classifyCommsSideEffectResult(
     if (deliveryStatus === "blocked" || deliveryStatus === "not_available") {
       // These failures are classified before commsInvoke's provider call ever
       // fired (missing auth, disallowed host, unconfigured channel) — pre-boundary.
-      throw new CommsPreBoundaryResultError(record);
+      // A provider message id means something was dispatched, so it is never proof.
+      throw new CommsPreBoundaryResultError(record, !record.providerMessageId);
     }
     // Any other failed deliveryStatus (degraded, retrying, manual_reconciliation_required,
     // or unclassified) means the provider call may have fired — the boundary must be
@@ -609,6 +624,9 @@ async function runLedgeredCommsInvoke(
     // claim must never be taken over. A pre-approved invoke marks before dispatch and
     // keeps the default takeover lease.
     disableDefaultClaimLease: spec.preApproval ? undefined : true,
+    // A pre-approved invoke marks its boundary before dispatch; a returned pre-boundary
+    // proof keeps that run failed_before_boundary instead of an unknown outcome.
+    isExternalCallProvenNotDispatched: spec.preApproval ? isCommsResultProvenNotDispatched : undefined,
     boundary: spec.boundary,
     catalogId: connection?.catalogId ?? spec.fallbackCatalogId,
     connectionId: spec.connectionId,
