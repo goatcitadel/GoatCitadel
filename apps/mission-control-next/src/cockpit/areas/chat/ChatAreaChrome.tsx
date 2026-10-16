@@ -5,7 +5,6 @@ import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-su
 import { PanelRight } from "lucide-react";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
-import { ChatMobileConversationSelect } from "./ChatMobileConversationSelect";
 import { ChatSessionOverflow, ChatSessionTitle } from "./ChatSessionControls";
 import { SelectedThreadActivity } from "./SelectedThreadActivity";
 import { useModelLabel } from "../../data/use-model-label";
@@ -14,9 +13,9 @@ import { presentDelegationRunStatus } from "./chat-vocabulary";
 type ActiveSession = MissionThreadedRenderSurfaceInput["activeSessionSurfaceProps"];
 
 /**
- * Title, conversation picker and session actions. Above phone width everything shares one row; on a
- * phone the title and status take the first row and the picker stretches across the second with the
- * primary actions, so neither the labels nor the select collapse into each other.
+ * Title, conversations and session actions in one row. Below the desktop rail a Conversations button opens the list
+ * in a sheet. On a phone the row is only the title, Conversations and the actions menu, which also holds Projects and
+ * New conversation, so the transcript keeps the screen; an open build editor keeps its visible way back.
  */
 export function ChatSessionHeader({
   input,
@@ -25,7 +24,8 @@ export function ChatSessionHeader({
   selectedSessionId,
   buildEditor,
   onOpenProjects,
-  onOpenFilters,
+  onOpenConversations,
+  conversationsOpen = false,
   inspecting = false,
   onInspect,
   onFork,
@@ -36,7 +36,9 @@ export function ChatSessionHeader({
   selectedSessionId?: string;
   buildEditor: { open: boolean; onToggle: () => void } | null;
   onOpenProjects: () => void;
-  onOpenFilters: () => void;
+  /** Opens the conversations sheet; the button shows only below the desktop rail. */
+  onOpenConversations: () => void;
+  conversationsOpen?: boolean;
   /** Whether the Chat inspector is showing; Inspect is a toggle, not navigation. */
   inspecting?: boolean;
   onInspect: () => void;
@@ -47,15 +49,22 @@ export function ChatSessionHeader({
   const title = (
     <ChatSessionTitle key={selectedSessionId} title={active?.sessionTitle ?? "Chat"} dock={input.contextDockProps} />
   );
-  const projects = (
-    <Button size="sm" className={phone ? "h-11 shrink-0 px-3" : undefined} onClick={onOpenProjects}>
-      Projects
+  const conversations = (
+    <Button
+      size="sm"
+      className={phone ? "h-11 shrink-0 px-3" : "md:hidden"}
+      aria-haspopup="dialog"
+      aria-expanded={conversationsOpen}
+      disabled={rail.loading}
+      onClick={onOpenConversations}
+    >
+      Conversations
     </Button>
   );
   const newConversation = (
     <Button
       size="sm"
-      className={phone ? "h-11 shrink-0 px-4" : "md:hidden max-sm:h-11 max-sm:px-4"}
+      className="md:hidden"
       aria-label="New conversation"
       disabled={rail.creatingSession || rail.loading}
       onClick={() => void rail.onCreateSession()}
@@ -79,36 +88,37 @@ export function ChatSessionHeader({
     </Button>
   ) : null;
   const overflow =
-    active || buildEditor ? (
+    active || buildEditor || phone ? (
       <ChatSessionOverflow
         key={selectedSessionId}
         dock={active ? input.contextDockProps : null}
         onFork={onFork}
         onInspect={onInspect}
         onOpenBuildEditor={buildEditor && !buildEditor.open ? buildEditor.onToggle : undefined}
+        phoneActions={
+          phone
+            ? {
+                onOpenProjects,
+                onNewConversation: () => void rail.onCreateSession(),
+                newConversationDisabled: rail.creatingSession || rail.loading,
+              }
+            : undefined
+        }
       />
     ) : null;
 
   if (phone)
     return (
-      <header className="flex flex-col gap-2 border-b border-line-subtle px-3 py-2">
-        <div className="flex min-h-10 min-w-0 items-center justify-between gap-2">
-          <div className="min-w-0 flex-1">
-            {title}
-            <div className="truncate [&>p]:truncate">
-              <SelectedThreadActivity session={session} />
-            </div>
+      <header className="flex min-h-14 min-w-0 items-center gap-2 border-b border-line-subtle px-3 py-1">
+        <div className="min-w-0 flex-1">
+          {title}
+          <div className="truncate [&>p]:truncate">
+            <SelectedThreadActivity session={session} />
           </div>
-          {projects}
-          {overflow}
         </div>
-        <div className="flex min-w-0 items-end gap-2">
-          <div className="min-w-0 flex-1 [&>label]:block [&>label]:max-w-none">
-            <ChatMobileConversationSelect rail={rail} onOpenFilters={onOpenFilters} />
-          </div>
-          {newConversation}
-          {build}
-        </div>
+        {conversations}
+        {build}
+        {overflow}
       </header>
     );
 
@@ -118,8 +128,10 @@ export function ChatSessionHeader({
         {title}
         <ChatHeaderSubtitle active={active} projectName={session?.projectName} loading={rail.loading} />
       </div>
-      {projects}
-      <ChatMobileConversationSelect rail={rail} onOpenFilters={onOpenFilters} />
+      <Button size="sm" onClick={onOpenProjects}>
+        Projects
+      </Button>
+      {conversations}
       <SelectedThreadActivity session={session} />
       {newConversation}
       {active ? (
@@ -171,7 +183,14 @@ export function ChatSetupBanner({ onReturnToSetup }: { onReturnToSetup: () => vo
   );
 }
 
-export function ChatEmptyState({ rail }: { rail: MissionThreadedRenderSurfaceInput["sessionRail"] }) {
+export function ChatEmptyState({
+  rail,
+  onOpenConversations,
+}: {
+  rail: MissionThreadedRenderSurfaceInput["sessionRail"];
+  /** Below the desktop rail the list is behind the header's Conversations button; the empty state offers it too. */
+  onOpenConversations?: () => void;
+}) {
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-5 text-center">
       {rail.loading ? (
@@ -182,9 +201,16 @@ export function ChatEmptyState({ rail }: { rail: MissionThreadedRenderSurfaceInp
         <>
           <p className="text-lg font-semibold text-fg">Choose a conversation</p>
           <p className="max-w-sm text-sm text-fg-secondary">Pick one from the list, or start a new conversation.</p>
-          <Button onClick={() => void rail.onCreateSession()} disabled={rail.creatingSession}>
-            {rail.creatingSession ? "Creating…" : "New conversation"}
-          </Button>
+          <div className="flex flex-wrap justify-center gap-2">
+            {onOpenConversations ? (
+              <Button className="max-sm:h-11 md:hidden" onClick={onOpenConversations}>
+                Show conversations
+              </Button>
+            ) : null}
+            <Button onClick={() => void rail.onCreateSession()} disabled={rail.creatingSession}>
+              {rail.creatingSession ? "Creating…" : "New conversation"}
+            </Button>
+          </div>
         </>
       )}
     </div>

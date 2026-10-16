@@ -1,9 +1,10 @@
-import { Suspense, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { Suspense, useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
 import { readCockpitLocation } from "../../app/cockpit-back-guard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/Tabs";
 import type { SettingsIndexEntry, SettingsIndexPage } from "./settings-index";
 import { preloadSettingsSection } from "./settings-controls";
 import { describeReleaseSurfaceStatus } from "../../../app/route-model";
+import { useOverflowEdges } from "./use-overflow-edges";
 
 const DEFAULT_SECTIONS: Record<string, string> = {
   models: "providers",
@@ -53,8 +54,17 @@ export function SettingsSectionTabs({
   // Keep visited controls (and unsaved input) without mounting every hidden owner.
   const visited = useRef(new Set<string>());
   visited.current.add(value);
+  // A long section row (Citadel has nine) scrolls sideways; the hidden side fades and the selected tab stays in view.
+  const root = useRef<HTMLDivElement>(null);
+  const edges = useOverflowEdges(root, '[role="tablist"]', page.id);
+  useEffect(() => {
+    root.current
+      ?.querySelector('[role="tablist"] [data-state="active"]')
+      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [value]);
   return (
     <Tabs
+      ref={root}
       value={value}
       onValueChange={(section) => {
         const entry = page.entries.find((item) => item.section === section);
@@ -63,20 +73,27 @@ export function SettingsSectionTabs({
       activationMode="manual"
       className="min-w-0"
     >
-      <TabsList aria-label={`${page.label} sections`} className="mt-3 max-w-full overflow-x-auto pb-px">
-        {page.entries.filter((entry) => entry.discoverable).map((entry) => (
-          <TabsTrigger
-            key={entry.section}
-            value={entry.section}
-            className="min-h-11 shrink-0 whitespace-nowrap"
-            onPointerEnter={() => preloadSettingsSection(entry.section)}
-            onFocus={() => preloadSettingsSection(entry.section)}
-            onPointerDown={() => preloadSettingsSection(entry.section)}
-          >
-            {entry.tabLabel ?? entry.label}
-            {entry.releaseStatus === "experimental" ? " · Experimental" : ""}
-          </TabsTrigger>
-        ))}
+      <TabsList
+        aria-label={`${page.label} sections`}
+        data-overflow-start={edges.start || undefined}
+        data-overflow-end={edges.end || undefined}
+        className="cockpit-area-tabs cockpit-overflow-fade mt-3 max-w-full overflow-x-auto pb-px"
+      >
+        {page.entries
+          .filter((entry) => entry.discoverable)
+          .map((entry) => (
+            <TabsTrigger
+              key={entry.section}
+              value={entry.section}
+              className="min-h-11 shrink-0 whitespace-nowrap"
+              onPointerEnter={() => preloadSettingsSection(entry.section)}
+              onFocus={() => preloadSettingsSection(entry.section)}
+              onPointerDown={() => preloadSettingsSection(entry.section)}
+            >
+              {entry.tabLabel ?? entry.label}
+              {entry.releaseStatus === "experimental" ? " · Experimental" : ""}
+            </TabsTrigger>
+          ))}
       </TabsList>
       {page.entries.map((entry) => (
         <TabsContent
@@ -95,9 +112,11 @@ export function SettingsSectionTabs({
                 </p>
               }
             >
-              {entry.releaseStatus !== "ship" ? <p role="status" className="py-2 text-sm text-fg-secondary">
-                {describeReleaseSurfaceStatus(entry.releaseStatus)}. {entry.releaseNote}
-              </p> : null}
+              {entry.releaseStatus !== "ship" ? (
+                <p role="status" className="py-2 text-sm text-fg-secondary">
+                  {describeReleaseSurfaceStatus(entry.releaseStatus)}. {entry.releaseNote}
+                </p>
+              ) : null}
               {children(entry)}
             </Suspense>
           ) : null}

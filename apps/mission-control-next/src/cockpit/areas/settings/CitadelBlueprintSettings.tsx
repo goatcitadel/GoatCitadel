@@ -140,7 +140,7 @@ export function CitadelBlueprintSettings({ citadelId }: { citadelId: string }) {
               value={control.importText}
               rows={8}
               disabled={control.locked || control.importState.busy}
-              className="mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 font-mono text-xs text-fg"
+              className="mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 font-mono text-md text-fg sm:text-xs"
               onChange={(event) => control.changeText(event.target.value)}
             />
           </details>

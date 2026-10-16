@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,14 @@ import { InspectorProvider } from "../../app/inspector";
 
 vi.mock("./ThreadList", () => ({ ThreadList: () => null }));
 vi.mock("./ChatBuildEditor", () => ({ ChatBuildEditor: () => <p>Build editor body</p> }));
+vi.mock("../../ui/Sheet", () => ({
+  Sheet: ({ open, title, children }: { open: boolean; title: string; children: ReactNode }) =>
+    open ? (
+      <section role="dialog" aria-label={title}>
+        {children}
+      </section>
+    ) : null,
+}));
 
 let root: Root;
 let container: HTMLDivElement;
@@ -64,7 +72,7 @@ describe("visible Chat session", () => {
     expect(container.textContent).not.toContain("Choose a conversation");
     expect(container.textContent).not.toContain("Conversation ready");
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="New conversation"]')?.disabled).toBe(true);
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Choose conversation"]')?.disabled).toBe(true);
+    expect(conversationsButton().disabled).toBe(true);
     await act(async () => root.unmount());
   });
 
@@ -147,7 +155,7 @@ describe("visible Chat session", () => {
     await act(async () => root.unmount());
   });
 
-  it("lets the phone picker reach archived conversations and return to recent history", async () => {
+  it("lets the phone conversations sheet reach archived conversations and return to recent history", async () => {
     const surface = input("session-1");
     const onHistoryViewChange = vi.fn();
     const onSelectSession = vi.fn();
@@ -155,16 +163,15 @@ describe("visible Chat session", () => {
       historyView: "active",
       onHistoryViewChange,
       onSelectSession,
+      availableFolders: [],
       missionSessions: [{ sessionId: "session-1" }],
       renderSessionLabel: () => "Recent conversation",
     });
     await act(async () => root.render(view(surface)));
-    const picker = container.querySelector('select[aria-label="Choose conversation"]') as HTMLSelectElement;
-    expect(picker.querySelector('option[value="history:archived"]')?.textContent).toBe("Show archived conversations");
-    await act(async () => {
-      picker.value = "history:archived";
-      picker.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    expect(container.querySelector('select[aria-label="Choose conversation"]')).toBeNull();
+    await act(async () => conversationsButton().click());
+    expect(conversationsButton().getAttribute("aria-expanded")).toBe("true");
+    await act(async () => sheetButton("Archived").click());
     expect(onHistoryViewChange).toHaveBeenCalledWith("archived");
 
     Object.assign(surface.sessionRail, {
@@ -173,21 +180,17 @@ describe("visible Chat session", () => {
       renderSessionLabel: () => "Archived conversation",
     });
     await act(async () => root.render(view({ ...surface, sessionRail: { ...surface.sessionRail } })));
-    expect(picker.value).toBe("");
-    await act(async () => {
-      picker.value = "session-2";
-      picker.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    expect(onSelectSession).toHaveBeenCalledWith("session-2");
-    await act(async () => {
-      picker.value = "history:active";
-      picker.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    expect(sheetButton("Archived").getAttribute("aria-pressed")).toBe("true");
+    await act(async () => sheetButton("Recent").click());
     expect(onHistoryViewChange).toHaveBeenCalledWith("active");
+    // Choosing a conversation selects it and closes the sheet.
+    await act(async () => sheetButton("Archived conversation").click());
+    expect(onSelectSession).toHaveBeenCalledWith("session-2");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => root.unmount());
   });
 
-  it("opens phone filters from the picker without selecting a pseudo conversation, and retains the shared selection", async () => {
+  it("keeps the shared filters inside the phone conversations sheet without selecting a conversation", async () => {
     const surface = input("session-1");
     const onSelectSession = vi.fn();
     const onSelectProjectId = vi.fn();
@@ -210,40 +213,26 @@ describe("visible Chat session", () => {
     >;
     await act(async () => root.render(view(surface)));
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-    const picker = container.querySelector('select[aria-label="Choose conversation"]') as HTMLSelectElement;
-    await act(async () => {
-      picker.value = "view:filters";
-      picker.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    const dialog = document.querySelector('[role="dialog"]')!;
-    expect(dialog.textContent).toContain("Filter conversations");
-    expect(onSelectSession).not.toHaveBeenCalled();
-    const projects = dialog.querySelector("select")!;
+    await act(async () => conversationsButton().click());
+    const sheet = document.querySelector('[role="dialog"][aria-label="Conversations"]')!;
+    const projects = sheet.querySelector<HTMLSelectElement>('select[aria-label="Filter by project"]')!;
     await act(async () => {
       projects.value = "project-a";
       projects.dispatchEvent(new Event("change", { bubbles: true }));
     });
     expect(onSelectProjectId).toHaveBeenCalledWith("project-a");
-    surface.sessionRail.selectedProjectId = "project-a";
-    await act(async () => root.render(view({ ...surface, sessionRail: { ...surface.sessionRail } })));
-    const done = [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Done")!;
-    await act(async () => done.click());
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    await act(async () => {
-      picker.value = "view:filters";
-      picker.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    expect(document.querySelector<HTMLSelectElement>('[role="dialog"] select')?.value).toBe("project-a");
-    expect(document.querySelector<HTMLInputElement>('[role="dialog"] input')?.value).toBe("retained");
+    expect(sheet.querySelector<HTMLInputElement>("input")?.value).toBe("retained");
     expect(onSelectSession).not.toHaveBeenCalled();
     await act(async () => root.unmount());
   });
-  it("lets the phone picker load another owner page without selecting a synthetic conversation", async () => {
+
+  it("lets the phone conversations sheet load another owner page without selecting a conversation", async () => {
     const surface = input("session-1"),
       onLoadMoreSessions = vi.fn(),
       onSelectSession = vi.fn();
     Object.assign(surface.sessionRail, {
       historyView: "active",
+      availableFolders: [],
       hasMoreSessions: true,
       loadingMoreSessions: false,
       onLoadMoreSessions,
@@ -252,17 +241,24 @@ describe("visible Chat session", () => {
       renderSessionLabel: () => "Current conversation",
     });
     await act(async () => root.render(view(surface)));
-    const picker = container.querySelector('select[aria-label="Choose conversation"]') as HTMLSelectElement;
-    await act(async () => {
-      picker.value = "history:load-more";
-      picker.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    await act(async () => conversationsButton().click());
+    await act(async () => sheetButton("Load more").click());
     expect(onLoadMoreSessions).toHaveBeenCalledOnce();
     expect(onSelectSession).not.toHaveBeenCalled();
-    expect(picker.value).toBe("session-1");
     Object.assign(surface.sessionRail, { loadingMoreSessions: true });
     await act(async () => root.render(view({ ...surface, sessionRail: { ...surface.sessionRail } })));
-    expect(picker.querySelector<HTMLOptionElement>('option[value="history:load-more"]')?.disabled).toBe(true);
+    expect(sheetButton("Loading…").disabled).toBe(true);
+    await act(async () => root.unmount());
+  });
+
+  it("offers the conversations sheet from the empty state below the desktop rail", async () => {
+    const surface = input(null);
+    Object.assign(surface.sessionRail, { availableFolders: [], historyView: "active" });
+    await act(async () => root.render(view(surface)));
+    const show = [...container.querySelectorAll("button")].find((b) => b.textContent === "Show conversations")!;
+    expect(show.className).toContain("md:hidden");
+    await act(async () => show.click());
+    expect(document.querySelector('[role="dialog"][aria-label="Conversations"]')).not.toBeNull();
     await act(async () => root.unmount());
   });
 });
@@ -300,3 +296,16 @@ it("contains native compact side chat in the positioned conversation host with b
   expect(onDraftChange).not.toHaveBeenCalled();
   await act(async () => root.unmount());
 });
+
+function conversationsButton(): HTMLButtonElement {
+  const button = [...document.querySelectorAll("header button")].find((b) => b.textContent === "Conversations");
+  if (!(button instanceof HTMLButtonElement)) throw new Error("Missing Conversations button");
+  return button;
+}
+
+function sheetButton(text: string): HTMLButtonElement {
+  const sheet = document.querySelector('[role="dialog"][aria-label="Conversations"]');
+  const button = [...(sheet?.querySelectorAll("button") ?? [])].find((b) => b.textContent?.startsWith(text));
+  if (!(button instanceof HTMLButtonElement)) throw new Error("Missing sheet button " + text);
+  return button;
+}

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createRef } from "react";
+import { act, createRef, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
@@ -15,11 +15,27 @@ vi.mock("../../data/use-model-label", () => ({
   useProviderLabelLookup: () => () => undefined,
 }));
 vi.mock("./use-chat-model-labels", () => ({ useChatModelLabels: () => (modelId: string) => modelId }));
+// Width and pointer are off by default (a desktop with a keyboard); the phone and touch tests switch them on.
+const media = vi.hoisted(() => ({ phone: false, coarse: false }));
+vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({
+  useMediaQuery: (query: string) =>
+    (media.phone && query === "(width < 640px)") || (media.coarse && query === "(pointer: coarse)"),
+}));
+vi.mock("../../ui/Sheet", () => ({
+  Sheet: ({ open, title, children }: { open: boolean; title: string; children: ReactNode }) =>
+    open ? (
+      <section role="dialog" aria-label={title}>
+        {children}
+      </section>
+    ) : null,
+}));
 
 let root: Root;
 let container: HTMLDivElement;
 
 beforeEach(() => {
+  media.phone = false;
+  media.coarse = false;
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -605,4 +621,93 @@ it("keeps read-only sources behind a toolbar chip until the operator opens them"
   expect(panel.closest("[hidden]")).toBeNull();
   // The draft starts at two lines and still grows.
   expect(container.querySelector("textarea")?.getAttribute("rows")).toBe("2");
+});
+
+describe("touch and phone composer", () => {
+  const enter = (init: KeyboardEventInit = {}) =>
+    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init });
+
+  it("keeps Enter as send and the Shift+Enter hint for a keyboard and fine pointer", async () => {
+    const props = composerProps();
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(container.textContent).toContain("Shift+Enter for a new line");
+    const event = enter();
+    await act(async () => container.querySelector("textarea")!.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(true);
+    expect(props.onSend).toHaveBeenCalledOnce();
+  });
+
+  it("makes a plain Enter a new line on touch, hides the Shift hint and sends from the button or Ctrl+Enter", async () => {
+    media.coarse = true;
+    const props = composerProps();
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(container.textContent).not.toContain("Shift+Enter");
+    const textarea = container.querySelector("textarea")!;
+    const plain = enter();
+    await act(async () => textarea.dispatchEvent(plain));
+    expect(plain.defaultPrevented).toBe(false);
+    expect(props.onSend).not.toHaveBeenCalled();
+    const ctrl = enter({ ctrlKey: true });
+    await act(async () => textarea.dispatchEvent(ctrl));
+    expect(ctrl.defaultPrevented).toBe(true);
+    expect(props.onSend).toHaveBeenCalledOnce();
+    await act(async () => sendButton().click());
+    expect(props.onSend).toHaveBeenCalledTimes(2);
+  });
+
+  it("still applies a highlighted partial command suggestion with Enter on touch", async () => {
+    media.coarse = true;
+    const suggestion = {
+      applyValue: "/status ",
+      label: "/status",
+    } as unknown as ComposerProps["commandSuggestions"][number];
+    const props = composerProps({ draft: "/sta", commandSuggestions: [suggestion] });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const event = enter();
+    await act(async () => container.querySelector("textarea")!.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(true);
+    expect(props.onApplyDraftCommand).toHaveBeenCalledWith("/status ");
+    expect(props.onSend).not.toHaveBeenCalled();
+  });
+
+  it("folds the controls into one Options sheet on a phone and keeps a named icon Send beside the draft", async () => {
+    media.phone = true;
+    media.coarse = true;
+    const props = composerProps();
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const textarea = container.querySelector("textarea")!;
+    expect(textarea.className).toContain("text-md");
+    const row = container.querySelector<HTMLElement>('[aria-label="Composer controls"]')!;
+    expect(row.parentElement).toBe(textarea.parentElement);
+    const options = row.querySelector<HTMLButtonElement>('button[aria-label="Options"]')!;
+    expect(options.getAttribute("aria-expanded")).toBe("false");
+    // Mode, model, web and voice controls are not stacked above the draft.
+    expect(container.querySelector('button[aria-label="Model and reasoning options"]')).toBeNull();
+    expect(container.querySelector('select[aria-label="Web search"]')).toBeNull();
+    expect(container.textContent).not.toContain("Voice and images");
+    expect(container.textContent).not.toContain("Commands and context");
+    // The hidden file input stays mounted so Attach works from the sheet.
+    expect(container.querySelector('input[aria-label="Choose files to attach"]')).not.toBeNull();
+    await act(async () => sendButton().click());
+    expect(props.onSend).toHaveBeenCalledOnce();
+    await act(async () => options.click());
+    const sheet = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Message options"]')!;
+    expect(options.getAttribute("aria-expanded")).toBe("true");
+    expect(sheet.querySelector('button[aria-label="Model and reasoning options"]')).not.toBeNull();
+    expect(sheet.querySelector('button[aria-label="Attach files"]')).not.toBeNull();
+    expect(sheet.textContent).toContain("Voice and images");
+    expect(sheet.querySelectorAll('input[aria-label="Choose files to attach"]')).toHaveLength(0);
+    await act(async () => sheet.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]')!.click());
+    expect(props.onAttachFiles).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a running turn stoppable and queueable from the phone row", async () => {
+    media.phone = true;
+    const props = composerProps({ hasActiveStream: true, canSendWhileRunning: true });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const row = container.querySelector<HTMLElement>('[aria-label="Composer controls"]')!;
+    await act(async () => row.querySelector<HTMLButtonElement>('button[aria-label="Stop response"]')!.click());
+    expect(props.onStopActiveTurn).toHaveBeenCalledOnce();
+    expect([...row.querySelectorAll("button")].some((button) => button.textContent === "Queue message")).toBe(true);
+  });
 });

@@ -152,7 +152,10 @@ export function useInspector(): InspectorApi {
 export function InspectorPanel() {
   const { content, close } = useInspector();
   const isPhone = useMediaQuery(RESPONSIVE_QUERIES.phone);
+  // SH-02: 1024–1279px laptops get a non-modal panel over the page; only narrower widths and Expand are modal.
+  const modal = useMediaQuery(RESPONSIVE_QUERIES.belowDesktop);
   const overlay = useMediaQuery(`(width < ${RESPONSIVE_BREAKPOINTS.wide}px)`);
+  const panel = useRef<HTMLElement>(null);
   const [width, setWidth] = useState(384);
   const [expanded, setExpanded] = useState(false);
   const opened = useRef(false);
@@ -160,9 +163,18 @@ export function InspectorPanel() {
   if (content && !opened.current)
     focusTarget.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   opened.current = Boolean(content);
+  const shown = Boolean(content);
   useEffect(() => {
-    if (!content) setExpanded(false);
-  }, [content]);
+    if (shown) return;
+    setExpanded(false);
+    // The docked and overlay panels are not dialogs, so closing them hands focus back to the opener here.
+    const active = document.activeElement;
+    if ((!active || active === document.body) && focusTarget.current?.isConnected) focusTarget.current.focus();
+  }, [shown]);
+  const floating = shown && overlay && !modal && !expanded && !isPhone;
+  useEffect(() => {
+    if (floating) panel.current?.focus({ preventScroll: true });
+  }, [floating]);
   if (!content) return null;
   const body = (
     <div
@@ -191,16 +203,15 @@ export function InspectorPanel() {
         {body}
       </Sheet>
     );
-  if (overlay || expanded)
+  if (modal || expanded)
     return (
       <Dialog
         open
         title={content.title}
-        description="Review the selected details."
-        contentClassName="inset-y-4 flex max-w-5xl flex-col"
+        contentClassName="inset-y-4 flex max-w-5xl flex-col sm:top-4"
         closeLabel="Close inspector"
         actions={
-          !overlay ? (
+          !modal ? (
             <IconButton
               label="Restore docked inspector"
               icon={<Minimize2 className="size-4" aria-hidden="true" />}
@@ -221,10 +232,15 @@ export function InspectorPanel() {
     );
   return (
     <aside
+      ref={panel}
       // The body region carries "Inspector: <title>"; the landmark stays generic so the two names differ.
       aria-label="Inspector"
+      tabIndex={floating ? -1 : undefined}
+      data-inspector-mode={floating ? "overlay" : "docked"}
       style={{ width }}
-      className="cockpit-inspector relative flex max-w-full shrink-0 flex-col border-l border-line-subtle bg-raised"
+      className={`cockpit-inspector flex max-w-full shrink-0 flex-col border-l border-line-subtle bg-raised ${
+        floating ? "absolute inset-y-0 right-0 z-30 shadow-overlay" : "relative"
+      }`}
     >
       <InspectorResizeHandle width={width} onChange={setWidth} />
       <header className="flex h-12 items-center justify-between gap-2 border-b border-line-subtle px-3">

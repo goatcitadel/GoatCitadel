@@ -8,9 +8,7 @@ import {
   type MissionThreadedActiveSessionSurfaceProps,
   type MissionThreadedRenderSurfaceInput,
 } from "@goatcitadel/threaded-surface-core";
-import { Button } from "../../ui/Button";
-import { Dialog } from "../../ui/Dialog";
-import { ChatConversationFilters } from "./ChatConversationFilters";
+import { ChatConversationsSheet } from "./ChatConversationsSheet";
 import { ChatEmptyState, ChatSessionHeader, ChatSetupBanner } from "./ChatAreaChrome";
 import { ChatTranscript } from "./ChatTranscript";
 import { ChatTextComposer } from "./ChatTextComposer";
@@ -118,7 +116,7 @@ export function ChatAreaView({
   const inspectorTurnId = useRef<string | null>(null);
   const inspectorTab = useRef<"run" | "turn" | "files">("run");
   const [buildOpen, setBuildOpen] = useState(false);
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [conversationsOpen, setConversationsOpen] = useState(false);
   const active = input.activeSessionSurfaceProps;
   const selectedSessionId = input.sessionRail.selectedSessionId ?? undefined;
   const inspectorIdentity = JSON.stringify([
@@ -234,19 +232,12 @@ export function ChatAreaView({
   return (
     <section aria-label="Chat" className="flex min-h-0 min-w-0 flex-1">
       <ThreadList rail={input.sessionRail} projectOptions={input.contextDockProps?.projectOptions} />
-      {filtersOpen ? (
-        <Dialog
-          open
-          onOpenChange={setFiltersOpen}
-          title="Filter conversations"
-          description="Choose a project or folder, then search within that view. These filters use the current conversation history."
-        >
-          <ChatConversationFilters rail={input.sessionRail} projectOptions={input.contextDockProps?.projectOptions} />
-          <Button className="mt-3" onClick={() => setFiltersOpen(false)}>
-            Done
-          </Button>
-        </Dialog>
-      ) : null}
+      <ChatConversationsSheet
+        open={conversationsOpen}
+        onOpenChange={setConversationsOpen}
+        rail={input.sessionRail}
+        projectOptions={input.contextDockProps?.projectOptions}
+      />
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <ChatSessionHeader
           input={input}
@@ -268,7 +259,8 @@ export function ChatAreaView({
               : null
           }
           onOpenProjects={() => navigate("/chat/projects")}
-          onOpenFilters={() => setFiltersOpen(true)}
+          onOpenConversations={() => setConversationsOpen(true)}
+          conversationsOpen={conversationsOpen}
           inspecting={inspectorContent?.source === "chat"}
           onInspect={() => (inspectorContent?.source === "chat" ? close() : openInspector())}
           onFork={active && latestTurnId ? () => active.onStartNewThreadFromTurn(latestTurnId) : undefined}
@@ -338,7 +330,7 @@ export function ChatAreaView({
             />
           </div>
         ) : (
-          <ChatEmptyState rail={input.sessionRail} />
+          <ChatEmptyState rail={input.sessionRail} onOpenConversations={() => setConversationsOpen(true)} />
         )}
         {active?.sessionStatusPanel?.open && !buildOpen ? (
           <div className="cockpit-chat-status-panel overflow-y-auto border-t border-line-subtle p-3">

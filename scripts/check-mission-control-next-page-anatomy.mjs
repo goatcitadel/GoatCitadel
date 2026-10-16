@@ -48,7 +48,26 @@ export const ANATOMY_RULES = [
     count: (_relative, contents) =>
       contents.match(/["'`][^"'`\n]*\brounded-(?:lg|xl)\b[^"'`\n]*\bborder\b[^"'`\n]*["'`]/g)?.length ?? 0,
   },
+  {
+    id: "small-textarea",
+    budget: 0,
+    help: "text boxes use 16px text (text-md) on phones so iOS does not zoom; use sm:text-sm for denser desktop text",
+    // A textarea whose class sets text-xs/text-sm as the base size (no sm: prefix) is under 16px on a phone.
+    count: (_relative, contents) =>
+      [...contents.matchAll(/<textarea\b[^>]*?className=(?:"([^"]*)"|\{`([^`]*)`\})/gs)].filter((match) =>
+        /(?:^|\s)text-(?:xs|sm)(?=\s|$)/.test(match[1] ?? match[2] ?? ""),
+      ).length,
+  },
 ];
+
+/** Phone chrome at the bottom edge must clear the home indicator (viewport-fit=cover). */
+export const SAFE_AREA_REQUIRED = ["app/MobileTabBar.tsx"];
+
+export function checkSafeArea(relativePath, contents) {
+  return SAFE_AREA_REQUIRED.includes(relativePath) && !/\bcockpit-safe-bottom\b/.test(contents)
+    ? [`${relativePath}: bottom-edge phone chrome must use cockpit-safe-bottom`]
+    : [];
+}
 
 export function countAnatomy(relativePath, contents, rules = ANATOMY_RULES) {
   const counts = {};
@@ -88,14 +107,21 @@ async function main() {
   const files = await walk(cockpitRoot);
   const totals = {};
   const byFile = {};
+  const safeArea = [];
+  const seen = new Set();
   for (const file of files) {
     const relative = path.relative(cockpitRoot, file).split(path.sep).join("/");
-    for (const [id, count] of Object.entries(countAnatomy(relative, await fs.readFile(file, "utf8")))) {
+    const contents = await fs.readFile(file, "utf8");
+    seen.add(relative);
+    safeArea.push(...checkSafeArea(relative, contents));
+    for (const [id, count] of Object.entries(countAnatomy(relative, contents))) {
       totals[id] = (totals[id] ?? 0) + count;
       (byFile[id] ??= []).push(`${relative} (${count})`);
     }
   }
-  const failures = evaluateAnatomy(totals);
+  for (const required of SAFE_AREA_REQUIRED)
+    if (!seen.has(required)) safeArea.push(`${required}: required phone chrome file is missing`);
+  const failures = [...evaluateAnatomy(totals), ...safeArea];
   if (failures.length) {
     console.error("[page-anatomy] violations (see DESIGN.md › Page anatomy):");
     for (const failure of failures) {

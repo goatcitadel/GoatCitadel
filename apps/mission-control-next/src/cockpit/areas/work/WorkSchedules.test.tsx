@@ -15,7 +15,7 @@ import {
   fetchCronReviewQueue,
 } from "@goatcitadel/mission-control-shared/api/cron";
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WorkSchedules } from "./WorkSchedules";
 import { WorkArea } from "./WorkArea";
 import { fetchObserveRunTrace } from "@goatcitadel/mission-control-shared/api/durable";
@@ -824,5 +824,44 @@ describe("scheduler review and run evidence", () => {
     );
     expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).not.toContain("env-abcdef123456");
     expect(container.querySelector('[aria-label="Schedule detail"]')?.textContent).toContain("Last run evidence");
+  });
+});
+
+describe("Work schedules on stacked widths", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const viewport = (stacked: boolean) =>
+    vi.stubGlobal("matchMedia", (media: string) => ({
+      media,
+      matches: stacked && media.includes("width <"),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+
+  it("marks the reviewed schedule and moves focus to its detail heading below the two-column width", async () => {
+    viewport(true);
+    const original = Element.prototype.scrollIntoView;
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    onTestFinished(() => {
+      Element.prototype.scrollIntoView = original;
+    });
+    await render();
+    const item = () => container.querySelector("li")!;
+    expect(item().hasAttribute("aria-current")).toBe(false);
+    await review();
+    expect(item().getAttribute("aria-current")).toBe("true");
+    expect(item().textContent).toContain("Shown in detail");
+    const heading = container.querySelector('[aria-label="Schedule detail"] h2')!;
+    await vi.waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(heading.textContent).toBe("Daily review");
+    expect(scroll).toHaveBeenCalled();
+  });
+
+  it("keeps focus on the list when the detail sits beside it", async () => {
+    viewport(false);
+    await render();
+    await review();
+    expect(container.querySelector("li")?.getAttribute("aria-current")).toBe("true");
+    expect(document.activeElement).not.toBe(container.querySelector('[aria-label="Schedule detail"] h2'));
   });
 });

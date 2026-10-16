@@ -3,7 +3,7 @@ export type { ComposerProps } from "./ChatTextComposer.types";
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
 import { useEffect, useId, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "../../ui/Button";
-import { ChatComposerControls } from "./ChatComposerControls";
+import { ChatComposerPhoneActions, ChatComposerTools } from "./ChatComposerTools";
 import { ChatComposerPalette } from "./ChatComposerPalette";
 import { ChatRunVariables } from "./ChatRunVariables";
 import { committedCommandDraft, composerSendBlock, type ComposerSendBlock } from "./composer-send-block";
@@ -12,15 +12,12 @@ import { useProjectSwitchReview } from "../../../features/threaded-surface/usePr
 import { useChatSelectionReview } from "./use-chat-owner-navigation";
 import { SessionControlBanner } from "../../../features/threaded-surface/SessionControlBanner";
 import { useAutoGrowTextarea } from "../../../features/threaded-surface/useAutoGrowTextarea";
-import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
-import { ExternalSourceStrip } from "../../../features/threaded-surface/ThreadedExternalSourceStrip";
-import { ChatMediaControls } from "./ChatMediaControls";
-import { ChatSourcesChip } from "./ChatSourcesChip";
 import type { ChatCompletionReasoningEffort } from "@goatcitadel/contracts";
 import { ChatLegacyInputNotice } from "./ChatLegacyInputNotice";
 import { Dialog } from "../../ui/Dialog";
-import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
+import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
+import { useCoarsePointer } from "../../lib/use-coarse-pointer";
 
 const REASON_ID = "cockpit-chat-send-reason";
 /** Short route checks are not worth announcing; only a check that outlasts this delay is shown. */
@@ -66,8 +63,13 @@ export function ChatTextComposer({
   // Read-only sources stay behind a toolbar chip; the panel and its explainer show only once opened.
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const sourcesPanelId = useId();
+  // Phones fold the mode, model, attach, sources and voice controls into one sheet; touch keyboards have no Shift.
+  const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
+  const coarse = useCoarsePointer();
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const openSourcePicker = () => {
     setSourcesOpen(true);
+    if (phone) setOptionsOpen(true);
     setExternalSourceOpenToken((token) => token + 1);
   };
   const toggleSources = () => {
@@ -124,6 +126,21 @@ export function ChatTextComposer({
   // A route check that settles quickly never flashes or re-announces its hint.
   const showRouteHint = useSettled(routeChecking, ROUTE_CHECK_HINT_DELAY_MS);
   const visibleReason = block && (!routeChecking || showRouteHint) ? block : null;
+  const submitLabel = props.hasActiveStream
+    ? props.midTurnDisposition === "steer"
+      ? "Steer response"
+      : "Queue message"
+    : localReady
+      ? command === "/schedule"
+        ? "Open schedules"
+        : command === "/timer"
+          ? "Open timer"
+          : "Show status"
+      : props.sending
+        ? "Sending…"
+        : props.editingTurnId
+          ? "Send edited message"
+          : "Send";
   const send = () => {
     if (!canSubmit) return;
     if (localReady && command === "/schedule") {
@@ -141,13 +158,13 @@ export function ChatTextComposer({
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter") {
       if (isImeEnter(event) || (event.shiftKey && !event.ctrlKey && !event.metaKey)) return;
-      event.preventDefault();
       // A committed command (`/help`, `/help args`) sends; only a partial token applies the highlighted suggestion.
-      if (
-        props.commandSuggestions.length &&
-        !localReady &&
-        !committedCommandDraft(props.draft, props.commandSuggestions)
-      ) {
+      const applies =
+        props.commandSuggestions.length && !localReady && !committedCommandDraft(props.draft, props.commandSuggestions);
+      // On touch, a plain Enter is a new line and Send is the button; Ctrl or Cmd+Enter still sends.
+      if (coarse && !applies && !event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      if (applies) {
         const selected = props.commandSuggestions[props.commandIndex];
         if (selected) {
           if (props.composerPalette?.enabled) selectPaletteItem(selected);
@@ -166,7 +183,7 @@ export function ChatTextComposer({
       onDragOver={props.onDragOver}
       onDragLeave={props.onDragLeave}
       onDrop={props.onDrop}
-      className={`border-t bg-raised p-3 ${props.isDragActive ? "border-accent" : "border-line-subtle"}`}
+      className={`border-t bg-raised p-3 max-sm:px-2 max-sm:py-2 ${props.isDragActive ? "border-accent" : "border-line-subtle"}`}
     >
       {props.sessionControlBanner ? <SessionControlBanner {...props.sessionControlBanner} /> : null}
       <div className="mx-auto max-w-3xl">
@@ -212,80 +229,58 @@ export function ChatTextComposer({
             </Button>
           </div>
         </Dialog>
-        {props.externalSourceControls ? (
-          <div id={sourcesPanelId} hidden={!sourcesOpen}>
-            <ExternalSourceStrip
-              controls={props.externalSourceControls}
-              disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
-              openAttachFormToken={externalSourceOpenToken}
-              onOpenLibrary={props.onOpenLibraryImports}
-              onRestoreFocus={() => props.composerRef.current?.focus()}
-            />
-          </div>
-        ) : null}
-        <ChatQueueBar
-          items={props.queueItems ?? []}
-          title="Queued messages"
-          onResumeAll={props.onResumeAll}
-          onRemove={props.onRemoveQueuedItem}
-        />
-        <ChatComposerControls
-          props={props.attachmentUpload?.pending ? { ...props, sending: false } : props}
+        <ChatComposerTools
+          props={props}
+          phone={phone}
           reasoningEfforts={reasoningEfforts}
-          scopeKey={props.selectedSessionId ?? ""}
-          sourcesChip={
-            props.externalSourceControls ? (
-              <ChatSourcesChip
-                controls={props.externalSourceControls}
-                open={sourcesOpen}
-                panelId={sourcesPanelId}
-                onToggle={toggleSources}
-              />
-            ) : null
-          }
+          sources={{
+            open: sourcesOpen,
+            panelId: sourcesPanelId,
+            openToken: externalSourceOpenToken,
+            onToggle: toggleSources,
+          }}
+          optionsOpen={optionsOpen}
+          onOptionsOpenChange={setOptionsOpen}
         />
-        {props.attachmentUpload?.pending ? (
-          <p role="status" className="text-sm text-fg-secondary">
-            Uploading {plural(props.attachmentUpload.pending, "attachment")}…
-          </p>
-        ) : null}
-        {props.attachmentUpload?.error ? (
-          <div role="alert" className="text-sm text-status-failed">
-            <p>The attachment didn’t upload. Select the file again to retry.</p>
-            <TechnicalDetails>
-              <p className="font-mono text-xs wrap-anywhere">{props.attachmentUpload.error}</p>
-            </TechnicalDetails>
-          </div>
-        ) : null}
-        <ChatMediaControls props={props} />
         <label htmlFor="cockpit-chat-draft" className="sr-only">
           Message
         </label>
-        <textarea
-          id="cockpit-chat-draft"
-          ref={props.composerRef}
-          rows={2}
-          role="combobox"
-          aria-autocomplete="list"
-          aria-expanded={ownsSuggestions}
-          aria-controls={ownsSuggestions ? "cockpit-composer-suggestions" : undefined}
-          aria-activedescendant={
-            ownsSuggestions && props.commandSuggestions[props.commandIndex]
-              ? `cockpit-suggestion-${props.commandIndex}`
-              : undefined
-          }
-          value={capture?.summary ?? props.draft}
-          readOnly={Boolean(capture)}
-          disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
-          aria-describedby={visibleReason ? REASON_ID : undefined}
-          onChange={(event) => props.onDraftChange(event.target.value)}
-          onKeyDown={keyDown}
-          onCompositionStart={() => setComposing(true)}
-          onCompositionEnd={() => setComposing(false)}
-          onPaste={props.onComposerPaste}
-          placeholder="Message GoatCitadel…"
-          className="cockpit-chat-draft mt-2 block min-h-16 w-full resize-y rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60"
-        />
+        <div className={phone ? "mt-2 flex items-end gap-1" : undefined}>
+          <textarea
+            id="cockpit-chat-draft"
+            ref={props.composerRef}
+            rows={2}
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={ownsSuggestions}
+            aria-controls={ownsSuggestions ? "cockpit-composer-suggestions" : undefined}
+            aria-activedescendant={
+              ownsSuggestions && props.commandSuggestions[props.commandIndex]
+                ? `cockpit-suggestion-${props.commandIndex}`
+                : undefined
+            }
+            value={capture?.summary ?? props.draft}
+            readOnly={Boolean(capture)}
+            disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
+            aria-describedby={visibleReason ? REASON_ID : undefined}
+            onChange={(event) => props.onDraftChange(event.target.value)}
+            onKeyDown={keyDown}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={() => setComposing(false)}
+            onPaste={props.onComposerPaste}
+            placeholder="Message GoatCitadel…"
+            className={`cockpit-chat-draft block min-h-16 resize-y rounded-md border border-line-control bg-canvas px-3 py-2 text-md text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60 sm:text-sm ${phone ? "min-w-0 flex-1" : "mt-2 w-full"}`}
+          />
+          {phone ? (
+            <ChatComposerPhoneActions
+              props={props}
+              canSubmit={canSubmit}
+              submitLabel={submitLabel}
+              optionsOpen={optionsOpen}
+              onOpenOptions={() => setOptionsOpen(true)}
+            />
+          ) : null}
+        </div>
         {capture ? (
           <section
             aria-label="Review captured workflow"
@@ -310,54 +305,53 @@ export function ChatTextComposer({
             </Button>
           </section>
         ) : null}
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-          <p className="min-w-0 text-xs text-fg-muted">
-            <button
-              type="button"
-              onClick={() => props.composerPalette?.onOpen()}
-              disabled={!props.composerPalette?.enabled}
-              className="inline-flex min-h-8 items-center font-medium text-accent hover:underline disabled:text-fg-muted max-sm:min-h-11"
-            >
-              Commands and context
-            </button>{" "}
-            · Shift+Enter for a new line
-          </p>
-          {props.hasActiveStream ? (
-            <Button type="submit" variant="primary" size="sm" disabled={!canSubmit}>
-              {props.midTurnDisposition === "steer" ? "Steer response" : "Queue message"}
-            </Button>
-          ) : null}
-          {props.hasActiveStream ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="max-sm:h-11 max-sm:px-4"
-              disabled={props.isStopPending}
-              onClick={() => {
-                props.onStopActiveTurn();
-                props.composerRef.current?.focus();
-              }}
-            >
-              {props.isStopPending ? "Stopping…" : "Stop response"}
-            </Button>
-          ) : (
-            <Button type="submit" variant="primary" size="sm" className="max-sm:h-11 max-sm:px-4" disabled={!canSubmit}>
-              {localReady
-                ? command === "/schedule"
-                  ? "Open schedules"
-                  : command === "/timer"
-                    ? "Open timer"
-                    : "Show status"
-                : props.sending
-                  ? "Sending…"
-                  : props.editingTurnId
-                    ? "Send edited message"
-                    : "Send"}
-            </Button>
-          )}
-        </div>
-        <div className="mt-2 min-h-5">
+        {phone ? null : (
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="min-w-0 text-xs text-fg-muted">
+              <button
+                type="button"
+                onClick={() => props.composerPalette?.onOpen()}
+                disabled={!props.composerPalette?.enabled}
+                className="inline-flex min-h-8 items-center font-medium text-accent hover:underline disabled:text-fg-muted max-sm:min-h-11"
+              >
+                Commands and context
+              </button>
+              {coarse ? null : " · Shift+Enter for a new line"}
+            </p>
+            {props.hasActiveStream ? (
+              <Button type="submit" variant="primary" size="sm" disabled={!canSubmit}>
+                {submitLabel}
+              </Button>
+            ) : null}
+            {props.hasActiveStream ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="max-sm:h-11 max-sm:px-4"
+                disabled={props.isStopPending}
+                onClick={() => {
+                  props.onStopActiveTurn();
+                  props.composerRef.current?.focus();
+                }}
+              >
+                {props.isStopPending ? "Stopping…" : "Stop response"}
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                variant="primary"
+                size="sm"
+                className="max-sm:h-11 max-sm:px-4"
+                disabled={!canSubmit}
+              >
+                {submitLabel}
+              </Button>
+            )}
+          </div>
+        )}
+        {/* A phone keeps no empty reserved line under the draft; wider layouts keep it so the row never jumps. */}
+        <div className={phone ? "mt-1 empty:hidden" : "mt-2 min-h-5"}>
           {localReady ? (
             <p role="status" className="text-xs text-fg-secondary">
               {command === "/schedule"
