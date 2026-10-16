@@ -312,6 +312,69 @@ describe("reconcileCrossedExternalSideEffectRun", () => {
     }
   });
 
+  it("rolls the run completion back when the mutation row is not unknown_after_send", async () => {
+    const storage = createStorage();
+    try {
+      const connectionId = "conn-ledger-mismatch";
+      const idempotencyKey = "key-ledger-mismatch";
+      const claim = await storage.mutationIdempotency.claim({
+        method: "POST",
+        routePath: routePathFor(connectionId),
+        idempotencyKey,
+        actorScope: connectionId,
+        payloadHash: "hash-ledger-mismatch",
+        now: CHECKED_AT,
+      });
+      expect(claim.outcome).toBe("claimed");
+      const mutationStatusBefore = await readMutationStatus(storage, connectionId, idempotencyKey);
+      expect(mutationStatusBefore).toBeDefined();
+      expect(mutationStatusBefore).not.toBe("unknown_after_send");
+      const created = await storage.externalSideEffectRuns.createOrGet(
+        {
+          boundary: BOUNDARY,
+          routePath: routePathFor(connectionId),
+          connectionId,
+          actionId: ACTION_ID,
+          actorScope: connectionId,
+          idempotencyKey,
+          payloadHash: "hash-ledger-mismatch",
+          status: "claimed_not_sent",
+          replayOutcome: "claimed",
+          replayAttempt: "new",
+        },
+        CHECKED_AT,
+      );
+      await storage.externalSideEffectRuns.markExternalCallStarted(created.runId, {}, CHECKED_AT);
+      const run = await storage.externalSideEffectRuns.markFailure(
+        created.runId,
+        { status: "unknown_external_outcome", errorText: "ambiguous" },
+        CHECKED_AT,
+      );
+      expect(run.status).toBe("unknown_external_outcome");
+      const probe = vi.fn(
+        async (): Promise<ExternalSideEffectProbeResult> => ({ found: true, externalReferenceId: "messageId:x" }),
+      );
+      const job = buildReplayJob(storage, run, { reconcileExternalOutcome: probe });
+
+      const results = await runReplaySafeExternalSideEffectWorker({
+        runs: [run],
+        checkedAt: CHECKED_AT,
+        buildJob: async () => job,
+      });
+
+      expect(results).toMatchObject([{ status: "skipped", reason: "blocked_or_unrecoverable" }]);
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(job.execute).not.toHaveBeenCalled();
+      const after = await storage.externalSideEffectRuns.get(run.runId);
+      expect(after).toMatchObject({ status: "unknown_external_outcome" });
+      expect(after.externalReferenceId).toBeUndefined();
+      expect(after.updatedAt).toBe(run.updatedAt);
+      expect(await readMutationStatus(storage, connectionId, idempotencyKey)).toBe(mutationStatusBefore);
+    } finally {
+      await storage.close();
+    }
+  });
+
   it("jobs without a probe keep the boundary-crossed skip", async () => {
     const storage = createStorage();
     try {

@@ -2328,7 +2328,7 @@
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 0,
       "reason": "WS8 gap-closure replay program: reconciliation of runs that already crossed the external dispatch boundary lives beside the replay runner so the runner stays at its dependency-access baseline. It reads only the replay job it is handed, settles a probe-proven effect through a status-CAS completion and the unknown_after_send mutation transition in one transaction, and never resends.",
-      "evidence": "2026-10-16: external-side-effect-reconciliation.test.ts covers probe found/not found/error, fresh and stale external_call_started skips, lost completion CAS and no-probe jobs against real SQLite storage; external-side-effect-runner-service and durable-execution-service suites pass; Gateway typecheck passes; repository counter measures 0 dependency accesses and 0 host callbacks."
+      "evidence": "2026-10-16: external-side-effect-reconciliation.test.ts covers probe found/not found/error, fresh and stale external_call_started skips, mutation-ledger mismatch rollback, lost completion CAS and no-probe jobs against real SQLite storage; external-side-effect-runner-service and durable-execution-service suites pass; Gateway typecheck passes; repository counter measures 0 dependency accesses and 0 host callbacks."
     }
   ]
 }

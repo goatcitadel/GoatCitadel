@@ -76,33 +76,49 @@ export async function reconcileCrossedExternalSideEffectRun<TValue>(
 
   const externalReferenceId = boundString(probe.externalReferenceId, MAX_EXTERNAL_REFERENCE_ID_LENGTH);
   const reconciliationId = randomUUID();
-  const settled = await runClaimTransaction(async () => {
-    const current = await markCompletedIfStatus(
-      run.runId,
-      "unknown_external_outcome",
-      {
-        replayOutcome: "duplicate",
-        ...(externalReferenceId ? { externalReferenceId } : {}),
-        responsePayload: {
-          ...summarizeProbeOutput(probe.output),
-          reconciled: true,
-          reconciliationId,
+  let settled: { won: boolean; current: ExternalSideEffectRunRecord };
+  try {
+    settled = await runClaimTransaction(async () => {
+      const current = await markCompletedIfStatus(
+        run.runId,
+        "unknown_external_outcome",
+        {
+          replayOutcome: "duplicate",
+          ...(externalReferenceId ? { externalReferenceId } : {}),
+          responsePayload: {
+            ...summarizeProbeOutput(probe.output),
+            reconciled: true,
+            reconciliationId,
+          },
         },
-      },
-      options.checkedAt,
-    );
-    if (!wonCompletion(current, reconciliationId)) {
-      return { won: false as const, current };
-    }
-    await markReconciledCompleted({
-      method: "POST",
-      routePath: run.routePath,
-      idempotencyKey: run.idempotencyKey,
-      actorScope: run.actorScope,
-      updatedAt: options.checkedAt,
+        options.checkedAt,
+      );
+      if (!wonCompletion(current, reconciliationId)) {
+        return { won: false as const, current };
+      }
+      const mutationSettled = await markReconciledCompleted({
+        method: "POST",
+        routePath: run.routePath,
+        idempotencyKey: run.idempotencyKey,
+        actorScope: run.actorScope,
+        updatedAt: options.checkedAt,
+      });
+      if (!mutationSettled) {
+        // Throwing rolls the run CAS back so the two ledgers never disagree.
+        throw new ReconciliationLedgerMismatchError();
+      }
+      return { won: true as const, current };
     });
-    return { won: true as const, current };
-  });
+  } catch (error) {
+    if (error instanceof ReconciliationLedgerMismatchError) {
+      return skip(
+        run,
+        "blocked_or_unrecoverable",
+        "The provider confirmed the effect, but the mutation ledger is not in unknown_after_send; the run stays unknown for manual review and replay will not resend it.",
+      );
+    }
+    throw error;
+  }
   if (!settled.won) {
     return skip(
       settled.current,
@@ -116,6 +132,13 @@ export async function reconcileCrossedExternalSideEffectRun<TValue>(
     ...(externalReferenceId ? { externalReferenceId } : {}),
     message: "The provider confirmed the external effect landed; the run is settled completed without resending it.",
   };
+}
+
+class ReconciliationLedgerMismatchError extends Error {
+  public constructor() {
+    super("External side-effect reconciliation found the mutation ledger outside unknown_after_send.");
+    this.name = "ReconciliationLedgerMismatchError";
+  }
 }
 
 function skip<TValue>(
