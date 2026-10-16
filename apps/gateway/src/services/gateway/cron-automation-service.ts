@@ -3,9 +3,12 @@ import { observeActiveCronAgentRun, reconcileCompletedCronChannelDelivery } from
 import { requireClaimedCommitmentOccurrence } from "../scheduled-cron-storage-guards.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  canReadCitadel,
   isCronRunTerminalStatus,
   NotFoundError,
+  PolicyViolationError,
   redactSecretText,
+  type CitadelAccessScope,
   type CronJobRecord,
   type CronReviewItem,
   type CronRunDiff,
@@ -238,8 +241,33 @@ export class CronAutomationService {
 
   public constructor(private readonly deps: CronAutomationServiceDeps) {}
 
-  public async listCronJobs(): Promise<CronJobRecord[]> {
-    return await this.deps.storage.cronJobs.list();
+  /**
+   * Lists cron jobs. With a `citadel` request the listing is Watchtower scope-checked: the
+   * access scope is built here, on the server (only the local operator access class may read
+   * every citadel; any other caller gets an empty readable set) and never from request input.
+   * Throws `NotFoundError` for an unknown citadel and `PolicyViolationError` when outside scope.
+   */
+  public async listCronJobs(citadel?: {
+    citadelId: string;
+    accessClass: string | undefined;
+  }): Promise<CronJobRecord[]> {
+    const { citadels, cronJobs } = this.deps.storage;
+    if (!citadel) {
+      return await cronJobs.list();
+    }
+    if (!(await citadels.getCitadel(citadel.citadelId))) {
+      throw new NotFoundError(`Citadel ${citadel.citadelId} not found.`);
+    }
+    const scope: CitadelAccessScope = {
+      citadelId: citadel.citadelId,
+      readableCitadelIds: citadel.accessClass === "operator" ? "all" : [],
+    };
+    if (!canReadCitadel(scope)) {
+      throw new PolicyViolationError({
+        message: `Citadel ${citadel.citadelId} is outside your Watchtower access scope.`,
+      });
+    }
+    return await cronJobs.listByCitadel(scope);
   }
 
   public async getCronJob(jobId: string): Promise<CronJobRecord> {
@@ -251,18 +279,21 @@ export class CronAutomationService {
     return job;
   }
 
-  public async createCronJob(input: {
-    jobId: string;
-    name: string;
-    action?: CronJobRecord["action"];
-    description?: string;
-    schedule: string;
-    enabled?: boolean;
-    endAt?: string;
-    actionConfig?: unknown;
-    workdir?: string;
-    contextFrom?: string;
-  }, creatorAuthority?: import("@goatcitadel/contracts").CronJobCreatorAuthorityInput): Promise<CronJobRecord> {
+  public async createCronJob(
+    input: {
+      jobId: string;
+      name: string;
+      action?: CronJobRecord["action"];
+      description?: string;
+      schedule: string;
+      enabled?: boolean;
+      endAt?: string;
+      actionConfig?: unknown;
+      workdir?: string;
+      contextFrom?: string;
+    },
+    creatorAuthority?: import("@goatcitadel/contracts").CronJobCreatorAuthorityInput,
+  ): Promise<CronJobRecord> {
     const jobId = normalizeCronJobId(input.jobId);
     if (await this.deps.storage.cronJobs.get(jobId)) {
       throw new Error(`Cron job already exists: ${jobId}`);
@@ -287,9 +318,15 @@ export class CronAutomationService {
     if (isScheduledCronAction(job.action)) {
       job.nextRunAt = computeNextCronRunAt(job.schedule, new Date(), job.endAt);
     }
-    const saved = await this.deps.specOwner.createSpec(job, {
-      nextRunAt: job.nextRunAt ?? null,
-    }, job.action === "agent_turn" && job.actionConfig?.agentTurn?.createdBy?.permissionProfileId ? creatorAuthority : undefined);
+    const saved = await this.deps.specOwner.createSpec(
+      job,
+      {
+        nextRunAt: job.nextRunAt ?? null,
+      },
+      job.action === "agent_turn" && job.actionConfig?.agentTurn?.createdBy?.permissionProfileId
+        ? creatorAuthority
+        : undefined,
+    );
     await this.deps.publishRealtime("system", "cron", {
       type: "cron_job_created",
       jobId: saved.jobId,
@@ -341,9 +378,18 @@ export class CronAutomationService {
     if (isScheduledCronAction(updated.action)) {
       updated.nextRunAt = computeNextCronRunAt(updated.schedule, new Date(), updated.endAt);
     }
-    const saved = await this.deps.specOwner.updateSpec(updated, expectedRevision, {
-      nextRunAt: updated.nextRunAt ?? null,
-    }, input.actionConfig !== undefined && updated.action === "agent_turn" && updated.actionConfig?.agentTurn?.createdBy?.permissionProfileId ? creatorAuthority : undefined);
+    const saved = await this.deps.specOwner.updateSpec(
+      updated,
+      expectedRevision,
+      {
+        nextRunAt: updated.nextRunAt ?? null,
+      },
+      input.actionConfig !== undefined &&
+        updated.action === "agent_turn" &&
+        updated.actionConfig?.agentTurn?.createdBy?.permissionProfileId
+        ? creatorAuthority
+        : undefined,
+    );
     await this.deps.publishRealtime("system", "cron", {
       type: "cron_job_updated",
       jobId: saved.jobId,

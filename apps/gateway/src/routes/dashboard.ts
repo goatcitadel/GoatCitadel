@@ -17,6 +17,7 @@ import {
 import { sendRouteError } from "./_error-handler.js";
 import { settingsChangePlanRequest, type SettingsChangePlanInput } from "./dashboard-settings-change-plan.js";
 import { bindPublicCronCreator } from "./dashboard-cron-authority.js";
+import { replyWithCronJobs } from "./dashboard-cron-citadel.js";
 
 const memoryQuerySchema = z.object({
   dir: z.string().default("memory"),
@@ -519,8 +520,8 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/cron/jobs", async (_request, reply) => {
-    return reply.send(projectPublicSecretValue({ items: await fastify.services.cron.listCronJobs() }));
+  fastify.get("/api/v1/cron/jobs", async (request, reply) => {
+    return replyWithCronJobs(fastify.services.cron, request, reply);
   });
 
   fastify.get("/api/v1/cron/jobs/:jobId", async (request, reply) => {
