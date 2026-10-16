@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The integration-action host contract and its invocation flow stay co-located until a bounded extraction preserves the shared ward, dry-run and side-effect admission ordering. */
 import type {
   IntegrationActionInvokeInput,
   IntegrationActionInvokeResult,
@@ -60,6 +61,8 @@ export interface IntegrationActionHost {
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
   mutationStore?: MutationIdempotencyStore;
   sideEffectRunStore?: ExternalSideEffectRunStore;
+  /** Encrypted replay copies of runner payloads (WS8); absent on narrow test hosts. */
+  replayRecords?: import("./external-side-effect-replay-record.js").ExternalSideEffectReplayRecords;
   /**
    * Optional approval front door (dry-run Stage 2). When present together with
    * `storage.dryRunCommits` + `storage.pendingApprovalActions`, a require_dry_run

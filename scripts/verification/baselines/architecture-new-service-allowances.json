@@ -1872,7 +1872,7 @@
       "maxHostCallbacks": 29,
       "maxDependencyMemberAccesses": 29,
       "reason": "Reviewed new explicit-context admission and dispatch guard owner. Verifies canonical durable identity, immutable admitted bytes and source visibility under the existing live write fence. Current source revalidation and admission-bound replay validation move verbatim from the source resolver and durable executor into this same owner. Historical frozen-profile replay remains in the durable executor; no new storage, transaction or execution owner is introduced. Original baseline and existing-owner limits remain unchanged.",
-      "evidence": "architecture-guard-tests.log passes175 tests with13 skips; durable-context-guard-tests.log passes147 tests. Context composition also moves here through a typed internal preparation port, keeping historical callback hosts compatible. context-preparation-tests.log passes89 with13 skips, and the actual owned-port path passes within9 current cases/13 historical skips in context-preparation-port-tests.log. Gateway typecheck passes; owner measures29/29, preparation returns to55/58 and two Gateway fa\u00e7ade methods become private. No original cap changes."
+      "evidence": "architecture-guard-tests.log passes175 tests with13 skips; durable-context-guard-tests.log passes147 tests. Context composition also moves here through a typed internal preparation port, keeping historical callback hosts compatible. context-preparation-tests.log passes89 with13 skips, and the actual owned-port path passes within9 current cases/13 historical skips in context-preparation-port-tests.log. Gateway typecheck passes; owner measures29/29, preparation returns to55/58 and two Gateway fa00e7ade methods become private. No original cap changes."
     },
     {
       "planStep": "C1",
@@ -2329,6 +2329,14 @@
       "maxDependencyMemberAccesses": 0,
       "reason": "WS8 gap-closure replay program: reconciliation of runs that already crossed the external dispatch boundary lives beside the replay runner so the runner stays at its dependency-access baseline. It reads only the replay job it is handed, settles a probe-proven effect through a status-CAS completion and the unknown_after_send mutation transition in one transaction, and never resends.",
       "evidence": "2026-10-16: external-side-effect-reconciliation.test.ts covers probe found/not found/error, fresh and stale external_call_started skips, mutation-ledger mismatch rollback, lost completion CAS and no-probe jobs against real SQLite storage; external-side-effect-runner-service and durable-execution-service suites pass; Gateway typecheck passes; repository counter measures 0 dependency accesses and 0 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/external-side-effect-replay-record.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 7,
+      "reason": "WS8 gap-closure replay program: seals and opens the encrypted replay copy of an external side-effect runner payload (AES-256-GCM, AAD bound to run id and payload hash) in its own service so the runner and composition files do not grow. The accesses are the injected key resolver, the two write-once run-row replay-record methods, and the secret store availability/get/set calls used to hold the generated key.",
+      "evidence": "2026-10-16: external-side-effect-replay-record.test.ts covers round-trip, tampered ciphertext, wrong run id, wrong payload hash, malformed and missing records, keyless seal/open, write errors, and generate-once/reuse key resolution; Gateway typecheck passes; repository counter measures 7 dependency accesses and 0 host callbacks."
     }
   ]
 }
