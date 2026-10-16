@@ -1369,13 +1369,16 @@ describe("LlmService", () => {
         },
       ],
     };
-    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const secretStore = createNoopSecretStore();
+    const setKey = vi.spyOn(secretStore, "setProviderApiKey");
+    const service = new LlmService(config, process.env, { secretStore });
 
     expect(() =>
       service.updateRuntimeConfig({
-        upsertProvider: { providerId: "openai", authMode: "aws-sigv4" },
+        upsertProvider: { providerId: "openai", authMode: "aws-sigv4", apiKey: "new-secret" },
       }),
     ).toThrow(/only valid with apiStyle "bedrock-messages"/);
+    expect(setKey).not.toHaveBeenCalled();
     expect(service.listProviders().find((provider) => provider.providerId === "openai")?.authMode).not.toBe(
       "aws-sigv4",
     );
