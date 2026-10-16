@@ -5,6 +5,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { MailAccountRecord, MailDraftRecord } from "@goatcitadel/contracts";
 import { createMailDraft, getMailDraft, sendMailDraft } from "@goatcitadel/mission-control-shared/api/personal-ops";
+import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { LibraryMailCompose } from "./LibraryMailCompose";
@@ -13,6 +14,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/personal-ops", () => ({
   createMailDraft: vi.fn(),
   getMailDraft: vi.fn(),
   sendMailDraft: vi.fn(),
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
+  fetchApproval: vi.fn(async (approvalId: string) => ({ approvalId, status: "pending" })),
 }));
 vi.mock("./LibraryApproval", () => ({
   LibraryApproval: ({
@@ -296,6 +300,26 @@ it.each([
   vi.mocked(getMailDraft).mockResolvedValue({ ...pending, status, failureReason });
   await click("Simulate decision");
   expect(container.textContent).toContain(`Not sent: ${failureReason}`);
+});
+
+it("shows a decided send as in progress, not as not-sent-yet, while the draft still awaits its outcome", async () => {
+  await requestApproval();
+  vi.mocked(getMailDraft).mockResolvedValue(pending);
+  vi.mocked(fetchApproval).mockResolvedValueOnce({ approvalId: "approval-1", status: "approved" } as never);
+  await click("Simulate decision");
+  const receipt = container.querySelector("[aria-label='Send approval receipt']")!.textContent!;
+  expect(fetchApproval).toHaveBeenLastCalledWith("approval-1", { workspaceId: "one" });
+  expect(receipt).toContain("The approval was decided; delivery is in progress. Refresh to see the outcome.");
+  expect(receipt).not.toContain("Nothing has been sent yet");
+});
+
+it("keeps the not-sent-yet wording while the approval is still pending", async () => {
+  await requestApproval();
+  vi.mocked(getMailDraft).mockResolvedValue(pending);
+  await click("Simulate decision");
+  expect(container.querySelector("[aria-label='Send approval receipt']")!.textContent).toContain(
+    "Nothing has been sent yet",
+  );
 });
 
 it("announces the decided outcome through the decision callout, not a second live region", async () => {

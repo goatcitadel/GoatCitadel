@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { MailAccountRecord, MailDraftRecord } from "@goatcitadel/contracts";
-import { createMailDraft, getMailDraft, sendMailDraft } from "@goatcitadel/mission-control-shared/api/personal-ops";
+import { createMailDraft, sendMailDraft } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
@@ -11,7 +11,7 @@ import { Field } from "../../ui/Field";
 import { RiskBadge } from "../../ui/RiskBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { handleEvidenceScrollKeyDown } from "../../ui/evidence-scroll";
-import { LibraryMailSendReceipt, type SendReceipt } from "./LibraryMailSendReceipt";
+import { LibraryMailSendReceipt, readSendReceiptUpdate, type SendReceipt } from "./LibraryMailSendReceipt";
 import { useLibraryOperation } from "./use-library-operation";
 import {
   draftMatchesRequest,
@@ -160,19 +160,16 @@ function LibraryMailComposeContent({
 
   /** Re-read the draft after a decision so the operator sees whether it was actually sent. */
   async function refreshReceipt() {
-    const draftId = receipt?.record.draftId;
+    const record = receipt?.record;
     const sequence = ++readSequence.current;
     // A failed record refresh must not stop the draft re-read below.
     await Promise.resolve()
       .then(onRefresh)
       .catch(() => undefined);
-    if (!draftId) return;
-    // The approval card stays authoritative; a failed re-read must not hide it.
-    const observed = await Promise.resolve(draftId)
-      .then((id) => getMailDraft(id, workspaceId))
-      .catch(() => undefined);
-    if (observed && operation.current() && sequence === readSequence.current && observed.draftId === draftId)
-      setReceipt((current) => (current && current.record.draftId === draftId ? { ...current, observed } : current));
+    if (!record) return;
+    const update = await readSendReceiptUpdate(record, workspaceId);
+    if ((update.observed || update.approvalStatus) && operation.current() && sequence === readSequence.current)
+      setReceipt((current) => (current?.record.draftId === record.draftId ? { ...current, ...update } : current));
   }
 
   function close() {
