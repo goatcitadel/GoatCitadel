@@ -9,8 +9,22 @@ import { describe, expect, it, vi } from "vitest";
 import type { CronJobRecord, CronRunRecord } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { CronAutomationService, type CronAutomationServiceDeps } from "./cron-automation-service.js";
-import { NO_AGENT_DEFAULT_TIMEOUT_MS, NO_AGENT_MAX_TIMEOUT_MS, runNoAgentCommand } from "./cron-no-agent-runner.js";
+import {
+  NO_AGENT_DEFAULT_TIMEOUT_MS,
+  NO_AGENT_MAX_TIMEOUT_MS,
+  NO_AGENT_SETTLE_GRACE_MS,
+  runNoAgentCommand,
+} from "./cron-no-agent-runner.js";
 import { createTestCronSpecOwner } from "./cron-spec-owner.test-utils.js";
+
+/**
+ * Grandchild spawn mode that survives a plain kill of its parent on each platform. On Windows a
+ * Node child's ordinary children sit in libuv's kill-on-close job and die with it anyway, so the
+ * grandchild is detached (outside that job, still in the parent-pid tree that `taskkill /T` walks).
+ * Elsewhere it stays in the parent's process group: it outlives a SIGKILL of its parent alone, but
+ * not the process-group kill.
+ */
+const DETACH_GRANDCHILD = process.platform === "win32";
 
 class FakeCronJobs {
   private readonly rows = new Map<string, CronJobRecord>();
@@ -351,6 +365,102 @@ describe("no_agent cron local-only proof", () => {
     const pid = Number(outputEvents(publishRealtime)[0]?.output);
     expect(Number.isInteger(pid)).toBe(true);
     expect(await waitUntilDead(pid)).toBe(false);
+  });
+
+  it("settles on timeout and kills a grandchild that inherited stdio", async () => {
+    const { service, cronJobs, publishRealtime } = createProofHarness();
+    const timeoutMs = 750;
+    await createNoAgentJob(service, "grandchild-timeout", {
+      args: [
+        "-e",
+        [
+          "const { spawn } = require('node:child_process');",
+          `const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit', detached: ${DETACH_GRANDCHILD} });`,
+          "process.stdout.write(String(g.pid));",
+          "setInterval(() => {}, 1000);",
+        ].join(" "),
+      ],
+      timeoutMs,
+    });
+
+    const startedAt = Date.now();
+    await expect(service.runCronJobNow("grandchild-timeout")).rejects.toThrow("timedOut=true");
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(elapsedMs).toBeLessThan(timeoutMs + NO_AGENT_SETTLE_GRACE_MS + 1500);
+    expect(cronJobs.get("grandchild-timeout")).toMatchObject({ lastRunStatus: "failed" });
+    expect(cronJobs.get("grandchild-timeout")?.activeRunId).toBeUndefined();
+    const grandchildPid = Number(outputEvents(publishRealtime)[0]?.output);
+    expect(Number.isInteger(grandchildPid) && grandchildPid > 0).toBe(true);
+    const survived = await waitUntilDead(grandchildPid);
+    if (survived) {
+      process.kill(grandchildPid, "SIGKILL");
+    }
+    expect(survived).toBe(false);
+  }, 15_000);
+
+  it("commits lastRunOutput before the output event and keeps success when the publish rejects", async () => {
+    const { service, cronJobs, cronRunRows, publishRealtime } = createProofHarness();
+    await createNoAgentJob(service, "publish-order-ok", { args: ["-e", "process.stdout.write('committed-first')"] });
+    const persistedAtPublish: Array<unknown> = [];
+    publishRealtime.mockImplementation(async (...call: unknown[]) => {
+      const payload = call[2] as Record<string, unknown> | undefined;
+      if (payload?.type === "cron_no_agent_output") {
+        persistedAtPublish.push(cronJobs.get("publish-order-ok")?.lastRunOutput);
+        persistedAtPublish.push(cronJobs.get("publish-order-ok")?.lastRunStatus);
+        throw new Error("realtime transport down");
+      }
+      return undefined;
+    });
+
+    const result = await service.runCronJobNow("publish-order-ok");
+
+    expect(persistedAtPublish).toEqual(["committed-first", "ok"]);
+    expect(result.status).toBe("ok");
+    expect(cronJobs.get("publish-order-ok")).toMatchObject({ lastRunStatus: "ok", lastRunOutput: "committed-first" });
+    expect(cronRunRows.get(result.runId)).toMatchObject({ status: "completed" });
+  });
+
+  it("persists the failed run's output before the output event, and a rejected publish keeps the real failure", async () => {
+    const { service, cronJobs, publishRealtime } = createProofHarness();
+    await createNoAgentJob(service, "publish-order-fail", {
+      args: ["-e", "process.stdout.write('partial-before-fail'); process.exit(4)"],
+    });
+    const persistedAtPublish: Array<unknown> = [];
+    publishRealtime.mockImplementation(async (...call: unknown[]) => {
+      const payload = call[2] as Record<string, unknown> | undefined;
+      if (payload?.type === "cron_no_agent_output") {
+        persistedAtPublish.push(cronJobs.get("publish-order-fail")?.lastRunOutput);
+        throw new Error("realtime transport down");
+      }
+      return undefined;
+    });
+
+    await expect(service.runCronJobNow("publish-order-fail")).rejects.toThrow("exitCode=4");
+
+    expect(persistedAtPublish).toEqual(["partial-before-fail"]);
+    const job = cronJobs.get("publish-order-fail");
+    expect(job).toMatchObject({ lastRunStatus: "failed", lastRunOutput: "partial-before-fail" });
+    expect(job?.lastFailure?.message).toContain("exitCode=4");
+    expect(job?.lastFailure?.message).not.toContain("realtime transport down");
+  });
+
+  it("clears a previous run's output when a later run fails without output", async () => {
+    const { service, cronJobs } = createProofHarness();
+    await createNoAgentJob(service, "stale-output", { args: ["-e", "process.stdout.write('first-run-output')"] });
+    await service.runCronJobNow("stale-output");
+    expect(cronJobs.get("stale-output")?.lastRunOutput).toBe("first-run-output");
+
+    const current = cronJobs.get("stale-output") as CronJobRecord;
+    cronJobs.upsert({
+      ...current,
+      actionConfig: { noAgent: { command: process.execPath, args: ["-e", "process.exit(2)"], timeoutMs: 5000 } },
+    });
+    await expect(service.runCronJobNow("stale-output")).rejects.toThrow("exitCode=2");
+
+    const job = cronJobs.get("stale-output");
+    expect(job).toMatchObject({ lastRunStatus: "failed" });
+    expect(job?.lastRunOutput).toBeUndefined();
   });
 
   it("never reaches a model, provider, or other run handler", async () => {

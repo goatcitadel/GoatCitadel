@@ -13,6 +13,12 @@ type NoAgentRunHandler = (input: {
   timeoutMs?: number;
 }) => Promise<NoAgentRunResult>;
 
+type NoAgentPublishRealtime = (
+  eventType: string,
+  source: string,
+  payload?: Record<string, unknown>,
+) => Promise<unknown>;
+
 export function normalizeNoAgentCronActionConfig(rawValue: Record<string, unknown>): CronJobRecord["actionConfig"] {
   const rawNoAgent =
     rawValue.noAgent && typeof rawValue.noAgent === "object" && !Array.isArray(rawValue.noAgent)
@@ -61,7 +67,7 @@ export async function runNoAgentCronJob(input: {
     patch: CronJobRuntimeTelemetryPatch,
     updatedAt: string,
   ) => CronJobRecord | Promise<CronJobRecord>;
-  publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => Promise<unknown>;
+  publishRealtime: NoAgentPublishRealtime;
   computeNextCronRunAt: (schedule: string, from: Date, endAt?: string) => string | undefined;
 }): Promise<Record<string, unknown>> {
   const noAgentConfig = input.job.actionConfig?.noAgent;
@@ -80,24 +86,20 @@ export async function runNoAgentCronJob(input: {
   const failed = runResult.timedOut || (runResult.exitCode !== null && runResult.exitCode !== 0);
   // A spawn error settles with exitCode null and no timeout; that is a failed run too.
   const spawnFailed = runResult.exitCode === null && !runResult.timedOut;
-  if (hasOutput) {
-    await input.publishRealtime("cron_job_run", "cron", {
-      type: "cron_no_agent_output",
-      jobId: input.job.jobId,
-      runId: input.runId,
-      output: stdoutTrimmed,
-      deliveryChannel: noAgentConfig.deliveryChannel,
-    });
-  }
+  const lastRunOutput = hasOutput ? stdoutTrimmed : null;
   if (failed || spawnFailed) {
-    // The caller records this as a failed run (lastRunStatus "failed", lastFailure, evidence).
+    // Canonical state first: lastRunOutput is written (or cleared) on the failure path too, so a
+    // failed run never leaves an earlier run's output behind. The caller then records the rest of
+    // the failure (lastRunStatus "failed", lastFailure, evidence) from the thrown error.
+    await input.mergeCronJobRuntimeTelemetry(input.job.jobId, { lastRunOutput }, finishedAt);
+    await publishNoAgentOutput(input, noAgentConfig.deliveryChannel, lastRunOutput);
     throw new Error(summarizeNoAgentFailure(input.normalizedJobId, runResult));
   }
   const saved = await input.mergeCronJobRuntimeTelemetry(
     input.job.jobId,
     {
       lastRunAt: finishedAt,
-      lastRunOutput: hasOutput ? stdoutTrimmed : null,
+      lastRunOutput,
       lastRunId: input.runId,
       lastRunStatus: "ok",
       lastFailureAt: null,
@@ -108,6 +110,8 @@ export async function runNoAgentCronJob(input: {
     },
     finishedAt,
   );
+  // Live emission only after the canonical commit; a rejected publish never flips the outcome.
+  const outputPublished = await publishNoAgentOutput(input, noAgentConfig.deliveryChannel, lastRunOutput);
   return {
     result: "ok",
     action: input.job.action,
@@ -117,8 +121,39 @@ export async function runNoAgentCronJob(input: {
     ...(runResult.stderrTruncated ? { stderrTruncated: true } : {}),
     runId: input.runId,
     hasOutput,
+    ...(outputPublished === false ? { outputBroadcastFailed: true } : {}),
     nextRunAt: saved.nextRunAt,
   };
+}
+
+type NoAgentDeliveryChannel = NonNullable<NonNullable<CronJobRecord["actionConfig"]>["noAgent"]>["deliveryChannel"];
+
+/**
+ * Best-effort realtime emission of the already-persisted, redacted, bounded stdout. Returns
+ * `undefined` when there is nothing to emit and `false` when the publish rejected. The rejection
+ * is swallowed on purpose: the persisted `lastRunOutput` is the canonical copy, and the run summary
+ * reports `outputBroadcastFailed` so the miss stays visible.
+ */
+async function publishNoAgentOutput(
+  input: { job: CronJobRecord; runId: string; publishRealtime: NoAgentPublishRealtime },
+  deliveryChannel: NoAgentDeliveryChannel,
+  output: string | null,
+): Promise<boolean | undefined> {
+  if (output === null) {
+    return undefined;
+  }
+  try {
+    await input.publishRealtime("cron_job_run", "cron", {
+      type: "cron_no_agent_output",
+      jobId: input.job.jobId,
+      runId: input.runId,
+      output,
+      deliveryChannel,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Failed-run summary: exit code, timeout flag, and a bounded, redacted stderr tail. */
