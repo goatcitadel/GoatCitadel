@@ -243,3 +243,93 @@ describe("ChannelStreamRuntimeService", () => {
     expect(h.runs).toHaveLength(1);
   });
 });
+
+describe("ChannelStreamRuntimeService supersession and resilience", () => {
+  function lateSettlingHarness() {
+    const started: Array<{ ctx: ChannelStreamRunContext; settle(): void }> = [];
+    const adapter: ChannelStreamAdapter = {
+      channelKey: "fake",
+      isInboundEnabled: () => true,
+      run: (ctx) =>
+        new Promise<void>((resolve) => {
+          started.push({ ctx, settle: () => resolve() });
+        }),
+    };
+    let current = [connection()];
+    const service = new ChannelStreamRuntimeService({
+      listConnections: async () => current,
+      adapters: [adapter],
+      dispatch: vi.fn(async () => ({})),
+      recordDevDiagnostic: vi.fn(),
+      sleep: async () => undefined,
+    });
+    return { service, started, setConnections: (next: IntegrationConnection[]) => (current = next) };
+  }
+
+  it("does not start the replacement session until the superseded one settles", async () => {
+    const h = lateSettlingHarness();
+    await h.service.sync();
+    await flush();
+    expect(h.started).toHaveLength(1);
+    h.setConnections([connection({ revision: "r2" })]);
+    await h.service.sync();
+    await flush();
+    expect(h.started[0]!.ctx.signal.aborted).toBe(true);
+    expect(h.started).toHaveLength(1);
+    h.started[0]!.settle();
+    await flush();
+    expect(h.started).toHaveLength(2);
+    const closing = h.service.close();
+    await flush();
+    expect(h.started[1]!.ctx.signal.aborted).toBe(true);
+    h.started[1]!.settle();
+    await closing;
+  });
+
+  it("close awaits a retiring runner that was removed", async () => {
+    const h = lateSettlingHarness();
+    await h.service.sync();
+    await flush();
+    h.setConnections([connection({ enabled: false })]);
+    await h.service.sync();
+    let closed = false;
+    const closing = h.service.close().then(() => {
+      closed = true;
+    });
+    await flush();
+    expect(closed).toBe(false);
+    h.started[0]!.settle();
+    await closing;
+    expect(closed).toBe(true);
+  });
+
+  it("survives a throwing diagnostics sink and a throwing isInboundEnabled", async () => {
+    const runs: ChannelStreamRunContext[] = [];
+    const good: ChannelStreamAdapter = {
+      channelKey: "fake",
+      isInboundEnabled: (c) => {
+        if (c.connectionId === "bad") throw new Error("boom");
+        return true;
+      },
+      run: (ctx) =>
+        new Promise<void>((_resolve, reject) => {
+          runs.push(ctx);
+          ctx.signal.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+    };
+    const service = new ChannelStreamRuntimeService({
+      listConnections: async () => [connection({ connectionId: "bad" }), connection({ connectionId: "ok" })],
+      adapters: [good],
+      dispatch: vi.fn(async () => ({})),
+      recordDevDiagnostic: () => {
+        throw new Error("sink down");
+      },
+      sleep: async () => undefined,
+    });
+    await service.sync();
+    await flush();
+    expect(runs).toHaveLength(1);
+    expect(service.activeRunnerCount).toBe(1);
+    await expect(service.close()).resolves.toBeUndefined();
+  });
+});

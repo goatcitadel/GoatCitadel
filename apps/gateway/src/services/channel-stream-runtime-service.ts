@@ -113,6 +113,8 @@ export class ChannelStreamRuntimeService {
   private readonly now: () => Date;
   private readonly runners = new Map<string, Runner>();
   private readonly statuses = new Map<string, ChannelStreamRuntimeStatus>();
+  /** Superseded or removed runners whose sessions may still be settling. */
+  private readonly retiring = new Set<Promise<void>>();
   private syncChain: Promise<void> = Promise.resolve();
   private closed = false;
 
@@ -153,7 +155,7 @@ export class ChannelStreamRuntimeService {
       runner.controller.abort();
       this.markStopped(connectionId, "closed");
     }
-    await Promise.allSettled(runners.map(([, runner]) => runner.task));
+    await Promise.allSettled([...runners.map(([, runner]) => runner.task), ...this.retiring]);
     this.runners.clear();
   }
 
@@ -163,7 +165,7 @@ export class ChannelStreamRuntimeService {
     try {
       connections = await this.listConnections();
     } catch (error) {
-      this.recordDiagnostic({
+      this.safeDiagnostic({
         level: "warn",
         category: "channels",
         event: "stream.sync_failed",
@@ -176,11 +178,25 @@ export class ChannelStreamRuntimeService {
     const wanted = new Map<string, { connection: IntegrationConnection; adapter: ChannelStreamAdapter }>();
     for (const connection of connections) {
       const adapter = this.adapters.find((candidate) => candidate.channelKey === connection.key);
-      if (adapter && connection.enabled && connection.status === "connected" && adapter.isInboundEnabled(connection)) {
+      if (!adapter || !connection.enabled || connection.status !== "connected") continue;
+      let optedIn = false;
+      try {
+        optedIn = adapter.isInboundEnabled(connection);
+      } catch (error) {
+        this.safeDiagnostic({
+          level: "warn",
+          category: "channels",
+          event: `${adapter.channelKey}.stream.config_check_failed`,
+          message: `Channel stream inbound check failed: ${describeError(error)}`,
+          context: { connectionId: connection.connectionId },
+        });
+      }
+      if (optedIn) {
         wanted.set(connection.connectionId, { connection, adapter });
       }
     }
 
+    const superseded = new Map<string, Runner>();
     for (const [connectionId, runner] of [...this.runners.entries()]) {
       const target = wanted.get(connectionId);
       if (target && runner.revisionKey === revisionKeyOf(target.connection)) {
@@ -188,6 +204,8 @@ export class ChannelStreamRuntimeService {
       }
       runner.controller.abort();
       this.runners.delete(connectionId);
+      this.retire(runner);
+      superseded.set(connectionId, runner);
       if (!target) {
         this.markStopped(connectionId, "disabled");
       }
@@ -195,12 +213,12 @@ export class ChannelStreamRuntimeService {
 
     for (const [connectionId, { connection, adapter }] of wanted) {
       if (!this.runners.has(connectionId)) {
-        this.startRunner(connection, adapter);
+        this.startRunner(connection, adapter, superseded.get(connectionId));
       }
     }
   }
 
-  private startRunner(connection: IntegrationConnection, adapter: ChannelStreamAdapter): void {
+  private startRunner(connection: IntegrationConnection, adapter: ChannelStreamAdapter, previous?: Runner): void {
     const controller = new AbortController();
     const runner: Runner = {
       revisionKey: revisionKeyOf(connection),
@@ -214,7 +232,26 @@ export class ChannelStreamRuntimeService {
       ready: false,
     });
     this.runners.set(connection.connectionId, runner);
-    runner.task = this.runLoop(connection, adapter, runner);
+    // Never overlap two sessions for one connection: wait for the superseded session to settle first.
+    const gate = previous ? previous.task : Promise.resolve();
+    runner.task = gate.then(() => this.runLoop(connection, adapter, runner)).catch(() => undefined);
+  }
+
+  private retire(runner: Runner): void {
+    const settled = runner.task.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.retiring.add(settled);
+    void settled.then(() => this.retiring.delete(settled));
+  }
+
+  private safeDiagnostic(input: Parameters<ChannelStreamRuntimeDeps["recordDevDiagnostic"]>[0]): void {
+    try {
+      this.recordDiagnostic(input);
+    } catch {
+      // Diagnostics must never break the runtime.
+    }
   }
 
   private async runLoop(
@@ -238,7 +275,7 @@ export class ChannelStreamRuntimeService {
       message: string,
       context?: Record<string, unknown>,
     ) => {
-      this.recordDiagnostic({
+      this.safeDiagnostic({
         level,
         category: "channels",
         event: `${channelKey}.stream.${event}`,
