@@ -27,6 +27,18 @@ const draftParamsSchema = z.object({
   draftId: z.string().min(1),
 });
 
+/** A draft is read only inside the workspace that owns it. */
+const draftReadQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).max(256),
+});
+
+/** A send may name its workspace (query or body); a mismatch answers 404 like a missing draft. */
+const draftSendScopeSchema = z.object({
+  workspaceId: z.string().trim().min(1).max(256).optional(),
+});
+
+const MAIL_DRAFT_NOT_FOUND = { error: "Mail draft not found." } as const;
+
 const calendarEventSchema = z.object({
   workspaceId: z.string().trim().min(1).max(256).optional(),
   accountId: z.string().min(1),
@@ -114,9 +126,16 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
+    const query = draftReadQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return reply.code(400).send({ error: query.error.flatten() });
+    }
     return await withDraftStore(reply, async () => {
       const draft = await service.getDraft(params.data.draftId);
-      return draft ? reply.send(draft) : reply.code(404).send({ error: "Mail draft not found." });
+      // Scope is checked before any draft content is exposed.
+      return draft && draft.workspaceId === query.data.workspaceId
+        ? reply.send(draft)
+        : reply.code(404).send(MAIL_DRAFT_NOT_FOUND);
     });
   });
 
@@ -125,7 +144,23 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
-    return await withDraftStore(reply, async () => reply.send(await service.sendDraft(params.data.draftId)));
+    const scope = draftSendScopeSchema.safeParse({
+      workspaceId:
+        readOptionalRecordString(request.query, "workspaceId") ?? readOptionalRecordString(request.body, "workspaceId"),
+    });
+    if (!scope.success) {
+      return reply.code(400).send({ error: scope.error.flatten() });
+    }
+    return await withDraftStore(reply, async () => {
+      const workspaceId = scope.data.workspaceId;
+      if (workspaceId) {
+        const draft = await service.getDraft(params.data.draftId);
+        if (!draft || draft.workspaceId !== workspaceId) {
+          return reply.code(404).send(MAIL_DRAFT_NOT_FOUND);
+        }
+      }
+      return reply.send(await service.sendDraft(params.data.draftId));
+    });
   });
 
   fastify.post("/api/v1/calendar/events", async (request, reply) => {
@@ -142,6 +177,12 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.code(202).send(await service.createCalendarEventPlaceholder(parsed.data as CreateCalendarEventInput));
   });
 };
+
+function readOptionalRecordString(value: unknown, key: string): unknown {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)[key]
+    : undefined;
+}
 
 /** Draft routes fail closed with 503 when draft persistence is not composed, instead of holding drafts in memory. */
 async function withDraftStore(reply: FastifyReply, handle: () => Promise<FastifyReply>): Promise<FastifyReply> {

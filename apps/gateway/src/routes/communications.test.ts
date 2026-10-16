@@ -284,7 +284,10 @@ describe("communications routes", () => {
     const draftId = created.json().draftId as string;
     await app.inject({ method: "POST", url: `/api/v1/mail/drafts/${draftId}/send`, payload: {} });
 
-    const read = await app.inject({ method: "GET", url: `/api/v1/mail/drafts/${encodeURIComponent(draftId)}` });
+    const read = await app.inject({
+      method: "GET",
+      url: `/api/v1/mail/drafts/${encodeURIComponent(draftId)}?workspaceId=default`,
+    });
     expect(read.statusCode).toBe(200);
     expect(read.json()).toMatchObject({
       draftId,
@@ -292,9 +295,71 @@ describe("communications routes", () => {
       approvalId: "22222222-2222-4222-8222-222222222222",
     });
 
-    const missing = await app.inject({ method: "GET", url: "/api/v1/mail/drafts/mail_draft_missing" });
+    const missing = await app.inject({
+      method: "GET",
+      url: "/api/v1/mail/drafts/mail_draft_missing?workspaceId=default",
+    });
     expect(missing.statusCode).toBe(404);
     expect(missing.json()).toEqual({ error: "Mail draft not found." });
+  });
+
+  it("scopes draft reads and sends to the draft's workspace", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => ({
+      approvalId: "33333333-3333-4333-8333-333333333333",
+      kind: input.kind,
+      riskLevel: input.riskLevel,
+      status: "pending",
+      payload: input.payload,
+      preview: input.preview,
+      linkage: input.linkage,
+      createdAt: "2026-06-05T12:00:00.000Z",
+      explanationStatus: "not_requested",
+    }));
+    app = Fastify();
+    decorateServices(app, {
+      integrations: { listIntegrationConnections: vi.fn(() => []) },
+      approvals: { createApproval },
+      mailDrafts: createMailDraftStore(),
+      comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
+    });
+    await app.register(communicationsRoutes);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts",
+      payload: { accountId: "acct-a", to: ["operator@example.test"], subject: "Secret plan", bodyText: "Private." },
+    });
+    const draftId = encodeURIComponent(created.json().draftId as string);
+
+    const unscoped = await app.inject({ method: "GET", url: `/api/v1/mail/drafts/${draftId}` });
+    expect(unscoped.statusCode).toBe(400);
+    expect(unscoped.body).not.toContain("Secret plan");
+    const other = await app.inject({ method: "GET", url: `/api/v1/mail/drafts/${draftId}?workspaceId=workspace-2` });
+    expect(other.statusCode).toBe(404);
+    expect(other.json()).toEqual({ error: "Mail draft not found." });
+
+    const sendQuery = await app.inject({
+      method: "POST",
+      url: `/api/v1/mail/drafts/${draftId}/send?workspaceId=workspace-2`,
+      payload: {},
+    });
+    const sendBody = await app.inject({
+      method: "POST",
+      url: `/api/v1/mail/drafts/${draftId}/send`,
+      payload: { workspaceId: "workspace-2" },
+    });
+    for (const response of [sendQuery, sendBody]) {
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toEqual({ error: "Mail draft not found." });
+    }
+    expect(createApproval).not.toHaveBeenCalled();
+
+    const sent = await app.inject({
+      method: "POST",
+      url: `/api/v1/mail/drafts/${draftId}/send`,
+      payload: { workspaceId: "default" },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json()).toMatchObject({ status: "approval_required", workspaceId: "default" });
   });
 
   it("answers 503 for draft routes when mail draft storage is not composed", async () => {
@@ -311,7 +376,7 @@ describe("communications routes", () => {
       url: "/api/v1/mail/drafts",
       payload: { accountId: "acct-a", to: ["operator@example.test"], subject: "Status", bodyText: "Ready." },
     });
-    const read = await app.inject({ method: "GET", url: "/api/v1/mail/drafts/mail_draft_x" });
+    const read = await app.inject({ method: "GET", url: "/api/v1/mail/drafts/mail_draft_x?workspaceId=default" });
     const sent = await app.inject({ method: "POST", url: "/api/v1/mail/drafts/mail_draft_x/send", payload: {} });
 
     for (const response of [created, read, sent]) {

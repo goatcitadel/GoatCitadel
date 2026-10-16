@@ -149,7 +149,7 @@ it("requests exactly one approval, links the approval owner and clears the sent 
   await compose();
   await click("Review send request");
   await click("Request send approval");
-  expect(sendMailDraft).toHaveBeenCalledExactlyOnceWith("draft-1");
+  expect(sendMailDraft).toHaveBeenCalledExactlyOnceWith("draft-1", "one");
   expect(container.textContent).toContain(
     "Send approval requested. Nothing has been sent yet. Approving sends this exact message once.",
   );
@@ -176,7 +176,10 @@ it("keeps a lost send response locked and offers only the exact replay of the sa
   await click("Review pending send request");
   await click("Replay exact send request");
   expect(createMailDraft).toHaveBeenCalledOnce();
-  expect(vi.mocked(sendMailDraft).mock.calls).toEqual([["draft-1"], ["draft-1"]]);
+  expect(vi.mocked(sendMailDraft).mock.calls).toEqual([
+    ["draft-1", "one"],
+    ["draft-1", "one"],
+  ]);
   expect(container.textContent).toContain("Approval owner approval-1 in one");
 });
 
@@ -281,7 +284,7 @@ it("re-reads the draft after the approval is decided and shows that it was sent"
   await requestApproval();
   vi.mocked(getMailDraft).mockResolvedValue({ ...pending, status: "sent", sentAt: "later" });
   await click("Simulate decision");
-  expect(getMailDraft).toHaveBeenCalledExactlyOnceWith("draft-1");
+  expect(getMailDraft).toHaveBeenCalledExactlyOnceWith("draft-1", "one");
   expect(container.querySelector("[aria-label='Send approval receipt']")!.textContent).toContain("Sent.");
 });
 
@@ -418,7 +421,10 @@ it("keeps the exact replay available when the replay is also lost", async () => 
   await click("Replay exact send request");
   expect(button("Replay exact send request")).toBeDefined();
   expect(button("Request send approval")).toBeUndefined();
-  expect(vi.mocked(sendMailDraft).mock.calls).toEqual([["draft-1"], ["draft-1"]]);
+  expect(vi.mocked(sendMailDraft).mock.calls).toEqual([
+    ["draft-1", "one"],
+    ["draft-1", "one"],
+  ]);
 });
 
 it("locks a mismatched send receipt as uncertain instead of accepting it", async () => {

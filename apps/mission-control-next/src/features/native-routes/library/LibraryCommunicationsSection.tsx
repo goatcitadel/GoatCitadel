@@ -74,7 +74,7 @@ export function LibraryCommunicationsSection({ activeWorkspaceId, activeWorkspac
         subject,
         bodyText,
       });
-      const sendState = await sendMailDraft(draft.draftId);
+      const sendState = await sendMailDraft(draft.draftId, activeWorkspaceId);
       setNotice({ tone: "success", message: `${sendState.status}: ${sendState.approvalId ?? draft.draftId}` });
       if (messageDraft.acceptSaved({ to: "", subject: "", bodyText: "" }, undefined, submitted)) setView("inbox");
       await reload();

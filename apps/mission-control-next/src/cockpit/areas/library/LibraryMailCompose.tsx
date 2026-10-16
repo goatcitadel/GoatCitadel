@@ -119,7 +119,7 @@ function LibraryMailComposeContent({
         async () => {
           dispatched = true;
           if (!replay) setPending(target);
-          return sendMailDraft(target.record.draftId);
+          return sendMailDraft(target.record.draftId, workspaceId);
         },
         (value) => {
           if (value.draftId !== target.record.draftId) throw new Error("The send receipt names a different draft.");
@@ -169,7 +169,7 @@ function LibraryMailComposeContent({
     if (!draftId) return;
     // The approval card stays authoritative; a failed re-read must not hide it.
     const observed = await Promise.resolve(draftId)
-      .then(getMailDraft)
+      .then((id) => getMailDraft(id, workspaceId))
       .catch(() => undefined);
     if (observed && operation.current() && sequence === readSequence.current && observed.draftId === draftId)
       setReceipt((current) => (current && current.record.draftId === draftId ? { ...current, observed } : current));
