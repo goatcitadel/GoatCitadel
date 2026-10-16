@@ -292,10 +292,11 @@ Use the existing ingress pattern. Webhook channels use `routes/webhook-handler-f
 ### Task 7.3: Generation-token fencing for external side effects
 - In `external-side-effect-runner-service.ts`:
   - carry `claimToken` into `markCompleted`/`markFailed` as a compare-and-set;
-  - fence the provider dispatch with `assertCurrent` (as MCP does with `effectDispatch`);
+  - fence the provider dispatch with `assertCurrent` (as MCP does with `effectDispatch`), and record a `dispatched` marker on the claim **before** the provider call;
   - then pass `leaseDurationMs` so stale claims can be taken over.
+- **Never auto-retry an ambiguous post-boundary effect.** Takeover may redispatch only a claim with no `dispatched` marker. A claim taken over after its marker was written settles as `unknown_after_send`: it blocks automatic redispatch and surfaces for operator review, unless the effect carries a provider-enforced idempotency key (then redispatch with the same key is allowed).
 - **Files:** `packages/storage/src/mutation-idempotency-repo.ts` (~L250-273) and the runner.
-- **Tests:** on SQLite and Postgres, a stale claim is taken over; the old holder's completion is rejected; the provider is called once.
+- **Tests:** on SQLite and Postgres, a stale claim without a `dispatched` marker is taken over and dispatched once; a stale claim with the marker settles `unknown_after_send` and the provider is not called again; the old holder's completion is rejected.
 
 ### Task 7.4: Watchtower access control on citadel cron listing
 - In `packages/storage/src/cron-job-repo.ts` `listByCitadel` (~L347-357), require a `CitadelAccessScope` argument and filter by it. Add the first gateway caller (a citadel-scoped schedules list), with the scope check copied from `workspaces-route-service.ts`. Delete the TODO.

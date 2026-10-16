@@ -24,8 +24,12 @@ export async function applyAutoRouteToInput(
     await host.persistChatSessionMode?.(sessionId, "chat");
     return { ...input, ...CHAT_ONLY };
   }
-  if (!input.autoRoute || input.mode !== undefined) {
-    return input.mode === undefined ? input : { ...input, mode: "chat" };
+  if (input.mode === "chat") {
+    // Explicit chat: clear a stale legacy autoRoute flag without a prefs write.
+    return input.autoRoute ? { ...input, ...CHAT_ONLY } : input;
+  }
+  if (!input.autoRoute) {
+    return input;
   }
   const persistedMode = await host.readChatSessionMode?.(sessionId);
   if (persistedMode !== "chat") {

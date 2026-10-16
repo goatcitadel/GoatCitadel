@@ -48,6 +48,19 @@ describe("applyAutoRouteToInput", () => {
     expect(out).toMatchObject({ mode: "chat", autoRoute: false });
     expect(host.persistChatSessionMode).toHaveBeenCalledWith("s1", "chat");
   });
+
+  it("clears a legacy autoRoute flag on an explicit chat turn without a prefs write", async () => {
+    const host = makeHost();
+    const out = await applyAutoRouteToInput(host as never, "s1", { content: "hi", mode: "chat", autoRoute: true });
+    expect(out).toEqual({ content: "hi", mode: "chat", autoRoute: false });
+    expect(host.persistChatSessionMode).not.toHaveBeenCalled();
+  });
+
+  it("leaves an explicit chat turn without autoRoute unchanged", async () => {
+    const host = makeHost();
+    const input = { content: "hi", mode: "chat" as const };
+    expect(await applyAutoRouteToInput(host as never, "s1", input)).toBe(input);
+  });
 });
 
 function makeOverrideHost(overrides: Record<string, unknown> = {}) {

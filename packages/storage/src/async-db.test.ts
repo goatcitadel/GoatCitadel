@@ -133,6 +133,38 @@ test("SQLite async transaction client nests awaited transactions more than one l
   }
 });
 
+test("SQLite async transaction client rejects parent writes while a nested transaction is active", async () => {
+  const db = new SqliteAsyncDatabaseClient(createDatabase({ dbPath: ":memory:" }));
+  try {
+    await db.exec("CREATE TABLE parent_guard_tx_test (id INTEGER PRIMARY KEY)");
+    await db.transaction("immediate", async (tx) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const nested = tx.transaction("immediate", async () => {
+        await gate;
+        throw new Error("nested rollback");
+      });
+      await assert.rejects(
+        tx.prepare("INSERT INTO parent_guard_tx_test (id) VALUES (?)").run(1),
+        /nested transaction is active/,
+      );
+      await assert.rejects(tx.exec("INSERT INTO parent_guard_tx_test (id) VALUES (2)"), /nested transaction is active/);
+      release();
+      await assert.rejects(nested, /nested rollback/);
+      await tx.prepare("INSERT INTO parent_guard_tx_test (id) VALUES (?)").run(3);
+    });
+    const rows = await db.prepare("SELECT id FROM parent_guard_tx_test ORDER BY id").all<{ id: number }>();
+    assert.deepEqual(
+      rows.map((row) => row.id),
+      [3],
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 test("SQLite async transaction client rejects concurrent nested transactions", async () => {
   const db = new SqliteAsyncDatabaseClient(createDatabase({ dbPath: ":memory:" }));
   try {

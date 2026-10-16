@@ -256,11 +256,11 @@ Add this line under the H1 of each of the three auto-router docs:
 - [ ] **Step 10: Commit**
 
 ```bash
-git add -A apps/gateway/src packages docs/superpowers
+git add -- <each file from this task's Files list, by explicit path>
 git commit -m "refactor: retire legacy surface auto-router after chat unification"
 ```
 
-Before running this, check `git status` and make sure nothing outside this task's files is staged.
+Stage only the files this task created, modified or deleted (`git rm` for deletions); never a directory-wide `git add -A`, which would sweep in another contributor's changes. Check `git status` and `git diff --cached --stat` before committing.
 
 ---
 

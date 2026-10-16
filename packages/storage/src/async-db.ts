@@ -136,14 +136,36 @@ class SqlitePinnedAsyncDatabaseClient implements AsyncDatabaseClient {
   public prepare(sql: string): AsyncDbStatement {
     const statement = this.db.prepare(sql);
     return {
-      run: async (...params) => statement.run(...params),
-      get: async <T = unknown>(...params: DbBindParams[]) => statement.get<T>(...params),
-      all: async <T = unknown>(...params: DbBindParams[]) => statement.all<T>(...params),
+      run: async (...params) => {
+        this.assertNoNestedTransaction();
+        return statement.run(...params);
+      },
+      get: async <T = unknown>(...params: DbBindParams[]) => {
+        this.assertNoNestedTransaction();
+        return statement.get<T>(...params);
+      },
+      all: async <T = unknown>(...params: DbBindParams[]) => {
+        this.assertNoNestedTransaction();
+        return statement.all<T>(...params);
+      },
     };
   }
 
   public async exec(sql: string): Promise<void> {
+    this.assertNoNestedTransaction();
     this.db.exec(sql);
+  }
+
+  /**
+   * While a nested savepoint is open, statements on this (parent) client would
+   * land inside the child savepoint and be undone by its rollback. Reject them.
+   */
+  private assertNoNestedTransaction(): void {
+    if (this.nestedActive) {
+      throw new Error(
+        "A SQLite transaction client cannot run statements while its nested transaction is active; use the nested client.",
+      );
+    }
   }
 
   public async transaction<T>(_mode: DbTransactionMode, callback: (db: AsyncDatabaseClient) => Promise<T>): Promise<T> {
