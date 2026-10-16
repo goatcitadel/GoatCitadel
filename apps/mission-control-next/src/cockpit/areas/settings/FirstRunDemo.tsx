@@ -24,8 +24,11 @@ export function FirstRunDemo({ workspaceId }: { workspaceId: string }) {
         }),
     );
   return (
-    <section aria-label="Local demo setup" className="grid gap-3 rounded-lg border border-line bg-raised p-4">
-      <h2 className="font-display text-lg font-semibold text-fg">Try a local demo</h2>
+    <section
+      aria-label="Local demo setup"
+      className="grid gap-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
+    >
+      <h2 className="text-lg font-semibold text-fg">Try a local demo</h2>
       <p className="text-sm text-fg-secondary">{DEMO_BOOTSTRAP_CONSEQUENCE}</p>
       <p className="text-sm text-fg-secondary">
         Sample records: {control.state?.status?.replaceAll("_", " ") ?? "Not checked"}. Samples are not model output or

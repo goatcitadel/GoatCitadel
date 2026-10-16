@@ -56,7 +56,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
         </p>
       ) : s.panel === "connectors" ? (
         <>
-          <h4 className="font-display text-md font-semibold">Imported external connectors</h4>
+          <h4 className="text-md font-semibold">Imported external connectors</h4>
           <p className="text-sm text-fg-secondary">
             Review metadata is scoped to workspace {workspaceLabel}. These imported actions are catalog-only and
             non-callable. Staging creates a capability proposal; it grants no execution authority.
@@ -153,7 +153,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
         </>
       ) : s.panel === "plugins" ? (
         <>
-          <h4 className="font-display text-md font-semibold">Installed plugin trust</h4>
+          <h4 className="text-md font-semibold">Installed plugin trust</h4>
           <p className="text-sm text-fg-secondary">
             Installation-wide source and integrity records. Review does not enable plugins.
           </p>
@@ -191,7 +191,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
         </>
       ) : (
         <>
-          <h4 className="font-display text-md font-semibold">External delivery records</h4>
+          <h4 className="text-md font-semibold">External delivery records</h4>
           <p className="text-sm text-fg-secondary">
             Workspace {workspaceLabel}
             {s.selectedConnectionId ? ` · connection ${s.selectedConnectionId}` : " · all connections"}. This list shows

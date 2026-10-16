@@ -117,8 +117,8 @@ export function ProjectDetail({
   }
   return (
     <div className="grid min-w-0 grid-cols-1 gap-4">
-      <section className="grid gap-3 rounded-lg border border-line p-4">
-        <h2 className="break-words font-display text-xl">{project.name}</h2>
+      <section className="grid gap-3">
+        <h2 className="break-words text-xl font-semibold">{project.name}</h2>
         <p className="break-words text-sm text-fg-secondary">{project.description || "No description provided."}</p>
         <p className="text-sm">{project.lifecycleStatus === "archived" ? "Archived project" : "Active project"}</p>
         <p className="break-all text-sm">Workspace path: {project.workspacePath}</p>
@@ -168,8 +168,8 @@ export function ProjectDetail({
           onClose={() => setEditing(false)}
         />
       ) : null}
-      <section aria-label="Project conversations" className="grid gap-3 rounded-lg border border-line p-4">
-        <h2 className="font-display text-lg">Conversations</h2>
+      <section aria-label="Project conversations" className="grid gap-3 border-t border-line-subtle pt-4">
+        <h2 className="text-lg font-semibold">Conversations</h2>
         {sessions.isFetching ? <p role="status">Reading conversations…</p> : null}
         {sessions.error ? <Callout tone="error">{describeApiError(sessions.error).summary}</Callout> : null}
         {!sessions.isPending && !sessions.error && !projectSessions.length ? (

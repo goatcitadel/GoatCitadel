@@ -61,9 +61,12 @@ export function FirstRunVerification() {
   const firstTaskVerified = Boolean(verifiedTask);
   const firstTaskModel = useModelLabel(verifiedTask?.providerId, verifiedTask?.model, firstTaskVerified);
   return (
-    <section aria-label="First-run checks" className="grid gap-4 rounded-lg border border-line bg-raised p-4">
+    <section
+      aria-label="First-run checks"
+      className="grid gap-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-display text-lg font-semibold text-fg">Setup checks</h2>
+        <h2 className="text-lg font-semibold text-fg">Setup checks</h2>
         <Button disabled={query.isFetching} onClick={() => void query.refetch()}>
           Refresh checks
         </Button>

@@ -100,6 +100,11 @@ export class PostgresTranscriptLog {
     this.deleteOlderThanStmt = db.prepare("DELETE FROM transcript_events WHERE occurred_at < ?");
   }
 
+  public async findEventOffset(sessionId: string, eventId: string): Promise<number | undefined> {
+    const row = this.existingSequenceStmt.get(sessionId, eventId) as { event_sequence?: number } | undefined;
+    return typeof row?.event_sequence === "number" ? row.event_sequence : undefined;
+  }
+
   public async append(event: TranscriptEvent): Promise<number> {
     return this.db.transaction("immediate", () => {
       const existing = this.existingSequenceStmt.get(event.sessionId, event.eventId) as

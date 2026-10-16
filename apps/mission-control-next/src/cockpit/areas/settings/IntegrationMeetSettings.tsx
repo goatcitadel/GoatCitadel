@@ -15,7 +15,7 @@ export function IntegrationMeetSettings({ owner: s }: { owner: IntegrationSettin
   const sessions = available ? (s.data?.meetSessions ?? []) : [];
   return (
     <section aria-label="Google Meet preparation" className="space-y-4 rounded-md border border-line-subtle p-3">
-      <h4 className="font-display text-md font-semibold">Google Meet preparation</h4>
+      <h4 className="text-md font-semibold">Google Meet preparation</h4>
       <p className="text-sm text-fg-secondary">{MEET_OWNER_BOUNDARY}</p>
       <p className="text-xs text-fg-muted">
         Installation-wide records. Account references are configuration inputs; their presence does not verify a

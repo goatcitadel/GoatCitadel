@@ -33,7 +33,7 @@ export function LibraryLinkedArtifact({
     staleTime: 0,
   });
   return (
-    <section aria-label="Linked project artifact" className="grid min-w-0 gap-3 rounded-lg border border-line p-3">
+    <section aria-label="Linked project artifact" className="grid min-w-0 gap-3 border-t border-line-subtle pt-4">
       <Button disabled={query.isFetching} onClick={() => void query.refetch()}>
         Refresh linked artifact
       </Button>

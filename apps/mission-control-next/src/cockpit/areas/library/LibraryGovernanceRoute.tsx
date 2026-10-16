@@ -5,6 +5,8 @@ import { CitadelWardsSettings } from "../settings/CitadelWardsSettings";
 import { CitadelCouncilSettings } from "../settings/CitadelCouncilSettings";
 import { CitadelVaultSettings } from "../settings/CitadelVaultSettings";
 import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 
 // Headings use the shared Citadel page names so Library, Settings, the nav rail and document titles agree.
 const GOVERNANCE_SECTIONS = CITADEL_PAGE_LABELS;
@@ -21,8 +23,11 @@ export function LibraryGovernanceRoute({
   citadelId: string;
 }) {
   return (
-    <section className="mx-auto w-full min-w-0 max-w-5xl space-y-4 p-4 sm:p-6">
-      <h1 className="font-display text-xl font-semibold text-fg">{GOVERNANCE_SECTIONS[section]}</h1>
+    <section className={`${AREA_PAGE} min-w-0`}>
+      <AreaHeader
+        title={GOVERNANCE_SECTIONS[section]}
+        description="Governance for the active Citadel. Settings › Citadel lists every Citadel page."
+      />
       {section === "citadel-overview" ? (
         <CitadelOverviewSettings key={citadelId} citadelId={citadelId} />
       ) : section === "citadel-blueprint" ? (

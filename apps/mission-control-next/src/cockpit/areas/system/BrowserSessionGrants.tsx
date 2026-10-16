@@ -184,8 +184,8 @@ export function BrowserSessionGrants({
 
   const canReplay = Boolean(review && pending === review && operation.attempt?.phase === "uncertain");
   return (
-    <section className="grid min-w-0 grid-cols-1 gap-3 rounded-lg border border-line p-3" aria-label="Scoped grants">
-      <h3 className="font-display text-md font-semibold">Scoped grants</h3>
+    <section className="grid min-w-0 grid-cols-1 gap-3 border-t border-line-subtle pt-3" aria-label="Scoped grants">
+      <h3 className="text-base font-semibold">Scoped grants</h3>
       <p className="text-sm text-fg-secondary">
         Grants let one actor use this session within its scopes and hosts. Tools still pass policy checks and
         guardrails; a grant does not open, bind or control a browser.

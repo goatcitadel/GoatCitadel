@@ -135,7 +135,7 @@ test("joined native frames reach portable accounting without counting guest allo
     assert.equal(run.status, 0, `Native joined capture evidence: ${output}\n${run.stdout}${run.stderr}`);
     const report = JSON.parse(run.stdout);
     assert.equal(report.passed, true); assert.ok(report.checks >= 100);
-    assert.equal(report.sessions, 50); assert.equal(report.nativeClientSessions, 50);
+    assert.equal(report.sessions, 52); assert.equal(report.nativeClientSessions, 52);
     for (const key of ["installedService", "canonicalStorage", "volumeAttached", "ntfsFormatted", "volumeRootProtected", "volumeMounted"])
       assert.equal(report[key], false);
     const read = name => fs.readFileSync(path.join(data, `joined-${name}.bin`));

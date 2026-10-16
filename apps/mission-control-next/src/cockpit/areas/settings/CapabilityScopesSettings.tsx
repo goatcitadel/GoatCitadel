@@ -14,7 +14,7 @@ export function CapabilityScopesSettings({ scopeKind, scopeId }: { scopeKind: Ca
   return (
     <section id={`${scopeKind}-capabilities`} aria-label={`${scopeLabel} capability selections`} className="space-y-4">
       <header>
-        <h3 className="font-display text-base font-semibold text-fg">{scopeLabel} capability selections</h3>
+        <h3 className="text-base font-semibold text-fg">{scopeLabel} capability selections</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Choose saved references for the selected {scopeKind}. Inheritance follows future parent choices; a curated
           selection records explicit inclusions and exclusions.
@@ -57,10 +57,13 @@ function ScopeSelection({
   const itemLabels = new Map(view?.items.map((item) => [item.resourceRef, item.label]));
   const selected = Object.values(scope.draft.value).filter(Boolean).length;
   return (
-    <section aria-label={`${title} selection`} className="space-y-3 rounded-lg border border-line bg-sunken p-4">
+    <section
+      aria-label={`${title} selection`}
+      className="space-y-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h4 className="font-display text-md font-semibold text-fg">{title}</h4>
+          <h4 className="text-md font-semibold text-fg">{title}</h4>
           <p className="mt-1 text-sm text-fg-secondary">
             {view
               ? view.mode === "inherit"

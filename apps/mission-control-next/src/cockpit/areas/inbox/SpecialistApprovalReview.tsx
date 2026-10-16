@@ -56,7 +56,7 @@ export function SpecialistApprovalReview({
         <p className="break-all">
           <strong>Working directory:</strong> {review.workingDirectory}
         </p>
-        <pre className="min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded bg-sunken p-2">
+        <pre className="min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-sunken p-2">
           {review.commandLine}
         </pre>
         <h5>Environment</h5>
@@ -139,7 +139,7 @@ export function SpecialistApprovalReview({
           aria-label="Reviewed code source"
           tabIndex={0}
           onKeyDown={handleEvidenceScrollKeyDown}
-          className="min-w-0 max-w-full max-h-80 overflow-auto whitespace-pre-wrap break-all rounded bg-sunken p-2"
+          className="min-w-0 max-w-full max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-md bg-sunken p-2"
         >
           {evidence.source.content}
         </pre>

@@ -113,9 +113,12 @@ export function ProviderManagementSettings() {
       setReview(null);
     }, [profile.providerEditor.key]);
   return (
-    <section aria-label="Provider profiles" className="mt-4 space-y-3 rounded-lg border border-line bg-raised p-4">
+    <section
+      aria-label="Provider profiles"
+      className="mt-4 space-y-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
+    >
       <header>
-        <h3 className="font-display text-md font-semibold text-fg">Provider profiles</h3>
+        <h3 className="text-md font-semibold text-fg">Provider profiles</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Create and edit installation profiles. Connection and credential actions remain governed by the Gateway.
         </p>

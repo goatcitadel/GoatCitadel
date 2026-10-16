@@ -225,7 +225,7 @@ struct CellControllerSessionOwner final {
     const CellMountedWorkspaceProvisioningCommitter&, DWORD wall_ms, HANDLE stop) noexcept = nullptr;
   // The composed owner must establish and retain workload quiescence while
   // calling the journal's observation API. Missing ownership refuses capacity
-  // requests. The installed service does not yet supply this owner.
+  // requests.
   DWORD (*observe_capacity)(void*, CellProvisioningJournal&, const CellProvisioningAnchor&, const CellFileSha256&,
     const CellFootprintScanLimits&, const CellFootprintScanGuard&, CellProvisioningFootprint*) noexcept = nullptr;
   DWORD (*observe_backing_capacity)(void*, CellProvisioningJournal&, const CellProvisioningAnchor&, const CellFileSha256&,

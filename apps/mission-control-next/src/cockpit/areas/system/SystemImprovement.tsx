@@ -18,10 +18,12 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useLibraryOperation } from "../library/use-library-operation";
 import { ReportEvidence } from "./ImprovementReportEvidence";
 import { TimeText } from "../../ui/TimeText";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { AUTO_TUNE_STATUS, CANDIDATE_RISK, CANDIDATE_STATUS, REPLAY_RUN_STATUS } from "./system-vocabulary";
 
-const CARD = "grid min-w-0 grid-cols-1 gap-3 rounded-lg border border-line p-3";
+const CARD = "grid min-w-0 grid-cols-1 gap-3 border-t border-line-subtle pt-3 first:border-t-0 first:pt-0";
 export const improvementRequestText = (item: CuratorReviewItem) =>
   `Apply improvement candidate ${item.candidate.candidateId}: ${item.candidate.summary}`;
 
@@ -57,19 +59,15 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
     route.navigate(`/system/improvement?${new URLSearchParams({ [param]: id }).toString()}`);
 
   return (
-    <div className="grid min-w-0 grid-cols-1 gap-4 overflow-y-auto p-4">
-      <header className="grid min-w-0 gap-2">
-        <h1 className="font-display text-xl font-semibold">Improvement</h1>
-        <p className="text-sm text-fg-secondary">
-          Experimental. Suggestions, weekly reports and replay runs are advisory evidence. Nothing is applied from here:
-          approving, activating or replaying happens through their governed owners. This view is not release-bearing
-          evidence.
-        </p>
-      </header>
+    <div className={AREA_PAGE}>
+      <AreaHeader
+        title="Improvement"
+        description="Experimental. Suggestions, weekly reports and replay runs are advisory evidence. Nothing is applied from here: approving, activating or replaying happens through their governed owners. This view is not release-bearing evidence."
+      />
       <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="grid min-w-0 grid-cols-1 content-start gap-4">
           <section className={CARD} aria-label="Improvement inbox">
-            <h2 className="font-display text-md font-semibold">Improvement inbox</h2>
+            <h2 className="text-base font-semibold">Improvement inbox</h2>
             <p className="text-sm text-fg-secondary">Deduplicated suggestions for this workspace.</p>
             <div>
               <Button disabled={inbox.isFetching} onClick={() => void inbox.refetch()}>
@@ -88,7 +86,7 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
             </ul>
           </section>
           <section className={CARD} aria-label="Improvement reports">
-            <h2 className="font-display text-md font-semibold">Weekly reports</h2>
+            <h2 className="text-base font-semibold">Weekly reports</h2>
             <p className="text-sm text-fg-secondary">
               Reports and replay runs are Gateway-wide, not filtered to this workspace.
             </p>
@@ -117,7 +115,7 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
             </ul>
           </section>
           <section className={CARD} aria-label="Replay runs">
-            <h2 className="font-display text-md font-semibold">Replay runs</h2>
+            <h2 className="text-base font-semibold">Replay runs</h2>
             {replays.error ? <Callout tone="error">{describeApiError(replays.error).summary}</Callout> : null}
             {replays.data && !replays.data.items.length ? (
               <p className="text-sm text-fg-muted">No replay runs yet.</p>
@@ -153,9 +151,7 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
           ) : replayRunId ? (
             <ReplayDetail runId={replayRunId} identity={access.identity} />
           ) : (
-            <p className="rounded-lg border border-line p-3 text-sm text-fg-secondary">
-              Select a report or replay run to inspect its record.
-            </p>
+            <p className="text-sm text-fg-secondary">Select a report or replay run to inspect its record.</p>
           )}
         </div>
       </div>
@@ -203,7 +199,7 @@ function Suggestion({ item, workspaceId }: { item: CuratorReviewItem; workspaceI
             To act on it, send this request in Chat and ask it to prepare a Change Plan you can inspect. Nothing is
             applied from here.
           </p>
-          <p className="rounded bg-sunken p-2 font-mono text-xs">{request}</p>
+          <p className="rounded-md bg-sunken p-2 font-mono text-xs">{request}</p>
         </>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -240,7 +236,7 @@ function ReportDetail({
   const data = report.data;
   return (
     <section className={CARD} aria-label="Improvement report">
-      <h2 className="font-display text-md font-semibold">Weekly report</h2>
+      <h2 className="text-base font-semibold">Weekly report</h2>
       {report.isPending ? <p role="status">Reading report…</p> : null}
       {report.error ? <Callout tone="error">{describeApiError(report.error).summary}</Callout> : null}
       {data ? (
@@ -286,7 +282,7 @@ function ReportDetail({
             <p className="text-sm text-fg-muted">None recorded.</p>
           )}
           <TechnicalDetails label="All retained report fields">
-            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-sunken p-2 font-mono text-xs">
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md bg-sunken p-2 font-mono text-xs">
               {JSON.stringify(data, null, 2)}
             </pre>
           </TechnicalDetails>
@@ -314,7 +310,7 @@ function ReplayDetail({ runId, identity }: { runId: string; identity: string }) 
   const run = replay.data?.run;
   return (
     <section className={CARD} aria-label="Replay run">
-      <h2 className="font-display text-md font-semibold">Replay run</h2>
+      <h2 className="text-base font-semibold">Replay run</h2>
       <p className="text-sm text-fg-secondary">
         Inspection reads the retained replay record. Viewing it never re-runs or applies anything.
       </p>
@@ -343,7 +339,7 @@ function ReplayDetail({ runId, identity }: { runId: string; identity: string }) 
             {plural(replay.data.autoTunes.length, "auto-tune")}
           </p>
           <TechnicalDetails label="Retained replay record">
-            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-sunken p-2 font-mono text-xs">
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md bg-sunken p-2 font-mono text-xs">
               {JSON.stringify(replay.data, null, 2)}
             </pre>
           </TechnicalDetails>

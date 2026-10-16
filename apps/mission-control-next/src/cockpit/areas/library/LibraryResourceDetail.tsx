@@ -80,7 +80,7 @@ export function LibraryResourceDetail({
   const active = preview?.binding === binding ? preview : undefined;
   return (
     <div className="grid min-w-0 gap-3">
-      <h3 className="break-words font-display text-lg font-semibold text-fg">{resourceTitle(resource)}</h3>
+      <h3 className="break-words text-base font-semibold text-fg">{resourceTitle(resource)}</h3>
       <p className="text-sm text-fg-secondary">{resourceDescription(resource)}</p>
       <p className="text-sm text-fg-secondary">
         <TimeText prefix={resourceTime(resource).label} value={resourceTime(resource).value} absolute />

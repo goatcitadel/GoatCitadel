@@ -8,7 +8,7 @@ import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Callout } from "../../ui/Callout";
 import { buildSessionPosture, describeContext, formatTime, LIST_LIMIT } from "./browser-sessions-model";
 
-const CARD = "grid min-w-0 grid-cols-1 gap-2 rounded-lg border border-line p-3";
+const CARD = "grid min-w-0 grid-cols-1 gap-2 border-t border-line-subtle pt-3";
 const LIST = "grid min-w-0 grid-cols-1 gap-2 text-sm sm:grid-cols-2";
 
 /** Tool posture and the read-only state projection. Values are never shown; only counts, origins and flags. */
@@ -50,7 +50,7 @@ export function BrowserSessionStateView({
       ) : null}
       {posture ? (
         <section className={CARD} aria-label="State and tool access">
-          <h3 className="font-display text-md font-semibold">State and tool access</h3>
+          <h3 className="text-base font-semibold">State and tool access</h3>
           <p className="text-sm text-fg-secondary">
             From session records, scoped grants and retained guard events. This does not show that a browser is open,
             bound or active; tools still pass policy checks and guardrails.
@@ -82,7 +82,7 @@ export function BrowserSessionStateView({
       ) : null}
       {state && projection ? (
         <section className={CARD} aria-label="Saved browser state">
-          <h3 className="font-display text-md font-semibold">Saved browser state</h3>
+          <h3 className="text-base font-semibold">Saved browser state</h3>
           <p className="text-sm text-fg-secondary">
             Counts and origins come from volatile browser-session memory. Cookie, storage and page values are never
             shown.

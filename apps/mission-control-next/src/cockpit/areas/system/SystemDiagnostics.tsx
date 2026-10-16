@@ -144,8 +144,8 @@ export function SystemDiagnostics() {
       ) : null}
       <FirstRunVerification />
 
-      <section aria-labelledby="diagnostics-recovery-title" className="rounded-lg border border-line bg-raised p-4">
-        <h2 id="diagnostics-recovery-title" className="font-display text-lg font-semibold text-fg">
+      <section aria-labelledby="diagnostics-recovery-title" className="border-t border-line-subtle pt-4">
+        <h2 id="diagnostics-recovery-title" className="text-base font-semibold text-fg">
           Queue recovery
         </h2>
         <p className="mt-1 text-xs text-fg-muted">
@@ -177,9 +177,9 @@ export function SystemDiagnostics() {
               </p>
             ) : null}
             {deadLetters.length ? (
-              <ul className="mt-3 grid gap-2">
+              <ul className="mt-2 divide-y divide-line-subtle">
                 {deadLetters.map((item) => (
-                  <li key={item.id} className="rounded-md border border-line-subtle bg-sunken p-3">
+                  <li key={item.id} className="py-3">
                     <h3 className="text-sm font-semibold text-fg">{item.title}</h3>
                     <p className="mt-1 text-sm text-fg-secondary">{item.summary}</p>
                     {item.source.runId ? (
@@ -203,8 +203,8 @@ export function SystemDiagnostics() {
         ) : null}
       </section>
 
-      <section aria-labelledby="diagnostics-logs-title" className="rounded-lg border border-line bg-raised p-4">
-        <h2 id="diagnostics-logs-title" className="font-display text-lg font-semibold text-fg">
+      <section aria-labelledby="diagnostics-logs-title" className="border-t border-line-subtle pt-4">
+        <h2 id="diagnostics-logs-title" className="text-base font-semibold text-fg">
           Daemon logs
         </h2>
         <p className="mt-1 text-xs text-fg-muted">Latest 100 entries reported by the Gateway daemon log API.</p>
@@ -216,9 +216,9 @@ export function SystemDiagnostics() {
         {logs.isError ? <Callout tone="error">Logs unavailable: {describeApiError(logs.error).summary}</Callout> : null}
         {logs.data && !logs.isError ? (
           logs.data.items.length ? (
-            <ul className="mt-3 grid gap-2">
+            <ul className="mt-2 divide-y divide-line-subtle">
               {logs.data.items.map((item, index) => (
-                <li key={`${item.timestamp}:${index}`} className="rounded-md border border-line-subtle bg-sunken p-3">
+                <li key={`${item.timestamp}:${index}`} className="py-3">
                   <p className="text-xs font-medium text-fg-muted">
                     {DIAGNOSTIC_LEVEL[item.level] ?? "Log"} · <TimeText value={item.timestamp} />
                   </p>
@@ -232,8 +232,8 @@ export function SystemDiagnostics() {
         ) : null}
       </section>
 
-      <section aria-labelledby="diagnostics-events-title">
-        <h2 id="diagnostics-events-title" className="font-display text-lg font-semibold text-fg">
+      <section aria-labelledby="diagnostics-events-title" className="border-t border-line-subtle pt-4">
+        <h2 id="diagnostics-events-title" className="text-base font-semibold text-fg">
           Diagnostic events
         </h2>
         <p className="mt-1 text-xs text-fg-muted">
@@ -275,9 +275,9 @@ export function SystemDiagnostics() {
                 {remainingEvents > 0 ? `; showing the first ${visibleEvents.length}` : ""}.
               </p>
               {filteredEvents.length ? (
-                <ul className="mt-3 grid gap-2">
+                <ul className="mt-2 divide-y divide-line-subtle">
                   {visibleEvents.map((item) => (
-                    <li key={item.id} className="rounded-lg border border-line bg-raised p-3">
+                    <li key={item.id} className="py-3">
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>
                           <p className="text-xs font-medium text-fg-muted">

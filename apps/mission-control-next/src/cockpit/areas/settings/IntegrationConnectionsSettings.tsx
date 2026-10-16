@@ -47,7 +47,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
       className="mt-4 space-y-3 border-t border-line-subtle pt-4"
     >
       <header>
-        <h3 className="font-display text-md font-semibold text-fg">Saved integrations</h3>
+        <h3 className="text-md font-semibold text-fg">Saved integrations</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Connections for this Gateway installation, across all workspaces. Review a saved connection before enabling or
           disabling it.

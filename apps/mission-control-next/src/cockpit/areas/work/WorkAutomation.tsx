@@ -21,6 +21,8 @@ import {
 } from "../../../features/native-routes/ops/runtime-schedule-model";
 import { useIsMounted } from "../../../hooks/use-is-mounted";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 import { Button } from "../../ui/Button";
 import { Field } from "../../ui/Field";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
@@ -136,12 +138,14 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
     constraints: "Constraints (one per line)",
   };
   return (
-    <section className="mx-auto grid max-w-5xl gap-4 p-4 sm:p-6">
-      <h1 className="font-display text-xl font-semibold text-fg">Automation designer</h1>
-      <p className="text-sm text-fg-secondary">
-        Draft a reviewable recipe for {workspaceName ?? "this workspace"}. Preview and template export do not create a
-        schedule, activate capabilities, import into an external service, or prove execution. Gateway governance still
-        applies.
+    <section className={AREA_PAGE}>
+      <AreaHeader
+        title="Automation designer"
+        description={<>Draft a reviewable recipe for {workspaceName ?? "this workspace"}.</>}
+      />
+      <p className="text-xs text-fg-muted">
+        Preview and template export do not create a schedule, activate capabilities, import into an external service, or
+        prove execution. Gateway governance still applies.
       </p>
       {(Object.keys(labels) as (keyof typeof labels)[]).map((key) => (
         <Field key={key} label={labels[key]}>
@@ -160,7 +164,7 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
           )}
         </Field>
       ))}
-      <Button disabled={busy} variant="primary" onClick={() => void perform()}>
+      <Button className="self-start" disabled={busy} variant="primary" onClick={() => void perform()}>
         {busy ? "Waiting for Gateway…" : "Preview automation recipe"}
       </Button>
       {message ? (
@@ -169,8 +173,8 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
         </p>
       ) : null}
       {preview ? (
-        <section className="grid gap-3 rounded-md border border-line p-4">
-          <h2 className="font-display text-lg font-semibold text-fg">{preview.recipe.name}</h2>
+        <section className="grid gap-3 border-t border-line-subtle pt-4">
+          <h2 className="text-base font-semibold text-fg">{preview.recipe.name}</h2>
           <p>{preview.recipe.goal}</p>
           <p>
             {"Timing intent: "}
@@ -209,8 +213,8 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
       ) : null}
       {EXPORT_PLATFORMS.map((platform) => exports[platform]).map((exported) =>
         exported?.identity === identity ? (
-          <section key={exported.platform} className="grid gap-2 rounded-md border border-line p-3">
-            <h2 className="font-medium text-fg">
+          <section key={exported.platform} className="grid gap-2 border-t border-line-subtle pt-4">
+            <h2 className="font-semibold text-fg">
               {exported.platform} export validation:{" "}
               {EXPORT_VALIDATION_LABELS[exported.value.validation.status] ??
                 humanizeToken(exported.value.validation.status)}

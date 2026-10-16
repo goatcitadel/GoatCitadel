@@ -52,7 +52,8 @@ export async function runUxBudgetChat(environment) {
             throw new Error(
               `Cockpit Chat ${variant}: message area ${chat.ratio} (minimum ${chat.threshold}), horizontal overflow ${overflow.overflow}px`,
             );
-          await page.getByRole("button", { name: "Build editor" }).click();
+          await page.getByRole("button", { name: "Conversation actions", exact: true }).click();
+          await page.getByRole("menuitem", { name: "Build editor", exact: true }).click();
           await page.getByRole("heading", { name: "Build editor" }).waitFor({ timeout: 30_000 });
           if (variant === "mobile") await page.getByRole("button", { name: "Browse files" }).click();
           await page.getByText("Choose a code source").waitFor();
@@ -189,7 +190,7 @@ export async function runUxBudgetChat(environment) {
           );
           const messages = page.locator('[aria-label="Messages"]');
           await messages.waitFor({ timeout: 30_000 });
-          const scroller = messages.locator('[data-transcript-scroller]');
+          const scroller = messages.locator("[data-transcript-scroller]");
           await scroller.waitFor();
           const artifactCard = messages
             .locator('[aria-label="Saved artifacts"]')

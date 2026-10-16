@@ -3,8 +3,8 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 export function ProjectRecents({ workspaceId }: { workspaceId: string }) {
   const recent = useCrossProjectRecentSessions(workspaceId, { limit: 4 });
   return (
-    <section aria-label="Recent cross-project conversations" className="grid gap-2 rounded-lg border border-line p-3">
-      <h2 className="font-display text-lg">Pick up where you left off</h2>
+    <section aria-label="Recent cross-project conversations" className="grid gap-2 border-t border-line-subtle pt-3">
+      <h2 className="text-lg font-semibold">Pick up where you left off</h2>
       {recent.loading ? (
         <p role="status">Reading recent conversations…</p>
       ) : recent.error ? (

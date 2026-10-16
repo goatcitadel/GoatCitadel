@@ -16,6 +16,8 @@ import { CockpitBoardEditor } from "./CockpitBoardEditor";
 import { BoardLifecycle } from "./BoardLifecycle";
 import { BoardDetails } from "./BoardDetails";
 import { useBoardMutationState } from "../../../features/native-routes/ops/board-mutation-state";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 import "./system-dashboard.css";
 
 export function SystemDashboards() {
@@ -33,7 +35,12 @@ export function SystemDashboards() {
         />
       );
     } catch {
-      return <EmptyState title="Board link unavailable" description="This saved-board link could not be read." />;
+      return (
+        <section className={AREA_PAGE}>
+          <AreaHeader title="Dashboards" description="Saved boards for this workspace." />
+          <EmptyState title="Board link unavailable" description="This saved-board link could not be read." />
+        </section>
+      );
     }
   }
   const includeArchived = new URLSearchParams(search).get("archived") === "1";
@@ -68,28 +75,29 @@ function BoardIndex({
     !boards.isPlaceholderData &&
     Boolean(boards.data);
   return (
-    <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-semibold text-fg">Dashboards</h1>
-          <p className="text-sm text-fg-secondary">Saved boards for this workspace.</p>
-          <p className="mt-1 text-xs text-fg-muted">
-            Open a board for live Gateway-backed widgets or create a saved layout.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            disabled={boards.isFetching || (boards.isError && access.retryable === false)}
-            onClick={() => void boards.refetch()}
-          >
-            <RefreshCw aria-hidden="true" className="size-4" /> Refresh
-          </Button>
-          <Button size="sm" variant="primary" disabled={!writable} onClick={() => setCreating(true)}>
-            New board
-          </Button>
-        </div>
-      </header>
+    <section className={AREA_PAGE}>
+      <AreaHeader
+        title="Dashboards"
+        description="Saved boards for this workspace."
+        actions={
+          <>
+            <Button size="sm" variant="primary" disabled={!writable} onClick={() => setCreating(true)}>
+              New board
+            </Button>
+            <Button
+              size="sm"
+              disabled={boards.isFetching || (boards.isError && access.retryable === false)}
+              onClick={() => void boards.refetch()}
+            >
+              <RefreshCw aria-hidden="true" className="size-4" /> Refresh
+            </Button>
+          </>
+        }
+      >
+        <p className="mt-1 text-xs text-fg-muted">
+          Open a board for live Gateway-backed widgets or create a saved layout.
+        </p>
+      </AreaHeader>
       <label className="flex min-h-11 items-center gap-2 text-sm text-fg-secondary">
         <input
           type="checkbox"
@@ -203,63 +211,13 @@ function BoardDetail({
   const detailKey = ["surface", "saved-board", workspaceId, boardId];
   const placements = record?.placements.slice().sort((left, right) => left.y - right.y || left.x - right.x) ?? [];
   return (
-    <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
-      <a
-        href="/system/dashboards"
-        onClick={(event) => {
-          event.preventDefault();
-          navigate("/system/dashboards");
-        }}
-        className="inline-flex items-center gap-2 text-sm font-medium text-accent"
-      >
-        <ArrowLeft aria-hidden="true" className="size-4" />
-        Back to Dashboards
-      </a>
-      {board.isLoading ? (
-        <p role="status" className="text-sm text-fg-muted">
-          Loading saved board…
-        </p>
-      ) : null}
-      {board.isError ? (
-        <EmptyState
-          title="Board unavailable"
-          description={describeApiError(board.error).summary}
-          action={<BoardReadRecovery error={board.error} retry={() => void board.refetch()} navigate={navigate} />}
-        />
-      ) : null}
-      {editing && record?.status === "active" ? (
-        <CockpitBoardEditor
-          key={`${workspaceId}:${boardId}`}
-          workspaceId={workspaceId}
-          board={record}
-          accessAvailable={writable}
-          onClose={() => setEditing(false)}
-          onSaved={() => setEditing(false)}
-          onConfirmed={(saved) => {
-            client.setQueryData(["surface", "saved-board", workspaceId, boardId], saved);
-            setSavedMessage(`Board saved and confirmed at revision ${saved.revision}.`);
-            setEditing(false);
-          }}
-        />
-      ) : null}
-      {savedMessage ? (
-        <p role="status" className="rounded-md border border-line bg-sunken p-3 text-sm text-fg">
-          {savedMessage}
-        </p>
-      ) : null}
-      {record && !board.isError ? (
-        <>
-          <header className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h1 className="font-display text-xl font-semibold text-fg">{record.name}</h1>
-              {record.description ? <p className="mt-1 text-sm text-fg-secondary">{record.description}</p> : null}
-              <p className="mt-1 text-xs text-fg-muted">
-                Saved layout revision {record.revision} · {record.status === "archived" ? "archived" : "active"}.
-                Desktop follows saved positions; phone stacks widgets. Values read current owner APIs and are not
-                historical snapshots.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
+    <section className={AREA_PAGE}>
+      <AreaHeader
+        title={record && !board.isError ? record.name : "Saved board"}
+        description={record && !board.isError ? record.description || undefined : undefined}
+        actions={
+          record && !board.isError ? (
+            <>
               {/* Opening the editor writes nothing; saving stays gated on a fresh read (accessAvailable). */}
               {record.status === "active" ? (
                 <Button
@@ -297,8 +255,63 @@ function BoardDetail({
               >
                 Review current board controls
               </SystemOwnerLink>
-            </div>
-          </header>
+            </>
+          ) : null
+        }
+      >
+        {record && !board.isError ? (
+          <p className="mt-1 text-xs text-fg-muted">
+            Saved layout revision {record.revision} · {record.status === "archived" ? "archived" : "active"}. Desktop
+            follows saved positions; phone stacks widgets. Values read current owner APIs and are not historical
+            snapshots.
+          </p>
+        ) : null}
+      </AreaHeader>
+      <a
+        href="/system/dashboards"
+        onClick={(event) => {
+          event.preventDefault();
+          navigate("/system/dashboards");
+        }}
+        className="inline-flex items-center gap-2 self-start text-sm font-medium text-accent"
+      >
+        <ArrowLeft aria-hidden="true" className="size-4" />
+        Back to Dashboards
+      </a>
+      {board.isLoading ? (
+        <p role="status" className="text-sm text-fg-muted">
+          Loading saved board…
+        </p>
+      ) : null}
+      {board.isError ? (
+        <EmptyState
+          title="Board unavailable"
+          description={describeApiError(board.error).summary}
+          action={<BoardReadRecovery error={board.error} retry={() => void board.refetch()} navigate={navigate} />}
+        />
+      ) : null}
+      {editing && record?.status === "active" ? (
+        <CockpitBoardEditor
+          key={`${workspaceId}:${boardId}`}
+          workspaceId={workspaceId}
+          board={record}
+          accessAvailable={writable}
+          onClose={() => setEditing(false)}
+          onSaved={() => setEditing(false)}
+          onConfirmed={(saved) => {
+            client.setQueryData(["surface", "saved-board", workspaceId, boardId], saved);
+            setSavedMessage(`Board saved and confirmed at revision ${saved.revision}.`);
+            setEditing(false);
+          }}
+        />
+      ) : null}
+      {savedMessage ? (
+        <p role="status" className="text-sm text-fg">
+          {savedMessage}
+        </p>
+      ) : null}
+      {record && !board.isError ? (
+        <>
           <BoardDetails board={record} />
           <div role="region" aria-label={`${record.name} widget grid`} className="cockpit-saved-board-grid">
             {placements.map((placement) => (

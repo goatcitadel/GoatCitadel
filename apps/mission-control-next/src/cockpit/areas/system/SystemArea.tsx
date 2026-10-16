@@ -9,7 +9,7 @@ import { SystemQuality } from "./SystemQuality";
 import { SystemBrowserSessions } from "./SystemBrowserSessions";
 import { SystemImprovement } from "./SystemImprovement";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
-import { AREA_TABS } from "../../ui/area-layout";
+import { AreaTabsProvider } from "../../ui/AreaHeader";
 
 const VIEWS = [
   { id: "health", label: "Health", path: "/system" },
@@ -22,29 +22,14 @@ const VIEWS = [
   { id: "dashboards", label: "Dashboards", path: "/system/dashboards" },
   { id: "browser-sessions", label: "Browser sessions", path: "/system/browser-sessions" },
 ] as const;
+const TABS = VIEWS.map((item) => ({ id: item.id, label: item.label, href: item.path }));
 
 export function SystemArea() {
   const { rest, navigate } = useCockpitRoute();
   // Improvement is experimental: reachable by direct link and the Classic /ops/improvement mapping, not a tab.
   const view = rest[0] === "improvement" ? "improvement" : (VIEWS.find((item) => item.id === rest[0])?.id ?? "health");
   return (
-    <>
-      <nav aria-label="System views" className={AREA_TABS}>
-        {VIEWS.map((item) => (
-          <a
-            key={item.id}
-            href={item.path}
-            aria-current={view === item.id ? "page" : undefined}
-            onClick={(event) => {
-              event.preventDefault();
-              navigate(item.path);
-            }}
-            className="shrink-0 border-b-2 border-transparent px-3 py-2 text-sm text-fg-secondary hover:text-fg aria-[current=page]:border-accent aria-[current=page]:text-fg"
-          >
-            {item.label}
-          </a>
-        ))}
-      </nav>
+    <AreaTabsProvider label="System views" tabs={TABS} current={view} navigate={(href) => navigate(href)}>
       {view === "spend" ? (
         rest[1] === "details" ? (
           <SystemRuntime section="costs" />
@@ -72,6 +57,6 @@ export function SystemArea() {
       ) : (
         <HealthOverview />
       )}
-    </>
+    </AreaTabsProvider>
   );
 }

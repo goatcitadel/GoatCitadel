@@ -12,6 +12,7 @@ import type {
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { resolveSessionRoute, type SessionRouteResolution } from "./session-key.js";
+import { logger } from "./logger.js";
 import { TokenCostLedger } from "./token-cost-ledger.js";
 
 export interface EventIngestOptions {
@@ -52,6 +53,24 @@ export function deriveCredentialDims(usage: GatewayEventInput["usage"]): {
 export class EventIngestService {
   private readonly tokenCostLedger: TokenCostLedger;
   private subscriptionUsageWarned = false;
+  private readonly drainChains = new Map<string, Promise<unknown>>();
+
+  /** Serializes outbox drains per session so two drainers cannot double-append. */
+  private drainSerialized(
+    storage: AsyncStorage,
+    input: { sessionId: string; targetEventId?: string; limit?: number },
+  ): Promise<{ deliveredCount: number; targetOffset: number }> {
+    const prior = this.drainChains.get(input.sessionId) ?? Promise.resolve();
+    const next = prior.catch(() => undefined).then(() => flushTranscriptOutboxSession(storage, input));
+    this.drainChains.set(input.sessionId, next);
+    const cleanup = () => {
+      if (this.drainChains.get(input.sessionId) === next) {
+        this.drainChains.delete(input.sessionId);
+      }
+    };
+    next.then(cleanup, cleanup);
+    return next;
+  }
 
   public constructor(private readonly storage: AsyncStorage) {
     this.tokenCostLedger = new TokenCostLedger(storage.costLedger);
@@ -175,7 +194,7 @@ export class EventIngestService {
     }
     await options.afterCommit?.();
 
-    const { targetOffset: transcriptOffset } = await flushTranscriptOutboxSession(this.storage, {
+    const { targetOffset: transcriptOffset } = await this.drainSerialized(this.storage, {
       sessionId: route.sessionId,
       targetEventId: transcriptEvent.eventId,
     });
@@ -258,7 +277,7 @@ export class EventIngestService {
     const sessionIds = new Set(pending.map((record) => record.sessionId));
     let deliveredCount = 0;
     for (const sessionId of sessionIds) {
-      const result = await flushTranscriptOutboxSession(this.storage, {
+      const result = await this.drainSerialized(this.storage, {
         sessionId,
         limit,
       });
@@ -437,10 +456,21 @@ async function flushTranscriptOutboxSession(
   const pending = await storage.transcriptOutbox.listPending(input.limit ?? 100, input.sessionId);
   let deliveredCount = 0;
   let targetOffset = 0;
+  const targetWasPending = pending.some((record) => record.eventId === input.targetEventId);
 
   for (const record of pending) {
     try {
-      const offset = await storage.transcripts.append(record.event);
+      let offset: number | undefined;
+      if (record.lastAttemptAt) {
+        // An earlier attempt began and may have appended before crashing.
+        offset = await storage.transcripts.findEventOffset(record.sessionId, record.eventId);
+      }
+      if (offset === undefined) {
+        await storage.transcriptOutbox.markAttemptStarted(record.eventId, {
+          attemptedAt: new Date().toISOString(),
+        });
+        offset = await storage.transcripts.append(record.event);
+      }
       await storage.transcriptOutbox.markDelivered(record.eventId, {
         deliveredAt: new Date().toISOString(),
         transcriptOffset: offset,
@@ -455,14 +485,20 @@ async function flushTranscriptOutboxSession(
         lastAttemptAt: new Date().toISOString(),
         lastError: message,
       });
-      // eslint-disable-next-line no-console -- outbox failures need local diagnostics until transcript persistence is fully absorbed by Postgres.
-      console.warn("[goatcitadel] transcript append failed after event commit", {
+      logger.child("event-ingest").warn("transcript append failed after event commit", {
         sessionId: record.sessionId,
         eventId: record.eventId,
         attemptCount: updated?.attemptCount ?? record.attemptCount + 1,
         error: message,
       });
       break;
+    }
+  }
+  if (input.targetEventId && !targetWasPending) {
+    // Another drain may have delivered the target first; report its recorded offset.
+    const delivered = await storage.transcriptOutbox.get(input.targetEventId);
+    if (delivered?.deliveredAt && typeof delivered.transcriptOffset === "number") {
+      targetOffset = delivered.transcriptOffset;
     }
   }
   return { deliveredCount, targetOffset };

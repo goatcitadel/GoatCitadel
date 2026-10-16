@@ -33,7 +33,7 @@ export function ModelsSettings() {
   return (
     <>
       <section aria-label="Model setup" className="mt-4">
-        <h3 className="font-display text-md font-semibold text-fg">Guided model setup</h3>
+        <h3 className="text-md font-semibold text-fg">Guided model setup</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Check the default model, provider connections, and model choices before using Chat.
         </p>

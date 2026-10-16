@@ -87,10 +87,10 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
 
   const { receipt, verification } = inspection ?? {};
   return (
-    <section aria-label="Signed evidence receipt" className="rounded-lg border border-line bg-raised p-4">
+    <section aria-label="Signed evidence receipt" className="border-t border-line-subtle pt-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="font-display text-lg font-semibold text-fg">Signed evidence receipt</h2>
+          <h2 className="text-base font-semibold text-fg">Signed evidence receipt</h2>
           <p className="mt-1 text-sm text-fg-muted">
             Build and verify a portable snapshot of this run through the Gateway.
           </p>

@@ -2,6 +2,7 @@
 #include "cell_joined_capacity_wire.hpp"
 #include "cell_pool_capacity.hpp"
 #include "cell_install_capacity_pipe.hpp"
+#include "cell_installed_pool_capacity.hpp"
 #include "cell_controller_client_protocol.hpp"
 #include "cell_runtime_client_session.hpp"
 #include "cell_runtime_result.hpp"
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 #include <thread>
 
 DWORD RunCellVirtualDiskLayoutJournalFixture(const goatcitadel::worker_cell::CellDiskLayoutPlan&,
@@ -384,11 +386,14 @@ struct Context final {
   std::atomic<ULONGLONG> watchdog{0};
   unsigned runtime_calls = 0, install_calls = 0;
   const char* mode = "";
-  unsigned hold_calls = 0, hold_checks = 0, hold_releases = 0;
+  unsigned hold_calls = 0, hold_checks = 0, hold_releases = 0, observe_calls = 0, observe_held = 0;
+  // Mirrors the installed service: the session owns the hold and the owner
+  // borrows the registration that the hold clears when it is released.
+  CellControllerMeasurementHold* active_hold = nullptr;
   struct Hold final : CellControllerMeasurementHold {
     Context& owner;
     explicit Hold(Context& value) : owner(value) {}
-    ~Hold() override { ++owner.hold_releases; }
+    ~Hold() override { if (owner.active_hold == this) owner.active_hold = nullptr; ++owner.hold_releases; }
     DWORD Verify() noexcept override {
       ++owner.hold_checks;
       return !std::strcmp(owner.mode, "native-install-revoked-hold") ? ERROR_ACCESS_DENIED : ERROR_SUCCESS;
@@ -397,11 +402,31 @@ struct Context final {
   static DWORD BeginHold(void* raw, const CellControllerRequest& request, HANDLE, ULONGLONG,
       std::unique_ptr<CellControllerMeasurementHold>* output) noexcept {
     auto& self = *static_cast<Context*>(raw); ++self.hold_calls;
-    if (request.operation != kCellControllerInstallOperation) return ERROR_INVALID_PARAMETER;
+    const bool capacity = !std::strcmp(self.mode, "native-capacity-held") && IsCellControllerCapacity(request.operation) &&
+      !IsCellControllerInstallCapacity(request.operation) && !IsCellControllerPoolCapacity(request.operation);
+    if (request.operation != kCellControllerInstallOperation && !capacity) return ERROR_INVALID_PARAMETER;
     if (!std::strcmp(self.mode, "native-install-denied-hold")) return ERROR_LOCK_VIOLATION;
     if (!std::strcmp(self.mode, "native-install-null-hold")) return ERROR_SUCCESS;
-    try { *output = std::make_unique<Hold>(self); return ERROR_SUCCESS; }
+    try { auto hold = std::make_unique<Hold>(self); self.active_hold = hold.get(); *output = std::move(hold); return ERROR_SUCCESS; }
     catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+  }
+  // The production owners, composed over this fixture's retained hold.
+  static DWORD ObserveCapacity(void* raw, CellProvisioningJournal& journal, const CellProvisioningAnchor& anchor,
+      const CellFileSha256& head, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+      CellProvisioningFootprint* output) noexcept {
+    auto& self = *static_cast<Context*>(raw); ++self.observe_calls; self.observe_held += self.active_hold != nullptr;
+    return CellInstalledCapacity::Observe(self.active_hold, journal, anchor, head, limits, guard, output);
+  }
+  static DWORD ObserveBacking(void* raw, CellProvisioningJournal& journal, const CellProvisioningAnchor& anchor,
+      const CellFileSha256& head, DWORD wall_ms, const CellFootprintScanGuard& guard, CellProvisioningBackingFootprint* output) noexcept {
+    auto& self = *static_cast<Context*>(raw); ++self.observe_calls; self.observe_held += self.active_hold != nullptr;
+    return CellInstalledCapacity::ObserveBacking(self.active_hold, journal, anchor, head, wall_ms, guard, output);
+  }
+  static DWORD ObserveInventory(void* raw, CellProvisioningJournal& journal, const CellProvisioningAnchor& anchor,
+      const CellFileSha256& head, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+      CellProvisioningInventory* output) noexcept {
+    auto& self = *static_cast<Context*>(raw); ++self.observe_calls; self.observe_held += self.active_hold != nullptr;
+    return CellInstalledCapacity::ObserveInventory(self.active_hold, journal, anchor, head, limits, guard, output);
   }
   static RuntimeBundleInstallResult Install(void* raw, CellProvisioningJournal&, std::span<const std::uint8_t>,
       const CellRuntimeInstallBinding&, DWORD, const CellFootprintScanGuard&) noexcept {
@@ -441,7 +466,7 @@ struct Context final {
     return CellProvisioningJournalTestPeer::MountedWorkspace(journal, sink, wall_ms, stop);
   }
 };
-struct Outcome final { CellControllerSessionResult result; std::vector<CellProvisioningRecord> records; DWORD client_error = 0; unsigned volume_checks = 0, server_runtime_calls = 0, client_runtime_calls = 0, server_install_calls = 0, hold_calls = 0, hold_checks = 0, hold_releases = 0; };
+struct Outcome final { CellControllerSessionResult result; std::vector<CellProvisioningRecord> records; DWORD client_error = 0; unsigned volume_checks = 0, server_runtime_calls = 0, client_runtime_calls = 0, server_install_calls = 0, hold_calls = 0, hold_checks = 0, hold_releases = 0, observe_calls = 0, observe_held = 0; };
 struct NativeClient final {
   CellPipeServerEvidence server;
   std::wstring root;
@@ -698,9 +723,14 @@ Outcome Exchange(const Parent& parent, const std::wstring& root, Wire request, c
   if (runtime_binding && std::strcmp(mode, "native-runtime-missing-owner")) owner.run_runtime = Context::Runtime;
   if (installation && std::strcmp(mode, "native-install-no-owner")) owner.install_runtime = Context::Install;
   if (installation && std::strcmp(mode, "native-install-missing-hold")) owner.begin_measurement = Context::BeginHold;
-  if (!std::strcmp(mode, "native-capacity-missing-hold")) owner.observe_capacity =
-    [](void*, CellProvisioningJournal&, const CellProvisioningAnchor&, const CellFileSha256&,
-      const CellFootprintScanLimits&, const CellFootprintScanGuard&, CellProvisioningFootprint*) noexcept -> DWORD { return ERROR_GEN_FAILURE; };
+  // Both modes compose the production observers; only "held" also supplies the
+  // measurement hold owner that capacity dispatch requires.
+  if (!std::strcmp(mode, "native-capacity-missing-hold") || !std::strcmp(mode, "native-capacity-held")) {
+    owner.observe_capacity = Context::ObserveCapacity;
+    owner.observe_backing_capacity = Context::ObserveBacking;
+    owner.observe_inventory = Context::ObserveInventory;
+  }
+  if (!std::strcmp(mode, "native-capacity-held")) owner.begin_measurement = Context::BeginHold;
   if (std::strcmp(mode, "native-volume-missing-owner")) owner.provision_volume = Context::Volume;
   if (std::strcmp(mode, "native-format-missing-owner")) owner.provision_format = Context::Format;
   if (std::strcmp(mode, "native-protection-missing-owner")) owner.provision_protection = Context::Protection;
@@ -759,6 +789,7 @@ Outcome Exchange(const Parent& parent, const std::wstring& root, Wire request, c
     outcome.server_runtime_calls = context.runtime_calls;
     outcome.server_install_calls = context.install_calls;
     outcome.hold_calls = context.hold_calls; outcome.hold_checks = context.hold_checks; outcome.hold_releases = context.hold_releases;
+    outcome.observe_calls = context.observe_calls; outcome.observe_held = context.observe_held;
     if (server_error) std::rethrow_exception(server_error);
     if (!outcome.client_error) Check(context_client.received && U32(context_client.receipt.data()) == outcome.result.error &&
       U32(context_client.receipt.data() + 12) == outcome.records.size(), "production client forwards the exact native receipt");
@@ -1738,6 +1769,78 @@ void CleanupBindingCases(const Parent& parent, const CellControllerRequest& requ
     }
   }
 }
+// Operations 14-16 through the actual controller session and the production
+// installed observers. Without the hold owner, dispatch refuses before even the
+// parent opens. With it, the request is dispatched past the ownership gate; the
+// hold/observer path is unreachable without SeManageVolumePrivilege on this host,
+// so the hold-present delegation is proven by the direct cases below.
+void QuiescenceOwnerCases(const Parent& parent, const std::wstring& root, const Wire& encoded, const CellControllerRequest& request) {
+  const auto before = JournalBytes(parent, request.cell_name);
+  CellProvisioningJournal unopened;
+  struct Counted final : CellControllerMeasurementHold {
+    unsigned checks = 0; DWORD error = ERROR_SUCCESS;
+    DWORD Verify() noexcept override { ++checks; return error; }
+  } denied; denied.error = ERROR_LOCK_VIOLATION;
+  CellProvisioningFootprint footprint; footprint.checkpoint_sha256.fill(1);
+  CellProvisioningBackingFootprint backing; backing.checkpoint_sha256.fill(1);
+  CellProvisioningInventory inventory; inventory.checkpoint_sha256.fill(1);
+  const CellFootprintScanGuard allow{[](void*) noexcept -> DWORD { return ERROR_SUCCESS; }};
+  Code(CellInstalledCapacity::Observe(nullptr, unopened, request.anchor, {}, {20000, 64, 1000}, allow, &footprint), ERROR_NOT_SUPPORTED,
+    "installed mounted observation refuses without a retained hold");
+  Code(CellInstalledCapacity::ObserveBacking(nullptr, unopened, request.anchor, {}, 1000, allow, &backing), ERROR_NOT_SUPPORTED,
+    "installed backing observation refuses without a retained hold");
+  Code(CellInstalledCapacity::ObserveInventory(nullptr, unopened, request.anchor, {}, {20000, 64, 1000}, allow, &inventory), ERROR_NOT_SUPPORTED,
+    "installed inventory observation refuses without a retained hold");
+  Check(footprint == CellProvisioningFootprint{} && backing.checkpoint_sha256 == CellFileSha256{} && inventory == CellProvisioningInventory{},
+    "refused installed observations expose no prior output");
+  Code(CellInstalledCapacity::Observe(&denied, unopened, request.anchor, {}, {20000, 64, 1000}, allow, &footprint), ERROR_LOCK_VIOLATION,
+    "installed mounted observation rechecks its hold before journal access");
+  Code(CellInstalledCapacity::ObserveBacking(&denied, unopened, request.anchor, {}, 1000, allow, &backing), ERROR_LOCK_VIOLATION,
+    "installed backing observation rechecks its hold before journal access");
+  Code(CellInstalledCapacity::ObserveInventory(&denied, unopened, request.anchor, {}, {20000, 64, 1000}, allow, &inventory), ERROR_LOCK_VIOLATION,
+    "installed inventory observation rechecks its hold before journal access");
+  Check(denied.checks == 3, "each installed observation verifies the hold exactly once before delegating");
+  // Hold present and verified: each owner reaches the journal API, so its result
+  // is the unopened journal's own refusal, not an ownership or hold refusal.
+  Counted granted;
+  const CellFileSha256 head{};
+  const CellFootprintScanLimits limits{20000, 64, 1000};
+  CellProvisioningFootprint journal_footprint; CellProvisioningBackingFootprint journal_backing; CellProvisioningInventory journal_inventory;
+  const auto direct_footprint = unopened.ObserveMountedFootprint(request.anchor, head, limits, allow, &journal_footprint);
+  const auto direct_backing = unopened.ObserveBackingFootprint(request.anchor, head, 1000, allow, &journal_backing);
+  const auto direct_inventory = unopened.ObserveMountedInventory(request.anchor, head, limits, allow, &journal_inventory);
+  const auto held_footprint = CellInstalledCapacity::Observe(&granted, unopened, request.anchor, head, limits, allow, &footprint);
+  const auto held_backing = CellInstalledCapacity::ObserveBacking(&granted, unopened, request.anchor, head, 1000, allow, &backing);
+  const auto held_inventory = CellInstalledCapacity::ObserveInventory(&granted, unopened, request.anchor, head, limits, allow, &inventory);
+  Check(granted.checks == 3, "a granted hold is verified exactly once per installed observation");
+  for (const auto& [held_error, direct_error] : {std::pair{held_footprint, direct_footprint}, std::pair{held_backing, direct_backing},
+      std::pair{held_inventory, direct_inventory}})
+    Check(held_error == direct_error && held_error != ERROR_SUCCESS && held_error != ERROR_NOT_SUPPORTED && held_error != ERROR_LOCK_VIOLATION,
+      "hold-present delegation returns the unopened journal's own refusal");
+  Check(footprint == CellProvisioningFootprint{} && inventory == CellProvisioningInventory{} && backing.checkpoint_sha256 == CellFileSha256{},
+    "journal refusal under a granted hold exposes no observation");
+  auto absent = parent; absent.path += L"\\absent-quiescence-owner";
+  const auto missing = Exchange(absent, root, encoded, "native-capacity-missing-hold", &request.volume_records,
+    &request.format_records, &request.protection_records, &request.creation_records, &request.mount_records, &request.mounted_workspace_records);
+  Check(missing.client_error == ERROR_SUCCESS && missing.result.error == ERROR_NOT_SUPPORTED && missing.result.receipt_acknowledged &&
+    !missing.result.capacity_written && !missing.result.creation_attempted && missing.records.empty() && !missing.hold_calls && !missing.observe_calls &&
+    JournalBytes(parent, request.cell_name) == before, "composed observers without a measurement hold owner refuse before opening the parent");
+  const auto held = Exchange(parent, root, encoded, "native-capacity-held", &request.volume_records,
+    &request.format_records, &request.protection_records, &request.creation_records, &request.mount_records, &request.mounted_workspace_records);
+  // Supplied ownership is dispatched: the actual controller now opens the real
+  // recorded journal instead of refusing composition. For ops 14-16 the hold is
+  // acquired only after that open succeeds, which requires SeManageVolumePrivilege.
+  // This fixture is unprivileged, so the expected outcome is an explicit stop at
+  // the recorded disk with no hold and no observer call. A privileged run fails
+  // here on purpose and must re-baseline this case instead of passing vacuously.
+  Check(held.client_error == ERROR_SUCCESS && held.result.receipt_acknowledged && held.result.error != ERROR_SUCCESS &&
+    held.result.error != ERROR_NOT_SUPPORTED && !held.result.capacity_written && !held.result.creation_attempted,
+    "composed hold and observers dispatch capacity past ownership checks to the recorded journal");
+  Code(held.result.error, ERROR_PRIVILEGE_NOT_HELD, "the unprivileged fixture stops at the recorded disk before measurement");
+  Check(held.hold_calls == 0 && held.hold_releases == 0 && held.observe_calls == 0 && held.observe_held == 0 && held.records.empty(),
+    "without SeManageVolumePrivilege the hold and observers are never reached");
+  Check(JournalBytes(parent, request.cell_name) == before, "held installed observation never changes the journal");
+}
 void CapacityCases(const Parent& parent, const std::wstring& root, const Wire& wire,
   const std::vector<CellProvisioningRecord>& records, CellControllerRequest request) {
   request.operation = kCellControllerCapacityOperation;
@@ -1797,10 +1900,7 @@ void CapacityCases(const Parent& parent, const std::wstring& root, const Wire& w
     unavailable.result.receipt_acknowledged && !unavailable.result.capacity_written && !unavailable.result.creation_attempted &&
     unavailable.records.empty() && JournalBytes(parent, request.cell_name) == before,
     "actual controller refuses missing quiescence ownership before opening even the nonexistent parent and preserves journal bytes");
-  const auto missing_hold = Exchange(unavailable_parent, root, encoded, "native-capacity-missing-hold", &request.volume_records,
-    &request.format_records, &request.protection_records, &request.creation_records, &request.mount_records, &request.mounted_workspace_records);
-  Check(missing_hold.client_error == ERROR_SUCCESS && missing_hold.result.error == ERROR_NOT_SUPPORTED && !missing_hold.result.capacity_written &&
-    missing_hold.records.empty(), "measurement callback without a retained writer hold refuses before opening parent");
+  QuiescenceOwnerCases(parent, root, encoded, request);
   for (const auto mode : {"capacity-cleanup-missing", "capacity-cleanup-nonce", "capacity-cleanup-binding", "capacity-cleanup-head", "capacity-cleanup-duplicate"})
     VolumeReply(root, wire, records, mode, parent.user);
   for (const auto mode : {"capacity-good", "capacity-frozen", "capacity-unavailable", "capacity-missing", "capacity-no-authority",
@@ -2618,6 +2718,7 @@ void InventoryCases(const Parent& parent, const std::wstring& root, const Wire& 
   Check(unavailable.client_error == ERROR_SUCCESS && unavailable.result.error == ERROR_NOT_SUPPORTED &&
     unavailable.result.receipt_acknowledged && !unavailable.result.capacity_written && !unavailable.result.creation_attempted && unavailable.records.empty(),
     "actual controller refuses missing inventory/quiescence owner before opening a nonexistent parent");
+  QuiescenceOwnerCases(parent, root, encoded, request);
   for (const auto mode : {"capacity-good", "capacity-frozen", "capacity-unavailable", "capacity-missing", "capacity-no-authority",
       "capacity-early", "capacity-nonce", "capacity-assignment", "capacity-profile", "capacity-head", "capacity-root", "capacity-wrong-kind",
       "capacity-error", "capacity-count", "capacity-duplicate", "capacity-after-frame", "capacity-no-terminal",
@@ -2691,6 +2792,7 @@ void BackingCapacityCases(const Parent& parent, const std::wstring& root, const 
   Check(unavailable.client_error == ERROR_SUCCESS && unavailable.result.error == ERROR_NOT_SUPPORTED && unavailable.result.receipt_acknowledged &&
     !unavailable.result.capacity_written && !unavailable.result.creation_attempted && unavailable.records.empty(),
     "actual controller refuses missing host quiescence owner before even opening its parent");
+  QuiescenceOwnerCases(parent, root, encoded, request);
   for (const auto mode : {"capacity-good", "capacity-frozen", "capacity-unavailable", "capacity-missing", "capacity-no-authority",
       "capacity-early", "capacity-nonce", "capacity-assignment", "capacity-profile", "capacity-head", "capacity-root", "capacity-wrong-kind",
       "capacity-error", "capacity-count", "capacity-duplicate", "capacity-after-frame", "capacity-no-terminal",

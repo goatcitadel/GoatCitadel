@@ -24,7 +24,7 @@ export function PortablePackSetup({
   const selected = owner.draft.value;
   return (
     <section aria-label="Governed pack setup" className="space-y-3 border-t border-line pt-4">
-      <h4 className="font-display text-base font-semibold text-fg">Governed setup</h4>
+      <h4 className="text-base font-semibold text-fg">Governed setup</h4>
       <p className="text-sm text-fg-secondary">{PACK_SETUP_WARNING}</p>
       <p className="text-xs text-fg-muted">
         Choose up to 32 bound assets. These apply to this workspace plan; some configured resources are shared across

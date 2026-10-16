@@ -440,7 +440,9 @@ export async function runExternalSourcesBrowserFlow({
         if (!(await include.isDisabled()) || (await include.isChecked())) {
           throw new Error("an attached external source can still be selected for the next turn");
         }
-        await picker.getByText("Including external sources in new Chat turns is temporarily unavailable", { exact: false }).waitFor();
+        await picker
+          .getByText("Including external sources in new Chat turns is temporarily unavailable", { exact: false })
+          .waitFor();
         await picker.getByText("No sources selected", { exact: true }).waitFor();
         await picker.getByRole("button", { name: "Done reviewing sources", exact: true }).click();
         await picker.waitFor({ state: "detached" });
@@ -465,7 +467,7 @@ export async function runExternalSourcesBrowserFlow({
           throw new Error(`${firstLine} — server turn state: ${diagnosis}`, { cause: error });
         }
         // The attachment stays read-only evidence: no retained selection rode along with the send.
-        const stripText = await page.locator(SOURCE_STRIP_SELECTOR).innerText();
+        const stripText = await (await revealSourceStrip(page)).strip.innerText();
         if (stripText.includes("retained source selection")) {
           throw new Error("an external source selection was retained across the send");
         }
@@ -475,7 +477,9 @@ export async function runExternalSourcesBrowserFlow({
         const picker = await openSourcePicker(page);
         const chip = attachedChip(picker, comboState.sourceLabel);
         await chip.getByText("Source details and actions", { exact: true }).click();
-        await chip.getByRole("button", { name: "Request a governed knowledge copy of this source", exact: true }).click();
+        await chip
+          .getByRole("button", { name: "Request a governed knowledge copy of this source", exact: true })
+          .click();
         // The notice can land in a collapsed or live-region node behind the open picker; the
         // approval reference is the request truth, and the next step resolves it in the inbox.
         const notice = page.getByText(/Knowledge copy requested\. Resolve approval /u).first();
@@ -493,7 +497,9 @@ export async function runExternalSourcesBrowserFlow({
         // Queue rows only summarize; the decision controls live in the selected approval's inspector.
         await page.getByText(KNOWLEDGE_APPROVAL_KIND, { exact: true }).first().click({ timeout: 60_000 });
         await page
-          .locator(".mc-next-approvals-inspector").getByRole("button", { name: "Approve now", exact: true }).click({ timeout: 60_000 });
+          .locator(".mc-next-approvals-inspector")
+          .getByRole("button", { name: "Approve now", exact: true })
+          .click({ timeout: 60_000 });
         await page.getByText("Approve this request?", { exact: false }).waitFor();
         await page.getByRole("button", { name: "Approve", exact: true }).click();
         // The pending knowledge approval leaves the queue once resolved.
@@ -647,12 +653,35 @@ function sourcePicker(page) {
   return page.getByRole("dialog", { name: "Attached sources", exact: true });
 }
 
+/**
+ * The read-only sources strip stays hidden behind the composer toolbar's "Sources: ..." chip.
+ * Opening the chip shows the strip; with nothing attached it also opens the source picker directly.
+ * Idempotent: an already-visible strip is left open (a second chip click would close it).
+ */
+async function revealSourceStrip(page) {
+  const strip = page.locator(SOURCE_STRIP_SELECTOR);
+  if (await strip.isVisible()) {
+    return { strip, pickerOpenedByChip: false };
+  }
+  const chip = page.getByRole("button", { name: /^Sources: /u });
+  await chip.waitFor({ timeout: 60_000 });
+  let pickerOpenedByChip = false;
+  if ((await chip.getAttribute("aria-expanded")) !== "true") {
+    pickerOpenedByChip = (await chip.innerText()).trim() === "Sources: none";
+    await chip.click();
+  }
+  await strip.waitFor({ timeout: 60_000 });
+  return { strip, pickerOpenedByChip };
+}
+
 /** The Chat strip keeps attach, inspection and knowledge-copy actions inside its source picker dialog. */
 async function openSourcePicker(page) {
-  const strip = page.locator(SOURCE_STRIP_SELECTOR);
-  await strip.waitFor({ timeout: 60_000 });
-  await strip.getByRole("button", { name: "Choose sources", exact: true }).click();
+  const { strip, pickerOpenedByChip } = await revealSourceStrip(page);
   const picker = sourcePicker(page);
+  // With nothing attached, the chip click opens the picker itself; its modal backdrop would block "Choose sources".
+  if (!pickerOpenedByChip && !(await picker.isVisible())) {
+    await strip.getByRole("button", { name: "Choose sources", exact: true }).click();
+  }
   await picker.waitFor({ timeout: 30_000 });
   return picker;
 }

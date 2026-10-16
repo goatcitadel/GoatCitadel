@@ -67,10 +67,10 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
     <section
       id="permission-profile"
       aria-label="Chat permission profile"
-      className="mt-4 space-y-3 rounded-lg border border-line bg-sunken p-4"
+      className="mt-4 space-y-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
     >
       <header>
-        <h3 className="font-display text-base font-semibold text-fg">Chat permission profile</h3>
+        <h3 className="text-base font-semibold text-fg">Chat permission profile</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Choose an existing profile for a policy context in the selected workspace. Session-specific selections, hard
           denies, scoped grants, auth and path boundaries still apply.
@@ -110,7 +110,7 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
               aria-label="Selection policy context"
               value={surface}
               disabled={control.locked || control.reviewing}
-              className="mt-1 min-h-10 w-full rounded border border-line-control bg-canvas px-3 text-fg"
+              className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-fg"
               onChange={(event) => {
                 control.clear();
                 setSurface(event.target.value as PermissionSurface);

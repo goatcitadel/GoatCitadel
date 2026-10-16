@@ -5,12 +5,8 @@ import type { EventStreamConnectionState } from "@goatcitadel/mission-control-sh
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
-import {
-  inboxCountLabel,
-  inboxCountTitle,
-  inboxMatchesWorkspace,
-  inboxNavigationLabel,
-} from "../areas/inbox/inbox-presentation";
+import { inboxCountLabel, inboxMatchesWorkspace, inboxNavigationLabel } from "../areas/inbox/inbox-presentation";
+import { InboxCountBadge } from "./InboxCountBadge";
 import { useOperatorInbox } from "../data/use-operator-inbox";
 import { useCockpitNavigation } from "./cockpit-navigation-context";
 import { ScopeSwitcher } from "./ScopeSwitcher";
@@ -82,12 +78,7 @@ export function MobileTabBar({
               <span className="relative">
                 <Icon aria-hidden="true" className="size-5" />
                 {area === "inbox" && inboxCount ? (
-                  <span
-                    title={inboxCountTitle(inboxCount)}
-                    className="absolute -right-3 -top-1 min-w-4 rounded-full bg-accent px-0.5 text-center text-xs font-semibold text-accent-ink"
-                  >
-                    {inboxCount}
-                  </span>
+                  <InboxCountBadge count={inboxCount} className="absolute -right-3 -top-1" />
                 ) : null}
                 {area === "work" && phone ? (
                   <span className="absolute -right-3 -top-1">

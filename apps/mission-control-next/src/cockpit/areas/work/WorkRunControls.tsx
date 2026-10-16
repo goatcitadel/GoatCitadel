@@ -161,9 +161,9 @@ export function WorkRunControls({ runId }: { runId: string }) {
   }
 
   return (
-    <section aria-label="Run controls" className="space-y-3 rounded-lg border border-line bg-raised p-4 text-sm">
+    <section aria-label="Run controls" className="space-y-3 border-t border-line-subtle pt-4 text-sm">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="font-display text-lg font-semibold text-fg">Run controls</h2>
+        <h2 className="text-base font-semibold text-fg">Run controls</h2>
         <Button
           size="sm"
           disabled={query.isFetching || pending}

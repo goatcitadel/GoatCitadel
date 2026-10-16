@@ -759,10 +759,7 @@ import {
   ChatTurnWriteConflictError,
 } from "./chat-turn-execution-registry.js";
 import { buildDelegatedSessionToolGrantCopies } from "./delegated-session-tool-grants.js";
-import {
-  resolveProjectRootForToolContext,
-  resolveToolRequestPaths as resolveToolRequestPathsForContext,
-} from "./tool-path-resolution.js";
+import { resolveToolRequestPathsForSessionScope } from "./tool-path-session-scope.js";
 import {
   buildUpdatedFeatureFlags,
   didDisengageAutonomyKillSwitch,
@@ -9414,39 +9411,11 @@ export class GatewayService {
   private async resolveToolRequestPathsForSession<TRequest extends ToolInvokeRequest | ToolAccessEvaluateRequest>(
     request: TRequest,
   ): Promise<TRequest> {
-    const rootDir =
-      typeof this.config.rootDir === "string" && this.config.rootDir.trim() ? this.config.rootDir : process.cwd();
-    const workspaceDir =
-      typeof this.config.assistant.workspaceDir === "string" && this.config.assistant.workspaceDir.trim()
-        ? this.config.assistant.workspaceDir
-        : "workspace";
-    const workspaceRoot = path.resolve(rootDir, workspaceDir);
-    const projectId = (await this.storage.chatSessionProjects.get(request.sessionId))?.projectId;
-    const project = projectId ? await this.storage.chatProjects.find(projectId) : undefined;
-    const delegatedParent = (
-      await this.storage.chatDelegationSteps.listParentsByChildSessionIds([request.sessionId])
-    ).get(request.sessionId);
-    const delegatedScope = delegatedParent
-      ? (await this.storage.chatDelegationSteps.get(delegatedParent.stepId)).scopeControl
-      : undefined;
-    if (delegatedScope) {
-      return resolveToolRequestPathsForContext(request, {
-        workspaceRoot,
-        projectRoot: path.resolve(
-          delegatedScope.rootPath,
-          delegatedScope.workingPath ?? delegatedScope.approvedPaths[0] ?? ".",
-        ),
-      });
-    }
-    const projectRoot = resolveProjectRootForToolContext({
-      workspaceRoot,
-      repoRoot: rootDir,
-      projectWorkspacePath: project?.workspacePath,
-    });
-    return resolveToolRequestPathsForContext(request, {
-      workspaceRoot,
-      projectRoot,
-      projectWorkspacePath: project?.workspacePath,
+    return await resolveToolRequestPathsForSessionScope(request, {
+      rootDir: typeof this.config.rootDir === "string" ? this.config.rootDir : "",
+      workspaceDir: typeof this.config.assistant.workspaceDir === "string" ? this.config.assistant.workspaceDir : "",
+      sandbox: this.config.toolPolicy?.sandbox,
+      storage: this.storage,
     });
   }
 

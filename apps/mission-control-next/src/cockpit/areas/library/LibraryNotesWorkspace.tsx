@@ -8,6 +8,9 @@ import { Callout } from "../../ui/Callout";
 import { Field } from "../../ui/Field";
 import { LibraryNoteEditor } from "./LibraryNoteEditor";
 import { LibraryReminders } from "./LibraryReminders";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
+import { LIBRARY_SECTION_LABELS } from "./library-sections";
 
 export function LibraryNotesWorkspace({ workspaceId }: { workspaceId: string }) {
   const route = useCockpitRoute();
@@ -40,11 +43,11 @@ export function LibraryNotesWorkspace({ workspaceId }: { workspaceId: string }) 
     });
   }
   return (
-    <section className="mx-auto grid w-full max-w-5xl gap-4 p-4" aria-label="Library Notes">
-      <header>
-        <h1 className="font-display text-xl font-semibold text-fg">Notes</h1>
-        <p className="text-sm text-fg-secondary">Workspace notes, revision history, sources and reminders.</p>
-      </header>
+    <section className={AREA_PAGE} aria-label="Library Notes">
+      <AreaHeader
+        title={LIBRARY_SECTION_LABELS.notes}
+        description="Workspace notes, revision history, sources and reminders."
+      />
       <div className="flex flex-wrap gap-2">
         <Button
           onClick={() =>
@@ -120,9 +123,9 @@ export function LibraryNotesWorkspace({ workspaceId }: { workspaceId: string }) 
         Showing {Math.min(visible.length, 100)} of {visible.length} matching notes. Narrow search to find additional
         notes.
       </p>
-      <ul className="grid gap-2">
+      <ul className="divide-y divide-line-subtle">
         {visible.slice(0, 100).map((note) => (
-          <li key={note.noteId} className="rounded-lg border border-line bg-raised p-3">
+          <li key={note.noteId} className="space-y-1 py-3">
             <h2 className="font-semibold text-fg">{note.title}</h2>
             <p className="text-sm text-fg-secondary">
               {note.lifecycleStatus} · Version {note.revision} · {note.updatedAt}

@@ -17,6 +17,7 @@ import {
 import { sendRouteError } from "./_error-handler.js";
 import { settingsChangePlanRequest, type SettingsChangePlanInput } from "./dashboard-settings-change-plan.js";
 import { bindPublicCronCreator } from "./dashboard-cron-authority.js";
+import { CRON_JOBS_LIST_ROUTE_OPTIONS, replyWithCronJobs } from "./dashboard-cron-citadel.js";
 
 const memoryQuerySchema = z.object({
   dir: z.string().default("memory"),
@@ -519,8 +520,8 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/cron/jobs", async (_request, reply) => {
-    return reply.send(projectPublicSecretValue({ items: await fastify.services.cron.listCronJobs() }));
+  fastify.get("/api/v1/cron/jobs", CRON_JOBS_LIST_ROUTE_OPTIONS, async (request, reply) => {
+    return replyWithCronJobs(fastify.services.cron, request, reply);
   });
 
   fastify.get("/api/v1/cron/jobs/:jobId", async (request, reply) => {
@@ -556,7 +557,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         return sendRouteError(reply, error, request.log);
       }
       const message = (error as Error).message;
-      return reply.code(isUnsupportedCronActionError(message) ? 409 : 400).send({ error: message });
+      return reply.code(400).send({ error: message });
     }
   });
 
@@ -600,7 +601,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       }
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
-      return reply.code(notFound ? 404 : isUnsupportedCronActionError(message) ? 409 : 400).send({ error: message });
+      return reply.code(notFound ? 404 : 400).send({ error: message });
     }
   });
 
@@ -688,7 +689,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
       const noHandler = message.toLowerCase().includes("no runnable handler");
-      return reply.code(notFound ? 404 : noHandler || isUnsupportedCronActionError(message) ? 409 : 400).send({
+      return reply.code(notFound ? 404 : noHandler ? 409 : 400).send({
         error: message,
       });
     }
@@ -1031,10 +1032,6 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 };
-
-function isUnsupportedCronActionError(message: string): boolean {
-  return message.includes("GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON");
-}
 
 function reconcileCronPublicUpdate(
   current: Record<string, unknown>,

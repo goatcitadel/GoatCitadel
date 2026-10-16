@@ -55,7 +55,7 @@ export function InboxSourceContext({ item, workspaceId }: { item: OperatorInboxI
   const message = eligible ? view.record : undefined;
   const lastVersion = eligible ? lastVersionNote(view) : undefined;
   return (
-    <section aria-label="Source conversation context" className="rounded-md border border-line bg-sunken p-3">
+    <section aria-label="Source conversation context" className="border-t border-line-subtle pt-3">
       <h3 className="text-sm font-medium text-fg">Most recent stored message</h3>
       <p className="mt-1 text-xs text-fg-muted">
         Current conversation context; the decision above still requires its own exact review.

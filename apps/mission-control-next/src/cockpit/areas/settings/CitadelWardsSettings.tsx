@@ -30,7 +30,7 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
   return (
     <section id="citadel-wards" aria-label="Citadel Wards" className="mt-4 space-y-4 border-t border-line-subtle pt-4">
       <header>
-        <h3 className="font-display text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-wards"]}</h3>
+        <h3 className="text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-wards"]}</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Access policy for this Citadel. Deny wins when several Wards match. Testing evaluates policy without executing
           the action.

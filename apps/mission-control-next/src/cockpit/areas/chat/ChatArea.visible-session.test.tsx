@@ -94,17 +94,34 @@ describe("visible Chat session", () => {
         onWorkbenchOpenChange,
       }) as unknown as MissionThreadedRenderSurfaceInput;
     const button = (name: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
+    // The build editor opens from the conversation actions menu; the way back is a visible header button.
+    const openBuildEditor = async () => {
+      await act(async () => {
+        const trigger = button("Conversation actions");
+        trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+        trigger.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0 }));
+        trigger.click();
+      });
+      const item = await vi.waitFor(() => {
+        const found = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+          (node) => node.textContent === "Build editor",
+        );
+        expect(found).toBeDefined();
+        return found!;
+      });
+      await act(async () => item.click());
+    };
     await act(async () => root.render(view(surface("session-1"))));
     expect(onWorkbenchOpenChange).not.toHaveBeenCalledWith(true);
-    await act(async () => button("Build editor").click());
+    await openBuildEditor();
     expect(onWorkbenchOpenChange).toHaveBeenLastCalledWith(true);
     await act(async () => button("Back to conversation").click());
     expect(onWorkbenchOpenChange).toHaveBeenLastCalledWith(false);
-    await act(async () => button("Build editor").click());
+    await openBuildEditor();
     expect(onWorkbenchOpenChange).toHaveBeenLastCalledWith(true);
     await act(async () => root.render(view(surface("session-2"))));
     expect(onWorkbenchOpenChange).toHaveBeenLastCalledWith(false);
-    await act(async () => button("Build editor").click());
+    await openBuildEditor();
     expect(onWorkbenchOpenChange).toHaveBeenLastCalledWith(true);
     await act(async () => root.unmount());
     expect(onWorkbenchOpenChange).toHaveBeenLastCalledWith(false);

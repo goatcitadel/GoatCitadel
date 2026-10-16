@@ -1,8 +1,9 @@
-import { useId, useRef } from "react";
+import { useId, useRef, type ReactNode } from "react";
 import { useDeferredOverlay } from "../../ui/deferred-overlay-owner";
 import { Dialog } from "../../ui/Dialog";
 import { Button } from "../../ui/Button";
-import { SlidersHorizontal } from "lucide-react";
+import { Paperclip, SlidersHorizontal } from "lucide-react";
+import { ChatAttachmentChips } from "./ChatAttachmentChips";
 import type { ChatCompletionReasoningEffort, ChatWebMode, RoutingPreflightRuntimeClass } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { useModelLabel } from "../../data/use-model-label";
@@ -83,10 +84,13 @@ export function ChatComposerControls({
   props,
   reasoningEfforts,
   scopeKey = "",
+  sourcesChip,
 }: {
   props: Controls;
   reasoningEfforts?: ChatCompletionReasoningEffort[];
   scopeKey?: string;
+  /** The read-only sources chip; it sits beside Attach because both add material to the next message. */
+  sourcesChip?: ReactNode;
 }) {
   const disabled = props.historicalReadOnly || props.sending;
   const options = useDeferredOverlay({ scopeKey, load: loadModelPopover });
@@ -162,27 +166,11 @@ export function ChatComposerControls({
   );
   return (
     <>
-      {props.pendingAttachments.length ? (
-        <div className="mb-2 flex flex-wrap gap-1.5" aria-label="Attached files">
-          {props.pendingAttachments.map((attachment) => (
-            <span
-              key={attachment.attachmentId}
-              className="inline-flex items-center gap-1 rounded-full border border-line bg-sunken px-2 py-1 text-xs text-fg-secondary"
-            >
-              <span className="max-w-36 truncate">{attachment.fileName}</span>
-              <button
-                type="button"
-                aria-label={`Remove ${attachment.fileName}`}
-                disabled={disabled}
-                onClick={() => props.onRemoveAttachment(attachment.attachmentId)}
-                className="rounded-full px-1 text-fg-muted hover:text-fg"
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      ) : null}
+      <ChatAttachmentChips
+        attachments={props.pendingAttachments}
+        disabled={disabled}
+        onRemove={props.onRemoveAttachment}
+      />
       {props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged ? (
         <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-status-waiting bg-sunken p-2 text-xs text-fg-secondary">
           <span>
@@ -222,11 +210,13 @@ export function ChatComposerControls({
           type="button"
           disabled={disabled}
           onClick={props.onAttachFiles}
-          className="rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-fg max-sm:min-h-11 max-sm:px-3"
+          className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-line-control px-2 text-fg-secondary hover:border-fg max-sm:min-h-11 max-sm:px-3"
           aria-label="Attach files"
         >
-          + Attach
+          <Paperclip aria-hidden="true" className="size-4 shrink-0" />
+          Attach
         </button>
+        {sourcesChip}
         <button
           ref={(element) => {
             options.trigger.current = element;

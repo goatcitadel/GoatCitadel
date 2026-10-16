@@ -21,10 +21,10 @@ export function GatewayAuthSettings() {
     <section
       id="gateway-auth"
       aria-labelledby="gateway-auth-title"
-      className="mt-4 space-y-3 rounded-lg border border-line bg-sunken p-4 text-sm text-fg-secondary"
+      className="mt-4 space-y-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0 text-sm text-fg-secondary"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h3 id="gateway-auth-title" className="font-display text-base font-semibold text-fg">
+        <h3 id="gateway-auth-title" className="text-base font-semibold text-fg">
           Gateway authentication
         </h3>
         <Button

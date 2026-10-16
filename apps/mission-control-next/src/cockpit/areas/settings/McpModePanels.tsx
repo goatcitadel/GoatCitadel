@@ -36,7 +36,7 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
         </p>
       ))}
       <section aria-label="MCP server mode" className="space-y-3 rounded-md border border-line p-3">
-        <h4 className="font-display text-md font-semibold text-fg">Server mode preview</h4>
+        <h4 className="text-md font-semibold text-fg">Server mode preview</h4>
         {serverMode ? (
           <>
             <p className="text-xs text-fg-muted">
@@ -104,7 +104,7 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
         )}
       </section>
       <section aria-label="Remote MCP preview" className="space-y-3 rounded-md border border-line p-3">
-        <h4 className="font-display text-md font-semibold text-fg">Remote MCP preview</h4>
+        <h4 className="text-md font-semibold text-fg">Remote MCP preview</h4>
         {remotePreview ? (
           <>
             <p className="text-xs text-fg-muted">

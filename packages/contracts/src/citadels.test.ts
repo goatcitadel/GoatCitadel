@@ -1,9 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import type {
-  CitadelStructureSnapshot,
-  CitadelTemplateTarget,
-} from "./citadels.js";
+import type { CitadelStructureSnapshot, CitadelTemplateTarget } from "./citadels.js";
 import {
+  canReadCitadel,
   CITADEL_TEMPLATES,
   DEFAULT_CITADEL_ID,
   applyCitadelTemplate,
@@ -118,10 +116,15 @@ describe("citadel templates", () => {
     expect(template).toBeDefined();
     expect(applyCitadelTemplate(target, "ws-1", template!, "reviewed")).toBe(saved);
     expect(target.mutateStructure).toHaveBeenCalledTimes(1);
-    expect(target.mutateStructure).toHaveBeenCalledWith({ citadelId: "ws-1", expectedRevision: "reviewed", change: {
-      type: "setup", charter: expect.objectContaining({ purpose: template!.purpose, kind: "project" }),
-      chambers: template!.chambers,
-    } });
+    expect(target.mutateStructure).toHaveBeenCalledWith({
+      citadelId: "ws-1",
+      expectedRevision: "reviewed",
+      change: {
+        type: "setup",
+        charter: expect.objectContaining({ purpose: template!.purpose, kind: "project" }),
+        chambers: template!.chambers,
+      },
+    });
   });
 });
 
@@ -181,5 +184,17 @@ describe("summarizeCitadelGatehouse", () => {
     expect(summary.modelPolicyDefault).toBe("local_only");
     expect(summary.sharingDefault).toBe("private");
     expect(summary.externalWritesDefault).toBe("approval_required");
+  });
+});
+
+describe("canReadCitadel", () => {
+  it("denies blank citadel ids even for all-access scopes", () => {
+    expect(canReadCitadel({ citadelId: "  ", readableCitadelIds: "all" })).toBe(false);
+  });
+  it("allows all-access scopes and listed citadels only", () => {
+    expect(canReadCitadel({ citadelId: "ws-a", readableCitadelIds: "all" })).toBe(true);
+    expect(canReadCitadel({ citadelId: "ws-a", readableCitadelIds: ["ws-a"] })).toBe(true);
+    expect(canReadCitadel({ citadelId: "ws-b", readableCitadelIds: ["ws-a"] })).toBe(false);
+    expect(canReadCitadel({ citadelId: "ws-a", readableCitadelIds: [] })).toBe(false);
   });
 });
