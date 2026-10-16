@@ -113,13 +113,21 @@ export class ModelComparisonRunRepository {
     comparisonId: string,
     update: { status: ModelComparisonStatus; updatedAt: string; completedAt?: string | null; error?: string | null },
   ): Promise<ModelComparisonRun> {
-    const current = await this.get(comparisonId);
-    await this.db.prepare(UPDATE_RUN_STATUS_SQL).run({
-      comparisonId,
-      status: update.status,
-      updatedAt: update.updatedAt,
-      completedAt: update.completedAt === undefined ? (current.completedAt ?? null) : update.completedAt,
-      error: update.error === undefined ? (current.error ?? null) : update.error,
+    await this.ensureSchema();
+    // Read and write in one immediate transaction so an omitted field keeps the
+    // value committed at write time, not one a concurrent writer replaced.
+    await this.db.runImmediateTransaction(async () => {
+      const row = toRunRow(await this.db.prepare(GET_RUN_SQL).get(comparisonId));
+      if (!row) {
+        throw new NotFoundError({ entity: "Model comparison", id: comparisonId });
+      }
+      await this.db.prepare(UPDATE_RUN_STATUS_SQL).run({
+        comparisonId,
+        status: update.status,
+        updatedAt: update.updatedAt,
+        completedAt: update.completedAt === undefined ? row.completed_at : update.completedAt,
+        error: update.error === undefined ? row.error : update.error,
+      });
     });
     return await this.get(comparisonId);
   }

@@ -19,7 +19,7 @@ afterEach(() => {
   tempDbs.cleanup();
 });
 
-function createRepo(): ModelComparisonRunRepository {
+function createGatewaySql() {
   const dbPath = tempDbs.path("goatcitadel-model-comparison");
   const storage = new Storage({
     dbPath,
@@ -27,7 +27,39 @@ function createRepo(): ModelComparisonRunRepository {
     auditDir: path.join(os.tmpdir(), `goatcitadel-model-comparison-audit-${randomUUID()}`),
   });
   createdStorages.push(storage);
-  return new ModelComparisonRunRepository(createSqliteAsyncStorage(storage).gatewaySql);
+  return createSqliteAsyncStorage(storage).gatewaySql;
+}
+
+function createRepo(): ModelComparisonRunRepository {
+  return new ModelComparisonRunRepository(createGatewaySql());
+}
+
+/** Records each prepared run-table statement and whether it ran inside an immediate transaction. */
+function createRecordingRepo(): {
+  repo: ModelComparisonRunRepository;
+  statements: Array<{ sql: string; inTransaction: boolean }>;
+} {
+  const inner = createGatewaySql();
+  const statements: Array<{ sql: string; inTransaction: boolean }> = [];
+  let depth = 0;
+  const port = {
+    prepare: (sql: string) => {
+      if (/model_comparison_runs/.test(sql) && !/CREATE TABLE/.test(sql)) {
+        statements.push({ sql: sql.replace(/\s+/g, " ").trim(), inTransaction: depth > 0 });
+      }
+      return inner.prepare(sql);
+    },
+    exec: (sql: string) => inner.exec(sql),
+    runImmediateTransaction: async <T>(callback: () => T | Promise<T>): Promise<Awaited<T>> => {
+      depth += 1;
+      try {
+        return (await inner.runImmediateTransaction(callback)) as Awaited<T>;
+      } finally {
+        depth -= 1;
+      }
+    },
+  };
+  return { repo: new ModelComparisonRunRepository(port), statements };
 }
 
 function sampleRun(): ModelComparisonRun {
@@ -152,6 +184,59 @@ describe("ModelComparisonRunRepository", () => {
     });
     assert.equal(cleared.completedAt, undefined);
     assert.equal(cleared.error, undefined);
+  });
+
+  it("keeps omitted completedAt/error and clears them only on explicit null", async () => {
+    const repo = createRepo();
+    await repo.create(sampleRun());
+    await repo.updateStatus("cmp-1", {
+      status: "failed",
+      updatedAt: "2026-10-15T00:01:00.000Z",
+      completedAt: "2026-10-15T00:01:00.000Z",
+      error: "provider down",
+    });
+
+    const kept = await repo.updateStatus("cmp-1", { status: "cancelled", updatedAt: "2026-10-15T00:02:00.000Z" });
+    assert.equal(kept.status, "cancelled");
+    assert.equal(kept.updatedAt, "2026-10-15T00:02:00.000Z");
+    assert.equal(kept.completedAt, "2026-10-15T00:01:00.000Z");
+    assert.equal(kept.error, "provider down");
+
+    const errorCleared = await repo.updateStatus("cmp-1", {
+      status: "queued",
+      updatedAt: "2026-10-15T00:03:00.000Z",
+      error: null,
+    });
+    assert.equal(errorCleared.completedAt, "2026-10-15T00:01:00.000Z");
+    assert.equal(errorCleared.error, undefined);
+
+    const completedCleared = await repo.updateStatus("cmp-1", {
+      status: "queued",
+      updatedAt: "2026-10-15T00:04:00.000Z",
+      completedAt: null,
+    });
+    assert.equal(completedCleared.completedAt, undefined);
+    assert.equal(completedCleared.error, undefined);
+  });
+
+  it("reads and writes a status update inside one immediate transaction", async () => {
+    const { repo, statements } = createRecordingRepo();
+    await repo.create(sampleRun());
+    statements.length = 0;
+
+    await repo.updateStatus("cmp-1", { status: "cancelled", updatedAt: "2026-10-15T00:02:00.000Z" });
+
+    const updateIndex = statements.findIndex((statement) => statement.sql.startsWith("UPDATE model_comparison_runs"));
+    assert.ok(updateIndex >= 0, "updateStatus issued no UPDATE");
+    const readAndWrite = statements.slice(0, updateIndex + 1);
+    assert.ok(
+      readAndWrite.some((statement) => statement.sql.startsWith("SELECT")),
+      "updateStatus read nothing first",
+    );
+    assert.deepEqual(
+      readAndWrite.filter((statement) => !statement.inTransaction).map((statement) => statement.sql),
+      [],
+    );
   });
 
   it("claims a run only when the expected status and updatedAt still match", async () => {
