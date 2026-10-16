@@ -4,8 +4,8 @@ import { Button } from "../../ui/Button";
 export function ProviderAdviceSettings() {
   const { state, load } = useProviderAdvice();
   return (
-    <details className="mt-4 rounded-lg border border-line bg-raised p-4">
-      <summary className="cursor-pointer font-display text-md font-semibold text-fg">Provider advice</summary>
+    <details className="mt-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0">
+      <summary className="cursor-pointer text-md font-semibold text-fg">Provider advice</summary>
       <p className="my-3 text-sm text-fg-secondary">
         Compare Gateway recommendations. Advice does not change saved routing or prove provider availability.
       </p>

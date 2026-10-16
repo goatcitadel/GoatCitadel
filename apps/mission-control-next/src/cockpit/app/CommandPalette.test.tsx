@@ -167,8 +167,10 @@ describe("CommandPalette", () => {
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
     const selected = dialog.querySelector<HTMLElement>('[cmdk-item][aria-selected="true"]')!;
     expect(selected.textContent).toMatch(/^New chat/);
-    const summary = dialog.querySelector<HTMLElement>('section[aria-label="Conversations search coverage"] summary')!;
-    const details = summary.closest("details")!;
+    // One disclosure level (SH-26): the source's coverage sits inside the single "Search coverage" disclosure.
+    const details = dialog.querySelector('section[aria-label="Conversations search coverage"]')!.closest("details")!;
+    const summary = details.querySelector<HTMLElement>(":scope > summary")!;
+    expect(details.querySelector("details")).toBeNull();
     expect(details.open).toBe(false);
     const activation = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
     act(() => {

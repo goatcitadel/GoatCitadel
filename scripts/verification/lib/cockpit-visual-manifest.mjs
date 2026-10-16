@@ -20,7 +20,7 @@ export const COCKPIT_VISUAL_MANIFEST = [
     readySelector: `nav[aria-label="Work views"] a[aria-current="page"][href="${href}"]`,
   })),
   ...[
-    ["capabilities", "/library", "Library"],
+    ["capabilities", "/library", "Skills and tools"],
     ["memory", "/library/memory", "Memory"],
     ["notes", "/library/notes", "Notes"],
     ["files", "/library/files", "Files"],

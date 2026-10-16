@@ -12,6 +12,8 @@ import { Field } from "../../ui/Field";
 import { LibraryAgentEditor } from "./LibraryAgentEditor";
 import { LibraryImportedAgents } from "./LibraryImportedAgents";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 
 export function LibraryAgentsWorkspace({ workspaceId }: { workspaceId: string }) {
   const access = useProjectAccess(workspaceId);
@@ -42,31 +44,35 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
     });
   }
   return (
-    <section className="mx-auto grid w-full max-w-5xl gap-4 p-4" aria-label="Library Agents">
-      <h1 className="font-display text-xl font-semibold text-fg">{LIBRARY_SECTION_LABELS.agents}</h1>
-      <p className="text-sm text-fg-secondary">
-        Installation profiles and workspace imported definitions. Tool access remains governed by Gateway policy and
-        grants.
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          onClick={() =>
-            route.requestTransition((review) => {
-              if (review.isCurrent()) {
-                const next = new URLSearchParams(route.search);
-                next.delete("agentId");
-                next.set("view", "create");
-                next.set("shell", "cockpit");
-                review.navigate(`/library/agents?${next}`);
+    <section className={AREA_PAGE} aria-label="Library Agents">
+      <AreaHeader
+        title={LIBRARY_SECTION_LABELS.agents}
+        description="Installation profiles and workspace imported definitions. Tool access remains governed by Gateway policy and grants."
+        actions={
+          <>
+            <Button
+              size="sm"
+              onClick={() =>
+                route.requestTransition((review) => {
+                  if (review.isCurrent()) {
+                    const next = new URLSearchParams(route.search);
+                    next.delete("agentId");
+                    next.set("view", "create");
+                    next.set("shell", "cockpit");
+                    review.navigate(`/library/agents?${next}`);
+                  }
+                })
               }
-            })
-          }
-        >
-          New agent profile
-        </Button>
-        <Button disabled={query.isFetching} onClick={() => void query.refetch()}>
-          Refresh agent profiles
-        </Button>
+            >
+              New agent profile
+            </Button>
+            <Button size="sm" disabled={query.isFetching} onClick={() => void query.refetch()}>
+              Refresh agent profiles
+            </Button>
+          </>
+        }
+      />
+      <div className="flex flex-wrap gap-2">
         <Button
           onClick={() =>
             route.requestTransition((review) => {
@@ -93,7 +99,7 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
             )}
           </Field>
           <p className="text-sm text-fg-muted">Up to 160 installation profiles.</p>
-          <ul className="grid gap-2">
+          <ul className="divide-y divide-line-subtle">
             {query.data?.items
               .filter((item) =>
                 `${item.name} ${item.title} ${item.roleId} ${item.summary}`
@@ -101,7 +107,7 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
                   .includes(search.toLowerCase()),
               )
               .map((item) => (
-                <li key={item.agentId} className="rounded-lg border border-line p-3">
+                <li key={item.agentId} className="space-y-1 py-3">
                   <h2 className="font-semibold">{item.name}</h2>
                   <p className="text-sm text-fg-secondary">
                     {item.title}

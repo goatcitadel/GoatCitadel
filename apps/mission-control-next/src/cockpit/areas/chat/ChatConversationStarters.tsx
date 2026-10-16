@@ -17,7 +17,7 @@ export function ChatConversationStarters({ props }: { props: Props }) {
     return null;
   return (
     <section aria-label="Conversation starters" className="mx-auto max-w-3xl space-y-4 p-5 text-sm">
-      <h2 className="font-display text-lg font-semibold text-fg">What would you like to work on?</h2>
+      <h2 className="text-lg font-semibold text-fg">What would you like to work on?</h2>
       <div className="grid gap-2 sm:grid-cols-3">
         {STARTERS.map((item) => (
           <button

@@ -1,0 +1,112 @@
+#!/usr/bin/env node
+/*
+ * Page-anatomy guard (UI audit 2026-10-14, workstream E; DESIGN.md › Page anatomy). Exact ratchets over cockpit source
+ * (tests excluded): a count above its budget fails, and a count below it asks for the budget to be lowered in the same
+ * change.
+ * - raw-h1: pages title themselves through ui/AreaHeader.tsx (title row, then the area's one tab row). Chat keeps its
+ *   conversation header and is excluded.
+ * - bare-rounded: `rounded` alone falls outside the 6/8/12 radius tokens; use rounded-sm, rounded-md or rounded-lg (6, 8 or 12px).
+ * - eyebrow: an uppercase, letter-spaced label above a heading is on DESIGN.md's refuse list.
+ * - card-surface: bordered card containers (a class string with rounded-lg or rounded-xl and a border); the page is the
+ *   only card, and sub-sections are hairline-separated regions (ui/Section.tsx).
+ */
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "cockpit");
+
+export const ANATOMY_RULES = [
+  {
+    id: "raw-h1",
+    budget: 0,
+    help: "title the page with ui/AreaHeader",
+    count: (relative, contents) =>
+      relative.startsWith("areas/") && !relative.startsWith("areas/chat/") && relative.endsWith(".tsx")
+        ? (contents.match(/<h1[\s>]/g)?.length ?? 0)
+        : 0,
+  },
+  {
+    id: "bare-rounded",
+    budget: 0,
+    help: "use rounded-sm, rounded-md or rounded-lg (6, 8 or 12px)",
+    count: (_relative, contents) => contents.match(/(?<=["'`\s])rounded(?=["'`\s])/g)?.length ?? 0,
+  },
+  {
+    id: "eyebrow",
+    budget: 0,
+    help: "drop the uppercase eyebrow and let the heading carry its own weight",
+    count: (_relative, contents) =>
+      contents.match(/["'`][^"'`\n]*\buppercase\b[^"'`\n]*\btracking-[a-z]+[^"'`\n]*["'`]/g)?.length ?? 0,
+  },
+  {
+    id: "card-surface",
+    budget: 19,
+    help: "make the page the only card; use ui/Section for sub-sections",
+    // Card containers: a large radius with a border. Controls (inputs, buttons, chips) use rounded-md and stay out.
+    count: (_relative, contents) =>
+      contents.match(/["'`][^"'`\n]*\brounded-(?:lg|xl)\b[^"'`\n]*\bborder\b[^"'`\n]*["'`]/g)?.length ?? 0,
+  },
+];
+
+export function countAnatomy(relativePath, contents, rules = ANATOMY_RULES) {
+  const counts = {};
+  for (const rule of rules) {
+    const hits = rule.count(relativePath, contents);
+    if (hits) counts[rule.id] = hits;
+  }
+  return counts;
+}
+
+export function evaluateAnatomy(totals, rules = ANATOMY_RULES) {
+  const failures = [];
+  for (const rule of rules) {
+    const count = totals[rule.id] ?? 0;
+    if (count > rule.budget)
+      failures.push(`${rule.id}: ${count} uses, budget ${rule.budget}. Remove the new ones: ${rule.help}.`);
+    else if (count < rule.budget)
+      failures.push(`${rule.id}: ${count} uses is below the budget of ${rule.budget}; lower the budget to ${count}.`);
+  }
+  return failures;
+}
+
+async function walk(dir) {
+  // A directory that cannot be read must fail the guard, not pass silently.
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const groups = await Promise.all(
+    entries.map((entry) => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) return walk(full);
+      return entry.isFile() && /\.tsx?$/.test(entry.name) && !/\.test\./.test(entry.name) ? [full] : [];
+    }),
+  );
+  return groups.flat();
+}
+
+async function main() {
+  const files = await walk(cockpitRoot);
+  const totals = {};
+  const byFile = {};
+  for (const file of files) {
+    const relative = path.relative(cockpitRoot, file).split(path.sep).join("/");
+    for (const [id, count] of Object.entries(countAnatomy(relative, await fs.readFile(file, "utf8")))) {
+      totals[id] = (totals[id] ?? 0) + count;
+      (byFile[id] ??= []).push(`${relative} (${count})`);
+    }
+  }
+  const failures = evaluateAnatomy(totals);
+  if (failures.length) {
+    console.error("[page-anatomy] violations (see DESIGN.md › Page anatomy):");
+    for (const failure of failures) {
+      console.error(`- ${failure}`);
+      const id = failure.split(":")[0];
+      if (process.env.ANATOMY_VERBOSE && byFile[id]) console.error(`  ${byFile[id].join(", ")}`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`[page-anatomy] ${files.length} cockpit files within budget (${JSON.stringify(totals)})`);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

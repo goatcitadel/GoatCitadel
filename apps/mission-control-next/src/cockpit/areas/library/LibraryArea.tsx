@@ -7,7 +7,8 @@ import { LibraryPromptPacks } from "./LibraryPromptPacks";
 import { LibraryResources } from "./LibraryResources";
 import { RESOURCE_KINDS, type ResourceKind } from "./library-resources";
 import { isLibraryGovernanceSection, LibraryGovernanceRoute } from "./LibraryGovernanceRoute";
-import { AREA_TABS } from "../../ui/area-layout";
+import { AREA_COLUMN, AREA_PAGE } from "../../ui/area-layout";
+import { AreaHeader, AreaTabsProvider } from "../../ui/AreaHeader";
 import {
   getRouteReleaseScope,
   isPrimaryRailRoute,
@@ -28,11 +29,12 @@ type NativeSection = (typeof NATIVE_SECTIONS)[number];
 
 export function LibraryArea() {
   const route = useCockpitRoute();
-  const sectionsRef = useRef<HTMLElement>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
   const sectionPath = route.rest.join("/");
+  // Each page draws the tab row in its AreaHeader; keep the selected tab in view on narrow screens.
   useEffect(() => {
-    sectionsRef.current
-      ?.querySelector<HTMLElement>('[aria-current="page"]')
+    pageRef.current
+      ?.querySelector<HTMLElement>('nav[aria-label="Library sections"] [aria-current="page"]')
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [sectionPath]);
   const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
@@ -57,98 +59,67 @@ export function LibraryArea() {
     !nativeSection &&
     (readCatalogLocation(route.rest, "").invalidSelection ||
       (route.rest.length > 1 && RESOURCE_KINDS.includes(route.rest[0] as ResourceKind)));
+  const tabs = ([undefined, ...RESOURCE_KINDS, ...NATIVE_SECTIONS] as const)
+    .filter((section) => isPrimaryRailRoute({ area: "library", section: section ?? "capabilities" }))
+    .map((section) => ({
+      id: section ?? "capabilities",
+      label: LIBRARY_SECTION_LABELS[section ?? "capabilities"],
+      href: `/library${section ? `/${section}` : ""}?shell=cockpit`,
+    }));
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <nav ref={sectionsRef} aria-label="Library sections" className={AREA_TABS}>
-        {([undefined, ...RESOURCE_KINDS, ...NATIVE_SECTIONS] as const)
-          .filter((section) => isPrimaryRailRoute({ area: "library", section: section ?? "capabilities" }))
-          .map((section) => (
-            <a
-              key={section ?? "capabilities"}
-              className={`shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm ${!governance && section === (nativeSection ?? kind) ? "border-accent text-fg" : "border-transparent text-fg-secondary hover:text-fg"}`}
-              aria-current={!governance && section === (nativeSection ?? kind) ? "page" : undefined}
-              href={`/library${section ? `/${section}` : ""}?shell=cockpit`}
-              onClick={(event) => {
-                if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
-                  event.preventDefault();
-                  route.navigate(event.currentTarget.getAttribute("href")!);
-                }
-              }}
-            >
-              {LIBRARY_SECTION_LABELS[section ?? "capabilities"]}
-            </a>
-          ))}
-      </nav>
-      {release.status !== "ship" ? (
-        <p role="status" className="px-4 py-2 text-sm text-fg-secondary">
-          {describeReleaseSurfaceStatus(release.status)}. {release.note}
-        </p>
-      ) : null}
-      {invalid ? (
-        <EmptyState
-          title="Library destination unavailable"
-          description="This link does not identify a supported Library destination. Check the link or open Library."
-        />
-      ) : nativeSection === "agents" ? (
-        <LibraryAgentsWorkspace key={workspaceId} workspaceId={workspaceId} />
-      ) : nativeSection === "knowledge" ? (
-        <LibraryKnowledgeWorkspace key={workspaceId} workspaceId={workspaceId} />
-      ) : nativeSection === "communications" ? (
-        <LibraryCommunications key={workspaceId} workspaceId={workspaceId} />
-      ) : nativeSection === "curator" ? (
-        <LibraryCurator key={workspaceId} workspaceId={workspaceId} />
-      ) : nativeSection === "journey" ? (
-        <LibraryJourney key={workspaceId} workspaceId={workspaceId} />
-      ) : nativeSection === "prompt-packs" ? (
-        <LibraryPromptPacks key={workspaceId} workspaceId={workspaceId} />
-      ) : governance && isLibraryGovernanceSection(governance) ? (
-        <LibraryGovernanceRoute section={governance} citadelId={activeCitadelId ?? ""} />
-      ) : kind ? (
-        <LibraryResources
-          key={JSON.stringify([workspaceId, citadelId, kind])}
-          kind={kind}
-          workspaceId={workspaceId}
-          citadelId={citadelId}
-        />
-      ) : (
-        <>
-          {route.rest.length === 0 ? (
-            <section className="grid gap-2 border-b border-line p-4" aria-label="Library overview">
-              <h1 className="font-display text-xl font-semibold">Library</h1>
-              <p className="text-sm text-fg-secondary">
-                Manage workspace notes and memory, transfer files and artifacts, and inspect skills, agents and governed
-                knowledge. Use the sections above to open each one.
-              </p>
-              <nav aria-label="Library governance" className="flex flex-wrap gap-3">
-                {[
-                  "citadel-overview",
-                  "citadel",
-                  "citadel-wards",
-                  "citadel-council",
-                  "citadel-blueprint",
-                  "citadel-vault",
-                ].map((section) => (
-                  <a
-                    key={section}
-                    className="text-sm text-accent hover:underline"
-                    href={`/library/${section}?shell=cockpit`}
-                    onClick={(event) => {
-                      if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
-                        event.preventDefault();
-                        route.navigate(event.currentTarget.getAttribute("href")!);
-                      }
-                    }}
-                  >
-                    {section.replace("citadel-", "").replace(/^./u, (letter) => letter.toUpperCase())}
-                  </a>
-                ))}
-              </nav>
-            </section>
-          ) : null}
-          <CapabilityCatalog />
-          {route.rest.length === 0 ? <MeshCapabilityPublications key={workspaceId} workspaceId={workspaceId} /> : null}
-        </>
-      )}
-    </div>
+    <AreaTabsProvider
+      label="Library sections"
+      tabs={tabs}
+      current={governance ? "" : (nativeSection ?? kind ?? "capabilities")}
+      navigate={(href) => route.navigate(href)}
+    >
+      <div ref={pageRef} className="flex h-full min-h-0 flex-col">
+        {release.status !== "ship" ? (
+          <p role="status" className={`${AREA_COLUMN} px-4 pt-3 text-sm text-fg-secondary sm:px-6`}>
+            {describeReleaseSurfaceStatus(release.status)}. {release.note}
+          </p>
+        ) : null}
+        {invalid ? (
+          <div className={AREA_PAGE}>
+            <AreaHeader title="Library" />
+            <EmptyState
+              title="Library destination unavailable"
+              description="This link does not identify a supported Library destination. Check the link or open Library."
+            />
+          </div>
+        ) : nativeSection === "agents" ? (
+          <LibraryAgentsWorkspace key={workspaceId} workspaceId={workspaceId} />
+        ) : nativeSection === "knowledge" ? (
+          <LibraryKnowledgeWorkspace key={workspaceId} workspaceId={workspaceId} />
+        ) : nativeSection === "communications" ? (
+          <LibraryCommunications key={workspaceId} workspaceId={workspaceId} />
+        ) : nativeSection === "curator" ? (
+          <LibraryCurator key={workspaceId} workspaceId={workspaceId} />
+        ) : nativeSection === "journey" ? (
+          <LibraryJourney key={workspaceId} workspaceId={workspaceId} />
+        ) : nativeSection === "prompt-packs" ? (
+          <LibraryPromptPacks key={workspaceId} workspaceId={workspaceId} />
+        ) : governance && isLibraryGovernanceSection(governance) ? (
+          // Citadel pages belong to Settings › Citadel (navigationAreaForRoute); their old Library paths stay
+          // routable here, under the Library tabs with none selected.
+          <LibraryGovernanceRoute section={governance} citadelId={activeCitadelId ?? ""} />
+        ) : kind ? (
+          <LibraryResources
+            key={JSON.stringify([workspaceId, citadelId, kind])}
+            kind={kind}
+            workspaceId={workspaceId}
+            citadelId={citadelId}
+          />
+        ) : (
+          <CapabilityCatalog
+            footer={
+              route.rest.length === 0 ? (
+                <MeshCapabilityPublications key={workspaceId} workspaceId={workspaceId} />
+              ) : null
+            }
+          />
+        )}
+      </div>
+    </AreaTabsProvider>
   );
 }

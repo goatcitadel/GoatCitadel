@@ -12,12 +12,12 @@ export function ApprovalShellExplanations({
   explanations?: readonly ShellCommandExplanation[];
 }) {
   return (
-    <section aria-label="Command explanations" className="grid min-w-0 gap-2">
+    <section aria-label="Command explanations" className="grid min-w-0 divide-y divide-line-subtle">
       {commands.map((command, index) => {
         const explanation =
           explanations?.[index]?.command === command ? explanations[index]! : explainShellCommand(command);
         return (
-          <details key={`${index}:${command}`} className="min-w-0 rounded border border-line p-2">
+          <details key={`${index}:${command}`} className="min-w-0 py-2">
             <summary>
               {explanation.summary} · <RiskBadge risk={shellRiskAsApprovalRisk[explanation.highestRisk]} />
             </summary>

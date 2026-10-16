@@ -104,8 +104,8 @@ export function ProjectHome({
     }
   }
   return (
-    <section aria-label="Project overview" className="grid min-w-0 gap-3 rounded-lg border border-line p-4">
-      <h2 className="font-display text-lg">Project overview</h2>
+    <section aria-label="Project overview" className="grid min-w-0 gap-3 border-t border-line-subtle pt-4">
+      <h2 className="text-lg font-semibold">Project overview</h2>
       <Button
         disabled={sessions.isFetching || artifacts.isFetching}
         onClick={() => {

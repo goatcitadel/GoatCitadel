@@ -25,7 +25,7 @@ export function ChatOpenCodeEvidence({
         </p>
       ) : null}
       {visible.map(({ id, report }) => (
-        <article key={id} className="space-y-2 rounded-lg border border-line bg-sunken p-3 text-fg-secondary">
+        <article key={id} className="space-y-2 border-t border-line-subtle pt-3 text-fg-secondary">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="font-semibold text-fg">OpenCode report</h3>
             <span>
@@ -37,21 +37,21 @@ export function ChatOpenCodeEvidence({
             These are external agent reports. Review the run and file evidence before treating them as applied changes.
           </p>
           {report.error ? (
-            <p role="alert" className="rounded border border-status-failed p-2 text-fg">
+            <p role="alert" className="rounded-md border border-status-failed p-2 text-fg">
               OpenCode reported a problem: {report.error}
             </p>
           ) : null}
           {report.text ? (
-            <div className="max-h-60 overflow-y-auto rounded border border-line-subtle bg-raised p-2 text-sm text-fg">
+            <div className="max-h-60 overflow-y-auto rounded-md border border-line-subtle bg-raised p-2 text-sm text-fg">
               <AssistantMessageRenderer role="assistant" content={report.text} />
             </div>
           ) : null}
           {report.files.length ? (
             <details>
               <summary className="cursor-pointer font-medium text-accent">Reported files</summary>
-              <ul className="mt-2 space-y-2">
+              <ul className="mt-2 divide-y divide-line-subtle">
                 {report.files.map((file) => (
-                  <li key={file.path} className="min-w-0 rounded border border-line-subtle bg-raised p-2">
+                  <li key={file.path} className="min-w-0 py-2">
                     <p className="wrap-anywhere font-mono text-xs text-fg">
                       {file.path}
                       {file.additions !== undefined ? ` · +${file.additions}` : ""}
@@ -76,12 +76,9 @@ export function ChatOpenCodeEvidence({
           {report.steps.length ? (
             <details>
               <summary className="cursor-pointer font-medium text-accent">Agent steps</summary>
-              <ol className="mt-2 space-y-1">
+              <ol className="mt-2 divide-y divide-line-subtle">
                 {report.steps.map((step) => (
-                  <li
-                    key={step.id}
-                    className="flex flex-wrap justify-between gap-2 rounded border border-line-subtle bg-raised p-2"
-                  >
+                  <li key={step.id} className="flex flex-wrap justify-between gap-2 py-2">
                     <span className="text-fg">{step.title}</span>
                     <span>{step.status === "error" ? "Failed" : "Reported done"}</span>
                     {step.error ? <span className="w-full">{step.error}</span> : null}

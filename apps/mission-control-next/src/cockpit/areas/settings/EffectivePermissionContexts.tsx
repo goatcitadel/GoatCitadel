@@ -17,7 +17,7 @@ export function EffectivePermissionContexts({
       {contexts
         .filter((item) => isLegacyPermissionContext(item.surface) === legacy)
         .map((item) => (
-          <li key={item.surface} className="rounded border border-line p-3 text-sm">
+          <li key={item.surface} className="rounded-md border border-line p-3 text-sm">
             <h5 className="font-semibold">{PERMISSION_CONTEXT_PRESENTATION[item.surface].label}</h5>
             <p className="text-fg-secondary">{PERMISSION_CONTEXT_PRESENTATION[item.surface].description}</p>
             {item.error ? (
@@ -57,7 +57,7 @@ export function EffectivePermissionContexts({
   );
   return (
     <section aria-label="Effective policy contexts" className="space-y-3 border-t border-line pt-4">
-      <h4 className="font-display text-base font-semibold">Effective policy contexts</h4>
+      <h4 className="text-base font-semibold">Effective policy contexts</h4>
       <p className="text-sm text-fg-secondary">
         Workspace context from the Gateway. Session, task or run overrides may produce a different decision; this view
         grants no execution authority.

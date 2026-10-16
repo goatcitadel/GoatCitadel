@@ -5,6 +5,13 @@ import type { MissionThreadedSessionRailData } from "@goatcitadel/threaded-surfa
 import { TimeText } from "../../ui/TimeText";
 import { ChatConversationFilters, type ChatProjectFilterOption } from "./ChatConversationFilters";
 
+type RailSession = MissionThreadedSessionRailData["missionSessions"][number];
+
+/** The project, or "Archived"; an active conversation outside a project is the default and says nothing. */
+function rowContext(session: RailSession): string | null {
+  return session.projectName ?? (session.lifecycleStatus === "archived" ? "Archived" : null);
+}
+
 export function ThreadList({
   rail,
   projectOptions,
@@ -22,7 +29,7 @@ export function ThreadList({
     >
       <div className="space-y-2 border-b border-line-subtle p-3">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="font-display text-sm font-semibold text-fg">Conversations</h2>
+          <h2 className="text-sm font-semibold text-fg">Conversations</h2>
           <button
             type="button"
             onClick={() => void rail.onCreateSession()}
@@ -47,7 +54,7 @@ export function ThreadList({
           ))}
         </div>
       </div>
-      <nav aria-label="Conversations" className="min-h-0 flex-1 overflow-hidden p-1">
+      <nav aria-label="Conversations" className="flex min-h-0 flex-1 flex-col overflow-hidden p-1">
         {sessions.length ? (
           <WindowedRecordList
             items={sessions}
@@ -73,20 +80,23 @@ export function ThreadList({
                   aria-current={session.sessionId === rail.selectedSessionId ? "page" : undefined}
                   className="flex w-full items-start rounded-md p-2 text-left hover:bg-sunken aria-[current=page]:bg-sunken"
                 >
+                  {/* Two lines: the title and when; then any non-default status, the project, and the preview. */}
                   <span className="min-w-0 flex-1">
-                    <span className="line-clamp-2 break-words text-sm font-medium text-fg">
-                      {rail.renderSessionLabel(session.sessionId)}
-                    </span>
-                    <span className="block truncate text-xs text-fg-muted">
-                      {session.projectName ?? (session.lifecycleStatus === "archived" ? "Archived" : "Active")}
-                    </span>
-                    <TimeText value={session.lastActivityAt} className="block text-xs text-fg-muted" />
-                    {session.lastMessagePreview ? (
-                      <span className="line-clamp-2 break-words text-xs text-fg-secondary">
-                        {session.lastMessagePreview}
+                    <span className="flex min-w-0 items-baseline gap-2">
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
+                        {rail.renderSessionLabel(session.sessionId)}
                       </span>
-                    ) : null}
-                    <ThreadRowStatus record={activity[session.sessionId]} />
+                      <TimeText value={session.lastActivityAt} className="shrink-0 text-xs text-fg-muted" />
+                    </span>
+                    <span className="flex min-w-0 items-center gap-1 text-xs text-fg-muted">
+                      {activity[session.sessionId]?.tone === "done" ? null : (
+                        <ThreadRowStatus record={activity[session.sessionId]} />
+                      )}
+                      {rowContext(session) ? <span className="shrink-0">{rowContext(session)}</span> : null}
+                      {session.lastMessagePreview ? (
+                        <span className="min-w-0 truncate text-fg-secondary">{session.lastMessagePreview}</span>
+                      ) : null}
+                    </span>
                   </span>
                 </button>
                 {session.searchHits?.map((hit) => (

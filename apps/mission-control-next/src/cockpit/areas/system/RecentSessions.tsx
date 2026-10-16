@@ -8,6 +8,7 @@ import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { SystemOwnerLink } from "./SystemOwnerLink";
+import { Section } from "../../ui/Section";
 import { presentChannel, SESSION_BUDGET, SESSION_HEALTH, SESSION_KIND } from "./system-vocabulary";
 
 const when = (value: string) => (Number.isFinite(Date.parse(value)) ? <TimeText value={value} /> : "Not reported");
@@ -25,21 +26,16 @@ export function RecentSessions() {
   const sessions = useQuery({ queryKey: ["system", "recent-sessions"], queryFn: fetchSessions });
   const items = sessions.isError ? [] : (sessions.data?.items ?? []);
   return (
-    <section
-      aria-labelledby="recent-sessions-title"
-      className="mt-4 space-y-3 rounded-lg border border-line bg-sunken p-4 text-sm"
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 id="recent-sessions-title" className="font-display text-base font-semibold text-fg">
-            Recent sessions
-          </h2>
-          <p className="mt-1 text-fg-secondary">Conversations across every channel, most recent first.</p>
-        </div>
+    <Section
+      title="Recent sessions"
+      description="Conversations across every channel, most recent first."
+      className="space-y-3 text-sm"
+      actions={
         <Button size="sm" disabled={sessions.isFetching} onClick={() => void sessions.refetch()}>
           Refresh sessions
         </Button>
-      </div>
+      }
+    >
       {sessions.isLoading ? (
         <p role="status" className="text-fg-muted">
           Loading sessions…
@@ -54,9 +50,9 @@ export function RecentSessions() {
         <p className="text-fg-muted">No sessions have recent activity.</p>
       ) : null}
       {items.length ? (
-        <ul aria-label="Recent sessions" className="space-y-2">
+        <ul aria-label="Recent sessions" className="divide-y divide-line-subtle">
           {items.map((item) => (
-            <li key={item.sessionId} className="space-y-1 rounded-md border border-line bg-raised p-3">
+            <li key={item.sessionId} className="space-y-1 py-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <h3 className="min-w-0 break-words font-semibold text-fg">{title(item)}</h3>
                 <StatusBadge status={SESSION_HEALTH[item.health] ?? { label: "Health unknown", tone: "neutral" }} />
@@ -86,6 +82,6 @@ export function RecentSessions() {
           ))}
         </ul>
       ) : null}
-    </section>
+    </Section>
   );
 }

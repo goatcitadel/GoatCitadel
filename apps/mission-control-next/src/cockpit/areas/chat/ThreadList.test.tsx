@@ -123,12 +123,15 @@ it("keeps full titles, server previews and exact search targets on desktop and p
     historyView: "active",
   } as unknown as MissionThreadedSessionRailData;
   await act(async () => root.render(<ThreadList rail={rail} />));
-  // The row is named by its content (title, state, time, preview, status), not by the title alone.
+  // The row is named by its content (title, time, status, preview), not by the title alone.
   const row = [...container.querySelectorAll("button")].find((button) => button.textContent?.startsWith(title));
   expect(row?.hasAttribute("aria-label")).toBe(false);
   expect(row?.textContent).toContain("Visible server preview");
   expect(container.textContent).toContain("Visible server preview");
-  expect(container.querySelectorAll(".line-clamp-2").length).toBeGreaterThanOrEqual(2);
+  // Each row is two lines: the title with its time, then the preview; the search excerpt still wraps to two lines.
+  expect(row?.firstElementChild?.firstElementChild?.firstElementChild?.classList.contains("truncate")).toBe(true);
+  expect(row?.textContent).not.toContain("Active");
+  expect(container.querySelectorAll(".line-clamp-2").length).toBeGreaterThanOrEqual(1);
   expect([...container.querySelectorAll(".line-clamp-2")].every((node) => !node.classList.contains("block"))).toBe(
     true,
   );

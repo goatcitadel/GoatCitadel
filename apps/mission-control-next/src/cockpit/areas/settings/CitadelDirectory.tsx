@@ -69,7 +69,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
       className="mt-4 space-y-4 border-t border-line-subtle pt-4"
     >
       <header>
-        <h3 className="font-display text-md font-semibold text-fg">Citadel directory</h3>
+        <h3 className="text-md font-semibold text-fg">Citadel directory</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Organize separate operating spaces. Create, edit, archive, or restore their directory records.
         </p>

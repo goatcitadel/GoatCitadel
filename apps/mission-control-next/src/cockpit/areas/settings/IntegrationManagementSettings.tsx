@@ -25,7 +25,7 @@ export function IntegrationManagementSettings({ workspaceId }: { workspaceId: st
   return (
     <section aria-label="Integration management" className="space-y-4 rounded-md border border-line-subtle p-3">
       <header>
-        <h3 className="font-display text-md font-semibold">Connection management</h3>
+        <h3 className="text-md font-semibold">Connection management</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Create and edit installation-wide connections. Unsaved drafts are kept, and saving stops if a connection
           changed since you opened it.

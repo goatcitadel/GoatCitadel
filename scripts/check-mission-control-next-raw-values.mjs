@@ -51,7 +51,7 @@ export const RULES = [
     id: "jsx-raw-id",
     // Only rendered text counts: attribute values such as key={run.runId} are never shown.
     pattern: /(?<!=)\{\s*[\w?.!]+\.(?:workspaceId|providerId|actorId|runId|taskId|sessionId|approvalId)\s*\}/g,
-    budget: 57,
+    budget: 54,
     help: "show a name or plain label; put the ID in TechnicalDetails",
   },
 ];

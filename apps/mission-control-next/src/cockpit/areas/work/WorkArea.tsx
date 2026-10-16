@@ -1,7 +1,6 @@
 import { useCockpitRoute } from "../../app/use-cockpit-route";
-import { isModifiedClick } from "../../lib/modified-click";
 import { EmptyState } from "../../ui/EmptyState";
-import { AREA_TABS } from "../../ui/area-layout";
+import { AreaTabsProvider } from "../../ui/AreaHeader";
 import { WorkBoard } from "./WorkBoard";
 import { WorkHistory } from "./WorkHistory";
 import { WorkRunDetail } from "./WorkRunDetail";
@@ -11,12 +10,12 @@ import { WorkKanban, WorkArchive } from "./WorkKanban";
 import { WorkAutomation } from "./WorkAutomation";
 
 const VIEWS = [
-  { id: "board", label: "Board", path: "/work" },
-  { id: "history", label: "History", path: "/work/history" },
-  { id: "schedules", label: "Schedules", path: "/work/schedules" },
-  { id: "kanban", label: "Classic Kanban", path: "/work/kanban" },
-  { id: "archive", label: "Archived tasks", path: "/work/archive" },
-  { id: "automation", label: "Automation designer", path: "/work/automation" },
+  { id: "board", label: "Board", href: "/work" },
+  { id: "history", label: "History", href: "/work/history" },
+  { id: "schedules", label: "Schedules", href: "/work/schedules" },
+  { id: "kanban", label: "Classic Kanban", href: "/work/kanban" },
+  { id: "archive", label: "Archived tasks", href: "/work/archive" },
+  { id: "automation", label: "Automation designer", href: "/work/automation" },
 ] as const;
 
 export function WorkArea() {
@@ -35,26 +34,10 @@ export function WorkArea() {
       return <EmptyState title="Run link unavailable" description="This run link could not be read." />;
     }
   }
-  const view = VIEWS.some((item) => item.id === rest[0]) ? rest[0] : "board";
+  const view = rest[0] && VIEWS.some((item) => item.id === rest[0]) ? rest[0] : "board";
+  // Each view draws these tabs in its own AreaHeader, under its title, in every load state.
   return (
-    <>
-      <nav aria-label="Work views" className={AREA_TABS}>
-        {VIEWS.map((item) => (
-          <a
-            key={item.id}
-            href={item.path}
-            aria-current={view === item.id ? "page" : undefined}
-            onClick={(event) => {
-              if (isModifiedClick(event)) return;
-              event.preventDefault();
-              navigate(item.path);
-            }}
-            className="border-b-2 border-transparent px-3 py-2 text-sm text-fg-secondary hover:text-fg aria-[current=page]:border-accent aria-[current=page]:text-fg"
-          >
-            {item.label}
-          </a>
-        ))}
-      </nav>
+    <AreaTabsProvider label="Work views" tabs={VIEWS} current={view} navigate={(href) => navigate(href)}>
       {view === "history" ? (
         <WorkHistory />
       ) : view === "schedules" ? (
@@ -68,6 +51,6 @@ export function WorkArea() {
       ) : (
         <WorkBoard />
       )}
-    </>
+    </AreaTabsProvider>
   );
 }

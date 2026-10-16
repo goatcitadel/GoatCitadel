@@ -24,7 +24,7 @@ export function ProviderOAuthSettings({
     plan && ["completed", "applied", "cancelled", "failed", "rolled_back", "rollback_failed"].includes(plan.status);
   return (
     <section aria-label="ChatGPT OAuth" className="mt-4 space-y-3 border-t border-line-subtle pt-4">
-      <h4 className="font-display text-md font-semibold text-fg">ChatGPT OAuth</h4>
+      <h4 className="text-md font-semibold text-fg">ChatGPT OAuth</h4>
       <p className="text-sm text-fg-secondary">
         Provider profile: {configured ? "Configured" : "Not configured"}. Login:{" "}
         {status

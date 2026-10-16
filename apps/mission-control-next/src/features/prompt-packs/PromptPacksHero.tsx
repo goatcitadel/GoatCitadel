@@ -2,6 +2,7 @@ import { AlertTriangle, BarChart3, CheckCircle2, LoaderCircle, Play, RefreshCcw,
 import { AssessmentThresholdBar } from "./PromptPacksWorkbenchPage.components";
 import type { ActiveRunState } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-types";
 import { NativeButton } from "@next/features/native-routes/primitives";
+import { useEmbeddedPageHeader } from "@next/features/native-routes/embedded-page-header";
 
 export interface PromptPacksHeroProps {
   isOpsVariant: boolean;
@@ -50,6 +51,7 @@ export function PromptPacksHero({
   onAutoScoreUnscored,
   onRefresh,
 }: PromptPacksHeroProps) {
+  const embedded = useEmbeddedPageHeader();
   const commandTitle = benchmarkActive
     ? "Run all active"
     : activeRun
@@ -63,31 +65,53 @@ export function PromptPacksHero({
         ? `${testsLength} test${testsLength === 1 ? "" : "s"} available`
         : "No tests loaded";
 
+  const thresholdBar =
+    hasReport && passRate !== undefined && passThreshold !== undefined ? (
+      <AssessmentThresholdBar passRate={passRate} threshold={passThreshold / 100} />
+    ) : null;
+
   return (
     <>
-      <header className="mc-pp-hero">
-        <div className="mc-pp-hero-copy">
-          <p className="mc-pp-kicker">{isOpsVariant ? "Quality" : "Prompt Packs"}</p>
-          <h1>{title}</h1>
-          <p>{subtitle}</p>
-        </div>
-      </header>
-
-      <details className="mc-next-inline-details">
-        <summary>Pack overview</summary>
-        <section className="mc-pp-summary-row" aria-label="Prompt pack overview">
-          {summaryCards.map((card) => (
-            <article key={card.label} className="mc-pp-summary-card">
-              <span>{card.label}</span>
-              <strong>{card.value}</strong>
-              <p>{card.detail}</p>
-            </article>
-          ))}
+      {embedded ? (
+        // The host's AreaHeader owns the page h1: lead with a sentence, then the numbers as an inline definition list.
+        <section className="mc-pp-overview" aria-label="Prompt pack overview">
+          <p className="mc-pp-overview-lede">{subtitle}</p>
+          <dl className="mc-pp-overview-list">
+            {summaryCards.map((card) => (
+              <div key={card.label}>
+                <dt>{card.label}</dt>
+                <dd className="mc-pp-overview-value">{card.value}</dd>
+                <dd className="mc-pp-overview-hint">{card.detail}</dd>
+              </div>
+            ))}
+          </dl>
+          {thresholdBar}
         </section>
-        {hasReport && passRate !== undefined && passThreshold !== undefined ? (
-          <AssessmentThresholdBar passRate={passRate} threshold={passThreshold / 100} />
-        ) : null}
-      </details>
+      ) : (
+        <>
+          <header className="mc-pp-hero">
+            <div className="mc-pp-hero-copy">
+              <p className="mc-pp-kicker">{isOpsVariant ? "Quality" : "Prompt Packs"}</p>
+              <h1>{title}</h1>
+              <p>{subtitle}</p>
+            </div>
+          </header>
+
+          <details className="mc-next-inline-details">
+            <summary>Pack overview</summary>
+            <section className="mc-pp-summary-row" aria-label="Prompt pack overview">
+              {summaryCards.map((card) => (
+                <article key={card.label} className="mc-pp-summary-card">
+                  <span>{card.label}</span>
+                  <strong>{card.value}</strong>
+                  <p>{card.detail}</p>
+                </article>
+              ))}
+            </section>
+            {thresholdBar}
+          </details>
+        </>
+      )}
 
       <section className="mc-pp-command-strip" aria-label="Prompt pack run controls">
         <div className="mc-pp-command-copy">

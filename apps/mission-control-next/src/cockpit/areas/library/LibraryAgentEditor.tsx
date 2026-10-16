@@ -181,8 +181,8 @@ function AgentEditor({
     setReview({ action, item, draft: { ...draft.value } });
   }
   return (
-    <section className="grid gap-3 rounded-lg border border-line p-3" aria-label="Agent profile editor">
-      <h2 className="font-display text-lg">{item?.name ?? "New agent profile"}</h2>
+    <section className="grid gap-3 border-t border-line-subtle pt-4" aria-label="Agent profile editor">
+      <h2 className="text-base font-semibold">{item?.name ?? "New agent profile"}</h2>
       <p className="text-sm text-fg-secondary">
         Installation-wide profile
         {item ? ` · ${item.lifecycleStatus} · ${item.isBuiltin ? "Built-in role" : "Custom role"}` : ""}. Default tools

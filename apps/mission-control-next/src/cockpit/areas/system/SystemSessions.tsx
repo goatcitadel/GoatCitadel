@@ -1,8 +1,8 @@
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useOpsRuntimeSnapshot } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
 import { useProjectAccess } from "@goatcitadel/mission-control-shared/hooks/use-current-access";
-import { buildAppHref, getRouteReleaseScope, parseAppRoute, routeKicker } from "../../../app/route-model";
-import { NativePageFrame } from "../../../features/native-routes/NativeRoutePageLayout";
+import { buildAppHref, getRouteReleaseScope, parseAppRoute } from "../../../app/route-model";
+import { ReleaseScopeBadge } from "../../../features/native-routes/NativeRoutePageLayout";
 import { RuntimeSessionsPanel } from "../../../features/native-routes/ops/RuntimeSessionsPanel";
 import { RuntimeRecordInspector } from "../../../features/native-routes/ops/RuntimeRecordInspector";
 import { RunDetailRoutePage } from "../../../features/native-routes/ops/RunDetailRoutePage";
@@ -13,6 +13,9 @@ import type { NativeRoutePagesProps } from "../../../features/native-routes/type
 import { SessionControlManager } from "../chat/SessionControlManager";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
+import { EmptyState } from "../../ui/EmptyState";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 import "../../../features/native-routes/native-routes.css";
 
 /** Session lists are installation-wide metadata; only the canonical control owner admits mutations. */
@@ -32,7 +35,15 @@ export function SystemSessions() {
     navigate: (next, options) => location.navigate(buildAppHref(next), options),
   };
   return route.runId || route.view === "run-detail" ? (
-    <RunDetailRoutePage key={access.identity} {...props} />
+    <section className="min-w-0">
+      <div className={AREA_PAGE}>
+        <AreaHeader
+          title="Sessions"
+          description="Recent conversation details, with controls for the selected Chat session."
+        />
+      </div>
+      <RunDetailRoutePage key={access.identity} {...props} />
+    </section>
   ) : (
     <SystemSessionEvidence key={access.identity} {...props} location={location} />
   );
@@ -57,61 +68,68 @@ function SystemSessionEvidence({
     location.navigate(url.pathname + url.search + url.hash);
   };
   return (
-    <section className="min-w-0 p-4 sm:p-6">
-      <NativePageFrame
-        kicker={routeKicker(props.route)}
+    <section className={AREA_PAGE}>
+      <AreaHeader
         title="Sessions"
         description="Recent conversation details, with controls for the selected Chat session."
-        area="ops"
-        loading={runtime.loading}
-        error={runtime.error}
-        releaseStatus={getRouteReleaseScope(props.route).status}
-        onRetry={() => void runtime.reload()}
         actions={
           <Button size="sm" disabled={runtime.loading} onClick={() => void runtime.reload()}>
             Refresh sessions
           </Button>
         }
       >
-        <OpsDegradedSourcesStrip
-          degraded={data ? buildSectionDegradedSources(data, "sessions") : []}
-          onRetry={() => void runtime.reload()}
-          retrying={runtime.loading}
+        <ReleaseScopeBadge status={getRouteReleaseScope(props.route).status} />
+      </AreaHeader>
+      {runtime.error ? (
+        <EmptyState
+          title="Sessions unavailable"
+          description={runtime.error}
+          action={<Button onClick={() => void runtime.reload()}>Try again</Button>}
         />
-        {data ? (
-          <RuntimeSessionsPanel
-            {...props}
-            data={data}
-            openInspection={(kind, id) => {
-              if (kind === "session") selectSession(id);
-            }}
+      ) : runtime.loading && !data ? (
+        <p className="text-sm text-fg-muted">Loading sessions…</p>
+      ) : (
+        <div className="flex min-w-0 flex-col gap-4">
+          <OpsDegradedSourcesStrip
+            degraded={data ? buildSectionDegradedSources(data, "sessions") : []}
+            onRetry={() => void runtime.reload()}
+            retrying={runtime.loading}
           />
-        ) : null}
-        {sessionId ? (
-          <SessionControlManager key={sessionId} sessionId={sessionId} workspaceId={props.activeWorkspaceId} />
-        ) : (
-          <p className="text-sm text-fg-muted">Choose a session's Details to see its recorded fields and controls.</p>
-        )}
-        {/* This inspector is admitted only for session metadata; schedule and notification actions have separate owners. */}
-        <RuntimeRecordInspector
-          {...props}
-          inspection={inspection}
-          setInspection={(next) => {
-            const selection = typeof next === "function" ? next(inspection) : next;
-            selectSession(selection?.kind === "session" ? selection.id : null);
-          }}
-          data={data}
-          runtime={runtime}
-          section="sessions"
-          setReadNotifications={noChange}
-          handleRunSchedule={noScheduleAction}
-          handleCancelSchedule={noScheduleAction}
-          scheduleBusy={null}
-          schedulePendingCancelId={null}
-          setSchedulePendingCancelId={noChange}
-          scheduleNotice={null}
-        />
-      </NativePageFrame>
+          {data ? (
+            <RuntimeSessionsPanel
+              {...props}
+              data={data}
+              openInspection={(kind, id) => {
+                if (kind === "session") selectSession(id);
+              }}
+            />
+          ) : null}
+          {sessionId ? (
+            <SessionControlManager key={sessionId} sessionId={sessionId} workspaceId={props.activeWorkspaceId} />
+          ) : (
+            <p className="text-sm text-fg-muted">Choose a session's Details to see its recorded fields and controls.</p>
+          )}
+          {/* This inspector is admitted only for session metadata; schedule and notification actions have separate owners. */}
+          <RuntimeRecordInspector
+            {...props}
+            inspection={inspection}
+            setInspection={(next) => {
+              const selection = typeof next === "function" ? next(inspection) : next;
+              selectSession(selection?.kind === "session" ? selection.id : null);
+            }}
+            data={data}
+            runtime={runtime}
+            section="sessions"
+            setReadNotifications={noChange}
+            handleRunSchedule={noScheduleAction}
+            handleCancelSchedule={noScheduleAction}
+            scheduleBusy={null}
+            schedulePendingCancelId={null}
+            setSchedulePendingCancelId={noChange}
+            scheduleNotice={null}
+          />
+        </div>
+      )}
     </section>
   );
 }

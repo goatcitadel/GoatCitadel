@@ -27,9 +27,12 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
   const disabled = owner.mutation.pending || Boolean(owner.mutation.uncertain) || owner.entryBusy;
   const matches = (label: string) => label.toLowerCase().includes(query.trim().toLowerCase());
   return (
-    <section id="channels" aria-label="Channel setup" className="space-y-4 rounded-lg border border-line bg-panel p-4">
+    <section
+      id="channels"
+      aria-label="Channel setup"
+      className="space-y-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
+    >
       <header>
-        <h2 className="font-display text-lg font-semibold">Channels</h2>
         <p className="text-sm text-fg-secondary">
           Connections and setup drafts belong to this installation. This workspace is only the origin of a finalization
           plan.

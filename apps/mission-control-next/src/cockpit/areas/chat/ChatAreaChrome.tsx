@@ -2,7 +2,9 @@ import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
+import { PanelRight } from "lucide-react";
 import { Button } from "../../ui/Button";
+import { IconButton } from "../../ui/IconButton";
 import { ChatMobileConversationSelect } from "./ChatMobileConversationSelect";
 import { ChatSessionOverflow, ChatSessionTitle } from "./ChatSessionControls";
 import { SelectedThreadActivity } from "./SelectedThreadActivity";
@@ -24,6 +26,7 @@ export function ChatSessionHeader({
   buildEditor,
   onOpenProjects,
   onOpenFilters,
+  inspecting = false,
   onInspect,
   onFork,
 }: {
@@ -34,6 +37,8 @@ export function ChatSessionHeader({
   buildEditor: { open: boolean; onToggle: () => void } | null;
   onOpenProjects: () => void;
   onOpenFilters: () => void;
+  /** Whether the Chat inspector is showing; Inspect is a toggle, not navigation. */
+  inspecting?: boolean;
   onInspect: () => void;
   onFork?: () => void;
 }) {
@@ -58,23 +63,31 @@ export function ChatSessionHeader({
       New
     </Button>
   );
-  const build = buildEditor ? (
+  // The build editor opens from the overflow menu; while it is open, the way back stays a visible button.
+  const build = buildEditor?.open ? (
     <Button
       size="sm"
       className={phone ? "h-11 shrink-0 whitespace-nowrap px-3" : "whitespace-nowrap max-sm:h-11 max-sm:px-3"}
-      aria-expanded={buildEditor.open}
-      aria-label={buildEditor.open ? "Back to conversation" : "Build editor"}
+      aria-expanded
+      aria-label="Back to conversation"
       onClick={buildEditor.onToggle}
     >
-      <span className="max-sm:hidden">{buildEditor.open ? "Back to conversation" : "Build editor"}</span>
+      <span className="max-sm:hidden">Back to conversation</span>
       <span aria-hidden="true" className="sm:hidden">
-        {buildEditor.open ? "Back" : "Build"}
+        Back
       </span>
     </Button>
   ) : null;
-  const overflow = active ? (
-    <ChatSessionOverflow key={selectedSessionId} dock={input.contextDockProps} onFork={onFork} onInspect={onInspect} />
-  ) : null;
+  const overflow =
+    active || buildEditor ? (
+      <ChatSessionOverflow
+        key={selectedSessionId}
+        dock={active ? input.contextDockProps : null}
+        onFork={onFork}
+        onInspect={onInspect}
+        onOpenBuildEditor={buildEditor && !buildEditor.open ? buildEditor.onToggle : undefined}
+      />
+    ) : null;
 
   if (phone)
     return (
@@ -110,9 +123,13 @@ export function ChatSessionHeader({
       <SelectedThreadActivity session={session} />
       {newConversation}
       {active ? (
-        <Button size="sm" className="hidden md:inline-flex" onClick={onInspect}>
-          Inspect
-        </Button>
+        <IconButton
+          label="Inspect"
+          aria-pressed={inspecting}
+          icon={<PanelRight aria-hidden="true" className="size-4" />}
+          className="hidden border border-line aria-pressed:border-accent aria-pressed:bg-sunken aria-pressed:text-fg md:inline-flex"
+          onClick={onInspect}
+        />
       ) : null}
       {build}
       {overflow}
@@ -163,7 +180,7 @@ export function ChatEmptyState({ rail }: { rail: MissionThreadedRenderSurfaceInp
         </p>
       ) : (
         <>
-          <p className="font-display text-lg font-medium text-fg">Choose a conversation</p>
+          <p className="text-lg font-semibold text-fg">Choose a conversation</p>
           <p className="max-w-sm text-sm text-fg-secondary">Pick one from the list, or start a new conversation.</p>
           <Button onClick={() => void rail.onCreateSession()} disabled={rail.creatingSession}>
             {rail.creatingSession ? "Creating…" : "New conversation"}

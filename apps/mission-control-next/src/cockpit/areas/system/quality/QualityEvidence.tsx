@@ -25,8 +25,11 @@ export function QualitySource({
   const available = state === "available" && !error;
   const globalWarnings = useContext(QualityGlobalWarnings);
   return (
-    <section aria-label={title} className="min-w-0 space-y-3 rounded-lg border border-line bg-raised p-4">
-      <h2 className="font-display text-md font-semibold text-fg">{title}</h2>
+    <section
+      aria-label={title}
+      className="min-w-0 space-y-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
+    >
+      <h2 className="text-base font-semibold text-fg">{title}</h2>
       {!available ? (
         <p role="status" className="text-sm text-fg-secondary">
           {title}: {state === "unknown" ? "availability unknown" : "unavailable"}.

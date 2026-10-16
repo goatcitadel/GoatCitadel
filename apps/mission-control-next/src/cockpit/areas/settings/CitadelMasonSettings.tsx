@@ -22,7 +22,7 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
   return (
     <section id="citadel-mason" aria-label="Citadel Mason" className="space-y-4">
       <header>
-        <h3 className="font-display text-md font-semibold text-fg">{CITADEL_PAGE_LABELS.citadel}</h3>
+        <h3 className="text-md font-semibold text-fg">{CITADEL_PAGE_LABELS.citadel}</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Collect the purpose, priorities and boundaries, then review a Blueprint before staging its Charter and
           Chambers.

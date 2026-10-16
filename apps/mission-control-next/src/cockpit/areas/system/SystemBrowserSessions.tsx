@@ -15,6 +15,8 @@ import { useLibraryOperation } from "../library/use-library-operation";
 import { BrowserSessionDetail } from "./BrowserSessionDetail";
 import { LIST_LIMIT } from "./browser-sessions-model";
 import { TimeText } from "../../ui/TimeText";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 
 type Filter = "active" | "closed" | "all";
 const FILTERS: readonly { id: Filter; label: string }[] = [
@@ -97,21 +99,18 @@ function BrowserSessionsWorkspace({ workspaceId }: { workspaceId: string }) {
   }
 
   return (
-    <div className="grid min-w-0 grid-cols-1 gap-4 overflow-y-auto p-4">
-      <header className="grid min-w-0 gap-2">
-        <h1 className="font-display text-xl font-semibold">Browser sessions</h1>
-        <p className="text-sm text-fg-secondary">
-          Governed browser-session records and scoped grants for this workspace. A session record does not open, bind or
-          control a browser; tools still need a grant, policy checks and guardrails.
-        </p>
-      </header>
+    <div className={AREA_PAGE}>
+      <AreaHeader
+        title="Browser sessions"
+        description="Governed browser-session records and scoped grants for this workspace. A session record does not open, bind or control a browser; tools still need a grant, policy checks and guardrails."
+      />
       <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="grid min-w-0 grid-cols-1 content-start gap-4">
           <section
-            className="grid min-w-0 grid-cols-1 gap-2 rounded-lg border border-line p-3"
+            className="grid min-w-0 grid-cols-1 gap-2 border-t border-line-subtle pt-3 first:border-t-0 first:pt-0"
             aria-label="New browser session"
           >
-            <h2 className="font-display text-md font-semibold">New browser session</h2>
+            <h2 className="text-base font-semibold">New browser session</h2>
             <Field label="Session label" help="Creates an empty session record in this workspace, with no grants.">
               {(props) => (
                 <input
@@ -147,10 +146,10 @@ function BrowserSessionsWorkspace({ workspaceId }: { workspaceId: string }) {
             </div>
           </section>
           <section
-            className="grid min-w-0 grid-cols-1 gap-2 rounded-lg border border-line p-3"
+            className="grid min-w-0 grid-cols-1 gap-2 border-t border-line-subtle pt-3 first:border-t-0 first:pt-0"
             aria-label="Browser session list"
           >
-            <h2 className="font-display text-md font-semibold">Sessions</h2>
+            <h2 className="text-base font-semibold">Sessions</h2>
             <div role="group" aria-label="Browser session filter" className="flex flex-wrap gap-1">
               {FILTERS.map((item) => (
                 <Button
@@ -211,9 +210,7 @@ function BrowserSessionsWorkspace({ workspaceId }: { workspaceId: string }) {
               onListChanged={() => list.refetch()}
             />
           ) : (
-            <p className="rounded-lg border border-line p-3 text-sm text-fg-secondary">
-              Select a session to review its grants, saved state and events.
-            </p>
+            <p className="text-sm text-fg-secondary">Select a session to review its grants, saved state and events.</p>
           )}
         </div>
       </div>

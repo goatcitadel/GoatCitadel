@@ -15,6 +15,9 @@ import { Callout } from "../../ui/Callout";
 import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
 import { TimeText } from "../../ui/TimeText";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
+import { Section } from "../../ui/Section";
 
 export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string }) {
   const access = useLibraryOperation(JSON.stringify(["knowledge", workspaceId]));
@@ -26,13 +29,11 @@ export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string
     staleTime: 0,
   });
   return (
-    <section className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-4 p-4" aria-label="Library Knowledge">
-      <header>
-        <h1 className="font-display text-xl">{LIBRARY_SECTION_LABELS.knowledge}</h1>
-        <p className="text-sm text-fg-secondary">
-          Source material, governed imports, retrieval evidence and Engineering learnings.
-        </p>
-      </header>
+    <section className={AREA_PAGE} aria-label="Library Knowledge">
+      <AreaHeader
+        title={LIBRARY_SECTION_LABELS.knowledge}
+        description="Source material, governed imports, retrieval evidence and Engineering learnings."
+      />
       <LibraryKnowledgeActions workspaceId={workspaceId} />
       <Field label="Filter Knowledge files">
         {(props) => (
@@ -44,16 +45,14 @@ export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string
           />
         )}
       </Field>
-      <section className="grid gap-3">
-        <h2 className="font-display text-lg">Memory files</h2>
-        <p className="text-sm text-fg-secondary">Installation memory files, not a workspace-only directory.</p>
+      <Section title="Memory files" description="Installation memory files, not a workspace-only directory.">
         {files.error ? <Callout tone="error">{describeApiError(files.error).summary}</Callout> : null}
         {files.isPending ? <p role="status">Reading memory files…</p> : null}
-        <ul className="grid gap-2">
+        <ul className="divide-y divide-line-subtle">
           {files.data?.items
             .filter((file) => file.relativePath.toLowerCase().includes(filter.toLowerCase()))
             .map((file) => (
-              <li key={file.relativePath} className="rounded-md border border-line p-3">
+              <li key={file.relativePath} className="space-y-1 py-3">
                 <h3 className="break-words">{file.relativePath}</h3>
                 <p>{formatBytes(file.size)}</p>
                 <Button onClick={() => setSelectedPath(file.relativePath)}>Preview {file.relativePath}</Button>
@@ -64,7 +63,7 @@ export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string
               </li>
             ))}
         </ul>
-      </section>
+      </Section>
       {files.data?.items
         .filter((file) => file.relativePath === selectedPath)
         .map((file) => (

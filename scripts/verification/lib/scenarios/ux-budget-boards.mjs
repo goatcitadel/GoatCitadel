@@ -148,7 +148,17 @@ export async function runUxBudgetBoards(environment) {
               approvals.body.items.filter((item) => item.linkage?.workspaceId === fixture.workspaceId).length,
             ],
             ["Task status", "Known tasks", tasks.body.items.length],
-            ["Usage and cost", "Groups", cost.body.items.length],
+            // The usage widget totals recorded tokens the same way the shared cost summary does (finite, non-negative).
+            [
+              "Usage and cost",
+              "Recorded tokens",
+              new Intl.NumberFormat().format(
+                cost.body.items.reduce(
+                  (sum, item) => sum + (Number.isFinite(item.tokenTotal) && item.tokenTotal >= 0 ? item.tokenTotal : 0),
+                  0,
+                ),
+              ),
+            ],
           ];
           for (const [title, label, expected] of expectedMetrics) {
             await metric(title, label).waitFor();

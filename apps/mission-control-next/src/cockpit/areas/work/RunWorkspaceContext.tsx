@@ -30,8 +30,8 @@ type Preview =
 export function RunWorkspaceContext({ trace, workspaceId }: { trace: ObserveRunTraceResponse; workspaceId: string }) {
   const sessionId = runWorkspaceSession(trace, workspaceId);
   return (
-    <section aria-label="Current conversation worktree" className="rounded-lg border border-line bg-raised p-4">
-      <h2 className="font-display text-lg font-semibold text-fg">Current conversation worktree</h2>
+    <section aria-label="Current conversation worktree" className="border-t border-line-subtle pt-4">
+      <h2 className="text-base font-semibold text-fg">Current conversation worktree</h2>
       <p className="mt-2 text-sm text-fg-secondary">
         Inspect the conversation's current worktree and files. This snapshot may include changes made after this run; it
         does not identify which changes the run made.

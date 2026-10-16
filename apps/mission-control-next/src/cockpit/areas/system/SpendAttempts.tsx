@@ -9,6 +9,7 @@ import { useModelLabel } from "../../data/use-model-label";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { SystemOwnerLink } from "./SystemOwnerLink";
+import { Section } from "../../ui/Section";
 
 export function attemptCostLabel(record: Pick<ModelUsageEventRecord, "costSource" | "costUsd">) {
   if (
@@ -29,14 +30,16 @@ export function SpendAttempts({ workspaceId, from, to }: { workspaceId: string; 
     queryFn: () => fetchModelUsageEvents(workspaceId, from, to),
   });
   return (
-    <section aria-labelledby="spend-attempts-title" className="rounded-lg border border-line bg-raised p-4">
-      <h2 id="spend-attempts-title" className="font-display text-lg font-semibold text-fg">
-        Cost provenance by call attempt
-      </h2>
-      <p className="mt-1 text-sm text-fg-secondary">
-        {workspaceLabel} · same period · latest 50 attempts. These scoped records are separate from installation totals.
-        Estimates are priced by the Gateway; provider-reported amounts are accounted usage, not a billing invoice.
-      </p>
+    <Section
+      title="Cost provenance by call attempt"
+      description={
+        <>
+          {workspaceLabel} · same period · latest 50 attempts. These scoped records are separate from installation
+          totals. Estimates are priced by the Gateway; provider-reported amounts are accounted usage, not a billing
+          invoice.
+        </>
+      }
+    >
       {attempts.isLoading ? <p role="status">Loading recorded call attempts…</p> : null}
       {attempts.isError ? (
         <p role="alert" className="mt-2 text-sm text-fg-secondary">
@@ -46,13 +49,13 @@ export function SpendAttempts({ workspaceId, from, to }: { workspaceId: string; 
       ) : null}
       {attempts.data && !attempts.isError ? (
         <>
-          <p className="mt-2 text-sm text-fg-secondary">
+          <p className="text-sm text-fg-secondary">
             {plural(attempts.data.summary.attemptCount, "recorded call attempt")} ·{" "}
             {plural(attempts.data.summary.uncertainDispatchCount, "dispatch outcome")} uncertain.{" "}
             {attempts.data.nextCursor ? "Older attempts are not shown." : ""}
           </p>
           {attempts.data.items.length ? (
-            <ol className="mt-3 grid gap-3">
+            <ol className="mt-1 divide-y divide-line-subtle">
               {attempts.data.items.map((record) => (
                 <AttemptRow key={record.eventId} record={record} workspaceId={workspaceId} />
               ))}
@@ -64,7 +67,7 @@ export function SpendAttempts({ workspaceId, from, to }: { workspaceId: string; 
           )}
         </>
       ) : null}
-    </section>
+    </Section>
   );
 }
 function AttemptRow({ record, workspaceId }: { record: ModelUsageEventRecord; workspaceId: string }) {
@@ -72,7 +75,7 @@ function AttemptRow({ record, workspaceId }: { record: ModelUsageEventRecord; wo
   const modelId = record.effectiveModelId ?? record.dispatchedModelId ?? record.requestedModelId;
   const modelLabel = useModelLabel(providerId, modelId);
   return (
-    <li className="grid gap-2 rounded-md border border-line bg-sunken p-3 text-sm text-fg-secondary">
+    <li className="grid gap-1 py-3 text-sm text-fg-secondary">
       <div className="flex flex-wrap justify-between gap-2">
         <strong className="break-words text-fg">{modelLabel}</strong>
         <TimeText value={record.startedAt} />

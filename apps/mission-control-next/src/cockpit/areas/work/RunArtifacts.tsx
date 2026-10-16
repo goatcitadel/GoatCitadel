@@ -104,8 +104,8 @@ export function RunArtifacts({ trace, workspaceId }: { trace: ObserveRunTraceRes
   };
 
   return (
-    <section aria-label="Run artifacts" className="rounded-lg border border-line bg-raised p-4">
-      <h2 className="font-display text-lg font-semibold text-fg">Artifacts</h2>
+    <section aria-label="Run artifacts" className="border-t border-line-subtle pt-4">
+      <h2 className="text-base font-semibold text-fg">Artifacts</h2>
       {!scopedRun ? (
         <p className="mt-2 text-sm text-fg-muted">Artifact evidence has no matching run workspace.</p>
       ) : trace.artifacts.state !== "available" ? (

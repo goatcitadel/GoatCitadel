@@ -81,7 +81,7 @@ export function ProjectImport({
   }
   const valid = draft.value.sourceType === "local_folder" ? draft.value.sourcePath.trim() : draft.value.repoUrl.trim();
   return (
-    <details className="rounded-lg border border-line p-3">
+    <details className="border-t border-line-subtle pt-3">
       <summary className="cursor-pointer font-medium">Import project source</summary>
       <section aria-label="Project source import" className="mt-3 grid min-w-0 gap-3">
         <Field label="Project source">

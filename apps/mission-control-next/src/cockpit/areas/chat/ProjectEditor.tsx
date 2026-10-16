@@ -99,9 +99,9 @@ export function ProjectEditor({
   return (
     <section
       aria-label={project ? "Edit project" : "Create project"}
-      className="grid w-full min-w-0 max-w-full grid-cols-1 gap-3 break-words rounded-lg border border-line p-4"
+      className="grid w-full min-w-0 max-w-full grid-cols-1 gap-3 break-words border-t border-line-subtle pt-4"
     >
-      <h2 className="font-display text-lg">{project ? "Edit project" : "Create project"}</h2>
+      <h2 className="text-lg font-semibold">{project ? "Edit project" : "Create project"}</h2>
       <p className="text-sm text-fg-secondary">
         Workspace {workspaceId}. Project context and its workspace path apply to future work; existing conversation
         history remains retained.

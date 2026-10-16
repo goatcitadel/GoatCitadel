@@ -35,7 +35,7 @@ export function ApprovalCodeOutcome({ approval, workspaceId }: { approval: Appro
         : 2000,
   });
   return (
-    <section aria-label="Original code run outcome" className="grid min-w-0 gap-2 rounded border border-line p-3">
+    <section aria-label="Original code run outcome" className="grid min-w-0 gap-2 border-t border-line-subtle pt-3">
       <h4 className="font-semibold">Original code run outcome</h4>
       {query.isFetching ? <p role="status">Checking original code work…</p> : null}
       {query.error ? (

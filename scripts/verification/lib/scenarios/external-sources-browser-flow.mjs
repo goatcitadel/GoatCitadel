@@ -467,7 +467,7 @@ export async function runExternalSourcesBrowserFlow({
           throw new Error(`${firstLine} — server turn state: ${diagnosis}`, { cause: error });
         }
         // The attachment stays read-only evidence: no retained selection rode along with the send.
-        const stripText = await page.locator(SOURCE_STRIP_SELECTOR).innerText();
+        const stripText = await (await revealSourceStrip(page)).strip.innerText();
         if (stripText.includes("retained source selection")) {
           throw new Error("an external source selection was retained across the send");
         }
@@ -653,12 +653,35 @@ function sourcePicker(page) {
   return page.getByRole("dialog", { name: "Attached sources", exact: true });
 }
 
+/**
+ * The read-only sources strip stays hidden behind the composer toolbar's "Sources: ..." chip.
+ * Opening the chip shows the strip; with nothing attached it also opens the source picker directly.
+ * Idempotent: an already-visible strip is left open (a second chip click would close it).
+ */
+async function revealSourceStrip(page) {
+  const strip = page.locator(SOURCE_STRIP_SELECTOR);
+  if (await strip.isVisible()) {
+    return { strip, pickerOpenedByChip: false };
+  }
+  const chip = page.getByRole("button", { name: /^Sources: /u });
+  await chip.waitFor({ timeout: 60_000 });
+  let pickerOpenedByChip = false;
+  if ((await chip.getAttribute("aria-expanded")) !== "true") {
+    pickerOpenedByChip = (await chip.innerText()).trim() === "Sources: none";
+    await chip.click();
+  }
+  await strip.waitFor({ timeout: 60_000 });
+  return { strip, pickerOpenedByChip };
+}
+
 /** The Chat strip keeps attach, inspection and knowledge-copy actions inside its source picker dialog. */
 async function openSourcePicker(page) {
-  const strip = page.locator(SOURCE_STRIP_SELECTOR);
-  await strip.waitFor({ timeout: 60_000 });
-  await strip.getByRole("button", { name: "Choose sources", exact: true }).click();
+  const { strip, pickerOpenedByChip } = await revealSourceStrip(page);
   const picker = sourcePicker(page);
+  // With nothing attached, the chip click opens the picker itself; its modal backdrop would block "Choose sources".
+  if (!pickerOpenedByChip && !(await picker.isVisible())) {
+    await strip.getByRole("button", { name: "Choose sources", exact: true }).click();
+  }
   await picker.waitFor({ timeout: 30_000 });
   return picker;
 }

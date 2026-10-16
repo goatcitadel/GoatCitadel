@@ -291,6 +291,9 @@ describe("cockpit text composer", () => {
     await act(async () => root.render(<ChatTextComposer props={props} />));
     await act(async () => sendButton().click());
     expect(props.onSend).toHaveBeenCalledOnce();
+    // The chip names the file's type and size, and removes through a lucide icon button, not a glyph.
+    expect(container.querySelector('[aria-label="Attached files"]')?.textContent).toContain("TXT · 1 B");
+    expect(container.querySelector('button[aria-label="Remove a.txt"] svg')).not.toBeNull();
     await act(async () => (container.querySelector('button[aria-label="Remove a.txt"]') as HTMLButtonElement).click());
     expect(props.onRemoveAttachment).toHaveBeenCalledWith("a");
     await act(async () =>
@@ -565,4 +568,41 @@ it("submits a running turn only through the shared queue admission and preserves
     root.render(<ChatTextComposer props={{ ...props, pendingApproval: { approvalId: "waiting" } as never }} />),
   );
   expect(queue.disabled).toBe(true);
+});
+
+it("keeps read-only sources behind a toolbar chip until the operator opens them", async () => {
+  const attachment = {
+    attachmentId: "att-1",
+    sourceId: "src",
+    importId: "imp",
+    itemId: "item",
+    revision: 1,
+    normalizedArtifactSha256: "a".repeat(64),
+    attachedAt: "2026-10-01T00:00:00Z",
+  };
+  const controls = {
+    attachments: [attachment],
+    candidates: [],
+    selectedAttachmentIds: [],
+    loading: false,
+    error: null,
+    canMutate: true,
+    busyAttachmentId: null,
+    onToggleSelect: vi.fn(),
+    onClearSelection: vi.fn(),
+    onAttach: vi.fn(),
+    onDetach: vi.fn(),
+    onRequestKnowledgeSnapshot: vi.fn(),
+    onReload: vi.fn(),
+  } as unknown as NonNullable<ComposerProps["externalSourceControls"]>;
+  await act(async () => root.render(<ChatTextComposer props={composerProps({ externalSourceControls: controls })} />));
+  const chip = [...container.querySelectorAll("button")].find((button) => button.textContent === "Sources: 1")!;
+  const panel = container.querySelector('section[aria-label="Read-only external source attachments"]')!;
+  expect(chip.getAttribute("aria-expanded")).toBe("false");
+  expect(panel.closest("[hidden]")).not.toBeNull();
+  await act(async () => chip.click());
+  expect(chip.getAttribute("aria-expanded")).toBe("true");
+  expect(panel.closest("[hidden]")).toBeNull();
+  // The draft starts at two lines and still grows.
+  expect(container.querySelector("textarea")?.getAttribute("rows")).toBe("2");
 });

@@ -96,9 +96,11 @@ export function HealthBackupAction({
       : undefined;
   return (
     <div className="mt-3 grid gap-3">
-      <Button size="sm" disabled={!readAvailable || reading || backupLocked(attempt)} onClick={() => void load()}>
-        {pending ? "Creating backup…" : reading ? "Reading backup scope…" : "Back up now"}
-      </Button>
+      <div>
+        <Button size="sm" disabled={!readAvailable || reading || backupLocked(attempt)} onClick={() => void load()}>
+          {pending ? "Creating backup…" : reading ? "Reading backup scope…" : "Back up now"}
+        </Button>
+      </div>
       {!readAvailable ? (
         <p role="status" className="text-xs text-fg-muted">
           Backup status is unavailable or refreshing. Back up now needs a current status check.

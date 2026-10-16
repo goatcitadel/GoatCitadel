@@ -29,7 +29,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
   const fields = s.form;
   return (
     <section id="hooks" aria-label="Governed hooks" className="space-y-4">
-      <h3 className="font-display text-lg font-semibold">Governed hooks</h3>
+      <h3 className="text-lg font-semibold">Governed hooks</h3>
       <p className="text-sm text-fg-secondary">
         Receive lifecycle events through configured hooks. Test and redrive actions can send real requests to the
         configured destination.
@@ -73,7 +73,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
       </div>
       {s.view === "new" ? (
         <section aria-label="Register hook" className="space-y-3 rounded-md border border-line-subtle p-3">
-          <h4 className="font-display text-md font-semibold">Register hook</h4>
+          <h4 className="text-md font-semibold">Register hook</h4>
           <p className="text-sm text-fg-secondary">
             New registrations are enabled, send metadata only, use priority 100 and a 5-second timeout, and record an
             open failure policy. The Gateway decides which modes are permitted.
@@ -196,7 +196,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
       ) : null}
       {s.view === "hook" && s.selectedHook ? (
         <section aria-label="Selected hook" className="space-y-3 rounded-md border border-line-subtle p-3">
-          <h4 className="break-words font-display text-md font-semibold">{s.selectedHook.label}</h4>
+          <h4 className="break-words text-md font-semibold">{s.selectedHook.label}</h4>
           <HookRecordEvidence hook={s.selectedHook} workspaceLabel={workspaceLabel} />
           <div className="flex flex-wrap gap-2">
             <Button
@@ -220,7 +220,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
       ) : null}
       {s.view === "hook" || s.view === "history" ? (
         <section aria-label="Hook delivery history" className="space-y-3 rounded-md border border-line-subtle p-3">
-          <h4 className="font-display text-md font-semibold">Hook delivery history</h4>
+          <h4 className="text-md font-semibold">Hook delivery history</h4>
           {s.data?.issues.some((issue) => issue.label === "Hook deliveries") ? (
             <p role="status">Delivery history is unavailable.</p>
           ) : (
