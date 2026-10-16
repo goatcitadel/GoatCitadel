@@ -395,3 +395,41 @@ describe("comms mutation boundary tracking", () => {
     expect(result).toMatchObject({ status: "failed", deliveryStatus: "blocked" });
   });
 });
+
+describe("mattermost reply threading", () => {
+  const ROOT_POST_ID = "rootpost0000000000000000ab";
+
+  async function sendWith(replyToMessageId: string | undefined): Promise<Record<string, unknown>> {
+    const { storage } = createMattermostStorage("conn-thread", "delivery-thread");
+    let postedBody: Record<string, unknown> = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/users/me")) return mattermostBotResponse();
+        if (url.endsWith("/posts")) {
+          postedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return new Response(JSON.stringify({ id: "reply-post" }), { status: 201 });
+        }
+        throw new Error(`unexpected request ${url}`);
+      }),
+    );
+    const request = channelSendRequest("conn-thread", []);
+    const result = await executeCommsTool(
+      { ...request, args: { ...request.args, ...(replyToMessageId ? { replyToMessageId } : {}) } },
+      policyConfig(["mattermost.example"]),
+      storage,
+    );
+    expect(result).toMatchObject({ status: "sent" });
+    return postedBody;
+  }
+
+  it("posts the reply under the inbound root post as root_id", async () => {
+    expect(await sendWith(ROOT_POST_ID)).toMatchObject({ channel_id: MATTERMOST_CHANNEL_ID, root_id: ROOT_POST_ID });
+  });
+
+  it("stays top-level for a non-Mattermost reply fallback id or no reply target", async () => {
+    expect(await sendWith("4f1c2b8e-1111-4222-8333-444455556666")).not.toHaveProperty("root_id");
+    expect(await sendWith(undefined)).not.toHaveProperty("root_id");
+  });
+});

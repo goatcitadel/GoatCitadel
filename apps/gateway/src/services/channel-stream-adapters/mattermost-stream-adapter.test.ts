@@ -219,6 +219,8 @@ describe("mattermost stream adapter", () => {
             content: "hello bot",
             metadata: { channelType: "O", channelName: "town-square", teamId: "team1", rootId: "root9" },
           },
+          // Replies stay in the inbound post's thread.
+          responseOptions: { deliveryReplyToMessageId: "root9" },
         },
       },
     ]);
@@ -236,6 +238,8 @@ describe("mattermost stream adapter", () => {
     expect(message?.peer).toBe("user1");
     expect(message?.threadId).toBeUndefined();
     expect(message?.metadata).toMatchObject({ channelType: "D" });
+    // A top-level post becomes the root of the reply thread.
+    expect(h.emitted[0]?.event.responseOptions).toEqual({ deliveryReplyToMessageId: "post1" });
   });
 
   it("ignores the bot's own posts, system posts, empty messages and malformed frames", async () => {

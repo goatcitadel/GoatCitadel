@@ -194,6 +194,8 @@ export function createMattermostStreamAdapter(
             rootId,
           },
         },
+        // Reply in the post's thread; a top-level post becomes the root of a new thread.
+        responseOptions: { deliveryReplyToMessageId: rootId ?? id },
       },
       seq === undefined ? undefined : String(seq),
     );

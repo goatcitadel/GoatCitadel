@@ -1929,6 +1929,20 @@ async function whatsappReact(
   );
 }
 
+const MATTERMOST_POST_ID_PATTERN = /^[a-z0-9]{26}$/;
+
+/**
+ * Threads a reply under a Mattermost root post. Only a real Mattermost post id
+ * (26 lowercase alphanumerics) is used; generic reply fallbacks such as an
+ * internal GoatCitadel event id are ignored so the post stays top-level
+ * instead of being rejected by the server.
+ */
+function resolveMattermostRootId(args: Record<string, unknown>): string | undefined {
+  return [args.rootId, args.threadId, args.replyToMessageId, args.replyTo]
+    .map((value) => asString(value))
+    .find((value): value is string => Boolean(value && MATTERMOST_POST_ID_PATTERN.test(value)));
+}
+
 async function mattermostSend(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -1955,6 +1969,7 @@ async function mattermostSend(
   }
 
   const parsedTarget = parseMattermostTarget(resolvedTarget);
+  const rootId = resolveMattermostRootId(args);
   const botUser = await mattermostApiRequest<Record<string, unknown>>(
     serverUrl,
     botToken,
@@ -2001,6 +2016,7 @@ async function mattermostSend(
       body: JSON.stringify({
         channel_id: channelId,
         message,
+        ...(rootId ? { root_id: rootId } : {}),
         ...(fileIds && fileIds.length > 0 ? { file_ids: fileIds } : {}),
       }),
     },

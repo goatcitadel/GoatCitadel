@@ -67,6 +67,7 @@ function createStreamRuntime(host: ChannelStreamRuntimeHost): ChannelStreamRunti
         inboundAccessConfig: { ...connection.config, inboundAccessMode: "allowlist" },
         acceptedConnectionRevision: connection.revision,
         message: event.message,
+        ...(event.responseOptions ? { responseOptions: event.responseOptions } : {}),
       },
     );
   const sharedDeps = {

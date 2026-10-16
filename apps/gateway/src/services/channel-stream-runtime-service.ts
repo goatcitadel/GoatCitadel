@@ -15,6 +15,11 @@ export interface ChannelStreamEvent {
   eventType: string;
   bindingTarget?: string;
   message: IngestChannelMessageInput;
+  /** Durable reply routing, forwarded unchanged into inbound dispatch (same shape as webhook routes use). */
+  responseOptions?: {
+    /** Provider message/thread id the assistant reply should attach to (for example a Mattermost root post id). */
+    deliveryReplyToMessageId?: string;
+  };
 }
 
 export interface ChannelStreamRunContext {

@@ -193,4 +193,40 @@ describe("getChannelStreamRuntime", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("forwards a stream event reply target into durable acceptance (Mattermost replies in-thread)", async () => {
+    const h = host();
+    const conn = {
+      ...ntfyConnection(),
+      connectionId: "conn-mm",
+      key: "mattermost",
+      catalogId: "channel.mattermost",
+      config: {
+        serverUrl: "https://chat.example.test",
+        botTokenEnv: "MM_TOKEN",
+        defaultChannel: "town-square",
+        inboundStreamEnabled: true,
+        allowedSenders: ["u1"],
+      },
+    };
+    (h.value.storage.integrationConnections.list as ReturnType<typeof vi.fn>).mockResolvedValue([conn]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ id: "bot" }), { status: 200 })),
+    );
+    vi.stubGlobal("WebSocket", FakeMattermostSocket);
+    const runtime = getChannelStreamRuntime(h.value);
+    try {
+      await runtime.sync();
+      await vi.waitFor(() => expect(h.acceptInboundChannelEvent).toHaveBeenCalledTimes(1));
+      expect(h.acceptInboundChannelEvent.mock.calls[0]?.[0]).toMatchObject({
+        channel: "mattermost",
+        idempotencyKey: "mattermost:conn-mm:p1",
+        responseOptions: { deliveryReplyToMessageId: "p1" },
+      });
+    } finally {
+      await runtime.close();
+      vi.unstubAllGlobals();
+    }
+  });
 });
