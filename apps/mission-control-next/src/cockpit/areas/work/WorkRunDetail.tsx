@@ -14,7 +14,10 @@ import {
 import { queryKeys } from "../../data/query-keys";
 import { durableRunWorkspaceId } from "../../data/durable-run-scope";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 import { Button } from "../../ui/Button";
+import { MetricList } from "../../ui/MetricList";
 import { EmptyState } from "../../ui/EmptyState";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
@@ -66,7 +69,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
     return `/inbox?${parameters}${hash}`;
   }
   return (
-    <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
+    <section className={AREA_PAGE}>
       <a
         href="/work"
         onClick={(event) => {
@@ -78,6 +81,18 @@ export function WorkRunDetail({ runId }: { runId: string }) {
         <ArrowLeft aria-hidden="true" className="size-4" />
         Back to Work
       </a>
+      <AreaHeader
+        title={run ? workRunTitle(run) : "Run"}
+        actions={
+          run ? <StatusBadge status={presentRunStatus(run.status, { waitingOnOperator: pendingApproval })} /> : null
+        }
+      >
+        {run ? (
+          <p className="mt-1 text-xs text-fg-muted">
+            <TimeText value={run.updatedAt} prefix="Updated" />
+          </p>
+        ) : null}
+      </AreaHeader>
       {trace.isLoading ? (
         <p role="status" className="text-sm text-fg-muted">
           Loading run evidence…
@@ -105,17 +120,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
       ) : null}
       {run && data ? (
         <>
-          <header className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold text-accent">Run</p>
-              <h1 className="max-w-3xl font-display text-xl font-semibold text-fg">{workRunTitle(run)}</h1>
-              <p className="mt-1 text-xs text-fg-muted">
-                <TimeText value={run.updatedAt} prefix="Updated" />
-              </p>
-            </div>
-            <StatusBadge status={presentRunStatus(run.status, { waitingOnOperator: pendingApproval })} />
-          </header>
-          <p className="rounded-md border border-line bg-sunken p-3 text-sm text-fg-secondary">
+          <p className="text-sm text-fg-secondary">
             This page shows the saved run record.{" "}
             {sessionId ? (
               <>
@@ -145,17 +150,24 @@ export function WorkRunDetail({ runId }: { runId: string }) {
               {run.recoverySummary ? ` ${run.recoverySummary}` : ""}
             </p>
           ) : null}
-          <div className="grid gap-3 sm:grid-cols-3">
-            <EvidenceCount
-              title="Checkpoints"
-              count={data.durable.checkpoints.items.length}
-              state={data.durable.checkpoints.state}
+          <div className="grid gap-2">
+            <p className="text-sm text-fg-secondary">
+              Checkpoints and tool calls saved for this run, and the provider cost recorded so far.
+            </p>
+            <MetricList
+              label="Saved run evidence"
+              items={[
+                {
+                  term: "Checkpoints",
+                  value: evidenceValue(data.durable.checkpoints.state, data.durable.checkpoints.items.length),
+                },
+                { term: "Tool calls", value: evidenceValue(data.toolCalls.state, data.toolCalls.items.length) },
+                { term: "Recorded cost", value: evidenceValue(data.providerUsage.state, costLabel) },
+              ]}
             />
-            <EvidenceCount title="Tool calls" count={data.toolCalls.items.length} state={data.toolCalls.state} />
-            <EvidenceCount title="Recorded cost" count={costLabel} state={data.providerUsage.state} />
           </div>
-          <section className="rounded-lg border border-line bg-raised p-4">
-            <h2 className="font-display text-lg font-semibold text-fg">Run history</h2>
+          <section className="border-t border-line-subtle pt-4">
+            <h2 className="text-base font-semibold text-fg">Run history</h2>
             {data.durable.timeline.state === "available" ? (
               data.durable.timeline.items.length > 0 ? (
                 <ol className="mt-3 grid gap-2">
@@ -178,8 +190,8 @@ export function WorkRunDetail({ runId }: { runId: string }) {
               </p>
             )}
           </section>
-          <details className="rounded-lg border border-line bg-raised p-4">
-            <summary className="cursor-pointer font-medium text-accent">Plan, delegation and tool evidence</summary>
+          <details className="border-t border-line-subtle pt-4">
+            <summary className="cursor-pointer font-semibold text-fg">Plan, delegation and tool evidence</summary>
             <div className="mt-3 grid gap-3">
               <RunEvidenceSections trace={data} />
             </div>
@@ -189,9 +201,9 @@ export function WorkRunDetail({ runId }: { runId: string }) {
           </TechnicalDetails>
           {/* Review evidence, not a diagnostic: keep it reachable when technical details are hidden. */}
           <RunSignedReceipt key={runId} runId={runId} />
-          <section className="rounded-lg border border-line bg-raised p-4">
+          <section className="border-t border-line-subtle pt-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="font-display text-lg font-semibold text-fg">Approvals</h2>
+              <h2 className="text-base font-semibold text-fg">Approvals</h2>
               <NativeOwnerLink className="text-sm text-accent" href={approvalHistoryHref} scope={ownerScope}>
                 Open approval history
               </NativeOwnerLink>
@@ -210,11 +222,11 @@ export function WorkRunDetail({ runId }: { runId: string }) {
             ) : null}
             {data.approvals.state === "available" || data.approvals.items.length > 0 ? (
               data.approvals.items.length ? (
-                <ul className="mt-3 grid gap-2">
+                <ul className="mt-2">
                   {data.approvals.items.map((approval) => (
                     <li
                       key={approval.approvalId}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line p-3 text-sm"
+                      className="flex flex-wrap items-center justify-between gap-2 border-b border-line-subtle py-2 text-sm"
                     >
                       <span className="text-fg">{humanizeToken(approval.kind)}</span>
                       <NativeOwnerLink
@@ -242,7 +254,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
               aria-label="Recorded run errors"
               className="rounded-md border border-status-failed p-3 text-sm text-fg"
             >
-              <h2 className="font-display text-lg font-semibold text-fg">Recorded run errors</h2>
+              <h2 className="text-base font-semibold text-fg">Recorded run errors</h2>
               {plural(data.errors.items.length, "recorded error")} {data.errors.items.length === 1 ? "needs" : "need"}{" "}
               review.
               <ul className="mt-3 space-y-2">
@@ -260,13 +272,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
   );
 }
 
-function EvidenceCount({ title, count, state }: { title: string; count: number | string; state: string }) {
-  return (
-    <div className="rounded-lg border border-line bg-raised p-4">
-      <p className="text-xs text-fg-muted">{title}</p>
-      <p className="mt-1 font-display text-xl font-semibold tabular-nums text-fg">
-        {state === "available" ? count : "Unknown"}
-      </p>
-    </div>
-  );
+/** A saved evidence count is shown only when its source is available; anything else reads as Unknown. */
+function evidenceValue(state: string, value: number | string): number | string {
+  return state === "available" ? value : "Unknown";
 }

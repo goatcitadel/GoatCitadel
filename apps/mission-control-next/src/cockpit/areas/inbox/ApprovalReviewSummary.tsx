@@ -40,7 +40,7 @@ export function ApprovalReviewSummary({ approval, workspaceId }: { approval: App
       {evidence?.commands.map((command) => (
         <pre
           key={command}
-          className="min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-words rounded bg-sunken p-2"
+          className="min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md bg-sunken p-2"
         >
           {command}
         </pre>
@@ -54,14 +54,14 @@ export function ApprovalReviewSummary({ approval, workspaceId }: { approval: App
           open={/^(Memory content|Requested memory|Knowledge |Message: )/.test(change.label)}
         >
           <summary>{change.label}</summary>
-          <pre className="min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-words rounded bg-sunken p-2">
+          <pre className="min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md bg-sunken p-2">
             {change.content}
           </pre>
         </details>
       ))}
       {evidence?.technicalDetails?.map((detail) => (
         <TechnicalDetails key={detail.label + detail.content} label={detail.label}>
-          <pre className="min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-words rounded bg-sunken p-2">
+          <pre className="min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md bg-sunken p-2">
             {detail.content}
           </pre>
         </TechnicalDetails>

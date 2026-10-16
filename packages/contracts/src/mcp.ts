@@ -477,8 +477,10 @@ export function assertMcpServerConnectionConfiguration(input: McpServerConnectio
     "requester-scoped connection configuration",
     ["args", "authState", "authType", "command", "oauth", "policy", "url"],
   );
-  if (input.transport !== "http" && input.transport !== "sse") {
-    throw new TypeError("Requester-scoped MCP servers require HTTP or SSE transport.");
+  if (input.transport !== "http") {
+    throw new TypeError(
+      "Requester-scoped MCP servers require Streamable HTTP (http) transport; the legacy HTTP+SSE handshake is not available for requester-scoped connections.",
+    );
   }
   if (input.command !== undefined || input.args !== undefined || input.url !== undefined) {
     throw new TypeError("Requester-scoped MCP servers cannot carry a static destination.");

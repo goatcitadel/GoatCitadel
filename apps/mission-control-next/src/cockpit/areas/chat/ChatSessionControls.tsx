@@ -74,19 +74,22 @@ export function ChatSessionOverflow({
   dock,
   onFork,
   onInspect,
+  onOpenBuildEditor,
 }: {
   dock: MissionThreadedContextDockProps | null;
   onFork?: () => void;
   onInspect?: () => void;
+  /** Present while the build editor is available and closed; the way back stays a visible header button. */
+  onOpenBuildEditor?: () => void;
 }) {
   const [archiveOpen, setArchiveOpen] = useState(false);
-  if (!dock) return null;
-  const archived = Boolean(dock.selectedSession.archivedAt);
-  const archivePending = dock.sessionControlPending === "archive";
+  if (!dock && !onOpenBuildEditor) return null;
+  const archived = Boolean(dock?.selectedSession.archivedAt);
+  const archivePending = dock?.sessionControlPending === "archive";
   // Radix gives the menu Escape, arrow keys and focus return; the bare <details> it replaces had none.
   return (
     <>
-      <Menu scopeKey={dock.selectedSession.sessionId}>
+      <Menu scopeKey={dock?.selectedSession.sessionId ?? ""}>
         <MenuTrigger
           aria-label="Conversation actions"
           className="inline-flex min-h-8 shrink-0 items-center rounded-md border border-line px-2 text-sm text-fg-secondary hover:border-accent max-sm:min-h-11 max-sm:min-w-11 max-sm:justify-center"
@@ -94,59 +97,84 @@ export function ChatSessionOverflow({
           <MoreHorizontal aria-hidden="true" className="size-4" />
         </MenuTrigger>
         <MenuContent align="end">
-          {onInspect ? (
+          {onOpenBuildEditor ? (
+            <MenuItem className="max-sm:min-h-11" onSelect={onOpenBuildEditor}>
+              Build editor
+            </MenuItem>
+          ) : null}
+          {dock && onInspect ? (
             <MenuItem className="max-sm:min-h-11 md:hidden" onSelect={onInspect}>
               Inspect conversation
             </MenuItem>
           ) : null}
-          <MenuItem className="max-sm:min-h-11" disabled={!onFork} onSelect={() => onFork?.()}>
-            New conversation from latest message
-          </MenuItem>
-          <MenuItem
-            className="max-sm:min-h-11"
-            disabled={Boolean(dock.sessionControlPending)}
-            onSelect={() => void dock.onTogglePinSession()}
-          >
-            {dock.selectedSession.pinned ? "Unpin conversation" : "Pin conversation"}
-          </MenuItem>
-          <MenuItem
-            className="max-sm:min-h-11"
-            disabled={Boolean(dock.sessionControlPending)}
-            onSelect={dock.onDeleteSession}
-          >
-            Delete conversation…
-          </MenuItem>
-          <MenuItem className="max-sm:min-h-11" onSelect={() => dock.onExportSnapshot()}>
-            Export conversation
-          </MenuItem>
-          <MenuItem className="max-sm:min-h-11" disabled={archivePending} onSelect={() => setArchiveOpen(true)}>
-            {archived ? "Restore conversation" : "Archive conversation"}
-          </MenuItem>
+          {dock ? <ChatSessionMenuItems dock={dock} onFork={onFork} onArchive={() => setArchiveOpen(true)} /> : null}
         </MenuContent>
       </Menu>
-      <Dialog
-        open={archiveOpen}
-        onOpenChange={setArchiveOpen}
-        title={archived ? "Restore conversation?" : "Archive conversation?"}
-        description={
-          archived
-            ? "The conversation will return to recent history."
-            : "The conversation will leave recent history and remain recoverable in Archived."
-        }
+      {dock ? (
+        <Dialog
+          open={archiveOpen}
+          onOpenChange={setArchiveOpen}
+          title={archived ? "Restore conversation?" : "Archive conversation?"}
+          description={
+            archived
+              ? "The conversation will return to recent history."
+              : "The conversation will leave recent history and remain recoverable in Archived."
+          }
+        >
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setArchiveOpen(false)} disabled={archivePending}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              disabled={archivePending}
+              onClick={() => void dock.onToggleArchiveSession().then(() => setArchiveOpen(false))}
+            >
+              {archivePending ? "Working…" : archived ? "Restore" : "Archive"}
+            </Button>
+          </div>
+        </Dialog>
+      ) : null}
+    </>
+  );
+}
+
+function ChatSessionMenuItems({
+  dock,
+  onFork,
+  onArchive,
+}: {
+  dock: MissionThreadedContextDockProps;
+  onFork?: () => void;
+  onArchive: () => void;
+}) {
+  const archived = Boolean(dock.selectedSession.archivedAt);
+  const archivePending = dock.sessionControlPending === "archive";
+  return (
+    <>
+      <MenuItem className="max-sm:min-h-11" disabled={!onFork} onSelect={() => onFork?.()}>
+        New conversation from latest message
+      </MenuItem>
+      <MenuItem
+        className="max-sm:min-h-11"
+        disabled={Boolean(dock.sessionControlPending)}
+        onSelect={() => void dock.onTogglePinSession()}
       >
-        <div className="flex justify-end gap-2">
-          <Button onClick={() => setArchiveOpen(false)} disabled={archivePending}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            disabled={archivePending}
-            onClick={() => void dock.onToggleArchiveSession().then(() => setArchiveOpen(false))}
-          >
-            {archivePending ? "Working…" : archived ? "Restore" : "Archive"}
-          </Button>
-        </div>
-      </Dialog>
+        {dock.selectedSession.pinned ? "Unpin conversation" : "Pin conversation"}
+      </MenuItem>
+      <MenuItem
+        className="max-sm:min-h-11"
+        disabled={Boolean(dock.sessionControlPending)}
+        onSelect={dock.onDeleteSession}
+      >
+        Delete conversation…
+      </MenuItem>
+      <MenuItem className="max-sm:min-h-11" onSelect={() => dock.onExportSnapshot()}>
+        Export conversation
+      </MenuItem>
+      <MenuItem className="max-sm:min-h-11" disabled={archivePending} onSelect={onArchive}>
+        {archived ? "Restore conversation" : "Archive conversation"}
+      </MenuItem>
     </>
   );
 }

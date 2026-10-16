@@ -23,6 +23,8 @@ import { curatorRecommendationLabel, skillStateLabel } from "./capability-vocabu
 import { catalogHref } from "./capability-catalog-route";
 import { useLibraryOperation } from "./use-library-operation";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 
 type Sort = "usage" | "score" | "name";
 const SORTS: Record<Sort, { label: string; heading: string }> = {
@@ -32,7 +34,9 @@ const SORTS: Record<Sort, { label: string; heading: string }> = {
 };
 type Outcome = { error: boolean; text: string };
 const ARCHIVE_REASON = "manual archive from Mission Control";
-const CARD = "grid min-w-0 grid-cols-1 gap-3 rounded-lg border border-line p-3";
+// Flat, hairline-separated regions (DESIGN.md › Page anatomy).
+const CARD =
+  "grid min-w-0 grid-cols-1 content-start gap-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0";
 
 const humanize = curatorRecommendationLabel;
 const validTime = (iso?: string): iso is string => Boolean(iso && Number.isFinite(Date.parse(iso)));
@@ -154,21 +158,22 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
 
   const canReplay = Boolean(review && pending?.skillId === review.skillId && operation.attempt?.phase === "uncertain");
   return (
-    <div className="grid min-w-0 grid-cols-1 gap-4 overflow-y-auto p-4">
-      <header className="grid min-w-0 gap-2">
-        <h1 className="font-display text-xl font-semibold">{LIBRARY_SECTION_LABELS.curator}</h1>
-        <p className="text-sm text-fg-secondary">
-          Grades installed skills by usage and proposes archives. Reports never change a skill; archiving is a separate,
-          reviewed action that disables a skill installation-wide.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Button disabled={busy || status.isFetching} onClick={() => void refresh()}>
-            Refresh
-          </Button>
-          <Button disabled={busy || status.isError} onClick={() => void generate()}>
-            Generate report
-          </Button>
-        </div>
+    <div className={`${AREA_PAGE} min-w-0`}>
+      <AreaHeader
+        title={LIBRARY_SECTION_LABELS.curator}
+        description="Grades installed skills by usage and proposes archives. Reports never change a skill; archiving is a separate, reviewed action that disables a skill installation-wide."
+        actions={
+          <>
+            <Button size="sm" disabled={busy || status.isError} onClick={() => void generate()}>
+              Generate report
+            </Button>
+            <Button size="sm" disabled={busy || status.isFetching} onClick={() => void refresh()}>
+              Refresh
+            </Button>
+          </>
+        }
+      />
+      <div className="grid min-w-0 gap-2 empty:hidden">
         {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
         {operation.locked && pending ? (
           <div>
@@ -178,11 +183,11 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
         {outcome && !review ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
         {status.isPending ? <p role="status">Reading curator status…</p> : null}
         {status.error ? <Callout tone="error">{describeApiError(status.error).summary}</Callout> : null}
-      </header>
+      </div>
       {status.data ? (
         <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-3">
           <section className={CARD} aria-label="Curated skills">
-            <h2 className="font-display text-md font-semibold">{SORTS[sort].heading}</h2>
+            <h2 className="text-base font-semibold">{SORTS[sort].heading}</h2>
             <p className="text-sm text-fg-secondary">
               {plural(status.data.items.length, "skill")} · {status.data.cycleDays}-day cycle ·{" "}
               <TimeText prefix="graded" value={status.data.generatedAt} />
@@ -225,7 +230,7 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
           <div className="grid min-w-0 grid-cols-1 content-start gap-4 lg:col-span-2">
             {selected ? (
               <section className={CARD} aria-label={`Skill ${selected.name}`}>
-                <h2 className="font-display text-md font-semibold wrap-anywhere">{selected.name}</h2>
+                <h2 className="text-base font-semibold wrap-anywhere">{selected.name}</h2>
                 <dl className="grid min-w-0 grid-cols-1 gap-2 text-sm sm:grid-cols-2">
                   <div>
                     <dt className="font-medium">Status</dt>
@@ -265,7 +270,7 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
                   </div>
                 </dl>
                 <TechnicalDetails label="Curator evidence record">
-                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-sunken p-2 font-mono text-xs">
+                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-sunken p-2 font-mono text-xs">
                     {JSON.stringify(selected, null, 2)}
                   </pre>
                 </TechnicalDetails>
@@ -289,12 +294,10 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
                 This skill is not in the current curator report. Refresh, or choose another skill.
               </Callout>
             ) : (
-              <p className="rounded-lg border border-line p-3 text-sm text-fg-secondary">
-                Select a skill to review its grade and evidence.
-              </p>
+              <p className="text-sm text-fg-secondary">Select a skill to review its grade and evidence.</p>
             )}
             <section className={CARD} aria-label="Archived skills">
-              <h2 className="font-display text-md font-semibold">Archived skills</h2>
+              <h2 className="text-base font-semibold">Archived skills</h2>
               {archived.error ? <Callout tone="error">{describeApiError(archived.error).summary}</Callout> : null}
               {archived.data && !archived.data.items.length ? (
                 <p className="text-sm text-fg-muted">No skills are archived by the curator.</p>

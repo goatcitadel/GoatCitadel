@@ -26,7 +26,7 @@ export function createCronRoutePort(cronAutomationService: CronAutomationService
     findCronRunById: (runId) => cronAutomationService.findCronRunById(runId),
     getCronJob: (jobId) => cronAutomationService.getCronJob(jobId),
     getCronRunDiff: (runId) => cronAutomationService.getCronRunDiff(runId),
-    listCronJobs: () => cronAutomationService.listCronJobs(),
+    listCronJobs: (citadel) => cronAutomationService.listCronJobs(citadel),
     listCronReviewQueue: (limit) => cronAutomationService.listCronReviewQueue(limit),
     retryCronReviewQueueItem: (itemId) => cronAutomationService.retryCronReviewQueueItem(itemId),
     runCronJobNow: (jobId) => cronAutomationService.runCronJobNow(jobId),

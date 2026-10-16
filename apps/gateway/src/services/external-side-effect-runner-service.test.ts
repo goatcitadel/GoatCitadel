@@ -10,6 +10,7 @@ import {
 } from "@goatcitadel/storage";
 import {
   claimIdempotentExternalSideEffect,
+  DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS,
   deriveExternalSideEffectReversibility,
   type ExternalSideEffectExecutionContext,
   type ExternalSideEffectRunStore,
@@ -2579,5 +2580,392 @@ describe("external-side-effect-runner-service", () => {
     expect(mutationStore.markFailed).not.toHaveBeenCalled();
     expect(mutationStore.claim).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  describe("dispatch-fenced mutation claims (real SQLite)", () => {
+    const pastNow = "2020-01-01T00:00:00.000Z";
+
+    function openFenceStorage(): AsyncStorage {
+      const root = mkdtempSync(path.join(os.tmpdir(), "goatcitadel-extfx-dispatch-fence-"));
+      realStorageTempRoots.push(root);
+      return createSqliteAsyncStorage(
+        new Storage({
+          dbPath: ":memory:",
+          transcriptsDir: path.join(root, "transcripts"),
+          auditDir: path.join(root, "audit"),
+        }),
+      );
+    }
+
+    const fenceIdentityInput = {
+      boundary: "dispatch_fence_proof",
+      connectionId: "conn-dispatch-fence",
+      actionId: "send-dispatch-fence",
+      idempotencyKey: "dispatch-fence-key",
+      checkedAt: "2026-10-16T00:00:00.000Z",
+      payload: { message: "send exactly once" },
+    };
+
+    async function readFenceIdentity() {
+      // Without stores the claim helper only derives the canonical mutation identity.
+      const identity = await claimIdempotentExternalSideEffect(fenceIdentityInput);
+      return {
+        method: "POST",
+        routePath: identity.routePath,
+        idempotencyKey: identity.idempotencyKey,
+        actorScope: identity.actorScope,
+        payloadHash: identity.payloadHash,
+      };
+    }
+
+    function fenceJob(storage: AsyncStorage) {
+      return {
+        ...fenceIdentityInput,
+        mutationStore: storage.mutationIdempotency,
+        sideEffectRunStore: storage.externalSideEffectRuns,
+        runClaimTransaction: async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> =>
+          await storage.runImmediateTransaction(work),
+        label: "Dispatch fence proof",
+        requireDurableBoundaryRecord: true,
+      };
+    }
+
+    it("takes over a stale unmarked claim and dispatches exactly once", async () => {
+      const storage = openFenceStorage();
+      try {
+        const identity = await readFenceIdentity();
+        const crashed = await storage.mutationIdempotency.claim({ ...identity, leaseDurationMs: 1, now: pastNow });
+        expect(crashed.outcome).toBe("claimed");
+        const crashedToken = crashed.record.claimToken!;
+        const provider = vi.fn();
+
+        const result = await runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          claimLeaseDurationMs: 1,
+          execute: async (claim) => {
+            await claim.markExternalCallStarted();
+            provider();
+            return { id: "sent" };
+          },
+        });
+
+        expect(result.status).toBe("executed");
+        expect(provider).toHaveBeenCalledTimes(1);
+        expect(await storage.mutationIdempotency.get(identity)).toMatchObject({ status: "completed" });
+        expect(await storage.mutationIdempotency.markCompleted({ ...identity, claimToken: crashedToken })).toBe(false);
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("settles a stale claim that crossed the dispatch boundary as unknown_after_send", async () => {
+      const storage = openFenceStorage();
+      try {
+        const identity = await readFenceIdentity();
+        const crashed = await storage.mutationIdempotency.claim({ ...identity, leaseDurationMs: 1, now: pastNow });
+        const marked = await storage.mutationIdempotency.markDispatched({
+          ...identity,
+          claimToken: crashed.record.claimToken!,
+          leaseDurationMs: 1,
+          now: pastNow,
+        });
+        expect(marked.outcome).toBe("dispatched");
+        const provider = vi.fn();
+
+        const result = await runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          claimLeaseDurationMs: 1,
+          execute: async (claim) => {
+            await claim.markExternalCallStarted();
+            provider();
+            return { id: "sent-twice" };
+          },
+        });
+
+        expect(result).toMatchObject({
+          status: "blocked",
+          blockedReason: "external_side_effect_unknown_after_send",
+          claim: {
+            replayOutcome: "unknown_after_send",
+            resumeState: "manual_review_unknown_external_outcome",
+          },
+        });
+        expect(result.status === "blocked" ? result.message : "").toContain(
+          "will not be sent again automatically. Reconcile it with the provider.",
+        );
+        expect(provider).not.toHaveBeenCalled();
+        expect(await storage.mutationIdempotency.get(identity)).toMatchObject({ status: "unknown_after_send" });
+        expect(
+          (await storage.externalSideEffectRuns.listByConnection(fenceIdentityInput.connectionId))[0],
+        ).toMatchObject({ status: "unknown_external_outcome" });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("redispatches a sent stale claim only when the provider enforces the idempotency key", async () => {
+      const storage = openFenceStorage();
+      try {
+        const identity = await readFenceIdentity();
+        const crashed = await storage.mutationIdempotency.claim({ ...identity, leaseDurationMs: 1, now: pastNow });
+        await storage.mutationIdempotency.markDispatched({
+          ...identity,
+          claimToken: crashed.record.claimToken!,
+          leaseDurationMs: 1,
+          now: pastNow,
+        });
+        const provider = vi.fn();
+
+        const result = await runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          claimLeaseDurationMs: 1,
+          providerIdempotencyKeyEnforced: true,
+          execute: async (claim) => {
+            await claim.markExternalCallStarted();
+            provider();
+            return { id: "provider-deduplicated" };
+          },
+        });
+
+        expect(result.status).toBe("executed");
+        expect(provider).toHaveBeenCalledTimes(1);
+        expect(await storage.mutationIdempotency.get(identity)).toMatchObject({ status: "completed" });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("fences an old holder at the boundary after a default-lease takeover", async () => {
+      const storage = openFenceStorage();
+      try {
+        const identity = await readFenceIdentity();
+        const provider = vi.fn();
+
+        // No claimLeaseDurationMs: the runner applies its default lease, so a
+        // later claimer may take over the unmarked claim.
+        const result = await runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          execute: async (claim) => {
+            const held = await storage.mutationIdempotency.get(identity);
+            expect(held?.claimExpiresAt).toBeDefined();
+            expect(held?.dispatchedAt).toBeUndefined();
+            const takeover = await storage.mutationIdempotency.claim({
+              ...identity,
+              leaseDurationMs: 60_000,
+              now: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+            });
+            expect(takeover).toMatchObject({ outcome: "claimed", claimKind: "retry_after_stale_claim" });
+            await claim.markExternalCallStarted();
+            provider();
+            return { id: "never-sent" };
+          },
+        });
+
+        expect(result.status).toBe("failed");
+        expect(result.status === "failed" ? result.error : undefined).toMatchObject({
+          code: "EXTERNAL_SIDE_EFFECT_BOUNDARY_CLAIM_LOST",
+        });
+        expect(provider).not.toHaveBeenCalled();
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("settles an ambiguous post-boundary failure so a retry is blocked as unknown_after_send", async () => {
+      const storage = openFenceStorage();
+      try {
+        const identity = await readFenceIdentity();
+        const provider = vi.fn();
+
+        const first = await runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          execute: async (claim) => {
+            await claim.markExternalCallStarted();
+            provider();
+            throw new Error("provider connection reset after send");
+          },
+        });
+
+        expect(first).toMatchObject({
+          status: "failed",
+          claim: { resumeState: "manual_review_unknown_external_outcome" },
+        });
+        expect(await storage.mutationIdempotency.get(identity)).toMatchObject({ status: "unknown_after_send" });
+
+        const second = await runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          execute: async (claim) => {
+            await claim.markExternalCallStarted();
+            provider();
+            return { id: "sent-again" };
+          },
+        });
+
+        expect(second).toMatchObject({
+          status: "blocked",
+          blockedReason: "external_side_effect_unknown_after_send",
+        });
+        expect(provider).toHaveBeenCalledTimes(1);
+      } finally {
+        await storage.close();
+      }
+    });
+
+    async function crashAfterStrictBoundary(storage: AsyncStorage, provider: () => void) {
+      let sent!: () => void;
+      const providerSent = new Promise<void>((resolve) => {
+        sent = resolve;
+      });
+      void runIdempotentExternalSideEffect({
+        ...fenceJob(storage),
+        claimLeaseDurationMs: 1,
+        execute: async (claim) => {
+          await claim.markExternalCallStarted();
+          provider();
+          sent();
+          // Simulated crash after the boundary transaction committed.
+          return await new Promise<never>(() => undefined);
+        },
+      });
+      await providerSent;
+      // Let the 1 ms dispatch lease lapse on the database clock.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    it("converges a crashed strict holder's ledger to unknown_external_outcome on retry", async () => {
+      const storage = openFenceStorage();
+      try {
+        const identity = await readFenceIdentity();
+        const provider = vi.fn();
+        await crashAfterStrictBoundary(storage, provider);
+        const [crashedRun] = await storage.externalSideEffectRuns.listByConnection(fenceIdentityInput.connectionId);
+        expect(crashedRun).toMatchObject({ status: "external_call_started" });
+        expect((await storage.mutationIdempotency.get(identity))?.dispatchedAt).toBeDefined();
+
+        const retry = await runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          claimLeaseDurationMs: 1,
+          execute: async (claim) => {
+            await claim.markExternalCallStarted();
+            provider();
+            return { id: "sent-again" };
+          },
+        });
+
+        expect(retry).toMatchObject({
+          status: "blocked",
+          blockedReason: "external_side_effect_unknown_after_send",
+          claim: {
+            replayOutcome: "unknown_after_send",
+            resumeState: "manual_review_unknown_external_outcome",
+            sideEffectRunId: crashedRun!.runId,
+          },
+        });
+        expect(provider).toHaveBeenCalledTimes(1);
+        expect(await storage.externalSideEffectRuns.get(crashedRun!.runId)).toMatchObject({
+          status: "unknown_external_outcome",
+          resumeState: "manual_review_unknown_external_outcome",
+        });
+        expect(await storage.mutationIdempotency.get(identity)).toMatchObject({ status: "unknown_after_send" });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("keeps a provider-key redispatch blocked while the ledger records the boundary crossing", async () => {
+      const storage = openFenceStorage();
+      try {
+        const identity = await readFenceIdentity();
+        const provider = vi.fn();
+        await crashAfterStrictBoundary(storage, provider);
+        const pendingBefore = await storage.mutationIdempotency.get(identity);
+
+        const retry = await runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          claimLeaseDurationMs: 1,
+          providerIdempotencyKeyEnforced: true,
+          execute: async (claim) => {
+            await claim.markExternalCallStarted();
+            provider();
+            return { id: "redispatched" };
+          },
+        });
+
+        // The ledger may only cross its boundary from a pre-boundary state, so
+        // a recorded external_call_started run fails closed; the takeover rolls back.
+        expect(retry).toMatchObject({ status: "blocked", blockedReason: "external_side_effect_in_progress" });
+        expect(provider).toHaveBeenCalledTimes(1);
+        expect(await storage.mutationIdempotency.get(identity)).toMatchObject({
+          status: "pending",
+          claimToken: pendingBefore?.claimToken,
+        });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("blocks an unleased retry of an opted-out claim whose holder sent before marking and then crashed", async () => {
+      const storage = openFenceStorage();
+      try {
+        const identity = await readFenceIdentity();
+        const provider = vi.fn();
+        let sent!: () => void;
+        const providerSent = new Promise<void>((resolve) => {
+          sent = resolve;
+        });
+        const sendThenMark = async (claim: ExternalSideEffectExecutionContext) => {
+          // Comms shape: the provider call happens before the boundary marker.
+          provider();
+          sent();
+          // Simulated crash: the holder never returns to mark its boundary.
+          await new Promise<never>(() => undefined);
+          await claim.markExternalCallStarted();
+          return { id: "unreachable" };
+        };
+
+        void runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          requireDurableBoundaryRecord: false,
+          disableDefaultClaimLease: true,
+          execute: sendThenMark,
+        });
+        await providerSent;
+        expect((await storage.mutationIdempotency.get(identity))?.claimExpiresAt).toBeUndefined();
+
+        const retry = await runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          requireDurableBoundaryRecord: false,
+          disableDefaultClaimLease: true,
+          checkedAt: new Date(Date.now() + DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS + 60_000).toISOString(),
+          execute: sendThenMark,
+        });
+
+        expect(retry).toMatchObject({ status: "blocked", blockedReason: "external_side_effect_in_progress" });
+        expect(provider).toHaveBeenCalledTimes(1);
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("treats a leased non-strict callback that never marked its boundary as an unknown outcome", async () => {
+      const storage = openFenceStorage();
+      try {
+        const identity = await readFenceIdentity();
+
+        const result = await runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          requireDurableBoundaryRecord: false,
+          execute: async () => ({ id: "dispatched-without-marker" }),
+        });
+
+        expect(result).toMatchObject({
+          status: "failed",
+          claim: { resumeState: "manual_review_unknown_external_outcome" },
+        });
+        expect(await storage.mutationIdempotency.get(identity)).toMatchObject({ status: "unknown_after_send" });
+      } finally {
+        await storage.close();
+      }
+    });
   });
 });

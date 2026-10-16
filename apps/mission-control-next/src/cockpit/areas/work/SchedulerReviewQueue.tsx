@@ -93,10 +93,10 @@ export function SchedulerReviewQueue({
     if (fresh.isSuccess && fresh.data?.features.cronReviewQueueV1Enabled === true) await queue.refetch();
   };
   return (
-    <section aria-label="Scheduler review" className="grid min-w-0 gap-3 rounded-lg border border-line bg-raised p-4">
+    <section aria-label="Scheduler review" className="grid min-w-0 gap-3 border-t border-line-subtle pt-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 className="font-display text-md font-semibold text-fg">Scheduler review</h2>
+          <h2 className="text-base font-semibold text-fg">Scheduler review</h2>
           <p className="text-sm text-fg-secondary">
             Scheduled runs flagged for follow-up, across all workspaces. Retrying is not offered here.
           </p>

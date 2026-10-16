@@ -86,7 +86,7 @@ test("controller service refuses interactive launch and protocol preserves exact
     assert.equal(capacityRun.status, 0, `Capacity protocol evidence: ${output}\n${capacityRun.stdout}${capacityRun.stderr}`);
     const capacityReport = JSON.parse(capacityRun.stdout);
     assert.equal(capacityReport.passed, true); assert.ok(capacityReport.checks >= 100);
-    assert.equal(capacityReport.sessions, 33); assert.equal(capacityReport.nativeClientSessions, 33);
+    assert.equal(capacityReport.sessions, 34); assert.equal(capacityReport.nativeClientSessions, 34);
     for (const key of ["installedService", "canonicalStorage", "volumeAttached", "ntfsFormatted", "volumeRootProtected", "volumeMounted"])
       assert.equal(capacityReport[key], false);
     const backingRun = spawnSync(executable, ["--backing-capacity", path.join(output, asan ? "asan-backing-capacity-data" : "normal-backing-capacity-data")], {
@@ -97,7 +97,7 @@ test("controller service refuses interactive launch and protocol preserves exact
     assert.equal(backingRun.status, 0, `Host capacity protocol evidence: ${output}\n${backingRun.stdout}${backingRun.stderr}`);
     const backingCapacityReport = JSON.parse(backingRun.stdout);
     assert.equal(backingCapacityReport.passed, true); assert.ok(backingCapacityReport.checks >= 100);
-    assert.equal(backingCapacityReport.sessions, 29); assert.equal(backingCapacityReport.nativeClientSessions, 29);
+    assert.equal(backingCapacityReport.sessions, 31); assert.equal(backingCapacityReport.nativeClientSessions, 31);
     for (const key of ["installedService", "canonicalStorage", "volumeAttached", "ntfsFormatted", "volumeRootProtected", "volumeMounted"])
       assert.equal(backingCapacityReport[key], false);
     const inventoryRun = spawnSync(executable, ["--inventory", path.join(output, asan ? "asan-inventory-data" : "normal-inventory-data")], {
@@ -108,7 +108,7 @@ test("controller service refuses interactive launch and protocol preserves exact
     assert.equal(inventoryRun.status, 0, `Inventory protocol evidence: ${output}\n${inventoryRun.stdout}${inventoryRun.stderr}`);
     const inventoryReport = JSON.parse(inventoryRun.stdout);
     assert.equal(inventoryReport.passed, true); assert.ok(inventoryReport.checks >= 100);
-    assert.equal(inventoryReport.sessions, 50); assert.equal(inventoryReport.nativeClientSessions, 50);
+    assert.equal(inventoryReport.sessions, 52); assert.equal(inventoryReport.nativeClientSessions, 52);
     for (const key of ["installedService", "canonicalStorage", "volumeAttached", "ntfsFormatted", "volumeRootProtected", "volumeMounted"])
       assert.equal(inventoryReport[key], false);
     const runtimeRun = spawnSync(executable, ["--runtime-handoff", path.join(output, asan ? "asan-runtime-data" : "normal-runtime-data")], {
@@ -131,6 +131,6 @@ test("controller service refuses interactive launch and protocol preserves exact
   );
   fs.writeFileSync(path.join(output, "acceptance.json"), JSON.stringify({
     sourceManifest: snapshot.sourceManifest, outcomes,
-    boundary: "Compiled production service with interactive refusal; actual protocol/journal creation and legacy recovery under a current-user fixture with OS pipe identity and flushed acknowledgements. Volume/format/protection/mount/workspace composition uses controlled physical-driver responses. Capacity uses independently retained native history, a controlled observation peer and the production client; the actual controller refuses missing quiescence ownership before filesystem access. Runtime handoff uses the production client with controlled server/runtime callbacks; the actual controller separately refuses absent owners and the unmounted fixture journal before runtime dispatch. No SCM install/start, real installed custody, privileged volume operation, actual mounted runtime, live capacity scan through the controller or canonical Gateway storage.",
+    boundary: "Compiled production service with interactive refusal; actual protocol/journal creation and legacy recovery under a current-user fixture with OS pipe identity and flushed acknowledgements. Volume/format/protection/mount/workspace composition uses controlled physical-driver responses. Capacity uses independently retained native history, a controlled observation peer and the production client; the actual controller refuses missing quiescence ownership before filesystem access and, with the hold owner and installed observers composed, dispatches to the recorded journal, which the unprivileged fixture cannot open for a live scan. Runtime handoff uses the production client with controlled server/runtime callbacks; the actual controller separately refuses absent owners and the unmounted fixture journal before runtime dispatch. No SCM install/start, real installed custody, privileged volume operation, actual mounted runtime, live capacity scan through the controller or canonical Gateway storage.",
   }, null, 2), { flag: "wx" });
 });

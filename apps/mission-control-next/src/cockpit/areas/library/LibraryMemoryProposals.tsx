@@ -17,6 +17,7 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { presentProposalStatus, proposalAuthorityLabel } from "./library-vocabulary";
+import { Section } from "../../ui/Section";
 
 export function LibraryMemoryProposals(props: Parameters<typeof LibraryMemoryProposalsContent>[0]) {
   const access = useLibraryOperation(JSON.stringify(["memory-proposals", props.workspaceId]));
@@ -99,23 +100,24 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
     }
   }
   return (
-    <section className="grid gap-3 rounded-lg border border-line p-3" aria-label="Memory proposals">
-      <h2 className="font-display text-lg text-fg">Memory proposals</h2>
-      <p className="text-sm text-fg-secondary">
-        Proposals are not trusted memory. Promotion is a decision you make explicitly.
-      </p>
+    <Section
+      title="Memory proposals"
+      description="Proposals are not trusted memory. Promotion is a decision you make explicitly."
+      actions={
+        <Button size="sm" disabled={query.isFetching} onClick={() => void query.refetch()}>
+          Refresh memory proposals
+        </Button>
+      }
+    >
       {query.isFetching ? <p role="status">Reading memory proposals…</p> : null}
       {query.error ? <Callout tone="error">{describeApiError(query.error).summary}</Callout> : null}
       {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
-      <Button disabled={query.isFetching} onClick={() => void query.refetch()}>
-        Refresh memory proposals
-      </Button>
       {query.data && !proposals.length ? (
         <p className="text-sm text-fg-muted">No proposals waiting for review.</p>
       ) : null}
-      <ul className="grid gap-2">
+      <ul className="divide-y divide-line-subtle">
         {proposals.map((item) => (
-          <li key={item.candidateId} className="rounded-md border border-line p-3">
+          <li key={item.candidateId} className="space-y-1 py-3">
             <p className="whitespace-pre-wrap break-words">{item.proposedInsight}</p>
             <div className="flex flex-wrap items-center gap-1 text-sm text-fg-secondary">
               <StatusBadge status={presentProposalStatus(item.status)} />
@@ -173,6 +175,6 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
           </Button>
         </div>
       </Dialog>
-    </section>
+    </Section>
   );
 }

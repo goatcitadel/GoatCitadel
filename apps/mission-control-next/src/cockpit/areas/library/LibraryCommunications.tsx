@@ -14,6 +14,8 @@ import { useLibraryOperation } from "./use-library-operation";
 import { TimeText } from "../../ui/TimeText";
 import { mailProviderLabel, triageLabel } from "./library-vocabulary";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 
 const SYNC_STATUS: Readonly<Record<MailAccountRecord["syncStatus"], StatusPresentation>> = {
   ready: { label: "Ready", tone: "done" },
@@ -22,8 +24,11 @@ const SYNC_STATUS: Readonly<Record<MailAccountRecord["syncStatus"], StatusPresen
   not_configured: { label: "Not configured", tone: "waiting" },
   failed: { label: "Failed", tone: "failed" },
 };
-const CARD = "grid min-w-0 grid-cols-1 content-start gap-3 rounded-lg border border-line p-3";
-const ITEM = "min-w-0 rounded-md border border-line p-3 wrap-anywhere";
+// Flat regions (DESIGN.md › Page anatomy): hairline-separated, with hairline-separated rows inside.
+const CARD =
+  "grid min-w-0 grid-cols-1 content-start gap-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0";
+const ITEM = "min-w-0 py-3 wrap-anywhere";
+const LIST = "min-w-0 divide-y divide-line-subtle";
 
 const validTime = (iso?: string): iso is string => Boolean(iso && Number.isFinite(Date.parse(iso)));
 
@@ -54,32 +59,34 @@ export function LibraryCommunications({ workspaceId }: { workspaceId: string }) 
   const data = query.data ? scopeDashboard(query.data, workspaceId) : undefined;
   const refresh = () => query.refetch();
   return (
-    <div className="grid min-w-0 grid-cols-1 gap-4 overflow-y-auto p-4">
-      <header className="grid min-w-0 gap-2">
-        <h1 className="font-display text-xl font-semibold">{LIBRARY_SECTION_LABELS.communications}</h1>
-        <p className="text-sm text-fg-secondary">
-          Inbox, agenda and contacts read through governed integrations for{" "}
-          <span title={workspaceId}>{workspaceName ?? `workspace ${workspaceId}`}</span>. Sending is approval-gated and
-          this screen never delivers mail.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <Button disabled={query.isFetching} onClick={() => void refresh()}>
+    <div className={`${AREA_PAGE} min-w-0`}>
+      <AreaHeader
+        title={LIBRARY_SECTION_LABELS.communications}
+        description={
+          <>
+            Inbox, agenda and contacts read through governed integrations for{" "}
+            <span title={workspaceId}>{workspaceName ?? `workspace ${workspaceId}`}</span>. Sending is approval-gated
+            and this screen never delivers mail.
+          </>
+        }
+        actions={
+          <Button size="sm" disabled={query.isFetching} onClick={() => void refresh()}>
             Refresh communications
           </Button>
-        </div>
-        {query.isPending ? <p role="status">Reading communications…</p> : null}
-        {query.error ? (
-          <Callout tone="error">{describeApiError(query.error).summary} Retry with Refresh communications.</Callout>
-        ) : null}
-      </header>
+        }
+      />
+      {query.isPending ? <p role="status">Reading communications…</p> : null}
+      {query.error ? (
+        <Callout tone="error">{describeApiError(query.error).summary} Retry with Refresh communications.</Callout>
+      ) : null}
       <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="grid min-w-0 grid-cols-1 content-start gap-4">
           <section className={CARD} aria-label="Inbox">
-            <h2 className="font-display text-lg text-fg">Inbox</h2>
+            <h2 className="text-base font-semibold text-fg">Inbox</h2>
             {data && !data.messages.length ? (
               <p className="text-sm text-fg-muted">No inbox messages returned.</p>
             ) : null}
-            <ul className="grid min-w-0 grid-cols-1 gap-2">
+            <ul className={LIST}>
               {data?.messages.map((message) => (
                 <li key={message.messageId} className={ITEM}>
                   <h3 className="font-medium">{message.subject || "Untitled message"}</h3>
@@ -104,9 +111,9 @@ export function LibraryCommunications({ workspaceId }: { workspaceId: string }) 
             </ul>
           </section>
           <section className={CARD} aria-label="Agenda">
-            <h2 className="font-display text-lg text-fg">Agenda</h2>
+            <h2 className="text-base font-semibold text-fg">Agenda</h2>
             {data && !data.events.length ? <p className="text-sm text-fg-muted">No agenda items returned.</p> : null}
-            <ul className="grid min-w-0 grid-cols-1 gap-2">
+            <ul className={LIST}>
               {data?.events.map((event) => (
                 <li key={event.eventId} className={ITEM}>
                   <h3 className="font-medium">{event.title}</h3>
@@ -123,9 +130,9 @@ export function LibraryCommunications({ workspaceId }: { workspaceId: string }) 
             </ul>
           </section>
           <section className={CARD} aria-label="Contacts">
-            <h2 className="font-display text-lg text-fg">Contacts</h2>
+            <h2 className="text-base font-semibold text-fg">Contacts</h2>
             {data && !data.contacts.length ? <p className="text-sm text-fg-muted">No contacts returned.</p> : null}
-            <ul className="grid min-w-0 grid-cols-1 gap-2">
+            <ul className={LIST}>
               {data?.contacts.map((contact) => (
                 <li key={contact.contactId} className={ITEM}>
                   <h3 className="font-medium">{contact.displayName}</h3>
@@ -145,11 +152,11 @@ export function LibraryCommunications({ workspaceId }: { workspaceId: string }) 
         </div>
         <div className="grid min-w-0 grid-cols-1 content-start gap-4">
           <section className={CARD} aria-label="Mail and calendar accounts">
-            <h2 className="font-display text-lg text-fg">Accounts</h2>
+            <h2 className="text-base font-semibold text-fg">Accounts</h2>
             {data && !data.mailAccounts.length && !data.calendarAccounts.length ? (
               <p className="text-sm text-fg-muted">No mail or calendar account is connected to this workspace.</p>
             ) : null}
-            <ul className="grid min-w-0 grid-cols-1 gap-2">
+            <ul className={LIST}>
               {[
                 ...(data?.mailAccounts ?? []).map((account) => ["Mail", account] as const),
                 ...(data?.calendarAccounts ?? []).map((account) => ["Calendar", account] as const),

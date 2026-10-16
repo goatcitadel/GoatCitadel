@@ -28,7 +28,7 @@ export function InboxSettingsContinuation({
   parameters.delete("shellScope");
   if (!control.visible) return null;
   return (
-    <section aria-label="Continue Settings change" className="space-y-2 rounded-md border border-line bg-sunken p-3">
+    <section aria-label="Continue Settings change" className="space-y-2 border-t border-line-subtle pt-3">
       <p>
         Review the separate approval first, then explicitly continue this exact Settings change. A recorded continuation
         does not prove the settings were saved.

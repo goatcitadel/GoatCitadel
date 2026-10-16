@@ -2,6 +2,7 @@ import type { McpServerRecord } from "@goatcitadel/contracts";
 import { fetchAllowlisted } from "@goatcitadel/policy-engine";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { prepareStaticEnvironment, buildMcpHttpAuthHeaders } from "./mcp-transport-credentials.js";
+import { withLegacySseMcpClient } from "./mcp-legacy-sse-transport.js";
 import type { McpRuntimeTransportOptions, JsonRpcEnvelope } from "./mcp-runtime.js";
 export const MCP_STREAMABLE_HTTP_PROTOCOL_VERSION = "2025-06-18";
 export const MCP_HTTP_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
@@ -19,6 +20,11 @@ export async function withHttpMcpClient<T>(
   run: (client: HttpMcpClient) => Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
+  if (server.transport === "sse") {
+    // `sse` records speak the legacy HTTP+SSE handshake (GET stream, announced
+    // same-origin message endpoint), not Streamable HTTP.
+    return withLegacySseMcpClient(server, timeoutMs, options, run, signal);
+  }
   options = await prepareStaticEnvironment(server, options);
   const endpoint = server.url?.trim();
   if (!endpoint) {
@@ -335,7 +341,7 @@ async function readBodyChunkWithDeadline(
   }
 }
 
-async function cancelBodyReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+export async function cancelBodyReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
   try {
     await reader.cancel();
   } catch {
@@ -343,11 +349,11 @@ async function cancelBodyReader(reader: ReadableStreamDefaultReader<Uint8Array>)
   }
 }
 
-function createMcpHttpBodyLimitError(maxBytes: number): Error {
+export function createMcpHttpBodyLimitError(maxBytes: number): Error {
   return new Error(`MCP HTTP response body exceeded ${maxBytes} bytes.`);
 }
 
-function createMcpHttpBodyTimeoutError(): Error {
+export function createMcpHttpBodyTimeoutError(): Error {
   return new Error("Timed out reading MCP HTTP response body.");
 }
 

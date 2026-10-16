@@ -56,7 +56,7 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
       aria-label="Autonomous activation grants"
       className="space-y-3 border-t border-line pt-4"
     >
-      <h3 className="font-display text-base font-semibold">Autonomous activation grants</h3>
+      <h3 className="text-base font-semibold">Autonomous activation grants</h3>
       <p className="text-sm text-fg-secondary">
         Installation-wide grant records, including other workspaces and expired grants. An active record is not proof
         that a particular action is currently allowed; deny rules, auth, path, provenance and health checks remain
@@ -84,14 +84,14 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
             setQuery(event.target.value);
             setLimit(30);
           }}
-          className="mt-1 min-h-10 w-full rounded border border-line-control bg-canvas px-3 text-fg"
+          className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-fg"
         />
       </label>
       <ul className="space-y-3">
         {items.slice(0, limit).map((grant) => {
           const attempt = control.attemptFor(grant.grantId);
           return (
-            <li key={grant.grantId} className="space-y-2 rounded border border-line p-3 text-sm">
+            <li key={grant.grantId} className="space-y-2 rounded-md border border-line p-3 text-sm">
               <h4 className="break-words font-semibold">{grant.reason}</h4>
               <p>
                 {workspaceName(grant.workspaceId) ?? "Workspace outside this Citadel"}

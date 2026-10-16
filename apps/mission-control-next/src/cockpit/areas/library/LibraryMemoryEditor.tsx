@@ -33,7 +33,7 @@ export function LibraryMemoryEditor({ itemId, workspaceId }: { itemId: string; w
     staleTime: 0,
   });
   return (
-    <section className="grid gap-3 rounded-lg border border-line p-3" aria-label="Memory editor">
+    <section className="grid gap-3 border-t border-line-subtle pt-4" aria-label="Memory editor">
       {item.isPending ? <p role="status">Reading memory item…</p> : null}
       {item.error ? <Callout tone="error">{describeApiError(item.error).summary} Changes are locked.</Callout> : null}
       {item.data ? (
@@ -168,7 +168,7 @@ function MemoryEditor({
   const globalItem = !item.workspaceId;
   return (
     <>
-      <h2 className="font-display text-lg text-fg">{item.title}</h2>
+      <h2 className="text-base font-semibold text-fg">{item.title}</h2>
       <p className="text-sm text-fg-secondary">
         {presentMemoryLifecycle(item.lifecycleState).label} · {memoryNamespaceLabel(item.namespace)} · {scope}
       </p>

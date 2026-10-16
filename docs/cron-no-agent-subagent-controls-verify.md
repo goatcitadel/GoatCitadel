@@ -1,6 +1,6 @@
 # Manual verification — cron + subagent control knobs
 
-This checklist covers an experimental local-only workstream. `GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON` must remain disabled by default; enabling it is outside the GoatCitadel 1.0 merge guarantee and should only be used for local/manual validation.
+`no_agent` cron is a shipped, local-only capability and no longer sits behind an environment flag (the former `GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON` gate was removed). The automated proof is `pnpm verify:cron:no-agent`; this checklist is a manual sanity probe on top of it, not release evidence. The O3, O5, and O6 sections below are manual probes that the proof lane does not cover.
 
 This is the manual-probe checklist for O3/O4/O5/O6 from the 2026-05-15 upstream gap review. The unit tests in this PR cover all paths; this doc is for sanity-checking the integration end-to-end against a running gateway.
 
@@ -61,7 +61,7 @@ This is the manual-probe checklist for O3/O4/O5/O6 from the 2026-05-15 upstream 
 
 ### `workdir`
 
-1. Create a `no_agent` job with `workdir: "/tmp/test"` (or `C:\\temp` on Windows). Command: `pwd` (Unix) or `cd` (Windows).
+1. Create a `no_agent` job with `workdir: "/tmp/test"` (or `C:\\temp` on Windows). Command: `node` with args `["-e", "process.stdout.write(process.cwd())"]` (portable; commands run with `shell: false`, so shell built-ins such as `cd` do not work).
 2. Trigger. The realtime event's `output` equals the workdir path.
 
 ## O6 — `goatcitadel-cron run --wait` + `cron runs --run-id`

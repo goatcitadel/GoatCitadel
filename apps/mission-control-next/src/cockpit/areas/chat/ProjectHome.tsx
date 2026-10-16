@@ -56,8 +56,18 @@ export function ProjectHome({
     sessions.data && !sessions.isError
       ? deriveProjectHome(project, currentSessions, artifacts.data && !artifacts.isError ? currentArtifacts : undefined)
       : undefined;
-  async function start(intent: ProjectIntakeMode, transition: { isCurrent: () => boolean; navigate: (href: string) => void }) {
-    if (!available || !transition.isCurrent() || !access.current() || pending.current || project.lifecycleStatus !== "active") return;
+  async function start(
+    intent: ProjectIntakeMode,
+    transition: { isCurrent: () => boolean; navigate: (href: string) => void },
+  ) {
+    if (
+      !available ||
+      !transition.isCurrent() ||
+      !access.current() ||
+      pending.current ||
+      project.lifecycleStatus !== "active"
+    )
+      return;
     pending.current = true;
     setBusy(true);
     setError("");
@@ -94,8 +104,8 @@ export function ProjectHome({
     }
   }
   return (
-    <section aria-label="Project overview" className="grid min-w-0 gap-3 rounded-lg border border-line p-4">
-      <h2 className="font-display text-lg">Project overview</h2>
+    <section aria-label="Project overview" className="grid min-w-0 gap-3 border-t border-line-subtle pt-4">
+      <h2 className="text-lg font-semibold">Project overview</h2>
       <Button
         disabled={sessions.isFetching || artifacts.isFetching}
         onClick={() => {
@@ -125,7 +135,11 @@ export function ProjectHome({
               disabled={!available || busy || project.lifecycleStatus !== "active"}
               className="h-auto min-w-0 flex-col items-start whitespace-normal p-3 text-left"
               aria-label={`Start ${intent.label} for ${project.name}`}
-              onClick={() => route.requestTransition(transition => { if (transition.isCurrent()) void start(intent, transition); })}
+              onClick={() =>
+                route.requestTransition((transition) => {
+                  if (transition.isCurrent()) void start(intent, transition);
+                })
+              }
             >
               <span>{intent.label}</span>
               <span className="text-xs font-normal">{intent.detail}</span>

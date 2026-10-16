@@ -14,10 +14,13 @@ export function SafetyCatalogSummary() {
     { kind: "skill", label: "Skills", action: "Open skills in Library" },
   ];
   return (
-    <section aria-labelledby="safety-catalog-title" className="mt-4 rounded-lg border border-line bg-sunken p-4">
+    <section
+      aria-labelledby="safety-catalog-title"
+      className="mt-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 id="safety-catalog-title" className="font-display text-md font-semibold text-fg">
+          <h3 id="safety-catalog-title" className="text-md font-semibold text-fg">
             Tools and skills
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">

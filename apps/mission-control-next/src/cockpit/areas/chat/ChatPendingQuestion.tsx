@@ -35,7 +35,7 @@ export function ChatPendingQuestion({
       className="mt-3 rounded-md border border-status-waiting bg-raised p-3 text-sm"
       aria-label="Pending question"
     >
-      <h3 className="font-display font-semibold text-fg">{prompt.title || "Your input is needed"}</h3>
+      <h3 className="font-semibold text-fg">{prompt.title || "Your input is needed"}</h3>
       {background ? (
         <p role="status" aria-live="polite" className="mt-1 text-xs text-fg-muted">
           Optional · Work continues
@@ -67,12 +67,9 @@ export function ChatPendingQuestion({
           </p>
         </>
       ) : prompt.kind === "single_select" ? (
-        <div role="radiogroup" aria-label={prompt.question} className="mt-2 grid gap-1">
+        <div role="radiogroup" aria-label={prompt.question} className="mt-2 divide-y divide-line-subtle">
           {(prompt.options ?? []).map((option) => (
-            <label
-              key={option.optionId}
-              className="flex items-start gap-2 rounded-md border border-line-subtle p-2 text-fg-secondary"
-            >
+            <label key={option.optionId} className="flex items-start gap-2 py-2 text-fg-secondary">
               <input
                 type="radio"
                 name={`prompt-${prompt.promptId}`}

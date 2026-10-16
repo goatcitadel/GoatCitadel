@@ -33,6 +33,7 @@ export class TranscriptOutboxRepository {
   private readonly listPendingBySessionStmt;
   private readonly markFailedStmt;
   private readonly markDeliveredStmt;
+  private readonly markAttemptStartedStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
@@ -81,6 +82,12 @@ export class TranscriptOutboxRepository {
       WHERE event_id = @eventId
         AND delivered_at IS NULL
     `);
+    this.markAttemptStartedStmt = db.prepare(`
+      UPDATE transcript_outbox
+      SET last_attempt_at = @attemptedAt
+      WHERE event_id = @eventId
+        AND delivered_at IS NULL
+    `);
     this.markDeliveredStmt = db.prepare(`
       UPDATE transcript_outbox
       SET delivered_at = @deliveredAt,
@@ -98,13 +105,15 @@ export class TranscriptOutboxRepository {
       eventJson: JSON.stringify(event),
       enqueuedAt,
     });
-    return this.get(event.eventId) ?? {
-      eventId: event.eventId,
-      sessionId: event.sessionId,
-      event,
-      enqueuedAt,
-      attemptCount: 0,
-    };
+    return (
+      this.get(event.eventId) ?? {
+        eventId: event.eventId,
+        sessionId: event.sessionId,
+        event,
+        enqueuedAt,
+        attemptCount: 0,
+      }
+    );
   }
 
   public get(eventId: string): TranscriptOutboxRecord | undefined {
@@ -113,9 +122,9 @@ export class TranscriptOutboxRepository {
   }
 
   public listPending(limit = 100, sessionId?: string): TranscriptOutboxRecord[] {
-    const rows = toTranscriptOutboxRows(sessionId
-      ? this.listPendingBySessionStmt.all({ limit, sessionId })
-      : this.listPendingStmt.all({ limit }));
+    const rows = toTranscriptOutboxRows(
+      sessionId ? this.listPendingBySessionStmt.all({ limit, sessionId }) : this.listPendingStmt.all({ limit }),
+    );
     return rows.map(mapRow);
   }
 
@@ -132,6 +141,12 @@ export class TranscriptOutboxRepository {
       lastAttemptAt,
       lastError: input.lastError,
     });
+    return this.get(eventId);
+  }
+
+  /** Records that an append attempt began, without counting it as a failure. */
+  public markAttemptStarted(eventId: string, input: { attemptedAt: string }): TranscriptOutboxRecord | undefined {
+    this.markAttemptStartedStmt.run({ eventId, attemptedAt: input.attemptedAt });
     return this.get(eventId);
   }
 
@@ -203,35 +218,37 @@ function isTranscriptOutboxRow(value: unknown): value is TranscriptOutboxRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.event_id === "string"
-    && typeof value.session_id === "string"
-    && typeof value.event_json === "string"
-    && typeof value.enqueued_at === "string"
-    && (typeof value.delivered_at === "string" || value.delivered_at === null)
-    && (typeof value.transcript_offset === "number" || value.transcript_offset === null)
-    && typeof value.attempt_count === "number"
-    && (typeof value.last_attempt_at === "string" || value.last_attempt_at === null)
-    && (typeof value.last_error === "string" || value.last_error === null);
+  return (
+    typeof value.event_id === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.event_json === "string" &&
+    typeof value.enqueued_at === "string" &&
+    (typeof value.delivered_at === "string" || value.delivered_at === null) &&
+    (typeof value.transcript_offset === "number" || value.transcript_offset === null) &&
+    typeof value.attempt_count === "number" &&
+    (typeof value.last_attempt_at === "string" || value.last_attempt_at === null) &&
+    (typeof value.last_error === "string" || value.last_error === null)
+  );
 }
 
 function isTranscriptEvent(value: unknown): value is TranscriptEvent {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.eventId === "string"
-    && typeof value.actionId === "string"
-    && typeof value.idempotencyKey === "string"
-    && typeof value.sessionId === "string"
-    && typeof value.sessionKey === "string"
-    && typeof value.timestamp === "string"
-    && typeof value.type === "string"
-    && typeof value.actorType === "string"
-    && typeof value.actorId === "string"
-    && isRecord(value.payload);
+  return (
+    typeof value.eventId === "string" &&
+    typeof value.actionId === "string" &&
+    typeof value.idempotencyKey === "string" &&
+    typeof value.sessionId === "string" &&
+    typeof value.sessionKey === "string" &&
+    typeof value.timestamp === "string" &&
+    typeof value.type === "string" &&
+    typeof value.actorType === "string" &&
+    typeof value.actorId === "string" &&
+    isRecord(value.payload)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

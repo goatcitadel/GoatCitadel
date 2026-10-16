@@ -15176,6 +15176,20 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     sql: buildPostgresV211SessionControlIndexAuthoritySql(),
     integritySha256: "3a9f7bc1529c9024d79436b5f9926231b3067d8ecb10814f5eb37d3adac4346e",
   },
+  {
+    // Nullable TEXT matches the v2 live render, which already carries the
+    // column on fresh installs; upgraded installs gain it here. Pre-fence
+    // pending rows may already have dispatched without a marker, so they are
+    // fenced fail-closed. Only external side-effect claims dispatch; internal
+    // owners (HTTP, skill learning, agentic controls) never mark and stay unfenced.
+    version: 212,
+    name: "mutation_idempotency_dispatch_fence",
+    sql: `
+      ALTER TABLE mutation_idempotency ADD COLUMN IF NOT EXISTS dispatched_at TEXT;
+      UPDATE mutation_idempotency SET dispatched_at = updated_at WHERE status = 'pending' AND dispatched_at IS NULL AND substr(route_path, 1, 21) = 'external_side_effect:';
+    `,
+    integritySha256: "f3fb771dfc2a5c4e4c1517208cb6598bc006e7ef4622a8f689d28a539b20e562",
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

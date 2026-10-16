@@ -10,10 +10,12 @@ import type {
   OperatorActionReversibility,
   WardEffect,
 } from "@goatcitadel/contracts";
+import { logger } from "@goatcitadel/gateway-core";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { wardRequiresDryRun } from "./dry-run-commit-service.js";
 
+const log = logger.child("external-side-effect-runner");
 const EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY = "goatcitadel:external-side-effect-digest:v1";
 const EXTERNAL_SIDE_EFFECT_DESTINATION_DIGEST_DOMAIN_KEY = "goatcitadel:external-side-effect-destination-digest:v1";
 
@@ -74,7 +76,19 @@ export interface ExternalSideEffectRunStore {
 }
 
 type MutationIdempotencyStore = Pick<AsyncStorage["mutationIdempotency"], "claim" | "markCompleted" | "markFailed"> &
-  Partial<Pick<AsyncStorage["mutationIdempotency"], "discardPending">>;
+  Partial<Pick<AsyncStorage["mutationIdempotency"], "discardPending" | "markDispatched" | "markUnknownAfterSend">>;
+
+/**
+ * Lease applied to every run whose caller leaves `claimLeaseDurationMs` unset,
+ * as long as the mutation store can record the dispatch marker. Takeover may
+ * only seize a claim that never crossed the dispatch boundary, so an expired
+ * lease can no longer leave a crashed pre-boundary claim `in_progress` forever.
+ *
+ * Hazard: takeover trusts the marker. A caller that dispatches before calling
+ * `markExternalCallStarted()` leaves an unmarked claim that a later run would
+ * take over and send again; such a caller must set `disableDefaultClaimLease`.
+ */
+export const DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS = 15 * 60 * 1000;
 
 export interface ExternalSideEffectIntentInput {
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
@@ -236,12 +250,31 @@ export interface ExternalSideEffectClaimInput {
   actionId?: string;
   checkedAt: string;
   /**
-   * Opts the mutation claim into token-fenced stale takeover. Ordinary live
-   * callers leave this unset, so an expired wall-clock alone can never seize a
-   * provider call. The replay worker supplies the same bounded interval it
-   * uses to classify a pre-boundary run as stale.
+   * Lease for token-fenced stale takeover. `runIdempotentExternalSideEffect`
+   * applies `DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS` when this is unset and
+   * the mutation store records dispatch markers; takeover never seizes a claim
+   * that crossed the dispatch boundary. The replay worker supplies the same
+   * bounded interval it uses to classify a pre-boundary run as stale.
    */
   claimLeaseDurationMs?: number;
+  /**
+   * Opts out of the default takeover lease (an explicit `claimLeaseDurationMs`
+   * still wins). Required for callers that cannot mark their dispatch boundary
+   * before the provider call: their unmarked claim must never be taken over.
+   * The protection holds only while every claimer of the same mutation identity
+   * is also unleased: the repository treats an unleased pending claim as
+   * expired for any leased claimer.
+   */
+  disableDefaultClaimLease?: boolean;
+  /**
+   * True only when the provider itself deduplicates on this idempotency key,
+   * which makes redispatching a stale claim that already crossed the boundary safe.
+   * Redispatch still requires a run ledger that never recorded the crossing (no
+   * row, `claimed_not_sent`, or `failed_before_boundary`): the ledger may only
+   * cross its boundary from a pre-boundary state, so a recorded
+   * `external_call_started` run stays blocked for operator reconciliation.
+   */
+  providerIdempotencyKeyEnforced?: boolean;
   /**
    * Non-secret digest of the canonical provider destination. When present it
    * becomes part of the mutation payload hash and the redacted run summary.
@@ -395,8 +428,11 @@ export async function claimIdempotentExternalSideEffect(
     input.connectionId ?? "unknown_connection",
     input.actionId ?? "unknown_action",
   ].join(":");
+  const { checkedAt } = input;
+  const mutationStore = input.mutationStore;
+  const sideEffectRunStore = input.sideEffectRunStore;
 
-  if (!input.mutationStore) {
+  if (!mutationStore) {
     return recordExternalSideEffectRun(input, {
       replayPolicy: "idempotent_external",
       replayOutcome: "idempotency_unavailable",
@@ -412,7 +448,7 @@ export async function claimIdempotentExternalSideEffect(
 
   const claimAndRecord = async (): Promise<ExternalSideEffectClaimResult> => {
     const currentReplayRun = input.replayRunId
-      ? await input.sideEffectRunStore!.createOrGet(
+      ? await sideEffectRunStore!.createOrGet(
           {
             workspaceId: input.workspaceId,
             boundary: input.boundary,
@@ -428,7 +464,7 @@ export async function claimIdempotentExternalSideEffect(
             replayAttempt: "new",
             requestPayload: summarizeExternalSideEffectRequest(input.payload, externalDestinationFingerprint),
           },
-          input.checkedAt,
+          checkedAt,
         )
       : undefined;
     if (currentReplayRun && currentReplayRun.runId !== input.replayRunId) {
@@ -440,27 +476,28 @@ export async function claimIdempotentExternalSideEffect(
     if (currentReplayBlock) {
       return currentReplayBlock;
     }
-    const claim = await input.mutationStore!.claim({
+    const leaseDurationMs = input.claimLeaseDurationMs;
+    const claim = await mutationStore.claim({
       method: "POST",
       routePath,
       idempotencyKey,
       actorScope,
       payloadHash,
-      ...(input.claimLeaseDurationMs !== undefined
-        ? { leaseDurationMs: input.claimLeaseDurationMs }
-        : { now: input.checkedAt }),
+      ...(leaseDurationMs !== undefined ? { leaseDurationMs } : { now: checkedAt }),
+      ...(input.providerIdempotencyKeyEnforced === true ? { providerIdempotencyKeyEnforced: true } : {}),
     });
+    const replayOutcome: IntegrationExternalWritebackReplayOutcome = claim.outcome;
     const claimed: ExternalSideEffectClaimResult = {
       replayPolicy: "idempotent_external",
-      replayOutcome: claim.outcome,
+      replayOutcome,
       replayAttempt:
         claim.outcome === "claimed"
-          ? claim.claimKind === "retry_after_stale_claim"
+          ? claim.claimKind === "retry_after_stale_claim" || claim.claimKind === "redispatch_after_stale_send"
             ? "retry_after_failure"
             : (claim.claimKind ?? "new")
           : "blocked",
       resumable: false,
-      resumeState: mapExternalSideEffectResumeState(claim.outcome),
+      resumeState: mapExternalSideEffectResumeState(replayOutcome),
       idempotencyKey,
       payloadHash,
       actorScope,
@@ -468,6 +505,7 @@ export async function claimIdempotentExternalSideEffect(
       ...(claim.outcome === "claimed" && claim.record?.claimToken ? { claimToken: claim.record.claimToken } : {}),
     };
     if (currentReplayRun) {
+      await settleUnknownAfterSendRun(sideEffectRunStore!, currentReplayRun, claimed, checkedAt);
       return { ...claimed, sideEffectRunId: currentReplayRun.runId };
     }
     const recorded = await recordExternalSideEffectRun(input, claimed);
@@ -481,14 +519,14 @@ export async function claimIdempotentExternalSideEffect(
       }
       if (
         claimed.replayAttempt !== "new" ||
-        !(await discardIdempotentExternalSideEffectPending(input.mutationStore, claimed))
+        !(await discardIdempotentExternalSideEffectPending(mutationStore, claimed))
       ) {
-        await markIdempotentExternalSideEffectFailed(input.mutationStore, claimed, input.checkedAt);
+        await markIdempotentExternalSideEffectFailed(mutationStore, claimed, checkedAt);
       }
     }
     return recorded;
   };
-  if (!input.sideEffectRunStore || !input.runClaimTransaction) {
+  if (!sideEffectRunStore || !input.runClaimTransaction) {
     return claimAndRecord();
   }
   try {
@@ -650,7 +688,8 @@ export async function runIdempotentExternalSideEffect<TValue>(
     throw new Error(`${input.label} requires a transaction owner for durable claim and completion state.`);
   }
 
-  const claim = await claimIdempotentExternalSideEffect(input);
+  const claimLeaseDurationMs = resolveExternalSideEffectClaimLeaseMs(input);
+  const claim = await claimIdempotentExternalSideEffect({ ...input, claimLeaseDurationMs });
   if (claim.replayOutcome !== "claimed") {
     return {
       status: "blocked",
@@ -683,7 +722,11 @@ export async function runIdempotentExternalSideEffect<TValue>(
         }
         try {
           const rotatedClaim = await input.runClaimTransaction!(async () => {
-            const nextClaim = await rotateExternalSideEffectMutationClaimAtBoundary(input, ownedClaim);
+            const nextClaim = await rotateExternalSideEffectMutationClaimAtBoundary(
+              input,
+              ownedClaim,
+              claimLeaseDurationMs,
+            );
             await markExternalSideEffectRunStarted(input.sideEffectRunStore, nextClaim, input.checkedAt);
             return nextClaim;
           });
@@ -696,7 +739,12 @@ export async function runIdempotentExternalSideEffect<TValue>(
         externalCallStarted = true;
         return;
       }
-      ownedClaim = await rotateExternalSideEffectMutationClaimAtBoundary(input, ownedClaim);
+      try {
+        ownedClaim = await rotateExternalSideEffectMutationClaimAtBoundary(input, ownedClaim, claimLeaseDurationMs);
+      } catch (error) {
+        boundaryClaimLost = isExternalSideEffectBoundaryClaimLostError(error);
+        throw error;
+      }
       externalCallStarted = true;
       try {
         await markExternalSideEffectRunStarted(input.sideEffectRunStore, ownedClaim, input.checkedAt);
@@ -730,9 +778,15 @@ export async function runIdempotentExternalSideEffect<TValue>(
 
   try {
     const value = await input.execute(executionClaim);
-    if (input.requireDurableBoundaryRecord && !externalCallStarted && !externalCallNotRequired) {
-      // The callback violated the strict contract. Treat the outcome as unknown:
-      // provider code may have run, so never reopen the mutation for retry.
+    if (
+      (input.requireDurableBoundaryRecord || claimLeaseDurationMs !== undefined) &&
+      !externalCallStarted &&
+      !externalCallNotRequired
+    ) {
+      // The callback violated the strict contract, or a leased callback skipped
+      // its dispatch marker (an unmarked leased claim is open to takeover).
+      // Treat the outcome as unknown: provider code may have run, so never
+      // reopen the mutation for retry.
       externalCallStarted = true;
       throw new Error(`${input.label} crossed execution without recording its durable external boundary.`);
     }
@@ -789,6 +843,11 @@ export async function runIdempotentExternalSideEffect<TValue>(
         manualReconciliationRequired = true;
         failure = settlementError;
       }
+    }
+    if (manualReconciliationRequired && !boundaryClaimLost) {
+      // Settle the still-owned generation terminally so it stops reading as
+      // `in_progress` forever; later claims report `unknown_after_send`.
+      await safeMarkIdempotentExternalSideEffectUnknownAfterSend(input.mutationStore, ownedClaim, input.checkedAt);
     }
     if (!boundaryClaimLost) {
       const expectedStatus = input.requireDurableBoundaryRecord
@@ -847,9 +906,22 @@ class ExternalSideEffectMutationClaimLostError extends Error {
   }
 }
 
+function resolveExternalSideEffectClaimLeaseMs(input: ExternalSideEffectClaimInput): number | undefined {
+  const explicitLeaseDurationMs = input.claimLeaseDurationMs;
+  if (explicitLeaseDurationMs !== undefined) {
+    return explicitLeaseDurationMs;
+  }
+  if (input.disableDefaultClaimLease === true) {
+    return undefined;
+  }
+  // Takeover is safe by default only where the dispatch marker can fence it.
+  return input.mutationStore?.markDispatched ? DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS : undefined;
+}
+
 async function rotateExternalSideEffectMutationClaimAtBoundary<TValue>(
   input: IdempotentExternalSideEffectRunInput<TValue>,
   claim: ExternalSideEffectClaimResult,
+  claimLeaseDurationMs: number | undefined,
 ): Promise<ExternalSideEffectClaimResult> {
   if (!claim.claimToken) {
     if (input.requireMutationClaimOwnership) {
@@ -865,6 +937,32 @@ async function rotateExternalSideEffectMutationClaimAtBoundary<TValue>(
     );
   }
 
+  if (input.mutationStore.markDispatched) {
+    // The marker CAS rotates the token, fencing every holder of the
+    // pre-dispatch generation. It keeps the run's lease: dropping it would let
+    // a concurrent leased claimer settle this live row immediately.
+    const dispatched = await input.mutationStore.markDispatched({
+      method: "POST",
+      routePath: claim.routePath,
+      idempotencyKey: claim.idempotencyKey,
+      actorScope: claim.actorScope,
+      claimToken: claim.claimToken,
+      ...(claimLeaseDurationMs !== undefined ? { leaseDurationMs: claimLeaseDurationMs } : {}),
+    });
+    if (dispatched.outcome !== "dispatched" || !dispatched.record.claimToken) {
+      throw new ExternalSideEffectMutationClaimLostError(
+        `${input.label} lost mutation ownership before crossing the external boundary.`,
+      );
+    }
+    return {
+      ...claim,
+      claimToken: dispatched.record.claimToken,
+    };
+  }
+
+  // Legacy stores without the dispatch marker keep the release/re-claim
+  // rotation. The renewed claim is never leased: without a marker, takeover
+  // could not tell a sent claim from an unsent one.
   const boundaryCheckedAt = new Date().toISOString();
   const released = await input.mutationStore.markFailed({
     method: "POST",
@@ -886,7 +984,6 @@ async function rotateExternalSideEffectMutationClaimAtBoundary<TValue>(
     idempotencyKey: claim.idempotencyKey,
     actorScope: claim.actorScope,
     payloadHash: claim.payloadHash,
-    ...(input.claimLeaseDurationMs !== undefined ? { leaseDurationMs: input.claimLeaseDurationMs } : {}),
   });
   if (refreshed.outcome !== "claimed" || !refreshed.record.claimToken) {
     throw new ExternalSideEffectMutationClaimLostError(
@@ -990,9 +1087,11 @@ function buildCurrentReplayRunBlock(
         ? "duplicate"
         : run.status === "idempotency_unavailable"
           ? "idempotency_unavailable"
-          : run.status === "external_call_started" || run.status === "unknown_external_outcome"
-            ? "in_progress"
-            : "payload_mismatch";
+          : run.status === "unknown_external_outcome"
+            ? "unknown_after_send"
+            : run.status === "external_call_started"
+              ? "in_progress"
+              : "payload_mismatch";
   return {
     replayPolicy: "idempotent_external",
     replayOutcome,
@@ -1036,6 +1135,9 @@ function mapExternalSideEffectResumeState(
   if (outcome === "idempotency_unavailable") {
     return "idempotency_unavailable";
   }
+  if (outcome === "unknown_after_send") {
+    return "manual_review_unknown_external_outcome";
+  }
   return "not_resumable";
 }
 
@@ -1043,10 +1145,12 @@ async function recordExternalSideEffectRun(
   input: ExternalSideEffectClaimInput,
   claim: ExternalSideEffectClaimResult,
 ): Promise<ExternalSideEffectClaimResult> {
-  if (!input.sideEffectRunStore) {
+  const sideEffectRunStore = input.sideEffectRunStore;
+  if (!sideEffectRunStore) {
     return claim;
   }
-  const run = await input.sideEffectRunStore.createOrGet(
+  const { checkedAt } = input;
+  const createdOrExisting = await sideEffectRunStore.createOrGet(
     {
       workspaceId: input.workspaceId,
       boundary: input.boundary,
@@ -1065,8 +1169,9 @@ async function recordExternalSideEffectRun(
         normalizeExternalDestinationFingerprint(input.externalDestinationFingerprint),
       ),
     },
-    input.checkedAt,
+    checkedAt,
   );
+  const run = await settleUnknownAfterSendRun(sideEffectRunStore, createdOrExisting, claim, checkedAt);
   const persistedBlock = buildCurrentReplayRunBlock(run, {
     idempotencyKey: claim.idempotencyKey,
     payloadHash: claim.payloadHash,
@@ -1082,6 +1187,38 @@ async function recordExternalSideEffectRun(
   };
 }
 
+/**
+ * A claim settled `unknown_after_send` means an interrupted holder crossed the
+ * dispatch boundary. Its run ledger can still read `external_call_started` (or
+ * `claimed_not_sent` for a best-effort mirror); converge it to
+ * `unknown_external_outcome` so the operator sees the truth instead of an
+ * in-progress run forever. The CAS on the observed status keeps any concurrent
+ * winner, and the returned row reflects it.
+ */
+async function settleUnknownAfterSendRun(
+  store: ExternalSideEffectRunStore,
+  run: ExternalSideEffectRunRecord,
+  claim: ExternalSideEffectClaimResult,
+  checkedAt: string,
+): Promise<ExternalSideEffectRunRecord> {
+  if (
+    claim.replayOutcome !== "unknown_after_send" ||
+    run.payloadHash !== claim.payloadHash ||
+    (run.status !== "external_call_started" && run.status !== "claimed_not_sent")
+  ) {
+    return run;
+  }
+  return await store.markFailureIfStatus(
+    run.runId,
+    run.status,
+    {
+      status: "unknown_external_outcome",
+      errorText: "An interrupted holder crossed the dispatch boundary; the external outcome is unknown.",
+    },
+    checkedAt,
+  );
+}
+
 function externalRunStatusForReplayOutcome(
   outcome: IntegrationExternalWritebackReplayOutcome,
 ): ExternalSideEffectRunStatus {
@@ -1093,6 +1230,9 @@ function externalRunStatusForReplayOutcome(
   }
   if (outcome === "idempotency_unavailable") {
     return "idempotency_unavailable";
+  }
+  if (outcome === "unknown_after_send") {
+    return "unknown_external_outcome";
   }
   return "claimed_not_sent";
 }
@@ -1312,6 +1452,35 @@ export async function markIdempotentExternalSideEffectFailed(
   }
 }
 
+async function safeMarkIdempotentExternalSideEffectUnknownAfterSend(
+  mutationStore: MutationIdempotencyStore | undefined,
+  claim: ExternalSideEffectClaimResult,
+  updatedAt: string,
+): Promise<void> {
+  if (!claim.claimToken || !mutationStore?.markUnknownAfterSend) {
+    return;
+  }
+  try {
+    // Token-fenced: a generation that already lost the row changes nothing.
+    await mutationStore.markUnknownAfterSend({
+      method: "POST",
+      routePath: claim.routePath,
+      idempotencyKey: claim.idempotencyKey,
+      actorScope: claim.actorScope,
+      claimToken: claim.claimToken,
+      updatedAt,
+    });
+  } catch (error) {
+    // Best effort: the run ledger already records the unknown outcome, and a
+    // dispatched pending row settles as `unknown_after_send` on takeover.
+    log.warn("external side-effect unknown_after_send settlement failed", {
+      routePath: claim.routePath,
+      sideEffectRunId: claim.sideEffectRunId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function discardIdempotentExternalSideEffectPending(
   mutationStore: MutationIdempotencyStore | undefined,
   claim: ExternalSideEffectClaimResult,
@@ -1343,6 +1512,9 @@ function formatExternalSideEffectReplayBlockMessage(
   }
   if (outcome === "payload_mismatch") {
     return `${label} idempotency key was reused with a different payload; the external request was not sent.`;
+  }
+  if (outcome === "unknown_after_send") {
+    return `${label}: the outcome of an earlier attempt is unknown (it may already have been sent); it will not be sent again automatically. Reconcile it with the provider.`;
   }
   return `${label} replay-safe idempotency is unavailable; the external request was not sent.`;
 }

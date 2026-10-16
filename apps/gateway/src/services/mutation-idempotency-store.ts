@@ -17,4 +17,11 @@ export interface MutationIdempotencyStore {
   discardPending?(
     input: Parameters<Storage["mutationIdempotency"]["discardPending"]>[0],
   ): ReturnType<Storage["mutationIdempotency"]["discardPending"]>;
+  /** Dispatch fence; external side-effect runs apply their default takeover lease only when present. */
+  markDispatched?(
+    input: Parameters<Storage["mutationIdempotency"]["markDispatched"]>[0],
+  ): ReturnType<Storage["mutationIdempotency"]["markDispatched"]>;
+  markUnknownAfterSend?(
+    input: Parameters<Storage["mutationIdempotency"]["markUnknownAfterSend"]>[0],
+  ): ReturnType<Storage["mutationIdempotency"]["markUnknownAfterSend"]>;
 }

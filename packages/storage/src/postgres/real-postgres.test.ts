@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
-import { observeProofWorkerCompletion, unwrapProofWorkerCompletion, waitForProofWorkerReady } from "./proof-worker-completion.js";
+import {
+  observeProofWorkerCompletion,
+  unwrapProofWorkerCompletion,
+  waitForProofWorkerReady,
+} from "./proof-worker-completion.js";
 import { Pool, type PoolClient } from "pg";
 import { PostgresDatabaseClient } from "./client.js";
 import {
@@ -4523,6 +4527,85 @@ test(
         }),
         true,
       );
+      const sentIdentity = {
+        method: "POST",
+        routePath: "external_side_effect:postgres-proof",
+        idempotencyKey: `sent-stale-claim-${suffix}`,
+        actorScope: "operator:postgres-proof",
+        payloadHash: "sent-payload-hash",
+        leaseDurationMs: 1_000,
+      };
+      const sentClaim = mutationIdempotency.claim({ ...sentIdentity, now: "2026-10-16T00:00:00.000Z" });
+      assert.equal(sentClaim.outcome, "claimed");
+      const sentMarked = mutationIdempotency.markDispatched({
+        ...sentIdentity,
+        claimToken: sentClaim.record.claimToken!,
+        now: "2026-10-16T00:00:00.100Z",
+      });
+      assert.equal(sentMarked.outcome, "dispatched");
+      assert.equal(
+        sentMarked.outcome === "dispatched" ? sentMarked.record.dispatchedAt : undefined,
+        "2026-10-16T00:00:00.100Z",
+      );
+      const sentHeldToken = sentMarked.outcome === "dispatched" ? sentMarked.record.claimToken! : "";
+      assert.notEqual(sentHeldToken, sentClaim.record.claimToken);
+      assert.equal(
+        mutationIdempotency.claim({ ...sentIdentity, now: "2026-10-16T00:00:05.000Z" }).outcome,
+        "unknown_after_send",
+      );
+      assert.equal(mutationIdempotency.get(sentIdentity)?.status, "unknown_after_send");
+      assert.equal(mutationIdempotency.get(sentIdentity)?.claimExpiresAt, undefined);
+      assert.equal(
+        mutationIdempotency.claim({ ...sentIdentity, now: "2026-10-16T00:10:00.000Z" }).outcome,
+        "unknown_after_send",
+      );
+      assert.equal(mutationIdempotency.markCompleted({ ...sentIdentity, claimToken: sentHeldToken }), false);
+      const providerIdentity = { ...sentIdentity, idempotencyKey: `provider-stale-claim-${suffix}` };
+      const providerClaim = mutationIdempotency.claim({ ...providerIdentity, now: "2026-10-16T00:00:00.000Z" });
+      mutationIdempotency.markDispatched({
+        ...providerIdentity,
+        claimToken: providerClaim.record.claimToken!,
+        now: "2026-10-16T00:00:00.100Z",
+      });
+      const providerTakeover = mutationIdempotency.claim({
+        ...providerIdentity,
+        providerIdempotencyKeyEnforced: true,
+        now: "2026-10-16T00:00:05.000Z",
+      });
+      assert.equal(
+        providerTakeover.outcome === "claimed" ? providerTakeover.claimKind : undefined,
+        "redispatch_after_stale_send",
+      );
+      const unsentIdentity = { ...sentIdentity, idempotencyKey: `unsent-stale-claim-${suffix}` };
+      const unsentFirst = mutationIdempotency.claim({ ...unsentIdentity, now: "2026-10-16T00:00:00.000Z" });
+      const unsentSecond = mutationIdempotency.claim({ ...unsentIdentity, now: "2026-10-16T00:00:05.000Z" });
+      assert.equal(unsentSecond.outcome === "claimed" ? unsentSecond.claimKind : undefined, "retry_after_stale_claim");
+      assert.equal(
+        mutationIdempotency.markDispatched({
+          ...unsentIdentity,
+          claimToken: unsentFirst.record.claimToken!,
+          now: "2026-10-16T00:00:05.100Z",
+        }).outcome,
+        "claim_lost",
+      );
+      assert.equal(
+        mutationIdempotency.markCompleted({ ...unsentIdentity, claimToken: unsentFirst.record.claimToken! }),
+        false,
+      );
+      const unsentMarked = mutationIdempotency.markDispatched({
+        ...unsentIdentity,
+        claimToken: unsentSecond.record.claimToken!,
+        now: "2026-10-16T00:00:05.200Z",
+      });
+      assert.equal(unsentMarked.outcome, "dispatched");
+      assert.equal(
+        mutationIdempotency.markUnknownAfterSend({
+          ...unsentIdentity,
+          claimToken: unsentMarked.outcome === "dispatched" ? unsentMarked.record.claimToken! : "",
+        }),
+        true,
+      );
+      assert.equal(mutationIdempotency.claim(unsentIdentity).outcome, "unknown_after_send");
       const discardIdentity = {
         method: "POST",
         routePath: "external_side_effect:integration_operator_action",

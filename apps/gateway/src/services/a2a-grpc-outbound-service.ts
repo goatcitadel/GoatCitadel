@@ -73,12 +73,14 @@ export async function sendOutboundGrpc(input: {
     // Governance refusals are honest blocks; only idempotency-duplicate
     // outcomes read as "replayed".
     const governanceRefusal = run.blockedReason === "external_side_effect_dry_run_required";
+    // An unknown outcome was not replayed: it may or may not have been sent.
+    const unknownOutcome = run.claim.replayOutcome === "unknown_after_send";
     return {
       checkedAt,
       peerId: request.peerId,
       method: request.method,
       transport: "GRPC",
-      status: governanceRefusal ? "blocked" : "replayed",
+      status: governanceRefusal || unknownOutcome ? "blocked" : "replayed",
       agentCardUrl: peer.agentCardUrl,
       grpcUrl: preview.grpcUrl,
       idempotencyKey,

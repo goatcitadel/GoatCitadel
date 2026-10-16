@@ -101,7 +101,9 @@ export function WindowedRecordList<T>({
   label,
   ordered = false,
   threshold = 100,
-  className = "h-96",
+  // SH-39: in a bounded flex column the list fills the space it has (flex-1) and never collapses below 12rem; in a
+  // block parent, where flex-1 is inert, it keeps a definite 24rem height so the virtual viewport can measure.
+  className = "h-96 min-h-48 flex-1",
   bounded = false,
   scopeKey = label,
   listRef,

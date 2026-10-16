@@ -28,7 +28,7 @@ export function NotificationRoutingSettings({
   return (
     <section aria-label="Notification routing" className="min-w-0 space-y-4 rounded-md border border-line p-4">
       <header>
-        <h3 className="font-display text-md font-semibold">Notification routing</h3>
+        <h3 className="text-md font-semibold">Notification routing</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Workspace-owned destinations and rules. Test sends contact the selected destination only after explicit
           review. Normal rules may send matching future events.

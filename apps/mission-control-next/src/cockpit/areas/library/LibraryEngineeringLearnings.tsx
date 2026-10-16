@@ -158,8 +158,8 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
       </Callout>
     );
   return (
-    <section className="grid gap-3 rounded-lg border border-line p-3" aria-label="Engineering learnings">
-      <h2 className="font-display text-lg">Engineering learnings</h2>
+    <section className="grid gap-3 border-t border-line-subtle pt-4" aria-label="Engineering learnings">
+      <h2 className="text-base font-semibold">Engineering learnings</h2>
       <Button onClick={() => setCreateOpen(true)}>Create learning from verified work</Button>
       {createOpen ? (
         <Suspense fallback={<p role="status">Loading proposal editor…</p>}>

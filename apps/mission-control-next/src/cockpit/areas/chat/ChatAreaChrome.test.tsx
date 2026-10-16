@@ -87,12 +87,36 @@ function renderHeader(build = false) {
 }
 
 describe("ChatSessionHeader", () => {
+  it("keeps the way back from an open build editor as a visible header button", () => {
+    const view = input();
+    const onToggle = vi.fn();
+    act(() =>
+      root.render(
+        <ChatSessionHeader
+          input={view}
+          active={null}
+          session={session}
+          selectedSessionId="session-1"
+          buildEditor={{ open: true, onToggle }}
+          onOpenProjects={vi.fn()}
+          onOpenFilters={vi.fn()}
+          onInspect={vi.fn()}
+        />,
+      ),
+    );
+    const back = container.querySelector('button[aria-label="Back to conversation"]') as HTMLButtonElement;
+    act(() => back.click());
+    expect(onToggle).toHaveBeenCalledOnce();
+  });
+
   it("keeps the single-row header above phone width", () => {
     const { header } = renderHeader(true);
     const select = header.querySelector('select[aria-label="Choose conversation"]');
     expect(select?.closest("label")?.parentElement).toBe(header);
     expect(header.querySelector('button[aria-label="New conversation"]')?.parentElement).toBe(header);
-    expect(header.querySelector('button[aria-label="Build editor"]')?.parentElement).toBe(header);
+    // A closed build editor lives in the overflow menu, so the header carries no "Build editor" button.
+    expect(header.querySelector('button[aria-label="Build editor"]')).toBeNull();
+    expect(header.querySelector('button[aria-label="Conversation actions"]')).not.toBeNull();
     expect(header.children.length).toBeGreaterThan(2);
   });
 
@@ -116,7 +140,8 @@ describe("ChatSessionHeader", () => {
     expect(wrapper.className).toContain("min-w-0");
     expect(wrapper.className).toContain("max-w-none");
     expect(conversationRow.querySelector('button[aria-label="New conversation"]')).not.toBeNull();
-    expect(conversationRow.querySelector('button[aria-label="Build editor"]')).not.toBeNull();
+    expect(conversationRow.querySelector('button[aria-label="Build editor"]')).toBeNull();
+    expect(titleRow.querySelector('button[aria-label="Conversation actions"]')).not.toBeNull();
     expect(conversationRow.querySelector('button[aria-label="Choose conversation"]')).toBeNull();
 
     const projects = [...titleRow.querySelectorAll("button")].find(
@@ -124,10 +149,7 @@ describe("ChatSessionHeader", () => {
     );
     await act(async () => projects!.click());
     expect(onOpenProjects).toHaveBeenCalledOnce();
-    await act(async () =>
-      (conversationRow.querySelector('button[aria-label="Build editor"]') as HTMLButtonElement).click(),
-    );
-    expect(onToggle).toHaveBeenCalledOnce();
+    expect(onToggle).not.toHaveBeenCalled();
     await act(async () =>
       (conversationRow.querySelector('button[aria-label="New conversation"]') as HTMLButtonElement).click(),
     );

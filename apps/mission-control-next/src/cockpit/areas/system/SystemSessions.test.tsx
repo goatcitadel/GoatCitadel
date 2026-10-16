@@ -90,6 +90,8 @@ it.each(["?runId=r%2F1&sessionId=s", "?view=run-detail"])("preserves the existin
   fixture.search = search;
   render();
   expect(host.textContent).toContain("Existing run evidence owner");
+  // The embedded run page drops its own h1, so the cockpit header names the selected run.
+  expect(host.querySelector("h1")?.textContent).toBe(search.includes("runId") ? "Run r/1" : "Run detail");
   expect(fixture.control).not.toHaveBeenCalled();
   expect(fixture.run).toHaveBeenCalledWith(
     expect.objectContaining({

@@ -71,7 +71,10 @@ describe("cockpit Spend", () => {
       expect(container.textContent).toContain("Models observed: model-a, model-b");
       expect(container.textContent).toContain("The mode is not a spend limit");
       expect(container.textContent).toContain("does not supply per-model cost totals");
-      expect(container.textContent).toContain("2026-09-28 UTC");
+      expect(container.textContent).toContain("Mon 28 Sep");
+      expect(container.querySelector('time[datetime="2026-09-28"]')?.getAttribute("title")).toBe("2026-09-28 UTC");
+      expect(container.textContent).toContain("Scale $0 to $5.00 · highest day $3.00");
+      expect(container.textContent).not.toContain("Recorded groups");
       expect(container.textContent).toContain("Grouped by day (UTC) ·");
       expect(container.textContent).toContain("currency USD");
       expect(container.textContent).not.toContain("Installation scope");

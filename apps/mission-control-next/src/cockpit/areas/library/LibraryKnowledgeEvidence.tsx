@@ -73,7 +73,7 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
   });
   return (
     <section className="grid gap-3" aria-label="Knowledge evidence">
-      <h2 className="font-display text-lg">Context use and retrieval evidence</h2>
+      <h2 className="text-base font-semibold">Context use and retrieval evidence</h2>
       <p>
         Retained installation retrieval records explain context selection. Recovered external snapshots are governed
         Knowledge documents, separate from lifecycle memory items.
@@ -153,7 +153,7 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
           </li>
         ))}
       </ul>
-      <h2 className="font-display text-lg">Recovered external snapshots</h2>
+      <h2 className="text-base font-semibold">Recovered external snapshots</h2>
       {recovered.error ? <Callout tone="error">{describeApiError(recovered.error).summary}</Callout> : null}
       {recovered.isPending ? <p role="status">Reading snapshot lifecycle…</p> : null}
       <ul className="grid gap-2">

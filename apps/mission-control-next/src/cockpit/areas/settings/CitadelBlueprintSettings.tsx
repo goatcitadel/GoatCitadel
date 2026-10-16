@@ -32,7 +32,7 @@ export function CitadelBlueprintSettings({ citadelId }: { citadelId: string }) {
       className="mt-4 space-y-4 border-t border-line-subtle pt-4"
     >
       <header>
-        <h3 className="font-display text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-blueprint"]}</h3>
+        <h3 className="text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-blueprint"]}</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Export a portable Charter and Chambers, or validate and review an import for this Citadel.
         </p>

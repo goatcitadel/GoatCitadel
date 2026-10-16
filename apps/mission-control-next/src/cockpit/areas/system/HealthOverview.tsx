@@ -36,6 +36,9 @@ import { inboxMatchesWorkspace } from "../inbox/inbox-presentation";
 import { loadSystemHealthSources, type SystemHealthSources } from "./system-health-sources";
 import { HealthLocalRuntimeActions } from "./HealthLocalRuntimeActions";
 import { healthQueryScope } from "../../data/health-query-scope";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
+import { Section } from "../../ui/Section";
 
 const ICONS: Readonly<Record<HealthCheck["id"], LucideIcon>> = {
   gateway: Waypoints,
@@ -48,6 +51,21 @@ const ICONS: Readonly<Record<HealthCheck["id"], LucideIcon>> = {
   updates: Download,
   remote_workers: Workflow,
 };
+
+/** Failed, then waiting, then unconfirmed, then not set up, then clear; the derived order breaks ties. */
+function severity(check: HealthCheck): number {
+  if (check.status.tone === "failed") return 0;
+  if (check.status.tone === "waiting") return 1;
+  if (check.status.tone === "neutral") return check.notSetUp ? 3 : 2;
+  return 4;
+}
+
+function sortBySeverity(checks: readonly HealthCheck[]): HealthCheck[] {
+  return checks
+    .map((check, index) => ({ check, index }))
+    .sort((a, b) => severity(a.check) - severity(b.check) || a.index - b.index)
+    .map(({ check }) => check);
+}
 
 function HealthCard({
   check,
@@ -62,15 +80,15 @@ function HealthCard({
 }) {
   const Icon = ICONS[check.id];
   return (
-    <article className="rounded-lg border border-line bg-raised p-4">
-      <div className="flex items-center justify-between gap-3">
+    <article className="py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
-          <Icon aria-hidden="true" className="size-4 text-accent" />
+          <Icon aria-hidden="true" className="size-4 text-fg-muted" />
           {check.title}
         </h3>
         <StatusBadge status={check.status} />
       </div>
-      <p className="mt-2 text-sm leading-relaxed text-fg-secondary">{check.detail}</p>
+      <p className="mt-1 text-sm leading-relaxed text-fg-secondary">{check.detail}</p>
       {check.lastKnown ? <p className="mt-1 text-xs text-fg-muted">{check.lastKnown}</p> : null}
       <SystemOwnerLink
         href={check.id === "remote_workers" ? "/system/runtime/workers" : check.inspectPath}
@@ -113,32 +131,32 @@ export function HealthOverview() {
   );
   const error = describeApiError(health.error);
   const checks = sources ? deriveSystemHealthChecks(sources, desktopUpdates, backupTrust) : [];
-  const { problems, unknown, heading } = healthOverviewState(checks);
+  const { heading } = healthOverviewState(checks);
   const generatedAt = sources?.summary.state === "current" ? Date.parse(sources.summary.value.generatedAt) : Number.NaN;
   const unavailable = sources ? Object.entries(sources).filter(([, source]) => source.state === "unavailable") : [];
 
   return (
-    <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-semibold text-fg">System</h1>
-          <p className="text-sm text-fg-secondary">
-            Service status as each part of the system reports it, and what each check can confirm.
+    <section className={AREA_PAGE}>
+      <AreaHeader
+        title="System"
+        description="Service status as each part of the system reports it, and what each check can confirm."
+        actions={
+          <Button
+            size="sm"
+            onClick={() => void health.refetch()}
+            disabled={health.isFetching || (health.isError && error.retryable === false)}
+          >
+            <RefreshCw aria-hidden="true" className="size-4" /> Refresh<span className="sr-only"> system health</span>
+          </Button>
+        }
+      >
+        {Number.isFinite(generatedAt) ? (
+          <p className="mt-1 text-xs text-fg-muted">
+            <TimeText value={generatedAt} prefix="Gateway snapshot" />
           </p>
-          {Number.isFinite(generatedAt) ? (
-            <p className="mt-1 text-xs text-fg-muted">
-              <TimeText value={generatedAt} prefix="Gateway snapshot" />
-            </p>
-          ) : null}
-        </div>
-        <Button
-          size="sm"
-          onClick={() => void health.refetch()}
-          disabled={health.isFetching || (health.isError && error.retryable === false)}
-        >
-          <RefreshCw aria-hidden="true" className="size-4" /> Refresh<span className="sr-only"> system health</span>
-        </Button>
-      </header>
+        ) : null}
+        {sources ? <p className="mt-2 text-sm font-medium text-fg">{heading}</p> : null}
+      </AreaHeader>
 
       {health.isLoading ? (
         <p role="status" className="text-sm text-fg-muted">
@@ -181,76 +199,25 @@ export function HealthOverview() {
               </ul>
             </details>
           ) : null}
-          <section aria-labelledby="system-attention-title" className="rounded-lg border border-line bg-sunken p-4">
-            <h2 id="system-attention-title" className="font-display text-lg font-semibold text-fg">
-              {heading}
-            </h2>
-            {problems.length ? (
-              <ul className="mt-3 space-y-3">
-                {problems.map((check) => (
-                  <li
-                    key={check.id}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-raised p-3"
-                  >
-                    <span className="text-sm text-fg">
-                      <strong>{check.title}:</strong> {check.detail}
-                      {check.lastKnown ? <span className="block text-xs text-fg-muted">{check.lastKnown}</span> : null}
-                    </span>
-                    <SystemOwnerLink
-                      href={check.id === "remote_workers" ? "/system/runtime/workers" : check.inspectPath}
-                      scope={[workspaceId, check.id]}
-                    >
-                      Review {check.title.toLowerCase()}
-                    </SystemOwnerLink>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-2 text-sm text-fg-secondary">
-                No problem was reported by the available checks
-                {unknown.length
-                  ? `; ${unknown.length} ${unknown.length === 1 ? "check" : "checks"} could not be confirmed`
-                  : ""}
-                .
-              </p>
-            )}
-          </section>
-
-          {unknown.length ? (
-            <section aria-label="Checks not yet confirmed" className="rounded-lg border border-line bg-sunken p-4">
-              <h2 className="font-display text-lg font-semibold text-fg">Checks not yet confirmed</h2>
-              <ul className="mt-3 space-y-2">
-                {unknown.map((check) => (
-                  <li key={check.id} className="text-sm text-fg-secondary">
-                    <strong>{check.title}:</strong> {check.detail}
-                    {check.lastKnown ? <span className="block text-xs text-fg-muted">{check.lastKnown}</span> : null}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-
-          <section aria-labelledby="system-checks-title">
-            <h2 id="system-checks-title" className="mb-3 font-display text-lg font-semibold text-fg">
-              Current checks
-            </h2>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {checks.map((check) => (
-                <HealthCard
-                  key={check.id}
-                  check={check}
-                  workspaceId={workspaceId}
-                  backupReadAvailable={sources.summary.state === "current" && !health.isFetching}
-                  onRefresh={() =>
-                    Promise.all([
-                      client.invalidateQueries({ queryKey: queryKeys.healthAll() }),
-                      client.invalidateQueries({ queryKey: queryKeys.inboxAll() }),
-                    ])
-                  }
-                />
+          <Section title="Checks" description="Most severe first; checks that could not be confirmed follow problems.">
+            <ul className="divide-y divide-line-subtle">
+              {sortBySeverity(checks).map((check) => (
+                <li key={check.id}>
+                  <HealthCard
+                    check={check}
+                    workspaceId={workspaceId}
+                    backupReadAvailable={sources.summary.state === "current" && !health.isFetching}
+                    onRefresh={() =>
+                      Promise.all([
+                        client.invalidateQueries({ queryKey: queryKeys.healthAll() }),
+                        client.invalidateQueries({ queryKey: queryKeys.inboxAll() }),
+                      ])
+                    }
+                  />
+                </li>
               ))}
-            </div>
-          </section>
+            </ul>
+          </Section>
         </>
       ) : null}
     </section>

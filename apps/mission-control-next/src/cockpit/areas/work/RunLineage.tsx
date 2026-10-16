@@ -33,8 +33,8 @@ const SYNTHESIS_LABELS = {
 export function RunLineage({ trace, workspaceId }: { trace: ObserveRunTraceResponse; workspaceId: string }) {
   const sessionId = runWorkspaceSession(trace, workspaceId);
   return (
-    <section aria-label="Delegation lineage" className="rounded-lg border border-line bg-raised p-4">
-      <h2 className="font-display text-lg font-semibold text-fg">Delegation lineage</h2>
+    <section aria-label="Delegation lineage" className="border-t border-line-subtle pt-4">
+      <h2 className="text-base font-semibold text-fg">Delegation lineage</h2>
       <p className="mt-2 text-sm text-fg-secondary">
         Direct children watched by this run and the outputs cited by its selected synthesis. Run status is current;
         output references describe recorded evidence.

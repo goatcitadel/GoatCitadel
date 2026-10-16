@@ -122,7 +122,7 @@ export function RiskApprovalAction({
                 <ul className="space-y-1">
                   {evidence.commands.map((command) => (
                     <li key={command}>
-                      <code className="block overflow-x-auto rounded bg-sunken p-2 font-mono text-xs text-fg">
+                      <code className="block overflow-x-auto rounded-md bg-sunken p-2 font-mono text-xs text-fg">
                         {command}
                       </code>
                     </li>
@@ -137,7 +137,7 @@ export function RiskApprovalAction({
                   {evidence.changes.map((change) => (
                     <li key={change.label}>
                       <span>{change.label}</span>
-                      <pre className="max-h-28 overflow-auto rounded bg-sunken p-2 text-xs">{change.content}</pre>
+                      <pre className="max-h-28 overflow-auto rounded-md bg-sunken p-2 text-xs">{change.content}</pre>
                     </li>
                   ))}
                 </ul>
@@ -164,7 +164,7 @@ export function RiskApprovalAction({
             ) : null}
             {reviewed ? (
               <TechnicalDetails label="Full persisted action preview">
-                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-sunken p-2 font-mono text-xs">
+                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-sunken p-2 font-mono text-xs">
                   {JSON.stringify(reviewed.preview, null, 2)}
                 </pre>
               </TechnicalDetails>

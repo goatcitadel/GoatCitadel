@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { Field } from "../../ui/Field";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import {
@@ -10,13 +11,14 @@ import { DesktopUpdateSettings } from "./DesktopUpdateSettings";
 export function AppearanceSettings() {
   const prefs = useUiPreferences();
   const desktop = useDesktopNotifications();
+  const testReasonId = useId();
+  const canSendTest = desktop.desktopPermission === "granted";
   return (
     <section
       aria-label="Appearance and attention"
       className="mt-4 grid gap-4 border-t border-line-subtle pt-4 sm:grid-cols-2"
     >
       <div className="space-y-3">
-        <h3 className="text-sm font-semibold text-fg">Appearance</h3>
         <Field
           label="Settings presentation"
           help="Guided starts with setup steps. Expert reveals additional configuration; it grants no runtime permissions."
@@ -113,10 +115,22 @@ export function AppearanceSettings() {
           <Button size="sm" disabled={desktop.checkingPermission} onClick={() => void desktop.checkDesktopPermission()}>
             {desktop.desktopPermission === "default" ? "Allow notifications" : "Re-check permission"}
           </Button>
-          <Button size="sm" disabled={desktop.desktopPermission !== "granted"} onClick={desktop.sendTestNotification}>
+          <Button
+            size="sm"
+            disabled={!canSendTest}
+            aria-describedby={canSendTest ? undefined : testReasonId}
+            onClick={desktop.sendTestNotification}
+          >
             Send test notification
           </Button>
         </div>
+        {canSendTest ? null : (
+          <p id={testReasonId} className="text-xs text-fg-muted">
+            {desktop.desktopPermission === "unsupported"
+              ? "A test needs system notifications, which this browser or host does not support."
+              : "A test is available after your browser or host allows system notifications."}
+          </p>
+        )}
         {desktop.notificationFeedback ? (
           <p className="text-xs text-fg-secondary" role="status">
             {desktop.notificationFeedback}

@@ -1,5 +1,5 @@
-import type { CronJobRecord, CronJobCreatorAuthorityInput } from "@goatcitadel/contracts";
-import { buildCronCreatorAuthority, hasCurrentCronCreatorAuthority } from "@goatcitadel/contracts";
+import type { CitadelAccessScope, CronJobRecord, CronJobCreatorAuthorityInput } from "@goatcitadel/contracts";
+import { buildCronCreatorAuthority, canReadCitadel, hasCurrentCronCreatorAuthority } from "@goatcitadel/contracts";
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
@@ -328,12 +328,19 @@ export class CronJobRepository {
 
   /** Only server mutation owners call this inside their existing spec transaction.
    * Config reconciliation cannot supply this separate argument or mint a receipt. */
-  public bindCreatorAuthority(jobId: string, expectedRevision: number, input: CronJobCreatorAuthorityInput): CronJobRecord {
+  public bindCreatorAuthority(
+    jobId: string,
+    expectedRevision: number,
+    input: CronJobCreatorAuthorityInput,
+  ): CronJobRecord {
     return this.db.transaction("immediate", () => {
       this.fenceSpec(jobId, expectedRevision);
       const current = this.require(jobId);
       const receipt = buildCronCreatorAuthority(current, input);
-      this.db.prepare("UPDATE cron_jobs SET creator_authority_json = @receipt WHERE job_id = @jobId AND revision = @expectedRevision")
+      this.db
+        .prepare(
+          "UPDATE cron_jobs SET creator_authority_json = @receipt WHERE job_id = @jobId AND revision = @expectedRevision",
+        )
         .run({ receipt: JSON.stringify(receipt), jobId, expectedRevision });
       return this.require(jobId);
     });
@@ -347,12 +354,15 @@ export class CronJobRepository {
 
   /**
    * List cron jobs visible to a Citadel: jobs scoped to that Citadel plus global
-   * (unscoped) jobs.
-   * TODO: Enforce Watchtower access control once a real citadel scope is threaded
-   * through scheduling.
+   * (unscoped) jobs. Global schedules are installation-wide, so every actor allowed
+   * to read any citadel sees them. Returns `[]` when the server-built access scope
+   * does not permit reading the citadel.
    */
-  public listByCitadel(citadelId: string): CronJobRecord[] {
-    const rows = this.listByCitadelStmt.all({ citadelId });
+  public listByCitadel(scope: CitadelAccessScope): CronJobRecord[] {
+    if (!canReadCitadel(scope)) {
+      return [];
+    }
+    const rows = this.listByCitadelStmt.all({ citadelId: scope.citadelId.trim() });
     assertCronJobRows(rows);
     return rows.map((row) => this.mapRow(row));
   }
@@ -425,7 +435,9 @@ export class CronJobRepository {
       name: row.name,
       action: row.action as CronJobRecord["action"],
       ...(actionConfig ? { actionConfig } : {}),
-      ...(row.creator_authority_json ? { creatorAuthority: JSON.parse(row.creator_authority_json) as CronJobRecord["creatorAuthority"] } : {}),
+      ...(row.creator_authority_json
+        ? { creatorAuthority: JSON.parse(row.creator_authority_json) as CronJobRecord["creatorAuthority"] }
+        : {}),
       description: row.description ?? undefined,
       schedule: row.schedule,
       enabled: Boolean(row.enabled),

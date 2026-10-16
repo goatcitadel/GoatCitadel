@@ -103,6 +103,21 @@ describe("Chat session controls", () => {
     expect(document.activeElement).toBe(trigger());
   });
 
+  it("opens the build editor from the menu even before a conversation is selected", async () => {
+    const onOpenBuildEditor = vi.fn();
+    await act(async () => root.render(<ChatSessionOverflow dock={null} onOpenBuildEditor={onOpenBuildEditor} />));
+    await act(async () => {
+      const node = trigger();
+      node.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+      node.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0 }));
+      node.click();
+    });
+    await vi.waitFor(() => expect(item("Build editor")).toBeDefined());
+    expect(item("Export conversation")).toBeUndefined();
+    await act(async () => item("Build editor")?.click());
+    expect(onOpenBuildEditor).toHaveBeenCalledOnce();
+  });
+
   it("disables fork when the conversation has no turn to fork from", async () => {
     await act(async () => root.render(<ChatSessionOverflow dock={dock()} />));
     await openWithPointer();

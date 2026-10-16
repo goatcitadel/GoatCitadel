@@ -53,8 +53,8 @@ export function TaskStatusControl({
     );
   }
   return (
-    <section aria-label="Task status" className="rounded-lg border border-line bg-raised p-4">
-      <h2 className="font-display text-lg font-semibold text-fg">Task status</h2>
+    <section aria-label="Task status" className="border-t border-line-subtle pt-4">
+      <h2 className="text-base font-semibold text-fg">Task status</h2>
       {executionOwned ? (
         <p className="mt-2 text-sm text-fg-secondary">
           This task has a runtime execution owner. Review its run before changing execution state.

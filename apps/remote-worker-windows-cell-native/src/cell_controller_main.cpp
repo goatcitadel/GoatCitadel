@@ -11,8 +11,14 @@ namespace goatcitadel::worker_cell {
 // namespace classes embeds a source-path hash and breaks reproducible payloads.
 class CellInstalledMeasurementHold final : public CellControllerMeasurementHold {
  public:
-  CellInstalledMeasurementHold(CellControllerIdentity& identity, const CellFootprintScanGuard& peer) noexcept
-    : identity_(identity), peer_(peer) {}
+  // The registration names the hold the session currently retains, so the
+  // capacity owners can require it. Release clears it before the gate unlocks.
+  CellInstalledMeasurementHold(CellControllerIdentity& identity, const CellFootprintScanGuard& peer,
+    CellControllerMeasurementHold** registration) noexcept
+    : identity_(identity), peer_(peer), registration_(registration) {}
+  ~CellInstalledMeasurementHold() override { if (registration_ && *registration_ == this) *registration_ = nullptr; }
+  CellInstalledMeasurementHold(const CellInstalledMeasurementHold&) = delete;
+  CellInstalledMeasurementHold& operator=(const CellInstalledMeasurementHold&) = delete;
   DWORD Acquire() noexcept { return identity_.AcquireMeasurementGate(gate_); }
   DWORD Verify() noexcept override {
     const auto error = gate_.Check();
@@ -21,6 +27,7 @@ class CellInstalledMeasurementHold final : public CellControllerMeasurementHold 
  private:
   CellControllerIdentity& identity_;
   CellFootprintScanGuard peer_;
+  CellControllerMeasurementHold** registration_;
   goatcitadel::worker_host::WorkerStateGateLock gate_;
 };
 }
@@ -77,6 +84,8 @@ struct Connection final {
   std::recursive_mutex custody_mutex;
   CellRuntimeControllerConnection runtime;
   std::unique_ptr<CellInstallCapacityPipeAdmission> installation_admission;
+  // Borrowed: the session owns the hold; its destructor clears this pointer.
+  CellControllerMeasurementHold* measurement = nullptr;
   static DWORD FinishInstallation(void* context) noexcept {
     auto& owner = *static_cast<Connection*>(context);
     return owner.installation_admission ? owner.installation_admission->Finish() : ERROR_INVALID_STATE;
@@ -111,12 +120,33 @@ struct Connection final {
     if (WaitForSingleObject(stop, 0) != WAIT_TIMEOUT || GetTickCount64() >= deadline) return ERROR_OPERATION_ABORTED;
     try {
       auto& owner = *static_cast<Connection*>(context);
-      auto hold = std::make_unique<CellInstalledMeasurementHold>(owner.identity, CellFootprintScanGuard{RuntimePeer, &owner, stop});
+      auto hold = std::make_unique<CellInstalledMeasurementHold>(owner.identity, CellFootprintScanGuard{RuntimePeer, &owner, stop},
+        &owner.measurement);
       auto error = hold->Acquire();
       if (!error) error = hold->Verify();
-      if (!error) *output = std::move(hold);
+      if (!error) { owner.measurement = hold.get(); *output = std::move(hold); }
       return error;
     } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+  }
+  // Operations 14-16: the session retains the hold BeginMeasurement acquired
+  // and verified for this request. Without it, refuse before journal access.
+  static DWORD ObserveCapacity(void* context, CellProvisioningJournal& journal, const CellProvisioningAnchor& anchor,
+    const CellFileSha256& digest, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+    CellProvisioningFootprint* output) noexcept {
+    auto& owner = *static_cast<Connection*>(context);
+    return CellInstalledCapacity::Observe(owner.measurement, journal, anchor, digest, limits, guard, output);
+  }
+  static DWORD ObserveBackingCapacity(void* context, CellProvisioningJournal& journal, const CellProvisioningAnchor& anchor,
+    const CellFileSha256& digest, DWORD wall_ms, const CellFootprintScanGuard& guard,
+    CellProvisioningBackingFootprint* output) noexcept {
+    auto& owner = *static_cast<Connection*>(context);
+    return CellInstalledCapacity::ObserveBacking(owner.measurement, journal, anchor, digest, wall_ms, guard, output);
+  }
+  static DWORD ObserveInventory(void* context, CellProvisioningJournal& journal, const CellProvisioningAnchor& anchor,
+    const CellFileSha256& digest, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+    CellProvisioningInventory* output) noexcept {
+    auto& owner = *static_cast<Connection*>(context);
+    return CellInstalledCapacity::ObserveInventory(owner.measurement, journal, anchor, digest, limits, guard, output);
   }
   static DWORD ProvisionVolume(void* context, CellProvisioningJournal& journal, const CellProvisioningAnchor& anchor,
     const CellVolumeProvisioningCommitter& committer, DWORD wall_ms, HANDLE stop) noexcept {
@@ -208,6 +238,9 @@ DWORD Run(CellControllerIdentity& identity, HANDLE stop, WatchState& watch) noex
         owner.provision_mounted_workspace = Connection::ProvisionMountedWorkspace;
         owner.run_runtime = Connection::RunRuntime;
         owner.begin_measurement = Connection::BeginMeasurement;
+        owner.observe_capacity = Connection::ObserveCapacity;
+        owner.observe_backing_capacity = Connection::ObserveBackingCapacity;
+        owner.observe_inventory = Connection::ObserveInventory;
         owner.observe_pool_capacity = Connection::ObservePoolCapacity;
         owner.install_runtime_capacity = Connection::InstallCapacity;
         owner.finish_installation = Connection::FinishInstallation;

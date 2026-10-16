@@ -114,7 +114,7 @@ export function ChatAreaView({
   const { navigate } = useCockpitRoute();
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
   const onboarding = useQuery({ queryKey: ["system", "onboarding"], queryFn: fetchOnboardingState, staleTime: 60_000 });
-  const { open, register, closeIfOpen, getDismissalGeneration } = useInspector();
+  const { open, close, content: inspectorContent, register, closeIfOpen, getDismissalGeneration } = useInspector();
   const inspectorTurnId = useRef<string | null>(null);
   const inspectorTab = useRef<"run" | "turn" | "files">("run");
   const [buildOpen, setBuildOpen] = useState(false);
@@ -269,7 +269,8 @@ export function ChatAreaView({
           }
           onOpenProjects={() => navigate("/chat/projects")}
           onOpenFilters={() => setFiltersOpen(true)}
-          onInspect={() => openInspector()}
+          inspecting={inspectorContent?.source === "chat"}
+          onInspect={() => (inspectorContent?.source === "chat" ? close() : openInspector())}
           onFork={active && latestTurnId ? () => active.onStartNewThreadFromTurn(latestTurnId) : undefined}
         />
         {active ? <ProjectAssignmentReview active={active} /> : null}

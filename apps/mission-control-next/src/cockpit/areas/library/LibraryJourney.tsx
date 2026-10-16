@@ -18,6 +18,8 @@ import { TimeText } from "../../ui/TimeText";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useLibraryOperation } from "./use-library-operation";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 import {
   JOURNEY_ACTOR,
   JOURNEY_CATEGORY,
@@ -44,7 +46,9 @@ const POSTURES = [
 type Category = (typeof CATEGORIES)[number][0];
 type Posture = (typeof POSTURES)[number][0];
 const PAGE_SIZE = 50;
-const CARD = "grid min-w-0 grid-cols-1 gap-3 rounded-lg border border-line p-3";
+// Flat, hairline-separated regions (DESIGN.md › Page anatomy).
+const CARD =
+  "grid min-w-0 grid-cols-1 content-start gap-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0";
 const INPUT = "w-full min-w-0 rounded-md border border-line bg-raised p-2";
 
 const pick = <T extends string>(value: string | null, allowed: readonly (readonly [T, string])[], fallback: T): T =>
@@ -104,20 +108,22 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
   }
 
   return (
-    <div className="grid min-w-0 grid-cols-1 gap-4 overflow-y-auto p-4">
-      <header className="grid min-w-0 gap-2">
-        <h1 className="font-display text-xl font-semibold">{LIBRARY_SECTION_LABELS.journey}</h1>
-        <p className="text-sm text-fg-secondary">
-          Experimental, read-only governance history for this workspace. Journey explains records from the sources
-          connected so far; it never activates skills or promotes memory. Blocked, quarantined, conflicting,
-          foreign-scope and incomplete evidence stays visible and marked.
-        </p>
-        <p className="text-sm text-fg-secondary">
+    <div className={`${AREA_PAGE} min-w-0`}>
+      <AreaHeader
+        title={LIBRARY_SECTION_LABELS.journey}
+        description="Experimental, read-only governance history for this workspace. Journey explains records from the sources connected so far; it never activates skills or promotes memory. Blocked, quarantined, conflicting, foreign-scope and incomplete evidence stays visible and marked."
+        actions={
+          <Button size="sm" disabled={query.isFetching} onClick={() => void query.refetch()}>
+            Refresh
+          </Button>
+        }
+      >
+        <p className="mt-1 max-w-3xl text-sm text-fg-secondary">
           Coverage is not yet complete: broader memory lifecycle, legacy imports, direct skill state, improvement
           rollback or revoke, and external source producers are not wired. This view is not release-bearing parity
           evidence.
         </p>
-      </header>
+      </AreaHeader>
       <section className={CARD} aria-label="Journey filters">
         <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Event family">
@@ -179,9 +185,6 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
           >
             Apply session
           </Button>
-          <Button variant="ghost" disabled={query.isFetching} onClick={() => void query.refetch()}>
-            Refresh
-          </Button>
         </div>
       </section>
       {query.isPending ? <p role="status">Reading Journey events…</p> : null}
@@ -189,7 +192,7 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
       {query.data ? (
         <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-3">
           <section className={CARD} aria-label="Journey events">
-            <h2 className="font-display text-md font-semibold">Events</h2>
+            <h2 className="text-base font-semibold">Events</h2>
             <p className="text-sm text-fg-secondary">
               {plural(items.length, "event")} loaded · {blocked} with blocked evidence
             </p>
@@ -228,9 +231,7 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
                 This event is not in the loaded results. Load older events or adjust the filters.
               </Callout>
             ) : (
-              <p className="rounded-lg border border-line p-3 text-sm text-fg-secondary">
-                Select an event to inspect its evidence.
-              </p>
+              <p className="text-sm text-fg-secondary">Select an event to inspect its evidence.</p>
             )}
           </div>
         </div>
@@ -272,7 +273,7 @@ function JourneyEventDetail({ item }: { item: JourneyTimelineItem }) {
           : "Not required";
   return (
     <section className={CARD} aria-label="Journey event detail">
-      <h2 className="font-display text-md font-semibold wrap-anywhere">{humanize(item.action)}</h2>
+      <h2 className="text-base font-semibold wrap-anywhere">{humanize(item.action)}</h2>
       <p className="text-sm text-fg-secondary wrap-anywhere">
         {journeyWords(item.eventType, "Event")} · {journeyWords(item.subjectKind, "Subject")} ·{" "}
         {item.scopeKind === "global" ? "Global evidence" : "This workspace"}
@@ -339,7 +340,7 @@ function JourneyEventDetail({ item }: { item: JourneyTimelineItem }) {
         <Rows title="Evidence references" rows={item.evidenceRefs.map((ref) => [ref.owner, ref.refId] as const)} />
         <p className="break-all">Event fingerprint {item.eventFingerprint}</p>
         {item.evidenceFingerprint ? <p className="break-all">Evidence fingerprint {item.evidenceFingerprint}</p> : null}
-        <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-sunken p-2 font-mono text-xs">
+        <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-sunken p-2 font-mono text-xs">
           {JSON.stringify(item, null, 2)}
         </pre>
       </TechnicalDetails>

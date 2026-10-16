@@ -150,15 +150,16 @@ export function healthOverviewState(checks: readonly HealthCheck[]) {
   const problems = checks.filter((check) => check.status.tone === "failed" || check.status.tone === "waiting");
   const unknown = checks.filter((check) => check.status.tone === "neutral" && !check.notSetUp);
   const kind = problems.length ? "problems" : unknown.length || !checks.length ? "incomplete" : "clear";
+  const lead = problems.length
+    ? `${problems.length} ${problems.length === 1 ? "check needs" : "checks need"} attention`
+    : checks.length
+      ? "All reachable checks report no problems"
+      : "No checks have reported yet";
   return {
     kind,
     problems,
     unknown,
-    heading:
-      kind === "problems"
-        ? "Needs attention"
-        : kind === "incomplete"
-          ? "Some checks cannot be verified yet"
-          : "Available checks report no problems",
+    /** One status line for the page: the problems or the all-clear, then how many checks could not be confirmed. */
+    heading: unknown.length ? `${lead} · ${unknown.length} unverified` : lead,
   };
 }

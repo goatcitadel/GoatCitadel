@@ -72,7 +72,7 @@ export function ProviderProfileReview({
             does not select it as the installation default.
           </p>
           {transport && (transport.tls.insecureSkipVerify || transport.proxyTls.insecureSkipVerify) ? (
-            <p role="alert" className="rounded border border-status-waiting p-3 text-status-waiting">
+            <p role="alert" className="rounded-md border border-status-waiting p-3 text-status-waiting">
               Certificate verification will be disabled for{" "}
               {transport.tls.insecureSkipVerify ? "provider requests" : ""}
               {transport.tls.insecureSkipVerify && transport.proxyTls.insecureSkipVerify ? " and " : ""}

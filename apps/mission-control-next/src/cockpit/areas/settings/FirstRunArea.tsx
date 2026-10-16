@@ -4,6 +4,8 @@ import { useDraftLeave } from "../../../features/native-routes/library/DraftLeav
 import { describeToolApprovalMode } from "../../../features/native-routes/settings/helpers/permission-helpers";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 import { EmptyState } from "../../ui/EmptyState";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { ApprovalModeEditor } from "./ApprovalModeControl";
@@ -22,7 +24,11 @@ const STEPS: readonly { id: FirstRunStep; label: string; detail: string }[] = [
   },
 ];
 
-export function FirstRunArea() {
+const TITLE = "Your first answer";
+const DESCRIPTION = "Three steps to connect a model, choose how tools ask for approval, and verify a response.";
+
+/** The guided setup page. `embedded` renders it inside Settings › Models, under that page's header. */
+export function FirstRunArea({ embedded = false }: { embedded?: boolean }) {
   const { navigate } = useCockpitRoute();
   const { activeWorkspaceId } = useUiPreferences();
   const setup = useFirstRunSetup(activeWorkspaceId);
@@ -32,18 +38,20 @@ export function FirstRunArea() {
   const finish = async () => {
     if (await setup.finish()) go("/chat");
   };
+  const exit = <Button onClick={() => go("/settings")}>Exit setup</Button>;
   return (
-    <section aria-label="First-run setup" className="mx-auto flex min-h-full max-w-4xl flex-col gap-5 p-4 sm:p-8">
-      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line-subtle pb-5">
-        <div>
-          <p className="text-xs font-semibold text-accent">GoatCitadel setup</p>
-          <h1 className="font-display text-xl font-semibold text-fg">Your first answer</h1>
-          <p className="mt-1 text-sm text-fg-secondary">
-            Three steps to connect a model, choose how tools ask for approval, and verify a response.
-          </p>
-        </div>
-        <Button onClick={() => go("/settings")}>Exit setup</Button>
-      </header>
+    <section aria-label="First-run setup" className={embedded ? "mt-4 flex flex-col gap-5" : AREA_PAGE}>
+      {embedded ? (
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-fg">{TITLE}</h2>
+            <p className="mt-1 text-sm text-fg-secondary">{DESCRIPTION}</p>
+          </div>
+          {exit}
+        </header>
+      ) : (
+        <AreaHeader title={TITLE} description={DESCRIPTION} actions={exit} />
+      )}
       {query.isLoading ? (
         <p role="status" className="text-sm text-fg-muted">
           Checking setup state…
@@ -84,7 +92,7 @@ export function FirstRunArea() {
               );
             })}
           </nav>
-          <div className="rounded-lg border border-line bg-raised p-4 sm:p-6">
+          <div className="border-t border-line-subtle pt-5">
             {step === "model" ? (
               <FirstRunModelStep
                 state={state}
@@ -99,7 +107,7 @@ export function FirstRunArea() {
             ) : null}
             {step === "safety" ? (
               <div className="space-y-4">
-                <h2 className="font-display text-lg font-semibold text-fg">Choose your safety settings</h2>
+                <h2 className="text-base font-semibold text-fg">Choose your safety settings</h2>
                 <p className="text-sm text-fg-secondary">
                   Current tool approval rule: {describeToolApprovalMode(state.settings.toolApprovalMode)}.
                 </p>
@@ -121,7 +129,7 @@ export function FirstRunArea() {
             ) : null}
             {step === "message" ? (
               <div className="space-y-4">
-                <h2 className="font-display text-lg font-semibold text-fg">Send a test message</h2>
+                <h2 className="text-base font-semibold text-fg">Send a test message</h2>
                 <p className="text-sm text-fg-secondary">
                   First response: {progress.firstResponseLabel}. The Gateway checks a completed Chat turn after setup,
                   not a catalog entry or a test connection.

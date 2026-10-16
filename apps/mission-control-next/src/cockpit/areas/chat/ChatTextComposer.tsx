@@ -1,7 +1,7 @@
 import type { ComposerProps } from "./ChatTextComposer.types";
 export type { ComposerProps } from "./ChatTextComposer.types";
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
-import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "../../ui/Button";
 import { ChatComposerControls } from "./ChatComposerControls";
 import { ChatComposerPalette } from "./ChatComposerPalette";
@@ -15,6 +15,7 @@ import { useAutoGrowTextarea } from "../../../features/threaded-surface/useAutoG
 import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
 import { ExternalSourceStrip } from "../../../features/threaded-surface/ThreadedExternalSourceStrip";
 import { ChatMediaControls } from "./ChatMediaControls";
+import { ChatSourcesChip } from "./ChatSourcesChip";
 import type { ChatCompletionReasoningEffort } from "@goatcitadel/contracts";
 import { ChatLegacyInputNotice } from "./ChatLegacyInputNotice";
 import { Dialog } from "../../ui/Dialog";
@@ -60,8 +61,22 @@ export function ChatTextComposer({
   reasoningEfforts?: ChatCompletionReasoningEffort[];
 }) {
   const capture = getWorkflowSkillCaptureDisplay(props.draft);
-  useAutoGrowTextarea(props.composerRef, props.draft, { minLines: 1, maxLines: 8 });
+  useAutoGrowTextarea(props.composerRef, props.draft, { minLines: 2, maxLines: 8 });
   const [externalSourceOpenToken, setExternalSourceOpenToken] = useState(0);
+  // Read-only sources stay behind a toolbar chip; the panel and its explainer show only once opened.
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const sourcesPanelId = useId();
+  const openSourcePicker = () => {
+    setSourcesOpen(true);
+    setExternalSourceOpenToken((token) => token + 1);
+  };
+  const toggleSources = () => {
+    const sources = props.externalSourceControls;
+    if (sourcesOpen || !sources) return setSourcesOpen(false);
+    // With nothing attached the panel has nothing to list, so opening goes straight to the source picker.
+    if (sources.attachments.length === 0) openSourcePicker();
+    else setSourcesOpen(true);
+  };
   const [composing, setComposing] = useState(false);
   const projectReview = useProjectSwitchReview(props, composing);
   const reviewTransition = useChatSelectionReview(projectReview.identity);
@@ -69,7 +84,7 @@ export function ChatTextComposer({
     if (projectReview.begin(item)) return;
     if (item.action?.type === "launch_external_source") {
       props.composerPalette?.onClose();
-      if (props.externalSourceControls) setExternalSourceOpenToken((token) => token + 1);
+      if (props.externalSourceControls) openSourcePicker();
       else props.onOpenLibraryImports?.();
       return;
     }
@@ -198,13 +213,15 @@ export function ChatTextComposer({
           </div>
         </Dialog>
         {props.externalSourceControls ? (
-          <ExternalSourceStrip
-            controls={props.externalSourceControls}
-            disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
-            openAttachFormToken={externalSourceOpenToken}
-            onOpenLibrary={props.onOpenLibraryImports}
-            onRestoreFocus={() => props.composerRef.current?.focus()}
-          />
+          <div id={sourcesPanelId} hidden={!sourcesOpen}>
+            <ExternalSourceStrip
+              controls={props.externalSourceControls}
+              disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
+              openAttachFormToken={externalSourceOpenToken}
+              onOpenLibrary={props.onOpenLibraryImports}
+              onRestoreFocus={() => props.composerRef.current?.focus()}
+            />
+          </div>
         ) : null}
         <ChatQueueBar
           items={props.queueItems ?? []}
@@ -216,6 +233,16 @@ export function ChatTextComposer({
           props={props.attachmentUpload?.pending ? { ...props, sending: false } : props}
           reasoningEfforts={reasoningEfforts}
           scopeKey={props.selectedSessionId ?? ""}
+          sourcesChip={
+            props.externalSourceControls ? (
+              <ChatSourcesChip
+                controls={props.externalSourceControls}
+                open={sourcesOpen}
+                panelId={sourcesPanelId}
+                onToggle={toggleSources}
+              />
+            ) : null
+          }
         />
         {props.attachmentUpload?.pending ? (
           <p role="status" className="text-sm text-fg-secondary">
@@ -237,7 +264,7 @@ export function ChatTextComposer({
         <textarea
           id="cockpit-chat-draft"
           ref={props.composerRef}
-          rows={1}
+          rows={2}
           role="combobox"
           aria-autocomplete="list"
           aria-expanded={ownsSuggestions}
@@ -257,7 +284,7 @@ export function ChatTextComposer({
           onCompositionEnd={() => setComposing(false)}
           onPaste={props.onComposerPaste}
           placeholder="Message GoatCitadel…"
-          className="cockpit-chat-draft mt-2 block min-h-10 w-full resize-y rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60"
+          className="cockpit-chat-draft mt-2 block min-h-16 w-full resize-y rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60"
         />
         {capture ? (
           <section
