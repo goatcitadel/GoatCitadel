@@ -389,7 +389,7 @@ export function composeRuntimeAdminRouteDependencies(
         runPromptPackTest: (packId, testId, input) =>
           gateway.promptPackService.runPromptPackTest(packId, testId, input),
         onBackgroundError: (comparisonId, error) =>
-          modelComparisonLog.error("Model comparison could not record its failed status", {
+          modelComparisonLog.error("Model comparison background status or lease write failed", {
             comparisonId,
             error: error instanceof Error ? error.message : String(error),
           }),

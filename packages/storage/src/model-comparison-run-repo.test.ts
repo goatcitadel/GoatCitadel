@@ -154,6 +154,114 @@ describe("ModelComparisonRunRepository", () => {
     assert.equal(cleared.error, undefined);
   });
 
+  it("claims a run only when the expected status and updatedAt still match", async () => {
+    const repo = createRepo();
+    await repo.create({ ...sampleRun(), completedAt: "2026-06-05T12:30:00.000Z", error: "earlier failure" });
+
+    const claimed = await repo.claimRun("cmp-1", {
+      expectedStatus: "queued",
+      expectedUpdatedAt: "2026-06-05T12:00:00.000Z",
+      updatedAt: "2026-10-15T00:00:00.000Z",
+    });
+    assert.equal(claimed?.status, "running");
+    assert.equal(claimed?.updatedAt, "2026-10-15T00:00:00.000Z");
+    assert.equal(claimed?.completedAt, undefined);
+    assert.equal(claimed?.error, undefined);
+
+    // A second claimer that read the same snapshot loses the race.
+    const lost = await repo.claimRun("cmp-1", {
+      expectedStatus: "queued",
+      expectedUpdatedAt: "2026-06-05T12:00:00.000Z",
+      updatedAt: "2026-10-15T00:00:01.000Z",
+    });
+    assert.equal(lost, undefined);
+    // Right status, stale updatedAt: also no match.
+    const staleLease = await repo.claimRun("cmp-1", {
+      expectedStatus: "running",
+      expectedUpdatedAt: "2026-06-05T12:00:00.000Z",
+      updatedAt: "2026-10-15T00:00:02.000Z",
+    });
+    assert.equal(staleLease, undefined);
+    assert.equal((await repo.get("cmp-1")).updatedAt, "2026-10-15T00:00:00.000Z");
+    assert.equal(
+      await repo.claimRun("missing", {
+        expectedStatus: "queued",
+        expectedUpdatedAt: "2026-06-05T12:00:00.000Z",
+        updatedAt: "2026-10-15T00:00:00.000Z",
+      }),
+      undefined,
+    );
+  });
+
+  it("renews a lease only while the run is running", async () => {
+    const repo = createRepo();
+    await repo.create(sampleRun());
+    assert.equal(await repo.renewRunLease("cmp-1", "2026-10-15T00:00:00.000Z"), false);
+    assert.equal((await repo.get("cmp-1")).updatedAt, "2026-06-05T12:00:00.000Z");
+
+    await repo.updateStatus("cmp-1", { status: "running", updatedAt: "2026-10-15T00:00:00.000Z" });
+    assert.equal(await repo.renewRunLease("cmp-1", "2026-10-15T00:01:00.000Z"), true);
+    assert.equal((await repo.get("cmp-1")).updatedAt, "2026-10-15T00:01:00.000Z");
+
+    await repo.updateStatus("cmp-1", { status: "cancelled", updatedAt: "2026-10-15T00:02:00.000Z" });
+    assert.equal(await repo.renewRunLease("cmp-1", "2026-10-15T00:03:00.000Z"), false);
+    assert.equal((await repo.get("cmp-1")).updatedAt, "2026-10-15T00:02:00.000Z");
+    assert.equal(await repo.renewRunLease("missing", "2026-10-15T00:03:00.000Z"), false);
+  });
+
+  it("finishes a run only while it is still running", async () => {
+    const repo = createRepo();
+    await repo.create(sampleRun());
+    assert.equal(
+      await repo.finishRun("cmp-1", {
+        status: "completed",
+        updatedAt: "2026-10-15T00:00:00.000Z",
+        completedAt: "2026-10-15T00:00:00.000Z",
+        error: null,
+      }),
+      undefined,
+    );
+    assert.equal((await repo.get("cmp-1")).status, "queued");
+
+    await repo.updateStatus("cmp-1", { status: "running", updatedAt: "2026-10-15T00:00:00.000Z" });
+    const finished = await repo.finishRun("cmp-1", {
+      status: "failed",
+      updatedAt: "2026-10-15T00:05:00.000Z",
+      completedAt: "2026-10-15T00:05:00.000Z",
+      error: "1 of 2 results failed.",
+    });
+    assert.equal(finished?.status, "failed");
+    assert.equal(finished?.completedAt, "2026-10-15T00:05:00.000Z");
+    assert.equal(finished?.error, "1 of 2 results failed.");
+
+    // A cancel written elsewhere wins over a late terminal write.
+    await repo.updateStatus("cmp-1", { status: "running", updatedAt: "2026-10-15T00:06:00.000Z" });
+    await repo.updateStatus("cmp-1", {
+      status: "cancelled",
+      updatedAt: "2026-10-15T00:07:00.000Z",
+      completedAt: "2026-10-15T00:07:00.000Z",
+    });
+    assert.equal(
+      await repo.finishRun("cmp-1", {
+        status: "completed",
+        updatedAt: "2026-10-15T00:08:00.000Z",
+        completedAt: "2026-10-15T00:08:00.000Z",
+        error: null,
+      }),
+      undefined,
+    );
+    assert.equal((await repo.get("cmp-1")).status, "cancelled");
+    assert.equal(
+      await repo.finishRun("missing", {
+        status: "completed",
+        updatedAt: "2026-10-15T00:08:00.000Z",
+        completedAt: "2026-10-15T00:08:00.000Z",
+        error: null,
+      }),
+      undefined,
+    );
+  });
+
   it("rejects updates for unknown comparisons", async () => {
     const repo = createRepo();
     await assert.rejects(() =>
