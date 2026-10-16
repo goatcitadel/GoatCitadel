@@ -571,12 +571,15 @@ export class LlmService {
       const submittedApiKey =
         isCodexOAuthProvider || submittedApiKeyValue === SECRET_REDACTION_MARKER ? undefined : submittedApiKeyValue;
       // Validate the resulting apiStyle/authMode pairing before any credential is written.
-      const authModeMismatch = describeAwsAuthModeApiStyleMismatch(
-        normalizeProviderApiStyle(input.upsertProvider.providerId, input.upsertProvider.apiStyle ?? existing?.apiStyle),
-        input.upsertProvider.authMode ??
-          existing?.authMode ??
-          defaultAuthModeForProvider(input.upsertProvider.providerId),
+      const resolvedApiStyle = normalizeProviderApiStyle(
+        input.upsertProvider.providerId,
+        input.upsertProvider.apiStyle ?? existing?.apiStyle,
       );
+      const resolvedAuthMode =
+        input.upsertProvider.authMode ??
+        existing?.authMode ??
+        defaultAuthModeForProvider(input.upsertProvider.providerId);
+      const authModeMismatch = describeAwsAuthModeApiStyleMismatch(resolvedApiStyle, resolvedAuthMode);
       if (authModeMismatch) {
         throw new Error(`Provider "${input.upsertProvider.providerId}": ${authModeMismatch}`);
       }
@@ -591,18 +594,12 @@ export class LlmService {
           preserveProjectedProviderString(existing?.baseUrl, input.upsertProvider.baseUrl) ??
           existing?.baseUrl ??
           "http://127.0.0.1:1234/v1",
-        apiStyle: normalizeProviderApiStyle(
-          input.upsertProvider.providerId,
-          input.upsertProvider.apiStyle ?? existing?.apiStyle,
-        ),
+        apiStyle: resolvedApiStyle,
         defaultModel:
           input.upsertProvider.defaultModel ??
           existing?.defaultModel ??
           defaultModelForProvider(input.upsertProvider.providerId),
-        authMode:
-          input.upsertProvider.authMode ??
-          existing?.authMode ??
-          defaultAuthModeForProvider(input.upsertProvider.providerId),
+        authMode: resolvedAuthMode,
         apiKey: isCodexOAuthProvider
           ? undefined
           : submittedApiKey
