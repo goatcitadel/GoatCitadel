@@ -185,14 +185,14 @@ function classifySmtpSendFailure(error: unknown): unknown {
   if (!error || typeof error !== "object") {
     return error;
   }
-  const { code, command } = error as { code?: unknown; command?: unknown };
-  const preData =
-    (typeof code === "string" && SMTP_PRE_DATA_ERROR_CODES.has(code)) || (code === "ECONNECTION" && command === "CONN");
-  if (!preData) {
+  // ECONNECTION is deliberately absent: nodemailer raises ECONNECTION/CONN for any
+  // unexpected close, including one after the body was streamed, so it may have sent.
+  const { code } = error as { code?: unknown };
+  if (typeof code !== "string" || !SMTP_PRE_DATA_ERROR_CODES.has(code)) {
     return error;
   }
   const detail = truncate(error instanceof Error ? error.message : String(error));
-  const message = SMTP_AUTH_ERROR_CODES.has(code as string)
+  const message = SMTP_AUTH_ERROR_CODES.has(code)
     ? `blocked: SMTP server rejected the configured credentials (${String(code)}); nothing was sent. ${detail}`
     : `smtp.send failed before the message was sent (${String(code)}); nothing was sent. ${detail}`;
   return new CommsPreBoundaryProviderError(message, { cause: error });

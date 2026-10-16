@@ -271,7 +271,6 @@ describe("smtpSend", () => {
     ["EDNS", "CONN", /before the message was sent \(EDNS\)/],
     ["ETLS", "CONN", /before the message was sent \(ETLS\)/],
     ["EENVELOPE", "RCPT TO", /before the message was sent \(EENVELOPE\)/],
-    ["ECONNECTION", "CONN", /before the message was sent \(ECONNECTION\)/],
   ])("classifies nodemailer %s as a pre-boundary failure", async (code, command, pattern) => {
     const runtime = fakeRuntime({
       sendMail: vi.fn(async () => Promise.reject(smtpError("server said no", code, command))),
@@ -291,6 +290,7 @@ describe("smtpSend", () => {
     ["EMESSAGE", "DATA"],
     ["ESTREAM", undefined],
     ["ECONNECTION", "API"],
+    ["ECONNECTION", "CONN"],
     [undefined, undefined],
   ])("leaves nodemailer %s (%s) as a possibly-sent failure", async (code, command) => {
     const original = smtpError("connection dropped", code, command);
@@ -435,9 +435,11 @@ describe("smtp.send through executeCommsTool", () => {
     expect(String(result.error)).not.toContain("unknown_after_send");
   });
 
-  it("reports a pre-DATA connection failure as not_available, not manual reconciliation", async () => {
+  it("reports a pre-DATA TLS failure as not_available, not manual reconciliation", async () => {
     nodemailerMock.createTransport.mockReturnValue({
-      sendMail: vi.fn(async () => Promise.reject(smtpError("connect ECONNREFUSED", "ECONNECTION", "CONN"))),
+      sendMail: vi.fn(async () =>
+        Promise.reject(smtpError("Error initiating TLS - certificate has expired", "ETLS", "CONN")),
+      ),
     });
     const { storage } = smtpStorage();
 
@@ -447,9 +449,9 @@ describe("smtp.send through executeCommsTool", () => {
     expect(String(result.error)).not.toContain("unknown_after_send");
   });
 
-  it("classifies a socket failure after the SMTP exchange started as an unknown outcome", async () => {
+  it("classifies an unexpected close (ECONNECTION/CONN, possibly after DATA) as an unknown outcome", async () => {
     nodemailerMock.createTransport.mockReturnValue({
-      sendMail: vi.fn(async () => Promise.reject(smtpError("Connection closed unexpectedly", "ESOCKET", "DATA"))),
+      sendMail: vi.fn(async () => Promise.reject(smtpError("Connection closed unexpectedly", "ECONNECTION", "CONN"))),
     });
     const { storage } = smtpStorage();
 

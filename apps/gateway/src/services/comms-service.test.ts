@@ -829,7 +829,7 @@ describe("comms smtp send external side-effect ledger", () => {
 
   it.each([
     ["blocked", "blocked: SMTP server rejected the configured credentials (EAUTH); nothing was sent."],
-    ["not_available", "smtp.send failed before the message was sent (ECONNECTION); nothing was sent."],
+    ["not_available", "smtp.send failed before the message was sent (ETLS); nothing was sent."],
   ])("records an SMTP pre-DATA %s failure as failed before the boundary", async (deliveryStatus, error) => {
     const failure = { status: "failed", deliveryStatus, error };
     const { host, sideEffectRunStore } = createSmtpHost();
