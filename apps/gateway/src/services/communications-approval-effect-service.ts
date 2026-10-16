@@ -110,7 +110,7 @@ export class CommunicationsApprovalEffectService {
       throw new CommunicationsApprovalEffectError("invalid_payload", "The mail send approval payload is malformed.");
     }
     const failDraft = (error: CommunicationsApprovalEffectError, reason = error.message) =>
-      this.failDraft(mail.draftId, reason).then(() => Promise.reject(error));
+      this.settleDraftAfterRefusal(mail.draftId, error, reason).then(() => Promise.reject(error));
     if (computeCommunicationsPayloadHash(mail) !== approval.payload.payloadHash) {
       return failDraft(new CommunicationsApprovalEffectError("payload_hash_mismatch", PAYLOAD_HASH_MISMATCH_REASON));
     }
@@ -245,7 +245,10 @@ export class CommunicationsApprovalEffectService {
   private async readConnection(accountId: string): Promise<IntegrationConnection> {
     try {
       return await this.deps.getIntegrationConnection(accountId);
-    } catch {
+    } catch (error) {
+      // Only a deleted connection is terminal; any other read failure is infrastructure,
+      // so it propagates and the effect worker defers and retries.
+      if (!(error instanceof NotFoundError)) throw error;
       throw new CommunicationsApprovalEffectError(
         "provider_unavailable",
         "The approved account is no longer connected; nothing was sent.",
@@ -347,9 +350,32 @@ export class CommunicationsApprovalEffectService {
     }
   }
 
-  private async failDraft(draftId: string, reason: string): Promise<MailDraftRecord | undefined> {
-    return this.deps.storage.mailDrafts.transition(draftId, ["approval_required"], {
-      status: "failed",
+  /**
+   * Records a refusal on the draft. An `outcome_unknown` refusal may follow a delivery,
+   * so the draft becomes `outcome_unknown` (never `failed`, never `sent`); every other
+   * refusal happened before the provider boundary and fails the draft.
+   */
+  private async settleDraftAfterRefusal(
+    draftId: string,
+    error: CommunicationsApprovalEffectError,
+    reason: string,
+  ): Promise<MailDraftRecord | undefined> {
+    return this.failDraft(draftId, reason, error.code === "outcome_unknown" ? "outcome_unknown" : "failed");
+  }
+
+  /**
+   * `failed` applies only to a draft still awaiting its outcome; `outcome_unknown` also
+   * replaces an earlier `failed`, because a later run may have crossed the provider boundary.
+   */
+  private async failDraft(
+    draftId: string,
+    reason: string,
+    status: "failed" | "outcome_unknown" = "failed",
+  ): Promise<MailDraftRecord | undefined> {
+    const from: MailDraftRecord["status"][] =
+      status === "outcome_unknown" ? ["approval_required", "failed"] : ["approval_required"];
+    return this.deps.storage.mailDrafts.transition(draftId, from, {
+      status,
       failureReason: reason,
       updatedAt: this.nowIso(),
     });

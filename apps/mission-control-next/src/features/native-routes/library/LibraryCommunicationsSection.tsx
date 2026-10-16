@@ -75,7 +75,15 @@ export function LibraryCommunicationsSection({ activeWorkspaceId, activeWorkspac
         bodyText,
       });
       const sendState = await sendMailDraft(draft.draftId, activeWorkspaceId);
-      setNotice({ tone: "success", message: `${sendState.status}: ${sendState.approvalId ?? draft.draftId}` });
+      setNotice(
+        sendState.status === "outcome_unknown"
+          ? {
+              tone: "warning",
+              message:
+                "Outcome unknown: the message may have been delivered. Check the sent mailbox before sending it again.",
+            }
+          : { tone: "success", message: `${sendState.status}: ${sendState.approvalId ?? draft.draftId}` },
+      );
       if (messageDraft.acceptSaved({ to: "", subject: "", bodyText: "" }, undefined, submitted)) setView("inbox");
       await reload();
     } catch (draftError) {

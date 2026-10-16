@@ -39,6 +39,8 @@ function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, 
   const invokes: ToolInvokeRequest[] = [];
   /** Current connection revisions; an edit after approval changes one. */
   const revisions: Record<string, string> = {};
+  /** Errors the next connection reads reject with, in order; empty reads the fixture. */
+  const connectionReadFailures: unknown[] = [];
   const host: CommsHost = {
     // Stands in for the policy engine's approval bypass: it only executes a presented
     // `approval:<id>` consent and settles that approval's pending action as executed.
@@ -54,7 +56,9 @@ function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, 
     readChatAttachmentContent: vi.fn(),
     getIntegrationConnection: async (connectionId) => {
       const known = CONNECTIONS[connectionId];
-      if (!known) throw new Error(`Unknown integration connection ${connectionId}`);
+      const failure = connectionReadFailures.shift();
+      if (failure) throw failure;
+      if (!known) throw new NotFoundError({ entity: "Integration connection", id: connectionId });
       const revision = revisions[connectionId] ?? APPROVED_REVISION;
       return {
         connectionId,
@@ -91,7 +95,7 @@ function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, 
     commsSmtpSend: (input, preApproval) => commsSmtpSend(host, input, preApproval),
     commsCalendarCreate: (input, preApproval) => commsCalendarCreate(host, input, preApproval),
   });
-  return { raw, storage, invokes, service, revisions, approvalReadFailures };
+  return { raw, storage, invokes, service, revisions, approvalReadFailures, connectionReadFailures };
 }
 
 const approvedLinkage = (actionType: string, connectorId: string) => ({
@@ -286,10 +290,56 @@ describe("CommunicationsApprovalEffectService mail send", () => {
     await expectEffectError(service.executeApprovedMailSend({ approvalId }), "outcome_unknown");
 
     expect(invokes).toHaveLength(1);
+    // The provider may have delivered, so the draft is never reported as failed (not sent).
     expect(await storage.mailDrafts.get(draftId)).toMatchObject({
-      status: "failed",
+      status: "outcome_unknown",
       failureReason: "Delivery outcome is unknown; check the mailbox before retrying.",
     });
+  });
+
+  it("keeps an outcome_unknown draft unknown on a ledger replay and never promotes it to sent", async () => {
+    let calls = 0;
+    const { storage, invokes, service } = createHarness(() => {
+      calls += 1;
+      return calls === 1
+        ? { status: "failed", deliveryStatus: "manual_reconciliation_required" }
+        : { status: "sent", deliveryStatus: "sent", providerMessageId: "provider-message-2" };
+    });
+    const { draftId, approvalId } = await seedApprovedMailSend(storage);
+
+    await expectEffectError(service.executeApprovedMailSend({ approvalId }), "outcome_unknown");
+    await expectEffectError(service.executeApprovedMailSend({ approvalId }), "outcome_unknown");
+
+    expect(invokes).toHaveLength(1);
+    const draft = await storage.mailDrafts.get(draftId);
+    expect(draft.status).toBe("outcome_unknown");
+    expect(draft.sentAt).toBeUndefined();
+  });
+
+  it("maps a deleted mail account to provider_unavailable and fails the draft", async () => {
+    const { storage, invokes, service, connectionReadFailures } = createHarness();
+    const { draftId, approvalId } = await seedApprovedMailSend(storage);
+    connectionReadFailures.push(new NotFoundError({ entity: "Integration connection", id: "conn-gmail" }));
+
+    const error = await expectEffectError(service.executeApprovedMailSend({ approvalId }), "provider_unavailable");
+
+    expect(invokes).toHaveLength(0);
+    expect(await storage.mailDrafts.get(draftId)).toMatchObject({ status: "failed", failureReason: error.message });
+  });
+
+  it("rethrows a transient connection read failure so the effect retries", async () => {
+    const { storage, invokes, service, connectionReadFailures } = createHarness();
+    const { draftId, approvalId } = await seedApprovedMailSend(storage);
+    const outage = new Error("database is locked");
+    connectionReadFailures.push(outage);
+
+    await expect(service.executeApprovedMailSend({ approvalId })).rejects.toBe(outage);
+
+    expect(invokes).toHaveLength(0);
+    expect(await storage.mailDrafts.get(draftId)).toMatchObject({ status: "approval_required" });
+    // The retry reads the connection again and sends exactly once.
+    await expect(service.executeApprovedMailSend({ approvalId })).resolves.toMatchObject({ disposition: "sent" });
+    expect(invokes).toHaveLength(1);
   });
 
   it("fails a pre-boundary provider refusal as delivery_failed", async () => {

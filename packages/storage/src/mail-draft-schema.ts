@@ -13,7 +13,7 @@ const MAIL_DRAFT_COLUMNS = `
   subject TEXT NOT NULL,
   body_text TEXT NOT NULL,
   approval_id TEXT,
-  status TEXT NOT NULL CHECK(status IN ('draft','approval_required','sent','failed','send_unavailable')),
+  status TEXT NOT NULL CHECK(status IN ('draft','approval_required','sent','failed','send_unavailable','outcome_unknown')),
   failure_reason TEXT,
   sent_at TEXT,
   created_at TEXT NOT NULL,
@@ -53,7 +53,7 @@ DROP INDEX IF EXISTS idx_mail_drafts_approval;
 CREATE INDEX idx_mail_drafts_approval ON mail_drafts(approval_id);
 ALTER TABLE mail_drafts DROP CONSTRAINT IF EXISTS mail_drafts_status_check;
 ALTER TABLE mail_drafts ADD CONSTRAINT mail_drafts_status_check
-  CHECK(status IN ('draft','approval_required','sent','failed','send_unavailable'));
+  CHECK(status IN ('draft','approval_required','sent','failed','send_unavailable','outcome_unknown'));
 `;
 
 export function createMailDraftSchema(db: Pick<DatabaseClient, "exec">): void {

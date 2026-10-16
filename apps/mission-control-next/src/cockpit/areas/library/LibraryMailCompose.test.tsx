@@ -302,6 +302,37 @@ it.each([
   expect(container.textContent).toContain(`Not sent: ${failureReason}`);
 });
 
+it("shows an unknown delivery outcome as possibly delivered, never as not sent", async () => {
+  await requestApproval();
+  vi.mocked(getMailDraft).mockResolvedValue({
+    ...pending,
+    status: "outcome_unknown",
+    failureReason: "Delivery outcome is unknown; check the mailbox before retrying.",
+  });
+  await click("Simulate decision");
+  const receipt = container.querySelector("[aria-label='Send approval receipt']")!;
+  const text = receipt.textContent!;
+  expect(text).toContain("Outcome unknown");
+  expect(text).toContain("may have been delivered");
+  expect(text).toContain("Check the sent mailbox before sending it again.");
+  expect(text).not.toMatch(/not sent|nothing was sent|nothing has been sent/i);
+  const regions = [...receipt.querySelectorAll("[role=alert], [role=status]")];
+  expect(regions).toHaveLength(1);
+});
+
+it("shows a replayed send of an outcome_unknown draft as possibly delivered, never as not sent", async () => {
+  vi.mocked(createMailDraft).mockResolvedValue(draft);
+  vi.mocked(sendMailDraft).mockResolvedValue({ ...pending, status: "outcome_unknown" });
+  await render();
+  await compose();
+  await click("Review send request");
+  await click("Request send approval");
+  const text = container.querySelector("[aria-label='Send approval receipt']")!.textContent!;
+  expect(text).toContain("Outcome unknown");
+  expect(text).toContain("Check the sent mailbox before sending it again.");
+  expect(text).not.toMatch(/not sent|nothing was sent/i);
+});
+
 it("shows a decided send as in progress, not as not-sent-yet, while the draft still awaits its outcome", async () => {
   await requestApproval();
   vi.mocked(getMailDraft).mockResolvedValue(pending);

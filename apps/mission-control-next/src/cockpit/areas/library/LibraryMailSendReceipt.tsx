@@ -1,6 +1,7 @@
 import type { ApprovalRequest, MailDraftRecord } from "@goatcitadel/contracts";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { getMailDraft } from "@goatcitadel/mission-control-shared/api/personal-ops";
+import { presentApprovalOutcome } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { LibraryApproval } from "./LibraryApproval";
@@ -48,10 +49,29 @@ function decidedPendingText(receipt: SendReceipt): string | undefined {
     : "The approval was decided; the draft outcome is still being recorded. Refresh to see the outcome.";
 }
 
+/** The shared label for a delivery the provider may have completed. */
+const OUTCOME_UNKNOWN_LABEL = presentApprovalOutcome("unknown").label;
+
+/**
+ * An `outcome_unknown` draft may already have been delivered, so it is never described as not sent: the operator
+ * checks the mailbox before sending again.
+ */
+function OutcomeUnknownCallout({ intro }: { intro: string }) {
+  return (
+    <Callout tone="warning">
+      {intro}
+      <span className="wrap-anywhere block font-medium">
+        {OUTCOME_UNKNOWN_LABEL}: the message may have been delivered. Check the sent mailbox before sending it again.
+      </span>
+    </Callout>
+  );
+}
+
 /** The delivery outcome the Gateway recorded on the draft, once the approval has been decided. */
 function draftOutcomeText(draft: MailDraftRecord | undefined): string | undefined {
   if (!draft) return undefined;
   if (draft.status === "sent") return "Sent.";
+  if (draft.status === "outcome_unknown") return OUTCOME_UNKNOWN_LABEL;
   if (draft.status === "failed" || draft.status === "send_unavailable")
     return `Not sent: ${draft.failureReason ?? "the Gateway did not record a reason."}`;
   return undefined;
@@ -77,6 +97,8 @@ export function LibraryMailSendReceipt({ receipt, workspaceId, onRefresh, onDism
               The approval was decided and the message was sent.
               <span className="wrap-anywhere block font-medium">{outcome}</span>
             </Callout>
+          ) : receipt.observed?.status === "outcome_unknown" ? (
+            <OutcomeUnknownCallout intro="The approval was decided, but the delivery outcome was not confirmed." />
           ) : receipt.observed?.status === "failed" || receipt.observed?.status === "send_unavailable" ? (
             <Callout tone="error">
               The approval was decided, but the message was not sent.
@@ -94,6 +116,8 @@ export function LibraryMailSendReceipt({ receipt, workspaceId, onRefresh, onDism
           </p>
           <LibraryApproval approvalId={receipt.record.approvalId} workspaceId={workspaceId} onRefresh={onRefresh} />
         </>
+      ) : receipt.record.status === "outcome_unknown" ? (
+        <OutcomeUnknownCallout intro="This draft was already approved, but its delivery outcome was not confirmed." />
       ) : receipt.replayed ? (
         <Callout tone="error">
           The earlier send request&apos;s outcome is unknown: a send approval may already exist, and this draft can no

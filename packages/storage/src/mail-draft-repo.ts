@@ -38,6 +38,7 @@ const MAIL_DRAFT_STATUSES: readonly MailDraftStatus[] = [
   "sent",
   "failed",
   "send_unavailable",
+  "outcome_unknown",
 ];
 
 type PreparedStatement = ReturnType<DatabaseClient["prepare"]>;

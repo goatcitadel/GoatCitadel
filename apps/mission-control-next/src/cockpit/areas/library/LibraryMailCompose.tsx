@@ -130,7 +130,7 @@ function LibraryMailComposeContent({
             !draftMatchesRequest(value, target.record, workspaceId)
           )
             throw new Error("The send approval receipt does not match the reviewed draft.");
-          if (value.status !== "approval_required" && value.status !== "failed")
+          if (value.status !== "approval_required" && value.status !== "failed" && value.status !== "outcome_unknown")
             throw new Error("The Gateway returned an unexpected draft status.");
         },
         replay,

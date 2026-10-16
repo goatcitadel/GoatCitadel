@@ -78,6 +78,16 @@ function assertRoundTripAndCas(scoped: string): void {
     });
     assert.equal(sent?.status, "sent");
     assert.equal(sent?.failureReason, undefined);
+    // The status CHECK admits outcome_unknown on both lineages.
+    const unknownDraft = { ...draft, draftId: "draft-pg-unknown", status: "approval_required" as const };
+    repo.create(unknownDraft);
+    const unknown = repo.transition(unknownDraft.draftId, ["approval_required"], {
+      status: "outcome_unknown",
+      failureReason: "Delivery outcome is unknown; check the mailbox before retrying.",
+      updatedAt: "2026-10-16T09:04:00.000Z",
+    });
+    assert.equal(unknown?.status, "outcome_unknown");
+    assert.equal(repo.get(unknownDraft.draftId).status, "outcome_unknown");
     assert.throws(
       () => db.prepare("UPDATE mail_drafts SET status = 'bogus' WHERE draft_id = ?").run(draft.draftId),
       /check constraint|mail_drafts_status_check/i,

@@ -15196,7 +15196,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     version: 213,
     name: "mail_drafts",
     sql: MAIL_DRAFTS_POSTGRES_SQL,
-    integritySha256: "ed491a03d198388aa6dc845ceae97f9b940248f7a1905ede1b06f02f692d8be9",
+    integritySha256: "28ee54b9449bc3b136cea4be2767546aea30d108e986c8b542b77b96808072b1",
   },
   {
     // Upgraded installs got v213's additive table while fresh installs get the
@@ -15204,7 +15204,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     version: 214,
     name: "mail_drafts_schema_convergence",
     sql: MAIL_DRAFTS_SCHEMA_CONVERGENCE_POSTGRES_SQL,
-    integritySha256: "9f285b44c93f18901fb1405bb04e244f07b230371091df13bc76e8ac2f3856e7",
+    integritySha256: "17014e5475fc236af54039b995f07f527804e014b8e712fb2ee05f43f1b23cdb",
   },
 ];
 

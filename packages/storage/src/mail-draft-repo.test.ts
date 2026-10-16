@@ -120,6 +120,34 @@ describe("MailDraftRepository", () => {
     );
   });
 
+  it("round-trips an outcome_unknown draft and keeps it out of a resend transition", () => {
+    const dbPath = tempDbs.path("goatcitadel-mail-drafts");
+    const repo = new MailDraftRepository(tempDbs.open({ dbPath }));
+    repo.create(draft({ status: "approval_required", approvalId: "ap-1" }));
+    const reason = "Delivery outcome is unknown; check the mailbox before retrying.";
+    const unknown = repo.transition("draft-1", ["approval_required", "failed"], {
+      status: "outcome_unknown",
+      failureReason: reason,
+      updatedAt: "2026-10-16T09:01:00.000Z",
+    });
+    assert.deepEqual(
+      unknown,
+      draft({
+        status: "outcome_unknown",
+        approvalId: "ap-1",
+        failureReason: reason,
+        updatedAt: "2026-10-16T09:01:00.000Z",
+      }),
+    );
+    assert.deepEqual(repo.get("draft-1"), unknown);
+    assert.equal(
+      repo.transition("draft-1", ["approval_required", "failed"], { status: "sent", updatedAt: "later" }),
+      undefined,
+      "the executor's sent transition never applies to an outcome_unknown draft",
+    );
+    assert.equal(repo.get("draft-1").status, "outcome_unknown");
+  });
+
   it("finds a draft after reopening the same database file", () => {
     const dbPath = tempDbs.path("goatcitadel-mail-drafts");
     const first = tempDbs.open({ dbPath });
