@@ -6,6 +6,7 @@ import {
   type ExternalSideEffectProbeResult,
   fingerprintExternalSideEffectDestination,
   type IdempotentExternalSideEffectRunInput,
+  resolveExternalSideEffectRouteIdentity,
 } from "./external-side-effect-runner-service.js";
 import type { IntegrationActionHost } from "./integration-action-service.js";
 import { buildLocalBridgeActionTargets } from "./local-bridge-action-policy.js";
@@ -65,15 +66,34 @@ export interface WritebackRunInputBlocked {
   output?: Record<string, unknown>;
 }
 
-const GMAIL_MESSAGE_ID_DOMAIN = "goatcitadel:gmail-message-id:v1";
-const TRELLO_MARKER_DOMAIN = "goatcitadel:trello-marker:v1";
+const GMAIL_MESSAGE_ID_DOMAIN = "goatcitadel:gmail-message-id:v2";
+const TRELLO_MARKER_DOMAIN = "goatcitadel:trello-marker:v2";
+const LOCAL_BRIDGE_IDEMPOTENCY_KEY_DOMAIN = "goatcitadel:local-bridge-idempotency-key:v2";
+const OPERATOR_ACTION_BOUNDARY = "integration_operator_action";
+const LOCAL_BRIDGE_ACTION_BOUNDARY = "integration_local_bridge_action";
 
-export function deriveGmailMessageId(idempotencyKey: string): string {
-  return `<gc-${digestKey(GMAIL_MESSAGE_ID_DOMAIN, idempotencyKey)}@goatcitadel.local>`;
+/**
+ * The mutation identity a provider-side dedupe identifier is scoped to. Binding the
+ * route (boundary, catalog, connection, action) and actor scope, not only the operator's
+ * key, keeps a key reused across connections from settling against another's effect.
+ */
+export interface WritebackDedupeScope {
+  routePath: string;
+  actorScope: string;
+  idempotencyKey: string;
 }
 
-export function deriveTrelloIdempotencyMarker(idempotencyKey: string): string {
-  return `[goatcitadel-idempotency:${digestKey(TRELLO_MARKER_DOMAIN, idempotencyKey)}]`;
+export function deriveGmailMessageId(scope: WritebackDedupeScope): string {
+  return `<gc-${digestScope(GMAIL_MESSAGE_ID_DOMAIN, scope).slice(0, 32)}@goatcitadel.local>`;
+}
+
+export function deriveTrelloIdempotencyMarker(scope: WritebackDedupeScope): string {
+  return `[goatcitadel-idempotency:${digestScope(TRELLO_MARKER_DOMAIN, scope).slice(0, 32)}]`;
+}
+
+/** The `Idempotency-Key` header value a local bridge receives: a scoped digest, never the raw key. */
+export function deriveLocalBridgeIdempotencyKey(scope: WritebackDedupeScope): string {
+  return digestScope(LOCAL_BRIDGE_IDEMPOTENCY_KEY_DOMAIN, scope);
 }
 
 export function buildGmailSendRunInput(
@@ -90,9 +110,9 @@ export function buildGmailSendRunInput(
   }
   const { payload } = options;
   const target = new URL("/gmail/v1/users/me/messages/send", gmailApiBaseUrl()).toString();
-  const probe = async (idempotencyKey: string): Promise<ExternalSideEffectProbeResult> => {
+  const probe = async (scope: WritebackDedupeScope): Promise<ExternalSideEffectProbeResult> => {
     const url = new URL("/gmail/v1/users/me/messages", gmailApiBaseUrl());
-    url.searchParams.set("q", `rfc822msgid:${deriveGmailMessageId(idempotencyKey).replace(/^<|>$/g, "")}`);
+    url.searchParams.set("q", `rfc822msgid:${deriveGmailMessageId(scope).replace(/^<|>$/g, "")}`);
     url.searchParams.set("includeSpamTrash", "true");
     url.searchParams.set("maxResults", "1");
     const body = await readProbeJson(host, url.toString(), {
@@ -111,7 +131,7 @@ export function buildGmailSendRunInput(
     const rawMessage = [
       `To: ${payload.to}`,
       `Subject: ${payload.subject}`,
-      `Message-ID: ${deriveGmailMessageId(claim.idempotencyKey)}`,
+      `Message-ID: ${deriveGmailMessageId(claim)}`,
       'Content-Type: text/plain; charset="UTF-8"',
       "",
       payload.bodyText,
@@ -136,7 +156,10 @@ export function buildGmailSendRunInput(
       label: "Gmail send",
       output: { provider: "gmail", to: payload.to, subject: payload.subject },
       execute: buildDedupedExecute(host, payload, options.replay, probe, send),
-      reconcileExternalOutcome: buildReconcile(options.idempotencyKey, probe),
+      reconcileExternalOutcome: buildReconcile(
+        liveDedupeScope(connection, options, OPERATOR_ACTION_BOUNDARY, "write"),
+        probe,
+      ),
     },
   };
 }
@@ -164,8 +187,8 @@ export function buildTrelloCardCreateRunInput(
     url.searchParams.set("desc", desc);
     return url.toString();
   };
-  const probe = async (idempotencyKey: string): Promise<ExternalSideEffectProbeResult> => {
-    const marker = deriveTrelloIdempotencyMarker(idempotencyKey);
+  const probe = async (scope: WritebackDedupeScope): Promise<ExternalSideEffectProbeResult> => {
+    const marker = deriveTrelloIdempotencyMarker(scope);
     const url = new URL(`/1/lists/${encodeURIComponent(payload.listId)}/cards/all`, trelloApiBaseUrl());
     url.searchParams.set("fields", "id,desc,shortUrl");
     url.searchParams.set("key", apiKey);
@@ -182,7 +205,7 @@ export function buildTrelloCardCreateRunInput(
     return { found: true, externalReferenceId: `id:${id}`, output: { id, ...(shortUrl ? { shortUrl } : {}) } };
   };
   const send = async (claim: ExternalSideEffectExecutionContext): Promise<ParsedProviderResponse> => {
-    const desc = `${payload.desc}\n\n${deriveTrelloIdempotencyMarker(claim.idempotencyKey)}`;
+    const desc = `${payload.desc}\n\n${deriveTrelloIdempotencyMarker(claim)}`;
     const response = await host.fetchWithDiagnosticsTimeout(buildCardUrl(desc), { method: "POST" });
     const parsed = await parseProviderResponse(response);
     if (!response.ok) {
@@ -202,7 +225,10 @@ export function buildTrelloCardCreateRunInput(
       label: "Trello card create",
       output: { provider: "trello", listId: payload.listId, name: payload.name },
       execute: buildDedupedExecute(host, payload, options.replay, probe, send),
-      reconcileExternalOutcome: buildReconcile(options.idempotencyKey, probe),
+      reconcileExternalOutcome: buildReconcile(
+        liveDedupeScope(connection, options, OPERATOR_ACTION_BOUNDARY, "write"),
+        probe,
+      ),
     },
   };
 }
@@ -233,12 +259,12 @@ export function buildLocalBridgeWriteRunInput(
   const authHeader = resolveBearerAuth(host, connection);
   const enforced = host.readConnectionConfigValue(connection.config, "idempotencyKeyEnforced") === "true";
   const { payload } = options;
-  const post = async (idempotencyKey: string) => {
+  const post = async (scope: WritebackDedupeScope) => {
     const response = await host.fetchWithDiagnosticsTimeout(target, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "Idempotency-Key": idempotencyKey,
+        "Idempotency-Key": deriveLocalBridgeIdempotencyKey(scope),
         ...(authHeader ? { authorization: authHeader } : {}),
       },
       body: JSON.stringify({
@@ -251,8 +277,8 @@ export function buildLocalBridgeWriteRunInput(
     });
     return { response, parsed: await parseProviderResponse(response) };
   };
-  const probe = async (idempotencyKey: string): Promise<ExternalSideEffectProbeResult> => {
-    const { response, parsed } = await post(idempotencyKey);
+  const probe = async (scope: WritebackDedupeScope): Promise<ExternalSideEffectProbeResult> => {
+    const { response, parsed } = await post(scope);
     if (!response.ok) {
       throw new Error(`Local bridge reconciliation probe failed (${response.status}).`);
     }
@@ -266,7 +292,7 @@ export function buildLocalBridgeWriteRunInput(
         await host.storage.runImmediateTransaction!(work),
       requireMutationClaimOwnership: true,
       requireDurableBoundaryRecord: true,
-      boundary: "integration_local_bridge_action",
+      boundary: LOCAL_BRIDGE_ACTION_BOUNDARY,
       ...(enforced ? { providerIdempotencyKeyEnforced: true } : {}),
       externalDestinationFingerprint: fingerprintExternalSideEffectDestination(target),
       payload,
@@ -275,13 +301,20 @@ export function buildLocalBridgeWriteRunInput(
       execute: async (claim) => {
         await sealReplayRecord(host, claim, payload);
         await claim.markExternalCallStarted();
-        const { response, parsed } = await post(claim.idempotencyKey);
+        const { response, parsed } = await post(claim);
         if (!response.ok) {
           throw new Error(parsed.message ?? `Bridge action failed (${response.status}).`);
         }
         return parsed;
       },
-      ...(enforced ? { reconcileExternalOutcome: buildReconcile(options.idempotencyKey, probe) } : {}),
+      ...(enforced
+        ? {
+            reconcileExternalOutcome: buildReconcile(
+              liveDedupeScope(connection, options, LOCAL_BRIDGE_ACTION_BOUNDARY, action.actionId),
+              probe,
+            ),
+          }
+        : {}),
     },
   };
 }
@@ -323,6 +356,31 @@ export const trelloApiBaseUrl = () => resolveApiBaseUrl("GOATCITADEL_TRELLO_API_
 export const gmailApiBaseUrl = () =>
   resolveApiBaseUrl("GOATCITADEL_GMAIL_API_BASE_URL", "https://gmail.googleapis.com");
 
+/**
+ * The dedupe scope the runner's claim will carry for this input, derived through the
+ * runner's own identity rule so a reconcile probe matches what send used. Undefined
+ * without an explicit idempotency key: reconciliation then fails closed.
+ */
+function liveDedupeScope(
+  connection: IntegrationConnection,
+  options: WritebackRunInputOptions<unknown>,
+  boundary: string,
+  actionId: string,
+): WritebackDedupeScope | undefined {
+  const idempotencyKey = options.idempotencyKey?.trim();
+  if (!idempotencyKey) {
+    return undefined;
+  }
+  const identity = resolveExternalSideEffectRouteIdentity({
+    boundary,
+    catalogId: connection.catalogId,
+    connectionId: connection.connectionId,
+    actionId,
+    ...(options.actorScope ? { actorScope: options.actorScope } : {}),
+  });
+  return { ...identity, idempotencyKey };
+}
+
 function baseInput(
   host: IntegrationActionHost,
   connection: IntegrationConnection,
@@ -332,7 +390,7 @@ function baseInput(
   return {
     mutationStore: host.mutationStore,
     sideEffectRunStore: host.sideEffectRunStore,
-    boundary: "integration_operator_action",
+    boundary: OPERATOR_ACTION_BOUNDARY,
     catalogId: connection.catalogId,
     connectionId: connection.connectionId,
     actionId,
@@ -352,12 +410,12 @@ function buildDedupedExecute(
   host: IntegrationActionHost,
   payload: unknown,
   replay: boolean | undefined,
-  probe: (idempotencyKey: string) => Promise<ExternalSideEffectProbeResult>,
+  probe: (scope: WritebackDedupeScope) => Promise<ExternalSideEffectProbeResult>,
   send: (claim: ExternalSideEffectExecutionContext) => Promise<ParsedProviderResponse>,
 ) {
   return async (claim: ExternalSideEffectExecutionContext): Promise<ParsedProviderResponse> => {
     if (replay) {
-      const found = await probe(claim.idempotencyKey);
+      const found = await probe(claim);
       if (found.found) {
         claim.markExternalCallNotRequired();
         return { output: found.output ?? {} };
@@ -370,15 +428,14 @@ function buildDedupedExecute(
 }
 
 function buildReconcile(
-  idempotencyKey: string | undefined,
-  probe: (idempotencyKey: string) => Promise<ExternalSideEffectProbeResult>,
+  scope: WritebackDedupeScope | undefined,
+  probe: (scope: WritebackDedupeScope) => Promise<ExternalSideEffectProbeResult>,
 ): () => Promise<ExternalSideEffectProbeResult> {
   return async () => {
-    const key = idempotencyKey?.trim();
-    if (!key) {
+    if (!scope) {
       throw new Error("External outcome reconciliation requires the run idempotency key.");
     }
-    return await probe(key);
+    return await probe(scope);
   };
 }
 
@@ -410,8 +467,10 @@ async function readProbeJson(host: IntegrationActionHost, url: string, init: Req
   }
 }
 
-function digestKey(domain: string, idempotencyKey: string): string {
-  return createHash("sha256").update(`${domain}\0${idempotencyKey}`).digest("hex").slice(0, 32);
+function digestScope(domain: string, scope: WritebackDedupeScope): string {
+  return createHash("sha256")
+    .update(`${domain}\0${JSON.stringify([scope.routePath, scope.actorScope, scope.idempotencyKey])}`)
+    .digest("hex");
 }
 
 function readNonEmptyString(value: unknown): string | undefined {

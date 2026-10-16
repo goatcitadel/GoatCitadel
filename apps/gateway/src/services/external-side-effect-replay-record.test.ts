@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  createExternalSideEffectReplayKeyResolver,
   createExternalSideEffectReplayRecords,
   resolveExternalSideEffectReplayKey,
+  sharedExternalSideEffectReplayKeyResolver,
 } from "./external-side-effect-replay-record.js";
 
 function createRuns() {
@@ -141,5 +143,82 @@ describe("external-side-effect replay records", () => {
         setSecret: () => undefined,
       }),
     ).toBeUndefined();
+  });
+
+  it("memoizes the resolved key so seal and open hit the keychain once", async () => {
+    const stored = new Map<string, string>([["external-side-effect-replay:master_key", key.toString("base64")]]);
+    let gets = 0;
+    const store = {
+      isAvailable: () => true,
+      getSecret: (account: string) => {
+        gets += 1;
+        return stored.get(account);
+      },
+      setSecret: () => {
+        throw new Error("must not write");
+      },
+    };
+    const runs = createRuns();
+    const records = createExternalSideEffectReplayRecords({
+      resolveKey: createExternalSideEffectReplayKeyResolver(store),
+      runs,
+    });
+    expect(await records.seal({ runId: "r1", payloadHash: "h1", payload: { a: 1 } })).toBe(true);
+    expect(await records.open({ runId: "r1", payloadHash: "h1" })).toEqual({ payload: { a: 1 } });
+    expect(gets).toBe(1);
+  });
+
+  it("never regenerates the key after an initial success even if later lookups miss", () => {
+    const stored = new Map<string, string>();
+    let sets = 0;
+    let lookupsMiss = false;
+    const store = {
+      isAvailable: () => true,
+      getSecret: (account: string) => (lookupsMiss ? undefined : stored.get(account)),
+      setSecret: (account: string, value: string) => {
+        sets += 1;
+        stored.set(account, value);
+      },
+    };
+    const resolve = createExternalSideEffectReplayKeyResolver(store);
+    const first = resolve();
+    lookupsMiss = true;
+    const second = resolve();
+    expect(first?.length).toBe(32);
+    expect(second?.equals(first as Buffer)).toBe(true);
+    expect(sets).toBe(1);
+  });
+
+  it("shares one memoized resolver per secret store across hosts", () => {
+    let gets = 0;
+    const store = {
+      isAvailable: () => true,
+      getSecret: () => {
+        gets += 1;
+        return key.toString("base64");
+      },
+      setSecret: () => undefined,
+    };
+    sharedExternalSideEffectReplayKeyResolver(store)();
+    sharedExternalSideEffectReplayKeyResolver(store)();
+    expect(gets).toBe(1);
+    expect(sharedExternalSideEffectReplayKeyResolver(undefined)()).toBeUndefined();
+  });
+
+  it("does not generate a key when secret-store write custody is unsafe", () => {
+    let sets = 0;
+    const store = {
+      isAvailable: () => true,
+      isWriteCustodySafe: () => false,
+      getSecret: () => undefined,
+      setSecret: () => {
+        sets += 1;
+      },
+    };
+    expect(resolveExternalSideEffectReplayKey(store)).toBeUndefined();
+    expect(createExternalSideEffectReplayKeyResolver(store)()).toBeUndefined();
+    expect(sets).toBe(0);
+    const existing = { ...store, getSecret: () => key.toString("base64") };
+    expect(resolveExternalSideEffectReplayKey(existing)?.equals(key)).toBe(true);
   });
 });

@@ -560,7 +560,8 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
 
   it("returns undefined when ward denies or requires dry-run at replay time", async () => {
     const connection = createConnection({ workspaceId: "ws-guarded" });
-    const run = buildRun();
+    // Same workspace as the connection, so the refusal comes from the ward, not workspace drift.
+    const run = buildRun({ workspaceId: "ws-guarded" });
     const payload = buildPayload();
 
     const denyHost = wardHost(connection, [{ actionPattern: "integration.*", effect: "deny" }]);
@@ -573,6 +574,38 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
 
     const approvalHost = wardHost(connection, [{ actionPattern: "integration.*", effect: "require_approval" }]);
     expect(await buildGatewayExternalSideEffectReplayJob(approvalHost, run, payload)).toBeUndefined();
+  });
+
+  it("re-checks the ward for a sealed-record catalog before opening its replay record", async () => {
+    const connection = createConnection({
+      connectionId: "conn-gmail",
+      catalogId: "automation.gmail",
+      key: "gmail",
+      label: "Gmail",
+      workspaceId: "ws-guarded",
+      config: { accessToken: "gmail-token" },
+    });
+    const run = buildRun({
+      workspaceId: "ws-guarded",
+      routePath: "external_side_effect:integration_operator_action:automation.gmail:conn-gmail:write",
+      catalogId: "automation.gmail",
+      connectionId: "conn-gmail",
+      actionId: "write",
+    });
+    const payload = buildPayload();
+    const open = vi.fn(async () => undefined);
+    const replayRecords = { seal: vi.fn(async () => true), open };
+
+    const denyHost = wardHost(connection, [{ actionPattern: "integration.automation.gmail.*", effect: "deny" }], {
+      replayRecords,
+    });
+    expect(await buildGatewayExternalSideEffectReplayJob(denyHost, run, payload)).toBeUndefined();
+    expect(open).not.toHaveBeenCalled();
+
+    // Control: without the ward the builder does reach the sealed record.
+    const allowHost = wardHost(connection, [], { replayRecords });
+    expect(await buildGatewayExternalSideEffectReplayJob(allowHost, run, payload)).toBeUndefined();
+    expect(open).toHaveBeenCalledTimes(1);
   });
 
   it("returns undefined for missing connection or missing webhook url", async () => {

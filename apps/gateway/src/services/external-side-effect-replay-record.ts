@@ -28,15 +28,25 @@ function buildAad(runId: string, payloadHash: string): Buffer {
   return Buffer.from(`${AAD_PREFIX}\0${runId}\0${payloadHash}`, "utf8");
 }
 
-export function resolveExternalSideEffectReplayKey(
-  secretStore: Pick<SecretStoreService, "isAvailable" | "getSecret" | "setSecret"> | undefined,
-): Buffer | undefined {
+type ReplayKeySecretStore = Pick<SecretStoreService, "isAvailable" | "getSecret" | "setSecret"> &
+  Partial<Pick<SecretStoreService, "isWriteCustodySafe">>;
+
+/**
+ * One keychain lookup per call. A fresh key is generated and stored only when none
+ * exists AND the store can write without exposing the value; where it cannot (the
+ * macOS `security(1)` adapter puts it on argv) this returns undefined and nothing
+ * is sealed.
+ */
+export function resolveExternalSideEffectReplayKey(secretStore: ReplayKeySecretStore | undefined): Buffer | undefined {
   try {
     if (!secretStore || !secretStore.isAvailable()) {
       return undefined;
     }
     let keyBase64 = secretStore.getSecret(REPLAY_KEY_ACCOUNT);
     if (!keyBase64) {
+      if (secretStore.isWriteCustodySafe?.() === false) {
+        return undefined;
+      }
       keyBase64 = randomBytes(KEY_BYTES).toString("base64");
       secretStore.setSecret(REPLAY_KEY_ACCOUNT, keyBase64);
     }
@@ -45,6 +55,40 @@ export function resolveExternalSideEffectReplayKey(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Memoizes the first successfully resolved key. Once a key has resolved, later calls
+ * never touch the keychain again, so a transient lookup miss can never generate a
+ * replacement key that would orphan every sealed record. Failed lookups retry.
+ */
+export function createExternalSideEffectReplayKeyResolver(
+  secretStore: ReplayKeySecretStore | undefined,
+): () => Buffer | undefined {
+  let resolved: Buffer | undefined;
+  return () => {
+    if (!resolved) {
+      resolved = resolveExternalSideEffectReplayKey(secretStore);
+    }
+    return resolved;
+  };
+}
+
+const sharedResolvers = new WeakMap<object, () => Buffer | undefined>();
+
+/** Process-wide memoized resolver per secret store, shared by every action host built on it. */
+export function sharedExternalSideEffectReplayKeyResolver(
+  secretStore: ReplayKeySecretStore | undefined,
+): () => Buffer | undefined {
+  if (!secretStore) {
+    return () => undefined;
+  }
+  let resolver = sharedResolvers.get(secretStore);
+  if (!resolver) {
+    resolver = createExternalSideEffectReplayKeyResolver(secretStore);
+    sharedResolvers.set(secretStore, resolver);
+  }
+  return resolver;
 }
 
 export function createExternalSideEffectReplayRecords(

@@ -448,6 +448,25 @@ export interface ExternalSideEffectReplayWorkerInput<TValue> {
   buildJob(run: ExternalSideEffectRunRecord): Promise<IdempotentExternalSideEffectRunInput<TValue> | undefined>;
 }
 
+/**
+ * The mutation identity scope every claim, run row and provider-side dedupe identifier
+ * derives from. Exported so probes built outside a claim derive exactly what the claim will.
+ */
+export function resolveExternalSideEffectRouteIdentity(
+  input: Pick<ExternalSideEffectClaimInput, "boundary" | "catalogId" | "connectionId" | "actionId" | "actorScope">,
+): { actorScope: string; routePath: string } {
+  return {
+    actorScope: input.actorScope?.trim() || input.connectionId || input.catalogId || "",
+    routePath: [
+      "external_side_effect",
+      input.boundary,
+      input.catalogId ?? "unknown_catalog",
+      input.connectionId ?? "unknown_connection",
+      input.actionId ?? "unknown_action",
+    ].join(":"),
+  };
+}
+
 export async function claimIdempotentExternalSideEffect(
   input: ExternalSideEffectClaimInput,
 ): Promise<ExternalSideEffectClaimResult> {
@@ -456,14 +475,7 @@ export async function claimIdempotentExternalSideEffect(
   const idempotencyKey =
     input.idempotencyKey?.trim() ||
     hashStableIntentParts([input.boundary, input.catalogId, input.connectionId, input.actionId, payloadHash]);
-  const actorScope = input.actorScope?.trim() || input.connectionId || input.catalogId || "";
-  const routePath = [
-    "external_side_effect",
-    input.boundary,
-    input.catalogId ?? "unknown_catalog",
-    input.connectionId ?? "unknown_connection",
-    input.actionId ?? "unknown_action",
-  ].join(":");
+  const { actorScope, routePath } = resolveExternalSideEffectRouteIdentity(input);
   const { checkedAt } = input;
   const mutationStore = input.mutationStore;
   const sideEffectRunStore = input.sideEffectRunStore;
@@ -701,14 +713,7 @@ export async function runIdempotentExternalSideEffect<TValue>(
         input.payload,
         normalizeExternalDestinationFingerprint(input.externalDestinationFingerprint),
       ),
-      actorScope: input.actorScope?.trim() || input.connectionId || input.catalogId || "",
-      routePath: [
-        "external_side_effect",
-        input.boundary,
-        input.catalogId ?? "unknown_catalog",
-        input.connectionId ?? "unknown_connection",
-        input.actionId ?? "unknown_action",
-      ].join(":"),
+      ...resolveExternalSideEffectRouteIdentity(input),
     });
     return {
       status: "blocked",

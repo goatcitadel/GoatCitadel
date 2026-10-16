@@ -63,7 +63,7 @@ import { composeChannelSetupHost } from "./channel-setup-host-composition.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import {
   createExternalSideEffectReplayRecords,
-  resolveExternalSideEffectReplayKey,
+  sharedExternalSideEffectReplayKeyResolver,
 } from "./external-side-effect-replay-record.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { readChatAttachmentContentForGateway } from "./gateway-route-composition-shared.js";
@@ -661,7 +661,7 @@ export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompos
     mutationStore: gateway.mutationIdempotencyStore,
     sideEffectRunStore: storage.externalSideEffectRuns,
     replayRecords: createExternalSideEffectReplayRecords({
-      resolveKey: () => resolveExternalSideEffectReplayKey(secretStore),
+      resolveKey: sharedExternalSideEffectReplayKeyResolver(secretStore),
       runs: storage.externalSideEffectRuns,
     }),
     createApproval: (input) => gateway.createApproval(input),

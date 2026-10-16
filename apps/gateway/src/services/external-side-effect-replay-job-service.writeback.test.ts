@@ -12,6 +12,7 @@ import { buildGatewayExternalSideEffectReplayJob } from "./external-side-effect-
 import { createExternalSideEffectReplayRecords } from "./external-side-effect-replay-record.js";
 import { runReplaySafeExternalSideEffectWorker } from "./external-side-effect-runner-service.js";
 import { invokeIntegrationConnectionAction, type IntegrationActionHost } from "./integration-action-service.js";
+import { deriveLocalBridgeIdempotencyKey } from "./integration-writeback-run-inputs.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 
 /**
@@ -306,7 +307,10 @@ describe("buildGatewayExternalSideEffectReplayJob writeback replay (WS8)", () =>
 
       expect(results).toMatchObject([{ status: "reconciled" }]);
       expect(await harness.readRun()).toMatchObject({ status: "completed" });
-      expect(bridge.keys).toEqual(["idem-bridge-1", "idem-bridge-1"]);
+      // The bridge receives the scoped digest (route + actor + key), never the raw key.
+      const scopedKey = deriveLocalBridgeIdempotencyKey(run);
+      expect(scopedKey).toMatch(/^[a-f0-9]{64}$/);
+      expect(bridge.keys).toEqual([scopedKey, scopedKey]);
       expect(bridge.effects.size).toBe(1);
     });
 
@@ -356,8 +360,14 @@ describe("buildGatewayExternalSideEffectReplayJob writeback replay (WS8)", () =>
     // The record still opens (same run id + payload hash), but the LIVE destination moved,
     // so the rebuilt input's fingerprint no longer reproduces the recorded payload hash.
     process.env.GOATCITADEL_GMAIL_API_BASE_URL = GMAIL_BASE_B;
+    const open = vi.spyOn(harness.host.replayRecords!, "open");
 
     expect(await buildGatewayExternalSideEffectReplayJob(harness.host, run, payload)).toBeUndefined();
+    // The sealed record DID open, so the refusal is the payload-hash check, not a missing record.
+    expect(open).toHaveBeenCalledTimes(1);
+    await expect(open.mock.results[0]!.value).resolves.toMatchObject({
+      payload: { provider: "gmail", to: gmailRequest.input.to },
+    });
     expect(await harness.replay(run)).toMatchObject([{ status: "skipped", reason: "job_unavailable" }]);
     expect(harness.fetchMock).not.toHaveBeenCalled();
     expect(fake.sendCount()).toBe(0);

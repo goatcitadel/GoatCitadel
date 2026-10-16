@@ -11,7 +11,9 @@ import {
   buildLocalBridgeWriteRunInput,
   buildTrelloCardCreateRunInput,
   deriveGmailMessageId,
+  deriveLocalBridgeIdempotencyKey,
   deriveTrelloIdempotencyMarker,
+  type WritebackDedupeScope,
 } from "./integration-writeback-run-inputs.js";
 
 const CHECKED_AT = "2026-10-16T12:00:00.000Z";
@@ -153,18 +155,71 @@ const bridgePayload = {
   input: { title: "Note" },
 };
 
+/** The dedupe scope the test claim (createClaim) carries. */
+const CLAIM_SCOPE: WritebackDedupeScope = {
+  routePath: "external",
+  actorScope: "scope",
+  idempotencyKey: "operator-key-1",
+};
+
+/** The runner's identity rule, spelled out independently: actor scope defaults to the connection id. */
+function liveScope(connection: IntegrationConnection, boundary: string, actionId: string): WritebackDedupeScope {
+  return {
+    routePath: `external_side_effect:${boundary}:${connection.catalogId}:${connection.connectionId}:${actionId}`,
+    actorScope: connection.connectionId,
+    idempotencyKey: "operator-key-1",
+  };
+}
+
+function scopedDigest(domain: string, scope: WritebackDedupeScope): string {
+  return createHash("sha256")
+    .update(`${domain}\0${JSON.stringify([scope.routePath, scope.actorScope, scope.idempotencyKey])}`)
+    .digest("hex");
+}
+
 describe("integration-writeback-run-inputs", () => {
-  it("derives stable provider dedupe identifiers", () => {
-    const gmailDigest = createHash("sha256")
-      .update("goatcitadel:gmail-message-id:v1\0operator-key-1")
-      .digest("hex")
-      .slice(0, 32);
-    expect(deriveGmailMessageId("operator-key-1")).toBe(`<gc-${gmailDigest}@goatcitadel.local>`);
-    const trelloDigest = createHash("sha256")
-      .update("goatcitadel:trello-marker:v1\0operator-key-1")
-      .digest("hex")
-      .slice(0, 32);
-    expect(deriveTrelloIdempotencyMarker("operator-key-1")).toBe(`[goatcitadel-idempotency:${trelloDigest}]`);
+  it("derives stable provider dedupe identifiers from the scoped mutation identity", () => {
+    const gmailDigest = scopedDigest("goatcitadel:gmail-message-id:v2", CLAIM_SCOPE).slice(0, 32);
+    expect(deriveGmailMessageId(CLAIM_SCOPE)).toBe(`<gc-${gmailDigest}@goatcitadel.local>`);
+    const trelloDigest = scopedDigest("goatcitadel:trello-marker:v2", CLAIM_SCOPE).slice(0, 32);
+    expect(deriveTrelloIdempotencyMarker(CLAIM_SCOPE)).toBe(`[goatcitadel-idempotency:${trelloDigest}]`);
+    expect(deriveLocalBridgeIdempotencyKey(CLAIM_SCOPE)).toBe(
+      scopedDigest("goatcitadel:local-bridge-idempotency-key:v2", CLAIM_SCOPE),
+    );
+  });
+
+  it("a key reused across connections or actor scopes yields different identifiers", () => {
+    const otherConnection = { ...CLAIM_SCOPE, routePath: "external:other-connection" };
+    const otherActor = { ...CLAIM_SCOPE, actorScope: "other-actor" };
+    for (const derive of [deriveGmailMessageId, deriveTrelloIdempotencyMarker, deriveLocalBridgeIdempotencyKey]) {
+      expect(derive(otherConnection)).not.toBe(derive(CLAIM_SCOPE));
+      expect(derive(otherActor)).not.toBe(derive(CLAIM_SCOPE));
+    }
+    expect(deriveLocalBridgeIdempotencyKey(CLAIM_SCOPE)).not.toContain("operator-key-1");
+  });
+
+  it("the reconcile probe derives the same Message-ID the runner's claim sent", async () => {
+    const connection = gmailConnection();
+    const scope = liveScope(connection, "integration_operator_action", "write");
+    const host = createHost([jsonResponse({ id: "msg-1" }), jsonResponse({ messages: [{ id: "msg-1" }] })]);
+    const parts = expectInput(
+      buildGmailSendRunInput(host, connection, {
+        checkedAt: CHECKED_AT,
+        payload: gmailPayload,
+        idempotencyKey: "operator-key-1",
+      }),
+    );
+    await parts.input.execute(createClaim(host.order, { routePath: scope.routePath, actorScope: scope.actorScope }));
+    await parts.input.reconcileExternalOutcome!();
+
+    const sentMessageId = decodeRaw(host.calls[0]!.init)
+      .split("\r\n")
+      .find((line) => line.startsWith("Message-ID: "))!
+      .slice("Message-ID: ".length);
+    expect(sentMessageId).toBe(deriveGmailMessageId(scope));
+    expect(new URL(host.calls[1]!.url).searchParams.get("q")).toBe(
+      `rfc822msgid:${sentMessageId.replace(/^<|>$/g, "")}`,
+    );
   });
 
   it("gmail send carries the derived Message-ID", async () => {
@@ -182,7 +237,7 @@ describe("integration-writeback-run-inputs", () => {
     expect(value.output).toEqual({ id: "msg-1", threadId: "thread-1" });
     expect(host.calls).toHaveLength(1);
     const raw = decodeRaw(host.calls[0]!.init);
-    expect(raw.split("\r\n")).toContain(`Message-ID: ${deriveGmailMessageId("operator-key-1")}`);
+    expect(raw.split("\r\n")).toContain(`Message-ID: ${deriveGmailMessageId(CLAIM_SCOPE)}`);
     expect(raw).toContain("To: ops@example.com");
     expect(raw.endsWith("\r\n\r\nBody")).toBe(true);
   });
@@ -206,7 +261,9 @@ describe("integration-writeback-run-inputs", () => {
     });
     const url = new URL(host.calls[0]!.url);
     expect(url.pathname).toBe("/gmail/v1/users/me/messages");
-    const messageId = deriveGmailMessageId("operator-key-1").replace(/^<|>$/g, "");
+    const messageId = deriveGmailMessageId(
+      liveScope(gmailConnection(), "integration_operator_action", "write"),
+    ).replace(/^<|>$/g, "");
     expect(url.searchParams.get("q")).toBe(`rfc822msgid:${messageId}`);
     expect(url.searchParams.get("includeSpamTrash")).toBe("true");
     expect(url.searchParams.get("maxResults")).toBe("1");
@@ -292,13 +349,13 @@ describe("integration-writeback-run-inputs", () => {
     expect(sent.pathname).toBe("/1/cards");
     expect(sent.searchParams.get("idList")).toBe("list-1");
     expect(sent.searchParams.get("name")).toBe("Card");
-    expect(sent.searchParams.get("desc")).toBe(`Card body\n\n${deriveTrelloIdempotencyMarker("operator-key-1")}`);
+    expect(sent.searchParams.get("desc")).toBe(`Card body\n\n${deriveTrelloIdempotencyMarker(CLAIM_SCOPE)}`);
     expect(sent.searchParams.get("key")).toBe("trello-key");
     expect(sent.searchParams.get("token")).toBe("trello-token");
   });
 
   it("trello replay finds the marked card and does not recreate", async () => {
-    const marker = deriveTrelloIdempotencyMarker("operator-key-1");
+    const marker = deriveTrelloIdempotencyMarker(CLAIM_SCOPE);
     const host = createHost([
       jsonResponse([
         { id: "card-other", desc: "unrelated", shortUrl: "https://trello.com/c/other" },
@@ -329,8 +386,26 @@ describe("integration-writeback-run-inputs", () => {
     expect(host.replayRecords!.seal).not.toHaveBeenCalled();
   });
 
+  it("trello replay throws before the boundary when the probe fails", async () => {
+    const host = createHost([jsonResponse({}, 503)]);
+    const parts = expectInput(
+      buildTrelloCardCreateRunInput(host, trelloConnection(), {
+        checkedAt: CHECKED_AT,
+        payload: trelloPayload,
+        replay: true,
+      }),
+    );
+    const claim = createClaim(host.order);
+
+    await expect(parts.input.execute(claim)).rejects.toThrow();
+    expect(claim.markExternalCallStarted).not.toHaveBeenCalled();
+    expect(host.replayRecords!.seal).not.toHaveBeenCalled();
+    expect(host.calls).toHaveLength(1);
+    expect(host.calls[0]!.init?.method).toBe("GET");
+  });
+
   it("trello probe reports the marked card id", async () => {
-    const marker = deriveTrelloIdempotencyMarker("operator-key-1");
+    const marker = deriveTrelloIdempotencyMarker(liveScope(trelloConnection(), "integration_operator_action", "write"));
     const host = createHost([jsonResponse([{ id: "card-1", desc: `x ${marker}`, shortUrl: "https://t/c/1" }])]);
     const parts = expectInput(
       buildTrelloCardCreateRunInput(host, trelloConnection(), {
@@ -360,7 +435,9 @@ describe("integration-writeback-run-inputs", () => {
 
     expect(value).toEqual({ message: "ok", output: { message: "ok", output: { noteId: "n-1" } } });
     expect(host.calls[0]!.url).toBe(parts.target);
-    expect(host.calls[0]!.init?.headers).toMatchObject({ "Idempotency-Key": "operator-key-1" });
+    expect(host.calls[0]!.init?.headers).toMatchObject({
+      "Idempotency-Key": deriveLocalBridgeIdempotencyKey(CLAIM_SCOPE),
+    });
     expect(JSON.parse(String(host.calls[0]!.init?.body))).toEqual({
       integrationKey: connection.key,
       catalogId: connection.catalogId,
@@ -394,7 +471,11 @@ describe("integration-writeback-run-inputs", () => {
     expect(probe.found).toBe(true);
     expect(enforcedHost.calls[0]!.init).toMatchObject({
       method: "POST",
-      headers: { "Idempotency-Key": "operator-key-1" },
+      headers: {
+        "Idempotency-Key": deriveLocalBridgeIdempotencyKey(
+          liveScope(bridgeConnection(), "integration_local_bridge_action", "write"),
+        ),
+      },
     });
   });
 
