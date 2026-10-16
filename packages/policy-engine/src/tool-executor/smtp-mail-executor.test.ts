@@ -115,6 +115,25 @@ describe("smtpSend", () => {
     );
   });
 
+  it("throws a partial-delivery error carrying the messageId when any recipient is refused", async () => {
+    const runtime = fakeRuntime({
+      sendMail: vi.fn(async () => ({
+        messageId: "<m-2@x>",
+        accepted: ["alice@example.com"],
+        rejected: ["bob@example.com"],
+      })),
+    });
+
+    const error = await smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"], undefined, runtime).then(
+      () => undefined,
+      (caught: unknown) => caught as Error & { providerMessageId?: string },
+    );
+
+    expect(error?.message).toContain("partial_channel_delivery_sent");
+    expect(error?.providerMessageId).toBe("<m-2@x>");
+    expect(error).not.toBeInstanceOf(CommsPreBoundaryProviderError);
+  });
+
   it("defaults secure to true on port 465, reads the password from an env var, and falls back to address", async () => {
     vi.stubEnv("GC_TEST_SMTP_PASSWORD", "env-secret");
     const runtime = fakeRuntime();
@@ -447,6 +466,29 @@ describe("smtp.send through executeCommsTool", () => {
 
     expect(result).toMatchObject({ status: "failed", deliveryStatus: "not_available" });
     expect(String(result.error)).not.toContain("unknown_after_send");
+  });
+
+  it("reports a partial delivery (one recipient accepted, one refused) as manual reconciliation, never sent", async () => {
+    nodemailerMock.createTransport.mockReturnValue({
+      sendMail: vi.fn(async () => ({
+        messageId: "<partial@x>",
+        accepted: ["alice@example.com"],
+        rejected: ["bob@example.com"],
+        rejectedErrors: [smtpError("550 mailbox unavailable", "EENVELOPE", "RCPT TO")],
+      })),
+    });
+    const { storage, markFailed } = smtpStorage();
+
+    const result = await executeCommsTool(smtpSendRequest(), policyConfig(["smtp.example.com"]), storage);
+
+    expect(result).toMatchObject({
+      status: "failed",
+      deliveryStatus: "manual_reconciliation_required",
+      providerMessageId: "<partial@x>",
+    });
+    expect(result.status).not.toBe("sent");
+    expect(String(result.error)).toContain("partial_channel_delivery_sent");
+    expect(markFailed).toHaveBeenCalledTimes(1);
   });
 
   it("classifies an unexpected close (ECONNECTION/CONN, possibly after DATA) as an unknown outcome", async () => {

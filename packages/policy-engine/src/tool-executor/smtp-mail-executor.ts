@@ -34,8 +34,19 @@ export interface SmtpOutboundMessage {
   text: string;
 }
 
+/**
+ * What a transport reports for one accepted message. nodemailer resolves even when the
+ * server accepted only some recipients, listing the refused ones in `rejected`.
+ */
+export interface SmtpSendInfo {
+  messageId?: string;
+  accepted?: unknown[];
+  rejected?: unknown[];
+  rejectedErrors?: unknown[];
+}
+
 export interface SmtpTransportFactory {
-  (options: SmtpTransportOptions): { sendMail(message: SmtpOutboundMessage): Promise<{ messageId?: string }> };
+  (options: SmtpTransportOptions): { sendMail(message: SmtpOutboundMessage): Promise<SmtpSendInfo> };
 }
 
 /** Executor-owned capabilities the comms dispatcher passes in, so this module never imports it back. */
@@ -103,13 +114,36 @@ export async function smtpSend(
     ...(isIP(host) === 0 ? { tls: { servername: host } } : {}),
   });
   await runtime.markMutationRequestStarted();
-  let info: { messageId?: string };
+  let info: SmtpSendInfo;
   try {
     info = await transport.sendMail(message);
   } catch (error) {
     throw classifySmtpSendFailure(error);
   }
-  return readString(info.messageId) ?? `smtp-${Date.now()}`;
+  const providerMessageId = readString(info.messageId) ?? `smtp-${Date.now()}`;
+  assertAllRecipientsAccepted(info, providerMessageId);
+  return providerMessageId;
+}
+
+/**
+ * A partial delivery (some recipients refused after the message was accepted for the
+ * others) is never a send: it is raised as a partial-delivery outcome the comms executor
+ * classifies as manual reconciliation, carrying the provider message id.
+ */
+function assertAllRecipientsAccepted(info: SmtpSendInfo, providerMessageId: string): void {
+  const rejected = Math.max(
+    Array.isArray(info.rejected) ? info.rejected.length : 0,
+    Array.isArray(info.rejectedErrors) ? info.rejectedErrors.length : 0,
+  );
+  if (rejected === 0) {
+    return;
+  }
+  const accepted = Array.isArray(info.accepted) ? info.accepted.length : 0;
+  const error = new Error(
+    `partial_channel_delivery_sent: smtp.send message ${providerMessageId} was accepted for ${accepted} recipient(s) ` +
+      `but the server refused ${rejected}; manual reconciliation required.`,
+  );
+  throw Object.assign(error, { providerMessageId });
 }
 
 function buildSmtpMessage(config: Record<string, unknown>, args: Record<string, unknown>): SmtpOutboundMessage {
