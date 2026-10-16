@@ -26,8 +26,18 @@ import { resolveChannelConfigTarget, resolveDefaultNamedTarget } from "./channel
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import { evaluateHostEgress } from "@goatcitadel/policy-engine";
+import { FORCED_ALLOWLIST_INBOUND_CHANNELS } from "./channel-setup-inbound-access.js";
 
-const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set(["slack", "whatsapp", "line", "nextcloud-talk"]);
+const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set([
+  "slack",
+  "whatsapp",
+  "line",
+  "nextcloud-talk",
+  "ntfy",
+  "mattermost",
+  "signal",
+  "google-chat",
+]);
 
 export interface IntegrationDiagnosticsPort {
   readonly config: {
@@ -230,10 +240,26 @@ export function buildIntegrationConnectionChecks(
           key: "delivery_posture",
           status: "pass",
           message:
-            "ntfy is outbound-only; sandbox diagnostics publish at most once and require manual receipt confirmation.",
+            "ntfy sandbox diagnostics publish at most once and require manual receipt confirmation. Inbound is a separate opt-in topic subscription (inboundStreamEnabled with a token); anyone able to publish to the subscribed topic can start turns.",
         });
         break;
       case "google-chat":
+        if (isGoogleChatAppConfig(deps, config)) {
+          requireSecretRef("auth", "Google Chat service-account key", "serviceAccountKey", "serviceAccountKeyEnv");
+          requireText(
+            "audience",
+            "Google Chat app audience",
+            deps.readConnectionConfigValue(config, "audience"),
+            "warn",
+          );
+          requireText(
+            "target",
+            "Default Google Chat space",
+            deps.readConnectionConfigValue(config, "defaultSpace"),
+            "warn",
+          );
+          break;
+        }
         checkUrl("url", "Google Chat webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), true);
         requireText(
           "target",
@@ -330,7 +356,9 @@ export function buildIntegrationConnectionChecks(
         checks.push({
           key: "auth",
           status: hasAuth ? "pass" : "fail",
-          message: hasAuth ? "Zalo User bridge authentication is configured." : "An authenticated zca bridge credential is required.",
+          message: hasAuth
+            ? "Zalo User bridge authentication is configured."
+            : "An authenticated zca bridge credential is required.",
         });
         requireText(
           "target",
@@ -473,6 +501,16 @@ export function buildIntegrationConnectionChecks(
   return checks;
 }
 
+function isGoogleChatAppConfig(
+  deps: Pick<IntegrationDiagnosticsPort, "readConnectionConfigValue">,
+  config: Record<string, unknown>,
+): boolean {
+  return Boolean(
+    deps.readConnectionConfigValue(config, "serviceAccountKeyEnv") ??
+    deps.readConnectionConfigValue(config, "serviceAccountKey"),
+  );
+}
+
 function buildChannelInboundAccessDiagnosticChecks(
   channelKey: string,
   config: Record<string, unknown>,
@@ -483,6 +521,9 @@ function buildChannelInboundAccessDiagnosticChecks(
   }
   if (!channelCapabilities.inboundModes.some((mode) => mode !== "none")) {
     return [];
+  }
+  if (FORCED_ALLOWLIST_INBOUND_CHANNELS.has(channelKey)) {
+    return buildForcedAllowlistInboundChecks(config);
   }
   const decision = evaluateChannelInboundAccess({ config });
   if (decision.legacyWarning) {
@@ -516,6 +557,31 @@ function buildChannelInboundAccessDiagnosticChecks(
   ];
 }
 
+/**
+ * Stream and Google Chat app inbound always run with a forced allowlist (the runtime overrides any stored
+ * open_legacy), so report that posture instead of evaluating the stored mode.
+ */
+function buildForcedAllowlistInboundChecks(config: Record<string, unknown>): ConnectorDiagnosticReport["checks"] {
+  const decision = evaluateChannelInboundAccess({ config: { ...config, inboundAccessMode: "allowlist" } });
+  if (decision.allowedSenders.length === 0) {
+    return [
+      {
+        key: "inbound_access_allowlist_empty",
+        status: "warn",
+        message:
+          "Inbound on this channel is always allowlist-only. No senders are listed, so all inbound is dropped until a sender is added to allowedSenders.",
+      },
+    ];
+  }
+  return [
+    {
+      key: "inbound_access",
+      status: "pass",
+      message: `Inbound on this channel is always allowlist-only; ${decision.allowedSenders.length} permitted sender${decision.allowedSenders.length === 1 ? "" : "s"}.`,
+    },
+  ];
+}
+
 export async function runIntegrationConnectionLiveChecks(
   deps: IntegrationDiagnosticsPort,
   connection: IntegrationConnection,
@@ -535,7 +601,13 @@ export async function runIntegrationConnectionLiveChecks(
       const token = resolveSecret("botToken", "botTokenEnv") ?? resolveSecret("token", "tokenEnv");
       if (!token) {
         const webhookUrl = resolveSecret("webhookUrl", "webhookUrlEnv");
-        if (webhookUrl) return runGovernedWebhookLiveChecks(deps, { channelKey: "slack", webhookUrl, includeSandboxSend: options.includeSandboxSend, fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init) });
+        if (webhookUrl)
+          return runGovernedWebhookLiveChecks(deps, {
+            channelKey: "slack",
+            webhookUrl,
+            includeSandboxSend: options.includeSandboxSend,
+            fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
+          });
         return {
           checks: [
             {
@@ -623,6 +695,18 @@ export async function runIntegrationConnectionLiveChecks(
       });
     }
     case "google-chat":
+      if (isGoogleChatAppConfig(deps, config)) {
+        return {
+          checks: [
+            {
+              key: "google_chat_app_live_send",
+              status: "warn",
+              message:
+                "Chat app (service-account) mode has no sandbox probe. Message the app from an allowed sender and confirm its reply in Google Chat.",
+            },
+          ],
+        };
+      }
       return runGovernedWebhookLiveChecks(deps, {
         channelKey: "google-chat",
         webhookUrl: resolveSecret("webhookUrl", "webhookUrlEnv"),
@@ -800,13 +884,32 @@ function readIMessageBridgeProvider(
  * keeps governing Code Mode egress and is intentionally not consulted here.
  */
 export function isDiagnosticsDestinationAllowed(urlValue: string, operatorAllowlist: readonly string[]): boolean {
-  return connectionUrlHelpers.isConnectionUrlRemoteSafe(urlValue) && evaluateHostEgress(urlValue, [...operatorAllowlist, "*"]).allowed;
+  return (
+    connectionUrlHelpers.isConnectionUrlRemoteSafe(urlValue) &&
+    evaluateHostEgress(urlValue, [...operatorAllowlist, "*"]).allowed
+  );
 }
 
-export async function runGovernedWebhookLiveChecks(deps: IntegrationDiagnosticsPort, input: Parameters<typeof runWebhookDestinationLiveChecks>[0]): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
-  if (input.webhookUrl && !isDiagnosticsDestinationAllowed(input.webhookUrl, deps.config.toolPolicy.sandbox.networkAllowlist)) {
-    const step = { key: input.channelKey.replace(/-/g, "_") + "_sandbox_send", label: "Webhook destination", status: "fail" as const, disposition: "blocking" as const, message: "The webhook destination must be a public HTTPS endpoint. Private, loopback, and reserved hosts stay blocked unless the operator allowlists them explicitly." };
-    return { checks: [{ key: step.key, status: "fail", message: step.message }], probe: { kind: input.channelKey + "_webhook", checkedAt: new Date().toISOString(), steps: [step] } };
+export async function runGovernedWebhookLiveChecks(
+  deps: IntegrationDiagnosticsPort,
+  input: Parameters<typeof runWebhookDestinationLiveChecks>[0],
+): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
+  if (
+    input.webhookUrl &&
+    !isDiagnosticsDestinationAllowed(input.webhookUrl, deps.config.toolPolicy.sandbox.networkAllowlist)
+  ) {
+    const step = {
+      key: input.channelKey.replace(/-/g, "_") + "_sandbox_send",
+      label: "Webhook destination",
+      status: "fail" as const,
+      disposition: "blocking" as const,
+      message:
+        "The webhook destination must be a public HTTPS endpoint. Private, loopback, and reserved hosts stay blocked unless the operator allowlists them explicitly.",
+    };
+    return {
+      checks: [{ key: step.key, status: "fail", message: step.message }],
+      probe: { kind: input.channelKey + "_webhook", checkedAt: new Date().toISOString(), steps: [step] },
+    };
   }
   return runWebhookDestinationLiveChecks(input);
 }

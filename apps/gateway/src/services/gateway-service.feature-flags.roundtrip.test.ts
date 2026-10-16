@@ -34,7 +34,6 @@ const ALL_FLAGS_SET: Required<FeatureFlagsConfig> = {
   notificationRoutingV1Enabled: true,
   chatTimersV1Enabled: true,
   channelVoiceInboundV1Enabled: true,
-  signalInboundV1Enabled: true,
   plannerFastPathV1Disabled: true,
   parallelToolExecutionV1Disabled: true,
   streamIdleWatchdogV1Disabled: true,
@@ -50,7 +49,6 @@ const ALL_FLAGS_SET: Required<FeatureFlagsConfig> = {
 
 function createFlagHarness(input: { configFeatures: FeatureFlagsConfig; stored?: Partial<FeatureFlagsConfig> }) {
   const settings = new Map<string, { value: unknown }>();
-  const syncSignalLegacySettings = vi.fn();
   if (input.stored) {
     settings.set("feature_flags_v1", { value: input.stored });
   }
@@ -64,11 +62,9 @@ function createFlagHarness(input: { configFeatures: FeatureFlagsConfig; stored?:
       },
     },
     config: { assistant: { features: input.configFeatures } },
-    signalInboundRuntimeService: { sync: syncSignalLegacySettings },
     // updateFeatureFlags reads the current set through this.readFeatureFlags.
     readFeatureFlags: GatewayService.prototype.readFeatureFlags,
     settings,
-    syncSignalLegacySettings,
   };
 }
 
@@ -154,17 +150,21 @@ describe("GatewayService feature-flag round-trip", () => {
     expect(after.plannerFastPathV1Disabled).toBe(true);
   });
 
-  it("reconciles a deprecated Signal inbound flag change through the outbound-only diagnostic facade", async () => {
+  it("drops the retired signalInboundV1Enabled flag from stored settings and patches", async () => {
     const harness = createFlagHarness({
-      configFeatures: { ...ALL_FLAGS_SET, signalInboundV1Enabled: false },
+      configFeatures: ALL_FLAGS_SET,
+      stored: { signalInboundV1Enabled: true } as Partial<FeatureFlagsConfig>,
     });
+    const read = await GatewayService.prototype.readFeatureFlags.call(harness as never);
+    expect(read).not.toHaveProperty("signalInboundV1Enabled");
 
-    const next = await GatewayService.prototype.updateFeatureFlags.call(harness as never, {
-      signalInboundV1Enabled: true,
-    });
-
-    expect(next.signalInboundV1Enabled).toBe(true);
-    expect(harness.syncSignalLegacySettings).toHaveBeenCalledTimes(1);
+    const next = await GatewayService.prototype.updateFeatureFlags.call(
+      harness as never,
+      {
+        signalInboundV1Enabled: true,
+      } as never,
+    );
+    expect(next).not.toHaveProperty("signalInboundV1Enabled");
   });
 
   it("memoizes resolved flags within the TTL: one settings read across many reads (Finding 6)", async () => {

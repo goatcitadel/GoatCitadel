@@ -44,23 +44,28 @@ export function buildUpdatedFeatureFlags(
     typedRunVariablesV1Enabled: patch.typedRunVariablesV1Enabled ?? current.typedRunVariablesV1Enabled,
     documentEditingV1Enabled: patch.documentEditingV1Enabled ?? current.documentEditingV1Enabled,
     channelVoiceInboundV1Enabled: patch.channelVoiceInboundV1Enabled ?? current.channelVoiceInboundV1Enabled,
-    signalInboundV1Enabled: patch.signalInboundV1Enabled ?? current.signalInboundV1Enabled,
     plannerFastPathV1Disabled: patch.plannerFastPathV1Disabled ?? current.plannerFastPathV1Disabled,
     parallelToolExecutionV1Disabled: patch.parallelToolExecutionV1Disabled ?? current.parallelToolExecutionV1Disabled,
     streamIdleWatchdogV1Disabled: patch.streamIdleWatchdogV1Disabled ?? current.streamIdleWatchdogV1Disabled,
     plannerFanoutV1Disabled: patch.plannerFanoutV1Disabled ?? current.plannerFanoutV1Disabled,
     subagentFanoutV1Disabled: patch.subagentFanoutV1Disabled ?? current.subagentFanoutV1Disabled,
     durableChatFanoutV1Enabled: patch.durableChatFanoutV1Enabled ?? current.durableChatFanoutV1Enabled,
-    chatProviderFallbackV1Enabled: patch.chatProviderFallbackV1Enabled ?? current.chatProviderFallbackV1Enabled ?? false,
-    chatSkillInstructionsV1Enabled: patch.chatSkillInstructionsV1Enabled ?? current.chatSkillInstructionsV1Enabled ?? false,
+    chatProviderFallbackV1Enabled:
+      patch.chatProviderFallbackV1Enabled ?? current.chatProviderFallbackV1Enabled ?? false,
+    chatSkillInstructionsV1Enabled:
+      patch.chatSkillInstructionsV1Enabled ?? current.chatSkillInstructionsV1Enabled ?? false,
     boundedToolExposureV1Enabled: patch.boundedToolExposureV1Enabled ?? current.boundedToolExposureV1Enabled ?? false,
     scheduledChatTurnsV1Enabled: patch.scheduledChatTurnsV1Enabled ?? current.scheduledChatTurnsV1Enabled ?? false,
     chatExplicitContextV1Enabled: patch.chatExplicitContextV1Enabled ?? current.chatExplicitContextV1Enabled ?? false,
     chatAutomaticFanoutV1Enabled: patch.chatAutomaticFanoutV1Enabled ?? current.chatAutomaticFanoutV1Enabled ?? false,
-    chatDelegationControlsV1Enabled: patch.chatDelegationControlsV1Enabled ?? current.chatDelegationControlsV1Enabled ?? false,
-    proactiveHeartbeatTurnsV1Enabled: patch.proactiveHeartbeatTurnsV1Enabled ?? current.proactiveHeartbeatTurnsV1Enabled ?? false,
-    commitmentScheduledTurnsV1Enabled: patch.commitmentScheduledTurnsV1Enabled ?? current.commitmentScheduledTurnsV1Enabled ?? false,
-    chatMeshCapabilitiesV1Enabled: patch.chatMeshCapabilitiesV1Enabled ?? current.chatMeshCapabilitiesV1Enabled ?? false,
+    chatDelegationControlsV1Enabled:
+      patch.chatDelegationControlsV1Enabled ?? current.chatDelegationControlsV1Enabled ?? false,
+    proactiveHeartbeatTurnsV1Enabled:
+      patch.proactiveHeartbeatTurnsV1Enabled ?? current.proactiveHeartbeatTurnsV1Enabled ?? false,
+    commitmentScheduledTurnsV1Enabled:
+      patch.commitmentScheduledTurnsV1Enabled ?? current.commitmentScheduledTurnsV1Enabled ?? false,
+    chatMeshCapabilitiesV1Enabled:
+      patch.chatMeshCapabilitiesV1Enabled ?? current.chatMeshCapabilitiesV1Enabled ?? false,
     chatRemotePlacementV1Enabled: patch.chatRemotePlacementV1Enabled ?? current.chatRemotePlacementV1Enabled ?? false,
     chatRequesterMcpV1Enabled: patch.chatRequesterMcpV1Enabled ?? current.chatRequesterMcpV1Enabled ?? false,
     chatStaticMcpV1Enabled: patch.chatStaticMcpV1Enabled ?? current.chatStaticMcpV1Enabled ?? false,
@@ -123,7 +128,6 @@ export function resolveGatewayFeatureFlags(
     typedRunVariablesV1Enabled: stored?.typedRunVariablesV1Enabled ?? fromConfig.typedRunVariablesV1Enabled,
     documentEditingV1Enabled: stored?.documentEditingV1Enabled ?? fromConfig.documentEditingV1Enabled,
     channelVoiceInboundV1Enabled: stored?.channelVoiceInboundV1Enabled ?? fromConfig.channelVoiceInboundV1Enabled,
-    signalInboundV1Enabled: stored?.signalInboundV1Enabled ?? fromConfig.signalInboundV1Enabled,
     plannerFastPathV1Disabled: stored?.plannerFastPathV1Disabled ?? fromConfig.plannerFastPathV1Disabled,
     parallelToolExecutionV1Disabled:
       stored?.parallelToolExecutionV1Disabled ?? fromConfig.parallelToolExecutionV1Disabled,
@@ -131,17 +135,27 @@ export function resolveGatewayFeatureFlags(
     plannerFanoutV1Disabled: stored?.plannerFanoutV1Disabled ?? fromConfig.plannerFanoutV1Disabled,
     subagentFanoutV1Disabled: stored?.subagentFanoutV1Disabled ?? fromConfig.subagentFanoutV1Disabled,
     durableChatFanoutV1Enabled: stored?.durableChatFanoutV1Enabled ?? fromConfig.durableChatFanoutV1Enabled ?? false,
-    chatProviderFallbackV1Enabled: stored?.chatProviderFallbackV1Enabled ?? fromConfig.chatProviderFallbackV1Enabled ?? false,
-    chatSkillInstructionsV1Enabled: stored?.chatSkillInstructionsV1Enabled ?? fromConfig.chatSkillInstructionsV1Enabled ?? false,
-    boundedToolExposureV1Enabled: stored?.boundedToolExposureV1Enabled ?? fromConfig.boundedToolExposureV1Enabled ?? false,
+    chatProviderFallbackV1Enabled:
+      stored?.chatProviderFallbackV1Enabled ?? fromConfig.chatProviderFallbackV1Enabled ?? false,
+    chatSkillInstructionsV1Enabled:
+      stored?.chatSkillInstructionsV1Enabled ?? fromConfig.chatSkillInstructionsV1Enabled ?? false,
+    boundedToolExposureV1Enabled:
+      stored?.boundedToolExposureV1Enabled ?? fromConfig.boundedToolExposureV1Enabled ?? false,
     scheduledChatTurnsV1Enabled: stored?.scheduledChatTurnsV1Enabled ?? fromConfig.scheduledChatTurnsV1Enabled ?? false,
-    chatExplicitContextV1Enabled: stored?.chatExplicitContextV1Enabled ?? fromConfig.chatExplicitContextV1Enabled ?? false,
-    chatAutomaticFanoutV1Enabled: stored?.chatAutomaticFanoutV1Enabled ?? fromConfig.chatAutomaticFanoutV1Enabled ?? false,
-    chatDelegationControlsV1Enabled: stored?.chatDelegationControlsV1Enabled ?? fromConfig.chatDelegationControlsV1Enabled ?? false,
-    proactiveHeartbeatTurnsV1Enabled: stored?.proactiveHeartbeatTurnsV1Enabled ?? fromConfig.proactiveHeartbeatTurnsV1Enabled ?? false,
-    commitmentScheduledTurnsV1Enabled: stored?.commitmentScheduledTurnsV1Enabled ?? fromConfig.commitmentScheduledTurnsV1Enabled ?? false,
-    chatMeshCapabilitiesV1Enabled: stored?.chatMeshCapabilitiesV1Enabled ?? fromConfig.chatMeshCapabilitiesV1Enabled ?? false,
-    chatRemotePlacementV1Enabled: stored?.chatRemotePlacementV1Enabled ?? fromConfig.chatRemotePlacementV1Enabled ?? false,
+    chatExplicitContextV1Enabled:
+      stored?.chatExplicitContextV1Enabled ?? fromConfig.chatExplicitContextV1Enabled ?? false,
+    chatAutomaticFanoutV1Enabled:
+      stored?.chatAutomaticFanoutV1Enabled ?? fromConfig.chatAutomaticFanoutV1Enabled ?? false,
+    chatDelegationControlsV1Enabled:
+      stored?.chatDelegationControlsV1Enabled ?? fromConfig.chatDelegationControlsV1Enabled ?? false,
+    proactiveHeartbeatTurnsV1Enabled:
+      stored?.proactiveHeartbeatTurnsV1Enabled ?? fromConfig.proactiveHeartbeatTurnsV1Enabled ?? false,
+    commitmentScheduledTurnsV1Enabled:
+      stored?.commitmentScheduledTurnsV1Enabled ?? fromConfig.commitmentScheduledTurnsV1Enabled ?? false,
+    chatMeshCapabilitiesV1Enabled:
+      stored?.chatMeshCapabilitiesV1Enabled ?? fromConfig.chatMeshCapabilitiesV1Enabled ?? false,
+    chatRemotePlacementV1Enabled:
+      stored?.chatRemotePlacementV1Enabled ?? fromConfig.chatRemotePlacementV1Enabled ?? false,
     chatRequesterMcpV1Enabled: stored?.chatRequesterMcpV1Enabled ?? fromConfig.chatRequesterMcpV1Enabled ?? false,
     chatStaticMcpV1Enabled: stored?.chatStaticMcpV1Enabled ?? fromConfig.chatStaticMcpV1Enabled ?? false,
     evolutionControlPlaneV1Enabled:

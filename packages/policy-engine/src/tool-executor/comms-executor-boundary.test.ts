@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { generateKeyPairSync } from "node:crypto";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { executeCommsTool } from "./comms-executor.js";
+import { resetGoogleChatAccessTokenCache } from "./google-chat-service-account.js";
 
 const MATTERMOST_CHANNEL_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -393,5 +395,127 @@ describe("comms mutation boundary tracking", () => {
       "blocked",
     );
     expect(result).toMatchObject({ status: "failed", deliveryStatus: "blocked" });
+  });
+});
+
+describe("mattermost reply threading", () => {
+  const ROOT_POST_ID = "rootpost0000000000000000ab";
+
+  async function sendWith(replyToMessageId: string | undefined): Promise<Record<string, unknown>> {
+    const { storage } = createMattermostStorage("conn-thread", "delivery-thread");
+    let postedBody: Record<string, unknown> = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/users/me")) return mattermostBotResponse();
+        if (url.endsWith("/posts")) {
+          postedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return new Response(JSON.stringify({ id: "reply-post" }), { status: 201 });
+        }
+        throw new Error(`unexpected request ${url}`);
+      }),
+    );
+    const request = channelSendRequest("conn-thread", []);
+    const result = await executeCommsTool(
+      { ...request, args: { ...request.args, ...(replyToMessageId ? { replyToMessageId } : {}) } },
+      policyConfig(["mattermost.example"]),
+      storage,
+    );
+    expect(result).toMatchObject({ status: "sent" });
+    return postedBody;
+  }
+
+  it("posts the reply under the inbound root post as root_id", async () => {
+    expect(await sendWith(ROOT_POST_ID)).toMatchObject({ channel_id: MATTERMOST_CHANNEL_ID, root_id: ROOT_POST_ID });
+  });
+
+  it("stays top-level for a non-Mattermost reply fallback id or no reply target", async () => {
+    expect(await sendWith("4f1c2b8e-1111-4222-8333-444455556666")).not.toHaveProperty("root_id");
+    expect(await sendWith(undefined)).not.toHaveProperty("root_id");
+  });
+});
+
+describe("google chat app reply references", () => {
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const serviceAccountKey = JSON.stringify({
+    client_email: "bot@example.iam.gserviceaccount.com",
+    private_key: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+  });
+
+  async function sendReply(
+    replyToMessageId: string,
+    lookup: () => Response,
+  ): Promise<{ result: Record<string, unknown>; calls: FetchCall[] }> {
+    resetGoogleChatAccessTokenCache();
+    const calls: FetchCall[] = [];
+    const storage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-gchat",
+          key: "google-chat",
+          config: { serviceAccountKey, defaultSpace: "spaces/S" },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-gchat",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-10-16T00:00:00.000Z",
+          updatedAt: "2026-10-16T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage & AsyncStorage;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = recordFetchCall(calls, input, init);
+        if (url.startsWith("https://oauth2.googleapis.com/")) {
+          return new Response(JSON.stringify({ access_token: "ya29.test", expires_in: 3600 }), { status: 200 });
+        }
+        if (url === "https://chat.googleapis.com/v1/spaces/S/messages/M") return lookup();
+        if (url.startsWith("https://chat.googleapis.com/v1/spaces/S/messages")) {
+          return new Response(JSON.stringify({ name: "spaces/S/messages/R" }), { status: 200 });
+        }
+        throw new Error(`unexpected request ${url}`);
+      }),
+    );
+    const request: ToolInvokeRequest = {
+      toolName: "channel.send",
+      args: { connectionId: "conn-gchat", message: "reply", replyToMessageId },
+      agentId: "operator",
+      sessionId: "sess-gchat",
+    };
+    const result = (await executeCommsTool(
+      request,
+      policyConfig(["chat.googleapis.com", "oauth2.googleapis.com"]),
+      storage,
+    )) as unknown as Record<string, unknown>;
+    return { result, calls };
+  }
+
+  it("rejects an unrecognized reply reference before any Chat API request", async () => {
+    const { result, calls } = await sendReply("4f1c2b8e-1111-4222-8333-444455556666", () => new Response("{}"));
+    expect(result).toMatchObject({ status: "failed" });
+    expect(calls.some((call) => call.url.startsWith("https://chat.googleapis.com/"))).toBe(false);
+  });
+
+  it("fails before posting when the reply message thread cannot be read", async () => {
+    const { result, calls } = await sendReply("spaces/S/messages/M", () => new Response("gone", { status: 404 }));
+    expect(result).toMatchObject({ status: "failed" });
+    expect(calls.some((call) => call.method === "POST" && call.url.includes("chat.googleapis.com"))).toBe(false);
+  });
+
+  it("replies in the message's thread when the lookup succeeds", async () => {
+    const { result, calls } = await sendReply(
+      "spaces/S/messages/M",
+      () => new Response(JSON.stringify({ thread: { name: "spaces/S/threads/T" } })),
+    );
+    expect(result).toMatchObject({ status: "sent" });
+    expect(calls.at(-1)).toMatchObject({ method: "POST" });
   });
 });

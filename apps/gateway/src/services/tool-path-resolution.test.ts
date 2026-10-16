@@ -501,8 +501,7 @@ describe("resolveToolRequestPathsForSessionScope", () => {
       chatSessionProjects: { get: async () => undefined },
       chatProjects: { find: async () => undefined },
       chatDelegationSteps: {
-        listParentsByChildSessionIds: async () =>
-          new Map(delegated ? [["session", { stepId: "step-1" }]] : []),
+        listParentsByChildSessionIds: async () => new Map(delegated ? [["session", { stepId: "step-1" }]] : []),
         get: async () => ({ scopeControl: { rootPath: "", approvedPaths: ["."] } }),
       },
     } as unknown as SessionToolPathScopeDeps["storage"];
@@ -538,7 +537,12 @@ describe("resolveToolRequestPathsForSessionScope", () => {
     };
     await expect(
       resolveToolRequestPathsForSessionScope(
-        { toolName: "fs.delete", args: { path: path.join(outsideRoot, "b.txt") }, agentId: "agent", sessionId: "session" },
+        {
+          toolName: "fs.delete",
+          args: { path: path.join(outsideRoot, "b.txt") },
+          agentId: "agent",
+          sessionId: "session",
+        },
         deps,
       ),
     ).rejects.toThrow(/outside the workspace boundary/);

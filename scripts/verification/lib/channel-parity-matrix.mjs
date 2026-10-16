@@ -20,6 +20,16 @@ export const REQUIRED_CHANNEL_FAMILIES = Object.freeze([
   "zalouser",
 ]);
 
+/**
+ * Persistent stream inbound has no provider acknowledgement to gate: events are accepted durably before
+ * the cursor advances, but nothing is redelivered for a gap, so these rows override the derived claims.
+ */
+const NO_REPLAY_STREAM_DURABILITY = Object.freeze({
+  inboundCommitBeforeAck: false,
+  inboundReplay: "none",
+  restartRecovery: "no_provider_replay_messages_lost_while_disconnected",
+});
+
 function adapterRow(input) {
   const inboundCapable = input.inboundMode !== "none";
   return Object.freeze({
@@ -38,6 +48,8 @@ function adapterRow(input) {
           : "shared_durable_recovery",
       unknownAfterSend: input.callability === "callable" ? "manual_reconciliation_required" : "blocked_before_send",
       finalReplyRecovery: inboundCapable ? "deterministic_delivery_idempotency" : "not_applicable",
+      // Per-row truth overrides the derived defaults (for example, stream inbound without provider replay).
+      ...input.durability,
     }),
     proof: Object.freeze({
       capability: CAPABILITY_PROOF,
@@ -210,6 +222,34 @@ export const ADVERTISED_CHANNEL_PARITY_MATRIX = Object.freeze([
     },
   }),
   adapterRow({
+    id: "ntfy.publish-and-stream",
+    family: "ntfy",
+    catalogId: "channel.ntfy",
+    channelKey: "ntfy",
+    variant: "outbound publish plus topic JSON stream inbound (token-read, write-restricted topic)",
+    callability: "callable",
+    config: {
+      baseUrl: "https://ntfy.example.test",
+      topic: "goatcitadel-ops",
+      tokenEnv: "NTFY_TOKEN",
+      inboundStreamEnabled: true,
+    },
+    inboundMode: "stream",
+    durability: {
+      inboundCommitBeforeAck: false,
+      // since=<last accepted id> only within one gateway run; the cursor is in memory.
+      inboundReplay: "in_process_reconnect_only",
+      restartRecovery: "no_replay_after_restart_messages_skipped",
+    },
+    expected: { outboundTransport: "api", lifecycle: "persistent", attachmentSources: ["url"] },
+    proof: {
+      outboundAdapter: "packages/policy-engine/src/tool-executor-edges.coverage.test.ts",
+      inboundAdapter: "apps/gateway/src/services/channel-stream-adapters/ntfy-stream-adapter.test.ts",
+      reconnect: "apps/gateway/src/services/channel-stream-runtime-service.test.ts",
+      diagnostics: "apps/gateway/src/services/channel-bot-live-probes.ntfy.test.ts",
+    },
+  }),
+  adapterRow({
     id: "google-chat.webhook",
     family: "google-chat",
     catalogId: "channel.google-chat",
@@ -222,6 +262,24 @@ export const ADVERTISED_CHANNEL_PARITY_MATRIX = Object.freeze([
     proof: {
       outboundAdapter: "packages/policy-engine/src/tool-executor.test.ts",
       diagnostics: "apps/gateway/src/services/channel-webhook-probes.test.ts",
+    },
+  }),
+  adapterRow({
+    id: "google-chat.app-service-account",
+    family: "google-chat",
+    catalogId: "channel.google-chat",
+    channelKey: "google-chat",
+    variant: "Chat app: service-account API send/reply/unsend plus Google-signed JWT webhook inbound",
+    callability: "callable",
+    config: { serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY", audienceType: "project_number", audience: "123456789012" },
+    inboundMode: "webhook",
+    expected: { outboundTransport: "api", lifecycle: "stateless", attachmentSources: ["url"] },
+    proof: {
+      outboundAdapter: "packages/policy-engine/src/tool-executor.test.ts",
+      serviceAccountClient: "packages/policy-engine/src/tool-executor/google-chat-service-account.test.ts",
+      inboundAdapter: "apps/gateway/src/routes/integrations.google-chat-webhook.test.ts",
+      inboundVerification: "apps/gateway/src/services/google-chat-webhook.test.ts",
+      diagnostics: "apps/gateway/src/services/integration-diagnostics-service.live-checks.test.ts",
     },
   }),
   adapterRow({
@@ -272,19 +330,61 @@ export const ADVERTISED_CHANNEL_PARITY_MATRIX = Object.freeze([
       baseUrl: "http://127.0.0.1:8080",
       accountId: "+15551234567",
       defaultRecipient: "+15557654321",
-      inboundEnabled: true,
-      pollIntervalSeconds: 5,
     },
     inboundMode: "none",
     expected: { outboundTransport: "api", lifecycle: "stateless", attachmentSources: [] },
     proof: {
       outboundAdapter: "packages/policy-engine/src/tool-executor.test.ts",
-      inboundQuarantine: "apps/gateway/src/services/signal-inbound-runtime-service.test.ts",
       diagnostics: "apps/gateway/src/services/channel-bot-live-probes.test.ts",
     },
   }),
   adapterRow({
-    id: "mattermost.bot",
+    id: "signal.daemon-events",
+    family: "signal",
+    catalogId: "channel.signal",
+    channelKey: "signal",
+    variant: "outbound JSON-RPC bridge plus signal-cli HTTP daemon event-stream inbound",
+    callability: "callable",
+    config: {
+      baseUrl: "http://127.0.0.1:8080",
+      accountId: "+15551234567",
+      defaultRecipient: "+15557654321",
+      receiveEvents: true,
+    },
+    inboundMode: "stream",
+    durability: NO_REPLAY_STREAM_DURABILITY,
+    expected: { outboundTransport: "api", lifecycle: "persistent", attachmentSources: [] },
+    proof: {
+      outboundAdapter: "packages/policy-engine/src/tool-executor.test.ts",
+      inboundAdapter: "apps/gateway/src/services/channel-stream-adapters/signal-stream-adapter.test.ts",
+      reconnect: "apps/gateway/src/services/channel-stream-runtime-service.test.ts",
+      diagnostics: "apps/gateway/src/services/channel-bot-live-probes.test.ts",
+    },
+  }),
+  adapterRow({
+    id: "mattermost.bot-websocket",
+    family: "mattermost",
+    catalogId: "channel.mattermost",
+    channelKey: "mattermost",
+    variant: "outbound bot API plus bot WebSocket posted-event inbound",
+    callability: "callable",
+    config: {
+      serverUrl: "https://mattermost.example.test",
+      botTokenEnv: "MATTERMOST_TOKEN",
+      inboundStreamEnabled: true,
+    },
+    inboundMode: "stream",
+    durability: NO_REPLAY_STREAM_DURABILITY,
+    expected: { outboundTransport: "api", lifecycle: "persistent", attachmentSources: ["url", "inline"] },
+    proof: {
+      outboundAdapter: "packages/policy-engine/src/tool-executor.test.ts",
+      inboundAdapter: "apps/gateway/src/services/channel-stream-adapters/mattermost-stream-adapter.test.ts",
+      reconnect: "apps/gateway/src/services/channel-stream-runtime-service.test.ts",
+      diagnostics: "apps/gateway/src/services/channel-bot-live-probes.test.ts",
+    },
+  }),
+  adapterRow({
+    id: "mattermost.bot-outbound",
     family: "mattermost",
     catalogId: "channel.mattermost",
     channelKey: "mattermost",
@@ -438,6 +538,10 @@ export function validateAdvertisedChannelParityMatrix(rows = ADVERTISED_CHANNEL_
       if (row.durability[key] === undefined) {
         errors.push(`${row.id} is missing durability.${key}`);
       }
+    }
+    const inboundCapable = row.expected.inboundModes.some((mode) => mode !== "none");
+    if (inboundCapable && row.durability.inboundCommitBeforeAck !== true && !row.durability.inboundReplay) {
+      errors.push(`${row.id} has inbound without commit-before-ack and must state durability.inboundReplay`);
     }
     if (!row.proof.capability || !row.proof.setup || !row.proof.diagnostics) {
       errors.push(`${row.id} is missing capability, setup, or diagnostics proof`);

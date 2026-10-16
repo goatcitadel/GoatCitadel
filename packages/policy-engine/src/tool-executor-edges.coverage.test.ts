@@ -282,6 +282,27 @@ describe("tool executor edge coverage", () => {
     expect(body).toContain('"severity":"info"');
   });
 
+  it("tags ntfy publishes with the outbound marker and merges caller tags", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 200, headers: { "x-message-id": "ntfy-msg-2" } }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "ntfy.example.com");
+    const store = commsStorage({
+      connectionId: "ntfy-tags",
+      kind: "channel",
+      key: "ntfy",
+      config: { baseUrl: "https://ntfy.example.com", topic: "goatcitadel-ops" },
+    });
+    await executeTool(request("channel.send", { connectionId: "ntfy-tags", message: "plain" }), commsConfig, store);
+    await executeTool(
+      request("channel.send", { connectionId: "ntfy-tags", message: "tagged", tags: ["warning", "skull"] }),
+      commsConfig,
+      store,
+    );
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect((calls[0]?.[1]?.headers as Record<string, string>)["X-Tags"]).toBe("goatcitadel-outbound");
+    expect((calls[1]?.[1]?.headers as Record<string, string>)["X-Tags"]).toBe("warning,skull,goatcitadel-outbound");
+  });
+
   it("sends ntfy outbound notifications and respects dry-run delivery", async () => {
     const fetchMock = vi.fn(async () => new Response("", { status: 200, headers: { "x-message-id": "ntfy-msg-1" } }));
     globalThis.fetch = fetchMock as unknown as typeof fetch;

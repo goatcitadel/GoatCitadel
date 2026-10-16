@@ -592,8 +592,6 @@ export interface RuntimeSettingsResponse {
     typedRunVariablesV1Enabled?: boolean;
     documentEditingV1Enabled?: boolean;
     channelVoiceInboundV1Enabled?: boolean;
-    /** @deprecated Signal is outbound-only; true is retained only for blocked legacy-posture evidence. */
-    signalInboundV1Enabled?: boolean;
     plannerFastPathV1Disabled?: boolean;
     parallelToolExecutionV1Disabled?: boolean;
     streamIdleWatchdogV1Disabled?: boolean;

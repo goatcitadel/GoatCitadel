@@ -651,6 +651,63 @@ describe("integration-diagnostics-service contract behavior", () => {
     );
   });
 
+  it("reports forced allowlist, never legacy-open, for migrated open_legacy stream and Chat app inbound", () => {
+    const host = createPort();
+    const migrated = { inboundAccessMode: "open_legacy", inboundAccessMigratedAt: "2026-07-07T12:00:00.000Z" };
+    const cases: Array<[string, Record<string, unknown>]> = [
+      [
+        "mattermost",
+        {
+          serverUrl: "https://chat.example.test",
+          botTokenEnv: "MM_TOKEN",
+          defaultChannel: "town-square",
+          inboundStreamEnabled: true,
+        },
+      ],
+      ["signal", { baseUrl: "http://127.0.0.1:8080", defaultRecipient: "+15551234567", receiveEvents: true }],
+      [
+        "ntfy",
+        { baseUrl: "https://ntfy.example.test", topic: "ops", tokenEnv: "NTFY_TOKEN", inboundStreamEnabled: true },
+      ],
+      [
+        "google-chat",
+        { serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY", audienceType: "project_number", audience: "123456789012" },
+      ],
+    ];
+    for (const [key, config] of cases) {
+      const empty = buildIntegrationConnectionChecks(
+        host,
+        createIntegrationConnection(key, "channel", { ...config, ...migrated }),
+      );
+      expect(
+        empty.map((check) => check.key),
+        key,
+      ).not.toContain("inbound_access_legacy_open");
+      expect(empty, key).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            key: "inbound_access_allowlist_empty",
+            status: "warn",
+            message: expect.stringContaining("all inbound is dropped"),
+          }),
+        ]),
+      );
+      const allowed = buildIntegrationConnectionChecks(
+        host,
+        createIntegrationConnection(key, "channel", { ...config, ...migrated, allowedSenders: ["operator"] }),
+      );
+      expect(allowed, key).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            key: "inbound_access",
+            status: "pass",
+            message: expect.stringContaining("allowlist-only"),
+          }),
+        ]),
+      );
+    }
+  });
+
   it("resolves Zalo User bridge authorization from explicit, bearer, and basic config sources", async () => {
     const host = createPort();
     const connection = createIntegrationConnection("zalouser", "channel", {

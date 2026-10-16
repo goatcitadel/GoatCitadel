@@ -40,7 +40,6 @@ const EXPECTED_PATCH_TOGGLEABLE: Record<keyof FeatureFlagsConfig, true> = {
   typedRunVariablesV1Enabled: true,
   channelVoiceInboundV1Enabled: true,
   channelVoiceReplyV1Enabled: true,
-  signalInboundV1Enabled: true,
   plannerFastPathV1Disabled: true,
   parallelToolExecutionV1Disabled: true,
   streamIdleWatchdogV1Disabled: true,
@@ -58,12 +57,18 @@ describe("settings PATCH schema feature-flag coverage (Phase 3.2)", () => {
 
   it("retains the independent default-off restoration switches through settings PATCH", () => {
     const features = {
-      chatSkillInstructionsV1Enabled: true, boundedToolExposureV1Enabled: true,
-      chatProviderFallbackV1Enabled: true, chatExplicitContextV1Enabled: true,
-      chatDelegationControlsV1Enabled: true, chatAutomaticFanoutV1Enabled: true,
-      scheduledChatTurnsV1Enabled: true, proactiveHeartbeatTurnsV1Enabled: true,
-      commitmentScheduledTurnsV1Enabled: true, chatRequesterMcpV1Enabled: true,
-      chatStaticMcpV1Enabled: true, chatMeshCapabilitiesV1Enabled: true,
+      chatSkillInstructionsV1Enabled: true,
+      boundedToolExposureV1Enabled: true,
+      chatProviderFallbackV1Enabled: true,
+      chatExplicitContextV1Enabled: true,
+      chatDelegationControlsV1Enabled: true,
+      chatAutomaticFanoutV1Enabled: true,
+      scheduledChatTurnsV1Enabled: true,
+      proactiveHeartbeatTurnsV1Enabled: true,
+      commitmentScheduledTurnsV1Enabled: true,
+      chatRequesterMcpV1Enabled: true,
+      chatStaticMcpV1Enabled: true,
+      chatMeshCapabilitiesV1Enabled: true,
       chatRemotePlacementV1Enabled: true,
     };
     expect(updateSettingsSchema.parse({ expectedRevision: 1, features }).features).toEqual(features);
@@ -74,6 +79,15 @@ describe("settings PATCH schema feature-flag coverage (Phase 3.2)", () => {
       (key) => !(key in featuresShape),
     );
     expect(missing).toEqual([]);
+  });
+
+  it("silently strips the retired signalInboundV1Enabled flag that old clients may still send", () => {
+    expect(featuresShape).not.toHaveProperty("signalInboundV1Enabled");
+    const parsed = updateSettingsSchema.parse({
+      expectedRevision: 1,
+      features: { signalInboundV1Enabled: true, chatTimersV1Enabled: true },
+    });
+    expect(parsed.features).toEqual({ chatTimersV1Enabled: true });
   });
 
   it("actually preserves the round-3 kill switches through a parse", () => {

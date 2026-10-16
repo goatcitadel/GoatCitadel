@@ -321,7 +321,7 @@ export async function dispatchInboundWebhookBatch(
  * media download or transcription subprocess.
  */
 function evaluateInboundWebhookAccess(
-  integrationWebhooks: IntegrationWebhookRouteLike,
+  integrationWebhooks: Pick<IntegrationWebhookRouteLike, "acceptInboundChannelEvent" | "recordDevDiagnostic">,
   options: InboundWebhookDispatchOptions,
 ) {
   const inboundAccess = evaluateChannelInboundAccess({
@@ -390,7 +390,7 @@ function evaluateInboundWebhookAccess(
 }
 
 export async function dispatchInboundWebhookMessage(
-  integrationWebhooks: IntegrationWebhookRouteLike,
+  integrationWebhooks: Pick<IntegrationWebhookRouteLike, "acceptInboundChannelEvent" | "recordDevDiagnostic">,
   options: InboundWebhookDispatchOptions,
 ) {
   const gate = evaluateInboundWebhookAccess(integrationWebhooks, options);

@@ -8,6 +8,7 @@ import { isMeshCapabilityNodeInvocationPath } from "../services/mesh-capability-
 import { isMeshCapabilityNodePublicationPath } from "../services/mesh-capability-publication-service.js";
 import type { MeshCapabilityAuthenticatedNodeIdentity } from "../services/mesh-capability-publication-service.js";
 import { isLineWebhookPath } from "../services/line-webhook.js";
+import { isGoogleChatWebhookPath } from "../services/google-chat-webhook.js";
 import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.js";
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
 import { isTelegramWebhookPath } from "../services/telegram-webhook.js";
@@ -147,6 +148,7 @@ export const authPlugin = fp(async (fastify) => {
       isGenericChannelInboundPath(request.url) ||
       isLineWebhookPath(request.url) ||
       isNextcloudTalkWebhookPath(request.url) ||
+      isGoogleChatWebhookPath(request.url) ||
       isSlackWebhookPath(request.url) ||
       isTelegramWebhookPath(request.url) ||
       isWhatsAppWebhookPath(request.url)

@@ -46,8 +46,7 @@ async function fixture() {
   const deps = {
     storage: createSqliteAsyncStorage(storage),
     publishRealtime: vi.fn(async () => undefined),
-    syncDiscordRuntime: vi.fn(async () => undefined),
-    syncSignalInboundRuntime: vi.fn(async () => undefined),
+    syncChannelRuntimes: vi.fn(async () => undefined),
   } as unknown as IntegrationChannelPort;
   const integrations = new IntegrationChannelService(deps);
   const host: setup.ChannelSetupHost = {
@@ -286,7 +285,7 @@ it("keeps committed credentials and blocks a duplicate after runtime synchroniza
     expectedRevision: f.draft.revision,
     values: { botToken: nextToken },
   });
-  vi.mocked(f.deps.syncDiscordRuntime).mockRejectedValueOnce(new Error("Synthetic sync failure"));
+  vi.mocked(f.deps.syncChannelRuntimes).mockRejectedValueOnce(new Error("Synthetic sync failure"));
   await expect(setup.finalizeChannelSetupDraft(f.host, draft.draftId, draft.revision)).rejects.toThrow(
     "The channel connection was saved",
   );

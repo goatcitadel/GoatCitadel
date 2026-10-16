@@ -28,6 +28,8 @@ type ChannelRule = {
   supportsStreaming: boolean;
   supportNotes?: string[];
   resolveSupportNotes?: (config: Record<string, unknown>) => string[];
+  /** Extra setup diagnostics beyond the requiredAnyOf groups. */
+  resolveSetupDiagnostics?: (config: Record<string, unknown>) => string[];
   requiredAnyOf: string[][];
 };
 
@@ -344,49 +346,99 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   ntfy: {
     supportedActions: ["channel.send"],
     supportedAttachmentSources: ["url"],
-    inboundModes: ["none"],
+    resolveInboundModes: (config) => (isNtfyInboundEnabled(config) ? ["stream"] : ["none"]),
     threadCapabilities: {
       rooms: true,
     },
     chunkingMode: "fallback",
     supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "api",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary:
-        "ntfy is normalized as a stateless outbound-only notification path. It can publish to a configured topic, but it does not accept inbound webhooks, subscriptions, or remote commands in this runtime.",
-    },
-    supportNotes: [
-      "ntfy v1 supports outbound text notifications only; inbound webhook and topic subscription handling are intentionally not wired.",
+    resolveRuntimePosture: (config) =>
+      isNtfyInboundEnabled(config)
+        ? {
+            outboundTransport: "api",
+            inboundTransport: "stream",
+            lifecycle: "persistent",
+            inboundReadiness: "ready",
+            operatorSummary:
+              "ntfy publishes notifications to a configured topic and, when inbound is enabled, subscribes to that topic's JSON stream. The sender is the topic itself: the token gates reading, but anyone able to publish to the subscribed topic can start turns, so use a topic whose write access is limited to trusted publishers. Messages published while the gateway is disconnected or restarting are skipped. Outbound publishes are tagged and ignored on the way back in.",
+          }
+        : {
+            outboundTransport: "api",
+            lifecycle: "stateless",
+            inboundReadiness: "unsupported",
+            operatorSummary:
+              "ntfy is normalized as a stateless outbound-only notification path. Inbound topic subscription is opt-in: enable inboundStreamEnabled with a token to subscribe to the topic's JSON stream, on a topic whose write access is limited to trusted publishers.",
+          },
+    resolveSupportNotes: (config) => [
+      ...(isNtfyInboundEnabled(config)
+        ? [
+            "ntfy inbound subscribes to the topic's JSON stream and the sender is the topic itself. The token gates reading the topic; anyone able to publish to the subscribed topic can start turns, so use a topic whose write access (ACL) is limited to trusted publishers. Outbound publishes are tagged and ignored on the way back in.",
+            "Messages published while the gateway is disconnected or restarting are skipped: a reconnect within one gateway run resumes after the last accepted message, but no history is fetched after a gateway restart or a connection edit. A stream silent for 2 minutes (ntfy keepalives arrive about every 45 seconds) is treated as dropped and reconnected.",
+          ]
+        : [
+            "ntfy inbound is off; set inboundStreamEnabled with a token to subscribe to the topic's JSON stream. Webhook and remote-command inbound are not supported.",
+          ]),
       "Token-backed topics should use tokenEnv so secrets are resolved at the tool host boundary.",
       "Dry-run mode validates routing without publishing to the ntfy server.",
     ],
+    resolveSetupDiagnostics: (config) =>
+      isNtfyInboundRequested(config) && !hasNtfyToken(config)
+        ? ["ntfy inbound requires a token to read the topic (tokenEnv)"]
+        : [],
     requiredAnyOf: [["baseUrl"], ["topic", "defaultTopic"]],
   },
   "google-chat": {
-    supportedActions: ["channel.send"],
+    resolveSupportedActions: (config) =>
+      isGoogleChatServiceAccountMode(config) ? ["channel.send", "channel.reply", "channel.unsend"] : ["channel.send"],
     supportedAttachmentSources: ["url"],
-    inboundModes: ["none"],
+    resolveInboundModes: (config) => (isGoogleChatAppInboundEnabled(config) ? ["webhook"] : ["none"]),
     threadCapabilities: {
       rooms: true,
       threads: true,
     },
+    resolveRuntimePolicy: (config) => ({ allowlist: isGoogleChatAppInboundEnabled(config) }),
     chunkingMode: "fallback",
     supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "webhook",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary:
-        "Google Chat is normalized as a stateless outbound webhook destination. Rich card sends work, but inbound routing is not available in the current runtime.",
-    },
-    supportNotes: [
-      "Google Chat webhook sends support URL-backed rich cards for image and link attachments.",
-      "Google Chat webhook mode is outbound only and does not provide inbound routing.",
-      "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
-    ],
-    requiredAnyOf: [["webhookUrl", "url"]],
+    resolveRuntimePosture: (config) =>
+      isGoogleChatAppInboundEnabled(config)
+        ? {
+            outboundTransport: "api",
+            inboundTransport: "webhook",
+            lifecycle: "stateless",
+            inboundReadiness: "ready",
+            operatorSummary:
+              "Google Chat runs as a Chat app: inbound events arrive on the app's HTTP endpoint with Google-signed bearer tokens verified against the configured audience, and replies, sends and deletes use the Chat API with the service account. App messages can be deleted, but only the app's own messages.",
+          }
+        : isGoogleChatServiceAccountMode(config)
+          ? {
+              outboundTransport: "api",
+              lifecycle: "stateless",
+              inboundReadiness: "unsupported",
+              operatorSummary:
+                "Google Chat sends through the Chat API as a Chat app (service account); only the app's own messages can be deleted. Inbound needs audienceType and audience so Google-signed requests can be verified.",
+            }
+          : {
+              outboundTransport: "webhook",
+              lifecycle: "stateless",
+              inboundReadiness: "unsupported",
+              operatorSummary:
+                "Google Chat is normalized as a stateless outbound webhook destination. Rich card sends work; inbound requires Chat app (service-account) mode.",
+            },
+    resolveSupportNotes: (config) =>
+      isGoogleChatServiceAccountMode(config)
+        ? [
+            isGoogleChatAppInboundEnabled(config)
+              ? "Google Chat app inbound verifies Google's bearer token (RS256, issuer, audience, expiry) before anything is accepted; allow the Google Chat user resource names (users/...) that may start turns, because inbound is default-deny."
+              : "Google Chat app inbound is off until audienceType (project_number or endpoint_url) and audience are configured.",
+            "Chat app sends, replies and deletes use the service-account key resolved at the tool host boundary; allow chat.googleapis.com and oauth2.googleapis.com in the network allowlist.",
+            "Google Chat unsend deletes only messages this app sent.",
+          ]
+        : [
+            "Google Chat webhook sends support URL-backed rich cards for image and link attachments.",
+            "Google Chat webhook mode is outbound; inbound requires Chat app (service-account) mode.",
+            "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
+          ],
+    requiredAnyOf: [["webhookUrl", "url", "serviceAccountKeyEnv", "serviceAccountKey"]],
   },
   teams: {
     supportedActions: ["channel.send"],
@@ -454,25 +506,40 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   },
   signal: {
     supportedActions: ["channel.send"],
-    resolveInboundModes: () => ["none"],
+    resolveInboundModes: (config) => (isSignalInboundEnabled(config) ? ["stream"] : ["none"]),
     threadCapabilities: {
       direct: true,
       groups: true,
     },
     chunkingMode: "fallback",
     supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "api",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary:
-        "Signal is outbound-only through the configured bridge. GoatCitadel does not call the destructive receive endpoint because the current bridge has no acknowledgement or replay contract.",
-    },
+    resolveRuntimePosture: (config) =>
+      isSignalInboundEnabled(config)
+        ? {
+            outboundTransport: "api",
+            inboundTransport: "stream",
+            lifecycle: "persistent",
+            inboundReadiness: "ready",
+            operatorSummary:
+              "Signal sends through the signal-cli JSON-RPC bridge and, with receiveEvents enabled, keeps a persistent subscription to the signal-cli HTTP daemon event stream. Self-echo, receipts and typing events are ignored, and the sender plus message timestamp dedupes any reconnect overlap.",
+          }
+        : {
+            outboundTransport: "api",
+            lifecycle: "stateless",
+            inboundReadiness: "unsupported",
+            operatorSummary:
+              "Signal sends through the configured signal-cli JSON-RPC bridge. Inbound is opt-in: enable receiveEvents on a signal-cli daemon --http bridge to receive messages from its event stream.",
+          },
     resolveSupportNotes: (config) => [
-      "Outbound Signal sends remain available through the configured bridge JSON-RPC send path.",
-      "Inbound Signal receive is intentionally blocked until the bridge exposes a durable offset/ack/replay contract.",
-      ...(isExplicitTrue(config.inboundEnabled)
-        ? ["This connection contains a deprecated inboundEnabled=true value. It is ignored and never starts polling."]
+      "Outbound Signal sends use the configured bridge JSON-RPC send path.",
+      isSignalInboundEnabled(config)
+        ? "Signal inbound subscribes to the signal-cli daemon --http event stream (/api/v1/events); allow the sender UUIDs (or numbers for senders without a UUID) that may start turns, because inbound is default-deny."
+        : "Signal inbound is off; set receiveEvents on a signal-cli daemon --http bridge to receive messages from its event stream (/api/v1/events).",
+      "signal-cli acknowledges messages to the Signal server itself, so messages that arrive while the gateway's event stream is disconnected are not replayed and are lost.",
+      ...(isSignalInboundEnabled(config)
+        ? [
+            "signal-cli sends an SSE keepalive (every 15 seconds by default, --sse-keepalive-interval); an event stream silent for 90 seconds is treated as dropped and reconnected, so keep that interval well below 90 seconds.",
+          ]
         : []),
     ],
     requiredAnyOf: [["baseUrl", "bridgeUrl"]],
@@ -480,6 +547,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   mattermost: {
     supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend"],
     supportedAttachmentSources: ["url", "inline"],
+    resolveInboundModes: (config) => (isMattermostInboundEnabled(config) ? ["stream"] : ["none"]),
     threadCapabilities: {
       rooms: true,
       replies: true,
@@ -488,14 +556,32 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     },
     chunkingMode: "fallback",
     supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "api",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary:
-        "Mattermost is normalized as a stateless outbound bot bridge. Rich outbound post actions are supported, but inbound routing is not yet wired.",
-    },
-    supportNotes: [
+    resolveRuntimePosture: (config) =>
+      isMattermostInboundEnabled(config)
+        ? {
+            outboundTransport: "api",
+            inboundTransport: "stream",
+            lifecycle: "persistent",
+            inboundReadiness: "ready",
+            operatorSummary:
+              "Mattermost sends through the bot REST API and, when inbound is enabled, keeps a persistent bot WebSocket open for posted events. The bot's own posts and system posts are ignored. Mattermost has no replay: posts sent while the socket is disconnected or backing off, or that fail durable acceptance, are not recovered.",
+          }
+        : {
+            outboundTransport: "api",
+            lifecycle: "stateless",
+            inboundReadiness: "unsupported",
+            operatorSummary:
+              "Mattermost is normalized as a stateless outbound bot bridge. Inbound is opt-in: enable inboundStreamEnabled with a bot token to receive posted events over the bot WebSocket.",
+          },
+    resolveSupportNotes: (config) => [
+      isMattermostInboundEnabled(config)
+        ? "Mattermost inbound uses the bot WebSocket (/api/v4/websocket); allow the Mattermost user ids that may start turns, because inbound is default-deny. Posts sent while the socket is disconnected, or that fail acceptance, are not recovered."
+        : "Mattermost inbound is off; set inboundStreamEnabled with a bot token to receive posted events over the bot WebSocket.",
+      ...(isMattermostInboundEnabled(config)
+        ? [
+            "The bot pings the WebSocket every 30 seconds; a socket that answers nothing for 90 seconds is treated as dropped and reconnected.",
+          ]
+        : []),
       "Mattermost unsend deletes the original post and typically applies only to posts the bot can remove.",
       "Mattermost rich sends upload files to the resolved channel before creating the post.",
     ],
@@ -626,7 +712,16 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     supportNotes: ["Rich media sends currently require URL-backed attachments for the zca bridge."],
     requiredAnyOf: [
       ["baseUrl", "bridgeUrl", "serverUrl"],
-      ["authToken", "authTokenEnv", "authorization", "authorizationEnv", "accessToken", "accessTokenEnv", "basicAuth", "basicAuthEnv"],
+      [
+        "authToken",
+        "authTokenEnv",
+        "authorization",
+        "authorizationEnv",
+        "accessToken",
+        "accessTokenEnv",
+        "basicAuth",
+        "basicAuthEnv",
+      ],
     ],
   },
 };
@@ -1095,6 +1190,7 @@ function buildSetupDiagnostics(rule: ChannelRule, config: Record<string, unknown
     }
     diagnostics.push(`Missing one of: ${group.map((key) => `config.${key}`).join(", ")}.`);
   }
+  diagnostics.push(...(rule.resolveSetupDiagnostics?.(config) ?? []));
   return diagnostics;
 }
 
@@ -1115,11 +1211,59 @@ function readConfigString(config: Record<string, unknown>, key: string): string 
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function isNtfyInboundRequested(config: Record<string, unknown>): boolean {
+  const flag = config.inboundStreamEnabled;
+  return flag === true || (typeof flag === "string" && flag.trim().toLowerCase() === "true");
+}
+
+function hasNtfyToken(config: Record<string, unknown>): boolean {
+  return hasAnyConfigured(config, ["token", "tokenEnv"]);
+}
+
+/** Mirrors the ntfy stream adapter: opt-in, base URL, subscribe topic and a token. */
+function isNtfyInboundEnabled(config: Record<string, unknown>): boolean {
+  return (
+    isNtfyInboundRequested(config) &&
+    hasNtfyToken(config) &&
+    hasAnyConfigured(config, ["baseUrl"]) &&
+    hasAnyConfigured(config, ["subscribeTopic", "topic", "defaultTopic"])
+  );
+}
+
+/** Mirrors the Signal stream adapter: receiveEvents opt-in and a bridge URL. */
+function isSignalInboundEnabled(config: Record<string, unknown>): boolean {
+  return isExplicitTrue(config.receiveEvents) && hasAnyConfigured(config, ["baseUrl", "bridgeUrl"]);
+}
+
+/** Mirrors the Mattermost stream adapter: opt-in, server URL and a bot token. */
+function isMattermostInboundEnabled(config: Record<string, unknown>): boolean {
+  return (
+    isExplicitTrue(config.inboundStreamEnabled) &&
+    hasAnyConfigured(config, ["serverUrl"]) &&
+    hasAnyConfigured(config, ["botToken", "botTokenEnv", "token", "tokenEnv"])
+  );
+}
+
+/** Google Chat app mode: a service-account key (env name or JSON key string) is configured. */
+function isGoogleChatServiceAccountMode(config: Record<string, unknown>): boolean {
+  return hasAnyConfigured(config, ["serviceAccountKeyEnv", "serviceAccountKey"]);
+}
+
+/** Mirrors the Google Chat webhook route: app mode plus a verifiable audience. */
+function isGoogleChatAppInboundEnabled(config: Record<string, unknown>): boolean {
+  const audienceType = readConfigString(config, "audienceType");
+  return (
+    isGoogleChatServiceAccountMode(config) &&
+    (audienceType === "project_number" || audienceType === "endpoint_url") &&
+    hasAnyConfigured(config, ["audience"])
+  );
+}
+
 function hasAnyConfigured(config: Record<string, unknown>, keys: string[]): boolean {
   return keys.some((key) => Boolean(readConfigString(config, key)));
 }
 
-function isExplicitTrue(value: unknown): boolean {
+export function isExplicitTrue(value: unknown): boolean {
   return value === true || (typeof value === "string" && value.trim().toLowerCase() === "true");
 }
 

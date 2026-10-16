@@ -3,7 +3,7 @@ const CHANNEL_TARGET_KEYS: Record<string, string[]> = {
   discord: ["defaultChannelId", "defaultTarget", "target"],
   telegram: ["defaultChatId", "defaultTarget", "target"],
   ntfy: ["topic", "defaultTopic", "defaultTarget", "target"],
-  "google-chat": ["defaultThreadKey", "defaultTarget", "target"],
+  "google-chat": ["defaultSpace", "defaultThreadKey", "defaultTarget", "target"],
   whatsapp: ["defaultTarget", "defaultRecipient", "target"],
   signal: ["defaultRecipient", "defaultTarget", "target"],
   imessage: ["defaultHandle", "defaultTarget", "target"],

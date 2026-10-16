@@ -656,7 +656,6 @@
     "apps/gateway/src/services/shell-command-explainer.ts",
     "apps/gateway/src/services/shell-command-handlers.ts",
     "apps/gateway/src/services/shell-command-prescreen.ts",
-    "apps/gateway/src/services/signal-inbound-runtime-service.ts",
     "apps/gateway/src/services/skill-bundle-manifest.ts",
     "apps/gateway/src/services/skill-content-integrity.ts",
     "apps/gateway/src/services/skill-content-validation.ts",
@@ -2313,6 +2312,62 @@
       "maxDependencyMemberAccesses": 15,
       "reason": "WS4 gap-closure program (operator-approved 2026-10-15): live blind model comparison execution split out of the baseline-era comparison owner. The cap covers the repository compare-and-swap claim, lease renewal and conditional terminal write plus the lease TTL override that guard a cross-process claim/lease.",
       "evidence": "apps/gateway/src/services/model-comparison-execution-service.test.ts covers concurrency 2, status transitions, partial failure, restart of missing/errored results, conflict rejection, cancel abort, stale running recovery past the lease TTL, cross-process claim races, fresh-lease restart rejection, cancels written by another process, empty/approval-paused responses and background-error reporting; packages/storage/src/model-comparison-run-repo.test.ts covers claimRun, renewRunLease and finishRun including no-match paths; the route-port factory test covers delegation of records and run control; routes/model-comparisons.test.ts covers run/cancel status mapping; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/channel-stream-runtime-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 7,
+      "reason": "WS5 channel-parity program: generic persistent stream runtime (lifecycle, backoff reconnect, revision restart, status) for SSE/WebSocket-style inbound channels; reads its seven injected dependencies once in the constructor and has no host callbacks.",
+      "evidence": "apps/gateway/src/services/channel-stream-runtime-service.test.ts covers one runner per opted-in connection, disable/abort, doubling backoff capped at 60s, backoff reset after ready+emit, auth-failure stop and revision restart, cursor advance only after durable acceptance, dispatch failure propagation, and close settlement; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/channel-stream-adapters/stream-line-reader.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS5 channel-parity program: pure byte-stream line and server-sent-event reader shared by stream channel adapters; reaches no adapter host or dependency.",
+      "evidence": "apps/gateway/src/services/channel-stream-adapters/stream-line-reader.test.ts covers chunk-split lines, split multi-byte UTF-8, CRLF, over-long line rejection, abort, and SSE event grouping."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/channel-stream-adapters/ntfy-stream-adapter.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 3,
+      "reason": "WS5 channel-parity program: ntfy inbound stream adapter over the generic channel stream runtime; reads its three injected dependencies (fetch, secret resolver, allowlist check) once per session and has no host callbacks.",
+      "evidence": "apps/gateway/src/services/channel-stream-adapters/ntfy-stream-adapter.test.ts covers open/keepalive/message handling, the exact normalized event and id cursor, self-echo marker drop, since cursor URL, bearer auth, 401/403 and allowlist/token auth errors, replay-deterministic idempotency keys and the real sender-allowlist gate; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/channel-stream-runtime-registry.ts",
+      "maxHostCallbacks": 7,
+      "maxDependencyMemberAccesses": 7,
+      "reason": "WS5 channel-parity program: per-Gateway registry that builds the generic channel stream runtime with its registered adapters over a narrow, lazily-read host (storage, durable acceptance, diagnostics, secret resolution, allowlist). The Gateway lifecycle facade and the route composition share one instance, so the new wiring lives outside the baseline-era GatewayService, which gains no lines or public methods.",
+      "evidence": "apps/gateway/src/services/channel-stream-runtime-registry.test.ts covers per-storage sharing, lazy host reads and durable dispatch without connection secrets; apps/gateway/src/services/channel-stream-adapters/ntfy-stream-adapter.test.ts runs the runtime through the real dispatchInboundWebhookMessage gate; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/channel-stream-adapters/mattermost-stream-adapter.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 6,
+      "reason": "WS5 channel-parity program: Mattermost inbound WebSocket adapter over the generic channel stream runtime; reads its four injected dependencies (fetch, secret resolver, allowlist check, WebSocket factory) per session and has no host callbacks.",
+      "evidence": "apps/gateway/src/services/channel-stream-adapters/mattermost-stream-adapter.test.ts covers users/me bot-id lookup, derived wss URL, authentication challenge, hello/OK readiness, exact normalized channel and DM events, self and system post drops, auth FAIL and 401/403 and allowlist/token auth errors, abort, replay-deterministic idempotency keys and the real sender-allowlist gate; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/channel-stream-adapters/signal-stream-adapter.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 2,
+      "reason": "WS5 channel-parity program: Signal inbound adapter over the signal-cli HTTP daemon Server-Sent Events stream on the generic channel stream runtime; reads its two injected dependencies (fetch, allowlist check) once per session and has no host callbacks. Replaces the retired outbound-only SignalInboundRuntimeService facade.",
+      "evidence": "apps/gateway/src/services/channel-stream-adapters/signal-stream-adapter.test.ts covers the exact direct and group events, identity/timestamp fallbacks, syncMessage/receipt/typing/self-account drops, the account query parameter, 401/403 and allowlist auth errors, replay-deterministic idempotency keys and the real sender-allowlist gate; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/google-chat-webhook.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS5 channel-parity program: Google Chat app inbound helpers: Google-signed bearer JWT verification (RS256, kid certificate selection, issuer/audience/expiry/email checks), a per-registration certificate cache, the fixed-host certificate fetcher and event normalization for the classic and Workspace add-on shapes. Pure functions with no adapter host or injected dependency members; the route owns the HTTP boundary and GatewayService gains nothing.",
+      "evidence": "apps/gateway/src/services/google-chat-webhook.test.ts covers valid project-number and endpoint-url tokens, bad audience/issuer/email, expiry and future iat with 60 s skew, unknown kid, alg none and HS256, tampered payload, missing and malformed tokens, cache max-age and failure handling, and classic/add-on/bot/lifecycle normalization; apps/gateway/src/routes/integrations.google-chat-webhook.test.ts covers the route, replay idempotency and the forced default-deny sender gate; Gateway typecheck passes."
     },
     {
       "planStep": "C0",
