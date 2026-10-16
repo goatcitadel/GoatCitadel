@@ -109,6 +109,9 @@ export class CommunicationsApprovalEffectService {
     if (!mail) {
       throw new CommunicationsApprovalEffectError("invalid_payload", "The mail send approval payload is malformed.");
     }
+    // A storage failure while recording the refusal deliberately propagates instead of the typed error:
+    // the effect worker then retries, re-reads the approval and re-reaches the same refusal, so the
+    // draft is never left without its failure reason. Nothing is ever sent on this path.
     const failDraft = (error: CommunicationsApprovalEffectError, reason = error.message) =>
       this.settleDraftAfterRefusal(mail.draftId, error, reason).then(() => Promise.reject(error));
     if (computeCommunicationsPayloadHash(mail) !== approval.payload.payloadHash) {

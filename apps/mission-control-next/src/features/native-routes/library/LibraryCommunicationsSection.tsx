@@ -82,7 +82,18 @@ export function LibraryCommunicationsSection({ activeWorkspaceId, activeWorkspac
               message:
                 "Outcome unknown: the message may have been delivered. Check the sent mailbox before sending it again.",
             }
-          : { tone: "success", message: `${sendState.status}: ${sendState.approvalId ?? draft.draftId}` },
+          : sendState.status === "failed" || sendState.status === "send_unavailable"
+            ? {
+                tone: "error",
+                message: `Not sent: ${sendState.failureReason ?? "the Gateway did not record a reason."}`,
+              }
+            : sendState.status === "sent"
+              ? { tone: "success", message: "Sent." }
+              : {
+                  tone: "success",
+                  message:
+                    "Send approval requested. Nothing has been sent yet. Approving sends this exact message once.",
+                },
       );
       if (messageDraft.acceptSaved({ to: "", subject: "", bodyText: "" }, undefined, submitted)) setView("inbox");
       await reload();
