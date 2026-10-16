@@ -103,13 +103,13 @@ export class ModelComparisonService {
       await entry.settled;
       return await this.getComparison(comparisonId);
     }
-    const run = await this.deps.repository.get(comparisonId);
+    const run = await this.readRun(comparisonId);
     if (run.status !== "running") {
       throw new ConflictError({ message: `Comparison is ${run.status}; only a running comparison can be cancelled.` });
     }
     const now = this.nowIso();
     return this.withAdvisory(
-      await this.deps.repository.updateStatus(comparisonId, { status: "cancelled", updatedAt: now, completedAt: now }),
+      await this.writeStatus(comparisonId, { status: "cancelled", updatedAt: now, completedAt: now }),
     );
   }
 
@@ -122,7 +122,7 @@ export class ModelComparisonService {
       throw new ValidationError({ field: "candidates", message: "At least two model candidates are required." });
     }
     const now = this.nowIso();
-    const comparisonId = this.deps.idFactory?.() ?? randomUUID();
+    const comparisonId = this.newId();
     const selectedTests = await this.resolvePromptPackTests(input);
     const testIds = selectedTests.map((test) => test.testId);
     const candidates = assignBlindLabels(input.candidates).map((candidate, index) => ({
@@ -151,11 +151,11 @@ export class ModelComparisonService {
   }
 
   public async getComparison(comparisonId: string): Promise<ModelComparisonRun> {
-    return this.withAdvisory(await this.deps.repository.get(comparisonId));
+    return this.withAdvisory(await this.readRun(comparisonId));
   }
 
   public async addJudgment(comparisonId: string, input: ModelComparisonJudgeRequest): Promise<ModelComparisonJudgment> {
-    const run = await this.deps.repository.get(comparisonId);
+    const run = await this.readRun(comparisonId);
     const candidateIds = new Set(run.candidates.map((candidate) => candidate.candidateId));
     if (!run.testIds.includes(input.testId)) {
       throw new ValidationError({ field: "testId", message: "Judgment testId is not part of the comparison." });
@@ -180,7 +180,7 @@ export class ModelComparisonService {
       seenScoreCandidateIds.add(score.candidateId);
     }
     const judgment: ModelComparisonJudgment = {
-      judgmentId: this.deps.idFactory?.() ?? randomUUID(),
+      judgmentId: this.newId(),
       testId: input.testId,
       winnerCandidateId: input.winnerCandidateId,
       scores: input.scores,
@@ -247,11 +247,11 @@ export class ModelComparisonService {
   }
 
   private async markRunning(comparisonId: string): Promise<ModelComparisonRun> {
-    const run = await this.deps.repository.get(comparisonId);
+    const run = await this.readRun(comparisonId);
     if (run.status === "completed") {
       throw new ConflictError({ message: "Comparison already completed." });
     }
-    return await this.deps.repository.updateStatus(comparisonId, {
+    return await this.writeStatus(comparisonId, {
       status: "running",
       updatedAt: this.nowIso(),
       completedAt: null,
@@ -268,14 +268,12 @@ export class ModelComparisonService {
       await this.executeComparison(run, runner, signal);
     } catch (error) {
       const now = this.nowIso();
-      await this.deps.repository
-        .updateStatus(run.comparisonId, {
-          status: "failed",
-          updatedAt: now,
-          completedAt: now,
-          error: error instanceof Error ? error.message : String(error),
-        })
-        .catch((statusError: unknown) => this.deps.onBackgroundError?.(run.comparisonId, statusError));
+      await this.writeStatus(run.comparisonId, {
+        status: "failed",
+        updatedAt: now,
+        completedAt: now,
+        error: error instanceof Error ? error.message : String(error),
+      }).catch((statusError: unknown) => this.deps.onBackgroundError?.(run.comparisonId, statusError));
     }
   }
 
@@ -311,7 +309,7 @@ export class ModelComparisonService {
     signal: AbortSignal,
   ): Promise<void> {
     const pending: ModelComparisonPromptResult = { ...item.result, error: undefined };
-    await this.deps.repository.upsertResult(run.comparisonId, pending, this.nowIso());
+    await this.writeResult(run.comparisonId, pending);
     let next: ModelComparisonPromptResult;
     try {
       const promptRun = await runner(run.packId, item.result.testId, {
@@ -326,25 +324,44 @@ export class ModelComparisonService {
       }
       next = { ...pending, error: error instanceof Error ? error.message : String(error) };
     }
-    await this.deps.repository.upsertResult(run.comparisonId, next, this.nowIso());
+    await this.writeResult(run.comparisonId, next);
   }
 
   private async finishComparison(comparisonId: string, aborted: boolean): Promise<void> {
     const now = this.nowIso();
     if (aborted) {
-      await this.deps.repository.updateStatus(comparisonId, { status: "cancelled", updatedAt: now, completedAt: now });
+      await this.writeStatus(comparisonId, { status: "cancelled", updatedAt: now, completedAt: now });
       return;
     }
-    const latest = await this.deps.repository.get(comparisonId);
+    const latest = await this.readRun(comparisonId);
     const failedCount = latest.results.filter(
       (result) => Boolean(result.error?.trim()) || !result.responseText?.trim(),
     ).length;
-    await this.deps.repository.updateStatus(comparisonId, {
+    await this.writeStatus(comparisonId, {
       status: failedCount > 0 ? "failed" : "completed",
       updatedAt: now,
       completedAt: now,
       error: failedCount > 0 ? `${failedCount} of ${latest.results.length} results failed.` : null,
     });
+  }
+
+  private async readRun(comparisonId: string): Promise<ModelComparisonRun> {
+    return await this.deps.repository.get(comparisonId);
+  }
+
+  private async writeStatus(
+    comparisonId: string,
+    update: Parameters<ModelComparisonRepositoryPort["updateStatus"]>[1],
+  ): Promise<ModelComparisonRun> {
+    return await this.deps.repository.updateStatus(comparisonId, update);
+  }
+
+  private async writeResult(comparisonId: string, result: ModelComparisonPromptResult): Promise<void> {
+    await this.deps.repository.upsertResult(comparisonId, result, this.nowIso());
+  }
+
+  private newId(): string {
+    return this.deps.idFactory?.() ?? randomUUID();
   }
 
   private nowIso(): string {
