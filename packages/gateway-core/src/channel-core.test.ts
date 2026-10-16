@@ -744,3 +744,49 @@ function startsWithDanglingLowSurrogate(value: string): boolean {
   const code = value.charCodeAt(0);
   return code >= 0xdc00 && code <= 0xdfff;
 }
+
+describe("platform-unsupported channel actions", () => {
+  it("declares WhatsApp unsend as a platform limit, not a missing wire-up", () => {
+    const capabilities = describeChannelCapabilities("whatsapp", { phoneNumberId: "1", accessTokenEnv: "WA_TOKEN" });
+    expect(capabilities.supportedActions).not.toContain("channel.unsend");
+    expect(capabilities.platformUnsupportedActions["channel.unsend"]).toMatch(/no endpoint for deleting/i);
+    const text = [capabilities.runtimePosture.operatorSummary, ...capabilities.supportNotes].join(" ");
+    expect(text).not.toMatch(/still incomplete|not wired|still not/i);
+  });
+
+  it("declares Slack typing as a platform limit and keeps Slack react/unsend", () => {
+    const capabilities = describeChannelCapabilities("slack", { botTokenEnv: "SLACK_BOT_TOKEN" });
+    expect(capabilities.supportedActions).not.toContain("channel.typing");
+    expect(capabilities.platformUnsupportedActions["channel.typing"]).toMatch(/no typing-indicator API/i);
+    expect(capabilities.platformUnsupportedActions["channel.unsend"]).toBeUndefined();
+  });
+
+  it("declares Nextcloud Talk unsend and ntfy one-way actions", () => {
+    expect(
+      describeChannelCapabilities("nextcloud-talk", {}).platformUnsupportedActions["channel.unsend"],
+    ).toBeDefined();
+    const ntfy = describeChannelCapabilities("ntfy", {}).platformUnsupportedActions;
+    expect(Object.keys(ntfy).sort()).toEqual(["channel.react", "channel.typing", "channel.unsend"]);
+  });
+
+  it("resolves Google Chat unsend by mode and never marks supported actions unsupported", () => {
+    const webhook = describeChannelCapabilities("google-chat", {
+      webhookUrl: "https://chat.googleapis.com/v1/spaces/A/messages",
+    });
+    expect(webhook.platformUnsupportedActions["channel.typing"]).toBeDefined();
+    expect(webhook.platformUnsupportedActions["channel.unsend"]).toMatch(/webhook/i);
+    const app = describeChannelCapabilities("google-chat", { serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY" });
+    expect(app.platformUnsupportedActions["channel.unsend"]).toBeUndefined();
+    expect(app.supportedActions).toContain("channel.unsend");
+  });
+
+  it("defaults to an empty map and never overlaps supported actions", () => {
+    expect(describeChannelCapabilities("telegram", {}).platformUnsupportedActions).toEqual({});
+    for (const key of ["slack", "whatsapp", "ntfy", "nextcloud-talk", "google-chat", "teams"]) {
+      const c = describeChannelCapabilities(key, { botTokenEnv: "X", serviceAccountKeyEnv: "Y" });
+      for (const action of Object.keys(c.platformUnsupportedActions)) {
+        expect(c.supportedActions).not.toContain(action);
+      }
+    }
+  });
+});

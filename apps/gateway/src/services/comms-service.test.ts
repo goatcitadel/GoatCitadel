@@ -8,7 +8,15 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import { commsActivity, commsGmailSend, commsReact, commsSend, commsUnsend, type CommsHost } from "./comms-service.js";
+import {
+  commsActivity,
+  commsGmailSend,
+  commsReact,
+  commsSend,
+  commsTyping,
+  commsUnsend,
+  type CommsHost,
+} from "./comms-service.js";
 import type { ExternalSideEffectRunStore } from "./external-side-effect-runner-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 
@@ -635,5 +643,42 @@ describe("comms gmail send external side-effect ledger", () => {
     expect(host.invokeAndUnwrap).toHaveBeenCalledTimes(2);
     expect(first).toMatchObject({ status: "sent" });
     expect(second).toMatchObject({ status: "sent" });
+  });
+});
+
+describe("comms typing platform limits", () => {
+  it("reports Slack typing as a platform limit instead of a generic gap", async () => {
+    const host = createHost();
+    host.getIntegrationConnection = vi.fn(
+      () =>
+        ({
+          connectionId: "slack-1",
+          kind: "channel",
+          key: "slack",
+          label: "Slack",
+          config: { botTokenEnv: "SLACK_BOT_TOKEN" },
+        }) as IntegrationConnection,
+    );
+    const result = await commsTyping(host, { connectionId: "slack-1", target: "C1" } as never);
+    expect(result.status).toBe("unsupported");
+    expect(result.reason).toMatch(/^Platform does not support this: Slack has no typing-indicator API/);
+  });
+
+  it("keeps the generic text for actions that are merely not configured", async () => {
+    const host = createHost();
+    host.getIntegrationConnection = vi.fn(
+      () =>
+        ({
+          connectionId: "d-1",
+          kind: "channel",
+          key: "discord",
+          label: "Discord",
+          config: {},
+        }) as IntegrationConnection,
+    );
+    const result = await commsTyping(host, { connectionId: "d-1", target: "1" } as never);
+    expect(result.status).toBe("unsupported");
+    expect(result.reason).toMatch(/does not advertise typing support in the current runtime mode/);
+    expect(result.reason).not.toMatch(/^Platform does not support this/);
   });
 });

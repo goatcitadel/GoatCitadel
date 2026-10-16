@@ -1,5 +1,5 @@
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
-import { sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
+import { describeChannelPlatformUnsupported, sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
 import type {
   CalendarCreateEventInput,
   CalendarListQuery,
@@ -236,13 +236,18 @@ export async function commsTyping(host: CommsHost, input: ChannelTypingInput): P
   }
   const capabilities = describeChannelCapabilities(connection.key, connection.config ?? {});
   if (!capabilities.supportedActions.includes("channel.typing")) {
+    const platformReason = describeChannelPlatformUnsupported(
+      connection.key,
+      "channel.typing",
+      capabilities.platformUnsupportedActions,
+    );
     return {
       channelKey: connection.key,
       connectionId: input.connectionId,
       target: input.target,
       supported: false,
       status: "unsupported",
-      reason: `${connection.label} does not advertise typing support in the current runtime mode.`,
+      reason: platformReason ?? `${connection.label} does not advertise typing support in the current runtime mode.`,
     };
   }
 

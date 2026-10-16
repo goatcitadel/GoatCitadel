@@ -138,7 +138,7 @@ function buildProgramEpicRecord(
             : [
                 blocker(
                   "repo_runtime",
-                  "WhatsApp still lacks delete parity, iMessage remains a local outbound bridge with platform-dependent limits, and Signal is still only a narrow outbound send lane.",
+                  "WhatsApp unsend is a platform limit (the Cloud API has no delete endpoint), iMessage remains a local outbound bridge with platform-dependent limits, and Signal is still only a narrow outbound send lane.",
                 ),
                 blocker(
                   "manual_operator",

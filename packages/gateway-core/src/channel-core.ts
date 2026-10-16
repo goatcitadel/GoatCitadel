@@ -12,6 +12,8 @@ import type {
   ChannelThreadCapabilities,
 } from "@goatcitadel/contracts";
 
+import { CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS } from "@goatcitadel/contracts";
+
 type ChannelRule = {
   supportedActions?: ChannelActionName[];
   resolveSupportedActions?: (config: Record<string, unknown>) => ChannelActionName[];
@@ -28,6 +30,9 @@ type ChannelRule = {
   supportsStreaming: boolean;
   supportNotes?: string[];
   resolveSupportNotes?: (config: Record<string, unknown>) => string[];
+  /** Actions the platform itself cannot do (reason per action); static map or per-config resolver. */
+  platformUnsupportedActions?: Partial<Record<ChannelActionName, string>>;
+  resolvePlatformUnsupportedActions?: (config: Record<string, unknown>) => Partial<Record<ChannelActionName, string>>;
   /** Extra setup diagnostics beyond the requiredAnyOf groups. */
   resolveSetupDiagnostics?: (config: Record<string, unknown>) => string[];
   requiredAnyOf: string[][];
@@ -160,6 +165,7 @@ const CHANNEL_RICH_MESSAGE_PROFILES: Record<
 
 const CHANNEL_RULES: Record<string, ChannelRule> = {
   slack: {
+    platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS.slack,
     resolveSupportedActions: (config) =>
       hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
         ? ["channel.send", "channel.reply", "channel.react", "channel.unsend"]
@@ -344,6 +350,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["botTokenEnv", "botToken", "tokenEnv", "token"]],
   },
   ntfy: {
+    platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS.ntfy,
     supportedActions: ["channel.send"],
     supportedAttachmentSources: ["url"],
     resolveInboundModes: (config) => (isNtfyInboundEnabled(config) ? ["stream"] : ["none"]),
@@ -388,6 +395,15 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["baseUrl"], ["topic", "defaultTopic"]],
   },
   "google-chat": {
+    resolvePlatformUnsupportedActions: (config) => ({
+      ...CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS["google-chat"],
+      ...(isGoogleChatServiceAccountMode(config)
+        ? {}
+        : {
+            "channel.unsend":
+              "Google Chat webhook-authored messages cannot be deleted; unsend needs Chat app (service-account) mode.",
+          }),
+    }),
     resolveSupportedActions: (config) =>
       isGoogleChatServiceAccountMode(config) ? ["channel.send", "channel.reply", "channel.unsend"] : ["channel.send"],
     supportedAttachmentSources: ["url"],
@@ -441,6 +457,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["webhookUrl", "url", "serviceAccountKeyEnv", "serviceAccountKey"]],
   },
   teams: {
+    platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS.teams,
     supportedActions: ["channel.send"],
     supportedAttachmentSources: ["url"],
     inboundModes: ["none"],
@@ -465,6 +482,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["webhookUrl", "url"]],
   },
   whatsapp: {
+    platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS.whatsapp,
     supportedActions: ["channel.send", "channel.reply", "channel.react"],
     supportedAttachmentSources: ["url", "inline"],
     resolveInboundModes: (config) =>
@@ -489,14 +507,14 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
         lifecycle: "stateless",
         inboundReadiness: hasWebhookIngress ? "ready" : "unsupported",
         operatorSummary: hasWebhookIngress
-          ? "WhatsApp Cloud API is normalized as a stateless bridge with signed webhook ingress. Rich outbound media, reactions, and inbound message routing are available, but delete parity is still incomplete."
-          : "WhatsApp Cloud API is normalized as a stateless outbound bridge. Rich outbound media and reactions are supported, but inbound routing and delete parity are still incomplete.",
+          ? "WhatsApp Cloud API is normalized as a stateless bridge with signed webhook ingress. Rich outbound media, reactions, and inbound message routing are available. The platform has no message-delete endpoint, so unsend is not offered."
+          : "WhatsApp Cloud API is normalized as a stateless outbound bridge. Rich outbound media and reactions are supported; inbound routing needs the app secret and webhook verify token, and the platform has no message-delete endpoint, so unsend is not offered.",
       };
     },
     resolveSupportNotes: (config) => [
       "WhatsApp Cloud API rich sends support public URL media and uploaded inline files for supported image, video, audio, and document types.",
       "WhatsApp rich-message preflight labels native media, text fallbacks, pending attachment hydration, and Cloud API provider evidence before send.",
-      "WhatsApp reactions are sent through the Cloud API, but unsend/delete is still not wired in this bridge.",
+      "WhatsApp reactions are sent through the Cloud API. Unsend is not offered because the Cloud API has no endpoint for deleting a sent message.",
       hasAnyConfigured(config, ["appSecret", "appSecretEnv"]) &&
       hasAnyConfigured(config, ["webhookVerifyToken", "webhookVerifyTokenEnv", "verifyToken", "verifyTokenEnv"])
         ? "WhatsApp inbound routing is enabled through the signed Cloud API webhook path when both the app secret and webhook verify token are configured."
@@ -617,6 +635,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     ],
   },
   "nextcloud-talk": {
+    platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS["nextcloud-talk"],
     supportedActions: ["channel.send", "channel.reply", "channel.react"],
     inboundModes: ["webhook"],
     threadCapabilities: {
@@ -640,7 +659,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     },
     supportNotes: [
       "Nextcloud Talk bot connections support inbound webhooks, outbound replies, and bot reactions through the documented bot API.",
-      "Attachments and unsend remain unsupported in this adapter.",
+      "Attachments are unsupported in this adapter, and Nextcloud Talk bots cannot delete messages through the bot API.",
     ],
     requiredAnyOf: [["baseUrl"], ["tokenEnv", "token", "botSecretEnv", "botSecret", "secretEnv", "secret"]],
   },
@@ -772,6 +791,9 @@ export function describeChannelCapabilities(channelKey: string, config: Record<s
     channelKey,
     supportedActions,
     supportedDeliveryActions: [...supportedActions],
+    platformUnsupportedActions: {
+      ...(rule.resolvePlatformUnsupportedActions?.(config) ?? rule.platformUnsupportedActions ?? {}),
+    },
     supportedAttachmentSources,
     inboundModes,
     threadCapabilities,

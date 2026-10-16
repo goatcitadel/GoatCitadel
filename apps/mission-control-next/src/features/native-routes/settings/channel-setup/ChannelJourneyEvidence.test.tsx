@@ -3,23 +3,77 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import { describe, expect, it } from "vitest";
 import type { ChannelCapabilities, ChannelRuntimePolicy, ChannelSetupJourney } from "@goatcitadel/contracts";
 import { ChannelJourneyEvidence } from "./ChannelJourneyEvidence";
-const policy: ChannelRuntimePolicy = { pairing: true, allowlist: true, mentionGating: false, typing: false, activity: false, presence: false };
+const policy: ChannelRuntimePolicy = {
+  pairing: true,
+  allowlist: true,
+  mentionGating: false,
+  typing: false,
+  activity: false,
+  presence: false,
+};
 const capabilities: ChannelCapabilities = {
-  channelKey: "telegram", supportedActions: ["channel.send", "channel.reply"], supportedDeliveryActions: ["channel.send", "channel.reply"], supportedAttachmentSources: [], inboundModes: ["webhook"],
-  threadCapabilities: { rooms: true, threads: true, replies: true, direct: true, groups: true }, runtimePolicy: policy,
+  platformUnsupportedActions: {},
+  channelKey: "telegram",
+  supportedActions: ["channel.send", "channel.reply"],
+  supportedDeliveryActions: ["channel.send", "channel.reply"],
+  supportedAttachmentSources: [],
+  inboundModes: ["webhook"],
+  threadCapabilities: { rooms: true, threads: true, replies: true, direct: true, groups: true },
+  runtimePolicy: policy,
   activityCapabilities: { supported: false, phases: [], nativeEffects: [], clearOnTerminal: true, activityEmoji: {} },
-  runtimePosture: { outboundTransport: "api", inboundTransport: "webhook", lifecycle: "stateless", inboundReadiness: "ready", operatorSummary: "A webhook bot with controlled sender access." },
-  chunkingMode: "fallback", supportsStreaming: false, supportNotes: [], setupDiagnostics: [], setupReady: true,
+  runtimePosture: {
+    outboundTransport: "api",
+    inboundTransport: "webhook",
+    lifecycle: "stateless",
+    inboundReadiness: "ready",
+    operatorSummary: "A webhook bot with controlled sender access.",
+  },
+  chunkingMode: "fallback",
+  supportsStreaming: false,
+  supportNotes: [],
+  setupDiagnostics: [],
+  setupReady: true,
 };
 const fixture: ChannelSetupJourney = {
-  connectionId: "telegram-fixture", connectionRevision: "current-revision", channelKey: "telegram", capabilities,
-  runtime: { connectionId: "telegram-fixture", channelKey: "telegram", enabled: true, ready: true, inboundModes: ["webhook"], runtimePolicy: policy },
-  setupEvidence: [], states: { configuration: "verified", activation: "verified", outbound: "verified", inbound: "verified", reply: "verified" },
-  latestInbound: { eventId: "new-event", status: "accepted", acceptedAt: "2026-10-09T03:00:00.000Z", sessionId: "session-new", turnId: "turn-new" },
-  latestReply: { deliveryId: "new-failed-delivery", status: "failed", updatedAt: "2026-10-09T03:01:00.000Z" }, latestReplyState: "failed",
+  connectionId: "telegram-fixture",
+  connectionRevision: "current-revision",
+  channelKey: "telegram",
+  capabilities,
+  runtime: {
+    connectionId: "telegram-fixture",
+    channelKey: "telegram",
+    enabled: true,
+    ready: true,
+    inboundModes: ["webhook"],
+    runtimePolicy: policy,
+  },
+  setupEvidence: [],
+  states: {
+    configuration: "verified",
+    activation: "verified",
+    outbound: "verified",
+    inbound: "verified",
+    reply: "verified",
+  },
+  latestInbound: {
+    eventId: "new-event",
+    status: "accepted",
+    acceptedAt: "2026-10-09T03:00:00.000Z",
+    sessionId: "session-new",
+    turnId: "turn-new",
+  },
+  latestReply: { deliveryId: "new-failed-delivery", status: "failed", updatedAt: "2026-10-09T03:01:00.000Z" },
+  latestReplyState: "failed",
 };
-const text = (node: ReactTestInstance): string => node.children.map((child) => typeof child === "string" ? child : text(child)).join(" ");
-async function render(journey: ChannelSetupJourney) { let renderer!: ReactTestRenderer; await act(async () => { renderer = create(<ChannelJourneyEvidence journey={journey} />); }); return renderer; }
+const text = (node: ReactTestInstance): string =>
+  node.children.map((child) => (typeof child === "string" ? child : text(child))).join(" ");
+async function render(journey: ChannelSetupJourney) {
+  let renderer!: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(<ChannelJourneyEvidence journey={journey} />);
+  });
+  return renderer;
+}
 describe("current reply delivery evidence", () => {
   it("retains verified first-reply proof while exposing a newer failed delivery and its timestamp", async () => {
     const latestWithPrivateBody = { ...fixture.latestReply!, body: "PRIVATE_REPLY_FIXTURE_DO_NOT_RENDER" };
@@ -34,7 +88,11 @@ describe("current reply delivery evidence", () => {
     renderer.unmount();
   });
   it("shows an uncertain latest result even when the first successful receipt remains verified", async () => {
-    const renderer = await render({ ...fixture, latestReplyState: "unknown", latestReply: { ...fixture.latestReply!, status: "unknown" } });
+    const renderer = await render({
+      ...fixture,
+      latestReplyState: "unknown",
+      latestReply: { ...fixture.latestReply!, status: "unknown" },
+    });
     const latest = renderer.root.findByProps({ "aria-label": "Latest reply delivery" });
     expect(text(latest)).toContain("Outcome uncertain");
     expect(text(latest)).not.toContain("Not observed");
@@ -47,11 +105,36 @@ describe("current reply delivery evidence", () => {
     renderer.unmount();
   });
   it("keeps outbound-only adapters' reply limitations explicit", async () => {
-    const renderer = await render({ ...fixture, states: { ...fixture.states, reply: "unsupported" }, latestReplyState: "unsupported", latestReply: undefined });
+    const renderer = await render({
+      ...fixture,
+      states: { ...fixture.states, reply: "unsupported" },
+      latestReplyState: "unsupported",
+      latestReply: undefined,
+    });
     const latest = renderer.root.findByProps({ "aria-label": "Latest reply delivery" });
     expect(text(latest)).toContain("Not supported by this adapter");
     expect(text(latest)).toContain("Timestamp unavailable");
     expect(text(latest)).not.toContain("Failed");
+    renderer.unmount();
+  });
+});
+describe("platform-unsupported actions", () => {
+  it("lists actions the platform does not offer, with the reason", async () => {
+    const renderer = await render({
+      ...fixture,
+      capabilities: {
+        ...capabilities,
+        platformUnsupportedActions: { "channel.typing": "Slack has no typing-indicator API for bots." },
+      },
+    });
+    const copy = text(renderer.root);
+    expect(copy).toContain("Not offered by the platform:");
+    expect(copy).toContain("typing (Slack has no typing-indicator API for bots.)");
+    renderer.unmount();
+  });
+  it("omits the line when the platform offers everything the adapter lists", async () => {
+    const renderer = await render(fixture);
+    expect(text(renderer.root)).not.toContain("Not offered by the platform");
     renderer.unmount();
   });
 });

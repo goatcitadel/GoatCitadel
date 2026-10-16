@@ -6,6 +6,7 @@ import {
   NTFY_OUTBOUND_MARKER_TAG,
   clampInt,
   coerceRetryAfterMs,
+  describeChannelPlatformUnsupported,
   sanitizeChannelOutboundMessage,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
@@ -536,7 +537,10 @@ async function commsReact(
     case "imessage":
       return imessageReact(connectionConfig, args, allowlist, target, grantAllowlist);
     default:
-      throw new Error(`${toolName} is not supported for ${channelKey}`);
+      throw new Error(
+        describeChannelPlatformUnsupported(channelKey, "channel.react") ??
+          `${toolName} is not supported for ${channelKey}`,
+      );
   }
 }
 
@@ -564,7 +568,10 @@ async function commsUnsend(
     case "imessage":
       return imessageUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
     default:
-      throw new Error(`${toolName} is not supported for ${channelKey}`);
+      throw new Error(
+        describeChannelPlatformUnsupported(channelKey, "channel.unsend") ??
+          `${toolName} is not supported for ${channelKey}`,
+      );
   }
 }
 

@@ -146,6 +146,52 @@ export type ChannelActionName =
 export type ChannelAttachmentSource = "url" | "inline";
 
 /**
+ * Actions the platform itself cannot perform for a channel, with the
+ * operator-facing reason. This is a platform truth, distinct from an action
+ * the adapter merely has not wired or the connection has not configured.
+ * Shared by channel capability reporting and the outbound executor so both
+ * give the same reason.
+ */
+export const CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS: Readonly<
+  Record<string, Readonly<Partial<Record<ChannelActionName, string>>>>
+> = {
+  whatsapp: {
+    "channel.unsend": "WhatsApp Cloud API has no endpoint for deleting a sent message.",
+  },
+  slack: {
+    "channel.typing": "Slack has no typing-indicator API for bots (only legacy RTM, which bot tokens cannot use).",
+  },
+  "nextcloud-talk": {
+    "channel.unsend": "Nextcloud Talk bots cannot delete messages through the bot API.",
+  },
+  "google-chat": {
+    "channel.typing": "Google Chat has no typing-indicator API.",
+  },
+  ntfy: {
+    "channel.react": "ntfy topics are one-way notifications.",
+    "channel.unsend": "ntfy topics are one-way notifications.",
+    "channel.typing": "ntfy topics are one-way notifications.",
+  },
+  teams: {
+    "channel.react": "Teams incoming webhooks can only post new messages.",
+    "channel.unsend": "Teams incoming webhooks can only post new messages.",
+    "channel.typing": "Teams incoming webhooks can only post new messages.",
+  },
+};
+
+export const CHANNEL_PLATFORM_UNSUPPORTED_PREFIX = "Platform does not support this: ";
+
+/** Returns the prefixed operator reason when the platform cannot do this action, else undefined. */
+export function describeChannelPlatformUnsupported(
+  channelKey: string,
+  action: ChannelActionName,
+  resolved?: Partial<Record<ChannelActionName, string>>,
+): string | undefined {
+  const reason = (resolved ?? CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS[channelKey])?.[action];
+  return reason ? `${CHANNEL_PLATFORM_UNSUPPORTED_PREFIX}${reason}` : undefined;
+}
+
+/**
  * Tag the ntfy outbound publisher stamps on every message it sends. The ntfy
  * inbound stream adapter drops messages carrying this tag so outbound
  * notifications are never echoed back in as inbound turns.
@@ -197,6 +243,8 @@ export interface ChannelCapabilities {
   supportedActions: ChannelActionName[];
   // Legacy alias consumed by existing Mission Control helpers/tests.
   supportedDeliveryActions: ChannelActionName[];
+  /** Actions the platform itself cannot do, with the operator-facing reason. */
+  platformUnsupportedActions: Partial<Record<ChannelActionName, string>>;
   supportedAttachmentSources: ChannelAttachmentSource[];
   inboundModes: ChannelInboundMode[];
   threadCapabilities: ChannelThreadCapabilities;
