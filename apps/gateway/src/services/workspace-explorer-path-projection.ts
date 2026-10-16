@@ -39,6 +39,88 @@ export function projectWorkspaceExplorerPathValue<T>(value: T, rootPaths: readon
 export function projectWorkspaceExplorerText(value: string, rootPaths: readonly string[]): string {
   if (looksLikeFileUrl(value)) return projectFileUrl(value, rootPaths);
   if (isAbsolutePathForAnyHost(value)) return projectAbsolutePath(value, rootPaths);
+  return projectWorkspaceExplorerInlineText(value, rootPaths);
+}
+
+/**
+ * Upper bound on the raw text a stream projector holds back while it waits to
+ * see whether a trailing token grows into an absolute path.
+ */
+export const WORKSPACE_EXPLORER_STREAM_HOLD_BACK_LIMIT = 512;
+
+export interface WorkspaceExplorerTextStreamProjector {
+  /** Adds a raw fragment and returns the projected text that is now safe to emit (possibly ""). */
+  push(fragment: string): string;
+  /** Projects and returns whatever is still held back; call once at the end of the stream. */
+  flush(): string;
+}
+
+/**
+ * Projects streamed text whose fragments can split a host path anywhere, for
+ * example `F` followed by `:\private\...`. Every path form the projector
+ * recognises (drive, UNC, POSIX, file URL) ends at whitespace, so only the
+ * trailing whitespace-free run can still grow into a path. The one exception
+ * is a delegated root that itself contains whitespace: an unfinished match of
+ * it is held back too, so it is still recognised once complete. The held text
+ * is capped at the hold-back limit; the text before it is projected and
+ * released. A held run longer than the limit is released projected as-is.
+ */
+export function createWorkspaceExplorerTextStreamProjector(
+  rootPaths: readonly string[],
+): WorkspaceExplorerTextStreamProjector {
+  const spacedRootVariants = rootPaths.flatMap((rootPath) =>
+    [...rootPathVariants(rootPath)]
+      .map((variant) => variant.replace(/[\\/]+$/u, ""))
+      .filter((variant) => /\s/u.test(variant))
+      .map((variant) => ({ variant, caseInsensitive: path.win32.isAbsolute(rootPath) })),
+  );
+  let held = "";
+  return {
+    push(fragment: string): string {
+      held += fragment;
+      const tailStart = heldTailStart(held, spacedRootVariants);
+      const releaseUpTo = held.length - tailStart > WORKSPACE_EXPLORER_STREAM_HOLD_BACK_LIMIT ? held.length : tailStart;
+      const ready = held.slice(0, releaseUpTo);
+      held = held.slice(releaseUpTo);
+      return ready ? projectWorkspaceExplorerInlineText(ready, rootPaths) : "";
+    },
+    flush(): string {
+      const rest = held;
+      held = "";
+      return rest ? projectWorkspaceExplorerInlineText(rest, rootPaths) : "";
+    },
+  };
+}
+
+function heldTailStart(
+  value: string,
+  spacedRootVariants: ReadonlyArray<{ variant: string; caseInsensitive: boolean }>,
+): number {
+  let start = value.length;
+  while (start > 0 && !/\s/u.test(value[start - 1]!)) start -= 1;
+  for (const { variant, caseInsensitive } of spacedRootVariants) {
+    const root = caseInsensitive ? variant.toLowerCase() : variant;
+    for (let index = Math.max(0, start - root.length); index < start; index += 1) {
+      const window = value.slice(index, index + root.length);
+      const candidate = caseInsensitive ? window.toLowerCase() : window;
+      // Either an unfinished root prefix that reaches the end of the text, or a
+      // complete root whose following path segment is still growing.
+      const unfinishedRoot = candidate.length < root.length && root.startsWith(candidate);
+      const growingRootPath = candidate === root && !/\s/u.test(value.slice(index + root.length));
+      if (unfinishedRoot || growingRootPath) {
+        start = index;
+        break;
+      }
+    }
+  }
+  return start;
+}
+
+/**
+ * Token-oriented projection without the whole-value shortcut, so running text
+ * that merely starts with a path keeps the words after it.
+ */
+function projectWorkspaceExplorerInlineText(value: string, rootPaths: readonly string[]): string {
   let projected = value;
   projected = projected.replace(FILE_URL_PATTERN, (candidate) => projectFileUrl(candidate, rootPaths));
   // Replace the exact frozen root before token-oriented matching. This keeps
@@ -100,10 +182,13 @@ function projectFileUrl(candidate: string, rootPaths: readonly string[]): string
   }
 }
 
+function rootPathVariants(rootPath: string): Set<string> {
+  return new Set([rootPath, rootPath.replaceAll("\\", "/"), rootPath.replaceAll("/", "\\")]);
+}
+
 function replaceExactRootPrefixes(value: string, rootPath: string): string {
-  const variants = new Set([rootPath, rootPath.replaceAll("\\", "/"), rootPath.replaceAll("/", "\\")]);
   let projected = value;
-  for (const variant of variants) {
+  for (const variant of rootPathVariants(rootPath)) {
     const escaped = escapeRegExp(variant.replace(/[\\/]+$/u, ""));
     if (!escaped) continue;
     projected = projected.replace(

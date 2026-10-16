@@ -7,6 +7,8 @@ import {
 import { createExecuteToolCallForTest, createMockStorage } from "./chat-turn-agent-runner-test-fixtures.js";
 import {
   READ_ONLY_EXPLORER_PERMISSION_PROFILE_ID,
+  WORKSPACE_EXPLORER_STREAM_HOLD_BACK_LIMIT,
+  createWorkspaceExplorerTextStreamProjector,
   projectWorkspaceExplorerPathValue,
 } from "./workspace-explorer-path-projection.js";
 
@@ -57,6 +59,42 @@ describe("workspace explorer host-path projection", () => {
       shortWindowsFileUrl: "src/owner.ts",
       uncFileUrl: "docs/owner.md",
     });
+  });
+
+  it("stream projector holds back paths split across fragments and loses no prose", () => {
+    const run = (fragments: string[], roots: string[]) => {
+      const projector = createWorkspaceExplorerTextStreamProjector(roots);
+      const released = fragments.map((fragment) => projector.push(fragment));
+      return { released, joined: released.join("") + projector.flush() };
+    };
+
+    const unc = run(["See \\", "\\fileserver\\private\\key", ".pem now."], ["F:\\code\\My Project"]);
+    expect(unc.joined).toBe("See [outside-workspace-path] now.");
+    expect(unc.released.join("")).not.toContain("fileserver");
+
+    const fileUrl = run(["Open fi", "le:///home/operator/notes.md please"], ["/srv/workspace"]);
+    expect(fileUrl.joined).toBe("Open [outside-workspace-path] please");
+
+    const spacedRoot = run(["Read F:\\code\\My", " Project\\src\\owner.ts then stop."], ["F:\\code\\My Project"]);
+    // Same output as projecting the unsplit prose in one piece.
+    expect(spacedRoot.joined).toBe(
+      projectWorkspaceExplorerPathValue("Read F:\\code\\My Project\\src\\owner.ts then stop.", [
+        "F:\\code\\My Project",
+      ]),
+    );
+    expect(spacedRoot.joined).toBe("Read src\\owner.ts then stop.");
+
+    const prose = run(["Plain ", "words stream ", "in order."], ["/srv/workspace"]);
+    expect(prose.released).toEqual(["Plain ", "words stream ", "in "]);
+    expect(prose.joined).toBe("Plain words stream in order.");
+  });
+
+  it("stream projector releases a held run once it exceeds the hold-back limit", () => {
+    const projector = createWorkspaceExplorerTextStreamProjector(["/srv/workspace"]);
+    const longToken = "x".repeat(WORKSPACE_EXPLORER_STREAM_HOLD_BACK_LIMIT + 1);
+    expect(projector.push("lead ")).toBe("lead ");
+    expect(projector.push(longToken)).toBe(longToken);
+    expect(projector.flush()).toBe("");
   });
 
   it("contains punctuation-separated POSIX host paths", () => {

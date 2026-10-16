@@ -223,6 +223,7 @@ import { repairToolCalls, type ToolCallRepairFeedback } from "./chat-agent-tool-
 import { MAX_INLINE_FILE_DOWNLOAD_BYTES } from "./files-route-service.js";
 import {
   READ_ONLY_EXPLORER_PERMISSION_PROFILE_ID,
+  createWorkspaceExplorerTextStreamProjector,
   projectWorkspaceExplorerPathValue,
 } from "./workspace-explorer-path-projection.js";
 import {
@@ -4359,6 +4360,12 @@ export class ChatTurnAgentRunner {
               let streamWasFirstProviderRequest = false;
               try {
                 const aggregate = createCompletionStreamAggregate();
+                // Explorer mode: a host path can be split across reasoning
+                // chunks, so hold back a bounded trailing token until it is
+                // complete instead of projecting each fragment on its own.
+                const explorerThinkingProjector = readOnlyExplorerScopeRoot
+                  ? createWorkspaceExplorerTextStreamProjector([readOnlyExplorerScopeRoot])
+                  : undefined;
                 await this.assertExternalDispatch(input);
                 completionRequest.timeoutMs = Math.min(
                   completionRequest.timeoutMs!,
@@ -4384,14 +4391,17 @@ export class ChatTurnAgentRunner {
                   // visible output and never reaches assistantContent.
                   if (thinkingStreamEnabled && streamed.reasoningDelta) {
                     streamedThinking = true;
-                    yield {
-                      type: "thinking_delta",
-                      sessionId: input.sessionId,
-                      turnId: input.turnId,
-                      delta: readOnlyExplorerScopeRoot
-                        ? projectWorkspaceExplorerPathValue(streamed.reasoningDelta, [readOnlyExplorerScopeRoot])
-                        : streamed.reasoningDelta,
-                    };
+                    const thinkingDelta = explorerThinkingProjector
+                      ? explorerThinkingProjector.push(streamed.reasoningDelta)
+                      : streamed.reasoningDelta;
+                    if (thinkingDelta) {
+                      yield {
+                        type: "thinking_delta",
+                        sessionId: input.sessionId,
+                        turnId: input.turnId,
+                        delta: thinkingDelta,
+                      };
+                    }
                   }
                   if (streamed.delta && !streamed.sawToolCall && !readOnlyExplorerScopeRoot) {
                     streamYieldedVisibleChunk = true;
@@ -4403,6 +4413,15 @@ export class ChatTurnAgentRunner {
                       delta: streamed.delta,
                     };
                   }
+                }
+                const heldThinking = explorerThinkingProjector?.flush();
+                if (heldThinking) {
+                  yield {
+                    type: "thinking_delta",
+                    sessionId: input.sessionId,
+                    turnId: input.turnId,
+                    delta: heldThinking,
+                  };
                 }
                 completion = buildCompletionFromAggregate(aggregate);
                 completedFirstProviderRequest = streamWasFirstProviderRequest;
