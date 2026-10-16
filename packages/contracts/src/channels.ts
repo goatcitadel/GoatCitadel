@@ -159,7 +159,8 @@ export const CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS: Readonly<
     "channel.unsend": "WhatsApp Cloud API has no endpoint for deleting a sent message.",
   },
   slack: {
-    "channel.typing": "Slack has no typing-indicator API for bots (only legacy RTM, which bot tokens cannot use).",
+    "channel.typing":
+      "Slack has no typing indicator for bot messages in channels (only assistant-thread status and the legacy RTM API).",
   },
   "nextcloud-talk": {
     "channel.unsend": "Nextcloud Talk bots cannot delete messages through the bot API.",
@@ -168,9 +169,8 @@ export const CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS: Readonly<
     "channel.typing": "Google Chat has no typing-indicator API.",
   },
   ntfy: {
-    "channel.react": "ntfy topics are one-way notifications.",
-    "channel.unsend": "ntfy topics are one-way notifications.",
-    "channel.typing": "ntfy topics are one-way notifications.",
+    "channel.react": "ntfy has no message reactions.",
+    "channel.typing": "ntfy has no typing indicator.",
   },
   teams: {
     "channel.react": "Teams incoming webhooks can only post new messages.",

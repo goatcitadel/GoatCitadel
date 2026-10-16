@@ -757,7 +757,7 @@ describe("platform-unsupported channel actions", () => {
   it("declares Slack typing as a platform limit and keeps Slack react/unsend", () => {
     const capabilities = describeChannelCapabilities("slack", { botTokenEnv: "SLACK_BOT_TOKEN" });
     expect(capabilities.supportedActions).not.toContain("channel.typing");
-    expect(capabilities.platformUnsupportedActions["channel.typing"]).toMatch(/no typing-indicator API/i);
+    expect(capabilities.platformUnsupportedActions["channel.typing"]).toMatch(/no typing indicator for bot messages/i);
     expect(capabilities.platformUnsupportedActions["channel.unsend"]).toBeUndefined();
   });
 
@@ -766,7 +766,7 @@ describe("platform-unsupported channel actions", () => {
       describeChannelCapabilities("nextcloud-talk", {}).platformUnsupportedActions["channel.unsend"],
     ).toBeDefined();
     const ntfy = describeChannelCapabilities("ntfy", {}).platformUnsupportedActions;
-    expect(Object.keys(ntfy).sort()).toEqual(["channel.react", "channel.typing", "channel.unsend"]);
+    expect(Object.keys(ntfy).sort()).toEqual(["channel.react", "channel.typing"]);
   });
 
   it("resolves Google Chat unsend by mode and never marks supported actions unsupported", () => {

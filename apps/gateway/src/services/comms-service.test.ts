@@ -661,7 +661,7 @@ describe("comms typing platform limits", () => {
     );
     const result = await commsTyping(host, { connectionId: "slack-1", target: "C1" } as never);
     expect(result.status).toBe("unsupported");
-    expect(result.reason).toMatch(/^Platform does not support this: Slack has no typing-indicator API/);
+    expect(result.reason).toMatch(/^Platform does not support this: Slack has no typing indicator for bot messages/);
   });
 
   it("keeps the generic text for actions that are merely not configured", async () => {

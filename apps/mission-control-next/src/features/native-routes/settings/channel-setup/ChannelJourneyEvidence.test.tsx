@@ -124,12 +124,12 @@ describe("platform-unsupported actions", () => {
       ...fixture,
       capabilities: {
         ...capabilities,
-        platformUnsupportedActions: { "channel.typing": "Slack has no typing-indicator API for bots." },
+        platformUnsupportedActions: { "channel.typing": "Slack has no typing indicator for bot messages in channels." },
       },
     });
     const copy = text(renderer.root);
     expect(copy).toContain("Not offered by the platform:");
-    expect(copy).toContain("typing (Slack has no typing-indicator API for bots.)");
+    expect(copy).toContain("typing (Slack has no typing indicator for bot messages in channels.)");
     renderer.unmount();
   });
   it("omits the line when the platform offers everything the adapter lists", async () => {
