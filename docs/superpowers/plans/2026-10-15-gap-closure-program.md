@@ -25,7 +25,7 @@
 - Any new Postgres table needs a convergence migration, tested on both lineages (fresh install and upgraded install). See the PG v2 dual-lineage trap.
 - Test SQLite through `TempSqliteFiles`.
 - Never run `architecture:baseline:update`. A new service file needs an entry in `scripts/verification/baselines/architecture-new-service-allowances.json`.
-- No personal paths in tracked files (`C:\Users\…`, `F:\code\`).
+- No personal paths in tracked files (local user-profile or personal source-drive paths; `scripts/verify-repo-hygiene.mjs` `PERSONAL_PATH_PATTERNS` lists them).
 - README edits must keep the ~17 verbatim phrases the governance gate checks.
 - Docs, UI copy and code must agree (AGENTS.md "Truth Beats Theater"). Any doc that names a gap is updated in the same PR that closes it: `README.md`, `docs/1_0_CONTRACT.md`, `docs/CANONICAL_RUNTIME_STATE_MODEL.md`.
 - New dependencies only where this plan names them.
