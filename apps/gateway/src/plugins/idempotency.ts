@@ -197,7 +197,7 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
    *
    * Client rule: "absent" is not proof that nothing ran (a delayed request can still arrive). Settle a lost response
    * by re-sending with the SAME key, which the claim makes safe whatever the answer; never mint a new key because of
-   * "absent". A pending claim with claimExpired is unknown, not failed. `route` must be the registered route pattern
+   * "absent". A pending claim with claimExpired, or an "unknown_after_send" claim, is unknown, not failed. `route` must be the registered route pattern
    * (for example /api/v1/secrets/providers/:providerId), never a concrete URL: anything else is refused, so a wrong
    * route can never read as "absent".
    */

@@ -37,7 +37,9 @@ test(
          VALUES ('POST', 'external_side_effect:legacy', 'legacy-pending', 'operator:upgrade', 'legacy-hash', 'pending',
            'legacy-token', '2026-10-16T00:00:01.000Z', '2026-10-16T00:00:00.000Z', '2026-10-16T00:00:00.000Z'),
            ('POST', 'external_side_effect:legacy', 'legacy-completed', 'operator:upgrade', 'legacy-hash', 'completed',
-           NULL, NULL, '2026-10-16T00:00:00.000Z', '2026-10-16T00:00:00.000Z')`,
+           NULL, NULL, '2026-10-16T00:00:00.000Z', '2026-10-16T00:00:00.000Z'),
+           ('POST', '/skill-learning/candidate-transition', 'legacy-internal', 'operator:upgrade', 'legacy-hash', 'pending',
+           'internal-token', '2026-10-16T00:00:01.000Z', '2026-10-16T00:00:00.000Z', '2026-10-16T00:00:00.000Z')`,
       );
 
       // The full registry (not a canonical prefix) runs the schema-shape gate.
@@ -80,6 +82,21 @@ test(
       assert.equal(later.outcome, "unknown_after_send");
       assert.equal(repo.get(identity)?.status, "unknown_after_send");
       assert.equal(repo.markCompleted({ ...identity, claimToken: "legacy-token" }), false);
+
+      // Internal owners never dispatch: they stay unfenced and keep stale takeover.
+      const internal = {
+        ...identity,
+        routePath: "/skill-learning/candidate-transition",
+        idempotencyKey: "legacy-internal",
+      };
+      assert.equal(repo.get(internal)?.dispatchedAt, undefined);
+      const takeover = repo.claim({
+        ...internal,
+        payloadHash: "legacy-hash",
+        leaseDurationMs: 1_000,
+        now: "2026-10-16T00:00:05.000Z",
+      });
+      assert.equal(takeover.outcome === "claimed" ? takeover.claimKind : takeover.outcome, "retry_after_stale_claim");
     } finally {
       db?.close();
       await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

@@ -2811,7 +2811,100 @@ describe("external-side-effect-runner-service", () => {
       }
     });
 
-    it("never takes over an opted-out claim whose holder sent before marking and then crashed", async () => {
+    async function crashAfterStrictBoundary(storage: AsyncStorage, provider: () => void) {
+      let sent!: () => void;
+      const providerSent = new Promise<void>((resolve) => {
+        sent = resolve;
+      });
+      void runIdempotentExternalSideEffect({
+        ...fenceJob(storage),
+        claimLeaseDurationMs: 1,
+        execute: async (claim) => {
+          await claim.markExternalCallStarted();
+          provider();
+          sent();
+          // Simulated crash after the boundary transaction committed.
+          return await new Promise<never>(() => undefined);
+        },
+      });
+      await providerSent;
+      // Let the 1 ms dispatch lease lapse on the database clock.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    it("converges a crashed strict holder's ledger to unknown_external_outcome on retry", async () => {
+      const storage = openFenceStorage();
+      try {
+        const identity = await readFenceIdentity();
+        const provider = vi.fn();
+        await crashAfterStrictBoundary(storage, provider);
+        const [crashedRun] = await storage.externalSideEffectRuns.listByConnection(fenceIdentityInput.connectionId);
+        expect(crashedRun).toMatchObject({ status: "external_call_started" });
+        expect((await storage.mutationIdempotency.get(identity))?.dispatchedAt).toBeDefined();
+
+        const retry = await runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          claimLeaseDurationMs: 1,
+          execute: async (claim) => {
+            await claim.markExternalCallStarted();
+            provider();
+            return { id: "sent-again" };
+          },
+        });
+
+        expect(retry).toMatchObject({
+          status: "blocked",
+          blockedReason: "external_side_effect_unknown_after_send",
+          claim: {
+            replayOutcome: "unknown_after_send",
+            resumeState: "manual_review_unknown_external_outcome",
+            sideEffectRunId: crashedRun!.runId,
+          },
+        });
+        expect(provider).toHaveBeenCalledTimes(1);
+        expect(await storage.externalSideEffectRuns.get(crashedRun!.runId)).toMatchObject({
+          status: "unknown_external_outcome",
+          resumeState: "manual_review_unknown_external_outcome",
+        });
+        expect(await storage.mutationIdempotency.get(identity)).toMatchObject({ status: "unknown_after_send" });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("keeps a provider-key redispatch blocked while the ledger records the boundary crossing", async () => {
+      const storage = openFenceStorage();
+      try {
+        const identity = await readFenceIdentity();
+        const provider = vi.fn();
+        await crashAfterStrictBoundary(storage, provider);
+        const pendingBefore = await storage.mutationIdempotency.get(identity);
+
+        const retry = await runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          claimLeaseDurationMs: 1,
+          providerIdempotencyKeyEnforced: true,
+          execute: async (claim) => {
+            await claim.markExternalCallStarted();
+            provider();
+            return { id: "redispatched" };
+          },
+        });
+
+        // The ledger may only cross its boundary from a pre-boundary state, so
+        // a recorded external_call_started run fails closed; the takeover rolls back.
+        expect(retry).toMatchObject({ status: "blocked", blockedReason: "external_side_effect_in_progress" });
+        expect(provider).toHaveBeenCalledTimes(1);
+        expect(await storage.mutationIdempotency.get(identity)).toMatchObject({
+          status: "pending",
+          claimToken: pendingBefore?.claimToken,
+        });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("blocks an unleased retry of an opted-out claim whose holder sent before marking and then crashed", async () => {
       const storage = openFenceStorage();
       try {
         const identity = await readFenceIdentity();

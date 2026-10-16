@@ -60,6 +60,8 @@ it.each([
   [{ status: "failed", claimExpired: false }, "failed_confirm_by_readback"],
   [{ status: "pending", claimExpired: false }, "in_progress"],
   [{ status: "pending", claimExpired: true }, "unknown"],
+  // An ambiguous settled attempt may have been applied: it locks, never "resend_same_key".
+  [{ status: "unknown_after_send", claimExpired: false }, "unknown"],
   [{ status: "absent" }, "resend_same_key"],
 ] as const)("classifies %o as %s", (attempt, verdict) => {
   expect(classifyMutationAttempt(attempt)).toBe(verdict);

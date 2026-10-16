@@ -265,11 +265,20 @@ describe("MutationIdempotencyRepository", () => {
       INSERT INTO mutation_idempotency
         (method, route_path, idempotency_key, actor_scope, payload_hash, status, claim_token, claim_expires_at,
          dispatched_at, created_at, updated_at)
-      VALUES ('POST', 'external_side_effect:legacy', @key, 'operator', 'legacy-hash', @status, @token, NULL,
+      VALUES ('POST', @routePath, @key, 'operator', 'legacy-hash', @status, @token, @expiresAt,
         NULL, '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:01.000Z')
     `);
-    insert.run({ key: "legacy-pending", status: "pending", token: "legacy-token" });
-    insert.run({ key: "legacy-completed", status: "completed", token: null });
+    const external = { routePath: "external_side_effect:legacy", expiresAt: null };
+    insert.run({ ...external, key: "legacy-pending", status: "pending", token: "legacy-token" });
+    insert.run({ ...external, key: "legacy-completed", status: "completed", token: null });
+    // Internal owners (here skill learning) never dispatch, so they stay unfenced.
+    insert.run({
+      routePath: "/skill-learning/candidate-transition",
+      key: "legacy-internal",
+      status: "pending",
+      token: "internal-token",
+      expiresAt: "2026-10-01T00:05:00.000Z",
+    });
     // Simulate an install whose ledger predates v265.
     before.prepare("DELETE FROM schema_migrations WHERE version >= 265").run();
     before.close();
@@ -294,6 +303,75 @@ describe("MutationIdempotencyRepository", () => {
     assert.equal(later.outcome, "unknown_after_send");
     assert.equal(repo.get(identity)?.status, "unknown_after_send");
     assert.equal(repo.markCompleted({ ...identity, claimToken: "legacy-token" }), false);
+
+    const internal = {
+      ...identity,
+      routePath: "/skill-learning/candidate-transition",
+      idempotencyKey: "legacy-internal",
+    };
+    assert.equal(repo.get(internal)?.dispatchedAt, undefined);
+    const takeover = repo.claim({
+      ...internal,
+      payloadHash: "legacy-hash",
+      leaseDurationMs: 1_000,
+      now: "2026-10-16T00:00:00.000Z",
+    });
+    assert.equal(takeover.outcome === "claimed" ? takeover.claimKind : takeover.outcome, "retry_after_stale_claim");
+  });
+
+  it("classifies the concurrent winner when the stale-sent settle CAS loses", () => {
+    const db = tempDbs.open({ dbPath: tempDbs.path("goatcitadel-mutation-idempotency-settle-race") });
+    let raced = false;
+    // A concurrent owner completes the row between the read and the settle CAS.
+    const racingDb: DatabaseClient = {
+      dialect: db.dialect,
+      prepare(sql) {
+        const statement = db.prepare(sql);
+        if (!sql.includes("SET status = 'unknown_after_send'") || !sql.includes("dispatched_at IS NOT NULL")) {
+          return statement;
+        }
+        return {
+          ...statement,
+          run: (params?: Record<string, unknown>) => {
+            raced = true;
+            db.prepare("UPDATE mutation_idempotency SET status = 'completed' WHERE idempotency_key = 'k-race'").run();
+            return statement.run(params);
+          },
+        } as DbStatement;
+      },
+      exec(sql) {
+        db.exec(sql);
+      },
+      close() {
+        db.close();
+      },
+      transaction(mode, callback) {
+        return db.transaction(mode, callback);
+      },
+    };
+    const repo = new MutationIdempotencyRepository(racingDb);
+    const identity = {
+      method: "POST",
+      routePath: "external_side_effect:race",
+      idempotencyKey: "k-race",
+      actorScope: "s",
+      payloadHash: "h",
+      leaseDurationMs: 1_000,
+    };
+    const first = repo.claim({ ...identity, now: "2026-10-16T00:00:00.000Z" });
+    assert.equal(first.outcome, "claimed");
+    const marked = repo.markDispatched({
+      ...identity,
+      claimToken: first.record.claimToken!,
+      now: "2026-10-16T00:00:00.100Z",
+    });
+    assert.equal(marked.outcome, "dispatched");
+
+    const later = repo.claim({ ...identity, now: "2026-10-16T01:00:00.000Z" });
+
+    assert.equal(raced, true);
+    assert.equal(later.outcome, "duplicate");
+    assert.equal(repo.get(identity)?.status, "completed");
   });
 
   it("refuses redispatch of a stale claim that crossed the dispatch boundary", () => {

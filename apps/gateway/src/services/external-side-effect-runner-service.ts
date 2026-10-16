@@ -261,11 +261,18 @@ export interface ExternalSideEffectClaimInput {
    * Opts out of the default takeover lease (an explicit `claimLeaseDurationMs`
    * still wins). Required for callers that cannot mark their dispatch boundary
    * before the provider call: their unmarked claim must never be taken over.
+   * The protection holds only while every claimer of the same mutation identity
+   * is also unleased: the repository treats an unleased pending claim as
+   * expired for any leased claimer.
    */
   disableDefaultClaimLease?: boolean;
   /**
    * True only when the provider itself deduplicates on this idempotency key,
    * which makes redispatching a stale claim that already crossed the boundary safe.
+   * Redispatch still requires a run ledger that never recorded the crossing (no
+   * row, `claimed_not_sent`, or `failed_before_boundary`): the ledger may only
+   * cross its boundary from a pre-boundary state, so a recorded
+   * `external_call_started` run stays blocked for operator reconciliation.
    */
   providerIdempotencyKeyEnforced?: boolean;
   /**
@@ -423,6 +430,7 @@ export async function claimIdempotentExternalSideEffect(
   ].join(":");
   const { checkedAt } = input;
   const mutationStore = input.mutationStore;
+  const sideEffectRunStore = input.sideEffectRunStore;
 
   if (!mutationStore) {
     return recordExternalSideEffectRun(input, {
@@ -440,7 +448,7 @@ export async function claimIdempotentExternalSideEffect(
 
   const claimAndRecord = async (): Promise<ExternalSideEffectClaimResult> => {
     const currentReplayRun = input.replayRunId
-      ? await input.sideEffectRunStore!.createOrGet(
+      ? await sideEffectRunStore!.createOrGet(
           {
             workspaceId: input.workspaceId,
             boundary: input.boundary,
@@ -497,6 +505,7 @@ export async function claimIdempotentExternalSideEffect(
       ...(claim.outcome === "claimed" && claim.record?.claimToken ? { claimToken: claim.record.claimToken } : {}),
     };
     if (currentReplayRun) {
+      await settleUnknownAfterSendRun(sideEffectRunStore!, currentReplayRun, claimed, checkedAt);
       return { ...claimed, sideEffectRunId: currentReplayRun.runId };
     }
     const recorded = await recordExternalSideEffectRun(input, claimed);
@@ -517,7 +526,7 @@ export async function claimIdempotentExternalSideEffect(
     }
     return recorded;
   };
-  if (!input.sideEffectRunStore || !input.runClaimTransaction) {
+  if (!sideEffectRunStore || !input.runClaimTransaction) {
     return claimAndRecord();
   }
   try {
@@ -1136,10 +1145,12 @@ async function recordExternalSideEffectRun(
   input: ExternalSideEffectClaimInput,
   claim: ExternalSideEffectClaimResult,
 ): Promise<ExternalSideEffectClaimResult> {
-  if (!input.sideEffectRunStore) {
+  const sideEffectRunStore = input.sideEffectRunStore;
+  if (!sideEffectRunStore) {
     return claim;
   }
-  const run = await input.sideEffectRunStore.createOrGet(
+  const { checkedAt } = input;
+  const createdOrExisting = await sideEffectRunStore.createOrGet(
     {
       workspaceId: input.workspaceId,
       boundary: input.boundary,
@@ -1158,8 +1169,9 @@ async function recordExternalSideEffectRun(
         normalizeExternalDestinationFingerprint(input.externalDestinationFingerprint),
       ),
     },
-    input.checkedAt,
+    checkedAt,
   );
+  const run = await settleUnknownAfterSendRun(sideEffectRunStore, createdOrExisting, claim, checkedAt);
   const persistedBlock = buildCurrentReplayRunBlock(run, {
     idempotencyKey: claim.idempotencyKey,
     payloadHash: claim.payloadHash,
@@ -1173,6 +1185,38 @@ async function recordExternalSideEffectRun(
     ...claim,
     sideEffectRunId: run.runId,
   };
+}
+
+/**
+ * A claim settled `unknown_after_send` means an interrupted holder crossed the
+ * dispatch boundary. Its run ledger can still read `external_call_started` (or
+ * `claimed_not_sent` for a best-effort mirror); converge it to
+ * `unknown_external_outcome` so the operator sees the truth instead of an
+ * in-progress run forever. The CAS on the observed status keeps any concurrent
+ * winner, and the returned row reflects it.
+ */
+async function settleUnknownAfterSendRun(
+  store: ExternalSideEffectRunStore,
+  run: ExternalSideEffectRunRecord,
+  claim: ExternalSideEffectClaimResult,
+  checkedAt: string,
+): Promise<ExternalSideEffectRunRecord> {
+  if (
+    claim.replayOutcome !== "unknown_after_send" ||
+    run.payloadHash !== claim.payloadHash ||
+    (run.status !== "external_call_started" && run.status !== "claimed_not_sent")
+  ) {
+    return run;
+  }
+  return await store.markFailureIfStatus(
+    run.runId,
+    run.status,
+    {
+      status: "unknown_external_outcome",
+      errorText: "An interrupted holder crossed the dispatch boundary; the external outcome is unknown.",
+    },
+    checkedAt,
+  );
 }
 
 function externalRunStatusForReplayOutcome(
@@ -1470,7 +1514,7 @@ function formatExternalSideEffectReplayBlockMessage(
     return `${label} idempotency key was reused with a different payload; the external request was not sent.`;
   }
   if (outcome === "unknown_after_send") {
-    return `${label} may already have been sent before an interrupted holder lost its claim; it will not be sent again automatically. Reconcile it with the provider.`;
+    return `${label}: the outcome of an earlier attempt is unknown (it may already have been sent); it will not be sent again automatically. Reconcile it with the provider.`;
   }
   return `${label} replay-safe idempotency is unavailable; the external request was not sent.`;
 }
