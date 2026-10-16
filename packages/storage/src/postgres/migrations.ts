@@ -15176,6 +15176,16 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     sql: buildPostgresV211SessionControlIndexAuthoritySql(),
     integritySha256: "3a9f7bc1529c9024d79436b5f9926231b3067d8ecb10814f5eb37d3adac4346e",
   },
+  {
+    // Nullable TEXT matches the v2 live render, which already carries the
+    // column on fresh installs; upgraded installs gain it here.
+    version: 212,
+    name: "mutation_idempotency_dispatch_fence",
+    sql: `
+      ALTER TABLE mutation_idempotency ADD COLUMN IF NOT EXISTS dispatched_at TEXT;
+    `,
+    integritySha256: "2f9121064d106b16dc4c73fbbbb499a0440b68006f2bf9369f6538017ba53cf7",
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

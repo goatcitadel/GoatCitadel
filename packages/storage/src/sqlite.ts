@@ -7442,6 +7442,13 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
       },
       // PostgreSQL v115 backing-index names need convergence; SQLite already owns the canonical names.
       { version: 264, name: "session_control_unique_index_authority", up: () => undefined },
+      // Nullable dispatch fence: a stale claim that crossed the dispatch boundary
+      // settles as unknown_after_send instead of being redispatched.
+      {
+        version: 265,
+        name: "mutation_idempotency_dispatch_fence",
+        up: (db) => addColumnIfMissingIfTableExists(db, "mutation_idempotency", "dispatched_at", "TEXT"),
+      },
     ],
   },
 ];

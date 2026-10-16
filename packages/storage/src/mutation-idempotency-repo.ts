@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 
-export type MutationIdempotencyStatus = "pending" | "completed" | "failed";
+export type MutationIdempotencyStatus = "pending" | "completed" | "failed" | "unknown_after_send";
 
 export interface MutationIdempotencyRecord {
   method: string;
@@ -12,6 +12,8 @@ export interface MutationIdempotencyRecord {
   status: MutationIdempotencyStatus;
   claimToken?: string;
   claimExpiresAt?: string;
+  /** Set once the claim holder crossed the external dispatch boundary. */
+  dispatchedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -25,6 +27,7 @@ interface MutationIdempotencyRow {
   status: MutationIdempotencyStatus;
   claim_token: string | null;
   claim_expires_at: string | null;
+  dispatched_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -33,11 +36,23 @@ export type MutationIdempotencyClaimResult =
   | {
       outcome: "claimed";
       record: MutationIdempotencyRecord;
-      claimKind: "new" | "retry_after_failure" | "retry_after_stale_claim";
+      claimKind: "new" | "retry_after_failure" | "retry_after_stale_claim" | "redispatch_after_stale_send";
     }
+  | { outcome: "unknown_after_send"; record: MutationIdempotencyRecord }
   | { outcome: "in_progress"; record: MutationIdempotencyRecord }
   | { outcome: "duplicate"; record: MutationIdempotencyRecord }
   | { outcome: "payload_mismatch"; record: MutationIdempotencyRecord };
+
+export type MutationIdempotencyDispatchResult =
+  | { outcome: "dispatched"; record: MutationIdempotencyRecord }
+  | { outcome: "claim_lost"; record?: MutationIdempotencyRecord };
+
+interface MutationIdempotencyIdentityInput {
+  method: string;
+  routePath: string;
+  idempotencyKey: string;
+  actorScope?: string;
+}
 
 export class MutationIdempotencyRepository {
   private readonly databaseNowStmt;
@@ -48,6 +63,8 @@ export class MutationIdempotencyRepository {
   private readonly discardOwnedPendingStmt;
   private readonly reviveFailedStmt;
   private readonly takeoverStaleStmt;
+  private readonly settleStaleDispatchedStmt;
+  private readonly markDispatchedStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.databaseNowStmt = db.prepare(
@@ -96,6 +113,8 @@ export class MutationIdempotencyRepository {
       )
       ON CONFLICT (method, route_path, idempotency_key, actor_scope) DO NOTHING
     `);
+    // Unowned (token-less) settlement never rewrites an ambiguous sent claim:
+    // turning it into `failed` would make the next claim redispatch it.
     this.updateStatusStmt = db.prepare(`
       UPDATE mutation_idempotency
       SET status = @status,
@@ -105,6 +124,7 @@ export class MutationIdempotencyRepository {
         AND route_path = @routePath
         AND idempotency_key = @idempotencyKey
         AND actor_scope = @actorScope
+        AND status <> 'unknown_after_send'
     `);
     this.updateOwnedStatusStmt = db.prepare(`
       UPDATE mutation_idempotency
@@ -134,6 +154,7 @@ export class MutationIdempotencyRepository {
           status = 'pending',
           claim_token = @claimToken,
           claim_expires_at = @claimExpiresAt,
+          dispatched_at = NULL,
           updated_at = @updatedAt
       WHERE method = @method
         AND route_path = @routePath
@@ -160,6 +181,39 @@ export class MutationIdempotencyRepository {
         AND (claim_expires_at IS NULL OR claim_expires_at <= @updatedAt)
         AND ${previousClaimTokenMatchesSql}
     `);
+    // A stale holder that already crossed the dispatch boundary may have
+    // produced the external side effect. Without a provider-enforced
+    // idempotency key nobody may redispatch, so the row settles terminally and
+    // the token rotates to a fresh value no caller holds.
+    this.settleStaleDispatchedStmt = db.prepare(`
+      UPDATE mutation_idempotency
+      SET status = 'unknown_after_send',
+          claim_token = @claimToken,
+          claim_expires_at = NULL,
+          updated_at = @updatedAt
+      WHERE method = @method
+        AND route_path = @routePath
+        AND idempotency_key = @idempotencyKey
+        AND actor_scope = @actorScope
+        AND payload_hash = @payloadHash
+        AND status = 'pending'
+        AND dispatched_at IS NOT NULL
+        AND (claim_expires_at IS NULL OR claim_expires_at <= @updatedAt)
+        AND ${previousClaimTokenMatchesSql}
+    `);
+    this.markDispatchedStmt = db.prepare(`
+      UPDATE mutation_idempotency
+      SET dispatched_at = @now,
+          claim_token = @nextClaimToken,
+          claim_expires_at = @claimExpiresAt,
+          updated_at = @now
+      WHERE method = @method
+        AND route_path = @routePath
+        AND idempotency_key = @idempotencyKey
+        AND actor_scope = @actorScope
+        AND status = 'pending'
+        AND claim_token = @claimToken
+    `);
   }
 
   public get(input: {
@@ -185,6 +239,11 @@ export class MutationIdempotencyRepository {
     payloadHash: string;
     now?: string;
     leaseDurationMs?: number;
+    /**
+     * True only when the downstream provider itself deduplicates on the
+     * idempotency key, which makes redispatching a sent stale claim safe.
+     */
+    providerIdempotencyKeyEnforced?: boolean;
   }): MutationIdempotencyClaimResult {
     const actorScope = input.actorScope?.trim() ?? "";
     const leaseDurationMs = normalizeLeaseDurationMs(input.leaseDurationMs);
@@ -230,6 +289,9 @@ export class MutationIdempotencyRepository {
       if (current.status === "completed") {
         return { outcome: "duplicate", record: current };
       }
+      if (current.status === "unknown_after_send") {
+        return { outcome: "unknown_after_send", record: current };
+      }
       if (current.status === "failed") {
         const claimToken = randomUUID();
         const revived = this.reviveFailedStmt.run({
@@ -255,6 +317,19 @@ export class MutationIdempotencyRepository {
         return { outcome: "in_progress", record: current };
       }
       const claimToken = randomUUID();
+      if (current.dispatchedAt && input.providerIdempotencyKeyEnforced !== true) {
+        const settled = this.settleStaleDispatchedStmt.run({
+          ...identity,
+          payloadHash: input.payloadHash,
+          claimToken,
+          previousClaimToken: current.claimToken ?? null,
+          updatedAt: now,
+        });
+        if (settled.changes > 0) {
+          return { outcome: "unknown_after_send" as const, record: this.get(identity)! };
+        }
+        return classifyConcurrentClaim(this.get(identity) ?? current, input.payloadHash);
+      }
       const reclaimed = this.takeoverStaleStmt.run({
         ...identity,
         payloadHash: input.payloadHash,
@@ -266,12 +341,65 @@ export class MutationIdempotencyRepository {
       if (reclaimed.changes > 0) {
         return {
           outcome: "claimed" as const,
-          claimKind: "retry_after_stale_claim" as const,
+          claimKind: current.dispatchedAt
+            ? ("redispatch_after_stale_send" as const)
+            : ("retry_after_stale_claim" as const),
           record: this.get(identity)!,
         };
       }
       return classifyConcurrentClaim(this.get(identity) ?? current, input.payloadHash);
     });
+  }
+
+  /**
+   * Records that the owning generation is about to cross the external dispatch
+   * boundary. The CAS rotates the claim token so any holder of the pre-dispatch
+   * token is fenced; the caller must use the returned record's token afterwards.
+   */
+  public markDispatched(
+    input: MutationIdempotencyIdentityInput & {
+      claimToken: string;
+      leaseDurationMs?: number;
+      now?: string;
+    },
+  ): MutationIdempotencyDispatchResult {
+    const identity = normalizeIdentity(input);
+    const claimToken = input.claimToken.trim();
+    const leaseDurationMs = normalizeLeaseDurationMs(input.leaseDurationMs);
+    return this.db.transaction("immediate", () => {
+      if (!claimToken) {
+        return { outcome: "claim_lost" as const, record: this.get(identity) };
+      }
+      const now = normalizeClaimTime(input.now ?? this.readDatabaseNow());
+      const claimExpiresAt =
+        leaseDurationMs === undefined ? null : new Date(Date.parse(now) + leaseDurationMs).toISOString();
+      const marked = this.markDispatchedStmt.run({
+        ...identity,
+        claimToken,
+        nextClaimToken: randomUUID(),
+        claimExpiresAt,
+        now,
+      });
+      const record = this.get(identity);
+      if (marked.changes > 0 && record) {
+        return { outcome: "dispatched" as const, record };
+      }
+      return { outcome: "claim_lost" as const, record };
+    });
+  }
+
+  /**
+   * Settles the caller's own dispatched generation when the external outcome
+   * cannot be proven either way. Terminal: later claims report
+   * `unknown_after_send` instead of redispatching.
+   */
+  public markUnknownAfterSend(
+    input: MutationIdempotencyIdentityInput & { claimToken: string; updatedAt?: string },
+  ): boolean {
+    if (!input.claimToken.trim()) {
+      return false;
+    }
+    return this.updateStatus(input, "unknown_after_send");
   }
 
   private readDatabaseNow(): string {
@@ -398,7 +526,19 @@ function classifyConcurrentClaim(
   if (record.payloadHash !== payloadHash) {
     return { outcome: "payload_mismatch", record };
   }
+  if (record.status === "unknown_after_send") {
+    return { outcome: "unknown_after_send", record };
+  }
   return { outcome: record.status === "completed" ? "duplicate" : "in_progress", record };
+}
+
+function normalizeIdentity(input: MutationIdempotencyIdentityInput): Required<MutationIdempotencyIdentityInput> {
+  return {
+    method: input.method,
+    routePath: input.routePath,
+    idempotencyKey: input.idempotencyKey,
+    actorScope: input.actorScope?.trim() ?? "",
+  };
 }
 
 function mapRow(row: MutationIdempotencyRow): MutationIdempotencyRecord {
@@ -411,6 +551,7 @@ function mapRow(row: MutationIdempotencyRow): MutationIdempotencyRecord {
     status: row.status,
     claimToken: row.claim_token ?? undefined,
     claimExpiresAt: row.claim_expires_at ?? undefined,
+    dispatchedAt: row.dispatched_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

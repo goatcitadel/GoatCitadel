@@ -244,4 +244,151 @@ describe("MutationIdempotencyRepository", () => {
     assert.equal(repo.claim({ ...input, now: "2026-07-11T12:00:00.000Z" }).outcome, "claimed");
     assert.equal(repo.claim({ ...input, now: "2027-07-11T12:00:00.000Z" }).outcome, "in_progress");
   });
+
+  it("migrates mutation_idempotency with a nullable dispatched_at fence column", () => {
+    const db = tempDbs.open({ dbPath: tempDbs.path("goatcitadel-mutation-idempotency") });
+    const columns = db.prepare("PRAGMA table_info(mutation_idempotency)").all() as Array<{
+      name: string;
+      type: string;
+      notnull: number;
+    }>;
+    const dispatchedAt = columns.find((column) => column.name === "dispatched_at");
+    assert.ok(dispatchedAt, "dispatched_at column must exist after migration");
+    assert.equal(dispatchedAt.type, "TEXT");
+    assert.equal(dispatchedAt.notnull, 0);
+  });
+
+  it("refuses redispatch of a stale claim that crossed the dispatch boundary", () => {
+    const repo = createRepo();
+    const identity = {
+      method: "POST",
+      routePath: "external_side_effect:x",
+      idempotencyKey: "k-sent",
+      actorScope: "s",
+      payloadHash: "h",
+      leaseDurationMs: 1_000,
+    };
+    const first = repo.claim({ ...identity, now: "2026-10-16T00:00:00.000Z" });
+    assert.equal(first.outcome, "claimed");
+    const marked = repo.markDispatched({
+      ...identity,
+      claimToken: first.record.claimToken!,
+      now: "2026-10-16T00:00:00.100Z",
+    });
+    assert.equal(marked.outcome, "dispatched");
+    assert.ok(marked.outcome === "dispatched" && marked.record.dispatchedAt);
+    assert.notEqual(marked.outcome === "dispatched" ? marked.record.claimToken : undefined, first.record.claimToken);
+    assert.equal(
+      marked.outcome === "dispatched" ? marked.record.claimExpiresAt : undefined,
+      "2026-10-16T00:00:01.100Z",
+    );
+    const takeover = repo.claim({ ...identity, now: "2026-10-16T00:00:05.000Z" });
+    assert.equal(takeover.outcome, "unknown_after_send");
+    assert.equal(repo.get(identity)?.status, "unknown_after_send");
+    assert.equal(repo.get(identity)?.claimExpiresAt, undefined);
+    assert.equal(repo.claim({ ...identity, now: "2026-10-16T00:10:00.000Z" }).outcome, "unknown_after_send");
+    const heldToken = marked.outcome === "dispatched" ? marked.record.claimToken! : "";
+    assert.equal(repo.markCompleted({ ...identity, claimToken: heldToken }), false);
+    assert.equal(repo.markFailed({ ...identity, claimToken: heldToken }), false);
+    assert.equal(repo.get(identity)?.status, "unknown_after_send");
+  });
+
+  it("takes over an unmarked stale claim and fences the old holder at the boundary", () => {
+    const repo = createRepo();
+    const identity = {
+      method: "POST",
+      routePath: "external_side_effect:x",
+      idempotencyKey: "k-unsent",
+      actorScope: "s",
+      payloadHash: "h",
+      leaseDurationMs: 1_000,
+    };
+    const first = repo.claim({ ...identity, now: "2026-10-16T00:00:00.000Z" });
+    const second = repo.claim({ ...identity, now: "2026-10-16T00:00:05.000Z" });
+    assert.equal(second.outcome, "claimed");
+    assert.equal(second.outcome === "claimed" ? second.claimKind : undefined, "retry_after_stale_claim");
+    assert.equal(
+      repo.markDispatched({ ...identity, claimToken: first.record.claimToken!, now: "2026-10-16T00:00:05.100Z" })
+        .outcome,
+      "claim_lost",
+    );
+    assert.equal(repo.markCompleted({ ...identity, claimToken: first.record.claimToken! }), false);
+    const marked = repo.markDispatched({
+      ...identity,
+      claimToken: second.record.claimToken!,
+      now: "2026-10-16T00:00:05.200Z",
+    });
+    assert.equal(marked.outcome, "dispatched");
+    assert.equal(
+      repo.markCompleted({
+        ...identity,
+        claimToken: marked.outcome === "dispatched" ? marked.record.claimToken : undefined,
+      }),
+      true,
+    );
+    assert.equal(repo.get(identity)?.status, "completed");
+  });
+
+  it("allows redispatch of a sent stale claim only with a provider-enforced idempotency key", () => {
+    const repo = createRepo();
+    const identity = {
+      method: "POST",
+      routePath: "external_side_effect:x",
+      idempotencyKey: "k-provider",
+      actorScope: "s",
+      payloadHash: "h",
+      leaseDurationMs: 1_000,
+    };
+    const first = repo.claim({ ...identity, now: "2026-10-16T00:00:00.000Z" });
+    repo.markDispatched({ ...identity, claimToken: first.record.claimToken!, now: "2026-10-16T00:00:00.100Z" });
+    const takeover = repo.claim({ ...identity, providerIdempotencyKeyEnforced: true, now: "2026-10-16T00:00:05.000Z" });
+    assert.equal(takeover.outcome, "claimed");
+    assert.equal(takeover.outcome === "claimed" ? takeover.claimKind : undefined, "redispatch_after_stale_send");
+    assert.equal(takeover.record.status, "pending");
+    assert.notEqual(takeover.record.claimToken, first.record.claimToken);
+  });
+
+  it("settles an owned dispatched claim as unknown_after_send", () => {
+    const repo = createRepo();
+    const identity = {
+      method: "POST",
+      routePath: "external_side_effect:x",
+      idempotencyKey: "k-ambiguous",
+      actorScope: "s",
+      payloadHash: "h",
+    };
+    const first = repo.claim(identity);
+    const marked = repo.markDispatched({ ...identity, claimToken: first.record.claimToken! });
+    assert.equal(marked.outcome, "dispatched");
+    assert.equal(marked.outcome === "dispatched" ? marked.record.claimExpiresAt : "unset", undefined);
+    const token = marked.outcome === "dispatched" ? marked.record.claimToken! : "";
+    assert.equal(repo.markUnknownAfterSend({ ...identity, claimToken: "wrong" }), false);
+    assert.equal(repo.markUnknownAfterSend({ ...identity, claimToken: "  " }), false);
+    assert.equal(repo.get(identity)?.status, "pending");
+    assert.equal(repo.markUnknownAfterSend({ ...identity, claimToken: token }), true);
+    assert.equal(repo.claim(identity).outcome, "unknown_after_send");
+    assert.equal(repo.claim({ ...identity, payloadHash: "other" }).outcome, "payload_mismatch");
+    assert.equal(repo.markFailed(identity), false);
+    assert.equal(repo.markCompleted(identity), false);
+    assert.equal(repo.get(identity)?.status, "unknown_after_send");
+  });
+
+  it("clears the dispatch fence when a failed claim is revived", () => {
+    const repo = createRepo();
+    const identity = {
+      method: "POST",
+      routePath: "external_side_effect:x",
+      idempotencyKey: "k-revive",
+      actorScope: "s",
+      payloadHash: "h",
+    };
+    const first = repo.claim({ ...identity, now: "2026-10-16T00:00:00.000Z" });
+    const marked = repo.markDispatched({ ...identity, claimToken: first.record.claimToken! });
+    const token = marked.outcome === "dispatched" ? marked.record.claimToken : undefined;
+    assert.equal(repo.markFailed({ ...identity, claimToken: token }), true);
+    const revived = repo.claim({ ...identity, now: "2026-10-16T00:00:01.000Z" });
+    assert.equal(revived.outcome, "claimed");
+    assert.equal(revived.outcome === "claimed" ? revived.claimKind : undefined, "retry_after_failure");
+    assert.equal(revived.record.dispatchedAt, undefined);
+  });
 });

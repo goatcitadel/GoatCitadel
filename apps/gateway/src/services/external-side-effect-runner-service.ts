@@ -450,17 +450,21 @@ export async function claimIdempotentExternalSideEffect(
         ? { leaseDurationMs: input.claimLeaseDurationMs }
         : { now: input.checkedAt }),
     });
+    // This path never marks a claim dispatched, so `unknown_after_send` cannot
+    // arise here yet; if it does, fail closed as a blocked in-progress replay.
+    const replayOutcome: IntegrationExternalWritebackReplayOutcome =
+      claim.outcome === "unknown_after_send" ? "in_progress" : claim.outcome;
     const claimed: ExternalSideEffectClaimResult = {
       replayPolicy: "idempotent_external",
-      replayOutcome: claim.outcome,
+      replayOutcome,
       replayAttempt:
         claim.outcome === "claimed"
-          ? claim.claimKind === "retry_after_stale_claim"
+          ? claim.claimKind === "retry_after_stale_claim" || claim.claimKind === "redispatch_after_stale_send"
             ? "retry_after_failure"
             : (claim.claimKind ?? "new")
           : "blocked",
       resumable: false,
-      resumeState: mapExternalSideEffectResumeState(claim.outcome),
+      resumeState: mapExternalSideEffectResumeState(replayOutcome),
       idempotencyKey,
       payloadHash,
       actorScope,

@@ -1013,11 +1013,15 @@ test("current registries and checked-in manifest cover every migration exactly",
 
   // These reviewed literals are intentionally independent from the generated
   // manifest so an accidental registry-plus-manifest edit cannot self-certify.
-  assert.equal(sqlite.migrations.length, 264);
-  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 264]);
-  assert.equal(postgres.migrations.length, 211);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 211]);
-  assert.equal(sqlite.migrations.at(-1)?.name, "session_control_unique_index_authority");
+  assert.equal(sqlite.migrations.length, 265);
+  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 265]);
+  assert.equal(postgres.migrations.length, 212);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 212]);
+  assert.equal(sqlite.migrations.at(-1)?.name, "mutation_idempotency_dispatch_fence");
+  assert.equal(
+    sqlite.migrations.find((record) => record.version === 264)?.name,
+    "session_control_unique_index_authority",
+  );
   assert.equal(
     sqlite.migrations.find((record) => record.version === 263)?.name,
     "approval_execution_linkage_index_sort_convergence",
@@ -1027,7 +1031,11 @@ test("current registries and checked-in manifest cover every migration exactly",
     sqlite.migrations.find((record) => record.version === 253)?.name,
     "purge_credential_route_idempotency_payload_hashes",
   );
-  assert.equal(postgres.migrations.at(-1)?.name, "session_control_unique_index_authority");
+  assert.equal(postgres.migrations.at(-1)?.name, "mutation_idempotency_dispatch_fence");
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 211)?.name,
+    "session_control_unique_index_authority",
+  );
   assert.equal(
     postgres.migrations.find((record) => record.version === 210)?.name,
     "approval_execution_linkage_index_sort_convergence",
@@ -1118,6 +1126,10 @@ test("current registries and checked-in manifest cover every migration exactly",
   assert.equal(
     postgres.migrations.find((record) => record.version === 211)?.runtimeIntegritySha256,
     "3a9f7bc1529c9024d79436b5f9926231b3067d8ecb10814f5eb37d3adac4346e",
+  );
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 212)?.runtimeIntegritySha256,
+    "2f9121064d106b16dc4c73fbbbb499a0440b68006f2bf9369f6538017ba53cf7",
   );
   assert.equal(postgres.migrations.find((record) => record.version === 63)?.name, "citadel_tables_backfill");
   assert.equal(
