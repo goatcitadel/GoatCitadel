@@ -1,6 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { CHANGE_PLAN_RUNTIME_FEATURE_FLAGS, ServiceUnavailableError } from "@goatcitadel/contracts";
+import {
+  CHANGE_PLAN_RUNTIME_FEATURE_FLAGS,
+  LlmProviderAuthModeSchema,
+  ServiceUnavailableError,
+} from "@goatcitadel/contracts";
 import type { EvolutionControlPlaneActor } from "../services/evolution-control-plane-service.js";
 import { sendRouteError } from "./_error-handler.js";
 
@@ -24,17 +28,7 @@ const providerProfileSchema = z
         "bedrock-messages",
       ])
       .optional(),
-    authMode: z
-      .enum([
-        "api-key",
-        "codex-oauth",
-        "claude-code-oauth",
-        "google-service-account",
-        "google-adc",
-        "aws-sigv4",
-        "aws-bedrock-api-key",
-      ])
-      .optional(),
+    authMode: LlmProviderAuthModeSchema.optional(),
     defaultModel: identifier.optional(),
     apiKeyEnv: z
       .string()
