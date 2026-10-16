@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
+import {
+  closeConversationList,
+  conversationRows,
+  openConversationList,
+  selectConversation,
+} from "./cockpit-conversation-list.mjs";
 
 export function assertProjectConversationScope({ ownerItems, visibleIds, workspaceId, projectId, folderId = "all" }) {
   assert.ok(
@@ -195,10 +201,12 @@ export async function runCockpitChatProjectProof({ context, browser, stack, cita
 
           stage = "folder selection and clearing";
           filters = await openFilters();
+          await openFolders(filters);
           await filters.getByRole("button", { name: new RegExp(`^Folder 1 ${token}`) }).click();
           await closeFilters();
           await assertVisible(baseline.items, projects[0].projectId, sessions[1].folderId);
           filters = await openFilters();
+          await openFolders(filters);
           await filters.getByRole("button", { name: "All conversations", exact: true }).click();
           await closeFilters();
           await assertVisible(baseline.items, projects[0].projectId);
@@ -223,15 +231,9 @@ export async function runCockpitChatProjectProof({ context, browser, stack, cita
             ),
             "Browser search did not request the exact workspace owner",
           );
-          if (variant === "mobile")
-            await page
-              .getByRole("combobox", { name: "Choose conversation", exact: true })
-              .selectOption(sessions[0].sessionId);
-          else
-            await page
-              .getByRole("navigation", { name: "Threads", exact: true })
-              .getByRole("button", { name: new RegExp(`^${common} Alpha`) })
-              .click();
+          // The desktop rail or, on a phone, the Conversations sheet (which closes on a choice).
+          await selectConversation(page, sessions[0].title);
+          await page.waitForURL((url) => url.searchParams.get("sessionId") === sessions[0].sessionId);
           assert.equal(new URL(page.url()).searchParams.get("sessionId"), sessions[0].sessionId);
           const routingInspections = assertProjectReadRequests(mutations, prefsBySession);
           for (const session of sessions) {
@@ -321,53 +323,37 @@ export async function runCockpitChatProjectProof({ context, browser, stack, cita
           await browserContext.close();
         }
 
+        // Filters live in the conversation list: the desktop rail, or the phone Conversations sheet.
         async function openFilters() {
-          if (variant !== "mobile") return page.getByRole("complementary", { name: "Conversations", exact: true });
-          await page
-            .getByRole("combobox", { name: "Choose conversation", exact: true })
-            .selectOption({ label: "Filter conversations…" });
-          const dialog = page.getByRole("dialog", { name: "Filter conversations", exact: true });
-          await dialog.waitFor();
-          return dialog;
+          return openConversationList(page);
         }
         async function closeFilters() {
-          if (variant === "mobile")
-            await page
-              .getByRole("dialog", { name: "Filter conversations", exact: true })
-              .getByRole("button", { name: "Done", exact: true })
-              .click();
+          await closeConversationList(page);
+        }
+        async function openFolders(filters) {
+          const folders = filters.locator("details").filter({ has: page.getByText("Folders", { exact: true }) });
+          if (!(await folders.evaluate((element) => element.open))) await folders.locator("summary").click();
         }
         async function assertVisible(ownerItems, projectId, folderId = "all") {
           let lastError;
-          for (let attempt = 0; attempt < 80; attempt += 1) {
-            let ids;
-            if (variant === "mobile")
-              ids = await page
-                .getByRole("combobox", { name: "Choose conversation", exact: true })
-                .locator("option")
-                .evaluateAll((options) =>
-                  options
-                    .map((option) => option.value)
-                    .filter((value) => value && !value.startsWith("history:") && !value.startsWith("view:")),
-                );
-            else
-              ids = (
-                await page
-                  .getByRole("navigation", { name: "Threads", exact: true })
-                  .getByRole("button")
-                  .allTextContents()
-              ).map(
+          const list = await openConversationList(page);
+          try {
+            for (let attempt = 0; attempt < 80; attempt += 1) {
+              const ids = (await conversationRows(list).allTextContents()).map(
                 (label) => sessions.find((item) => label.startsWith(item.title))?.sessionId ?? `unexpected:${label}`,
               );
-            try {
-              assertProjectConversationScope({ ownerItems, visibleIds: ids, workspaceId, projectId, folderId });
-              return;
-            } catch (error) {
-              lastError = error;
-              await page.waitForTimeout(250);
+              try {
+                assertProjectConversationScope({ ownerItems, visibleIds: ids, workspaceId, projectId, folderId });
+                return;
+              } catch (error) {
+                lastError = error;
+                await page.waitForTimeout(250);
+              }
             }
+            throw lastError;
+          } finally {
+            await closeConversationList(page);
           }
-          throw lastError;
         }
       },
     );

@@ -85,12 +85,15 @@ export function ChatComposerControls({
   reasoningEfforts,
   scopeKey = "",
   sourcesChip,
+  notices = true,
 }: {
   props: Controls;
   reasoningEfforts?: ChatCompletionReasoningEffort[];
   scopeKey?: string;
   /** The read-only sources chip; it sits beside Attach because both add material to the next message. */
   sourcesChip?: ReactNode;
+  /** False inside the phone options sheet, where the composer itself keeps the notices and the file input. */
+  notices?: boolean;
 }) {
   const disabled = props.historicalReadOnly || props.sending;
   const options = useDeferredOverlay({ scopeKey, load: loadModelPopover });
@@ -102,12 +105,6 @@ export function ChatComposerControls({
     props.selectedProviderId,
     props.selectedModel ?? undefined,
     Boolean(props.selectedModel),
-  );
-  const route = props.routePreflight;
-  const routeLabel = useModelLabel(
-    route?.effectiveProviderId,
-    route?.effectiveModel,
-    Boolean(props.routeBoundaryAckRequired && (route?.effectiveProviderId || route?.effectiveModel)),
   );
   const optionsSummary = [
     props.selectedModel ? modelLabel : "Choose model",
@@ -166,42 +163,7 @@ export function ChatComposerControls({
   );
   return (
     <>
-      <ChatAttachmentChips
-        attachments={props.pendingAttachments}
-        disabled={disabled}
-        onRemove={props.onRemoveAttachment}
-      />
-      {props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged ? (
-        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-status-waiting bg-sunken p-2 text-xs text-fg-secondary">
-          <span>
-            {"Route: "}
-            {route?.effectiveProviderId || route?.effectiveModel ? routeLabel : "model not recorded"}
-            {" · "}
-            {RUNTIME_CLASS_LABELS[route?.runtimeClass ?? "unknown"] ?? RUNTIME_CLASS_LABELS.unknown}
-            {". Fallback may send conversation content to another runtime, including outside this computer. "}
-            {props.routePreflight?.degradedReason ?? props.routePreflight?.normalizationReason}
-          </span>
-          <button
-            type="button"
-            onClick={props.onAcknowledgeRouteBoundary}
-            className="font-semibold text-accent underline-offset-2 hover:underline"
-          >
-            Acknowledge fallback
-          </button>
-        </div>
-      ) : null}
-      <input
-        ref={props.fileInputRef}
-        type="file"
-        multiple
-        className="sr-only"
-        tabIndex={-1}
-        aria-label="Choose files to attach"
-        onChange={(event) => {
-          props.onUploadFiles(event.target.files);
-          event.target.value = "";
-        }}
-      />
+      {notices ? <ChatComposerNotices props={props} /> : null}
       <div
         aria-label="Composer controls"
         className="cockpit-chat-controls flex min-w-0 flex-wrap items-center gap-2 pb-1 text-xs text-fg-muted"
@@ -321,6 +283,56 @@ export function ChatComposerControls({
         </Dialog>
         {modeOptions}
       </div>
+    </>
+  );
+}
+
+/** Attached files, the route fallback acknowledgement and the file input stay beside the draft at every width. */
+export function ChatComposerNotices({ props }: { props: Controls }) {
+  const route = props.routePreflight;
+  const routeLabel = useModelLabel(
+    route?.effectiveProviderId,
+    route?.effectiveModel,
+    Boolean(props.routeBoundaryAckRequired && (route?.effectiveProviderId || route?.effectiveModel)),
+  );
+  return (
+    <>
+      <ChatAttachmentChips
+        attachments={props.pendingAttachments}
+        disabled={props.historicalReadOnly || props.sending}
+        onRemove={props.onRemoveAttachment}
+      />
+      {props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged ? (
+        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-status-waiting bg-sunken p-2 text-xs text-fg-secondary">
+          <span>
+            {"Route: "}
+            {route?.effectiveProviderId || route?.effectiveModel ? routeLabel : "model not recorded"}
+            {" · "}
+            {RUNTIME_CLASS_LABELS[route?.runtimeClass ?? "unknown"] ?? RUNTIME_CLASS_LABELS.unknown}
+            {". Fallback may send conversation content to another runtime, including outside this computer. "}
+            {props.routePreflight?.degradedReason ?? props.routePreflight?.normalizationReason}
+          </span>
+          <button
+            type="button"
+            onClick={props.onAcknowledgeRouteBoundary}
+            className="font-semibold text-accent underline-offset-2 hover:underline"
+          >
+            Acknowledge fallback
+          </button>
+        </div>
+      ) : null}
+      <input
+        ref={props.fileInputRef}
+        type="file"
+        multiple
+        className="sr-only"
+        tabIndex={-1}
+        aria-label="Choose files to attach"
+        onChange={(event) => {
+          props.onUploadFiles(event.target.files);
+          event.target.value = "";
+        }}
+      />
     </>
   );
 }

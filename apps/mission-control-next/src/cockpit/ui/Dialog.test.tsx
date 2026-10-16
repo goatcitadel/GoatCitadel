@@ -32,6 +32,10 @@ describe("Dialog", () => {
     expect(dialog?.getAttribute("aria-modal")).toBe("true");
     expect(dialog?.textContent).toContain("Command palette");
     expect(dialog?.querySelector('button[aria-label="Close dialog"]')).not.toBeNull();
+    // SH-07: a side gutter and a short top offset on phones instead of edge-to-edge at top-24.
+    const classes = dialog?.className.split(/\s+/) ?? [];
+    expect(classes).toEqual(expect.arrayContaining(["inset-x-4", "mx-auto", "top-4", "sm:top-24", "max-w-xl"]));
+    expect(classes).not.toContain("w-full");
   });
 });
 

@@ -11,7 +11,11 @@ import {
   COMPOSER_SCHEMA,
   composerPackMarkdown,
 } from "./cockpit-chat-composer-evidence.mjs";
-import { observePendingWait, selectComposerConversation } from "./cockpit-chat-composer-proof.mjs";
+import {
+  currentConversationId,
+  observePendingWait,
+  selectComposerConversation,
+} from "./cockpit-chat-composer-proof.mjs";
 
 const digest = (content) => createHash("sha256").update(content).digest("hex");
 const expected = {
@@ -200,35 +204,60 @@ it("authors an importable typed schema before the test body, without capability 
   assert.ok(source.indexOf("```goatcitadel-variables") < source.indexOf("## TEST-91"));
   assert.doesNotMatch(source, /capabilityProfile|frozenSnapshot|callableCatalog/u);
 });
-it("switches the real conversation control without replacing the browser document", async () => {
-  const calls = [];
-  const page = {
-    goto() {
-      throw new Error("Document navigation bypasses the SPA scope persistence contract");
-    },
-    getByRole(role, options) {
-      calls.push([role, options]);
-      return {
-        selectOption: async (value) => calls.push(["select", value]),
-        getByRole(childRole, childOptions) {
-          calls.push([childRole, childOptions]);
-          return { click: async () => calls.push(["click"]) };
+it("switches the real conversation list without replacing the browser document", async () => {
+  for (const layout of ["desktop", "phone"]) {
+    const clicks = [];
+    let sheetOpen = false;
+    const locator = (path) => {
+      const self = {
+        or: () => locator([...path, "or"]),
+        filter: () => self,
+        first: () => self,
+        waitFor: async () => {},
+        isVisible: async () =>
+          path[0] === "complementary:Conversations"
+            ? layout === "desktop"
+            : path[0] === "dialog:Conversations"
+              ? layout === "phone" && sheetOpen
+              : layout === "phone" && !sheetOpen,
+        getByRole: (role, options) => locator([...path, [role, options]]),
+        click: async () => {
+          clicks.push(path);
+          if (path[0] === "button:Conversations") sheetOpen = true;
         },
       };
-    },
-  };
-  const session = { sessionId: "exact-session-id", title: "Composer [literal].title" };
-  await selectComposerConversation(page, "mobile", session);
-  assert.deepEqual(calls.splice(0), [
-    ["combobox", { name: "Choose conversation", exact: true }],
-    ["select", session.sessionId],
-  ]);
-  await selectComposerConversation(page, "desktop", session);
-  assert.deepEqual(calls[0], ["navigation", { name: "Conversations", exact: true }]);
-  assert.equal(calls[1][0], "button");
-  assert.ok(calls[1][1].name.test(`${session.title}active`));
-  assert.ok(!calls[1][1].name.test("Composer ltitle"));
-  assert.deepEqual(calls[2], ["click"]);
+      return self;
+    };
+    const page = {
+      goto() {
+        throw new Error("Document navigation bypasses the SPA scope persistence contract");
+      },
+      getByRole: (role, options) => {
+        assert.equal(options.exact, true);
+        return locator([`${role}:${options.name}`]);
+      },
+    };
+    const session = { sessionId: "exact-session-id", title: "Composer [literal].title" };
+    await selectComposerConversation(page, session);
+    if (layout === "phone") assert.deepEqual(clicks.shift(), ["button:Conversations"]);
+    assert.equal(clicks.length, 1);
+    const [root, [navRole, navOptions], [rowRole, rowOptions]] = clicks[0];
+    assert.equal(root, layout === "desktop" ? "complementary:Conversations" : "dialog:Conversations");
+    assert.deepEqual([navRole, navOptions], ["navigation", { name: "Conversations", exact: true }]);
+    assert.equal(rowRole, "button");
+    assert.ok(rowOptions.name.test(`${session.title}2m agoactive`));
+    assert.ok(!rowOptions.name.test("Composer ltitle"));
+  }
+});
+it("maps the list's current row back to exactly one fixture conversation", () => {
+  const sessions = [
+    { sessionId: "a", title: "Composer x1" },
+    { sessionId: "b", title: "Other composer x1" },
+  ];
+  assert.equal(currentConversationId("Composer x12m ago", sessions), "a");
+  assert.equal(currentConversationId("Other composer x1just now", sessions), "b");
+  assert.match(currentConversationId(null, sessions), /^unresolved:/u);
+  assert.match(currentConversationId("Unrelated", sessions), /^unresolved:/u);
 });
 it("requires controlled session selection and the exact canonical thread in the same browser document", () => {
   const value = {

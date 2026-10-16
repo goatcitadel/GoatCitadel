@@ -1288,11 +1288,19 @@ test("cockpit Chat persistence journey reloads, exports, archives, and restores 
     operations.slice(-6).map((operation) => operation.kind),
     ["click", "confirm", "api", "assert-text", "click", "assert-control"],
   );
-  const phone = cockpitChatPersistenceStep({ phone: true }).operations;
-  assert.deepEqual(phone.slice(13, 15), [
-    { kind: "select", label: "Choose conversation", value: "history:archived" },
+  assert.deepEqual(operations.slice(13, 15), [
+    { kind: "click", name: "Archived", exact: true },
     { kind: "select-action-session" },
   ]);
+  // Phones open the conversation list from the header's Conversations sheet first.
+  const phone = cockpitChatPersistenceStep({ phone: true }).operations;
+  assert.deepEqual(phone.slice(13, 16), [
+    { kind: "click", name: "Conversations", exact: true },
+    { kind: "click", name: "Archived", exact: true },
+    { kind: "select-action-session" },
+  ]);
+  assert.equal(phone.length, operations.length + 1);
+  assert.ok(!JSON.stringify(phone).includes("Choose conversation"));
 });
 
 test("cockpit inline decisions keep the exact durable approval and user-input readback", () => {

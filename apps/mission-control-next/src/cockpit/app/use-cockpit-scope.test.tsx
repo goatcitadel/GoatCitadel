@@ -232,9 +232,18 @@ describe("cockpit scope owner", () => {
     width = 390;
     await render();
     await vi.waitFor(() => expect(mocks.currentCitadel).toHaveBeenCalledTimes(1));
-    expect(document.querySelector('[aria-label="Current operating scope"]')?.textContent).not.toContain(
-      "Reading Citadel",
-    );
+    // SH-22: the scope line lives in the More sheet, not in the bottom chrome.
+    expect(document.querySelector('[aria-label="Current operating scope"]')).toBeNull();
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[aria-label="More areas and settings"]')!.click();
+    });
+    const scopeLine = await vi.waitFor(() => {
+      const line = document.querySelector('[aria-label="Current operating scope"]');
+      expect(line).not.toBeNull();
+      return line!;
+    });
+    expect(scopeLine.textContent).not.toContain("Reading Citadel");
+    expect(scopeLine.textContent).not.toContain("Loading workspace");
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["system", "directory", "active-citadel"] });
     });

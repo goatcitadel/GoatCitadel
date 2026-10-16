@@ -24,6 +24,13 @@ vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ rest: 
 let container: HTMLDivElement;
 let root: Root;
 let client: QueryClient;
+const viewport = (stacked: boolean) =>
+  vi.stubGlobal("matchMedia", (media: string) => ({
+    media,
+    matches: stacked && media.includes("width <"),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
 
 const task = (taskId: string, title: string) => ({
   taskId,
@@ -40,6 +47,7 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
+  viewport(false);
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.mocked(fetchDurableRunHistory).mockResolvedValue({ items: [] } as never);
   vi.mocked(fetchTasks).mockResolvedValue({
@@ -52,6 +60,7 @@ afterEach(() => {
   client.clear();
   container.remove();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 const targets = () => container.querySelector('[data-testid="bulk-targets"]')?.textContent;
@@ -110,5 +119,47 @@ describe("Work board selection", () => {
     await setValue("Record type", "all");
     expect(targets()).toBe("a,b,c");
     expect(container.textContent).not.toContain("hidden by the filter");
+  });
+});
+
+describe("Work board on narrow widths", () => {
+  it("shows one column at a time with a named, counted column picker", async () => {
+    viewport(true);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <WorkBoard />
+        </QueryClientProvider>,
+      ),
+    );
+    const picker = () => container.querySelector('[role="group"][aria-label="Board column"]')!;
+    await vi.waitFor(() => expect(picker()).not.toBeNull());
+    const choice = (title: string) =>
+      [...picker().querySelectorAll("button")].find((button) => button.textContent?.startsWith(title))!;
+    expect(choice("Needs attention").getAttribute("aria-pressed")).toBe("true");
+    expect(choice("Active").textContent).toBe("Active 3");
+    expect(container.querySelectorAll("section[aria-label]").length).toBe(1);
+    expect(container.querySelector('section[aria-label="Needs attention"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Outline release");
+
+    await act(async () => choice("Active").click());
+    expect(choice("Active").getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector('section[aria-label="Active"]')).not.toBeNull();
+    expect(container.querySelector('section[aria-label="Needs attention"]')).toBeNull();
+    expect(container.textContent).toContain("Outline release");
+  });
+
+  it("keeps all four columns and no picker at desktop width", async () => {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <WorkBoard />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.textContent).toContain("Outline release"));
+    expect(container.querySelector('[aria-label="Board column"]')).toBeNull();
+    for (const title of ["Active", "Needs attention", "Failed runs", "Done"])
+      expect(container.querySelector(`section[aria-label="${title}"]`)).not.toBeNull();
   });
 });

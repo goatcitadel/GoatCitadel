@@ -9,6 +9,7 @@ import {
   assertUploadedAttachment,
   composerPackMarkdown,
 } from "./cockpit-chat-composer-evidence.mjs";
+import { CLOSE_SHEET, readCurrentConversation, selectConversation } from "./cockpit-conversation-list.mjs";
 
 /** Real browser/owner proof. Requires two configured, reachable disposable provider models. */
 export async function runCockpitChatComposerProof({ context, browser, stack, citadelId, viewports, deps }) {
@@ -124,20 +125,17 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
                     `/api/v1/chat/sessions/${encodeURIComponent(target.sessionId)}/thread`,
               ),
             );
-            await selectComposerConversation(page, variant, target);
+            await selectComposerConversation(page, target);
             const response = await threadReady;
             assert.equal(response.ok(), true, "Conversation owner could not hydrate the selected scope");
             const thread = await response.json();
-            // Both responsive controls share this controlled selection; the URL
-            // must agree so reload/back can restore the same conversation.
-            await page.waitForFunction(
-              (id) => document.querySelector('select[aria-label="Choose conversation"]')?.value === id,
-              target.sessionId,
-            );
+            // The rail and the phone sheet share this controlled selection (the current row);
+            // the URL must agree so reload/back can restore the same conversation.
             await page.waitForURL((url) => url.searchParams.get("sessionId") === target.sessionId);
+            const currentLabel = await readCurrentConversation(page, { expectedTitle: target.title });
             assertComposerSelectedScope({
               requestedId: target.sessionId,
-              selectedId: await page.locator('select[aria-label="Choose conversation"]').inputValue(),
+              selectedId: currentConversationId(currentLabel, [session, other]),
               threadId: thread.sessionId,
               documentBefore: documentStarted,
               documentAfter: await page.evaluate(() => performance.timeOrigin),
@@ -179,11 +177,14 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
               ),
             );
             const picker = observePendingWait(page.waitForEvent("filechooser"));
+            await revealComposerOptions(page);
             await page.getByRole("button", { name: "Attach files", exact: true }).click();
             await (
               await picker
             ).setFiles({ name: item.fileName, mimeType: "text/plain", buffer: Buffer.from(item.content) });
             const response = await responsePromise;
+            // The phone options sheet is modal; the attachment chips sit beside the draft, outside it.
+            await closeComposerOptions(page);
             assert.equal(response.ok(), true, "Picker upload was rejected");
             const record = await response.json();
             assertUploadedAttachment(record, { ...item, sessionId, workspaceId, mimeType: "text/plain" });
@@ -285,6 +286,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           };
 
           stage = "typed variables invalid and apply";
+          await closeComposerOptions(page);
           await draft.fill(`$${packName}`);
           await chooseKeyboardSuggestion(page, draft, new RegExp(`^${escapeRegex(packName)}:`, "u"));
           const panel = page.getByRole("region", { name: "Run variables", exact: true });
@@ -371,6 +373,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           evidence.personalityReturn =
             "native installation-wide personality inspection and browser Back preserved conversation";
           stage = "variable close and navigation cleanup";
+          await closeComposerOptions(page);
           await draft.fill(`$${packName}`);
           await chooseKeyboardSuggestion(page, draft, new RegExp(`^${escapeRegex(packName)}:`, "u"));
           await panel.getByRole("button", { name: "Close", exact: true }).click();
@@ -432,9 +435,11 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           const browserScope = page
             ? {
                 url: page.url(),
-                selectedSessionId: await page
-                  .locator('select[aria-label="Choose conversation"]')
-                  .inputValue({ timeout: 1_000 })
+                // The rail's current row; a failure report does not open the phone sheet.
+                currentConversation: await page
+                  .locator('nav[aria-label="Conversations"] button[aria-current="page"]')
+                  .first()
+                  .textContent({ timeout: 1_000 })
                   .catch(() => null),
               }
             : undefined;
@@ -467,24 +472,32 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
   }
 }
 
-/** Phones fold the route and mode controls behind one Options toggle; wider layouts show them inline. */
+/**
+ * Phones fold attach, model, mode, media, sources and commands into the modal "Message options" sheet behind the
+ * Options button in the phone "Composer controls" row; wider layouts show them inline.
+ */
 export async function revealComposerOptions(page) {
   const toggle = page.locator('[aria-label="Composer controls"]').getByRole("button", { name: "Options", exact: true });
   if ((await toggle.count()) && (await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
 }
 
-/** Exercise the shipped conversation controls; page.goto skips React scope persistence. */
-export async function selectComposerConversation(page, variant, session) {
-  if (variant === "mobile") {
-    await page.getByRole("combobox", { name: "Choose conversation", exact: true }).selectOption(session.sessionId);
-  } else {
-    await page
-      .getByRole("navigation", { name: "Conversations", exact: true })
-      .getByRole("button", {
-        name: new RegExp(`^${escapeRegex(session.title)}`, "u"),
-      })
-      .click();
-  }
+/** The options sheet is modal, so phone steps close it before typing in or sending the draft. */
+export async function closeComposerOptions(page) {
+  const sheet = page.getByRole("dialog", { name: "Message options", exact: true });
+  if (!(await sheet.isVisible())) return;
+  await sheet.getByRole("button", { name: CLOSE_SHEET, exact: true }).click();
+  await sheet.waitFor({ state: "hidden" });
+}
+
+/** Exercise the shipped conversation list (desktop rail or phone sheet); page.goto skips React scope persistence. */
+export async function selectComposerConversation(page, session) {
+  await selectConversation(page, session.title);
+}
+
+/** Map the list's current row label back to the one fixture conversation whose title it starts with. */
+export function currentConversationId(label, sessions) {
+  const matches = sessions.filter((item) => typeof label === "string" && label.startsWith(item.title));
+  return matches.length === 1 ? matches[0].sessionId : `unresolved:${label ?? "no current row"}`;
 }
 
 async function chooseKeyboardSuggestion(page, draft, name) {

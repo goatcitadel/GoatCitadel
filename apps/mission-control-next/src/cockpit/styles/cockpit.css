@@ -236,6 +236,24 @@ html[data-shell="cockpit"] .cockpit-chat-host .mc-next-threaded-loading-copy > p
     flex: 0 0 auto;
     white-space: nowrap;
   }
+  /* OverflowTabs: fade whichever side has more tabs hidden, so a clipped row reads as scrollable. */
+  .cockpit-overflow-fade[data-overflow-end] {
+    mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+  }
+  .cockpit-overflow-fade[data-overflow-start] {
+    mask-image: linear-gradient(to right, transparent, #000 2rem);
+  }
+  .cockpit-overflow-fade[data-overflow-start][data-overflow-end] {
+    mask-image: linear-gradient(to right, transparent, #000 2rem, #000 calc(100% - 2rem), transparent);
+  }
+  /* Phone chrome at the bottom edge (tab bar, composer) clears the home indicator and rounded corners. */
+  .cockpit-safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .cockpit-safe-x {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
   /* The strip is a scroll container, which clips an outset focus ring below the tabs; draw it inside instead. */
   html[data-shell="cockpit"] .cockpit-area-tabs > :focus-visible {
     outline-offset: -2px !important;

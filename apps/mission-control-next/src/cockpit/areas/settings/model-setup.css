@@ -21,19 +21,6 @@
   color: var(--cockpit-text-muted);
   font-size: var(--text-xs);
 }
-.cockpit-model-setup .mc-next-directory-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-.cockpit-model-setup .mc-next-directory-stats > div {
-  display: grid;
-  gap: 0.15rem;
-  min-width: 8rem;
-  border: 1px solid var(--cockpit-border);
-  border-radius: 8px;
-  padding: 0.5rem 0.65rem;
-}
 .cockpit-model-setup .mc-next-directory-stats span {
   color: var(--cockpit-text-muted);
   font-size: var(--text-xs);
@@ -161,4 +148,33 @@
 .cockpit-model-setup ol:not(.mc-next-settings-wizard) {
   margin-left: 1.25rem;
   list-style: decimal;
+}
+/* VR-07: the guided card already sits inside the Models section, so it drops its own frame and inset and its content
+   (status rows included) starts on the section's content edge. Status rows share one width: one column on phones,
+   equal columns where they fit. */
+.cockpit-model-setup .mc-next-directory-card.mc-next-settings-panel {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.cockpit-model-setup .mc-next-directory-card.mc-next-settings-panel > .mc-next-directory-card-body {
+  padding: 0;
+}
+.cockpit-model-setup .mc-next-directory-card .mc-next-directory-card-head > .mc-next-directory-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 0.5rem;
+}
+.cockpit-model-setup .mc-next-directory-card .mc-next-directory-card-head > .mc-next-directory-stats > div {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+  border: 1px solid var(--cockpit-border);
+  border-radius: 8px;
+  background: transparent;
+  padding: 0.5rem 0.65rem;
 }

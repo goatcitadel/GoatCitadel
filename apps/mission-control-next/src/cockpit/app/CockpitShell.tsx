@@ -132,7 +132,7 @@ function CockpitShellContent({
         {gatewayReachability?.unavailable ? (
           <GatewayUnavailableBanner reachability={gatewayReachability} inChat={area === "chat"} />
         ) : null}
-        <div className="flex min-h-0 flex-1">
+        <div className="relative flex min-h-0 flex-1">
           {!firstRun && wide ? (
             <Sidebar
               onOpenPalette={() => {

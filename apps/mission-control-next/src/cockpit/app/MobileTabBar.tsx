@@ -1,6 +1,16 @@
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useRef, useState } from "react";
-import { Activity, Inbox, LayoutGrid, Library, MessageSquare, MoreHorizontal, Search, Settings } from "lucide-react";
+import {
+  Activity,
+  Inbox,
+  LayoutGrid,
+  Library,
+  MessageSquare,
+  MoreHorizontal,
+  Search,
+  Settings,
+  TriangleAlert,
+} from "lucide-react";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -14,6 +24,8 @@ import { Sheet } from "../ui/Sheet";
 import { useCockpitRoute } from "./use-cockpit-route";
 import { useCockpitPreload } from "./use-cockpit-preload";
 import { MobileStatusStrip } from "./MobileStatusStrip";
+import { statusNeedsAttention } from "./stream-status";
+import { useHealthDigestStatus } from "./use-health-digest";
 import { WorkRunningIndicator } from "./WorkRunningIndicator";
 import { useWorkspaceName } from "../data/use-workspace-name";
 import { useCitadelName } from "../data/use-citadel-name";
@@ -44,6 +56,12 @@ export function MobileTabBar({
   const workspaceName = useWorkspaceName(activeCitadelId, activeWorkspaceId, phone);
   const citadelName = useCitadelName(activeCitadelId, phone);
   const inbox = useOperatorInbox(workspaceId);
+  // SH-01: the phone has no status row; the More tab carries a shaped marker when status needs a look.
+  const health = useHealthDigestStatus(workspaceId, phone, true);
+  const attention = phone && statusNeedsAttention(health.tone, streamState);
+  const scopeLine = citadelName.startsWith("Reading Citadel")
+    ? "Loading workspace…"
+    : `${citadelName} / ${workspaceName ?? "Workspace"}`;
   const inboxCount = inboxCountLabel(
     !inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined,
   );
@@ -56,11 +74,8 @@ export function MobileTabBar({
   };
   return (
     <>
-      <div className="shrink-0 border-t border-line-subtle bg-raised sm:hidden">
-        <p aria-label="Current operating scope" className="truncate px-3 text-xs text-fg-secondary">
-          {citadelName} / {workspaceName ?? "Workspace name unavailable"}
-        </p>
-        {phone ? <MobileStatusStrip workspaceId={workspaceId} streamState={streamState} /> : null}
+      {/* SH-22: the bottom chrome is the tab bar only; scope and status live at the top of the More sheet. */}
+      <div className="cockpit-safe-bottom shrink-0 border-t border-line-subtle bg-raised sm:hidden">
         <nav aria-label="Areas on small screens" data-cockpit-tabbar="" className="flex">
           {TABS.map(({ area, label, path, Icon }) => (
             <button
@@ -95,18 +110,43 @@ export function MobileTabBar({
             aria-label="More areas and settings"
             aria-expanded={moreOpen}
             aria-current={current === "system" || current === "settings" ? "page" : undefined}
+            aria-describedby={attention ? "cockpit-more-attention" : undefined}
             onClick={() => {
               if (!isTransitionPending()) setMoreOpen(true);
             }}
             className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-xs text-fg-muted"
           >
-            <MoreHorizontal aria-hidden="true" className="size-5" />
+            <span className="relative">
+              <MoreHorizontal aria-hidden="true" className="size-5" />
+              {attention ? (
+                <TriangleAlert
+                  aria-hidden="true"
+                  data-status-attention=""
+                  className="absolute -right-3 -top-1 size-3.5 text-status-waiting"
+                />
+              ) : null}
+            </span>
             {/* Stays "More" so the visible text is part of the accessible name; aria-current marks System/Settings. */}
             More
           </button>
         </nav>
+        {attention ? (
+          <span id="cockpit-more-attention" className="sr-only">
+            System status needs attention
+          </span>
+        ) : null}
       </div>
       <Sheet open={moreOpen} onOpenChange={setMoreOpen} title="More">
+        {phone ? (
+          <MobileStatusStrip
+            workspaceId={workspaceId}
+            streamState={streamState}
+            onOpenHealth={() => openArea("/system/health")}
+          />
+        ) : null}
+        <p aria-label="Current operating scope" className="truncate px-3 text-sm text-fg-secondary">
+          {scopeLine}
+        </p>
         <TechnicalDetails label="Operating scope identifiers">
           <p>Citadel: {activeCitadelId}</p>
           <p>Workspace: {workspaceId}</p>
