@@ -8,7 +8,12 @@ import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "../s
 import { assertSafeRedirectTransition, isHttpRequestSafeToRetry } from "../sandbox/http-request-policy.js";
 import { sanitizeForAudit } from "../tool-security.js";
 import { assertNoRawRemoteApprovalBearer } from "../approval-action-secrets.js";
-import { createCommsProviderReceipt, markCommsProviderFailed, markCommsProviderSent } from "./channel-delivery-part-execution.js";
+import {
+  createCommsProviderReceipt,
+  markCommsProviderFailed,
+  markCommsProviderSent,
+} from "./channel-delivery-part-execution.js";
+import { smtpSend } from "./smtp-mail-executor.js";
 
 const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
@@ -405,6 +410,9 @@ async function executeCommsProviderTool(
 ): Promise<string> {
   if (toolName === "gmail.send") {
     return gmailSend(connectionConfig, args, allowlist, grantAllowlist);
+  }
+  if (toolName === "smtp.send") {
+    return smtpSend(connectionConfig, args, allowlist, grantAllowlist);
   }
   if (toolName === "calendar.create_event") {
     return calendarCreate(connectionConfig, args, allowlist, grantAllowlist);
@@ -4280,6 +4288,24 @@ async function calendarCreate(
   return safeJsonParse<{ id?: string }>(body, {}).id ?? `calendar-${Date.now()}`;
 }
 
+/**
+ * Marks the active comms mutation as started for a non-HTTP provider transport,
+ * awaiting the durable external-boundary hook first exactly as fetchAllowlisted does
+ * before a non-retryable request. A later failure is then classified as an unknown
+ * external outcome instead of a pre-boundary refusal.
+ */
+export async function markCommsMutationRequestStarted(): Promise<void> {
+  const boundaryState = commsRequestBoundaryContext.getStore();
+  if (!boundaryState) {
+    return;
+  }
+  if (!boundaryState.externalBoundaryReported) {
+    await boundaryState.beforeExternalSideEffect?.();
+    boundaryState.externalBoundaryReported = true;
+  }
+  boundaryState.mutationRequestStarted = true;
+}
+
 async function fetchAllowlisted(
   url: string,
   init: RequestInit,
@@ -4378,7 +4404,7 @@ function composeAbortSignal(timeoutMs: number, signal?: AbortSignal): AbortSigna
   return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }
 
-function secretFrom(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined {
+export function secretFrom(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined {
   const direct = asString(readOwn(config, directKey));
   if (direct) return direct;
   const envName = asString(readOwn(config, envKey));

@@ -17,6 +17,7 @@ import {
   commsGmailSend,
   commsReact,
   commsSend,
+  commsSmtpSend,
   commsUnsend,
   type CommsHost,
   type CommsPreApproval,
@@ -749,6 +750,81 @@ describe("comms calendar create external side-effect ledger", () => {
 
     expect(result).toEqual(refusal);
     expect([...sideEffectRunStore.runs.values()][0]).toMatchObject({ status: "failed_before_boundary" });
+  });
+});
+
+function createSmtpHost(): ReturnType<typeof createGmailHost> {
+  return createGmailHost({
+    invokeAndUnwrap: vi.fn(
+      async () =>
+        ({ status: "sent", deliveryStatus: "sent", providerMessageId: "<smtp-1@x>" }) as Record<string, unknown>,
+    ),
+    getIntegrationConnection: vi.fn(
+      async () =>
+        ({
+          connectionId: "conn-smtp",
+          catalogId: "automation.imap-smtp",
+          kind: "automation",
+          key: "imap-smtp",
+          label: "Work mail",
+          enabled: true,
+          status: "connected",
+          config: {},
+        }) as IntegrationConnection,
+    ),
+  });
+}
+
+describe("comms smtp send external side-effect ledger", () => {
+  it("smtp send with the same idempotency key twice invokes smtp.send once", async () => {
+    const { host, sideEffectRunStore } = createSmtpHost();
+    const input = gmailInput({ connectionId: "conn-smtp", cc: ["cc@example.test"], idempotencyKey: "smtp-key-1" });
+
+    const first = await commsSmtpSend(host, input);
+    const second = await commsSmtpSend(host, input);
+
+    expect(host.invokeAndUnwrap).toHaveBeenCalledTimes(1);
+    expect(host.invokeAndUnwrap.mock.calls[0]).toEqual([
+      expect.objectContaining({
+        toolName: "smtp.send",
+        args: {
+          connectionId: "conn-smtp",
+          to: ["dest@example.test"],
+          cc: ["cc@example.test"],
+          subject: "Status",
+          bodyText: "All good",
+        },
+      }),
+      "comms_smtp_send",
+    ]);
+    expect(first).toMatchObject({
+      status: "sent",
+      providerMessageId: "<smtp-1@x>",
+      replayOutcome: "claimed",
+      idempotencyKey: "smtp-key-1",
+    });
+    expect(second).toMatchObject({ status: "failed", deliveryStatus: "blocked", replayOutcome: "duplicate" });
+    const runs = [...sideEffectRunStore.runs.values()];
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      boundary: "comms_smtp_send",
+      actionId: "smtp.send",
+      catalogId: "automation.imap-smtp",
+      status: "completed",
+    });
+  });
+
+  it("carries pre-approval consent into smtp.send", async () => {
+    const { host } = createSmtpHost();
+    const preApproval = createRecordingPreApproval("ap-smtp");
+
+    await commsSmtpSend(host, gmailInput({ connectionId: "conn-smtp", idempotencyKey: "smtp-key-2" }), preApproval);
+
+    expect(host.invokeAndUnwrap.mock.calls[0]?.[0]).toMatchObject({
+      toolName: "smtp.send",
+      consentContext: { source: "ui", reason: "approval:ap-smtp" },
+    });
+    expect(preApproval.recordPendingAction.mock.calls[0]?.[0]).toMatchObject({ toolName: "smtp.send" });
   });
 });
 

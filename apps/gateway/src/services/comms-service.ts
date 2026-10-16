@@ -451,6 +451,7 @@ export async function commsGmailRead(
 
 /** Boundary keys for the comms external side-effect ledger (see comms-service test suite). */
 const COMMS_GMAIL_SEND_BOUNDARY = "comms_gmail_send";
+const COMMS_SMTP_SEND_BOUNDARY = "comms_smtp_send";
 const COMMS_CALENDAR_CREATE_BOUNDARY = "comms_calendar_create";
 
 /**
@@ -601,46 +602,82 @@ function isPreBoundaryToolInvokeRefusal(
   );
 }
 
+/** Provider-specific identity of one ledgered mail send; the payload and request shape are shared. */
+interface LedgeredMailSendProvider {
+  provider: string;
+  /** Ledger boundary key; also used as the invoke's realtime type. */
+  boundary: string;
+  fallbackCatalogId: string;
+  toolName: string;
+  label: string;
+}
+
+const GMAIL_SEND_PROVIDER: LedgeredMailSendProvider = {
+  provider: "gmail",
+  boundary: COMMS_GMAIL_SEND_BOUNDARY,
+  fallbackCatalogId: "automation.gmail",
+  toolName: "gmail.send",
+  label: "Gmail send (comms)",
+};
+
+const SMTP_SEND_PROVIDER: LedgeredMailSendProvider = {
+  provider: "smtp",
+  boundary: COMMS_SMTP_SEND_BOUNDARY,
+  fallbackCatalogId: "automation.smtp",
+  toolName: "smtp.send",
+  label: "SMTP send (comms)",
+};
+
+function runLedgeredMailSend(
+  host: CommsHost,
+  input: GmailSendInput,
+  mail: LedgeredMailSendProvider,
+  preApproval?: CommsPreApproval,
+): Promise<ToolInvokeResult | Record<string, unknown>> {
+  const message = {
+    connectionId: input.connectionId,
+    to: input.to,
+    cc: input.cc,
+    bcc: input.bcc,
+    subject: input.subject,
+    bodyText: input.bodyText,
+    bodyHtml: input.bodyHtml,
+  };
+  return runLedgeredCommsInvoke(host, {
+    boundary: mail.boundary,
+    fallbackCatalogId: mail.fallbackCatalogId,
+    connectionId: input.connectionId,
+    actionId: mail.toolName,
+    idempotencyKey: input.idempotencyKey,
+    payload: { provider: mail.provider, ...message },
+    label: mail.label,
+    request: {
+      toolName: mail.toolName,
+      args: message,
+      sessionId: input.sessionId ?? COMMS_SESSION,
+      agentId: input.agentId ?? KNOWLEDGE_AGENT,
+      taskId: input.taskId,
+    },
+    realtimeType: mail.boundary,
+    preApproval,
+  });
+}
+
 export async function commsGmailSend(
   host: CommsHost,
   input: GmailSendInput,
   preApproval?: CommsPreApproval,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return runLedgeredCommsInvoke(host, {
-    boundary: COMMS_GMAIL_SEND_BOUNDARY,
-    fallbackCatalogId: "automation.gmail",
-    connectionId: input.connectionId,
-    actionId: "gmail.send",
-    idempotencyKey: input.idempotencyKey,
-    payload: {
-      provider: "gmail",
-      connectionId: input.connectionId,
-      to: input.to,
-      cc: input.cc,
-      bcc: input.bcc,
-      subject: input.subject,
-      bodyText: input.bodyText,
-      bodyHtml: input.bodyHtml,
-    },
-    label: "Gmail send (comms)",
-    request: {
-      toolName: "gmail.send",
-      args: {
-        connectionId: input.connectionId,
-        to: input.to,
-        cc: input.cc,
-        bcc: input.bcc,
-        subject: input.subject,
-        bodyText: input.bodyText,
-        bodyHtml: input.bodyHtml,
-      },
-      sessionId: input.sessionId ?? COMMS_SESSION,
-      agentId: input.agentId ?? KNOWLEDGE_AGENT,
-      taskId: input.taskId,
-    },
-    realtimeType: "comms_gmail_send",
-    preApproval,
-  });
+  return runLedgeredMailSend(host, input, GMAIL_SEND_PROVIDER, preApproval);
+}
+
+/** Sends an approved draft from an IMAP/SMTP account through the governed `smtp.send` tool, on the same ledger as Gmail. */
+export async function commsSmtpSend(
+  host: CommsHost,
+  input: GmailSendInput,
+  preApproval?: CommsPreApproval,
+): Promise<ToolInvokeResult | Record<string, unknown>> {
+  return runLedgeredMailSend(host, input, SMTP_SEND_PROVIDER, preApproval);
 }
 
 export async function commsCalendarList(

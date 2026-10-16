@@ -385,9 +385,13 @@ export async function executeTool(
     }
     case "capabilities.search": {
       const { query, limit } = request.args;
-      if (Object.keys(request.args).some((key) => key !== "query" && key !== "limit") ||
-          typeof query !== "string" || !query.trim() || query.length > 512 ||
-          (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 5))) {
+      if (
+        Object.keys(request.args).some((key) => key !== "query" && key !== "limit") ||
+        typeof query !== "string" ||
+        !query.trim() ||
+        query.length > 512 ||
+        (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 5))
+      ) {
         throw new Error("Capability discovery requires a bounded query and optional limit from 1 to 5.");
       }
       if (!runtimeHooks.searchCapabilities) throw new Error("Capability discovery is unavailable in this runtime.");
@@ -395,9 +399,14 @@ export async function executeTool(
     }
     case "skills.read": {
       const { skillId, relativePath } = request.args;
-      if (Object.keys(request.args).some((key) => key !== "skillId" && key !== "relativePath") ||
-          typeof skillId !== "string" || !skillId.trim() || skillId.length > 256 ||
-          (relativePath !== undefined && (typeof relativePath !== "string" || !relativePath.trim() || relativePath.length > 512))) {
+      if (
+        Object.keys(request.args).some((key) => key !== "skillId" && key !== "relativePath") ||
+        typeof skillId !== "string" ||
+        !skillId.trim() ||
+        skillId.length > 256 ||
+        (relativePath !== undefined &&
+          (typeof relativePath !== "string" || !relativePath.trim() || relativePath.length > 512))
+      ) {
         throw new Error("Skill reading requires a bounded skill ID and optional relative path.");
       }
       if (!runtimeHooks.readSkill) throw new Error("Governed skill reading is unavailable in this runtime.");
@@ -473,6 +482,7 @@ export async function executeTool(
     case "webhook.send":
     case "gmail.read":
     case "gmail.send":
+    case "smtp.send":
     case "calendar.list":
     case "calendar.create_event":
     case "discord.send":
