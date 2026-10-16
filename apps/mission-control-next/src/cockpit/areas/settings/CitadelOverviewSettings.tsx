@@ -37,7 +37,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
     >
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="font-display text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-overview"]}</h3>
+          <h3 className="text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-overview"]}</h3>
           <p className="mt-1 text-sm text-fg-secondary">
             Review this operating space's Charter, Chambers and Gatehouse posture.
           </p>

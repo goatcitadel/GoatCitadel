@@ -129,7 +129,7 @@ export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: s
       className="mt-4 space-y-3 border-t border-line-subtle pt-4"
     >
       <header>
-        <h3 className="font-display text-md font-semibold text-fg">Design context</h3>
+        <h3 className="text-md font-semibold text-fg">Design context</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           PRODUCT.md and DESIGN.md apply to only this workspace, so a family workspace and a company workspace can keep
           different brands. The design skill reads them when it designs, and decks and documents use the brand block.

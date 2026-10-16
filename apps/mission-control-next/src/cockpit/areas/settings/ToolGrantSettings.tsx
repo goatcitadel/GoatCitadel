@@ -78,11 +78,11 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
     <section
       id="tool-grants"
       aria-label="Tool catalog and grants"
-      className="mt-4 space-y-4 rounded-lg border border-line bg-sunken p-4"
+      className="mt-4 space-y-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
     >
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="font-display text-base font-semibold text-fg">Tool catalog and grants</h3>
+          <h3 className="text-base font-semibold text-fg">Tool catalog and grants</h3>
           <p className="mt-1 text-sm text-fg-secondary">
             Installation-wide recorded grants, across scopes. Matching records do not establish effective permission for
             an action.

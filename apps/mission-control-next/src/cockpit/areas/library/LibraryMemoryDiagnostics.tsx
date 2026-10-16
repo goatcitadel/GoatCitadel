@@ -85,10 +85,10 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
   }
   return (
     <section
-      className="grid min-w-0 max-w-full grid-cols-1 gap-3 rounded-lg border border-line p-3 wrap-anywhere"
+      className="grid min-w-0 max-w-full grid-cols-1 gap-3 border-t border-line-subtle pt-4 wrap-anywhere"
       aria-label="Memory diagnostics and maintenance"
     >
-      <h2 className="font-display text-lg">Memory diagnostics and maintenance</h2>
+      <h2 className="text-base font-semibold">Memory diagnostics and maintenance</h2>
       <nav aria-label="Memory diagnostic views" className="flex flex-wrap gap-2">
         {(["quality", "graph", "maintenance"] as const).map((value) => (
           <Button key={value} variant={view === value ? "primary" : "secondary"} onClick={() => setView(value)}>

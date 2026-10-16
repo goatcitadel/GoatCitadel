@@ -1360,21 +1360,116 @@
   outline-offset: 1px;
 }
 
-.mc-next-shell .mc-next-prompt-directory { grid-template-columns: minmax(0, 1fr); }
-.mc-next-shell .mc-pp-command-deck { grid-template-columns: minmax(0, 1fr); }
-.mc-next-shell .mc-pp-hero { padding: 0; border: 0; background: none; box-shadow: none; }
-.mc-next-shell .mc-pp-hero-copy h1 { font-size: var(--text-2xl); margin: 0; }
-.mc-next-shell .mc-pp-hero-copy > .mc-pp-kicker { display: none; }
-.mc-next-shell .mc-pp-command-copy > span { display: none; }
-.mc-next-shell .mc-pp-merged-evidence { min-width: 0; }
+.mc-next-shell .mc-next-prompt-directory {
+  grid-template-columns: minmax(0, 1fr);
+}
+.mc-next-shell .mc-pp-command-deck {
+  grid-template-columns: minmax(0, 1fr);
+}
+.mc-next-shell .mc-pp-hero {
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+.mc-next-shell .mc-pp-hero-copy h1 {
+  font-size: var(--text-2xl);
+  margin: 0;
+}
+.mc-next-shell .mc-pp-hero-copy > .mc-pp-kicker {
+  display: none;
+}
+.mc-next-shell .mc-pp-command-copy > span {
+  display: none;
+}
+.mc-next-shell .mc-pp-merged-evidence {
+  min-width: 0;
+}
 
-.mc-next-shell .mc-prompt-packs { display: block; padding: 24px; overflow: auto; }
-.mc-next-shell .mc-prompt-packs > * { margin-bottom: 16px; }
-.mc-next-shell .mc-pp-hero { min-height: max-content; overflow: visible; }
-.mc-next-shell .mc-pp-panel-collapsible { padding: 0; border: 0; background: transparent; box-shadow: none; }
-.mc-next-shell .mc-pp-panel-collapsible > summary { min-height: 44px; padding: 8px 0; }
-.mc-next-shell .mc-pp-panel-collapsible > summary h4 { margin: 0; font-size: var(--text-sm); }
-.mc-next-shell .mc-pp-panel-collapsible:not([open]) > summary p { display: none; }
-.mc-next-shell .mc-pp-test-row { border: 0; border-bottom: 1px solid var(--border-subtle); border-radius: 0; box-shadow: none; }
-.mc-next-shell .mc-pp-tests-column { background: none; border: 0; padding: 0; }
-@media (max-width: 639px) { .mc-next-shell .mc-prompt-packs { padding: 16px; } }
+.mc-next-shell .mc-prompt-packs {
+  display: block;
+  padding: 24px;
+  overflow: auto;
+}
+.mc-next-shell .mc-prompt-packs > * {
+  margin-bottom: 16px;
+}
+.mc-next-shell .mc-pp-hero {
+  min-height: max-content;
+  overflow: visible;
+}
+.mc-next-shell .mc-pp-panel-collapsible {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.mc-next-shell .mc-pp-panel-collapsible > summary {
+  min-height: 44px;
+  padding: 8px 0;
+}
+.mc-next-shell .mc-pp-panel-collapsible > summary h4 {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+.mc-next-shell .mc-pp-panel-collapsible:not([open]) > summary p {
+  display: none;
+}
+.mc-next-shell .mc-pp-test-row {
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+  box-shadow: none;
+}
+.mc-next-shell .mc-pp-tests-column {
+  background: none;
+  border: 0;
+  padding: 0;
+}
+@media (max-width: 639px) {
+  .mc-next-shell .mc-prompt-packs {
+    padding: 16px;
+  }
+}
+
+/* Embedded in a host that owns the page h1 (Cockpit): a sentence, then the numbers as an inline definition list. */
+.mc-pp-overview {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.mc-pp-overview-lede {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.mc-pp-overview-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 2rem;
+  margin: 0;
+}
+
+.mc-pp-overview-list > div {
+  min-width: 0;
+}
+
+.mc-pp-overview-list dt {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.mc-pp-overview-list dd {
+  margin: 0;
+}
+
+.mc-pp-overview-value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.mc-pp-overview-hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}

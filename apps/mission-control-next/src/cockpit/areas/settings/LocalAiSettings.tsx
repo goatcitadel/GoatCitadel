@@ -26,10 +26,10 @@ export function LocalAiSettings() {
     <section
       id="local-ai"
       aria-label="Local AI readiness"
-      className="mt-4 space-y-4 rounded-lg border border-line bg-sunken p-4"
+      className="mt-4 space-y-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
     >
       <header>
-        <h3 className="font-display text-base font-semibold text-fg">Local AI readiness</h3>
+        <h3 className="text-base font-semibold text-fg">Local AI readiness</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Inspect this installation's hardware and model fit. Detection and recommendations are advisory; they do not
           establish working inference.

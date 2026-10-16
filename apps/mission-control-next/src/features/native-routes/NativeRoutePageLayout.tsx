@@ -5,12 +5,17 @@ import "./calm-surfaces.css";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { recordRouteDiagnostic } from "./route-diagnostics";
+import { useEmbeddedPageHeader } from "./embedded-page-header";
 import { EmptyState, ErrorState, NativeButton, type AreaSlug } from "./primitives";
 import {
   normalizeNativeRouteError,
   type NativeRouteError,
   type NativeRouteErrorContext,
 } from "./shared/native-route-errors";
+
+function hasReleaseScopeBadge(status?: ReleaseSurfaceStatus): boolean {
+  return status === "experimental" || status === "needs_release_polish";
+}
 
 /**
  * F-M11: on-surface "Experimental" badge for routes scoped `experimental` in
@@ -19,7 +24,7 @@ import {
  * as release-complete once you were on it.
  */
 export function ReleaseScopeBadge({ status }: { status?: ReleaseSurfaceStatus }) {
-  if (status !== "experimental" && status !== "needs_release_polish") {
+  if (!hasReleaseScopeBadge(status)) {
     return null;
   }
   const label = status === "experimental" ? "Experimental" : "Needs release polish";
@@ -88,6 +93,8 @@ export function NativePageFrame({
   className?: string;
 }) {
   const pageRef = useRef<HTMLElement | null>(null);
+  // Inside a host that owns the page h1 (Cockpit), the frame keeps everything except its own title and icon.
+  const embedded = useEmbeddedPageHeader();
 
   useEffect(() => {
     recordRouteDiagnostic({
@@ -136,19 +143,31 @@ export function NativePageFrame({
   const errorPresentation = error ? normalizeNativeRouteError(error, { resourceLabel: title, ...errorContext }) : null;
 
   return (
-    <section ref={pageRef} className={["mc-next-directory-page", className ?? ""].filter(Boolean).join(" ")}>
+    <section
+      ref={pageRef}
+      className={["mc-next-directory-page", className ?? ""].filter(Boolean).join(" ")}
+      data-embedded-header={embedded ? "true" : undefined}
+    >
       <header className="mc-next-directory-header" data-native-kicker={kicker} data-area={area}>
-        {Icon ? (
+        {Icon && !embedded ? (
           <div className="mc-next-directory-icon">
             <Icon size={20} />
           </div>
         ) : null}
         <div className="mc-next-directory-copy">
           <p className="mc-next-visually-hidden">{kicker}</p>
-          <div className="mc-next-directory-title-row">
-            <h1>{title}</h1>
-            <ReleaseScopeBadge status={releaseStatus} />
-          </div>
+          {embedded ? (
+            hasReleaseScopeBadge(releaseStatus) ? (
+              <div className="mc-next-directory-title-row">
+                <ReleaseScopeBadge status={releaseStatus} />
+              </div>
+            ) : null
+          ) : (
+            <div className="mc-next-directory-title-row">
+              <h1>{title}</h1>
+              <ReleaseScopeBadge status={releaseStatus} />
+            </div>
+          )}
           {description ? <span className="mc-next-directory-description">{description}</span> : null}
           {technicalMetrics?.length ? (
             <dl className="mc-next-page-technical mc-next-technical-detail">
@@ -379,7 +398,12 @@ export function NativeDisclosureCard({
   const [isOpen, setIsOpen] = useState(() => defaultOpen || globalThis.location?.hash === `#${id}`);
   const [hasOpened, setHasOpened] = useState(isOpen);
   useEffect(() => {
-    const openTarget = () => { if (globalThis.location?.hash === `#${id}`) { setIsOpen(true); setHasOpened(true); } };
+    const openTarget = () => {
+      if (globalThis.location?.hash === `#${id}`) {
+        setIsOpen(true);
+        setHasOpened(true);
+      }
+    };
     globalThis.window?.addEventListener?.("hashchange", openTarget);
     return () => globalThis.window?.removeEventListener?.("hashchange", openTarget);
   }, [id]);

@@ -48,7 +48,8 @@ export function InboxInspectorBody({
         {item.expiresAt ? <p className="mt-2 text-fg-muted">{approvalExpiryLabel(item.expiresAt)}</p> : null}
       </div>
       {explicitDetails && inboxUpdateVersion(item, workspaceId) ? <RecordViewedUpdate onOpened={onOpened} /> : null}
-      {item.riskLevel ? (
+      {/* An approval's detail shows the risk from its current record; show the projected risk only once (IN-15). */}
+      {item.riskLevel && item.kind !== "approval" ? (
         <div className="w-fit">
           <StatusBadge status={presentRiskLevel(item.riskLevel)} />
         </div>

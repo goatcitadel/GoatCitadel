@@ -18,12 +18,8 @@ import type { EventStreamConnectionState } from "@goatcitadel/mission-control-sh
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
 import { queryKeys } from "../data/query-keys";
-import {
-  inboxCountLabel,
-  inboxCountTitle,
-  inboxMatchesWorkspace,
-  inboxNavigationLabel,
-} from "../areas/inbox/inbox-presentation";
+import { inboxCountLabel, inboxMatchesWorkspace, inboxNavigationLabel } from "../areas/inbox/inbox-presentation";
+import { InboxCountBadge } from "./InboxCountBadge";
 import { useOperatorInbox } from "../data/use-operator-inbox";
 import { WorkRunningIndicator } from "./WorkRunningIndicator";
 import { ScopeSwitcher } from "./ScopeSwitcher";
@@ -126,15 +122,7 @@ export function Sidebar({
               <span className={collapsed ? "sr-only" : "flex-1 text-left"}>{entry.label}</span>
               {entry.area === "work" ? <WorkRunningIndicator workspaceId={workspaceId} overlay={collapsed} /> : null}
               {entry.area === "inbox" && inboxCount ? (
-                <span
-                  aria-hidden="true"
-                  title={inboxCountTitle(inboxCount)}
-                  className={`min-w-4 rounded-full bg-accent px-1 text-center text-xs font-semibold text-accent-ink ${
-                    collapsed ? "absolute -top-1 right-0" : ""
-                  }`}
-                >
-                  {inboxCount}
-                </span>
+                <InboxCountBadge count={inboxCount} className={collapsed ? "absolute -top-1 right-0" : ""} />
               ) : null}
             </button>
           );
@@ -184,7 +172,9 @@ export function Sidebar({
         <Menu scopeKey={JSON.stringify([activeCitadelId, activeWorkspaceId, pathname, search, hash])}>
           <MenuTrigger
             aria-label="Settings and account"
-            className="rounded-md p-1 text-fg-muted hover:bg-sunken"
+            // ST-11: Settings has no Areas entry, so its gear is the sidebar's current item while Settings is open.
+            aria-current={current === "settings" ? "page" : undefined}
+            className="rounded-md p-1 text-fg-muted hover:bg-sunken aria-[current=page]:bg-sunken aria-[current=page]:text-fg"
             onPointerEnter={() => preload("settings")}
             onFocus={() => preload("settings")}
             onPointerDown={() => preload("settings")}

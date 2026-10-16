@@ -10,10 +10,10 @@ export function VoiceRuntimeSettings() {
     <section
       id="voice-runtime"
       aria-labelledby="voice-runtime-title"
-      className="mt-4 space-y-3 rounded-lg border border-line bg-sunken p-4"
+      className="mt-4 space-y-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h3 id="voice-runtime-title" className="font-display text-base font-semibold text-fg">
+        <h3 id="voice-runtime-title" className="text-base font-semibold text-fg">
           Local voice runtime
         </h3>
         <Button size="sm" disabled={runtime.isFetching} onClick={() => void runtime.refetch()}>

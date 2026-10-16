@@ -13,6 +13,9 @@ import { LibraryMemoryProposals } from "./LibraryMemoryProposals";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { memoryNamespaceLabel, memoryScopeLabel, presentMemoryLifecycle } from "./library-vocabulary";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
+import { EmptyState } from "../../ui/EmptyState";
 
 const Diagnostics = lazy(() =>
   import("./LibraryMemoryDiagnostics").then((module) => ({ default: module.LibraryMemoryDiagnostics })),
@@ -59,105 +62,134 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
     next.set("shell", "cockpit");
     route.navigate(`/library/memory?${next}`);
   }
+  const listed = list.data?.items.length ?? 0;
+  // A first, unfiltered read with nothing in it is one empty state: no filters, bulk actions or paging to operate yet.
+  const nothingRemembered = Boolean(
+    list.data && !listed && !list.isError && !query && status === "active" && cursors.length < 2,
+  );
+  const paged = cursors.length > 1 || Boolean(list.data?.nextCursor);
   return (
-    <section
-      className="mx-auto grid min-w-0 w-full max-w-5xl grid-cols-1 gap-4 wrap-anywhere p-4"
-      aria-label="Library Memory"
-    >
-      <header>
-        <h1 className="font-display text-xl font-semibold text-fg">{LIBRARY_SECTION_LABELS.memory}</h1>
-        <p className="text-sm text-fg-secondary">
-          Workspace and global memory. Editing and forgetting ask for approval first; the change is confirmed separately
-          after approval.
-        </p>
-      </header>
-      <form
-        className="grid min-w-0 grid-cols-1 items-end gap-2 sm:flex sm:flex-wrap"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setCursors([undefined]);
-          setQuery(filter);
-        }}
-      >
-        <Field label="Search memory">
-          {(props) => (
-            <input
-              {...props}
-              className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
-              value={filter}
-              onChange={(event) => setFilter(event.target.value)}
-            />
-          )}
-        </Field>
-        <Field label="Memory status">
-          {(props) => (
-            <select
-              {...props}
-              className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
-              value={status}
-              onChange={(event) => {
-                setStatus(event.target.value);
+    <section className={`${AREA_PAGE} min-w-0 wrap-anywhere`} aria-label="Library Memory">
+      <AreaHeader
+        title={LIBRARY_SECTION_LABELS.memory}
+        description="Workspace and global memory. Editing and forgetting ask for approval first; the change is confirmed separately after approval."
+        actions={
+          <Button size="sm" disabled={list.isFetching} onClick={reloadDirectory}>
+            {stalePage ? "Reload memory directory" : "Refresh memory directory"}
+          </Button>
+        }
+      />
+      {nothingRemembered ? (
+        <EmptyState
+          title="No active memories"
+          description="Memories appear here after you approve a memory write from Chat or promote a proposal below. Forgotten memories are listed under all statuses."
+          action={
+            <Button
+              size="sm"
+              onClick={() => {
+                setStatus("all");
                 setCursors([undefined]);
               }}
             >
-              <option value="active">Active</option>
-              <option value="forgotten">Forgotten</option>
-              <option value="all">All statuses</option>
-            </select>
-          )}
-        </Field>
-        <Button type="submit">Apply memory filter</Button>
-      </form>
-      <Field label="Memory namespace on this page">
-        {(props) => (
-          <select
-            {...props}
-            className="min-h-11 min-w-0 w-full max-w-full rounded-md border border-line bg-canvas p-2"
-            value={namespace}
-            onChange={(event) => setNamespace(event.target.value)}
+              Show all statuses
+            </Button>
+          }
+        />
+      ) : (
+        <>
+          <form
+            className="flex min-w-0 flex-wrap items-end gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setCursors([undefined]);
+              setQuery(filter);
+            }}
           >
-            <option value="">All namespaces</option>
-            {[
-              ...new Set(
-                list.data?.items.flatMap((resource) => (resource.kind === "memory" ? [resource.item.namespace] : [])) ??
-                  [],
-              ),
-            ].map((value) => (
-              <option key={value} value={value}>
-                {memoryNamespaceLabel(value)}
-              </option>
-            ))}
-          </select>
-        )}
-      </Field>
-      <Field label="Memory lifecycle on this page">
-        {(props) => (
-          <select
-            {...props}
-            className="min-h-11 min-w-0 w-full max-w-full rounded-md border border-line bg-canvas p-2"
-            value={lifecycle}
-            onChange={(event) => setLifecycle(event.target.value)}
-          >
-            <option value="">All lifecycle states</option>
-            <option value="active">Active</option>
-            <option value="expired">Expired</option>
-            <option value="forgotten">Forgotten</option>
-          </select>
-        )}
-      </Field>
-      <LibraryMemoryBatch
-        key={access.identity}
-        workspaceId={workspaceId}
-        items={rows.flatMap((resource) =>
-          resource.kind === "memory" && selected.includes(resource.item.itemId) ? [resource.item] : [],
-        )}
-        available={!list.isFetching && !list.isError}
-        onClear={() => setSelected([])}
-        onRefresh={() => list.refetch()}
-      />
-      <Button disabled={list.isFetching} onClick={reloadDirectory}>
-        {stalePage ? "Reload memory directory" : "Refresh memory directory"}
-      </Button>
+            <Field label="Search memory">
+              {(props) => (
+                <input
+                  {...props}
+                  className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
+                  value={filter}
+                  onChange={(event) => setFilter(event.target.value)}
+                />
+              )}
+            </Field>
+            <Field label="Memory status">
+              {(props) => (
+                <select
+                  {...props}
+                  className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
+                  value={status}
+                  onChange={(event) => {
+                    setStatus(event.target.value);
+                    setCursors([undefined]);
+                  }}
+                >
+                  <option value="active">Active</option>
+                  <option value="forgotten">Forgotten</option>
+                  <option value="all">All statuses</option>
+                </select>
+              )}
+            </Field>
+            <Button type="submit">Apply memory filter</Button>
+          </form>
+          {listed ? (
+            <div className="flex min-w-0 flex-wrap items-end gap-2">
+              <Field label="Memory namespace on this page">
+                {(props) => (
+                  <select
+                    {...props}
+                    className="min-h-11 min-w-0 w-full max-w-full rounded-md border border-line bg-canvas p-2"
+                    value={namespace}
+                    onChange={(event) => setNamespace(event.target.value)}
+                  >
+                    <option value="">All namespaces</option>
+                    {[
+                      ...new Set(
+                        list.data?.items.flatMap((resource) =>
+                          resource.kind === "memory" ? [resource.item.namespace] : [],
+                        ) ?? [],
+                      ),
+                    ].map((value) => (
+                      <option key={value} value={value}>
+                        {memoryNamespaceLabel(value)}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+              <Field label="Memory lifecycle on this page">
+                {(props) => (
+                  <select
+                    {...props}
+                    className="min-h-11 min-w-0 w-full max-w-full rounded-md border border-line bg-canvas p-2"
+                    value={lifecycle}
+                    onChange={(event) => setLifecycle(event.target.value)}
+                  >
+                    <option value="">All lifecycle states</option>
+                    <option value="active">Active</option>
+                    <option value="expired">Expired</option>
+                    <option value="forgotten">Forgotten</option>
+                  </select>
+                )}
+              </Field>
+            </div>
+          ) : null}
+          {rows.length || selected.length ? (
+            <LibraryMemoryBatch
+              key={access.identity}
+              workspaceId={workspaceId}
+              items={rows.flatMap((resource) =>
+                resource.kind === "memory" && selected.includes(resource.item.itemId) ? [resource.item] : [],
+              )}
+              available={!list.isFetching && !list.isError}
+              onClear={() => setSelected([])}
+              onRefresh={() => list.refetch()}
+            />
+          ) : null}
+        </>
+      )}
       {list.isFetching ? <p role="status">Reading memory directory…</p> : null}
       {list.error ? (
         <Callout tone="error">
@@ -169,11 +201,11 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
       {itemId ? (
         <LibraryMemoryEditor key={`${workspaceId}:${itemId}`} itemId={itemId} workspaceId={workspaceId} />
       ) : null}
-      <p className="text-sm text-fg-muted">{list.data?.coverage}</p>
-      <ul className="grid min-w-0 grid-cols-1 gap-2">
+      {nothingRemembered ? null : <p className="text-sm text-fg-muted">{list.data?.coverage}</p>}
+      <ul className="min-w-0 divide-y divide-line-subtle">
         {rows.map((resource) =>
           resource.kind === "memory" ? (
-            <li key={resource.item.itemId} className="min-w-0 rounded-lg border border-line bg-raised p-3">
+            <li key={resource.item.itemId} className="min-w-0 space-y-1 py-3">
               <label className="flex min-h-11 items-center gap-2">
                 <input
                   type="checkbox"
@@ -208,21 +240,25 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
           ) : null,
         )}
       </ul>
-      <div className="flex min-w-0 flex-wrap gap-2">
-        <Button
-          disabled={cursors.length < 2 || list.isFetching}
-          onClick={() => setCursors((value) => value.slice(0, -1))}
-        >
-          Previous memory page
-        </Button>
-        <Button
-          disabled={!list.data?.nextCursor || list.isFetching || list.isError}
-          onClick={() => setCursors((value) => [...value, list.data?.nextCursor])}
-        >
-          Next memory page
-        </Button>
+      {paged ? (
+        <div className="flex min-w-0 flex-wrap gap-2">
+          <Button
+            disabled={cursors.length < 2 || list.isFetching}
+            onClick={() => setCursors((value) => value.slice(0, -1))}
+          >
+            Previous memory page
+          </Button>
+          <Button
+            disabled={!list.data?.nextCursor || list.isFetching || list.isError}
+            onClick={() => setCursors((value) => [...value, list.data?.nextCursor])}
+          >
+            Next memory page
+          </Button>
+        </div>
+      ) : null}
+      <div>
+        <Button onClick={() => setDiagnostics(true)}>Open memory diagnostics and maintenance</Button>
       </div>
-      <Button onClick={() => setDiagnostics(true)}>Open memory diagnostics and maintenance</Button>
       {diagnostics ? (
         <Suspense fallback={<p role="status">Loading memory diagnostics…</p>}>
           <Diagnostics workspaceId={workspaceId} />

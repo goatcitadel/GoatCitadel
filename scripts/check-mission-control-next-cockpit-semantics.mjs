@@ -37,7 +37,6 @@ const LAYER_CLASS = /(?:^|[\s"'`:])z-(40|50|60|70|[89]\d|\d{3,})(?=[\s"'`]|$)/;
 // Files that intercepted link clicks before this guard existed. Remove entries as they adopt isModifiedClick.
 export const MODIFIED_CLICK_BASELINE = new Set([
   "areas/library/CapabilitySettings.tsx",
-  "areas/library/LibraryArea.tsx",
   "areas/settings/FirstRunVerification.tsx",
   "areas/settings/LocalAiSettings.tsx",
   "areas/settings/ProviderCatalogSettings.tsx",
@@ -45,7 +44,6 @@ export const MODIFIED_CLICK_BASELINE = new Set([
   "areas/settings/SettingsArea.tsx",
   "areas/settings/TrustPolicySettings.tsx",
   "areas/system/HealthLocalRuntimeActions.tsx",
-  "areas/system/SystemArea.tsx",
   "areas/system/SystemDashboards.tsx",
   "areas/work/WorkRunDetail.tsx",
   "areas/work/WorkTaskDetail.tsx",

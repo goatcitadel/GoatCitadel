@@ -139,7 +139,7 @@ function LibraryFileTemplatesContent({
       <Button onClick={() => setOpen(true)}>Create from template</Button>
       {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
       {open ? (
-        <section aria-label="File from template" className="grid gap-3 rounded-lg border border-line p-3">
+        <section aria-label="File from template" className="grid gap-3 border-t border-line-subtle pt-4">
           <p className="text-sm text-fg-secondary">
             Create a text file in the installation shared file root. All workspaces share this destination. Gateway
             access and path restrictions apply.

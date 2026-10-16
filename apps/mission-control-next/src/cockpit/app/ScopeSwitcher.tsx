@@ -84,6 +84,10 @@ export function ScopeSwitcher({
     return () => window.cancelAnimationFrame(frame);
   });
   // NV-03: the last known Citadel name stays during a refetch; "Reading" only before the first answer.
+  // SH-27: the name truncates in the rail, so the tooltip carries it in full; the collapsed rail is too narrow for
+  // the busy sentence, which it keeps for assistive technology and the tooltip instead.
+  const scopeName = `${citadelName} / ${workspaceName}`;
+  const busyText = "Checking scope…";
   return (
     <>
       {!hideTrigger ? (
@@ -91,7 +95,8 @@ export function ScopeSwitcher({
           ref={trigger}
           type="button"
           aria-label="Change Citadel and workspace"
-          title="Change Citadel and workspace"
+          title={owner.busy ? `${scopeName}. ${busyText}` : `Change Citadel and workspace: ${scopeName}`}
+          aria-busy={owner.busy || undefined}
           disabled={owner.busy}
           onClick={() => {
             if (owner.isTransitionPending() || document.querySelector('[role="dialog"][data-state="open"]')) return;
@@ -101,16 +106,12 @@ export function ScopeSwitcher({
           className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium text-fg hover:bg-sunken"
         >
           <Compass aria-hidden="true" className="size-4 shrink-0" />
-          {!compact ? (
-            <span className="min-w-0 truncate">
-              {citadelName} / {workspaceName}
-            </span>
-          ) : null}
+          {!compact ? <span className="min-w-0 truncate">{scopeName}</span> : null}
         </button>
       ) : null}
       {owner.busy ? (
-        <p role="status" className="text-xs text-fg-muted">
-          Checking scope...
+        <p role="status" className={compact ? "sr-only" : "px-2 text-xs text-fg-muted"}>
+          {busyText}
         </p>
       ) : null}
       {owner.error ? (
@@ -182,7 +183,7 @@ export function ScopeSwitcher({
           </label>
           {owner.loading ? (
             <p role="status" className="text-sm text-fg-muted">
-              Loading active scope choices...
+              Loading active scope choices…
             </p>
           ) : owner.checking ? (
             <p role="status" className="text-sm text-fg-muted">

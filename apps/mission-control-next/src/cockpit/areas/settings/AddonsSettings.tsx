@@ -27,7 +27,7 @@ export function AddonsSettings() {
   return (
     <section id="addons" aria-label="Add-on applications" className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h3 className="font-display text-lg font-semibold">Add-on applications</h3>
+        <h3 className="text-lg font-semibold">Add-on applications</h3>
         <Button disabled={owner.loading || owner.mutation.pending} onClick={() => void owner.reload()}>
           Refresh add-ons
         </Button>
@@ -131,7 +131,7 @@ export function AddonsSettings() {
           ) : null}
           {selected ? (
             <>
-              <h4 className="break-words font-display text-md font-semibold">{selected.addon.label}</h4>
+              <h4 className="break-words text-md font-semibold">{selected.addon.label}</h4>
               <p className="break-words text-sm text-fg-secondary">{selected.addon.description}</p>
               <AddonEvidence status={selected} />
               <div aria-label="Add-on lifecycle actions" className="flex flex-wrap gap-2">

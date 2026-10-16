@@ -19,7 +19,7 @@ export function WorkRunHistory({ workspaceId }: { workspaceId: string }) {
     <section aria-labelledby="durable-history-heading" className="grid gap-3">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="durable-history-heading" className="font-display text-md font-semibold text-fg">
+          <h2 id="durable-history-heading" className="text-base font-semibold text-fg">
             Runs
           </h2>
           <p className="text-sm text-fg-secondary">Saved run records for this workspace, newest created first.</p>
@@ -63,7 +63,7 @@ export function WorkRunHistory({ workspaceId }: { workspaceId: string }) {
           </p>
           <WindowedRecordList items={runs} itemKey={(run) => run.runId} label="Run history" ordered>
             {(run) => (
-              <article className="rounded-lg border border-line bg-raised p-3">
+              <article className="border-b border-line-subtle pb-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <p className="text-sm font-medium text-fg">{workRunTitle(run)}</p>
                   <StatusBadge status={presentRunStatus(run.status)} />
@@ -86,7 +86,12 @@ export function WorkRunHistory({ workspaceId }: { workspaceId: string }) {
         </>
       ) : null}
       {query.hasNextPage ? (
-        <Button size="sm" disabled={query.isFetching} onClick={() => void query.fetchNextPage()}>
+        <Button
+          size="sm"
+          className="justify-self-start"
+          disabled={query.isFetching}
+          onClick={() => void query.fetchNextPage()}
+        >
           {query.isFetchingNextPage ? "Loading older runs…" : "Load older runs"}
         </Button>
       ) : null}

@@ -362,9 +362,11 @@ describe("InboxArea", () => {
     expect(container.textContent).toContain("What this Inbox covers");
     expect(container.textContent).not.toContain("Couldn't fully check");
     expect(container.textContent).not.toContain("Count unknown");
-    // A declared scope is not a read gap, so the per-group counts read exactly.
-    expect(container.querySelector('[data-inbox-count="needs_attention"]')?.textContent).toBe("Not fully checked");
-    expect(container.textContent).toContain("Nothing found here, but not every source could be checked.");
+    // Empty groups are hidden: one empty state replaces the four empty sections (IN-10).
+    expect(container.textContent).toContain("You're all caught up");
+    expect(container.querySelector("[data-inbox-count]")).toBeNull();
+    expect(container.textContent).not.toContain("Nothing found here");
+    expect(container.textContent).not.toContain("Mark all shown updates read");
   });
 
   it("says when sources could not be read instead of claiming an all-clear", async () => {
@@ -399,7 +401,7 @@ describe("InboxArea", () => {
         </QueryClientProvider>,
       ),
     );
-    expect(container.textContent).toContain("Nothing found, but some sources couldn't be checked completely.");
+    expect(container.textContent).toContain("Nothing found, but some sources couldn't be checked completely");
     expect(container.textContent).not.toContain("Nothing needs your attention");
     expect(container.textContent).toContain("Couldn't fully check 1 source");
     // The coverage summary is static polled context, not a live region.
@@ -408,7 +410,9 @@ describe("InboxArea", () => {
         node.textContent?.includes("Nothing found, but some sources"),
       ),
     ).toBe(false);
-    expect(container.querySelector('[data-inbox-count="needs_attention"]')?.textContent).toBe("Not fully checked");
+    expect(container.textContent).toContain("Some sources couldn't be checked");
+    expect(container.textContent).not.toContain("You're all caught up");
+    expect(container.querySelector("[data-inbox-count]")).toBeNull();
   });
 
   it("opens the exact scoped deep link without deciding or reopening a dismissed inspector", async () => {
@@ -539,7 +543,8 @@ describe("InboxArea", () => {
     expect(container.textContent).toContain("1 known item; more may be outside this view");
     expect(container.textContent).toContain("Couldn't fully check 1 source");
     expect(container.textContent).toContain("Review file write");
-    expect(container.textContent).toContain("Nothing found here, but not every source could be checked.");
+    // The empty group with an incomplete count is hidden; the coverage line above says more may exist (IN-10).
+    expect(container.querySelector('[data-inbox-count="needs_attention"]')).toBeNull();
     const link = container.querySelector('a[href="/inbox?approvalId=test&shell=cockpit&workspaceId=default"]');
     expect(link?.textContent).toContain("Open approval");
     const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Details");
@@ -825,8 +830,17 @@ it("puts the installation-wide rejection in its own zone at the bottom when appr
 
 it("lets operators disable single-letter shortcuts", async () => {
   await renderUpdates(new QueryClient());
+  // Shortcut help and the switch sit behind the header's keyboard disclosure (IN-10, IN-18).
+  expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+  const help = container.querySelector<HTMLButtonElement>('button[aria-label="Keyboard shortcuts"]')!;
+  expect(help.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => help.click());
+  expect(help.getAttribute("aria-expanded")).toBe("true");
+  expect(container.textContent).toContain("Focus the source link");
   const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
   await act(async () => toggle.click());
+  // The choice is remembered in this browser.
+  expect(localStorage.getItem("goatcitadel.cockpit.inbox.letter-shortcuts.v1")).toBe("off");
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true })));
   expect(container.querySelector('[data-inbox-item][data-selected="true"]')).toBeNull();
   await act(async () => toggle.click());

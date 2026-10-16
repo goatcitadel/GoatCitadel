@@ -1,3 +1,4 @@
+import { EmbeddedPageHeaderProvider } from "../../features/native-routes/embedded-page-header";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { ClassicOwnerLink } from "../ui/ClassicOwnerLink";
 import { Activity, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -142,84 +143,87 @@ function CockpitShellContent({
               onToggleCollapsed={() => setCollapseOverride(!sidebarCollapsed)}
             />
           ) : null}
-          <main
-            ref={mainScroll}
-            id="main-content"
-            tabIndex={-1}
-            className={
-              conversationVisible
-                ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
-                : "min-w-0 flex-1 overflow-y-auto"
-            }
-          >
-            {retainedChat.current.visited ? (
-              <Activity key={chatScope} mode={conversationVisible ? "visible" : "hidden"}>
-                {/* A new route query, such as the palette's New chat, retries a failed Chat. */}
-                <AreaErrorBoundary label="Chat" resetKey={chatScope + search}>
-                  <ChatArea
-                    gatewayUnavailable={gatewayReachability?.unavailable}
-                    onVisibleSessionChange={onVisibleSessionChange}
-                  />
+          {/* Cockpit pages title themselves with AreaHeader, so embedded shared pages drop their own h1. */}
+          <EmbeddedPageHeaderProvider>
+            <main
+              ref={mainScroll}
+              id="main-content"
+              tabIndex={-1}
+              className={
+                conversationVisible
+                  ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+                  : "min-w-0 flex-1 overflow-y-auto"
+              }
+            >
+              {retainedChat.current.visited ? (
+                <Activity key={chatScope} mode={conversationVisible ? "visible" : "hidden"}>
+                  {/* A new route query, such as the palette's New chat, retries a failed Chat. */}
+                  <AreaErrorBoundary label="Chat" resetKey={chatScope + search}>
+                    <ChatArea
+                      gatewayUnavailable={gatewayReachability?.unavailable}
+                      onVisibleSessionChange={onVisibleSessionChange}
+                    />
+                  </AreaErrorBoundary>
+                </Activity>
+              ) : null}
+              {projectsVisible ? (
+                <AreaErrorBoundary label="Projects" resetKey={pathname + search}>
+                  <Suspense
+                    fallback={
+                      <p role="status" className="p-4">
+                        Loading projects…
+                      </p>
+                    }
+                  >
+                    <ChatProjects />
+                  </Suspense>
                 </AreaErrorBoundary>
-              </Activity>
-            ) : null}
-            {projectsVisible ? (
-              <AreaErrorBoundary label="Projects" resetKey={pathname + search}>
-                <Suspense
-                  fallback={
-                    <p role="status" className="p-4">
-                      Loading projects…
-                    </p>
-                  }
-                >
-                  <ChatProjects />
-                </Suspense>
-              </AreaErrorBoundary>
-            ) : null}
-            {!nativeRoute ? (
-              <section className="p-6 space-y-4">
-                <h1 className="text-xl font-semibold">
-                  {resolution.kind === "classic" ? "This view is available in Classic" : "Page not found"}
-                </h1>
-                {resolution.kind === "classic" ? (
-                  <ClassicOwnerLink href={resolution.href} scope={chatScope} label={resolution.label} />
-                ) : (
-                  <p>Choose a destination from the navigation to continue.</p>
-                )}
-              </section>
-            ) : area !== "chat" ? (
-              // `key` remounts on an area change; the path retries a failed view after Back or a jump inside the area.
-              <AreaErrorBoundary
-                key={area}
-                label={areaLabel}
-                resetKey={pathname + search}
-                onGoToChat={() => navigate("/chat")}
-              >
-                <Suspense
+              ) : null}
+              {!nativeRoute ? (
+                <section className="p-6 space-y-4">
+                  <h1 className="text-xl font-semibold">
+                    {resolution.kind === "classic" ? "This view is available in Classic" : "Page not found"}
+                  </h1>
+                  {resolution.kind === "classic" ? (
+                    <ClassicOwnerLink href={resolution.href} scope={chatScope} label={resolution.label} />
+                  ) : (
+                    <p>Choose a destination from the navigation to continue.</p>
+                  )}
+                </section>
+              ) : area !== "chat" ? (
+                // `key` remounts on an area change; the path retries a failed view after Back or a jump inside the area.
+                <AreaErrorBoundary
                   key={area}
-                  fallback={
-                    <p role="status" className="p-4 text-sm text-fg-muted">
-                      Loading {areaLabel}…
-                    </p>
-                  }
+                  label={areaLabel}
+                  resetKey={pathname + search}
+                  onGoToChat={() => navigate("/chat")}
                 >
-                  {area === "gallery" ? (
-                    <Gallery />
-                  ) : area === "inbox" ? (
-                    <InboxArea />
-                  ) : area === "library" ? (
-                    <LibraryArea />
-                  ) : area === "system" ? (
-                    <SystemArea />
-                  ) : area === "work" ? (
-                    <WorkArea />
-                  ) : area === "settings" ? (
-                    <SettingsArea />
-                  ) : null}
-                </Suspense>
-              </AreaErrorBoundary>
-            ) : null}
-          </main>
+                  <Suspense
+                    key={area}
+                    fallback={
+                      <p role="status" className="p-4 text-sm text-fg-muted">
+                        Loading {areaLabel}…
+                      </p>
+                    }
+                  >
+                    {area === "gallery" ? (
+                      <Gallery />
+                    ) : area === "inbox" ? (
+                      <InboxArea />
+                    ) : area === "library" ? (
+                      <LibraryArea />
+                    ) : area === "system" ? (
+                      <SystemArea />
+                    ) : area === "work" ? (
+                      <WorkArea />
+                    ) : area === "settings" ? (
+                      <SettingsArea />
+                    ) : null}
+                  </Suspense>
+                </AreaErrorBoundary>
+              ) : null}
+            </main>
+          </EmbeddedPageHeaderProvider>
           <InspectorPanel />
         </div>
         {!firstRun ? (

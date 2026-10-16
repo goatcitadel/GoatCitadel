@@ -126,11 +126,11 @@ export function BudgetModeControl() {
     <section
       id="budget-mode"
       aria-labelledby="budget-mode-title"
-      className="mt-4 rounded-lg border border-line bg-sunken p-4"
+      className="mt-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 id="budget-mode-title" className="font-display text-base font-semibold text-fg">
+          <h3 id="budget-mode-title" className="text-base font-semibold text-fg">
             Budget preference
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">

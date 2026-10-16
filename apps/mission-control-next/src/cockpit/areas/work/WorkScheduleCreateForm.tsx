@@ -64,7 +64,7 @@ export function WorkScheduleCreateForm({
       onSubmit={onSubmit}
       className="grid gap-3 rounded-lg border border-line bg-raised p-4"
     >
-      <h2 className="font-display text-md font-semibold text-fg">New schedule</h2>
+      <h2 className="text-base font-semibold text-fg">New schedule</h2>
       <label className="grid gap-1 text-sm text-fg-secondary">
         Name
         <input

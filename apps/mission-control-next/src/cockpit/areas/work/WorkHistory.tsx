@@ -9,7 +9,10 @@ import { useEventStreamStatus } from "@goatcitadel/mission-control-shared/hooks/
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { ACTIVITY_FALLBACK_MS } from "../../data/activity-feed";
 import { queryKeys } from "../../data/query-keys";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 import { Button } from "../../ui/Button";
+import { Section } from "../../ui/Section";
 import { EmptyState } from "../../ui/EmptyState";
 import { projectWorkHistory } from "./work-history";
 import { WorkRunHistory } from "./WorkRunHistory";
@@ -36,97 +39,100 @@ export function WorkHistory() {
       ? projectWorkHistory(sessions.data.items, activity.data.items, workspaceId)
       : null;
   return (
-    <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-semibold text-fg">Work history</h1>
-          <p className="text-sm text-fg-secondary">Saved runs, conversations, and recent activity in this workspace.</p>
-          <p className="mt-1 text-xs text-fg-muted">
-            Recent activity is kept for a limited time. Open a conversation or run for its full saved record.
-          </p>
-        </div>
-        <Button
-          size="sm"
-          disabled={sessions.isFetching || activity.isFetching}
-          onClick={() => {
-            void sessions.refetch();
-            void activity.refetch();
-          }}
-        >
-          <RefreshCw aria-hidden="true" className="size-4" /> Refresh conversations and activity
-        </Button>
-      </header>
+    <section className={AREA_PAGE}>
+      <AreaHeader
+        title="Work history"
+        description="Saved runs, conversations, and recent activity in this workspace."
+        actions={
+          <Button
+            size="sm"
+            disabled={sessions.isFetching || activity.isFetching}
+            onClick={() => {
+              void sessions.refetch();
+              void activity.refetch();
+            }}
+          >
+            <RefreshCw aria-hidden="true" className="size-4" /> Refresh conversations and activity
+          </Button>
+        }
+      />
       <WorkRunHistory key={workspaceId} workspaceId={workspaceId} />
-      <h2 className="font-display text-md font-semibold text-fg">Conversations and recent activity</h2>
-      {sessions.isLoading || activity.isLoading ? (
-        <p role="status" className="text-sm text-fg-muted">
-          Loading work history…
-        </p>
-      ) : null}
-      {sessions.isError || activity.isError ? (
-        <EmptyState
-          title="Work history incomplete"
-          description={describeApiError(sessions.error ?? activity.error).summary}
-          action={
-            <Button
-              onClick={() => {
-                void sessions.refetch();
-                void activity.refetch();
-              }}
-            >
-              Try again
-            </Button>
-          }
-        />
-      ) : null}
-      {history ? (
-        <>
-          <p className="text-xs text-fg-muted">
-            Showing up to 100 conversations and 100 retained events.{" "}
-            {history.omittedUnscopedEvents > 0
-              ? `${plural(history.omittedUnscopedEvents, "event")} without this workspace binding ${history.omittedUnscopedEvents === 1 ? "was" : "were"} omitted.`
-              : ""}
-            {sessions.data?.nextCursor || activity.data?.nextCursor ? " Older entries are not shown." : ""}
-          </p>
-          {history.entries.length === 0 ? (
+      <Section
+        title="Conversations and recent activity"
+        description="Recent activity is kept for a limited time. Open a conversation or run for its full saved record."
+      >
+        <div className="flex flex-col gap-3">
+          {sessions.isLoading || activity.isLoading ? (
+            <p role="status" className="text-sm text-fg-muted">
+              Loading work history…
+            </p>
+          ) : null}
+          {sessions.isError || activity.isError ? (
             <EmptyState
-              title="No recent work returned"
-              description="No conversations or activity for this workspace in this window."
+              title="Work history incomplete"
+              description={describeApiError(sessions.error ?? activity.error).summary}
+              action={
+                <Button
+                  onClick={() => {
+                    void sessions.refetch();
+                    void activity.refetch();
+                  }}
+                >
+                  Try again
+                </Button>
+              }
             />
-          ) : (
-            <WindowedRecordList
-              items={history.entries}
-              itemKey={(entry) => entry.id}
-              label="Conversations and activity"
-              ordered
-            >
-              {(entry) => (
-                <article className="rounded-lg border border-line bg-raised p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-medium text-fg-muted">
-                        {entry.kind === "conversation" ? "Conversation" : "Activity"}
-                      </p>
-                      <p className="mt-1 text-sm font-medium text-fg">{entry.title}</p>
-                    </div>
-                    <TimeText value={entry.at} className="text-xs text-fg-muted" />
-                  </div>
-                  {entry.href ? (
-                    <NativeOwnerLink
-                      scope={[workspaceId, entry.id]}
-                      href={entry.href}
-                      className="mt-2 inline-block text-sm font-medium text-accent hover:underline"
-                    >
-                      {entry.href.startsWith("/work/runs/") ? "Open run" : "Open conversation"}
-                      <span className="sr-only">: {entry.title}</span>
-                    </NativeOwnerLink>
-                  ) : null}
-                </article>
+          ) : null}
+          {history ? (
+            <>
+              <p className="text-xs text-fg-muted">
+                Showing up to 100 conversations and 100 retained events.{" "}
+                {history.omittedUnscopedEvents > 0
+                  ? `${plural(history.omittedUnscopedEvents, "event")} without this workspace binding ${history.omittedUnscopedEvents === 1 ? "was" : "were"} omitted.`
+                  : ""}
+                {sessions.data?.nextCursor || activity.data?.nextCursor ? " Older entries are not shown." : ""}
+              </p>
+              {history.entries.length === 0 ? (
+                <EmptyState
+                  title="No recent work returned"
+                  description="No conversations or activity for this workspace in this window."
+                />
+              ) : (
+                <WindowedRecordList
+                  items={history.entries}
+                  itemKey={(entry) => entry.id}
+                  label="Conversations and activity"
+                  ordered
+                >
+                  {(entry) => (
+                    <article className="border-b border-line-subtle pb-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-medium text-fg-muted">
+                            {entry.kind === "conversation" ? "Conversation" : "Activity"}
+                          </p>
+                          <p className="mt-1 text-sm font-medium text-fg">{entry.title}</p>
+                        </div>
+                        <TimeText value={entry.at} className="text-xs text-fg-muted" />
+                      </div>
+                      {entry.href ? (
+                        <NativeOwnerLink
+                          scope={[workspaceId, entry.id]}
+                          href={entry.href}
+                          className="mt-2 inline-block text-sm font-medium text-accent hover:underline"
+                        >
+                          {entry.href.startsWith("/work/runs/") ? "Open run" : "Open conversation"}
+                          <span className="sr-only">: {entry.title}</span>
+                        </NativeOwnerLink>
+                      ) : null}
+                    </article>
+                  )}
+                </WindowedRecordList>
               )}
-            </WindowedRecordList>
-          )}
-        </>
-      ) : null}
+            </>
+          ) : null}
+        </div>
+      </Section>
     </section>
   );
 }

@@ -19,10 +19,10 @@ export function DesktopUpdateSettings() {
     <section
       id="application-updates"
       aria-label="Application updates"
-      className="space-y-3 rounded-lg border border-line bg-sunken p-4 sm:col-span-2"
+      className="space-y-3 border-t border-line-subtle pt-4 sm:col-span-2"
     >
       <header>
-        <h3 className="font-display text-base font-semibold text-fg">Application updates</h3>
+        <h3 className="text-sm font-semibold text-fg">Application updates</h3>
         <p className="mt-1 text-sm text-fg-secondary">Choose when to download a version and run its installer.</p>
       </header>
       {!status ? (

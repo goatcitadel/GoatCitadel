@@ -87,7 +87,7 @@ export function InboxApprovalDetail({
   return (
     <section aria-label="Current approval" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="font-display font-semibold text-fg">Current approval</h3>
+        <h3 className="font-semibold text-fg">Current approval</h3>
         <Button
           size="sm"
           onClick={() => {
@@ -133,7 +133,7 @@ export function InboxApprovalDetail({
       {settled?.kind === "code_mode.run" ? <ApprovalCodeOutcome approval={settled} workspaceId={workspaceId} /> : null}
       {settled ? <ApprovalSettlement approval={settled} workspaceId={workspaceId} /> : null}
       {settled ? (
-        <section aria-label="Decided request" className="space-y-2 rounded-md border border-line bg-sunken p-3">
+        <section aria-label="Decided request" className="space-y-2 border-t border-line-subtle pt-3">
           <div className="flex flex-wrap gap-2">
             <RiskBadge risk={settled.riskLevel} />
             <StatusBadge status={presentApprovalStatus(settled.status)} />
@@ -174,7 +174,7 @@ export function InboxApprovalDetail({
             <p className="text-fg-secondary">Safer option: {approval.explanation.saferAlternative}</p>
           ) : null}
           {evidence ? (
-            <section aria-label="Action preview" className="space-y-2 rounded-md border border-line bg-sunken p-3">
+            <section aria-label="Action preview" className="space-y-2 border-t border-line-subtle pt-3">
               <h4 className="font-medium text-fg">Action preview</h4>
               {evidence.targets.length ? (
                 <ul className="list-disc space-y-1 pl-5 text-fg-secondary">
@@ -189,7 +189,7 @@ export function InboxApprovalDetail({
                 <ul className="space-y-1">
                   {evidence.commands.map((command) => (
                     <li key={command}>
-                      <code className="block overflow-x-auto rounded bg-raised p-2 font-mono text-xs text-fg">
+                      <code className="block overflow-x-auto rounded-md bg-sunken p-2 font-mono text-xs text-fg">
                         {command}
                       </code>
                     </li>
@@ -211,7 +211,7 @@ export function InboxApprovalDetail({
               {evidence.changes.map((change) => (
                 <details key={change.label} className="text-fg-secondary">
                   <summary className="cursor-pointer">{change.label}</summary>
-                  <pre className="mt-1 overflow-x-auto rounded bg-raised p-2 text-xs">{change.content}</pre>
+                  <pre className="mt-1 overflow-x-auto rounded-md bg-sunken p-2 text-xs">{change.content}</pre>
                 </details>
               ))}
             </section>

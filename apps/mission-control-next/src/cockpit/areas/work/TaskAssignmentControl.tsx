@@ -56,8 +56,8 @@ export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord;
   }
 
   return (
-    <section aria-label="Task assignment" className="rounded-lg border border-line bg-raised p-4">
-      <h2 className="font-display text-lg font-semibold text-fg">Task assignment</h2>
+    <section aria-label="Task assignment" className="border-t border-line-subtle pt-4">
+      <h2 className="text-base font-semibold text-fg">Task assignment</h2>
       <p className="mt-1 text-sm text-fg-secondary">
         Assign a board owner. This does not launch, resume, or transfer a running execution.
       </p>

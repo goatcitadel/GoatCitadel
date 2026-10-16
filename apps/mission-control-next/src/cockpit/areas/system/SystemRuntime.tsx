@@ -12,6 +12,8 @@ import { resolveCockpitCompatibility } from "../../app/cockpit-compatibility";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useWorkspaceName } from "../../data/use-workspace-name";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 
 const RemoteWorkersRoutePage = lazy(async () => ({
   default: (await import("../../../features/native-routes/ops/RemoteWorkersRoutePage")).RemoteWorkersRoutePage,
@@ -65,6 +67,17 @@ export function SystemRuntime({ section = "runtime" }: { section?: "runtime" | "
   };
   return (
     <section className="min-w-0">
+      {/* The area header keeps the System tabs in every state; the embedded runtime page below keeps its own controls. */}
+      <div className={AREA_PAGE}>
+        <AreaHeader
+          title={section === "costs" ? "Spend details" : "Runtime"}
+          description={
+            section === "costs"
+              ? "Cost coverage and per-provider records from the Gateway."
+              : "Runtime records, controls and held boundaries from the Gateway."
+          }
+        />
+      </div>
       {navigationUnavailable === access.identity ? (
         <p role="status" className="p-4 text-sm text-fg-secondary">
           This source destination is unavailable in Cockpit.

@@ -85,11 +85,11 @@ export function ChatTurnDetails({
       {turn.citations.length ? (
         <details>
           <summary className="cursor-pointer text-accent">{plural(turn.citations.length, "source")}</summary>
-          <ul className="mt-1 grid gap-1">
+          <ul className="mt-1 divide-y divide-line-subtle">
             {turn.citations.map((source) => {
               const href = safeSourceHref(source.url);
               return (
-                <li key={source.citationId} className="rounded-md border border-line-subtle p-2">
+                <li key={source.citationId} className="py-2">
                   {href ? (
                     <a
                       href={href}
@@ -120,7 +120,7 @@ export function ChatTurnDetails({
           <summary className="cursor-pointer text-accent">
             {plural(turn.toolRuns.length, "tool call")} · {activitySummary}
           </summary>
-          <ul className="mt-1 grid gap-1">
+          <ul className="mt-1 divide-y divide-line-subtle">
             {turn.toolRuns.map((tool) => {
               const diagnostics = getChatToolRunDiagnostics(tool);
               const effect = projectChatToolEffectTruth(tool);
@@ -129,7 +129,7 @@ export function ChatTurnDetails({
                 <li
                   key={tool.toolRunId}
                   data-tool-run-id={tool.toolRunId}
-                  className="flex flex-wrap justify-between gap-2 rounded-md border border-line-subtle p-2"
+                  className="flex flex-wrap justify-between gap-2 py-2"
                 >
                   <span className="text-fg-secondary">{chatToolDisplayName(tool)}</span>
                   <span>{activityLabel(tool)}</span>
@@ -178,8 +178,8 @@ export function ChatTurnDetails({
         </Suspense>
       ) : null}
       {turn.generatedArtifacts?.length ? (
-        <section aria-label="Saved artifacts" className="rounded-md border border-line-subtle bg-raised p-2">
-          <h3 className="font-medium text-fg">Saved artifacts</h3>
+        <section aria-label="Saved artifacts" className="border-t border-line-subtle pt-2">
+          <h3 className="font-semibold text-fg">Saved artifacts</h3>
           <ul className="mt-1 space-y-1">
             {turn.generatedArtifacts.map((artifact) => (
               <li key={artifact.artifactId}>

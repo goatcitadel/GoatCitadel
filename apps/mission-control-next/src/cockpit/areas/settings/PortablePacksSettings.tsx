@@ -28,10 +28,10 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
     <section
       aria-label="Portable capability packs"
       id="portable-capability-packs"
-      className="space-y-4 rounded-lg border border-line bg-sunken p-4"
+      className="space-y-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
     >
       <header>
-        <h3 className="font-display text-base font-semibold text-fg">Capability packs</h3>
+        <h3 className="text-base font-semibold text-fg">Capability packs</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Inspect bundled packs or preview a portable manifest. Staging and recording review add installation records
           only; they do not install, enable, connect or invoke capabilities.

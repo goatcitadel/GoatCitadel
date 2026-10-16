@@ -40,10 +40,10 @@ function ExternalSources({ workspaceId }: { workspaceId: string }) {
     );
   return (
     <section
-      className="grid min-w-0 max-w-full grid-cols-1 gap-3 wrap-anywhere rounded-lg border border-line p-3"
+      className="grid min-w-0 max-w-full grid-cols-1 gap-3 wrap-anywhere border-t border-line-subtle pt-4"
       aria-label="External sources"
     >
-      <h2 className="font-display text-lg">External sources</h2>
+      <h2 className="text-base font-semibold">External sources</h2>
       <p className="text-sm text-fg-secondary">
         Governed source registration, sealed scans and content-free import provenance. Imports do not grant unrestricted
         source read access.

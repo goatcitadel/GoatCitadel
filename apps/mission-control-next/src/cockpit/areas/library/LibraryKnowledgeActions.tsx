@@ -218,10 +218,10 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
   }
   return (
     <section
-      className="grid min-w-0 max-w-full grid-cols-1 gap-3 wrap-anywhere rounded-lg border border-line p-3"
+      className="grid min-w-0 max-w-full grid-cols-1 gap-3 wrap-anywhere border-t border-line-subtle pt-4"
       aria-label="Knowledge ingest and retrieval"
     >
-      <h2 className="font-display text-lg">Knowledge ingest and retrieval</h2>
+      <h2 className="text-base font-semibold">Knowledge ingest and retrieval</h2>
       <p className="text-sm text-fg-secondary">
         Choose the source conversation. Tool policy and read access still decide what this conversation can use.
       </p>

@@ -64,8 +64,11 @@ export function ProviderRoutingSettings() {
     review.model === routingModel,
   );
   return (
-    <section aria-label="Default model" className="mt-4 space-y-3 rounded-lg border border-line bg-raised p-4">
-      <h3 className="font-display text-md font-semibold text-fg">Default model</h3>
+    <section
+      aria-label="Default model"
+      className="mt-4 space-y-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
+    >
+      <h3 className="text-md font-semibold text-fg">Default model</h3>
       <p className="text-sm text-fg-secondary">
         Default model: {activeProviderId ? gatewayDefaultLabel : "Unavailable"}. Conversations that already chose a
         model keep their choice.

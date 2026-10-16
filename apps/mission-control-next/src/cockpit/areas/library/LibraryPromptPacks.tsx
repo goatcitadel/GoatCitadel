@@ -3,6 +3,9 @@ import { buildAppHref, type AppRoute } from "../../../app/route-model";
 import { resolveCockpitCompatibility } from "../../app/cockpit-compatibility";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_COLUMN } from "../../ui/area-layout";
+import { LIBRARY_SECTION_LABELS } from "./library-sections";
 
 // The heavy workbench stays lazy (Task16); it is the same shared owner Classic mounts, not a copy.
 const PromptPacksWorkbenchPage = lazy(async () => ({
@@ -48,6 +51,12 @@ export function LibraryPromptPacks({ workspaceId }: { workspaceId: string }) {
     },
     [route],
   );
+  // The area's title row and tabs stay in every state; the shared workbench below keeps its own layout.
+  const header = (
+    <div className={`${AREA_COLUMN} px-4 pt-4 sm:px-6 sm:pt-6`}>
+      <AreaHeader title={LIBRARY_SECTION_LABELS["prompt-packs"]} />
+    </div>
+  );
   if (focusError) {
     const inspect = new URLSearchParams(route.search);
     inspect.delete("runId");
@@ -55,37 +64,43 @@ export function LibraryPromptPacks({ workspaceId }: { workspaceId: string }) {
     inspect.delete("scoring");
     if (query.getAll("view").length !== 1) inspect.delete("view");
     return (
-      <section aria-label="Prompt-pack record outcome" className="space-y-3 p-4">
-        <p role="status">{focusError}</p>
-        <NativeOwnerLink
-          href={`/library/prompt-packs?${inspect}${route.hash}`}
-          scope={JSON.stringify([workspaceId, initialPackId, requestedRun, requestedSession, requestedScoring])}
-        >
-          {initialPackId && query.getAll("view").length === 1 ? "Inspect this pack" : "Browse prompt packs"}
-        </NativeOwnerLink>
-      </section>
+      <>
+        {header}
+        <section aria-label="Prompt-pack record outcome" className={`${AREA_COLUMN} space-y-3 p-4 sm:px-6`}>
+          <p role="status">{focusError}</p>
+          <NativeOwnerLink
+            href={`/library/prompt-packs?${inspect}${route.hash}`}
+            scope={JSON.stringify([workspaceId, initialPackId, requestedRun, requestedSession, requestedScoring])}
+          >
+            {initialPackId && query.getAll("view").length === 1 ? "Inspect this pack" : "Browse prompt packs"}
+          </NativeOwnerLink>
+        </section>
+      </>
     );
   }
   return (
-    <Suspense
-      fallback={
-        <p role="status" className="p-4 text-sm text-fg-muted">
-          Loading prompt packs…
-        </p>
-      }
-    >
-      <PromptPacksWorkbenchPage
-        key={JSON.stringify([workspaceId, initialPackId, initialRunId, initialSessionId, requestedScoring])}
-        workspaceId={workspaceId}
-        variant="library"
-        navigate={navigate}
-        initialPackId={initialPackId}
-        initialRunId={initialRunId}
-        initialSessionId={initialSessionId}
-        initialDetailTab={
-          requestedScoring === "human" ? "review" : requestedScoring === "auto" ? "assessment" : undefined
+    <>
+      {header}
+      <Suspense
+        fallback={
+          <p role="status" className="p-4 text-sm text-fg-muted">
+            Loading prompt packs…
+          </p>
         }
-      />
-    </Suspense>
+      >
+        <PromptPacksWorkbenchPage
+          key={JSON.stringify([workspaceId, initialPackId, initialRunId, initialSessionId, requestedScoring])}
+          workspaceId={workspaceId}
+          variant="library"
+          navigate={navigate}
+          initialPackId={initialPackId}
+          initialRunId={initialRunId}
+          initialSessionId={initialSessionId}
+          initialDetailTab={
+            requestedScoring === "human" ? "review" : requestedScoring === "auto" ? "assessment" : undefined
+          }
+        />
+      </Suspense>
+    </>
   );
 }

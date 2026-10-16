@@ -16,7 +16,12 @@ import { useOperatorInbox } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { INBOX_GROUPS, inboxCountIsExact, inboxMatchesWorkspace } from "./inbox-presentation";
-import { InboxCoverageSummary } from "./InboxCoverageSummary";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
+import { InboxCoverageSummary, InboxEmptyState } from "./InboxCoverageSummary";
+import { InboxShortcutsPanel, InboxShortcutsToggle } from "./InboxShortcutsControl";
+import { InboxUpdatesControls } from "./InboxUpdatesControls";
+import { useInboxShortcutsPreference } from "./inbox-shortcuts-preference";
 import { InboxInspectorBody } from "./InboxInspectorBody";
 import { InboxItemCard } from "./InboxItemCard";
 import { useInboxLinkedItem } from "./use-inbox-linked-item";
@@ -119,9 +124,18 @@ export function InboxArea() {
       ),
     [visibleItems],
   );
+  // Empty groups are hidden; a group shows once it has a shown or read item or a known count (IN-10).
+  const shownGroups = projection
+    ? INBOX_GROUPS.map((group) => ({
+        group,
+        allItems: projection.items.filter((item) => item.group === group.id),
+        count: projection.counts[group.id],
+      })).filter(({ allItems, count }) => allItems.length > 0 || count.known > 0)
+    : [];
   const [contextSelection, setContextSelection] = useState<{ scope: string; id: string } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [shortcutsEnabled, setShortcutsEnabled] = useState(true);
+  const [shortcutsEnabled, setShortcutsEnabled] = useInboxShortcutsPreference();
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const priorItems = useRef<OperatorInboxItem[]>([]);
   const listHandles = useRef(new Map<string, WindowedRecordListHandle>());
   useEffect(() => {
@@ -239,30 +253,23 @@ export function InboxArea() {
   }, [inspect, orderedItems, selectedId, shortcutsEnabled]);
 
   return (
-    <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-semibold text-fg">Inbox</h1>
-          <p className="text-sm text-fg-secondary">Decisions and work that need your attention in this workspace.</p>
-          <p className="mt-1 text-xs text-fg-muted">
-            Review and answer decisions here. Open linked work for its current outcome.
-          </p>
-          <p className="mt-1 text-xs text-fg-muted max-sm:hidden pointer-coarse:hidden">
-            Keys: J/K select · O details · A/D focus approval actions · E source link. Confirm to decide.
-          </p>
-          <label className="mt-2 flex items-center gap-2 text-xs text-fg-muted">
-            <input
-              type="checkbox"
-              checked={shortcutsEnabled}
-              onChange={(event) => setShortcutsEnabled(event.target.checked)}
-            />
-            Enable Inbox letter shortcuts
-          </label>
-        </div>
-        <Button size="sm" onClick={() => void inbox.refetch()} disabled={inbox.isFetching}>
-          <RefreshCw aria-hidden="true" className="size-4" /> Refresh
-        </Button>
-      </header>
+    <section className={AREA_PAGE}>
+      <AreaHeader
+        title="Inbox"
+        description="Decisions and work that need your attention in this workspace."
+        actions={
+          <>
+            <InboxShortcutsToggle open={shortcutHelpOpen} onOpenChange={setShortcutHelpOpen} />
+            <Button size="sm" onClick={() => void inbox.refetch()} disabled={inbox.isFetching}>
+              <RefreshCw aria-hidden="true" className="size-4" /> Refresh
+            </Button>
+          </>
+        }
+      >
+        {shortcutHelpOpen ? (
+          <InboxShortcutsPanel enabled={shortcutsEnabled} onEnabledChange={setShortcutsEnabled} />
+        ) : null}
+      </AreaHeader>
 
       {params.get("approvalId") ? (
         <LinkedApproval key={params.get("approvalId")} approvalId={params.get("approvalId")!} />
@@ -305,18 +312,20 @@ export function InboxArea() {
 
       {projection ? (
         <>
-          <InboxCoverageSummary projection={projection} />
+          {shownGroups.length ? (
+            <InboxCoverageSummary projection={projection} />
+          ) : (
+            <InboxEmptyState projection={projection} />
+          )}
           <InboxApprovalHistory key={workspaceId} workspaceId={workspaceId} />
-          {INBOX_GROUPS.map((group) => {
-            const allItems = projection.items.filter((item) => item.group === group.id);
+          {shownGroups.map(({ group, allItems, count }) => {
             const items = orderedItems.filter((item) => item.group === group.id);
             const viewedCount = allItems.filter(isViewed).length;
-            const count = projection.counts[group.id];
             const exact = inboxCountIsExact(projection, count.complete);
             return (
               <section key={group.id} aria-labelledby={`inbox-${group.id}`} className="grid gap-3">
                 <header className="flex items-baseline gap-2">
-                  <h2 id={`inbox-${group.id}`} className="font-display text-md font-semibold text-fg">
+                  <h2 id={`inbox-${group.id}`} className="text-md font-semibold text-fg">
                     {group.label}
                   </h2>
                   <span data-inbox-count={group.id} className="text-xs text-fg-muted">
@@ -324,38 +333,17 @@ export function InboxArea() {
                   </span>
                 </header>
                 {group.id === "updates" ? (
-                  <div className="space-y-2 text-xs text-fg-muted">
-                    <p>
-                      {allItems.length - viewedCount} unread · {viewedCount} read from shown updates.
-                    </p>
-                    <p>
-                      {readScope === "operator"
-                        ? "Read status is saved for this operator and workspace."
-                        : readScope === "browser_local" && localReads.available
-                          ? "Read status is saved in this browser for this workspace."
-                          : "Read storage unavailable."}
-                    </p>
-                    {readNotice ? <p role="status">{readNotice}</p> : null}
-                    <Button
-                      size="sm"
-                      // A background refetch (30 s poll, realtime invalidations) must not swallow the click:
-                      // receipts carry each shown update's version, so a changed update stays unread.
-                      disabled={
-                        reading ||
-                        allItems.length === viewedCount ||
-                        readScope === "unavailable" ||
-                        (readScope === "browser_local" && !localReads.available)
-                      }
-                      onClick={() => void acknowledge(allItems)}
-                    >
-                      Mark all shown updates read
-                    </Button>
-                    {viewedCount > 0 ? (
-                      <Button size="sm" onClick={() => setShowViewedScope(showViewed ? null : scopeKey)}>
-                        {showViewed ? "Hide read updates" : `Show read updates (${viewedCount})`}
-                      </Button>
-                    ) : null}
-                  </div>
+                  <InboxUpdatesControls
+                    shownCount={allItems.length}
+                    viewedCount={viewedCount}
+                    readScope={readScope}
+                    localReadsAvailable={localReads.available}
+                    readNotice={readNotice}
+                    reading={reading}
+                    showViewed={showViewed}
+                    onMarkAllRead={() => void acknowledge(allItems)}
+                    onToggleShowViewed={() => setShowViewedScope(showViewed ? null : scopeKey)}
+                  />
                 ) : null}
                 {items.length === 0 ? (
                   <p className="text-sm text-fg-muted">

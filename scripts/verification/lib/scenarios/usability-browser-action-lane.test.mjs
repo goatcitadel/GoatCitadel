@@ -1234,8 +1234,10 @@ test("cockpit Code Mode journey keeps owner probes while using cockpit controls"
   );
   const returned = cockpit.operations.findIndex((operation) => operation.kind === "return-to-cockpit-chat");
   // The build editor picks its pane when the selected turn loads, so open it only after the turn is visible.
-  assert.deepEqual(cockpit.operations.slice(returned + 1, returned + 3), [
+  // Build editor is a "Conversation actions" menu item, so the menu opens first.
+  assert.deepEqual(cockpit.operations.slice(returned + 1, returned + 4), [
     { kind: "assert-text", value: "CHAT_CODE_MODE_OK" },
+    { kind: "click", name: "Conversation actions", exact: true },
     { kind: "click", name: "Build editor", exact: true },
   ]);
   assert.ok(

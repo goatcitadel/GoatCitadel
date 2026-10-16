@@ -135,8 +135,8 @@ function LibraryNoteEditorContent({
     setReview({ action, note, ...draft.value, revision: draft.baseRevision as number | undefined });
   }
   return (
-    <section className="grid gap-3 rounded-lg border border-line p-3" aria-label="Note editor">
-      <h2 className="font-display text-lg text-fg">{note?.title ?? "New note"}</h2>
+    <section className="grid gap-3 border-t border-line-subtle pt-4" aria-label="Note editor">
+      <h2 className="text-base font-semibold text-fg">{note?.title ?? "New note"}</h2>
       <p className="text-sm text-fg-secondary">
         This workspace{note ? ` · ${noteLifecycleLabel(note.lifecycleStatus)} · Version ${note.revision}` : ""}
       </p>
