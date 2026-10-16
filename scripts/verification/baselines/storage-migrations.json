@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 265,
+      "expectedCount": 266,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 265,
+      "expectedLastVersion": 266,
       "migrations": [
         {
           "version": 1,
@@ -1863,15 +1863,22 @@
           "groupName": "canonical",
           "definitionSha256": "587263464aff9c087f691203285816a758e960e822d1b871b762d5789697bc9a",
           "implementationSha256": "1bbda5d884693cbf73e29f6d9fdfca8a83b7e3fe9618176a75f8608266f96d48"
+        },
+        {
+          "version": 266,
+          "name": "external_side_effect_replay_record",
+          "groupName": "canonical",
+          "definitionSha256": "7fc97ef7de31b5448bb607dc5161f5f3fce08e0c7d6ce58b365a0755363c23d5",
+          "implementationSha256": "05cab7216f4e13e919ba0df693dc1af86dbe025fd25cb2bdbcc9c6e738084de4"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 212,
+      "expectedCount": 213,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 212,
+      "expectedLastVersion": 213,
       "migrations": [
         {
           "version": 1,
@@ -3149,6 +3156,13 @@
           "definitionSha256": "6636d25470c48f836da92f1a03073aeface0c5c9471b86be2ab793a81fa867c6",
           "sqlPayloadSha256": "5ef401e2046e721707bc1bb337e2e9dbdfa57e128c5a29aba37ded33e8715d6e",
           "runtimeIntegritySha256": "f3fb771dfc2a5c4e4c1517208cb6598bc006e7ef4622a8f689d28a539b20e562"
+        },
+        {
+          "version": 213,
+          "name": "external_side_effect_replay_record",
+          "definitionSha256": "2d99a99302e9138d5aca2f2ef240d4a294999f9441795d2f17d8bb60464d7d11",
+          "sqlPayloadSha256": "467c542c0cf38a4da5a70081a0fc0625fedee1690b08ed7acb49a20394f8606c",
+          "runtimeIntegritySha256": "1368d55a32906a665fd9209b3346e9667242b705d200a2fc19238a462f65649d"
         }
       ]
     }

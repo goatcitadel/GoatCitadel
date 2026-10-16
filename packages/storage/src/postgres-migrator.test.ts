@@ -870,12 +870,13 @@ describe("Postgres migration ledger compatibility", () => {
     // Reviewed published registry through v208 plus task appends v209/v210:
     // feature admissions, context/heartbeat bindings, remote references and cron
     // authority remain intact; approval linkage adds six columns and two indexes;
-    // v212 adds mutation_idempotency.dispatched_at.
+    // v212 adds mutation_idempotency.dispatched_at; v213 adds
+    // external_side_effect_runs.replay_record_json.
     // Keep independent drift tripwires for the complete current shape.
     assert.equal(manifest.tables.length, 368);
     assert.equal(
       manifest.tables.reduce((count, table) => count + table.columns.length, 0),
-      5_085,
+      5_086,
     );
     assert.equal(manifest.indexes.length, 768);
     assert.deepEqual(

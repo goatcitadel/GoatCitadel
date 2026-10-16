@@ -44,8 +44,8 @@ test(
 
       // The full registry (not a canonical prefix) runs the schema-shape gate.
       const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-      assert.deepEqual(migrated.appliedVersions, [212]);
-      assert.equal(migrated.latestVersion, 212);
+      assert.deepEqual(migrated.appliedVersions, [212, 213]);
+      assert.equal(migrated.latestVersion, 213);
 
       const column = await admin.query<{ data_type: string; is_nullable: string }>(
         `SELECT data_type, is_nullable FROM information_schema.columns
@@ -99,6 +99,45 @@ test(
       assert.equal(takeover.outcome === "claimed" ? takeover.claimKind : takeover.outcome, "retry_after_stale_claim");
     } finally {
       db?.close();
+      await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
+      await migrations.close();
+      await admin.end();
+    }
+  },
+);
+
+test(
+  "real PostgreSQL upgraded installs gain the sealed external side-effect replay record column",
+  {
+    skip: connectionString ? false : "Set GOATCITADEL_TEST_POSTGRES_URL to a disposable PostgreSQL instance.",
+  },
+  async () => {
+    assert.ok(connectionString);
+    const schema = `replay_record_upgrade_${randomUUID().replaceAll("-", "")}`;
+    assert.match(schema, /^replay_record_upgrade_[a-f0-9]{32}$/);
+    const admin = new Pool({ connectionString });
+    const scoped = new URL(connectionString);
+    scoped.searchParams.set("options", `-csearch_path=${schema}`);
+    const migrations = new PostgresDatabaseClient({ connectionString: scoped.toString(), database: "postgres" });
+    const upTo = (version: number) => POSTGRES_MIGRATIONS.filter((migration) => migration.version <= version);
+    try {
+      await admin.query(`CREATE SCHEMA ${schema}`);
+      // v2 renders from the current SQLite blueprint, so an install that predates
+      // the column is simulated by dropping it before v213.
+      await runPostgresMigrations(migrations, upTo(212));
+      await admin.query(`ALTER TABLE ${schema}.external_side_effect_runs DROP COLUMN replay_record_json`);
+
+      const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
+      assert.deepEqual(migrated.appliedVersions, [213]);
+      assert.equal(migrated.latestVersion, 213);
+
+      const column = await admin.query<{ data_type: string; is_nullable: string }>(
+        `SELECT data_type, is_nullable FROM information_schema.columns
+         WHERE table_schema = $1 AND table_name = 'external_side_effect_runs' AND column_name = 'replay_record_json'`,
+        [schema],
+      );
+      assert.deepEqual(column.rows, [{ data_type: "text", is_nullable: "YES" }]);
+    } finally {
       await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);
       await migrations.close();
       await admin.end();
