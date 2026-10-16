@@ -385,6 +385,29 @@ describe("ChatStreamSecretProjector", () => {
     ).toMatchObject({ type: "message_done", content: "a".repeat(20_000) });
   });
 
+  it("redacts a credential split across consecutive thinking_delta chunks", () => {
+    const projector = new ChatStreamSecretProjector();
+    const thinking = (delta: string) =>
+      ({ type: "thinking_delta", sessionId: "session-1", turnId: "turn-1", delta }) satisfies ChatStreamChunkDraft;
+
+    const projected = [
+      ...projector.projectAll(thinking("Checking Authorization: Bearer hun")),
+      ...projector.projectAll(thinking("ter2 before answering. ")),
+      ...projector.projectAll({
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "message-1",
+        content: "Final answer",
+      } satisfies ChatStreamChunkDraft),
+    ];
+
+    const serialized = JSON.stringify(projected);
+    expect(serialized).not.toContain("hunter2");
+    expect(serialized).toContain("[REDACTED]");
+    expect(projected.at(-1)).toMatchObject({ type: "message_done", content: "Final answer" });
+  });
+
   it("emits a bounded redaction marker instead of dropping oversized thinking", () => {
     const projector = new ChatStreamSecretProjector();
 

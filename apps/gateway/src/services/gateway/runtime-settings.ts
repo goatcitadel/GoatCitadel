@@ -114,7 +114,7 @@ export interface RuntimeSettings {
     orchestrationFinalStreamingV1Disabled?: boolean;
     /** Master autonomy kill switch (Phase 1 proactivity / self-improvement). Absent/false ⇒ autonomy ON; `true` halts all autonomous loops. */
     autonomyV1Disabled?: boolean;
-    /** Thinking-display skeleton. Absent/false (default) ⇒ no thinking_delta chunks are emitted; behavior is byte-identical to today. */
+    /** Thinking display. `true` streams one thinking_delta per provider reasoning chunk. Absent/false (default) ⇒ no thinking_delta chunks are emitted; behavior is byte-identical to today. */
     chatThinkingStreamV1Enabled?: boolean;
     /** On-demand context estimates in session.status. Absent/false disables enrichment. */
     chatContextBudgetVisibilityV1Enabled?: boolean;

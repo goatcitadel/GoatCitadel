@@ -230,3 +230,86 @@ describe("ChatTurnAgentRunner thinking-display skeleton (chatThinkingStreamV1Ena
     expect(String(thinkingChunk?.delta)).not.toContain("ENCRYPTED");
   });
 });
+
+function streamingDeps(chunks: Array<Record<string, unknown>>, seenRequests: Array<Record<string, unknown>>) {
+  return {
+    storage: createMockStorage() as never,
+    listToolCatalog: () => createToolCatalog([]),
+    createChatCompletion: async () => {
+      throw new Error("non-stream path not expected");
+    },
+    createChatCompletionStream: async (request: Record<string, unknown>) => {
+      seenRequests.push(request);
+      return (async function* () {
+        for (const chunk of chunks) yield chunk;
+      })();
+    },
+    invokeTool: async () => {
+      throw new Error("not expected");
+    },
+  };
+}
+
+const reasoningStream = [
+  { id: "s1", model: "m", choices: [{ index: 0, delta: { reasoning_content: "First, " } }] },
+  { id: "s1", model: "m", choices: [{ index: 0, delta: { reasoning_content: "then second." } }] },
+  { id: "s1", model: "m", choices: [{ index: 0, delta: { content: "Done." } }] },
+  { id: "s1", model: "m", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+];
+
+describe("ChatTurnAgentRunner incremental thinking stream", () => {
+  it("yields one thinking_delta per provider reasoning chunk, in order, before message_done", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const orchestrator = new ChatTurnAgentRunner({
+      ...streamingDeps(reasoningStream, seen),
+      chatThinkingStreamV1Enabled: () => true,
+    } as never);
+    const input = baseTurn("sess-incremental", "Explain.");
+    const chunks: Array<Record<string, unknown>> = [];
+    for await (const chunk of orchestrator.runStream(input)) chunks.push(chunk as Record<string, unknown>);
+    const thinking = chunks.filter((chunk) => chunk.type === "thinking_delta");
+    expect(thinking.map((chunk) => chunk.delta)).toEqual(["First, ", "then second."]);
+    const doneIndex = chunks.findIndex((chunk) => chunk.type === "message_done");
+    expect(chunks.findIndex((chunk) => chunk.type === "thinking_delta")).toBeLessThan(doneIndex);
+    expect(chunks.filter((chunk) => chunk.type === "thinking_delta")).toHaveLength(2); // no end-of-pass duplicate
+    expect(String(chunks[doneIndex]?.content)).toBe("Done.");
+    expect(seen[0]?.streamReasoningDeltas).toBe(true);
+  });
+
+  it("neither requests nor yields reasoning when the flag is off", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const orchestrator = new ChatTurnAgentRunner(streamingDeps(reasoningStream, seen) as never);
+    const chunks: Array<Record<string, unknown>> = [];
+    for await (const chunk of orchestrator.runStream(baseTurn("sess-incremental-off", "Explain."))) {
+      chunks.push(chunk as Record<string, unknown>);
+    }
+    expect(chunks.some((chunk) => chunk.type === "thinking_delta")).toBe(false);
+    expect("streamReasoningDeltas" in (seen[0] ?? {})).toBe(false);
+  });
+
+  it("never streams a redacted_thinking block's data as a thinking_delta", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const redactedStream = [
+      {
+        id: "s2",
+        model: "m",
+        choices: [{ index: 0, delta: { provider_native_content: [{ type: "redacted_thinking", data: "cipher" }] } }],
+      },
+      { id: "s2", model: "m", choices: [{ index: 0, delta: { content: "Done." } }] },
+      { id: "s2", model: "m", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+    ];
+    const orchestrator = new ChatTurnAgentRunner({
+      ...streamingDeps(redactedStream, seen),
+      chatThinkingStreamV1Enabled: () => true,
+    } as never);
+    const chunks: Array<Record<string, unknown>> = [];
+    for await (const chunk of orchestrator.runStream(baseTurn("sess-incremental-redacted", "Explain."))) {
+      chunks.push(chunk as Record<string, unknown>);
+    }
+    const thinking = chunks.filter((chunk) => chunk.type === "thinking_delta");
+    expect(thinking.some((chunk) => String(chunk.delta).includes("cipher"))).toBe(false);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.streamReasoningDeltas).toBe(true);
+    expect(chunks.find((chunk) => chunk.type === "message_done")?.content).toBe("Done.");
+  });
+});

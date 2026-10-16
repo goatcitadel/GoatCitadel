@@ -1038,10 +1038,13 @@ export interface ChatTurnAgentRunnerDeps {
   /** Absolute root used to derive jailed workspace-file download links from verified tool results. */
   workspaceFileRootDir?: string;
   /**
-   * Thinking-display skeleton gate. Read live (like the `isFeatureEnabled`
-   * closures other services pass in) rather than a plain boolean snapshot, so an
-   * operator toggling the flag at runtime via the dashboard takes effect on the
-   * NEXT turn without requiring a gateway restart. Absent or returning false
+   * Thinking display gate. When true, streaming passes request per-chunk
+   * reasoning (`streamReasoningDeltas`) and yield one `thinking_delta` per
+   * provider reasoning chunk; passes that streamed none fall back to one
+   * end-of-pass chunk from the terminal message. Read live (like the
+   * `isFeatureEnabled` closures other services pass in) rather than a plain
+   * boolean snapshot, so an operator toggling the flag at runtime via the
+   * dashboard takes effect on the NEXT turn without requiring a gateway restart. Absent or returning false
    * (default) ⇒ this orchestrator never constructs a `thinking_delta` chunk —
    * byte-identical behavior to today.
    */
@@ -4338,6 +4341,8 @@ export class ChatTurnAgentRunner {
               completionRequest = attachChatProviderFallbackAuthorization(completionRequest, authorization);
           }
 
+          const thinkingStreamEnabled = (await this.deps.chatThinkingStreamV1Enabled?.()) === true;
+          let streamedThinking = false;
           let completion: ChatCompletionResponse;
           let completedFirstProviderRequest = false;
           completionRequest.timeoutMs = Math.min(
@@ -4364,6 +4369,7 @@ export class ChatTurnAgentRunner {
                   {
                     ...completionRequest,
                     stream: true,
+                    ...(thinkingStreamEnabled ? { streamReasoningDeltas: true } : {}),
                   },
                   completionUsageAttribution(`loop:${loop}:stream`, loop === 0 ? "chat_initial" : "chat_tool_loop"),
                 );
@@ -4374,6 +4380,19 @@ export class ChatTurnAgentRunner {
                   // when no user-visible text was rendered.
                   streamYieldedProviderOutput = true;
                   const streamed = absorbCompletionStreamChunk(aggregate, rawChunk);
+                  // Reasoning is a standalone chunk only: it never counts as
+                  // visible output and never reaches assistantContent.
+                  if (thinkingStreamEnabled && streamed.reasoningDelta) {
+                    streamedThinking = true;
+                    yield {
+                      type: "thinking_delta",
+                      sessionId: input.sessionId,
+                      turnId: input.turnId,
+                      delta: readOnlyExplorerScopeRoot
+                        ? projectWorkspaceExplorerPathValue(streamed.reasoningDelta, [readOnlyExplorerScopeRoot])
+                        : streamed.reasoningDelta,
+                    };
+                  }
                   if (streamed.delta && !streamed.sawToolCall && !readOnlyExplorerScopeRoot) {
                     streamYieldedVisibleChunk = true;
                     yield {
@@ -4529,17 +4548,15 @@ export class ChatTurnAgentRunner {
             break;
           }
 
-          // Thinking-display skeleton (default-off `chatThinkingStreamV1Enabled`):
-          // terminal-block variant. Streaming reasoning deltas are absorbed into
-          // the completion aggregate per-chunk (see absorbCompletionStreamChunk)
-          // but not surfaced incrementally, so — without deeper provider-plumbing
-          // changes than a skeleton warrants — the earliest tappable point is
-          // right here, once this completion's terminal `message` is available.
-          // Emits AT MOST one thinking_delta per completion pass, always before
-          // this pass's visible output continues below. SAFETY INVARIANT: the
-          // reasoning text below is never written into assistantContent or any
-          // persisted message content — only into this standalone chunk.
-          if (await this.deps.chatThinkingStreamV1Enabled?.()) {
+          // Thinking display fallback (default-off `chatThinkingStreamV1Enabled`):
+          // when this pass streamed no per-chunk reasoning (non-stream path,
+          // stream-recovery completion, or a provider that only returns
+          // reasoning on the terminal message), emit the terminal message's
+          // reasoning as AT MOST one thinking_delta, before this pass's visible
+          // output continues below. SAFETY INVARIANT: the reasoning text below
+          // is never written into assistantContent or any persisted message
+          // content — only into this standalone chunk.
+          if (thinkingStreamEnabled && !streamedThinking) {
             const reasoningText = extractReasoningText(message);
             if (reasoningText) {
               yield {
