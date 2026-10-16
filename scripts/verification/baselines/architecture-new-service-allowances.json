@@ -2313,6 +2313,14 @@
       "maxDependencyMemberAccesses": 15,
       "reason": "WS4 gap-closure program (operator-approved 2026-10-15): live blind model comparison execution split out of the baseline-era comparison owner. The cap covers the repository compare-and-swap claim, lease renewal and conditional terminal write plus the lease TTL override that guard a cross-process claim/lease.",
       "evidence": "apps/gateway/src/services/model-comparison-execution-service.test.ts covers concurrency 2, status transitions, partial failure, restart of missing/errored results, conflict rejection, cancel abort, stale running recovery past the lease TTL, cross-process claim races, fresh-lease restart rejection, cancels written by another process, empty/approval-paused responses and background-error reporting; packages/storage/src/model-comparison-run-repo.test.ts covers claimRun, renewRunLease and finishRun including no-match paths; the route-port factory test covers delegation of records and run control; routes/model-comparisons.test.ts covers run/cancel status mapping; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/communications-approval-payload.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS2 gap-closure program: pure helper that defines the communications approval payload contract (hashed mail-send and calendar-create fields, SHA-256 payloadHash over canonical JSON, and the communications:<approvalId> idempotency key) shared by the dashboard service that creates the approvals and the later executor that verifies them; it reaches no host or dependency.",
+      "evidence": "apps/gateway/src/services/communications-approval-payload.test.ts covers hash stability under key reordering, hash change on content change, omitted calendar optionals, and payload readers rejecting wrong actions and malformed fields; communications-dashboard-service.test.ts pins payloadHash equality for both approval kinds; Gateway typecheck passes."
     }
   ]
 }

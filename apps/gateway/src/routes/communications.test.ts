@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import type { ApprovalCreateInput } from "@goatcitadel/contracts";
+import type { ApprovalCreateInput, MailDraftRecord } from "@goatcitadel/contracts";
 import { communicationsRoutes } from "./communications.js";
 
 function decorateServices(app: FastifyInstance, services: Record<string, unknown>) {
@@ -85,6 +85,7 @@ describe("communications routes", () => {
     decorateServices(app, {
       integrations: { listIntegrationConnections: vi.fn(() => []) },
       approvals: { createApproval },
+      mailDrafts: createMailDraftStore(),
       comms: {
         commsGmailRead: vi.fn(async () => ({ messages: [] })),
         commsCalendarList: vi.fn(async () => ({ items: [] })),
@@ -159,6 +160,7 @@ describe("communications routes", () => {
         ]),
       },
       approvals: { createApproval },
+      mailDrafts: createMailDraftStore(),
       comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
     });
     await app.register(communicationsRoutes);
@@ -227,6 +229,7 @@ describe("communications routes", () => {
         ]),
       },
       approvals: { createApproval },
+      mailDrafts: createMailDraftStore(),
       comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
     });
     await app.register(communicationsRoutes);
@@ -251,6 +254,136 @@ describe("communications routes", () => {
     });
     expect(accepted.statusCode).toBe(201);
     expect(createApproval).not.toHaveBeenCalled();
+  });
+
+  it("reads a persisted draft back and answers 404 for an unknown draft", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => ({
+      approvalId: "22222222-2222-4222-8222-222222222222",
+      kind: input.kind,
+      riskLevel: input.riskLevel,
+      status: "pending",
+      payload: input.payload,
+      preview: input.preview,
+      linkage: input.linkage,
+      createdAt: "2026-06-05T12:00:00.000Z",
+      explanationStatus: "not_requested",
+    }));
+    app = Fastify();
+    decorateServices(app, {
+      integrations: { listIntegrationConnections: vi.fn(() => []) },
+      approvals: { createApproval },
+      mailDrafts: createMailDraftStore(),
+      comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
+    });
+    await app.register(communicationsRoutes);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts",
+      payload: { accountId: "acct-a", to: ["operator@example.test"], subject: "Status", bodyText: "Ready." },
+    });
+    const draftId = created.json().draftId as string;
+    await app.inject({ method: "POST", url: `/api/v1/mail/drafts/${draftId}/send`, payload: {} });
+
+    const read = await app.inject({ method: "GET", url: `/api/v1/mail/drafts/${encodeURIComponent(draftId)}` });
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toMatchObject({
+      draftId,
+      status: "approval_required",
+      approvalId: "22222222-2222-4222-8222-222222222222",
+    });
+
+    const missing = await app.inject({ method: "GET", url: "/api/v1/mail/drafts/mail_draft_missing" });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({ error: "Mail draft not found." });
+  });
+
+  it("answers 503 for draft routes when mail draft storage is not composed", async () => {
+    app = Fastify();
+    decorateServices(app, {
+      integrations: { listIntegrationConnections: vi.fn(() => []) },
+      approvals: { createApproval: vi.fn() },
+      comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
+    });
+    await app.register(communicationsRoutes);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts",
+      payload: { accountId: "acct-a", to: ["operator@example.test"], subject: "Status", bodyText: "Ready." },
+    });
+    const read = await app.inject({ method: "GET", url: "/api/v1/mail/drafts/mail_draft_x" });
+    const sent = await app.inject({ method: "POST", url: "/api/v1/mail/drafts/mail_draft_x/send", payload: {} });
+
+    for (const response of [created, read, sent]) {
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({ error: "Mail draft storage is unavailable." });
+    }
+  });
+
+  it("binds a calendar approval to a workspace that can see the calendar account", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => ({
+      approvalId: "33333333-3333-4333-8333-333333333333",
+      kind: input.kind,
+      riskLevel: input.riskLevel,
+      status: "pending",
+      payload: input.payload,
+      preview: input.preview,
+      linkage: input.linkage,
+      createdAt: "2026-06-05T12:00:00.000Z",
+      explanationStatus: "not_requested",
+    }));
+    const connection = (connectionId: string, workspaceId?: string) => ({
+      connectionId,
+      catalogId: "automation.google-calendar",
+      kind: "automation",
+      key: "google-calendar",
+      label: connectionId,
+      enabled: true,
+      status: "connected",
+      ...(workspaceId ? { workspaceId } : {}),
+      config: {},
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-02T00:00:00.000Z",
+    });
+    app = Fastify();
+    decorateServices(app, {
+      integrations: {
+        listIntegrationConnections: vi.fn(() => [
+          connection("cal-own", "workspace-cal"),
+          connection("cal-foreign", "other"),
+        ]),
+      },
+      approvals: { createApproval },
+      comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
+    });
+    await app.register(communicationsRoutes);
+    const event = {
+      workspaceId: "workspace-cal",
+      title: "Planning",
+      startIso: "2026-06-06T10:00:00.000Z",
+      endIso: "2026-06-06T10:30:00.000Z",
+    };
+
+    const refused = await app.inject({
+      method: "POST",
+      url: "/api/v1/calendar/events",
+      payload: { ...event, accountId: "cal-foreign" },
+    });
+    expect(refused.statusCode).toBe(404);
+    expect(createApproval).not.toHaveBeenCalled();
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/v1/calendar/events",
+      payload: { ...event, accountId: "cal-own" },
+    });
+    expect(accepted.statusCode).toBe(202);
+    expect(accepted.json()).toMatchObject({ approvalId: "33333333-3333-4333-8333-333333333333" });
+    expect(createApproval.mock.calls[0]![0].linkage).toEqual({
+      actionType: "communications.calendar.create",
+      connectorId: "cal-own",
+      workspaceId: "workspace-cal",
+    });
   });
 
   it("uses a disabled uncredentialed fixture only in dev verification without provider calls", async () => {
@@ -358,3 +491,40 @@ describe("communications routes", () => {
     expect(disabledResponse.body).not.toContain("Fixture usability agenda");
   });
 });
+
+/** In-memory stand-in for `storage.mailDrafts`: duplicate create throws, transition is compare-and-set. */
+function createMailDraftStore() {
+  const rows = new Map<string, MailDraftRecord>();
+  return {
+    create: async (record: MailDraftRecord) => {
+      if (rows.has(record.draftId)) {
+        throw new Error(`duplicate mail draft ${record.draftId}`);
+      }
+      rows.set(record.draftId, { ...record });
+      return { ...record };
+    },
+    find: async (draftId: string) => {
+      const row = rows.get(draftId);
+      return row ? { ...row } : undefined;
+    },
+    transition: async (
+      draftId: string,
+      from: readonly MailDraftRecord["status"][],
+      patch: Partial<MailDraftRecord> & Pick<MailDraftRecord, "status" | "updatedAt">,
+    ) => {
+      const row = rows.get(draftId);
+      if (!row || !from.includes(row.status)) {
+        return undefined;
+      }
+      const next: MailDraftRecord = {
+        ...row,
+        status: patch.status,
+        updatedAt: patch.updatedAt,
+        ...(patch.approvalId === undefined ? {} : { approvalId: patch.approvalId }),
+        ...(patch.failureReason === undefined ? {} : { failureReason: patch.failureReason }),
+      };
+      rows.set(draftId, next);
+      return { ...next };
+    },
+  };
+}

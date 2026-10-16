@@ -1,6 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ApprovalCreateInput, ApprovalRequest, IntegrationConnection } from "@goatcitadel/contracts";
-import { createCommunicationsDashboardService } from "./communications-dashboard-service.js";
+import type {
+  ApprovalCreateInput,
+  ApprovalRequest,
+  IntegrationConnection,
+  MailDraftRecord,
+} from "@goatcitadel/contracts";
+import {
+  computeCommunicationsPayloadHash,
+  readCalendarCreateApprovalInput,
+  readMailSendApprovalInput,
+} from "./communications-approval-payload.js";
+import {
+  createCommunicationsDashboardService,
+  type CommunicationsMailDraftStore,
+} from "./communications-dashboard-service.js";
 
 const NOW = "2026-06-05T12:00:00.000Z";
 
@@ -171,8 +184,9 @@ describe("communications dashboard service", () => {
     const service = createCommunicationsDashboardService({
       now: () => new Date(NOW),
       createApproval,
+      mailDrafts: createMailDraftStore(),
     });
-    const draft = service.createDraft({
+    const draft = await service.createDraft({
       accountId: "11111111-1111-4111-8111-111111111111",
       to: ["operator@example.test"],
       subject: "Approval check",
@@ -198,8 +212,12 @@ describe("communications dashboard service", () => {
 
   it("binds the send approval to the draft workspace and replays an exact repeated send without a second approval", async () => {
     const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
-    const service = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval });
-    const draft = service.createDraft({
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(NOW),
+      createApproval,
+      mailDrafts: createMailDraftStore(),
+    });
+    const draft = await service.createDraft({
       workspaceId: "workspace-mail",
       accountId: "11111111-1111-4111-8111-111111111111",
       to: ["operator@example.test"],
@@ -226,8 +244,12 @@ describe("communications dashboard service", () => {
 
   it("keeps the exact unscoped send linkage for drafts without a workspace", async () => {
     const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
-    const service = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval });
-    const draft = service.createDraft({
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(NOW),
+      createApproval,
+      mailDrafts: createMailDraftStore(),
+    });
+    const draft = await service.createDraft({
       accountId: "acct-unscoped",
       to: ["operator@example.test"],
       subject: "Unscoped",
@@ -249,8 +271,12 @@ describe("communications dashboard service", () => {
       await gate;
       return createApprovalRecord(input);
     });
-    const service = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval });
-    const draft = service.createDraft({
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(NOW),
+      createApproval,
+      mailDrafts: createMailDraftStore(),
+    });
+    const draft = await service.createDraft({
       workspaceId: "workspace-mail",
       accountId: "acct-a",
       to: ["operator@example.test"],
@@ -270,8 +296,12 @@ describe("communications dashboard service", () => {
     const createApproval = vi.fn(async () => {
       throw new Error("storage write outcome unknown");
     });
-    const service = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval });
-    const draft = service.createDraft({
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(NOW),
+      createApproval,
+      mailDrafts: createMailDraftStore(),
+    });
+    const draft = await service.createDraft({
       workspaceId: "workspace-mail",
       accountId: "acct-a",
       to: ["operator@example.test"],
@@ -281,16 +311,124 @@ describe("communications dashboard service", () => {
     await expect(service.sendDraft(draft.draftId)).rejects.toThrow("storage write outcome unknown");
     const replay = await service.sendDraft(draft.draftId);
     expect(replay).toMatchObject({ draftId: draft.draftId, status: "failed" });
+    expect(replay.failureReason).toEqual(expect.any(String));
     expect(replay.approvalId).toBeUndefined();
     expect(createApproval).toHaveBeenCalledOnce();
   });
 
   it("never requests an approval for a draft the Gateway does not hold, even when sent twice", async () => {
     const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
-    const service = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval });
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(NOW),
+      createApproval,
+      mailDrafts: createMailDraftStore(),
+    });
     expect(await service.sendDraft("mail_draft_missing")).toMatchObject({ status: "failed" });
     expect(await service.sendDraft("mail_draft_missing")).toMatchObject({ status: "failed" });
     expect(createApproval).not.toHaveBeenCalled();
+    expect(await service.getDraft("mail_draft_missing")).toBeUndefined();
+  });
+
+  it("hashes the exact send payload and states that approving sends it", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(NOW),
+      createApproval,
+      mailDrafts: createMailDraftStore(),
+    });
+    const draft = await service.createDraft({
+      accountId: "acct-a",
+      to: ["operator@example.test"],
+      cc: ["cc@example.test"],
+      subject: "Hashed",
+      bodyText: "Exact body.",
+    });
+
+    await service.sendDraft(draft.draftId);
+
+    const request = createApproval.mock.calls[0]![0];
+    const input = readMailSendApprovalInput(request.payload);
+    expect(input).toEqual({
+      draftId: draft.draftId,
+      accountId: "acct-a",
+      to: ["operator@example.test"],
+      cc: ["cc@example.test"],
+      bcc: [],
+      subject: "Hashed",
+      bodyText: "Exact body.",
+    });
+    expect(request.payload).toMatchObject({
+      action: "mail_send",
+      payloadHash: computeCommunicationsPayloadHash(input!),
+      idempotencyKeyPrefix: "communications:",
+    });
+    expect(request.preview).toMatchObject({
+      execution: "Approving sends this exact message once through the connected account.",
+    });
+    expect(JSON.stringify(request.preview)).not.toMatch(/does not (send|mutate)/u);
+  });
+
+  it("hashes the exact calendar payload and binds the approval to the workspace", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const service = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval });
+
+    const event = await service.createCalendarEventPlaceholder({
+      workspaceId: "workspace-cal",
+      accountId: "acct-cal",
+      title: "Planning",
+      startIso: "2026-06-06T10:00:00.000Z",
+      endIso: "2026-06-06T10:30:00.000Z",
+      attendees: ["a@example.test"],
+      location: "Room 1",
+    });
+
+    const request = createApproval.mock.calls[0]![0];
+    const input = readCalendarCreateApprovalInput(JSON.parse(JSON.stringify(request.payload)));
+    expect(input).toEqual({
+      eventId: event.eventId,
+      accountId: "acct-cal",
+      title: "Planning",
+      startIso: "2026-06-06T10:00:00.000Z",
+      endIso: "2026-06-06T10:30:00.000Z",
+      attendees: ["a@example.test"],
+      location: "Room 1",
+    });
+    expect(request.payload).toMatchObject({
+      action: "calendar_event_create",
+      payloadHash: computeCommunicationsPayloadHash(input!),
+      idempotencyKeyPrefix: "communications:",
+    });
+    expect(request.preview).toMatchObject({
+      execution: "Approving creates this exact event once on the connected calendar.",
+    });
+    expect(JSON.stringify(request.preview)).not.toMatch(/does not (send|mutate)/u);
+    expect(request.linkage).toEqual({
+      actionType: "communications.calendar.create",
+      connectorId: "acct-cal",
+      workspaceId: "workspace-cal",
+    });
+  });
+
+  it("persists drafts so a restarted service replays the recorded approval instead of requesting another", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const mailDrafts = createMailDraftStore();
+    const serviceA = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval, mailDrafts });
+    const draft = await serviceA.createDraft({
+      workspaceId: "workspace-mail",
+      accountId: "acct-a",
+      to: ["operator@example.test"],
+      subject: "Restart",
+      bodyText: "Survives.",
+    });
+    const first = await serviceA.sendDraft(draft.draftId);
+
+    const serviceB = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval, mailDrafts });
+    const replay = await serviceB.sendDraft(draft.draftId);
+
+    expect(first).toMatchObject({ status: "approval_required", approvalId: "22222222-2222-4222-8222-222222222222" });
+    expect(replay).toMatchObject({ status: "approval_required", approvalId: first.approvalId });
+    expect(createApproval).toHaveBeenCalledOnce();
+    expect(await serviceB.getDraft(draft.draftId)).toEqual(replay);
   });
 
   it("projects only unbound connections and connections bound to the requested workspace", async () => {
@@ -366,5 +504,39 @@ function createApprovalRecord(input: ApprovalCreateInput): ApprovalRequest {
     rollbackNote: input.rollbackNote,
     createdAt: NOW,
     explanationStatus: "not_requested",
+  };
+}
+
+/** In-memory stand-in for the storage repo: duplicate create throws, transition is compare-and-set with COALESCE. */
+function createMailDraftStore(): CommunicationsMailDraftStore {
+  const rows = new Map<string, MailDraftRecord>();
+  return {
+    create: async (record) => {
+      if (rows.has(record.draftId)) {
+        throw new Error(`duplicate mail draft ${record.draftId}`);
+      }
+      rows.set(record.draftId, { ...record });
+      return { ...record };
+    },
+    find: async (draftId) => {
+      const row = rows.get(draftId);
+      return row ? { ...row } : undefined;
+    },
+    transition: async (draftId, from, patch) => {
+      const row = rows.get(draftId);
+      if (!row || !from.includes(row.status)) {
+        return undefined;
+      }
+      const next: MailDraftRecord = {
+        ...row,
+        status: patch.status,
+        updatedAt: patch.updatedAt,
+        ...(patch.approvalId === undefined ? {} : { approvalId: patch.approvalId }),
+        ...(patch.failureReason === undefined ? {} : { failureReason: patch.failureReason }),
+        ...(patch.sentAt === undefined ? {} : { sentAt: patch.sentAt }),
+      };
+      rows.set(draftId, next);
+      return { ...next };
+    },
   };
 }

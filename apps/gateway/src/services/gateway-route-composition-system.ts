@@ -5,6 +5,7 @@ import { createPersonalOpsRouteService } from "./personal-ops-route-service.js";
 import { PersonalOpsService } from "./personal-ops-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
+import type { CommunicationsMailDraftStore } from "./communications-dashboard-service.js";
 import {
   createSettingsRuntimeDependenciesForGateway,
   createWorkspacesRoutePortForGateway,
@@ -101,4 +102,11 @@ export function composeSystemRouteDependencies(
     voice: mediaVoiceService,
     workspaces: createWorkspacesRoutePortForGateway(gateway),
   };
+}
+
+/** The durable mail draft store the communications routes persist drafts through. */
+export function composeCommunicationsMailDraftStore(
+  gateway: GatewayRouteCompositionPort,
+): CommunicationsMailDraftStore {
+  return gateway.storage.mailDrafts;
 }

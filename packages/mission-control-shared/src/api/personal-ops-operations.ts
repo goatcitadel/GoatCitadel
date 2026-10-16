@@ -78,6 +78,11 @@ export async function createMailDraft(input: {
   });
 }
 
+/** Re-reads one persisted draft so the operator sees its current send outcome. */
+export async function getMailDraft(draftId: string): Promise<MailDraftRecord> {
+  return request<MailDraftRecord>(`/api/v1/mail/drafts/${encodeURIComponent(draftId)}`, { cache: "no-store" });
+}
+
 export async function sendMailDraft(draftId: string): Promise<MailDraftRecord> {
   return request<MailDraftRecord>(`/api/v1/mail/drafts/${encodeURIComponent(draftId)}/send`, {
     method: "POST",
