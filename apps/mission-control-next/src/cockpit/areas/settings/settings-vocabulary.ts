@@ -110,6 +110,7 @@ export const WRITEBACK_REPLAY_OUTCOME_LABELS: Record<IntegrationExternalWritebac
   in_progress: "Still in progress",
   payload_mismatch: "Different from the original request",
   idempotency_unavailable: "Replay protection unavailable",
+  unknown_after_send: "May have been sent, not retried",
 };
 
 export const DAEMON_STATE_LABELS: Record<DaemonStatusResponse["state"], string> = {

@@ -795,6 +795,11 @@ export class SkillLearningService {
         throw new ConflictError({
           message: "Skill-learning candidate transition is already in progress; retry this evidence.",
         });
+      } else if (claim.outcome === "unknown_after_send") {
+        throw new ConflictError({
+          message:
+            "Skill-learning candidate transition may already have been applied; it is not retried automatically.",
+        });
       } else {
         throw new ConflictError({
           message: "Skill-learning candidate transition identity conflicts with prior bytes.",

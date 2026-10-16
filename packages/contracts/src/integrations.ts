@@ -173,7 +173,9 @@ export type IntegrationExternalWritebackReplayOutcome =
   | "duplicate"
   | "in_progress"
   | "payload_mismatch"
-  | "idempotency_unavailable";
+  | "idempotency_unavailable"
+  /** A stale holder crossed the dispatch boundary; the outcome is unknown and is never auto-redispatched. */
+  | "unknown_after_send";
 export type IntegrationExternalWritebackResumeState =
   | "not_resumable"
   | "completed"

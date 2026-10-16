@@ -261,7 +261,12 @@ async function commitApprovedDryRunSideEffect<TValue>(
           context.markExternalCallStarted();
           return result;
         }
-        if (result.status === "failed" && result.claim.resumeState === "manual_review_unknown_external_outcome") {
+        if (
+          (result.status === "failed" && result.claim.resumeState === "manual_review_unknown_external_outcome") ||
+          (result.status === "blocked" && result.blockedReason === "external_side_effect_unknown_after_send")
+        ) {
+          // The boundary may have been crossed by this or an interrupted
+          // attempt; never record the commit as cleanly pre-boundary.
           context.markExternalCallStarted();
         }
         throw new DryRunCommitInnerResultError(result);
