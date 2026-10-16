@@ -1,4 +1,4 @@
-import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/contracts";
+import type { ChannelSetupDefinition, ChannelSetupDraft, ChannelSetupIssue } from "@goatcitadel/contracts";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   requireCatalog,
@@ -16,8 +16,16 @@ import {
 const GOOGLE_CHAT_VERSION = "2026.10.google-chat.app.v2";
 const AUDIENCE_TYPES = new Set(["project_number", "endpoint_url"]);
 
-function hasServiceAccountKey(values: Record<string, unknown>): boolean {
-  return Boolean(readString(values, "serviceAccountKeyEnv") || readString(values, "serviceAccountKey"));
+/**
+ * An inline service-account key is a credential: it lives only in secure draft custody
+ * (secretState) or as a custody-hydrated value during validation/test, never in plain draft JSON.
+ */
+function hasServiceAccountKey(draft: ChannelSetupDraft): boolean {
+  return Boolean(
+    readString(draft.draft, "serviceAccountKeyEnv") ||
+    readString(draft.draft, "serviceAccountKey") ||
+    draft.secretState?.serviceAccountKey?.configured,
+  );
 }
 
 export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
@@ -179,7 +187,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
     },
     adapter: {
       adapterVersion: GOOGLE_CHAT_VERSION,
-      secretFieldKeys: ["webhookUrl"],
+      secretFieldKeys: ["webhookUrl", "serviceAccountKey"],
     },
     validation: {
       validationVersion: GOOGLE_CHAT_VERSION,
@@ -219,7 +227,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
     definition,
     hydrate(connection) {
       const config = connection.config;
-      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["webhookUrl"]]);
+      const hasConfiguredSecret = hasAnyConfiguredSecret(config, [["webhookUrl"], ["serviceAccountKey"]]);
       return {
         draft: {
           defaultThreadKey: readString(config, "defaultThreadKey"),
@@ -232,6 +240,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
           fieldState: {
             webhookUrl: readString(config, "webhookUrl") ? "configured" : "missing",
+            serviceAccountKey: readString(config, "serviceAccountKey") ? "configured" : "unknown",
             defaultThreadKey: readString(config, "defaultThreadKey") ? "configured" : "unknown",
             serviceAccountKeyEnv: readString(config, "serviceAccountKeyEnv") ? "configured" : "unknown",
             audienceType: readString(config, "audienceType") ? "configured" : "unknown",
@@ -240,7 +249,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
           },
           warnings: hasConfiguredSecret
             ? [
-                "Saved webhook URLs are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
+                "Saved webhook URLs and service-account keys are intentionally not rehydrated into the wizard. Replace them only if you need to change them.",
               ]
             : [],
           rawLegacyConfig: config,
@@ -248,9 +257,11 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
       };
     },
     normalize(draft) {
-      const appMode = hasServiceAccountKey(draft.draft);
+      const appMode = hasServiceAccountKey(draft);
       return compactRecord({
         webhookUrl: readString(draft.draft, "webhookUrl"),
+        // Present only on a custody-hydrated draft; finalize replaces it with the promoted secret reference.
+        serviceAccountKey: readString(draft.draft, "serviceAccountKey"),
         defaultThreadKey: readString(draft.draft, "defaultThreadKey"),
         serviceAccountKeyEnv: readString(draft.draft, "serviceAccountKeyEnv"),
         audienceType: appMode ? (readString(draft.draft, "audienceType") ?? "project_number") : undefined,
@@ -263,7 +274,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
     validate(draft) {
       const issues: ChannelSetupIssue[] = [];
       const webhookUrl = readString(draft.draft, "webhookUrl");
-      const appMode = hasServiceAccountKey(draft.draft);
+      const appMode = hasServiceAccountKey(draft);
       if (!webhookUrl && !appMode) {
         issues.push(
           requiredFieldIssue("webhookUrl", "Add a webhook URL, or a service-account key variable for Chat app mode."),
