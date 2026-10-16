@@ -162,9 +162,7 @@ async function invokeCommsTool(
  */
 async function normalizePreApprovedRequest(host: CommsHost, request: ToolInvokeRequest): Promise<ToolInvokeRequest> {
   const { consentContext: _callerConsent, ...unconsented } = request;
-  const normalized: ToolInvokeRequest = host.normalizeToolInvokeRequest
-    ? await host.normalizeToolInvokeRequest(unconsented)
-    : unconsented;
+  const normalized: ToolInvokeRequest = (await host.normalizeToolInvokeRequest?.(unconsented)) ?? unconsented;
   const { consentContext: _normalizedConsent, ...recorded } = normalized;
   return recorded;
 }
