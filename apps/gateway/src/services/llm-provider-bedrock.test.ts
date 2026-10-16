@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { EventStreamCodec } from "@smithy/eventstream-codec";
 import type { ChatCompletionRequest } from "@goatcitadel/contracts";
 import type { LlmProviderAdapterHost, LlmProviderResolution } from "./llm-provider-adapter.js";
 import {
@@ -7,6 +8,7 @@ import {
   buildBedrockConversePayload,
   parseBedrockRegion,
 } from "./llm-provider-bedrock.js";
+import { decodeBedrockEventStream } from "./llm-provider-bedrock-stream.js";
 
 const SIGV4_SECRET = "test-secret";
 const PNG_BASE64 = "iVBORw0KGgo=";
@@ -32,7 +34,10 @@ function bedrockResolution(overrides: { authMode?: string; apiKey?: string } = {
   };
 }
 
-function createHost(headers: Record<string, string> = { "Content-Type": "application/json" }): LlmProviderAdapterHost {
+function createHost(
+  headers: Record<string, string> = { "Content-Type": "application/json" },
+  usage?: FakeUsage["handle"],
+): LlmProviderAdapterHost {
   return {
     buildRequestTarget: (_resolved, _purpose, endpointUrl) => ({ url: endpointUrl, headers: { ...headers } }),
     postJsonRequest: async ({ target, payload, timeoutMs, signal }) => {
@@ -44,10 +49,106 @@ function createHost(headers: Record<string, string> = { "Content-Type": "applica
         signal: signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal,
         redirect: "manual",
       });
-      return { response, effectivePayload: payload, outputCapRetriesRemaining: 0 };
+      return {
+        response,
+        effectivePayload: payload,
+        outputCapRetriesRemaining: 0,
+        ...(usage ? { usage: usage as never } : {}),
+      };
     },
     retryOutputCapFailure: async () => undefined,
   };
+}
+
+interface FakeUsage {
+  calls: string[];
+  handle: Record<string, unknown>;
+}
+
+function createFakeUsage(): FakeUsage {
+  const calls: string[] = [];
+  const record = (name: string) => async () => {
+    calls.push(name);
+    return { eventId: "usage_evt_1" };
+  };
+  return {
+    calls,
+    handle: {
+      eventId: "usage_evt_1",
+      renewLease: async () => {
+        calls.push("renewLease");
+      },
+      observe: () => undefined,
+      observeNormalized: () => undefined,
+      succeed: record("succeed"),
+      fail: record("fail"),
+      cancel: record("cancel"),
+    },
+  };
+}
+
+const streamCodec = new EventStreamCodec(
+  (bytes) => new TextDecoder().decode(bytes),
+  (text) => new TextEncoder().encode(text),
+);
+
+function frame(eventType: string, payload: unknown, messageType = "event"): Uint8Array {
+  return streamCodec.encode({
+    headers: {
+      ":event-type": { type: "string", value: eventType },
+      ":message-type": { type: "string", value: messageType },
+      ":content-type": { type: "string", value: "application/json" },
+      ...(messageType === "exception" ? { ":exception-type": { type: "string", value: eventType } } : {}),
+    },
+    body: new TextEncoder().encode(JSON.stringify(payload)),
+  });
+}
+
+function streamOf(bytes: Uint8Array, splitEvery: number): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      for (let offset = 0; offset < bytes.length; offset += splitEvery) {
+        controller.enqueue(bytes.slice(offset, offset + splitEvery));
+      }
+      controller.close();
+    },
+  });
+}
+
+function concat(parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function eventStreamResponse(bytes: Uint8Array, splitEvery = 100000): Response {
+  return new Response(streamOf(bytes, splitEvery), {
+    status: 200,
+    headers: { "content-type": "application/vnd.amazon.eventstream" },
+  });
+}
+
+const metadataFrame = () => frame("metadata", { usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 } });
+
+async function collectStream(
+  response: Response,
+  host: LlmProviderAdapterHost = createHost(),
+): Promise<Array<Record<string, any>>> {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+  const chunks: Array<Record<string, any>> = [];
+  for await (const chunk of bedrockProviderAdapter.chatCompletionsStream(
+    simpleRequest,
+    bedrockResolution(),
+    "anthropic.claude-test:0",
+    host,
+  )) {
+    chunks.push(chunk as Record<string, any>);
+  }
+  return chunks;
 }
 
 function converseJson(body: Record<string, unknown>, init: ResponseInit = {}): Response {
@@ -149,6 +250,37 @@ describe("buildBedrockConversePayload", () => {
         ],
       }),
     ).toThrow(/data: URL/);
+  });
+
+  it("substitutes placeholder text for an empty tool result", () => {
+    const payload = buildBedrockConversePayload({
+      messages: [
+        { role: "user", content: "Run it." },
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: "tool_1", type: "function", function: { name: "search", arguments: "{}" } }],
+        } as never,
+        { role: "tool", tool_call_id: "tool_1", content: "" },
+      ],
+    });
+    const messages = payload.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    expect(messages[2]?.content).toEqual([{ toolResult: { toolUseId: "tool_1", content: [{ text: "(no output)" }] } }]);
+  });
+
+  it("requires the conversation to start with a user message", () => {
+    const expected = "Amazon Bedrock requires the conversation to start with a user message.";
+    expect(() => buildBedrockConversePayload({ messages: [{ role: "system", content: "Only system." }] })).toThrow(
+      expected,
+    );
+    expect(() =>
+      buildBedrockConversePayload({
+        messages: [
+          { role: "assistant", content: "I speak first." },
+          { role: "user", content: "Hi" },
+        ],
+      }),
+    ).toThrow(expected);
   });
 
   it("maps auto and named tool choices", () => {
@@ -332,6 +464,19 @@ describe("bedrockProviderAdapter.chatCompletions", () => {
     ).rejects.toThrow(/blocked redirect/);
   });
 
+  it("fails locally when the conversation does not start with a user message", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    await expect(
+      bedrockProviderAdapter.chatCompletions(
+        { messages: [{ role: "assistant", content: "Hello?" }] },
+        bedrockResolution(),
+        "m",
+        createHost(),
+      ),
+    ).rejects.toThrow("Amazon Bedrock requires the conversation to start with a user message.");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed SigV4 credentials before any request", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     await expect(
@@ -350,6 +495,284 @@ describe("bedrockProviderAdapter.chatCompletions", () => {
         createHost(),
       ),
     ).rejects.toThrow(/malformed/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("decodeBedrockEventStream", () => {
+  it("decodes concatenated frames split mid-prelude", async () => {
+    const bytes = concat([
+      frame("contentBlockDelta", { contentBlockIndex: 0, delta: { text: "Hi" } }),
+      frame("messageStop", { stopReason: "end_turn" }),
+    ]);
+    const events = [];
+    for await (const event of decodeBedrockEventStream(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(bytes.slice(0, 5));
+          controller.enqueue(bytes.slice(5));
+          controller.close();
+        },
+      }),
+    )) {
+      events.push(event);
+    }
+    expect(events).toEqual([
+      {
+        eventType: "contentBlockDelta",
+        messageType: "event",
+        payload: { contentBlockIndex: 0, delta: { text: "Hi" } },
+      },
+      { eventType: "messageStop", messageType: "event", payload: { stopReason: "end_turn" } },
+    ]);
+  });
+
+  it("reports exception frames, empty bodies, and enforces limits", async () => {
+    const empty = streamCodec.encode({
+      headers: {
+        ":event-type": { type: "string", value: "messageStart" },
+        ":message-type": { type: "string", value: "event" },
+      },
+      body: new Uint8Array(0),
+    });
+    const events = [];
+    for await (const event of decodeBedrockEventStream(
+      streamOf(concat([empty, frame("throttlingException", { message: "slow down" }, "exception")]), 3),
+    )) {
+      events.push(event);
+    }
+    expect(events).toEqual([
+      { eventType: "messageStart", messageType: "event", payload: {} },
+      {
+        eventType: "throttlingException",
+        messageType: "exception",
+        exceptionType: "throttlingException",
+        payload: { message: "slow down" },
+      },
+    ]);
+
+    const drain = async (body: ReadableStream<Uint8Array>, limits: { maxBytes?: number; maxEvents?: number }) => {
+      for await (const _event of decodeBedrockEventStream(body, limits)) {
+        // Draining only exercises the limits.
+      }
+    };
+    const twoFrames = concat([frame("messageStart", { role: "assistant" }), frame("messageStop", {})]);
+    await expect(drain(streamOf(twoFrames, 7), { maxEvents: 1 })).rejects.toThrow(/exceeded 1 events/);
+    await expect(drain(streamOf(twoFrames, 7), { maxBytes: 10 })).rejects.toThrow(/exceeded 10 bytes/);
+  });
+});
+
+describe("bedrockProviderAdapter.chatCompletionsStream", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const textStreamBytes = () =>
+    concat([
+      frame("messageStart", { role: "assistant" }),
+      frame("contentBlockDelta", { contentBlockIndex: 0, delta: { text: "Hel" } }),
+      frame("contentBlockDelta", { contentBlockIndex: 0, delta: { text: "lo" } }),
+      frame("contentBlockStop", { contentBlockIndex: 0 }),
+      frame("messageStop", { stopReason: "end_turn" }),
+      metadataFrame(),
+    ]);
+
+  it.each([1, 7, 64, 100000])("decodes text deltas and the final chunk when split every %i bytes", async (n) => {
+    const chunks = await collectStream(eventStreamResponse(textStreamBytes(), n));
+    const contents = chunks.map((chunk) => chunk.choices?.[0]?.delta?.content).filter((value) => value !== undefined);
+    expect(contents).toEqual(["Hel", "lo"]);
+    const final = chunks.at(-1);
+    expect(final?.choices?.[0]?.finish_reason).toBe("stop");
+    expect(final?.usage?.total_tokens).toBe(5);
+    expect(chunks).toHaveLength(3);
+  });
+
+  it("posts a SigV4-signed request to the converse-stream endpoint", async () => {
+    await collectStream(eventStreamResponse(textStreamBytes()));
+    const fetchMock = vi.mocked(globalThis.fetch);
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-test%3A0/converse-stream");
+    const headers = init?.headers as Record<string, string>;
+    expect(headers.authorization).toMatch(/^AWS4-HMAC-SHA256 /);
+    expect(JSON.parse(String(init?.body))).toEqual({ messages: [{ role: "user", content: [{ text: "Hello" }] }] });
+  });
+
+  it("buffers tool use input into one tool_calls chunk", async () => {
+    const chunks = await collectStream(
+      eventStreamResponse(
+        concat([
+          frame("messageStart", { role: "assistant" }),
+          frame("contentBlockStart", {
+            contentBlockIndex: 1,
+            start: { toolUse: { toolUseId: "tu1", name: "lookup" } },
+          }),
+          frame("contentBlockDelta", { contentBlockIndex: 1, delta: { toolUse: { input: '{"q":' } } }),
+          frame("contentBlockDelta", { contentBlockIndex: 1, delta: { toolUse: { input: '"goat"}' } } }),
+          frame("contentBlockStop", { contentBlockIndex: 1 }),
+          frame("messageStop", { stopReason: "tool_use" }),
+          metadataFrame(),
+        ]),
+        11,
+      ),
+    );
+    const toolChunks = chunks.filter((chunk) => chunk.choices?.[0]?.delta?.tool_calls);
+    expect(toolChunks).toHaveLength(1);
+    expect(toolChunks[0]?.choices[0].delta.tool_calls).toEqual([
+      { index: 0, id: "tu1", type: "function", function: { name: "lookup", arguments: '{"q":"goat"}' } },
+    ]);
+    expect(chunks.at(-1)?.choices?.[0]?.finish_reason).toBe("tool_calls");
+  });
+
+  it("sends empty tool input as an empty JSON object", async () => {
+    const chunks = await collectStream(
+      eventStreamResponse(
+        concat([
+          frame("messageStart", { role: "assistant" }),
+          frame("contentBlockStart", { contentBlockIndex: 0, start: { toolUse: { toolUseId: "tu0", name: "ping" } } }),
+          frame("contentBlockStop", { contentBlockIndex: 0 }),
+          frame("messageStop", { stopReason: "tool_use" }),
+        ]),
+      ),
+    );
+    const toolCall = chunks.find((chunk) => chunk.choices?.[0]?.delta?.tool_calls)?.choices[0].delta.tool_calls[0];
+    expect(toolCall?.function).toEqual({ name: "ping", arguments: "{}" });
+  });
+
+  it("yields reasoning deltas as reasoning_content, never content", async () => {
+    const chunks = await collectStream(
+      eventStreamResponse(
+        concat([
+          frame("messageStart", { role: "assistant" }),
+          frame("contentBlockDelta", { contentBlockIndex: 0, delta: { reasoningContent: { text: "hmm" } } }),
+          frame("contentBlockStop", { contentBlockIndex: 0 }),
+          frame("messageStop", { stopReason: "end_turn" }),
+          metadataFrame(),
+        ]),
+      ),
+    );
+    const reasoning = chunks.filter((chunk) => chunk.choices?.[0]?.delta?.reasoning_content !== undefined);
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0]?.choices[0].delta.reasoning_content).toBe("hmm");
+    expect(chunks.some((chunk) => String(chunk.choices?.[0]?.delta?.content ?? "").includes("hmm"))).toBe(false);
+  });
+
+  it("rejects exception frames with the exception type and message", async () => {
+    const usage = createFakeUsage();
+    const failure = collectStream(
+      eventStreamResponse(
+        concat([
+          frame("messageStart", { role: "assistant" }),
+          frame("throttlingException", { message: "Too many requests" }, "exception"),
+        ]),
+      ),
+      createHost(undefined, usage.handle),
+    );
+    await expect(failure).rejects.toThrow("Bedrock stream error (throttlingException): Too many requests");
+    expect(usage.calls).toContain("fail");
+    expect(usage.calls).not.toContain("succeed");
+    expect(usage.calls).not.toContain("cancel");
+  });
+
+  it("rejects a stream truncated mid-frame", async () => {
+    const bytes = textStreamBytes();
+    await expect(collectStream(eventStreamResponse(bytes.slice(0, bytes.length - 3), 9))).rejects.toThrow(/mid-frame/);
+  });
+
+  it("rejects a stream that ends before messageStop", async () => {
+    await expect(
+      collectStream(
+        eventStreamResponse(
+          concat([
+            frame("messageStart", { role: "assistant" }),
+            frame("contentBlockDelta", { contentBlockIndex: 0, delta: { text: "Hel" } }),
+            frame("contentBlockStop", { contentBlockIndex: 0 }),
+          ]),
+        ),
+      ),
+    ).rejects.toThrow(/before messageStop/);
+  });
+
+  it("yields the final chunk without usage when metadata never arrives", async () => {
+    const usage = createFakeUsage();
+    const chunks = await collectStream(
+      eventStreamResponse(
+        concat([
+          frame("messageStart", { role: "assistant" }),
+          frame("contentBlockDelta", { contentBlockIndex: 0, delta: { text: "ok" } }),
+          frame("messageStop", { stopReason: "max_tokens" }),
+        ]),
+      ),
+      createHost(undefined, usage.handle),
+    );
+    const final = chunks.at(-1);
+    expect(final?.choices?.[0]).toEqual({ index: 0, delta: {}, finish_reason: "length" });
+    expect(final).not.toHaveProperty("usage");
+    expect(final?.model_usage_event_id).toBe("usage_evt_1");
+    expect(usage.calls.filter((call) => call === "succeed")).toHaveLength(1);
+    expect(usage.calls.filter((call) => call === "renewLease")).toHaveLength(3);
+  });
+
+  it("renews the lease per event and succeeds once on metadata", async () => {
+    const usage = createFakeUsage();
+    await collectStream(eventStreamResponse(textStreamBytes(), 13), createHost(undefined, usage.handle));
+    expect(usage.calls.filter((call) => call === "renewLease")).toHaveLength(6);
+    expect(usage.calls.filter((call) => call === "succeed")).toHaveLength(1);
+    expect(usage.calls).not.toContain("fail");
+    expect(usage.calls).not.toContain("cancel");
+  });
+
+  it("cancels accounting when the consumer stops early", async () => {
+    const usage = createFakeUsage();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(eventStreamResponse(textStreamBytes(), 5));
+    for await (const chunk of bedrockProviderAdapter.chatCompletionsStream(
+      simpleRequest,
+      bedrockResolution(),
+      "anthropic.claude-test:0",
+      createHost(undefined, usage.handle),
+    )) {
+      expect((chunk as Record<string, any>).choices[0].delta.content).toBe("Hel");
+      break;
+    }
+    expect(usage.calls).toContain("cancel");
+    expect(usage.calls).not.toContain("succeed");
+    expect(usage.calls).not.toContain("fail");
+  });
+
+  it("falls back to a Converse JSON body when the response is not an event stream", async () => {
+    const usage = createFakeUsage();
+    const chunks = await collectStream(converseJson(simpleConverseResponse), createHost(undefined, usage.handle));
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.choices?.[0]?.message).toMatchObject({ role: "assistant", content: "Hi there" });
+    expect(chunks[0]?.usage).toMatchObject({ total_tokens: 5 });
+    expect(usage.calls).toEqual(["succeed"]);
+  });
+
+  it("maps HTTP errors and blocks redirects", async () => {
+    await expect(
+      collectStream(
+        new Response(JSON.stringify({ message: "Malformed input request" }), {
+          status: 400,
+          headers: { "x-amzn-errortype": "ValidationException:http://internal.amazon.com/coral/" },
+        }),
+      ),
+    ).rejects.toThrow(/400 ValidationException\): Malformed input request/);
+    vi.restoreAllMocks();
+    await expect(
+      collectStream(new Response(null, { status: 302, headers: { location: "https://elsewhere.example" } })),
+    ).rejects.toThrow(/blocked redirect/);
+  });
+
+  it("fails locally when the conversation does not start with a user message", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const stream = bedrockProviderAdapter.chatCompletionsStream(
+      { messages: [{ role: "assistant", content: "Hello?" }] },
+      bedrockResolution(),
+      "m",
+      createHost(),
+    );
+    await expect(stream.next()).rejects.toThrow(
+      "Amazon Bedrock requires the conversation to start with a user message.",
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

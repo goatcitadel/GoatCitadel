@@ -2298,16 +2298,16 @@
       "path": "apps/gateway/src/services/llm-provider-bedrock.ts",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 4,
-      "reason": "New Amazon Bedrock Converse provider adapter owns request mapping, SigV4/bearer auth and response adaptation behind the existing LlmProviderAdapterHost port, mirroring the Anthropic adapter; it measures three host accesses (request target and tracked JSON dispatch) with one reserved for the streaming dispatch.",
-      "evidence": "apps/gateway/src/services/llm-provider-bedrock.test.ts covers payload mapping, SigV4 and bearer headers, response/tool-use mapping, error mapping, region parsing and malformed credentials; Gateway typecheck passes."
+      "reason": "New Amazon Bedrock Converse provider adapter owns request mapping, SigV4/bearer auth and response adaptation behind the existing LlmProviderAdapterHost port, mirroring the Anthropic adapter; it measures four host accesses (request target and tracked JSON dispatch for Converse and ConverseStream).",
+      "evidence": "apps/gateway/src/services/llm-provider-bedrock.test.ts covers payload mapping (user-first guard, empty tool result placeholder), SigV4 and bearer headers, response/tool-use mapping, error mapping, region parsing, malformed credentials, and ConverseStream text/tool/reasoning deltas, exception frames, truncation, missing messageStop, JSON fallback and accounting succeed/fail/cancel; Gateway typecheck passes."
     },
     {
       "planStep": "C0",
       "path": "apps/gateway/src/services/llm-provider-bedrock-stream.ts",
       "maxHostCallbacks": 0,
-      "maxDependencyMemberAccesses": 2,
-      "reason": "Amazon Bedrock ConverseStream event-stream decoding and chunk adaptation kept in its own helper beside the Bedrock adapter so the adapter stays focused; at most the tracked JSON dispatch and request target reach the adapter host.",
-      "evidence": "Added with the Bedrock adapter for the follow-up ConverseStream task in the same branch; focused stream tests and Gateway typecheck are required before acceptance."
+      "maxDependencyMemberAccesses": 0,
+      "reason": "Amazon Bedrock ConverseStream binary event-stream framing and decoding kept in its own helper beside the Bedrock adapter; it is a pure decoder and reaches no adapter host or dependency.",
+      "evidence": "apps/gateway/src/services/llm-provider-bedrock.test.ts decodeBedrockEventStream tests cover frames split mid-prelude, exception frames, empty bodies and byte/event limits, and the ConverseStream adapter tests cover 1/7/64-byte splits and mid-frame truncation; Gateway typecheck passes."
     },
     {
       "planStep": "C0",

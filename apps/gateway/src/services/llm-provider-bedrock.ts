@@ -5,18 +5,26 @@ import type {
   ChatCompletionResponse,
   ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
+import type { ModelUsageAttemptHandle } from "@goatcitadel/gateway-core";
 import type {
   LlmProviderAdapter,
   LlmProviderAdapterHost,
   LlmProviderRequestTarget,
   LlmProviderResolution,
+  LlmTrackedJsonDispatch,
 } from "./llm-provider-adapter.js";
-import { applyEstimatedCostToChatResponseWithSource, observeProviderUsageWithTrustedEstimate } from "./llm-pricing.js";
+import {
+  applyEstimatedCostToChatResponseWithSource,
+  applyEstimatedCostToStreamChunkWithSource,
+  observeProviderUsageWithTrustedEstimate,
+} from "./llm-pricing.js";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
+import { decodeBedrockEventStream } from "./llm-provider-bedrock-stream.js";
 
 const MAX_BEDROCK_ERROR_BODY_BYTES = 64 * 1024;
 const BEDROCK_ERROR_BODY_TIMEOUT_MS = 5000;
+const BEDROCK_EVENT_STREAM_CONTENT_TYPE = "application/vnd.amazon.eventstream";
 const BEDROCK_REGION_PATTERN = /bedrock-runtime(?:-fips)?\.([a-z]{2}(?:-gov)?-[a-z]+-\d)\./;
 const BEDROCK_IMAGE_FORMATS: Readonly<Record<string, string>> = {
   "image/png": "png",
@@ -82,11 +90,181 @@ export const bedrockProviderAdapter: LlmProviderAdapter = {
     }
   },
 
-  // eslint-disable-next-line require-yield -- replaced by the ConverseStream implementation.
-  async *chatCompletionsStream(): AsyncGenerator<Record<string, unknown>> {
-    throw new Error("Amazon Bedrock streaming is not implemented yet.");
+  async *chatCompletionsStream(
+    request: ChatCompletionRequest,
+    resolved: LlmProviderResolution,
+    model: string,
+    adapterHost: LlmProviderAdapterHost,
+    attribution: ModelUsageAttributionContext = {},
+  ): AsyncGenerator<Record<string, unknown>> {
+    const payload = buildBedrockConversePayload(request);
+    const target = await buildBedrockRequestTarget(resolved, model, "converse-stream", payload, adapterHost);
+    const dispatched = await adapterHost.postJsonRequest({
+      resolved,
+      model,
+      requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+      requestedModelId: attribution.requestedModelId ?? request.model,
+      attribution,
+      transportAttemptIndex: 0,
+      target,
+      payload,
+      timeoutMs: resolveChatCompletionTimeoutMs(request.timeoutMs, 120000),
+      signal: request.signal,
+    });
+    yield* streamBedrockConverseResponse(dispatched, { providerId: resolved.provider.providerId, model });
   },
 };
+
+interface BedrockToolUseBuffer {
+  id: string;
+  name: string;
+  partialJson: string;
+  toolCallIndex: number;
+}
+
+async function* streamBedrockConverseResponse(
+  dispatched: LlmTrackedJsonDispatch,
+  pricing: { providerId: string; model: string },
+): AsyncGenerator<Record<string, unknown>> {
+  const accounting = dispatched.usage;
+  const priorModelUsageEventIds = dispatched.priorModelUsageEventIds ?? [];
+  const tag = <T extends object>(value: T) => withUsageEvent(value, accounting, priorModelUsageEventIds);
+  let terminal: boolean | undefined;
+  try {
+    await assertBedrockResponseOk("Bedrock converse-stream request", dispatched.response);
+    const contentType = dispatched.response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (!contentType.includes(BEDROCK_EVENT_STREAM_CONTENT_TYPE) || !dispatched.response.body) {
+      const json = await parseProviderJsonResponse<Record<string, unknown>>(
+        "Bedrock converse-stream request",
+        dispatched.response,
+      );
+      const providerCompletion = adaptBedrockConverseResponse(json, pricing.model);
+      const completion = applyEstimatedCostToChatResponseWithSource(providerCompletion, pricing);
+      observeProviderUsageWithTrustedEstimate(accounting, providerCompletion.usage, completion.usage);
+      accounting?.observeNormalized({ effectiveModelId: completion.model });
+      await accounting?.succeed();
+      terminal = true;
+      yield tag(completion);
+      return;
+    }
+
+    const toolUseBuffers = new Map<number, BedrockToolUseBuffer>();
+    let nextToolCallIndex = 0;
+    let stopReason: string | undefined;
+    let receivedMessageStop = false;
+    let usage: Record<string, unknown> | undefined;
+    const finalChunk = () => {
+      const chunk = applyEstimatedCostToStreamChunkWithSource(
+        {
+          model: pricing.model,
+          choices: [{ index: 0, delta: {}, finish_reason: mapBedrockStopReason(stopReason) }],
+          ...(usage ? { usage } : {}),
+        },
+        pricing,
+      );
+      if (usage) observeProviderUsageWithTrustedEstimate(accounting, usage, chunk.usage);
+      return chunk;
+    };
+    const delta = (value: Record<string, unknown>) =>
+      tag({ model: pricing.model, choices: [{ index: 0, delta: value }] });
+
+    for await (const event of decodeBedrockEventStream(dispatched.response.body)) {
+      await accounting?.renewLease();
+      if (event.messageType !== "event") {
+        const message = typeof event.payload.message === "string" ? event.payload.message : "unknown error";
+        throw new Error(`Bedrock stream error (${event.exceptionType ?? event.eventType}): ${message}`);
+      }
+      const payload = event.payload;
+      const blockIndex = typeof payload.contentBlockIndex === "number" ? payload.contentBlockIndex : 0;
+      switch (event.eventType) {
+        case "contentBlockStart": {
+          const toolUse =
+            isRecord(payload.start) && isRecord(payload.start.toolUse) ? payload.start.toolUse : undefined;
+          if (toolUse) {
+            toolUseBuffers.set(blockIndex, {
+              id: String(toolUse.toolUseId ?? randomToolUseId()),
+              name: String(toolUse.name ?? ""),
+              partialJson: "",
+              toolCallIndex: nextToolCallIndex,
+            });
+            nextToolCallIndex += 1;
+          }
+          break;
+        }
+        case "contentBlockDelta": {
+          const blockDelta = isRecord(payload.delta) ? payload.delta : {};
+          if (typeof blockDelta.text === "string") {
+            yield delta({ content: blockDelta.text });
+          } else if (isRecord(blockDelta.toolUse) && typeof blockDelta.toolUse.input === "string") {
+            const buffer = toolUseBuffers.get(blockIndex);
+            if (buffer) {
+              toolUseBuffers.set(blockIndex, { ...buffer, partialJson: buffer.partialJson + blockDelta.toolUse.input });
+            }
+          } else if (isRecord(blockDelta.reasoningContent) && typeof blockDelta.reasoningContent.text === "string") {
+            if (blockDelta.reasoningContent.text) {
+              yield delta({ reasoning_content: blockDelta.reasoningContent.text });
+            }
+          }
+          break;
+        }
+        case "contentBlockStop": {
+          const buffer = toolUseBuffers.get(blockIndex);
+          if (buffer) {
+            toolUseBuffers.delete(blockIndex);
+            yield delta({
+              tool_calls: [
+                {
+                  index: buffer.toolCallIndex,
+                  id: buffer.id,
+                  type: "function",
+                  function: { name: buffer.name, arguments: buffer.partialJson.trim() ? buffer.partialJson : "{}" },
+                },
+              ],
+            });
+          }
+          break;
+        }
+        case "messageStop":
+          receivedMessageStop = true;
+          stopReason = typeof payload.stopReason === "string" ? payload.stopReason : undefined;
+          break;
+        case "metadata": {
+          usage = normalizeBedrockUsage(isRecord(payload.usage) ? payload.usage : undefined) ?? usage;
+          if (!receivedMessageStop) break;
+          const chunk = finalChunk();
+          await accounting?.succeed();
+          terminal = true;
+          yield tag(chunk);
+          return;
+        }
+        default:
+          break;
+      }
+    }
+    if (!receivedMessageStop) throw new Error("Bedrock stream ended before messageStop");
+    const chunk = finalChunk();
+    await accounting?.succeed();
+    terminal = true;
+    yield tag(chunk);
+  } catch (error) {
+    await accounting?.fail(error);
+    terminal = true;
+    throw error;
+  } finally {
+    if (!terminal) await accounting?.cancel(new Error("stream consumer cancelled"));
+  }
+}
+
+function withUsageEvent<T extends object>(
+  value: T,
+  accounting: ModelUsageAttemptHandle | undefined,
+  priorModelUsageEventIds: readonly string[],
+): T & { model_usage_event_id?: string; model_usage_event_ids?: string[] } {
+  const eventIds = [...new Set([...priorModelUsageEventIds, ...(accounting ? [accounting.eventId] : [])])];
+  return eventIds.length > 0
+    ? { ...value, model_usage_event_id: eventIds.at(-1), model_usage_event_ids: eventIds }
+    : value;
+}
 
 /**
  * Resolves the Converse endpoint and its auth headers. SigV4 signs the exact
@@ -206,7 +384,7 @@ export function buildBedrockConversePayload(request: ChatCompletionRequest): Rec
         {
           toolResult: {
             toolUseId: String(message.tool_call_id ?? ""),
-            content: [{ text: messageText(message.content) }],
+            content: [{ text: toolResultText(message.content) }],
           },
         },
       ]);
@@ -219,6 +397,9 @@ export function buildBedrockConversePayload(request: ChatCompletionRequest): Rec
     appendBedrockMessage(messages, "user", buildUserContent(message.content));
   }
 
+  if (messages[0]?.role !== "user") {
+    throw new Error("Amazon Bedrock requires the conversation to start with a user message.");
+  }
   const payload: Record<string, unknown> = { messages };
   if (system.length > 0) payload.system = system;
   const inferenceConfig = buildInferenceConfig(request);
@@ -440,6 +621,11 @@ function messageText(content: ChatCompletionRequest["messages"][number]["content
     .map((part) => (isRecord(part) ? partText(part) : undefined))
     .filter((text): text is string => typeof text === "string" && text.length > 0)
     .join("\n");
+}
+
+function toolResultText(content: ChatCompletionRequest["messages"][number]["content"]): string {
+  const text = messageText(content);
+  return text.trim() ? text : "(no output)";
 }
 
 function partText(part: Record<string, unknown>): string | undefined {
