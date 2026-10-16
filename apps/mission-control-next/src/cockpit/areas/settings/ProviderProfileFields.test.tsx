@@ -23,4 +23,49 @@ describe("provider profile fields", () => {
     expect(markup).not.toContain(">openai-responses<");
     expect(markup).not.toContain(">bedrock-messages<");
   });
+
+  const renderBedrock = (authMode: "" | "aws-sigv4" | "aws-bedrock-api-key") =>
+    renderToStaticMarkup(
+      <ProviderProfileFields
+        providerDraft={{ ...createEmptyProviderEditorDraft(), apiStyle: "bedrock-messages", authMode }}
+        setProviderDraft={() => undefined}
+        providerTransportDraft={{} as never}
+        setProviderTransportDraft={() => undefined}
+        providerRequestValidation={{ error: null }}
+        disabled={false}
+        existing={false}
+      />,
+    );
+
+  it("offers Bedrock credential modes in plain words only for the Bedrock API style", () => {
+    const markup = renderBedrock("");
+    expect(markup).toContain('<option value="aws-bedrock-api-key">Bedrock API key</option>');
+    expect(markup).toContain('<option value="aws-sigv4">AWS access key (SigV4)</option>');
+    expect(markup).toContain(">Amazon Bedrock messages<");
+    expect(markup).not.toContain(">aws-sigv4<");
+    expect(markup).not.toContain(">bedrock-messages<");
+    const anthropic = renderToStaticMarkup(
+      <ProviderProfileFields
+        providerDraft={{ ...createEmptyProviderEditorDraft(), apiStyle: "anthropic-messages" }}
+        setProviderDraft={() => undefined}
+        providerTransportDraft={{} as never}
+        setProviderTransportDraft={() => undefined}
+        providerRequestValidation={{ error: null }}
+        disabled={false}
+        existing={false}
+      />,
+    );
+    expect(anthropic).not.toContain('value="aws-sigv4"');
+    expect(anthropic).not.toContain('value="aws-bedrock-api-key"');
+  });
+
+  it("labels the SigV4 environment field as a variable name holding the credentials JSON", () => {
+    const markup = renderBedrock("aws-sigv4");
+    expect(markup).toContain("AWS credentials JSON environment variable name");
+    expect(markup).toContain(
+      "Name of an environment variable whose value is the AWS credentials JSON. Leave empty to use AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from the gateway environment.",
+    );
+    expect(markup).not.toContain("accessKeyId");
+    expect(renderBedrock("aws-bedrock-api-key")).not.toContain("AWS credentials JSON");
+  });
 });

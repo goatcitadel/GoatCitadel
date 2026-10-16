@@ -277,6 +277,23 @@ describe("LlmConfigFileSchema", () => {
     }
   });
 
+  it.each(["aws-sigv4", "aws-bedrock-api-key"])("accepts authMode %s on the zod runtime enum", (authMode) => {
+    const result = LlmConfigFileSchema.safeParse({
+      activeProviderId: "bedrock",
+      providers: [
+        {
+          providerId: "bedrock",
+          label: "Bedrock",
+          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+          apiStyle: "bedrock-messages",
+          defaultModel: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+          authMode,
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects when activeProviderId is missing", () => {
     const input = { providers: [] };
     expect(() => LlmConfigFileSchema.parse(input)).toThrow();

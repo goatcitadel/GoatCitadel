@@ -1,7 +1,7 @@
-import type { FastifyInstance, FastifyPluginAsync } from "fastify";
-import type { ModelComparisonJudgeRequest } from "@goatcitadel/contracts";
+import type { FastifyBaseLogger, FastifyInstance, FastifyPluginAsync, FastifyReply } from "fastify";
+import { isGoatError, redactStructuredSecrets, type ModelComparisonJudgeRequest } from "@goatcitadel/contracts";
 import { z } from "zod";
-import type { ModelComparisonService } from "../services/model-comparison-service.js";
+import type { ModelComparisonRoutePort } from "../services/model-comparison-route-service.js";
 
 const candidateSchema = z.object({
   providerId: z.string().trim().min(1),
@@ -99,10 +99,55 @@ export const modelComparisonRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: (error as Error).message });
     }
   });
+
+  fastify.post("/api/v1/model-comparisons/:comparisonId/run", async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.code(202).send(await getModelComparisonService(fastify).startComparison(params.data.comparisonId));
+    } catch (error) {
+      return sendRunControlError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/model-comparisons/:comparisonId/cancel", async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await getModelComparisonService(fastify).cancelComparison(params.data.comparisonId));
+    } catch (error) {
+      return sendRunControlError(reply, error, request.log);
+    }
+  });
 };
 
-function getModelComparisonService(fastify: FastifyInstance): ModelComparisonService {
-  const services = fastify.services as unknown as { modelComparisons?: ModelComparisonService };
+const RUN_CONTROL_FAILURE_MESSAGE = "Comparison run control failed.";
+
+/**
+ * Typed domain errors (not found 404, conflict 409, validation 400, ...) keep
+ * their own status and message. Anything else is a server fault: the raw
+ * message stays in the redacted server log and the client gets a fixed body.
+ */
+function sendRunControlError(
+  reply: FastifyReply,
+  error: unknown,
+  log: FastifyBaseLogger,
+): ReturnType<FastifyReply["send"]> {
+  if (isGoatError(error)) {
+    return reply.code(error.httpStatus).send({ error: redactStructuredSecrets(error.message).value });
+  }
+  const diagnostic =
+    error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : { value: error };
+  log.error({ err: redactStructuredSecrets(diagnostic).value }, "model comparison run control failed");
+  return reply.code(500).send({ error: RUN_CONTROL_FAILURE_MESSAGE });
+}
+
+function getModelComparisonService(fastify: FastifyInstance): ModelComparisonRoutePort {
+  const services = fastify.services as unknown as { modelComparisons?: ModelComparisonRoutePort };
   if (!services.modelComparisons) {
     throw new Error("Model comparison route service is not registered.");
   }

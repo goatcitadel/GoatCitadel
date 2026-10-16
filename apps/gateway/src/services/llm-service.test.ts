@@ -9,7 +9,8 @@ import {
   buildCompletionFromAggregate,
   createCompletionStreamAggregate,
 } from "./chat-agent-completion-adapters.js";
-import { LlmService } from "./llm-service.js";
+import { bedrockEventFrame, bedrockEventStreamResponse, concatBytes } from "./llm-provider-bedrock.test-support.js";
+import { LlmService, resolveOutputCapPayloadField } from "./llm-service.js";
 import { projectLlmConfigPublicValue } from "./provider-settings-public-projection.js";
 import { SecretStoreService, SecretStoreUnavailableError } from "./secret-store-service.js";
 
@@ -684,6 +685,80 @@ describe("LlmService", () => {
     expect(payloads.map((payload) => payload.max_tokens)).toEqual([64, 64]);
   });
 
+  describe("per-chunk reasoning deltas", () => {
+    const reasoningSse =
+      'data: {"id":"c1","choices":[{"index":0,"delta":{"reasoning_content":"Think A. "}}]}\n\n' +
+      'data: {"id":"c1","choices":[{"index":0,"delta":{"reasoning_content":"Think B."}}]}\n\n' +
+      'data: {"id":"c1","choices":[{"index":0,"delta":{"content":"OK"}}]}\n\n' +
+      'data: {"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n' +
+      "data: [DONE]\n\n";
+
+    async function collectReasoningStream(
+      streamReasoningDeltas: boolean | undefined,
+    ): Promise<{ chunks: Record<string, unknown>[]; sentPayloads: Record<string, unknown>[] }> {
+      const service = new LlmService(
+        {
+          activeProviderId: "llamacpp",
+          activeModel: "local-model",
+          providers: [
+            {
+              providerId: "llamacpp",
+              label: "llama.cpp",
+              baseUrl: "http://127.0.0.1:8080/v1",
+              apiStyle: "openai-chat-completions",
+              defaultModel: "local-model",
+            },
+          ],
+        },
+        process.env,
+        { secretStore: createNoopSecretStore() },
+      );
+      const originalFetch = globalThis.fetch;
+      const sentPayloads: Record<string, unknown>[] = [];
+      globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        sentPayloads.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(reasoningSse, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }) as unknown as typeof fetch;
+      const chunks: Record<string, unknown>[] = [];
+      try {
+        for await (const chunk of service.chatCompletionsStream({
+          providerId: "llamacpp",
+          model: "local-model",
+          messages: [{ role: "user", content: "hi" }],
+          ...(streamReasoningDeltas === undefined ? {} : { streamReasoningDeltas }),
+        })) {
+          chunks.push(chunk);
+        }
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+      return { chunks, sentPayloads };
+    }
+
+    it("keeps delta.reasoning_content per chunk when the caller opts in", async () => {
+      const { chunks, sentPayloads } = await collectReasoningStream(true);
+      const reasoning = chunks.flatMap((chunk) =>
+        ((chunk.choices as Array<{ delta?: { reasoning_content?: string } }>) ?? [])
+          .map((choice) => choice.delta?.reasoning_content)
+          .filter((text): text is string => typeof text === "string"),
+      );
+      expect(reasoning).toEqual(["Think A. ", "Think B."]);
+      expect(JSON.stringify(sentPayloads)).not.toContain("streamReasoningDeltas");
+    });
+
+    it("drops reasoning-only frames and reasoning text when the caller does not opt in", async () => {
+      const { chunks, sentPayloads } = await collectReasoningStream(undefined);
+      const serialized = JSON.stringify(chunks);
+      expect(serialized).not.toContain("Think A.");
+      expect(serialized).not.toContain("reasoning_content");
+      expect(
+        chunks.filter((c) => JSON.stringify(c).includes('"delta":{}') && !JSON.stringify(c).includes("finish_reason")),
+      ).toHaveLength(0);
+      expect(serialized).toContain("OK");
+      expect(JSON.stringify(sentPayloads)).not.toContain("streamReasoningDeltas");
+    });
+  });
+
   it("preserves developer messages and forwards OpenAI GPT controls", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",
@@ -1321,6 +1396,276 @@ describe("LlmService", () => {
     });
 
     expect(bedrock.providers.find((provider) => provider.providerId === "bedrock")?.apiStyle).toBe("bedrock-messages");
+  });
+
+  describe("Amazon Bedrock dispatch", () => {
+    const bedrockModel = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    const bedrockProvider = (authMode: "aws-bedrock-api-key" | "aws-sigv4"): LlmProviderConfig => ({
+      providerId: "bedrock",
+      label: "Amazon Bedrock",
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      apiStyle: "bedrock-messages",
+      defaultModel: bedrockModel,
+      authMode,
+      ...(authMode === "aws-bedrock-api-key" ? { apiKeyEnv: "BEDROCK_API_KEY" } : {}),
+    });
+    const createBedrockService = (
+      authMode: "aws-bedrock-api-key" | "aws-sigv4",
+      env: Record<string, string | undefined>,
+    ) =>
+      new LlmService(
+        { activeProviderId: "bedrock", providers: [bedrockProvider(authMode)] },
+        env as NodeJS.ProcessEnv,
+        {
+          secretStore: createNoopSecretStore(),
+        },
+      );
+    const converseResponse = () =>
+      new Response(
+        JSON.stringify({
+          output: { message: { role: "assistant", content: [{ text: "hi there" }] } },
+          stopReason: "end_turn",
+          usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+
+    async function captureBedrockCompletion(
+      authMode: "aws-bedrock-api-key" | "aws-sigv4",
+      env: Record<string, string | undefined>,
+    ): Promise<{ content: unknown; url: string; headers: Headers }> {
+      const service = createBedrockService(authMode, env);
+      const originalFetch = globalThis.fetch;
+      let url = "";
+      let headers = new Headers();
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        url = String(input);
+        headers = new Headers(init?.headers);
+        return converseResponse();
+      }) as unknown as typeof fetch;
+      try {
+        const completion = await service.chatCompletions({
+          providerId: "bedrock",
+          model: bedrockModel,
+          messages: [{ role: "user", content: "hi" }],
+        });
+        return { content: (completion.choices?.[0]?.message as { content?: unknown })?.content, url, headers };
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    }
+
+    it("dispatches Converse with a Bedrock API key from the environment", async () => {
+      const result = await captureBedrockCompletion("aws-bedrock-api-key", { BEDROCK_API_KEY: "bedrock-env-key" });
+      expect(result.content).toBe("hi there");
+      expect(result.url.endsWith("/converse")).toBe(true);
+      expect(result.headers.get("authorization")).toBe("Bearer bedrock-env-key");
+    });
+
+    it("signs Converse with SigV4 credentials from AWS_* environment variables", async () => {
+      const result = await captureBedrockCompletion("aws-sigv4", {
+        AWS_ACCESS_KEY_ID: "AKIATESTTESTTESTTEST",
+        AWS_SECRET_ACCESS_KEY: "test-secret",
+      });
+      expect(result.content).toBe("hi there");
+      expect(result.url.endsWith("/converse")).toBe(true);
+      expect(result.headers.get("authorization")).toMatch(/^AWS4-HMAC-SHA256 /);
+      expect(result.headers.get("authorization")).not.toContain("test-secret");
+    });
+
+    it("reads the Bedrock inferenceConfig output cap as read-only evidence", () => {
+      expect(resolveOutputCapPayloadField({ messages: [], inferenceConfig: { maxTokens: 256 } })).toEqual({
+        field: "inferenceConfig.maxTokens",
+        value: 256,
+        rewritable: false,
+      });
+      expect(resolveOutputCapPayloadField({ max_tokens: 64 })).toEqual({
+        field: "max_tokens",
+        value: 64,
+        rewritable: true,
+      });
+      expect(resolveOutputCapPayloadField({ max_tokens: 64, inferenceConfig: { maxTokens: 256 } })).toBeUndefined();
+      expect(resolveOutputCapPayloadField({ inferenceConfig: { maxTokens: 0 } })).toBeUndefined();
+      expect(resolveOutputCapPayloadField({ inferenceConfig: { temperature: 0.2 } })).toBeUndefined();
+    });
+
+    it("never returns Bedrock reasoning text from a public completion", async () => {
+      const service = createBedrockService("aws-bedrock-api-key", { BEDROCK_API_KEY: "bedrock-env-key" });
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              output: {
+                message: {
+                  role: "assistant",
+                  content: [
+                    { reasoningContent: { reasoningText: { text: "PRIVATE-BEDROCK-REASONING", signature: "sig" } } },
+                    { text: "hi there" },
+                  ],
+                },
+              },
+              stopReason: "end_turn",
+              usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ) as unknown as typeof fetch;
+      try {
+        const completion = await service.chatCompletions({
+          providerId: "bedrock",
+          model: bedrockModel,
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect((completion.choices?.[0]?.message as { content?: unknown })?.content).toBe("hi there");
+        expect(JSON.stringify(completion)).not.toContain("PRIVATE-BEDROCK-REASONING");
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it("streams ConverseStream text deltas", async () => {
+      const service = createBedrockService("aws-bedrock-api-key", { BEDROCK_API_KEY: "bedrock-env-key" });
+      const originalFetch = globalThis.fetch;
+      let url = "";
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+        url = String(input);
+        return bedrockEventStreamResponse(
+          concatBytes([
+            bedrockEventFrame("messageStart", { role: "assistant" }),
+            bedrockEventFrame("contentBlockDelta", { contentBlockIndex: 0, delta: { text: "hi " } }),
+            bedrockEventFrame("contentBlockDelta", { contentBlockIndex: 0, delta: { text: "there" } }),
+            bedrockEventFrame("contentBlockStop", { contentBlockIndex: 0 }),
+            bedrockEventFrame("messageStop", { stopReason: "end_turn" }),
+            bedrockEventFrame("metadata", { usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 } }),
+          ]),
+          9,
+        );
+      }) as unknown as typeof fetch;
+      const deltas: string[] = [];
+      try {
+        for await (const chunk of service.chatCompletionsStream({
+          providerId: "bedrock",
+          model: bedrockModel,
+          messages: [{ role: "user", content: "hi" }],
+        })) {
+          const content = (chunk as { choices?: Array<{ delta?: { content?: string } }> }).choices?.[0]?.delta?.content;
+          if (typeof content === "string") {
+            deltas.push(content);
+          }
+        }
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+      expect(url.endsWith("/converse-stream")).toBe(true);
+      expect(deltas.join("")).toBe("hi there");
+    });
+
+    it("lists Bedrock models offline from the configured default and template", async () => {
+      const service = createBedrockService("aws-bedrock-api-key", { BEDROCK_API_KEY: "bedrock-env-key" });
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => new Response("{}", { status: 500 }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      try {
+        const result = await service.listModelsWithSource("bedrock");
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(result.source).toBe("template_fallback");
+        expect(result.items.map((item) => item.id)).toEqual(
+          expect.arrayContaining([bedrockModel, "us.amazon.nova-pro-v1:0"]),
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    describe("reasoning effort truth", () => {
+      // The Converse adapter never sends a reasoning/thinking field, so no
+      // input source may make the receipt claim an honored effort.
+      const createClaimingBedrockService = () => {
+        const dir = mkdtempSync(join(tmpdir(), "gc-bedrock-reasoning-"));
+        const manifestPath = join(dir, "llm-model-metadata.json");
+        writeFileSync(
+          manifestPath,
+          JSON.stringify({
+            version: 1,
+            entries: {
+              [`bedrock/${bedrockModel}`]: {
+                contextWindow: 200000,
+                outputTokenLimit: 32000,
+                reasoning: { supportedEfforts: ["none", "low", "medium", "high"] },
+              },
+            },
+          }),
+        );
+        const service = new LlmService(
+          {
+            activeProviderId: "bedrock",
+            providers: [
+              {
+                ...bedrockProvider("aws-bedrock-api-key"),
+                capabilities: { reasoning: true, reasoningEfforts: ["low", "medium", "high"] },
+              },
+            ],
+          },
+          { BEDROCK_API_KEY: "bedrock-env-key" } as NodeJS.ProcessEnv,
+          { secretStore: createNoopSecretStore(), modelMetadataPath: manifestPath },
+        );
+        return { service, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+      };
+
+      it("downgrades a requested effort to none and sends no reasoning field", async () => {
+        const { service, cleanup } = createClaimingBedrockService();
+        const originalFetch = globalThis.fetch;
+        let sentBody: Record<string, unknown> = {};
+        globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+          sentBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return converseResponse();
+        }) as unknown as typeof fetch;
+        try {
+          const completion = await service.chatCompletions({
+            providerId: "bedrock",
+            model: bedrockModel,
+            messages: [{ role: "user", content: "hi" }],
+            reasoning: { effort: "high" },
+          });
+          expect(completion.routing?.reasoning).toMatchObject({
+            requested: "high",
+            actual: "none",
+            disposition: "downgraded",
+            reasonCode: "legacy_provider_reasoning_omitted",
+            capabilitySource: "legacy_compatibility",
+          });
+          expect(completion.routing?.reasoning?.disposition).not.toBe("honored");
+          const serialized = JSON.stringify(sentBody).toLowerCase();
+          expect(serialized).not.toContain("reasoning");
+          expect(serialized).not.toContain("thinking");
+          expect(sentBody).not.toHaveProperty("additionalModelRequestFields");
+        } finally {
+          globalThis.fetch = originalFetch;
+          cleanup();
+        }
+      });
+
+      it("advertises no selectable reasoning efforts in provider listings or model catalogs", async () => {
+        const { service, cleanup } = createClaimingBedrockService();
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(async () => new Response("{}", { status: 500 })) as unknown as typeof fetch;
+        try {
+          // The fixture metadata really is loaded, so the listing must ignore it.
+          expect(service.getModelReasoningMetadata("bedrock", bedrockModel)?.supportedEfforts).toContain("high");
+          const provider = service.listProviders().find((entry) => entry.providerId === "bedrock");
+          expect(provider?.capabilities?.reasoning).toBe(false);
+          expect(provider?.capabilities?.reasoningEfforts).toBeUndefined();
+          const models = await service.listModelsWithSource("bedrock");
+          const model = models.items.find((item) => item.id === bedrockModel);
+          expect(model).toBeDefined();
+          expect(model?.reasoningEfforts).toBeUndefined();
+        } finally {
+          globalThis.fetch = originalFetch;
+          cleanup();
+        }
+      });
+    });
   });
 
   it("rejects raw API-key storage for the OpenAI Codex OAuth provider", () => {
@@ -4945,6 +5290,125 @@ describe("LlmService", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  describe("Bedrock SigV4 auth", () => {
+    const sigV4Provider: LlmProviderConfig = {
+      providerId: "bedrock",
+      label: "Bedrock",
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      apiStyle: "bedrock-messages",
+      defaultModel: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      authMode: "aws-sigv4",
+    };
+    const createSigV4Service = (
+      provider: LlmProviderConfig,
+      env: Record<string, string | undefined>,
+      secretStore: SecretStoreService = createNoopSecretStore(),
+    ) =>
+      new LlmService({ activeProviderId: "bedrock", providers: [provider] }, env as NodeJS.ProcessEnv, {
+        secretStore,
+      }) as unknown as {
+        buildHeaders(
+          resolved: { provider: LlmProviderConfig; apiKey?: string },
+          purpose: string,
+        ): Record<string, string>;
+        resolveProvider(providerId?: string): Promise<{ apiKey?: string }>;
+      };
+
+    it("never builds a bearer header from SigV4 credential JSON", () => {
+      const service = createSigV4Service(sigV4Provider, {});
+      const headers = service.buildHeaders(
+        { provider: sigV4Provider, apiKey: '{"accessKeyId":"A","secretAccessKey":"S"}' },
+        "chat",
+      );
+      expect(headers.Authorization).toBeUndefined();
+      expect(JSON.stringify(headers)).not.toContain("secretAccessKey");
+    });
+
+    it("keeps the bearer header for aws-bedrock-api-key", () => {
+      const provider = { ...sigV4Provider, authMode: "aws-bedrock-api-key" as const };
+      const service = createSigV4Service(provider, {});
+      expect(service.buildHeaders({ provider, apiKey: "bedrock-test-key" }, "chat").Authorization).toBe(
+        "Bearer bedrock-test-key",
+      );
+    });
+
+    it("resolves SigV4 credentials from AWS_* environment variables as JSON", async () => {
+      const service = createSigV4Service(sigV4Provider, {
+        AWS_ACCESS_KEY_ID: "AKIATESTTESTTESTTEST",
+        AWS_SECRET_ACCESS_KEY: "test-secret",
+        AWS_SESSION_TOKEN: "test-session",
+      });
+      const resolved = await service.resolveProvider("bedrock");
+      expect(JSON.parse(resolved.apiKey ?? "")).toEqual({
+        accessKeyId: "AKIATESTTESTTESTTEST",
+        secretAccessKey: "test-secret",
+        sessionToken: "test-session",
+      });
+    });
+
+    it("prefers keychain SigV4 JSON over AWS_* environment variables", async () => {
+      const blob = '{"accessKeyId":"AKIAKEYCHAINTEST","secretAccessKey":"kc-secret"}';
+      const service = createSigV4Service(
+        sigV4Provider,
+        { AWS_ACCESS_KEY_ID: "AKIATESTTESTTESTTEST", AWS_SECRET_ACCESS_KEY: "test-secret" },
+        createTrackedSecretStore({ bedrock: blob }),
+      );
+      expect((await service.resolveProvider("bedrock")).apiKey).toBe(blob);
+    });
+
+    it("leaves apiKey undefined when no SigV4 credentials exist", async () => {
+      const service = createSigV4Service(sigV4Provider, {});
+      expect((await service.resolveProvider("bedrock")).apiKey).toBeUndefined();
+    });
+
+    it("never puts SigV4 credential JSON in a query-auth URL", () => {
+      const provider: LlmProviderConfig = {
+        ...sigV4Provider,
+        request: { auth: { type: "query", queryParam: "key" } },
+      };
+      const service = createSigV4Service(provider, {}) as unknown as {
+        buildRequestTarget(
+          resolved: { provider: LlmProviderConfig; apiKey?: string },
+          purpose: string,
+          endpoint: string,
+        ): { url: string };
+      };
+      const target = service.buildRequestTarget(
+        { provider, apiKey: '{"accessKeyId":"A","secretAccessKey":"S"}' },
+        "chat",
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/x/converse",
+      );
+      expect(new URL(target.url).searchParams.has("key")).toBe(false);
+      expect(target.url).not.toContain("secretAccessKey");
+    });
+
+    it("reports env readiness when only AWS_* credentials are present", () => {
+      const service = createSigV4Service(sigV4Provider, {
+        AWS_ACCESS_KEY_ID: "AKIATESTTESTTESTTEST",
+        AWS_SECRET_ACCESS_KEY: "test-secret",
+      }) as unknown as LlmService;
+      expect(service.getProviderSecretStatus("bedrock", { useCache: false })).toMatchObject({
+        hasApiKey: true,
+        apiKeySource: "env",
+        apiKeyRef: "AWS_ACCESS_KEY_ID",
+      });
+      const bare = createSigV4Service(sigV4Provider, {
+        AWS_ACCESS_KEY_ID: "AKIATESTTESTTESTTEST",
+      }) as unknown as LlmService;
+      expect(bare.getProviderSecretStatus("bedrock", { useCache: false })).toMatchObject({
+        hasApiKey: false,
+        apiKeySource: "none",
+      });
+    });
+
+    it("rejects inline SigV4 credentials", async () => {
+      const service = createSigV4Service({ ...sigV4Provider, apiKey: '{"accessKeyId":"A","secretAccessKey":"S"}' }, {});
+      await expect(service.resolveProvider("bedrock")).rejects.toThrow(
+        "AWS SigV4 credentials must be stored in the Gateway keychain or provided through AWS_* environment variables.",
+      );
+    });
   });
 });
 

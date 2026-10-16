@@ -121,11 +121,12 @@ export interface FeatureFlagsConfig {
   /** Managed-source staging and live source evolution remain explicit opt-in. */
   productSourceEvolutionV1Enabled?: boolean;
   /**
-   * Thinking-display skeleton: gates the gateway emitting `thinking_delta` stream
-   * chunks carrying the model's reasoning/thinking text. Absent/false (default) ⇒
-   * byte-identical behavior to today (no chunk is even constructed). `true` turns
-   * on the terminal-block emission (see chat-turn-agent-runner's P0-B reasoning
-   * detection site) so the client's collapsible ChatThinkingSection can render.
+   * Thinking display: gates the gateway emitting `thinking_delta` stream chunks
+   * carrying the model's reasoning/thinking text. Absent/false (default) ⇒
+   * byte-identical behavior to today (no chunk is even constructed). `true`
+   * streams one chunk per provider reasoning chunk (falling back to one chunk
+   * from the terminal message when a pass streamed none) so the client's
+   * collapsible ChatThinkingSection can render.
    */
   chatThinkingStreamV1Enabled?: boolean;
   /** On-demand, read-only context estimates in session.status; default off. */
@@ -1436,7 +1437,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // `*Disabled` master kill switch — `?? false` means "not disabled" unless
       // an operator explicitly sets it. Do NOT flip this default.
       autonomyV1Disabled: featuresInput.autonomyV1Disabled ?? false,
-      // Thinking-display skeleton: default OFF. `?? false` means the gateway never
+      // Thinking display: default OFF. `?? false` means the gateway never
       // constructs/emits a thinking_delta chunk unless an operator opts in — with
       // this flag left at its default, runtime behavior is byte-identical to today.
       chatThinkingStreamV1Enabled: featuresInput.chatThinkingStreamV1Enabled ?? false,

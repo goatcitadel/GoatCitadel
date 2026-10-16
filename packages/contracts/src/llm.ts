@@ -7,12 +7,32 @@ export type LlmApiStyle =
   | "anthropic-messages"
   | "bedrock-messages";
 
+export const LLM_API_STYLES: readonly LlmApiStyle[] = [
+  "openai-chat-completions",
+  "openai-responses",
+  "openai-codex-responses",
+  "anthropic-messages",
+  "bedrock-messages",
+];
+
 export type LlmProviderAuthMode =
   | "api-key"
   | "codex-oauth"
   | "claude-code-oauth"
   | "google-service-account"
-  | "google-adc";
+  | "google-adc"
+  | "aws-sigv4"
+  | "aws-bedrock-api-key";
+
+export const LLM_PROVIDER_AUTH_MODES: readonly LlmProviderAuthMode[] = [
+  "api-key",
+  "codex-oauth",
+  "claude-code-oauth",
+  "google-service-account",
+  "google-adc",
+  "aws-sigv4",
+  "aws-bedrock-api-key",
+];
 
 export type ChatCompletionReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
@@ -573,6 +593,8 @@ export interface ChatCompletionRequest {
   requiredRuntimeTarget?: { providerId: string; model?: string };
   messages: ChatCompletionMessage[];
   signal?: AbortSignal;
+  /** Internal: the chat runner opts in to receiving per-chunk display reasoning (delta.reasoning_content). Never sent to providers. */
+  streamReasoningDeltas?: boolean;
   memory?: {
     enabled?: boolean;
     mode?: "qmd" | "off";

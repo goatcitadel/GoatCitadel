@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { LlmProviderCapabilitiesSchema, LlmProviderGoogleCloudConfigSchema } from "@goatcitadel/contracts";
+import {
+  LlmProviderAuthModeSchema,
+  LlmProviderCapabilitiesSchema,
+  LlmProviderGoogleCloudConfigSchema,
+} from "@goatcitadel/contracts";
 import {
   projectLlmConfigPublicValue,
   projectLlmProviderSummariesPublicValue,
@@ -121,9 +125,7 @@ const updateConfigSchema = z.object({
       label: z.string().min(1).optional(),
       baseUrl: z.string().url().optional(),
       apiStyle: llmApiStyleSchema.optional(),
-      authMode: z
-        .enum(["api-key", "codex-oauth", "claude-code-oauth", "google-service-account", "google-adc"])
-        .optional(),
+      authMode: LlmProviderAuthModeSchema.optional(),
       defaultModel: z.string().min(1).optional(),
       apiKey: z.string().min(1).optional(),
       apiKeyEnv: z.string().min(1).optional(),

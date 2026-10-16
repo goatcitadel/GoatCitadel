@@ -316,6 +316,30 @@ describe("cockpit provider connection editing", () => {
     expect(button("Replace API credential").disabled).toBe(true);
   });
 
+  it("names the AWS credentials JSON in the secure credential step for SigV4 providers", async () => {
+    catalog = { ...catalog, providers: [{ ...provider, apiStyle: "bedrock-messages", authMode: "aws-sigv4" }] };
+    await render();
+    expect(container.querySelector("legend")?.textContent).toBe("AWS credentials JSON");
+    expect(container.textContent).toContain(
+      "If no credential is stored, the gateway uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from its environment.",
+    );
+    expect(container.textContent).not.toContain("Use its existing authentication setup below");
+    await click("Replace AWS credentials JSON");
+    expect(api.createChangePlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ credentialAction: "replace_api_key", credentialStorage: "keychain" }),
+      }),
+    );
+    expect(dialog.contextNote).toContain("Enter the AWS credentials JSON");
+    expect(dialog.contextNote).toContain('"accessKeyId"');
+  });
+
+  it("keeps the API credential wording for API-key providers", async () => {
+    await render();
+    expect(container.querySelector("legend")?.textContent).toBe("API credential");
+    expect(container.textContent).not.toContain("AWS credentials JSON");
+  });
+
   it("rechecks the current plan and blocks changed actions", async () => {
     await render();
     await editEndpoint();

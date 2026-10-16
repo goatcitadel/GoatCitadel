@@ -32,3 +32,17 @@ export async function judgeModelComparison(
     body: JSON.stringify(input),
   });
 }
+
+export async function runModelComparison(comparisonId: string): Promise<ModelComparisonRun> {
+  return request<ModelComparisonRun>(`/api/v1/model-comparisons/${encodeURIComponent(comparisonId)}/run`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function cancelModelComparison(comparisonId: string): Promise<ModelComparisonRun> {
+  return request<ModelComparisonRun>(`/api/v1/model-comparisons/${encodeURIComponent(comparisonId)}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}

@@ -42,6 +42,7 @@ overrides:
   source-map-js@^1.0.0: 1.2.2
   compression@^1.0.0: 1.8.2
   katex@^0.16.0: 0.18.2
+  "@smithy/core@^3.0.0": 3.35.1
 
 importers:
   .:
@@ -113,6 +114,9 @@ importers:
 
   apps/gateway:
     dependencies:
+      "@aws-crypto/sha256-js":
+        specifier: 5.2.0
+        version: 5.2.0
       "@fastify/cors":
         specifier: 10.1.0
         version: 10.1.0
@@ -170,6 +174,12 @@ importers:
       "@sigstore/verify":
         specifier: 3.1.1
         version: 3.1.1
+      "@smithy/eventstream-codec":
+        specifier: 4.5.2
+        version: 4.5.2
+      "@smithy/signature-v4":
+        specifier: 5.7.4
+        version: 5.7.4
       adm-zip:
         specifier: 0.6.1
         version: 0.6.1
@@ -803,6 +813,20 @@ packages:
         optional: true
       react:
         optional: true
+
+  "@aws-crypto/sha256-js@5.2.0":
+    resolution:
+      { integrity: sha512-FFQQyu7edu4ufvIZ+OadFpHHOt+eSTBaYaki44c+akjg7qZg9oOQeLlk77F6tSYqjDAFClrHJk9tMf0HdVyOvA== }
+    engines: { node: ">=16.0.0" }
+
+  "@aws-crypto/util@5.2.0":
+    resolution:
+      { integrity: sha512-4RkU9EsI6ZpBve5fseQlGNUWKMa1RLPQ1dnjnQoe07ldfIzcsGb5hC5W0Dm7u423KWzawlrpbjXBrXCEv9zazQ== }
+
+  "@aws-sdk/types@3.974.6":
+    resolution:
+      { integrity: sha512-v/clNZzZnDxGyvpHMOGpJKVXFAExJzUNAAjaWGdcx8QAcXLGwTaOkw33p5SHAi0YAioK32xB3hWwOekRVfmfKg== }
+    engines: { node: ">=20.0.0" }
 
   "@babel/code-frame@7.29.7":
     resolution:
@@ -3116,6 +3140,41 @@ packages:
     resolution:
       { integrity: sha512-qv7+G3J2cc6wwFj3yKvXOamzqhMwSk1ogPGmhpS8iXllcPrJaIIBA+4HbttlHVu1pqWTdmaCH/WE7UOC51kdoA== }
     engines: { node: ^20.17.0 || >=22.9.0 }
+
+  "@smithy/core@3.35.1":
+    resolution:
+      { integrity: sha512-i4YPS4B6ts7bjn7UwLnGjiZdprOvHvgGobFZsYK3GIY3E5hIqtj0rReU69BcTpGp+fvtraSNXeG1l+jtJvF55w== }
+    engines: { node: ">=18.0.0" }
+
+  "@smithy/eventstream-codec@4.5.2":
+    resolution:
+      { integrity: sha512-u4EAkaviMcQYlorFSnxFUgF/Dnbgiu2TzGmqOU4h3CL4MbvrYyNCXpFkcBwvAEU11EvspKX2zzS2uX7q+43VdQ== }
+    engines: { node: ">=18.0.0" }
+
+  "@smithy/is-array-buffer@2.2.0":
+    resolution:
+      { integrity: sha512-GGP3O9QFD24uGeAXYUjwSTXARoqpZykHadOmA8G5vfJPK0/DC67qa//0qvqrJzL1xc8WQWX7/yc7fwudjPHPhA== }
+    engines: { node: ">=14.0.0" }
+
+  "@smithy/signature-v4@5.7.4":
+    resolution:
+      { integrity: sha512-tHy0K0VtqNd5Y7Y41h0a0Lhh0L1GzC08dTWg0F7vRJWFtTENg7IZikf3wQkanYIRdb7ngoIPMTmqgUi401fEeQ== }
+    engines: { node: ">=18.0.0" }
+
+  "@smithy/types@4.19.0":
+    resolution:
+      { integrity: sha512-r7jh49VJxGerfAcTQA6gXcKc+98zOp/tqRwzYjgOE+iSQsP6cEU1hq2QzbuipmP68QtYdY9wKEhiCQZIzHgZ4Q== }
+    engines: { node: ">=18.0.0" }
+
+  "@smithy/util-buffer-from@2.2.0":
+    resolution:
+      { integrity: sha512-IJdWBbTcMQ6DA0gdNhh/BwrLkDR+ADW5Kr1aZmd4k3DIF6ezMV4R2NIAmT08wQJ3yUK82thHWmC/TnK/wpMMIA== }
+    engines: { node: ">=14.0.0" }
+
+  "@smithy/util-utf8@2.3.0":
+    resolution:
+      { integrity: sha512-R8Rdn8Hy72KKcebgLiv8jQcQkXoLMOGGv5uI1/k0l+snqkOzQ1R0ChUBCxWMlBsFMekWjq0wRudIweFs7sKT5A== }
+    engines: { node: ">=14.0.0" }
 
   "@standard-schema/spec@1.1.0":
     resolution:
@@ -7947,6 +8006,23 @@ snapshots:
       "@types/react": 19.2.14
       react: 19.2.5
 
+  "@aws-crypto/sha256-js@5.2.0":
+    dependencies:
+      "@aws-crypto/util": 5.2.0
+      "@aws-sdk/types": 3.974.6
+      tslib: 2.8.1
+
+  "@aws-crypto/util@5.2.0":
+    dependencies:
+      "@aws-sdk/types": 3.974.6
+      "@smithy/util-utf8": 2.3.0
+      tslib: 2.8.1
+
+  "@aws-sdk/types@3.974.6":
+    dependencies:
+      "@smithy/types": 4.19.0
+      tslib: 2.8.1
+
   "@babel/code-frame@7.29.7":
     dependencies:
       "@babel/helper-validator-identifier": 7.29.7
@@ -9908,6 +9984,40 @@ snapshots:
       "@sigstore/bundle": 4.0.0
       "@sigstore/core": 3.2.1
       "@sigstore/protobuf-specs": 0.5.1
+
+  "@smithy/core@3.35.1":
+    dependencies:
+      "@smithy/types": 4.19.0
+      tslib: 2.8.1
+
+  "@smithy/eventstream-codec@4.5.2":
+    dependencies:
+      "@smithy/core": 3.35.1
+      tslib: 2.8.1
+
+  "@smithy/is-array-buffer@2.2.0":
+    dependencies:
+      tslib: 2.8.1
+
+  "@smithy/signature-v4@5.7.4":
+    dependencies:
+      "@smithy/core": 3.35.1
+      "@smithy/types": 4.19.0
+      tslib: 2.8.1
+
+  "@smithy/types@4.19.0":
+    dependencies:
+      tslib: 2.8.1
+
+  "@smithy/util-buffer-from@2.2.0":
+    dependencies:
+      "@smithy/is-array-buffer": 2.2.0
+      tslib: 2.8.1
+
+  "@smithy/util-utf8@2.3.0":
+    dependencies:
+      "@smithy/util-buffer-from": 2.2.0
+      tslib: 2.8.1
 
   "@standard-schema/spec@1.1.0": {}
 

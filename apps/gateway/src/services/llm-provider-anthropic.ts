@@ -4,12 +4,12 @@ import type {
   ChatCompletionResponse,
   ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
-import type { ModelUsageAttemptHandle } from "@goatcitadel/gateway-core";
 import type { LlmProviderAdapter, LlmProviderAdapterHost, LlmProviderResolution } from "./llm-provider-adapter.js";
 import {
   applyEstimatedCostToChatResponseWithSource,
   applyEstimatedCostToStreamChunkWithSource,
   observeProviderUsageWithTrustedEstimate,
+  withUsageEvent,
 } from "./llm-pricing.js";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
@@ -314,6 +314,21 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
                 priorModelUsageEventIds,
               );
               continue;
+            }
+
+            if (event.delta.type === "thinking_delta") {
+              const thinkingText = String(event.delta.thinking ?? "");
+              if (thinkingText) {
+                yield withUsageEvent(
+                  {
+                    id: messageId ?? "message",
+                    model: messageModel,
+                    choices: [{ index: 0, delta: { reasoning_content: thinkingText } }],
+                  },
+                  accounting,
+                  priorModelUsageEventIds,
+                );
+              }
             }
 
             if (event.delta.type === "input_json_delta" && typeof event.index === "number") {
@@ -1030,21 +1045,6 @@ function mergeAnthropicUsage(
 ): Record<string, unknown> | undefined {
   if (!next) return current;
   return { ...(current ?? {}), ...next };
-}
-
-function withUsageEvent<T extends object>(
-  value: T,
-  accounting: ModelUsageAttemptHandle | undefined,
-  priorModelUsageEventIds: readonly string[] = [],
-): T & { model_usage_event_id?: string; model_usage_event_ids?: string[] } {
-  const eventIds = [...new Set([...priorModelUsageEventIds, ...(accounting ? [accounting.eventId] : [])])];
-  return eventIds.length > 0
-    ? {
-        ...value,
-        model_usage_event_id: eventIds.at(-1),
-        model_usage_event_ids: eventIds,
-      }
-    : value;
 }
 
 function mapAnthropicStopReason(stopReason: string | undefined): string {

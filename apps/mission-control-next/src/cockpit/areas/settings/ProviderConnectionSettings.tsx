@@ -12,7 +12,14 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import { canReviewConnectionPlan, connectionPlanCompleted } from "./provider-connection-state";
 import { useProviderConnectionEditor } from "./use-provider-connection-editor";
-import { presentChangeStatusLabel, PROVIDER_AUTH_MODE_LABELS } from "./settings-vocabulary";
+import {
+  AWS_SIGV4_CREDENTIAL_HELP,
+  AWS_SIGV4_CREDENTIAL_LABEL,
+  AWS_SIGV4_SECURE_INPUT_NOTE,
+  isBedrockCredentialMode,
+  presentChangeStatusLabel,
+  PROVIDER_AUTH_MODE_LABELS,
+} from "./settings-vocabulary";
 
 export function ProviderConnectionSettings() {
   const catalog = useProviderModelCatalog("system");
@@ -105,7 +112,9 @@ function ProviderConnectionEditor({
   const route = useCockpitRoute();
   const [credentialStorage, setCredentialStorage] = useState<"keychain" | "env">("keychain");
   const { draft, attempt, blocked } = editor;
-  const credentialEditable = !provider.authMode || provider.authMode === "api-key";
+  const credentialEditable =
+    !provider.authMode || provider.authMode === "api-key" || isBedrockCredentialMode(provider.authMode);
+  const sigV4 = provider.authMode === "aws-sigv4";
   const disabled = !available || blocked || editor.refreshing;
   const plan = attempt?.plan;
   const inspectionParams = new URLSearchParams(route.search);
@@ -125,7 +134,7 @@ function ProviderConnectionEditor({
   const shownStorage = pendingCredential?.credentialStorage ?? credentialStorage;
   const shownEnvVar = pendingCredential?.credentialEnvVar ?? registeredEnvVar?.trim() ?? "";
   const dialogRequest = editor.dialog?.request;
-  const reviewNote =
+  const storageNote =
     dialogRequest?.kind === "provider_connection" && dialogRequest.credentialAction === "replace_api_key"
       ? dialogRequest.credentialStorage === "env"
         ? `Credential storage: plaintext in this installation's environment file, variable ${dialogRequest.credentialEnvVar}. Anyone who can read that file can read the credential.`
@@ -133,6 +142,10 @@ function ProviderConnectionEditor({
       : dialogRequest?.kind === "provider_connection" && dialogRequest.profile?.baseUrl
         ? `New endpoint: ${dialogRequest.profile.baseUrl}. Provider requests, including the live connection check, will use this address with the configured credential.`
         : undefined;
+  const reviewNote =
+    sigV4 && dialogRequest?.kind === "provider_connection" && dialogRequest.credentialAction === "replace_api_key"
+      ? `${AWS_SIGV4_SECURE_INPUT_NOTE} ${storageNote ?? ""}`.trim()
+      : storageNote;
   return (
     <div className="mt-4 space-y-3">
       <p className="text-xs text-fg-muted">
@@ -189,7 +202,10 @@ function ProviderConnectionEditor({
           className="space-y-2 border-t border-line-subtle pt-3"
           disabled={disabled || draft.isDirty || draft.hasRemoteChanges}
         >
-          <legend className="pt-3 text-sm font-medium text-fg">API credential</legend>
+          <legend className="pt-3 text-sm font-medium text-fg">
+            {sigV4 ? AWS_SIGV4_CREDENTIAL_LABEL : "API credential"}
+          </legend>
+          {sigV4 ? <p className="text-xs text-fg-muted">{AWS_SIGV4_CREDENTIAL_HELP}</p> : null}
           <label className="block text-sm text-fg">
             Credential storage
             <select
@@ -235,7 +251,7 @@ function ProviderConnectionEditor({
             disabled={disabled || draft.isDirty || draft.hasRemoteChanges || (shownStorage === "env" && !shownEnvVar)}
             onClick={() => editor.prepareCredential(credentialStorage, shownEnvVar)}
           >
-            Replace API credential
+            {sigV4 ? `Replace ${AWS_SIGV4_CREDENTIAL_LABEL}` : "Replace API credential"}
           </Button>
         </fieldset>
       ) : null}

@@ -86,6 +86,24 @@ function openAiChatConfig(): LlmConfigFile {
   };
 }
 
+function bedrockConfig(): LlmConfigFile {
+  return {
+    activeProviderId: "bedrock",
+    activeModel: "us.amazon.nova-pro-v1:0",
+    providers: [
+      {
+        providerId: "bedrock",
+        label: "Amazon Bedrock",
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+        apiStyle: "bedrock-messages",
+        defaultModel: "us.amazon.nova-pro-v1:0",
+        authMode: "aws-bedrock-api-key",
+        apiKey: "test-key",
+      },
+    ],
+  };
+}
+
 function codexConfig(): LlmConfigFile {
   return {
     activeProviderId: "openai-codex",
@@ -341,6 +359,43 @@ describe("LlmService canonical transport accounting", () => {
     ).rejects.toThrow("governed execution lineage");
     expect(fetch).not.toHaveBeenCalled();
     expect(storage.modelUsageEvents.list().items).toEqual([]);
+  });
+
+  it("passes the Bedrock inferenceConfig output cap to a dispatch guard that requires one", async () => {
+    const { service, storage } = createHarness(bedrockConfig());
+    const fetch = vi.fn(
+      async (_url: string, _init: RequestInit) =>
+        new Response(
+          JSON.stringify({
+            output: { message: { role: "assistant", content: [{ text: "ok" }] } },
+            stopReason: "end_turn",
+            usage: { inputTokens: 4, outputTokens: 1, totalTokens: 5 },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const guard = vi.fn(async (input: { effectiveOutputTokenCap?: number }) => {
+      if (typeof input.effectiveOutputTokenCap !== "number" || input.effectiveOutputTokenCap > 256) {
+        throw new Error("output budget missing");
+      }
+    });
+    const completion = await service.chatCompletionsWithDispatchGuard(
+      {
+        providerId: "bedrock",
+        model: "us.amazon.nova-pro-v1:0",
+        messages: [{ role: "user", content: "hello" }],
+        max_tokens: 256,
+      },
+      attribution("guard-bedrock"),
+      guard,
+    );
+    expect(guard).toHaveBeenCalledOnce();
+    expect(guard.mock.calls[0]?.[0].effectiveOutputTokenCap).toBe(256);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).inferenceConfig).toEqual({ maxTokens: 256 });
+    expect((completion.choices?.[0]?.message as { content?: unknown })?.content).toBe("ok");
+    expect(onlyUsageRecord(storage)).toMatchObject({ effectiveOutputTokenCap: 256, terminalOutcome: "succeeded" });
   });
 
   it("checks a server-owned dispatch guard after persisting usage intent and before sending", async () => {

@@ -109,6 +109,94 @@ export class ModelComparisonRunRepository {
     return persisted;
   }
 
+  public async updateStatus(
+    comparisonId: string,
+    update: { status: ModelComparisonStatus; updatedAt: string; completedAt?: string | null; error?: string | null },
+  ): Promise<ModelComparisonRun> {
+    await this.ensureSchema();
+    // Read and write in one immediate transaction so an omitted field keeps the
+    // value committed at write time, not one a concurrent writer replaced.
+    await this.db.runImmediateTransaction(async () => {
+      const row = toRunRow(await this.db.prepare(GET_RUN_SQL).get(comparisonId));
+      if (!row) {
+        throw new NotFoundError({ entity: "Model comparison", id: comparisonId });
+      }
+      await this.db.prepare(UPDATE_RUN_STATUS_SQL).run({
+        comparisonId,
+        status: update.status,
+        updatedAt: update.updatedAt,
+        completedAt: update.completedAt === undefined ? row.completed_at : update.completedAt,
+        error: update.error === undefined ? row.error : update.error,
+      });
+    });
+    return await this.get(comparisonId);
+  }
+
+  /**
+   * Compare-and-swap claim: moves the run to `running` only when its status and
+   * `updatedAt` still match the snapshot the caller read. Returns undefined
+   * when another writer changed the row first (or it does not exist).
+   */
+  public async claimRun(
+    comparisonId: string,
+    claim: { expectedStatus: ModelComparisonStatus; expectedUpdatedAt: string; updatedAt: string },
+  ): Promise<ModelComparisonRun | undefined> {
+    await this.ensureSchema();
+    const result = await this.db.prepare(CLAIM_RUN_SQL).run({
+      comparisonId,
+      expectedStatus: claim.expectedStatus,
+      expectedUpdatedAt: claim.expectedUpdatedAt,
+      updatedAt: claim.updatedAt,
+    });
+    return changedRows(result) === 1 ? await this.get(comparisonId) : undefined;
+  }
+
+  /** Extends the execution lease; false once the run is no longer `running`. */
+  public async renewRunLease(comparisonId: string, updatedAt: string): Promise<boolean> {
+    await this.ensureSchema();
+    const result = await this.db.prepare(RENEW_RUN_LEASE_SQL).run({ comparisonId, updatedAt });
+    return changedRows(result) === 1;
+  }
+
+  /** Terminal write that applies only while the run is still `running`. */
+  public async finishRun(
+    comparisonId: string,
+    update: { status: ModelComparisonStatus; updatedAt: string; completedAt: string | null; error: string | null },
+  ): Promise<ModelComparisonRun | undefined> {
+    await this.ensureSchema();
+    const result = await this.db.prepare(FINISH_RUN_SQL).run({
+      comparisonId,
+      status: update.status,
+      updatedAt: update.updatedAt,
+      completedAt: update.completedAt,
+      error: update.error,
+    });
+    return changedRows(result) === 1 ? await this.get(comparisonId) : undefined;
+  }
+
+  public async upsertResult(
+    comparisonId: string,
+    result: ModelComparisonPromptResult,
+    updatedAt: string,
+  ): Promise<ModelComparisonRun> {
+    await this.ensureSchema();
+    await this.db.runImmediateTransaction(async () => {
+      const row = toRunRow(await this.db.prepare(GET_RUN_SQL).get(comparisonId));
+      if (!row) {
+        throw new NotFoundError({ entity: "Model comparison", id: comparisonId });
+      }
+      const results = safeJsonParse<ModelComparisonPromptResult[]>(row.results_json, []);
+      const index = results.findIndex((item) => item.resultId === result.resultId);
+      const next = index >= 0 ? results.map((item, i) => (i === index ? result : item)) : [...results, result];
+      await this.db.prepare(UPDATE_RUN_RESULTS_SQL).run({
+        comparisonId,
+        resultsJson: JSON.stringify(next),
+        updatedAt,
+      });
+    });
+    return await this.get(comparisonId);
+  }
+
   private ensureSchema(): Promise<void> {
     this.schemaReady ??= Promise.resolve(
       this.db.exec(`
@@ -212,6 +300,29 @@ const LIST_JUDGMENTS_SQL = `
 const UPDATE_RUN_TIMESTAMP_SQL = `
   UPDATE model_comparison_runs SET updated_at = @updatedAt WHERE comparison_id = @comparisonId
 `;
+const UPDATE_RUN_STATUS_SQL = `
+  UPDATE model_comparison_runs
+  SET status = @status, updated_at = @updatedAt, completed_at = @completedAt, error = @error
+  WHERE comparison_id = @comparisonId
+`;
+const CLAIM_RUN_SQL = `
+  UPDATE model_comparison_runs
+  SET status = 'running', updated_at = @updatedAt, completed_at = NULL, error = NULL
+  WHERE comparison_id = @comparisonId AND status = @expectedStatus AND updated_at = @expectedUpdatedAt
+`;
+const RENEW_RUN_LEASE_SQL = `
+  UPDATE model_comparison_runs SET updated_at = @updatedAt
+  WHERE comparison_id = @comparisonId AND status = 'running'
+`;
+const FINISH_RUN_SQL = `
+  UPDATE model_comparison_runs
+  SET status = @status, updated_at = @updatedAt, completed_at = @completedAt, error = @error
+  WHERE comparison_id = @comparisonId AND status = 'running'
+`;
+const UPDATE_RUN_RESULTS_SQL = `
+  UPDATE model_comparison_runs SET results_json = @resultsJson, updated_at = @updatedAt
+  WHERE comparison_id = @comparisonId
+`;
 
 function mapJudgmentRow(row: ModelComparisonJudgmentRow): ModelComparisonJudgment {
   return {
@@ -223,6 +334,10 @@ function mapJudgmentRow(row: ModelComparisonJudgmentRow): ModelComparisonJudgmen
     reviewerId: row.reviewer_id ?? undefined,
     createdAt: row.created_at,
   };
+}
+
+function changedRows(result: DbRunResult): number {
+  return Number(result.changes ?? 0);
 }
 
 function safeJsonParse<T>(raw: string, fallback: T): T {

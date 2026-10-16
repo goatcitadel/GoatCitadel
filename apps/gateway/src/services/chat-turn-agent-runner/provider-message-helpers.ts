@@ -86,7 +86,7 @@ export function messageHasReasoningContent(message: Record<string, unknown> | un
 }
 
 /**
- * Thinking-display skeleton: concatenates the same readable reasoning text
+ * Thinking display: concatenates the same readable reasoning text
  * {@link messageHasReasoningContent} detects, for emission as a `thinking_delta`
  * chunk. Mirrors that function's traversal (flat field first, then structured
  * `provider_native_content` blocks) so "has reasoning" and "the reasoning text"

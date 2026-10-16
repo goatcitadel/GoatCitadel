@@ -78,6 +78,7 @@ import {
 } from "./google-cloud-auth-service.js";
 import { resolveLlmReasoningProfile } from "./llm-reasoning-profile.js";
 import { anthropicProviderAdapter } from "./llm-provider-anthropic.js";
+import { bedrockProviderAdapter } from "./llm-provider-bedrock.js";
 import {
   createLlmProviderAdapterRegistry,
   type LlmProviderAdapterHost,
@@ -315,6 +316,7 @@ export class LlmService {
   private readonly requestDispatcherCache = new Map<string, Dispatcher>();
   private readonly providerAdapters: LlmProviderAdapterRegistry = createLlmProviderAdapterRegistry([
     anthropicProviderAdapter,
+    bedrockProviderAdapter,
   ]);
   private readonly providerAdapterHost: LlmProviderAdapterHost = {
     buildRequestTarget: (resolved, purpose, endpointUrl) => this.buildRequestTarget(resolved, purpose, endpointUrl),
@@ -1135,6 +1137,16 @@ export class LlmService {
 
   private enrichModelRecord(providerId: string, record: LlmModelRecord): LlmModelRecord {
     const meta = lookupModelMetadata(this.modelMetadata, providerId, record.id);
+    const provider = this.providers.get(providerId);
+    if (provider && providerOmitsReasoningEffort(provider, record.id)) {
+      // Never advertise selectable efforts the adapter would silently drop.
+      const { reasoningEfforts: _droppedEfforts, ...withoutEfforts } = record;
+      return {
+        ...withoutEfforts,
+        contextWindow: record.contextWindow ?? meta?.contextWindow,
+        outputTokenLimit: record.outputTokenLimit ?? meta?.outputTokenLimit,
+      };
+    }
     if (!meta) return record;
     return {
       ...record,
@@ -1149,6 +1161,27 @@ export class LlmService {
     model: string,
   ): ChatCompletionReasoningEffort[] | undefined {
     return this.getLiveCatalogModel(provider, model)?.reasoningEfforts;
+  }
+
+  private resolveDispatchReasoningProfile(
+    request: ChatCompletionRequest,
+    provider: LlmProviderConfig,
+    model: string,
+    attribution: ModelUsageAttributionContext,
+  ): ReturnType<typeof resolveLlmReasoningProfile> {
+    // An adapter that never sends a reasoning field must not inherit efforts
+    // from the catalog or model metadata, or the receipt would claim "honored".
+    const omitsReasoning = providerOmitsReasoningEffort(provider, model);
+    return resolveLlmReasoningProfile({
+      request,
+      providerId: provider.providerId,
+      providerCapabilities: inferProviderCapabilities(provider),
+      modelMetadata: omitsReasoning
+        ? undefined
+        : lookupExactModelMetadata(this.modelMetadata, provider.providerId, model),
+      catalogReasoningEfforts: omitsReasoning ? undefined : this.getCatalogReasoningEfforts(provider, model),
+      attribution,
+    });
   }
 
   public getCachedModelAvailability(
@@ -1314,7 +1347,7 @@ export class LlmService {
       ) {
         return baseResult;
       }
-      if (!outputCapField) {
+      if (!outputCapField?.rewritable) {
         return baseResult;
       }
       let errorText: string;
@@ -1350,7 +1383,7 @@ export class LlmService {
     },
   ): Promise<LlmTrackedJsonDispatch | undefined> {
     const outputCapField = resolveOutputCapPayloadField(input.dispatched.effectivePayload);
-    if (!outputCapField || input.dispatched.outputCapRetriesRemaining <= 0) return undefined;
+    if (!outputCapField?.rewritable || input.dispatched.outputCapRetriesRemaining <= 0) return undefined;
     const requestedOutputTokenCap = input.dispatched.logicalRequestedOutputTokenCap ?? outputCapField.value;
     const decision = resolveOutputCapRecovery({
       errorText: input.providerErrorText,
@@ -1784,14 +1817,7 @@ export class LlmService {
     try {
       const model = this.resolveRequestModel(resolved.provider, sanitizedRequest.model);
       this.assertFastModeAvailable(resolved.provider, model, sanitizedRequest);
-      const reasoning = resolveLlmReasoningProfile({
-        request: sanitizedRequest,
-        providerId: resolved.provider.providerId,
-        providerCapabilities: inferProviderCapabilities(resolved.provider),
-        modelMetadata: lookupExactModelMetadata(this.modelMetadata, resolved.provider.providerId, model),
-        catalogReasoningEfforts: this.getCatalogReasoningEfforts(resolved.provider, model),
-        attribution,
-      });
+      const reasoning = this.resolveDispatchReasoningProfile(sanitizedRequest, resolved.provider, model, attribution);
       const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
       const providerAdapter = this.providerAdapters.get(apiStyle);
       let completion: ChatCompletionResponse;
@@ -1809,8 +1835,6 @@ export class LlmService {
           case "openai-responses":
             completion = await this.executeOpenAiResponses(reasoning.request, resolved, model, reasoning.attribution);
             break;
-          case "bedrock-messages":
-            throw new Error("AWS Bedrock messages API style is not yet supported in this version");
           default:
             completion = await this.executeChatCompletions(reasoning.request, resolved, model, reasoning.attribution);
         }
@@ -1931,9 +1955,10 @@ export class LlmService {
   }
 
   private async *chatCompletionsStreamInternal(
-    request: ChatCompletionRequest,
+    callerRequest: ChatCompletionRequest,
     attributionInput: ModelUsageAttributionContext = {},
   ): AsyncGenerator<Record<string, unknown>> {
+    const { streamReasoningDeltas, ...request } = callerRequest;
     if (!request.messages || request.messages.length === 0) {
       throw new Error("chat/completions requires at least one message");
     }
@@ -1952,14 +1977,7 @@ export class LlmService {
     try {
       const model = this.resolveRequestModel(resolved.provider, sanitizedRequest.model);
       this.assertFastModeAvailable(resolved.provider, model, sanitizedRequest);
-      const reasoning = resolveLlmReasoningProfile({
-        request: sanitizedRequest,
-        providerId: resolved.provider.providerId,
-        providerCapabilities: inferProviderCapabilities(resolved.provider),
-        modelMetadata: lookupExactModelMetadata(this.modelMetadata, resolved.provider.providerId, model),
-        catalogReasoningEfforts: this.getCatalogReasoningEfforts(resolved.provider, model),
-        attribution,
-      });
+      const reasoning = this.resolveDispatchReasoningProfile(sanitizedRequest, resolved.provider, model, attribution);
       const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
       const providerAdapter = this.providerAdapters.get(apiStyle);
       let stream: AsyncGenerator<Record<string, unknown>>;
@@ -1977,14 +1995,18 @@ export class LlmService {
           case "openai-responses":
             stream = this.executeOpenAiResponsesStream(reasoning.request, resolved, model, reasoning.attribution);
             break;
-          case "bedrock-messages":
-            throw new Error("AWS Bedrock messages API style is not yet supported in this version");
           default:
             stream = this.executeChatCompletionsStream(reasoning.request, resolved, model, reasoning.attribution);
         }
       }
       for await (const chunk of stream) {
-        yield attachReasoningReceiptToChunk(stripPrivateReasoningFromChunk(chunk), reasoning.receipt);
+        const reasoningByChoice = readChunkReasoningDeltas(chunk);
+        const publicChunk = stripPrivateReasoningFromChunk(chunk);
+        if (!streamReasoningDeltas && reasoningByChoice.size > 0 && isEmptyStreamFrame(publicChunk)) {
+          continue;
+        }
+        const projected = streamReasoningDeltas ? attachReasoningDeltas(publicChunk, reasoningByChoice) : publicChunk;
+        yield attachReasoningReceiptToChunk(projected, reasoning.receipt);
       }
     } finally {
       await this.releaseLocalServiceLease(lease);
@@ -2771,6 +2793,19 @@ export class LlmService {
       };
     }
 
+    if (authMode === "aws-sigv4") {
+      const secretStatus = this.getProviderSecretStatus(provider.providerId, {
+        includeKeychain: true,
+        useCache: false,
+      });
+      if (secretStatus.apiKeySource === "inline") {
+        throw new Error(
+          "AWS SigV4 credentials must be stored in the Gateway keychain or provided through AWS_* environment variables.",
+        );
+      }
+      return { provider, apiKey: this.resolveApiKey(provider) ?? this.resolveAwsEnvCredentials() };
+    }
+
     const apiKey = isOpenAICodexProvider(provider)
       ? options.requireAuth
         ? await this.openAICodexOAuth.resolveAccessToken()
@@ -2844,6 +2879,16 @@ export class LlmService {
     return undefined;
   }
 
+  private resolveAwsEnvCredentials(): string | undefined {
+    const accessKeyId = this.env.AWS_ACCESS_KEY_ID?.trim();
+    const secretAccessKey = this.env.AWS_SECRET_ACCESS_KEY?.trim();
+    if (!accessKeyId || !secretAccessKey) {
+      return undefined;
+    }
+    const sessionToken = this.env.AWS_SESSION_TOKEN?.trim();
+    return JSON.stringify({ accessKeyId, secretAccessKey, ...(sessionToken ? { sessionToken } : {}) });
+  }
+
   private readKeychainApiKey(providerId: string): string | undefined {
     try {
       return this.secretStore.getProviderApiKey(providerId);
@@ -2886,23 +2931,29 @@ export class LlmService {
     const useClaudeCodeOAuthHeaders =
       isClaudeCodeOAuthProvider(resolved.provider) && (purpose === "models" || purpose === "messages");
 
+    const dispatchSecret = this.resolveDispatchSecret(resolved);
+
     delete headers.Authorization;
     delete headers["x-api-key"];
-    applyRequestAuthHeaders(headers, explicitAuth, this.env, resolved.apiKey);
-    if (useClaudeCodeOAuthHeaders && !explicitAuth && resolved.apiKey) {
-      headers.Authorization = `Bearer ${resolved.apiKey}`;
+    applyRequestAuthHeaders(headers, explicitAuth, this.env, dispatchSecret);
+    if (useClaudeCodeOAuthHeaders && !explicitAuth && dispatchSecret) {
+      headers.Authorization = `Bearer ${dispatchSecret}`;
       headers["anthropic-beta"] = "oauth-2025-04-20";
       delete headers["x-api-key"];
-    } else if (useAnthropicNativeHeaders && !explicitAuth && resolved.apiKey) {
-      headers["x-api-key"] = resolved.apiKey;
+    } else if (useAnthropicNativeHeaders && !explicitAuth && dispatchSecret) {
+      headers["x-api-key"] = dispatchSecret;
       delete headers.Authorization;
-    } else if (!explicitAuth && resolved.apiKey) {
-      headers.Authorization = `Bearer ${resolved.apiKey}`;
+    } else if (!explicitAuth && dispatchSecret) {
+      headers.Authorization = `Bearer ${dispatchSecret}`;
     }
     if (useAnthropicNativeHeaders || useClaudeCodeOAuthHeaders) {
       headers["anthropic-version"] = "2023-06-01";
     }
     return headers;
+  }
+
+  private resolveDispatchSecret(resolved: ResolvedProvider): string | undefined {
+    return resolveProviderAuthMode(resolved.provider) === "aws-sigv4" ? undefined : resolved.apiKey;
   }
 
   private buildRequestTarget(
@@ -2917,7 +2968,7 @@ export class LlmService {
     if (!auth || auth.type !== "query") {
       return { url: endpoint, headers, dispatcher };
     }
-    const secret = resolveRequestAuthSecret(auth, this.env, resolved.apiKey);
+    const secret = resolveRequestAuthSecret(auth, this.env, this.resolveDispatchSecret(resolved));
     if (!secret) {
       return { url: endpoint, headers, dispatcher };
     }
@@ -2994,6 +3045,19 @@ export class LlmService {
         hasApiKey: true,
         apiKeySource: "inline",
         hasKeychainSecret: false,
+      };
+    }
+    if (
+      resolveProviderAuthMode(provider) === "aws-sigv4" &&
+      this.env.AWS_ACCESS_KEY_ID?.trim() &&
+      this.env.AWS_SECRET_ACCESS_KEY?.trim()
+    ) {
+      return {
+        providerId: provider.providerId,
+        hasApiKey: true,
+        apiKeySource: "env",
+        hasKeychainSecret: false,
+        apiKeyRef: "AWS_ACCESS_KEY_ID",
       };
     }
     return {
@@ -3226,6 +3290,15 @@ export class LlmService {
     resolved: ResolvedProvider,
     options: { skipLocalLease?: boolean } = {},
   ): Promise<ModelDiscoveryResult> {
+    if (resolved.provider.apiStyle === "bedrock-messages") {
+      // The Bedrock runtime host has no model listing endpoint; the catalog is configuration only.
+      return {
+        items: buildBedrockModelCatalog(resolved.provider),
+        source: "template_fallback",
+        warning:
+          "Amazon Bedrock does not list models on its runtime endpoint. Showing the configured and template models.",
+      };
+    }
     const fallback = buildFallbackModelCatalog(resolved.provider.providerId, resolved.provider.defaultModel);
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
     const discoverySignal = AbortSignal.timeout(15_000);
@@ -3881,6 +3954,13 @@ function buildFallbackModelCatalog(providerId: string, defaultModel: string | un
   return Array.from(ids, (id) => ({ id }));
 }
 
+function buildBedrockModelCatalog(provider: LlmProviderConfig): LlmModelRecord[] {
+  return mergeModelCatalogs(
+    buildFallbackModelCatalog(provider.providerId, provider.defaultModel),
+    buildFallbackModelCatalog("bedrock", undefined),
+  );
+}
+
 function defaultModelMetadataPath(configFilePath: string | undefined): string {
   if (!configFilePath) {
     return findNearestModelMetadataPath(process.cwd()) ?? "config/llm-model-metadata.json";
@@ -4233,6 +4313,49 @@ function stripPrivateReasoningFromCompletion(response: ChatCompletionResponse): 
   return sanitizeProviderResponseForPublicProjection(response as Record<string, unknown>) as ChatCompletionResponse;
 }
 
+function readChunkReasoningDeltas(chunk: Record<string, unknown>): Map<number, string> {
+  const result = new Map<number, string>();
+  const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
+  choices.forEach((choice, position) => {
+    if (!isRecord(choice) || !isRecord(choice.delta)) return;
+    const text =
+      typeof choice.delta.reasoning_content === "string"
+        ? choice.delta.reasoning_content
+        : typeof choice.delta.reasoning === "string"
+          ? choice.delta.reasoning
+          : "";
+    if (text) result.set(position, text);
+  });
+  return result;
+}
+
+function attachReasoningDeltas(
+  chunk: Record<string, unknown>,
+  reasoningByChoice: Map<number, string>,
+): Record<string, unknown> {
+  if (reasoningByChoice.size === 0 || !Array.isArray(chunk.choices)) return chunk;
+  return {
+    ...chunk,
+    choices: chunk.choices.map((choice, position) => {
+      const text = reasoningByChoice.get(position);
+      if (!text || !isRecord(choice)) return choice;
+      return { ...choice, delta: { ...(isRecord(choice.delta) ? choice.delta : {}), reasoning_content: text } };
+    }),
+  };
+}
+
+function isEmptyStreamFrame(chunk: Record<string, unknown>): boolean {
+  if (chunk.usage !== undefined) return false;
+  const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
+  return choices.every(
+    (choice) =>
+      isRecord(choice) &&
+      choice.message === undefined &&
+      (choice.finish_reason === undefined || choice.finish_reason === null) &&
+      (!isRecord(choice.delta) || Object.keys(choice.delta).length === 0),
+  );
+}
+
 function stripPrivateReasoningFromChunk(chunk: Record<string, unknown>): Record<string, unknown> {
   return sanitizeProviderResponseForPublicProjection(chunk);
 }
@@ -4432,17 +4555,28 @@ function applyMaxTokensPayloadField(input: {
   input.payload.max_tokens = input.maxTokens;
 }
 
-function resolveOutputCapPayloadField(
+type OutputCapPayloadField =
+  | { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; value: number; rewritable: true }
+  | { field: "inferenceConfig.maxTokens"; value: number; rewritable: false };
+
+/**
+ * Reads the single output-cap field of a provider payload. Bedrock's nested
+ * `inferenceConfig.maxTokens` is evidence for accounting and dispatch guards
+ * only: its body is SigV4-signed, so output-cap recovery must never rewrite it.
+ */
+export function resolveOutputCapPayloadField(
   payload: Readonly<Record<string, unknown>>,
-): { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; value: number } | undefined {
-  const candidates = (["max_tokens", "max_completion_tokens", "max_output_tokens"] as const)
-    .map((field) => ({ field, value: payload[field] }))
-    .filter(
-      (
-        candidate,
-      ): candidate is { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; value: number } =>
-        Number.isSafeInteger(candidate.value) && (candidate.value as number) > 0,
-    );
+): OutputCapPayloadField | undefined {
+  const isOutputCap = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) > 0;
+  const candidates: OutputCapPayloadField[] = [];
+  for (const field of ["max_tokens", "max_completion_tokens", "max_output_tokens"] as const) {
+    const value = payload[field];
+    if (isOutputCap(value)) candidates.push({ field, value, rewritable: true });
+  }
+  const inferenceConfig = payload.inferenceConfig;
+  if (isRecord(inferenceConfig) && isOutputCap(inferenceConfig.maxTokens)) {
+    candidates.push({ field: "inferenceConfig.maxTokens", value: inferenceConfig.maxTokens, rewritable: false });
+  }
   return candidates.length === 1 ? candidates[0] : undefined;
 }
 
@@ -6313,7 +6447,7 @@ function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapa
     model.includes("o3") ||
     model.includes("claude-sonnet-4") ||
     model.includes("claude-opus-4");
-  return {
+  const capabilities: LlmProviderCapabilities = {
     vision: hasVision,
     audio: hasAudio,
     video: hasVideo,
@@ -6326,6 +6460,22 @@ function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapa
     imageEdit: supportsImageGenerationProvider(provider.providerId),
     ...(provider.capabilities ?? {}),
   };
+  if (!providerOmitsReasoningEffort(provider, provider.defaultModel)) {
+    return capabilities;
+  }
+  // The adapter drops `reasoning`, so no configured override may advertise a
+  // selectable effort; legacy compatibility then resolves to "none" only.
+  const { reasoningEfforts: _droppedEfforts, ...withoutEfforts } = capabilities;
+  return { ...withoutEfforts, reasoning: false };
+}
+
+/**
+ * True when the execution adapter never sends a reasoning-effort field.
+ * Bedrock Converse thinking combined with tools would require replaying
+ * reasoning blocks, which the Bedrock adapter does not do.
+ */
+function providerOmitsReasoningEffort(provider: LlmProviderConfig, model: string): boolean {
+  return resolveProviderExecutionApiStyle(provider, model) === "bedrock-messages";
 }
 
 function defaultModelForProvider(providerId: string): string {

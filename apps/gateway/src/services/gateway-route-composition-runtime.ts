@@ -1,4 +1,5 @@
 import { ModelComparisonRunRepository } from "@goatcitadel/storage";
+import { logger } from "@goatcitadel/gateway-core";
 import { generateVaultKey } from "@goatcitadel/contracts/citadel-vault-node";
 import { DEFAULT_CITADEL_ID } from "@goatcitadel/contracts";
 import { getStartupPhaseRecorder } from "../diagnostics/startup-phases.js";
@@ -15,6 +16,10 @@ import { MobileApprovalKeyService } from "./mobile-approval-key-service.js";
 import { createMobileRoutePort } from "./mobile-route-service.js";
 import { createConfiguredMobilePushProvider } from "./mobile-push-provider.js";
 import { MobilePushService } from "./mobile-push-service.js";
+import {
+  createModelComparisonRoutePort,
+  ModelComparisonExecutionService,
+} from "./model-comparison-execution-service.js";
 import { ModelComparisonService } from "./model-comparison-service.js";
 import { createNpuRoutePort } from "./npu-route-service.js";
 import { ResearchSearchBrokerService } from "./research-search-broker-service.js";
@@ -38,6 +43,7 @@ import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-c
 
 const DEV_VERIFICATION_VAULT_KEY_ENV = "GOATCITADEL_VERIFY_VAULT_KEY_BASE64";
 const VAULT_KEY_BYTES = 32;
+const modelComparisonLog = logger.child("model-comparison-service");
 
 export function resolveDevVerificationVaultKey(
   devVerificationEnabled: boolean,
@@ -149,6 +155,7 @@ export function composeRuntimeAdminRouteDependencies(
       Boolean(await settingsAuthService.getActiveAuthDeviceGrantById(settingsAuthDeps, grantId)),
   });
   const warnedOutsideRootPathFingerprints = new Set<string>();
+  const modelComparisonRepository = new ModelComparisonRunRepository(gateway.storage.gatewaySql);
 
   return {
     authAdmin: {
@@ -371,11 +378,23 @@ export function composeRuntimeAdminRouteDependencies(
       mobileApprovalKeys,
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     }),
-    modelComparisons: new ModelComparisonService({
-      repository: new ModelComparisonRunRepository(gateway.storage.gatewaySql),
-      listPromptPackTests: (packId, limit) => gateway.promptPackService.listPromptPackTests(packId, limit),
-      listPromptPackRunsByTest: (testId, limit) => gateway.storage.promptPackRuns.listByTest(testId, limit),
-    }),
+    modelComparisons: createModelComparisonRoutePort(
+      new ModelComparisonService({
+        repository: modelComparisonRepository,
+        listPromptPackTests: (packId, limit) => gateway.promptPackService.listPromptPackTests(packId, limit),
+        listPromptPackRunsByTest: (testId, limit) => gateway.storage.promptPackRuns.listByTest(testId, limit),
+      }),
+      new ModelComparisonExecutionService({
+        repository: modelComparisonRepository,
+        runPromptPackTest: (packId, testId, input) =>
+          gateway.promptPackService.runPromptPackTest(packId, testId, input),
+        onBackgroundError: (comparisonId, error) =>
+          modelComparisonLog.error("Model comparison background status or lease write failed", {
+            comparisonId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      }),
+    ),
     npu: createNpuRoutePort({
       npuSidecar: gateway.npuSidecar,
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),

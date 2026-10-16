@@ -47,15 +47,7 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://chatgpt.com/backend-api/codex",
     defaultModel: "gpt-6-sol",
     apiStyle: "openai-codex-responses",
-    knownModels: [
-      "gpt-6-astra",
-      "gpt-6-sol",
-      "gpt-6-luna",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
-    ],
+    knownModels: ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
   },
   {
     providerId: "anthropic",
@@ -72,6 +64,19 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     defaultModel: "claude-sonnet-4-6",
     apiStyle: "anthropic-messages",
     knownModels: ["claude-opus-4-8", "claude-fable-5", "claude-sonnet-4-6", "claude-sonnet-4", "claude-opus-4"],
+  },
+  {
+    providerId: "bedrock",
+    label: "Amazon Bedrock",
+    baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+    defaultModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    apiStyle: "bedrock-messages",
+    authMode: "aws-bedrock-api-key",
+    knownModels: [
+      "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "us.amazon.nova-pro-v1:0",
+      "us.meta.llama4-maverick-17b-instruct-v1:0",
+    ],
   },
   {
     providerId: "google",

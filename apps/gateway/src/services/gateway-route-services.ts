@@ -139,7 +139,7 @@ import { createLlmRouteService, type LlmRoutePort, type LlmRouteService } from "
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { MemoryRouteService } from "./memory-route-service.js";
 import { McpRouteService, type McpRoutePort } from "./mcp-route-service.js";
-import type { ModelComparisonService } from "./model-comparison-service.js";
+import type { ModelComparisonRoutePort } from "./model-comparison-route-service.js";
 import { createMediaRouteService, type MediaRoutePort, type MediaRouteService } from "./media-route-service.js";
 import { createMeshRouteService, type MeshRoutePort, type MeshRouteService } from "./mesh-route-service.js";
 import { createMobileRouteService, type MobileRoutePort, type MobileRouteService } from "./mobile-route-service.js";
@@ -330,7 +330,7 @@ export interface GatewayRouteServices {
   llm: LlmRouteService;
   memory: MemoryRouteService;
   mcp: McpRouteService;
-  modelComparisons: ModelComparisonService;
+  modelComparisons: ModelComparisonRoutePort;
   media: MediaRouteService;
   mesh: MeshRouteService;
   /**
@@ -427,7 +427,7 @@ export interface GatewayRouteServiceDependencies {
   llm: LlmRoutePort;
   memory: MemoryLifecycleService;
   mcp: McpRoutePort;
-  modelComparisons: ModelComparisonService;
+  modelComparisons: ModelComparisonRoutePort;
   media: MediaRoutePort;
   mesh: MeshRoutePort;
   mobile: MobileRoutePort;

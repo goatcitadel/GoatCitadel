@@ -2,16 +2,11 @@ import type { LlmProviderConfig } from "@goatcitadel/contracts";
 import { KeyRound, RefreshCw, Trash2 } from "lucide-react";
 import { NativeCard } from "../../NativeRoutePageLayout";
 import { NativeButton } from "../../primitives";
-import {
-  SettingsButtonRow,
-  SettingsEmptyState,
-  SettingsField,
-  SettingsNotice,
-  type SettingsSectionProps,
-} from "../SettingsShared";
+import { SettingsButtonRow, SettingsEmptyState, SettingsNotice, type SettingsSectionProps } from "../SettingsShared";
 import { SettingsChangeStatus } from "../use-settings-change";
 import { formatProviderCredentialLabel, formatProviderProbeStateLabel } from "../helpers/provider-format";
 import { ProviderConnectionDiagnostics } from "./ProviderConnectionDiagnostics";
+import { ProviderSecretField } from "./ProviderSecretField";
 import type { ProviderCatalog } from "./provider-section-types";
 import type { useProviderCredentials } from "./use-provider-credentials";
 import type { useProviderOAuthFlow } from "./use-provider-oauth-flow";
@@ -172,21 +167,11 @@ export function ProviderTrustPanel({
                 Provider credential{secretEditor.isDirty ? " · Unsaved" : ""}
               </NativeButton>
               <div id="provider-credential-editor" hidden={!credentialEditorOpen}>
-                <SettingsField
-                  label={selectedProviderIsGoogleServiceAccount ? "Service-account JSON" : "Provider secret"}
-                >
-                  <input
-                    className="mc-next-settings-input"
-                    type="password"
-                    value={secretValue}
-                    placeholder={
-                      selectedProviderIsGoogleServiceAccount
-                        ? "Paste service-account JSON to replace the Gateway-owned secret"
-                        : "Paste a new API key to save"
-                    }
-                    onChange={(event) => setSecretValue(event.target.value)}
-                  />
-                </SettingsField>
+                <ProviderSecretField
+                  authMode={selectedProvider.authMode}
+                  value={secretValue}
+                  onChange={setSecretValue}
+                />
                 <details>
                   <summary>Credential storage</summary>
                   <SettingsNotice
@@ -202,7 +187,12 @@ export function ProviderTrustPanel({
                 <SettingsButtonRow>
                   <NativeButton
                     variant="default"
-                    disabled={secretChange.hasPending || secretRemoval.hasPending || credentials.mutation.pending || Boolean(credentials.mutation.uncertain)}
+                    disabled={
+                      secretChange.hasPending ||
+                      secretRemoval.hasPending ||
+                      credentials.mutation.pending ||
+                      Boolean(credentials.mutation.uncertain)
+                    }
                     onClick={() => void handleSaveSecret()}
                   >
                     <KeyRound size={16} />

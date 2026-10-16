@@ -759,6 +759,22 @@ describe("chat-thread-reducer", () => {
       expect(capped.includes("a".repeat(15_990))).toBe(false);
     });
 
+    it("keeps many small streamed thinking chunks within the 16k cap", () => {
+      let thread = baseThread() as never;
+      for (let index = 0; index < 40; index += 1) {
+        thread = updateThreadFromStreamChunk(
+          thread,
+          { type: "thinking_delta", sessionId, turnId: "turn-2", delta: "c".repeat(500) } as never,
+          null,
+          sessionId,
+          null,
+        ) as never;
+      }
+      const stored = (thread as { turns: Array<{ thinking?: string }> }).turns[1]?.thinking ?? "";
+      expect(stored.length).toBeLessThanOrEqual(16_000);
+      expect(stored.endsWith("c".repeat(500))).toBe(true);
+    });
+
     it("no-ops for an unknown turnId", () => {
       const current = baseThread() as never;
       const result = updateThreadFromStreamChunk(

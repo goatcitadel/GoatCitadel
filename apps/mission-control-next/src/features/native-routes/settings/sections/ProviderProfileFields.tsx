@@ -3,6 +3,14 @@ import {
   LlmTransportFields,
   type LlmTransportDraft,
 } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
+import {
+  AWS_SIGV4_ENV_REFERENCE_HELP,
+  AWS_SIGV4_ENV_REFERENCE_PLACEHOLDER,
+  AWS_SIGV4_ENV_REFERENCE_SHORT_LABEL,
+  BEDROCK_CREDENTIAL_MODE_OPTIONS,
+  isBedrockCredentialMode,
+  LLM_API_STYLE_LABELS,
+} from "../../../../cockpit/areas/settings/settings-vocabulary";
 import { SettingsField, SettingsFieldGrid, SettingsNotice } from "../SettingsShared";
 import { getProviderApiStyleWarning, type ProviderEditorDraft } from "../helpers/provider-drafts";
 
@@ -34,6 +42,8 @@ export function ProviderProfileFields({
     providerDraft.providerId.trim().toLowerCase() === "openai-codex" || providerDraft.authMode === "codex-oauth";
   const draftUsesGoogleAuth =
     providerDraft.authMode === "google-adc" || providerDraft.authMode === "google-service-account";
+  const draftUsesBedrock =
+    providerDraft.apiStyle === "bedrock-messages" || isBedrockCredentialMode(providerDraft.authMode);
   const providerApiStyleWarning = getProviderApiStyleWarning(providerDraft);
   return (
     <>
@@ -115,9 +125,18 @@ export function ProviderProfileFields({
             <option value="google-service-account">Google service account</option>
             <option value="claude-code-oauth">Claude Code OAuth token</option>
             <option value="codex-oauth">ChatGPT/Codex OAuth</option>
+            {draftUsesBedrock
+              ? BEDROCK_CREDENTIAL_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))
+              : null}
           </select>
           <p className="mc-next-settings-field-note">
-            Google credential contents remain Gateway-local; this field stores only the auth posture.
+            {draftUsesBedrock
+              ? "AWS credential contents remain Gateway-local; this field stores only the auth posture."
+              : "Google credential contents remain Gateway-local; this field stores only the auth posture."}
           </p>
         </SettingsField>
         <SettingsField label="Default model">
@@ -135,12 +154,20 @@ export function ProviderProfileFields({
         </SettingsField>
         {draftIsCodexOAuth || providerDraft.authMode === "google-adc" ? null : (
           <SettingsField
-            label={providerDraft.authMode === "google-service-account" ? "Service-account JSON env" : "API key env"}
+            label={
+              providerDraft.authMode === "google-service-account"
+                ? "Service-account JSON env"
+                : providerDraft.authMode === "aws-sigv4"
+                  ? AWS_SIGV4_ENV_REFERENCE_SHORT_LABEL
+                  : "API key env"
+            }
           >
             <input
               className="mc-next-settings-input"
               value={providerDraft.apiKeyEnv}
-              placeholder="OPENAI_API_KEY"
+              placeholder={
+                providerDraft.authMode === "aws-sigv4" ? AWS_SIGV4_ENV_REFERENCE_PLACEHOLDER : "OPENAI_API_KEY"
+              }
               onChange={(event) =>
                 setProviderDraft((current) => ({
                   ...current,
@@ -148,6 +175,9 @@ export function ProviderProfileFields({
                 }))
               }
             />
+            {providerDraft.authMode === "aws-sigv4" ? (
+              <p className="mc-next-settings-field-note">{AWS_SIGV4_ENV_REFERENCE_HELP}</p>
+            ) : null}
           </SettingsField>
         )}
         {draftUsesGoogleAuth ? (
@@ -228,6 +258,9 @@ function formatProviderApiStyleLabel(value: ProviderEditorDraft["apiStyle"]): st
   if (value === "anthropic-messages") {
     return "Anthropic Messages";
   }
+  if (value === "bedrock-messages") {
+    return LLM_API_STYLE_LABELS["bedrock-messages"];
+  }
   return "OpenAI Chat Completions";
 }
 
@@ -240,6 +273,9 @@ function describeProviderApiStyle(value: ProviderEditorDraft["apiStyle"]): strin
   }
   if (value === "anthropic-messages") {
     return "Use for Anthropic Claude providers that speak the Messages API.";
+  }
+  if (value === "bedrock-messages") {
+    return "Use for Amazon Bedrock runtime endpoints through the Converse API.";
   }
   return "Use for older OpenAI-compatible chat-completions endpoints such as many proxy or local servers.";
 }

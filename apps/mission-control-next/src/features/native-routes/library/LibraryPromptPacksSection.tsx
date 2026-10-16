@@ -2,9 +2,14 @@ import { FocusedDetail } from "../shared/FocusedDetail";
 import { useSessionDraft, hasSessionDraft } from "./session-drafts";
 import { useDraftLeave } from "./DraftLeaveDialog";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, Scale, Waypoints } from "lucide-react";
-import type { ModelComparisonRun } from "@goatcitadel/contracts";
-import { judgeModelComparison, listModelComparisons } from "@goatcitadel/mission-control-shared/api/model-comparisons";
+import { Play, RefreshCw, Scale, Square, Waypoints } from "lucide-react";
+import type { ModelComparisonRun, ModelComparisonStatus } from "@goatcitadel/contracts";
+import {
+  cancelModelComparison,
+  judgeModelComparison,
+  listModelComparisons,
+  runModelComparison,
+} from "@goatcitadel/mission-control-shared/api/model-comparisons";
 import { NativeCard } from "../NativeRoutePageLayout";
 import { NativeButton } from "@next/features/native-routes/primitives";
 import type { NativeRoutePagesProps } from "../types";
@@ -35,6 +40,14 @@ type ScoreValue = "0" | "1" | "2" | "3" | "4";
 type ScoreDraft = Record<string, ScoreValue>;
 
 const SCORE_OPTIONS: ScoreValue[] = ["0", "1", "2", "3", "4"];
+const RUNNABLE_STATUSES: ReadonlySet<ModelComparisonStatus> = new Set(["queued", "failed", "cancelled"]);
+const COMPARISON_STATUS_LABELS: Record<ModelComparisonStatus, string> = {
+  queued: "Queued",
+  running: "Running",
+  completed: "Done",
+  failed: "Failed",
+  cancelled: "Cancelled",
+};
 
 export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesProps) {
   const [selectedComparisonId, setSelectedComparisonId] = useState("");
@@ -43,6 +56,7 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
   const leave = useDraftLeave();
   const [notice, setNotice] = useState<Notice | null>(null);
   const [saving, setSaving] = useState(false);
+  const [runAction, setRunAction] = useState<"run" | "cancel" | null>(null);
   const load = useCallback(async () => {
     const comparisons = await nativeLoad("Model comparisons", listModelComparisons(30), { items: [] });
     return { issues: nativeLoadIssues([comparisons]), comparisons: comparisons.data.items };
@@ -65,15 +79,34 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
   }, [comparisons]);
 
   useEffect(() => {
-    setSelectedTestId((current) => selectedComparison?.testIds.includes(current) ? current : selectedComparison?.testIds[0] ?? "");
+    setSelectedTestId((current) =>
+      selectedComparison?.testIds.includes(current) ? current : (selectedComparison?.testIds[0] ?? ""),
+    );
   }, [selectedComparison]);
-  const judgmentDraft = useSessionDraft("judgment:" + selectedComparisonId + ":" + selectedTestId, {
-    winner: selectedComparison?.candidates[0]?.candidateId ?? "", scores: Object.fromEntries((selectedComparison?.candidates ?? []).map((candidate) => [candidate.candidateId, "3"])) as ScoreDraft, notes: "",
-  }, selectedComparison?.updatedAt, { label: "Comparison judgment", active: detailOpen, available: Boolean(selectedComparison), onSave: (): Promise<boolean> => saveJudgment() });
-  const winnerCandidateId = judgmentDraft.value.winner, scoreDraft = judgmentDraft.value.scores, notes = judgmentDraft.value.notes;
+  const judgmentDraft = useSessionDraft(
+    "judgment:" + selectedComparisonId + ":" + selectedTestId,
+    {
+      winner: selectedComparison?.candidates[0]?.candidateId ?? "",
+      scores: Object.fromEntries(
+        (selectedComparison?.candidates ?? []).map((candidate) => [candidate.candidateId, "3"]),
+      ) as ScoreDraft,
+      notes: "",
+    },
+    selectedComparison?.updatedAt,
+    {
+      label: "Comparison judgment",
+      active: detailOpen,
+      available: Boolean(selectedComparison),
+      onSave: (): Promise<boolean> => saveJudgment(),
+    },
+  );
+  const winnerCandidateId = judgmentDraft.value.winner,
+    scoreDraft = judgmentDraft.value.scores,
+    notes = judgmentDraft.value.notes;
   const setWinnerCandidateId = (winner: string) => judgmentDraft.setValue((current) => ({ ...current, winner }));
   const setNotes = (notes: string) => judgmentDraft.setValue((current) => ({ ...current, notes }));
-  const setScoreDraft = (update: (current: ScoreDraft) => ScoreDraft) => judgmentDraft.setValue((current) => ({ ...current, scores: update(current.scores) }));
+  const setScoreDraft = (update: (current: ScoreDraft) => ScoreDraft) =>
+    judgmentDraft.setValue((current) => ({ ...current, scores: update(current.scores) }));
 
   const saveJudgment = useCallback(async (): Promise<boolean> => {
     if (!selectedComparison || !selectedTestId) {
@@ -105,238 +138,318 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
     }
   }, [notes, reload, scoreDraft, selectedComparison, selectedTestId, winnerCandidateId, judgmentDraft]);
 
+  const controlRun = useCallback(
+    async (action: "run" | "cancel") => {
+      if (!selectedComparison || runAction) {
+        return;
+      }
+      setRunAction(action);
+      try {
+        const updated =
+          action === "run"
+            ? await runModelComparison(selectedComparison.comparisonId)
+            : await cancelModelComparison(selectedComparison.comparisonId);
+        // Report the status the gateway returned, not the one requested: a
+        // cancel can land after the run already finished.
+        setNotice({
+          tone: "success",
+          message: `Comparison status: ${formatComparisonStatus(updated.status)}`,
+        });
+        await reload();
+      } catch (runError) {
+        setNotice({ tone: "error", message: getErrorMessage(runError) });
+      } finally {
+        setRunAction(null);
+      }
+    },
+    [reload, runAction, selectedComparison],
+  );
+
   return (
     <LibrarySectionShell loading={loading && !data} error={error} onRetry={reload}>
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       {notice ? <LibraryNotice notice={notice} /> : null}
       <div className="mc-next-calm-directory">
-        {!detailOpen ? <NativeCard
-          title="Prompt-pack review queue"
-          subtitle="Recent model comparisons attached to prompt-pack evaluation work."
-          stats={[
-            { label: "Runs", value: String(comparisons.length) },
-            { label: "Completed", value: String(comparisons.filter((item) => item.status === "completed").length) },
-          ]}
-        >
-          <LibraryMetricGrid
-            items={[
-              {
-                label: "Judgments",
-                value: String(comparisons.reduce((total, item) => total + item.judgments.length, 0)),
-                meta: "Operator review records",
-              },
-              {
-                label: "Results",
-                value: String(comparisons.reduce((total, item) => total + item.results.length, 0)),
-                meta: "Model response records",
-              },
-              {
-                label: "Active run",
-                value: selectedComparison?.status ?? "none",
-                meta: selectedComparison?.packId ?? "Select a comparison run",
-              },
-            ]}
-          />
-          <LibrarySelectableList
-            items={comparisons.map((comparison) => ({
-              id: comparison.comparisonId,
-              title: comparison.title + (comparison.testIds.some((testId) => hasSessionDraft("judgment:" + comparison.comparisonId + ":" + testId)) ? " · Unsaved" : ""),
-              meta: comparison.status,
-              body: `${comparison.packId} - ${comparison.candidates.length} candidates - ${formatDateTime(
-                comparison.updatedAt,
-              )}`,
-            }))}
-            selectedId={selectedComparisonId}
-            onSelect={(id) => leave.request(() => { setSelectedComparisonId(id); setDetailOpen(true); })}
-            emptyLabel="No model comparison runs are visible yet."
-          />
-          <LibraryButtonRow>
-            <button type="button" className="mc-next-settings-filter" onClick={() => void reload()}>
-              <RefreshCw size={16} />
-              Refresh
-            </button>
-            <button
-              type="button"
-              className="mc-next-settings-filter"
-              onClick={() => navigate({ area: "ops", section: "quality", theme: route.theme })}
-            >
-              <Waypoints size={16} />
-              Ops quality
-            </button>
-          </LibraryButtonRow>
-        </NativeCard> : null}
-        {detailOpen ? <FocusedDetail title={selectedComparison?.title ?? "Comparison unavailable"} onClose={() => leave.request(() => setDetailOpen(false), [judgmentDraft.key])}><div className="mc-next-settings-stack">
+        {!detailOpen ? (
           <NativeCard
-            title={selectedComparison?.title ?? "Model comparison detail"}
-            subtitle={
-              selectedComparison ? `${selectedComparison.packId} - ${selectedComparison.status}` : "Select a run."
-            }
+            title="Prompt-pack review queue"
+            subtitle="Recent model comparisons attached to prompt-pack evaluation work."
+            stats={[
+              { label: "Runs", value: String(comparisons.length) },
+              { label: "Completed", value: String(comparisons.filter((item) => item.status === "completed").length) },
+            ]}
           >
-            {selectedComparison ? (
-              <>
-                {selectedComparison.advisory ? (
+            <LibraryMetricGrid
+              items={[
+                {
+                  label: "Judgments",
+                  value: String(comparisons.reduce((total, item) => total + item.judgments.length, 0)),
+                  meta: "Operator review records",
+                },
+                {
+                  label: "Results",
+                  value: String(comparisons.reduce((total, item) => total + item.results.length, 0)),
+                  meta: "Model response records",
+                },
+                {
+                  label: "Active run",
+                  value: selectedComparison ? formatComparisonStatus(selectedComparison.status) : "None",
+                  meta: selectedComparison?.packId ?? "Select a comparison run",
+                },
+              ]}
+            />
+            <LibrarySelectableList
+              items={comparisons.map((comparison) => ({
+                id: comparison.comparisonId,
+                title:
+                  comparison.title +
+                  (comparison.testIds.some((testId) =>
+                    hasSessionDraft("judgment:" + comparison.comparisonId + ":" + testId),
+                  )
+                    ? " · Unsaved"
+                    : ""),
+                meta: formatComparisonStatus(comparison.status),
+                body: `${comparison.packId} - ${comparison.candidates.length} candidates - ${formatDateTime(
+                  comparison.updatedAt,
+                )}`,
+              }))}
+              selectedId={selectedComparisonId}
+              onSelect={(id) =>
+                leave.request(() => {
+                  setSelectedComparisonId(id);
+                  setDetailOpen(true);
+                })
+              }
+              emptyLabel="No model comparison runs are visible yet."
+            />
+            <LibraryButtonRow>
+              <button type="button" className="mc-next-settings-filter" onClick={() => void reload()}>
+                <RefreshCw size={16} />
+                Refresh
+              </button>
+              <button
+                type="button"
+                className="mc-next-settings-filter"
+                onClick={() => navigate({ area: "ops", section: "quality", theme: route.theme })}
+              >
+                <Waypoints size={16} />
+                Ops quality
+              </button>
+            </LibraryButtonRow>
+          </NativeCard>
+        ) : null}
+        {detailOpen ? (
+          <FocusedDetail
+            title={selectedComparison?.title ?? "Comparison unavailable"}
+            onClose={() => leave.request(() => setDetailOpen(false), [judgmentDraft.key])}
+          >
+            <div className="mc-next-settings-stack">
+              <NativeCard
+                title={selectedComparison?.title ?? "Model comparison detail"}
+                subtitle={
+                  selectedComparison
+                    ? `${selectedComparison.packId} - ${formatComparisonStatus(selectedComparison.status)}`
+                    : "Select a run."
+                }
+              >
+                {selectedComparison ? (
                   <>
-                    <LibraryMetricGrid
-                      items={[
-                        {
-                          label: "Posture",
-                          value: "Advisory only",
-                          meta: selectedComparison.advisory.label,
-                        },
-                        {
-                          label: "Responses",
-                          value: `${selectedComparison.advisory.responseCount}/${selectedComparison.advisory.resultCount}`,
-                          meta:
-                            selectedComparison.advisory.missingResultCount > 0
-                              ? `${selectedComparison.advisory.missingResultCount} missing`
-                              : "Ready for review",
-                        },
-                        {
-                          label: "Next action",
-                          value: formatAdvisoryNextAction(selectedComparison.advisory.recommendedNextAction),
-                          meta: `${selectedComparison.advisory.judgmentCount} judgment${selectedComparison.advisory.judgmentCount === 1 ? "" : "s"}`,
-                        },
-                      ]}
+                    {selectedComparison.advisory ? (
+                      <>
+                        <LibraryMetricGrid
+                          items={[
+                            {
+                              label: "Posture",
+                              value: "Advisory only",
+                              meta: selectedComparison.advisory.label,
+                            },
+                            {
+                              label: "Responses",
+                              value: `${selectedComparison.advisory.responseCount}/${selectedComparison.advisory.resultCount}`,
+                              meta:
+                                selectedComparison.advisory.missingResultCount > 0
+                                  ? `${selectedComparison.advisory.missingResultCount} missing`
+                                  : "Ready for review",
+                            },
+                            {
+                              label: "Next action",
+                              value: formatAdvisoryNextAction(selectedComparison.advisory.recommendedNextAction),
+                              meta: `${selectedComparison.advisory.judgmentCount} judgment${selectedComparison.advisory.judgmentCount === 1 ? "" : "s"}`,
+                            },
+                          ]}
+                        />
+                        <LibraryActionList
+                          ariaLabel="Model comparison safety notes"
+                          items={selectedComparison.advisory.safetyNotes.map((note, index) => ({
+                            id: `advisory-note-${index}`,
+                            label:
+                              index === 0 ? "Comparison boundary" : index === 1 ? "Execution path" : "Runtime effect",
+                            description: note,
+                            meta: selectedComparison.advisory?.summary,
+                          }))}
+                          maxHeight=""
+                        />
+                      </>
+                    ) : null}
+                    <LibraryActionCardGrid
+                      items={selectedComparison.candidates.map((candidate) => ({
+                        id: candidate.candidateId,
+                        label: candidate.blindLabel,
+                        value: candidate.model,
+                        description: `Provider ${candidate.providerId}; candidate id ${candidate.candidateId}.`,
+                        meta: candidate.providerId,
+                        tone: candidate.candidateId === winnerCandidateId ? "success" : "neutral",
+                      }))}
+                      emptyLabel="No candidates were recorded for this comparison."
                     />
                     <LibraryActionList
-                      ariaLabel="Model comparison safety notes"
-                      items={selectedComparison.advisory.safetyNotes.map((note, index) => ({
-                        id: `advisory-note-${index}`,
-                        label: index === 0 ? "Comparison boundary" : index === 1 ? "Runtime effect" : "Execution path",
-                        description: note,
-                        meta: selectedComparison.advisory?.summary,
+                      ariaLabel="Selected test model results"
+                      items={selectedResults.map((result) => ({
+                        id: result.resultId,
+                        label: labelForResult(result.candidateId, selectedComparison),
+                        description: result.error
+                          ? result.error
+                          : truncateText(result.responseText ?? "No response text was recorded.", 220),
+                        meta: [
+                          result.latencyMs ? `${result.latencyMs} ms` : undefined,
+                          result.costUsd !== undefined ? `$${result.costUsd.toFixed(4)}` : undefined,
+                          result.runId,
+                        ]
+                          .filter((value): value is string => Boolean(value))
+                          .join(" - "),
                       }))}
-                      maxHeight=""
+                      emptyLabel="No results are visible for the selected test."
+                      maxHeight="min(36vh, 22rem)"
+                    />
+                    {RUNNABLE_STATUSES.has(selectedComparison.status) || selectedComparison.status === "running" ? (
+                      <LibraryButtonRow>
+                        {selectedComparison.status === "running" ? (
+                          <NativeButton
+                            variant="outline"
+                            disabled={runAction !== null}
+                            onClick={() => void controlRun("cancel")}
+                          >
+                            <Square size={16} />
+                            {runAction === "cancel" ? "Cancelling..." : "Cancel run"}
+                          </NativeButton>
+                        ) : (
+                          <NativeButton
+                            variant="outline"
+                            disabled={runAction !== null}
+                            onClick={() => void controlRun("run")}
+                          >
+                            <Play size={16} />
+                            {runAction === "run" ? "Starting..." : "Run comparison"}
+                          </NativeButton>
+                        )}
+                      </LibraryButtonRow>
+                    ) : null}
+                  </>
+                ) : (
+                  <LibraryEmptyState label="Select a model comparison run to inspect it." />
+                )}
+              </NativeCard>
+              <NativeCard title="Review selected test" subtitle="Save one operator judgment without leaving Library.">
+                {selectedComparison ? (
+                  <>
+                    <LibraryFieldGrid>
+                      <LibraryField label="Test">
+                        <select
+                          className="mc-next-settings-input"
+                          value={selectedTestId}
+                          onChange={(event) => {
+                            const id = event.target.value;
+                            leave.request(() => setSelectedTestId(id), [judgmentDraft.key]);
+                          }}
+                        >
+                          {selectedComparison.testIds.map((testId) => (
+                            <option key={testId} value={testId}>
+                              {testId}
+                            </option>
+                          ))}
+                        </select>
+                      </LibraryField>
+                      <LibraryField label="Winner">
+                        <select
+                          className="mc-next-settings-input"
+                          value={winnerCandidateId}
+                          onChange={(event) => setWinnerCandidateId(event.target.value)}
+                        >
+                          <option value="">No winner</option>
+                          {selectedComparison.candidates.map((candidate) => (
+                            <option key={candidate.candidateId} value={candidate.candidateId}>
+                              {candidate.blindLabel} - {candidate.model}
+                            </option>
+                          ))}
+                        </select>
+                      </LibraryField>
+                      {selectedComparison.candidates.map((candidate) => (
+                        <LibraryField key={candidate.candidateId} label={`${candidate.blindLabel} quality`}>
+                          <select
+                            className="mc-next-settings-input"
+                            value={scoreDraft[candidate.candidateId] ?? "3"}
+                            onChange={(event) =>
+                              setScoreDraft((current) => ({
+                                ...current,
+                                [candidate.candidateId]: event.target.value as ScoreValue,
+                              }))
+                            }
+                          >
+                            {SCORE_OPTIONS.map((score) => (
+                              <option key={score} value={score}>
+                                {score}
+                              </option>
+                            ))}
+                          </select>
+                        </LibraryField>
+                      ))}
+                      <LibraryField label="Review notes" span={2}>
+                        <textarea
+                          className="mc-next-settings-input"
+                          value={notes}
+                          onChange={(event) => setNotes(event.target.value)}
+                          placeholder="Why did this model win?"
+                          rows={4}
+                        />
+                      </LibraryField>
+                    </LibraryFieldGrid>
+                    <LibraryButtonRow>
+                      <NativeButton
+                        variant="default"
+                        disabled={saving || !selectedTestId}
+                        onClick={() => void saveJudgment()}
+                      >
+                        <Scale size={16} />
+                        Save judgment
+                      </NativeButton>
+                    </LibraryButtonRow>
+                    <LibraryActionList
+                      ariaLabel="Saved comparison judgments"
+                      items={selectedComparison.judgments.map((judgment) => ({
+                        id: judgment.judgmentId,
+                        label: judgment.testId,
+                        description: judgment.notes ?? "No notes recorded.",
+                        meta: `${judgment.winnerCandidateId ?? "no winner"} - ${formatDateTime(judgment.createdAt)}`,
+                      }))}
+                      emptyLabel="No judgments have been saved for this run."
+                      maxHeight="min(28vh, 16rem)"
                     />
                   </>
-                ) : null}
-                <LibraryActionCardGrid
-                  items={selectedComparison.candidates.map((candidate) => ({
-                    id: candidate.candidateId,
-                    label: candidate.blindLabel,
-                    value: candidate.model,
-                    description: `Provider ${candidate.providerId}; candidate id ${candidate.candidateId}.`,
-                    meta: candidate.providerId,
-                    tone: candidate.candidateId === winnerCandidateId ? "success" : "neutral",
-                  }))}
-                  emptyLabel="No candidates were recorded for this comparison."
-                />
-                <LibraryActionList
-                  ariaLabel="Selected test model results"
-                  items={selectedResults.map((result) => ({
-                    id: result.resultId,
-                    label: labelForResult(result.candidateId, selectedComparison),
-                    description: result.error
-                      ? result.error
-                      : truncateText(result.responseText ?? "No response text was recorded.", 220),
-                    meta: [
-                      result.latencyMs ? `${result.latencyMs} ms` : undefined,
-                      result.costUsd !== undefined ? `$${result.costUsd.toFixed(4)}` : undefined,
-                      result.runId,
-                    ]
-                      .filter((value): value is string => Boolean(value))
-                      .join(" - "),
-                  }))}
-                  emptyLabel="No results are visible for the selected test."
-                  maxHeight="min(36vh, 22rem)"
-                />
-              </>
-            ) : (
-              <LibraryEmptyState label="Select a model comparison run to inspect it." />
-            )}
-          </NativeCard>
-          <NativeCard title="Review selected test" subtitle="Save one operator judgment without leaving Library.">
-            {selectedComparison ? (
-              <>
-                <LibraryFieldGrid>
-                  <LibraryField label="Test">
-                    <select
-                      className="mc-next-settings-input"
-                      value={selectedTestId}
-                      onChange={(event) => { const id = event.target.value; leave.request(() => setSelectedTestId(id), [judgmentDraft.key]); }}
-                    >
-                      {selectedComparison.testIds.map((testId) => (
-                        <option key={testId} value={testId}>
-                          {testId}
-                        </option>
-                      ))}
-                    </select>
-                  </LibraryField>
-                  <LibraryField label="Winner">
-                    <select
-                      className="mc-next-settings-input"
-                      value={winnerCandidateId}
-                      onChange={(event) => setWinnerCandidateId(event.target.value)}
-                    >
-                      <option value="">No winner</option>
-                      {selectedComparison.candidates.map((candidate) => (
-                        <option key={candidate.candidateId} value={candidate.candidateId}>
-                          {candidate.blindLabel} - {candidate.model}
-                        </option>
-                      ))}
-                    </select>
-                  </LibraryField>
-                  {selectedComparison.candidates.map((candidate) => (
-                    <LibraryField key={candidate.candidateId} label={`${candidate.blindLabel} quality`}>
-                      <select
-                        className="mc-next-settings-input"
-                        value={scoreDraft[candidate.candidateId] ?? "3"}
-                        onChange={(event) =>
-                          setScoreDraft((current) => ({
-                            ...current,
-                            [candidate.candidateId]: event.target.value as ScoreValue,
-                          }))
-                        }
-                      >
-                        {SCORE_OPTIONS.map((score) => (
-                          <option key={score} value={score}>
-                            {score}
-                          </option>
-                        ))}
-                      </select>
-                    </LibraryField>
-                  ))}
-                  <LibraryField label="Review notes" span={2}>
-                    <textarea
-                      className="mc-next-settings-input"
-                      value={notes}
-                      onChange={(event) => setNotes(event.target.value)}
-                      placeholder="Why did this model win?"
-                      rows={4}
-                    />
-                  </LibraryField>
-                </LibraryFieldGrid>
-                <LibraryButtonRow>
-                  <NativeButton
-                    variant="default"
-                    disabled={saving || !selectedTestId}
-                    onClick={() => void saveJudgment()}
-                  >
-                    <Scale size={16} />
-                    Save judgment
-                  </NativeButton>
-                </LibraryButtonRow>
-                <LibraryActionList
-                  ariaLabel="Saved comparison judgments"
-                  items={selectedComparison.judgments.map((judgment) => ({
-                    id: judgment.judgmentId,
-                    label: judgment.testId,
-                    description: judgment.notes ?? "No notes recorded.",
-                    meta: `${judgment.winnerCandidateId ?? "no winner"} - ${formatDateTime(judgment.createdAt)}`,
-                  }))}
-                  emptyLabel="No judgments have been saved for this run."
-                  maxHeight="min(28vh, 16rem)"
-                />
-              </>
-            ) : (
-              <LibraryEmptyState label="Select a comparison before saving a judgment." />
-            )}
-          </NativeCard>
-        </div></FocusedDetail> : null}
+                ) : (
+                  <LibraryEmptyState label="Select a comparison before saving a judgment." />
+                )}
+              </NativeCard>
+            </div>
+          </FocusedDetail>
+        ) : null}
       </div>
       {leave.dialog}
     </LibrarySectionShell>
   );
+}
+
+function formatComparisonStatus(status: ModelComparisonStatus): string {
+  return COMPARISON_STATUS_LABELS[status] ?? "Unknown";
 }
 
 function labelForResult(candidateId: string, comparison: ModelComparisonRun): string {

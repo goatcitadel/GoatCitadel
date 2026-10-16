@@ -1,4 +1,5 @@
 import type { ChatThinkingLevel } from "./chat.js";
+import { LLM_API_STYLES, LLM_PROVIDER_AUTH_MODES } from "./llm.js";
 import type { LlmApiStyle, LlmProviderAuthMode, LlmProviderCapabilities, LlmProviderGoogleCloudConfig } from "./llm.js";
 
 /**
@@ -683,7 +684,14 @@ export function isChangePlanRequest(value: unknown): value is ChangePlanRequest 
 export function isChangePlanResult(value: unknown): value is ChangePlanResult {
   if (
     !isPlainObject(value) ||
-    !hasOnlyKeys(value, ["summary", "appliedRevision", "evidenceRefs", "rollbackRef", "failureCode", "providerProfileCheckpoint"])
+    !hasOnlyKeys(value, [
+      "summary",
+      "appliedRevision",
+      "evidenceRefs",
+      "rollbackRef",
+      "failureCode",
+      "providerProfileCheckpoint",
+    ])
   ) {
     return false;
   }
@@ -698,11 +706,17 @@ export function isChangePlanResult(value: unknown): value is ChangePlanResult {
 }
 
 export function isProviderProfileCheckpoint(value: unknown): value is ProviderProfileCheckpoint {
-  return isPlainObject(value) && hasOnlyKeys(value, ["version", "providerId", "originalRevision", "appliedRevision", "intentHash"])
-    && value.version === "provider_profile_checkpoint.v1" && isBoundedText(value.providerId, 256)
-    && isPositiveInteger(value.originalRevision) && isPositiveInteger(value.appliedRevision)
-    && Number(value.appliedRevision) > Number(value.originalRevision)
-    && typeof value.intentHash === "string" && /^[a-f0-9]{64}$/u.test(value.intentHash);
+  return (
+    isPlainObject(value) &&
+    hasOnlyKeys(value, ["version", "providerId", "originalRevision", "appliedRevision", "intentHash"]) &&
+    value.version === "provider_profile_checkpoint.v1" &&
+    isBoundedText(value.providerId, 256) &&
+    isPositiveInteger(value.originalRevision) &&
+    isPositiveInteger(value.appliedRevision) &&
+    Number(value.appliedRevision) > Number(value.originalRevision) &&
+    typeof value.intentHash === "string" &&
+    /^[a-f0-9]{64}$/u.test(value.intentHash)
+  );
 }
 
 function isRuntimeConfigurationOperation(value: unknown): value is ChangePlanRuntimeConfigurationOperation {
@@ -916,23 +930,9 @@ function isProviderProfile(value: unknown): boolean {
   if (value.defaultModel !== undefined && !isIdentifier(value.defaultModel)) return false;
   if (value.apiKeyEnv !== undefined && !isEnvironmentReference(value.apiKeyEnv)) return false;
   if (value.baseUrl !== undefined && !isSafeProviderBaseUrl(value.baseUrl)) return false;
-  if (
-    value.apiStyle !== undefined &&
-    ![
-      "openai-chat-completions",
-      "openai-responses",
-      "openai-codex-responses",
-      "anthropic-messages",
-      "bedrock-messages",
-    ].includes(String(value.apiStyle))
-  )
+  if (value.apiStyle !== undefined && !(LLM_API_STYLES as readonly string[]).includes(String(value.apiStyle)))
     return false;
-  if (
-    value.authMode !== undefined &&
-    !["api-key", "codex-oauth", "claude-code-oauth", "google-service-account", "google-adc"].includes(
-      String(value.authMode),
-    )
-  )
+  if (value.authMode !== undefined && !(LLM_PROVIDER_AUTH_MODES as readonly string[]).includes(String(value.authMode)))
     return false;
   if (value.googleCloud !== undefined && !isProviderGoogleCloud(value.googleCloud)) return false;
   return value.capabilities === undefined || isProviderCapabilities(value.capabilities);

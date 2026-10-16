@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import type { ModelComparisonRun } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage } from "./async-storage.js";
 import { Storage } from "./index.js";
 import { ModelComparisonRunRepository } from "./model-comparison-run-repo.js";
@@ -18,7 +19,7 @@ afterEach(() => {
   tempDbs.cleanup();
 });
 
-function createRepo(): ModelComparisonRunRepository {
+function createGatewaySql() {
   const dbPath = tempDbs.path("goatcitadel-model-comparison");
   const storage = new Storage({
     dbPath,
@@ -26,42 +27,78 @@ function createRepo(): ModelComparisonRunRepository {
     auditDir: path.join(os.tmpdir(), `goatcitadel-model-comparison-audit-${randomUUID()}`),
   });
   createdStorages.push(storage);
-  return new ModelComparisonRunRepository(createSqliteAsyncStorage(storage).gatewaySql);
+  return createSqliteAsyncStorage(storage).gatewaySql;
+}
+
+function createRepo(): ModelComparisonRunRepository {
+  return new ModelComparisonRunRepository(createGatewaySql());
+}
+
+/** Records each prepared run-table statement and whether it ran inside an immediate transaction. */
+function createRecordingRepo(): {
+  repo: ModelComparisonRunRepository;
+  statements: Array<{ sql: string; inTransaction: boolean }>;
+} {
+  const inner = createGatewaySql();
+  const statements: Array<{ sql: string; inTransaction: boolean }> = [];
+  let depth = 0;
+  const port = {
+    prepare: (sql: string) => {
+      if (/model_comparison_runs/.test(sql) && !/CREATE TABLE/.test(sql)) {
+        statements.push({ sql: sql.replace(/\s+/g, " ").trim(), inTransaction: depth > 0 });
+      }
+      return inner.prepare(sql);
+    },
+    exec: (sql: string) => inner.exec(sql),
+    runImmediateTransaction: async <T>(callback: () => T | Promise<T>): Promise<Awaited<T>> => {
+      depth += 1;
+      try {
+        return (await inner.runImmediateTransaction(callback)) as Awaited<T>;
+      } finally {
+        depth -= 1;
+      }
+    },
+  };
+  return { repo: new ModelComparisonRunRepository(port), statements };
+}
+
+function sampleRun(): ModelComparisonRun {
+  return {
+    comparisonId: "cmp-1",
+    packId: "pack-1",
+    status: "queued",
+    title: "Security prompts blind comparison",
+    candidates: [
+      { candidateId: "cmp-1-a", providerId: "openai", model: "gpt-5", blindLabel: "A" },
+      { candidateId: "cmp-1-b", providerId: "anthropic", model: "claude-4.5", blindLabel: "B" },
+      { candidateId: "cmp-1-c", providerId: "google", model: "gemini-3", blindLabel: "C" },
+    ],
+    testIds: ["test-1", "test-2"],
+    results: [
+      {
+        resultId: "result-1",
+        testId: "test-1",
+        candidateId: "cmp-1-a",
+        runId: "run-1",
+        responseText: "Stored prompt-pack answer",
+        latencyMs: 1200,
+      },
+      {
+        resultId: "result-2",
+        testId: "test-1",
+        candidateId: "cmp-1-b",
+      },
+    ],
+    judgments: [],
+    createdAt: "2026-06-05T12:00:00.000Z",
+    updatedAt: "2026-06-05T12:00:00.000Z",
+  };
 }
 
 describe("ModelComparisonRunRepository", () => {
   it("round-trips runs and preserves blind labels", async () => {
     const repo = createRepo();
-    const run = await repo.create({
-      comparisonId: "cmp-1",
-      packId: "pack-1",
-      status: "queued",
-      title: "Security prompts blind comparison",
-      candidates: [
-        { candidateId: "cmp-1-a", providerId: "openai", model: "gpt-5", blindLabel: "A" },
-        { candidateId: "cmp-1-b", providerId: "anthropic", model: "claude-4.5", blindLabel: "B" },
-        { candidateId: "cmp-1-c", providerId: "google", model: "gemini-3", blindLabel: "C" },
-      ],
-      testIds: ["test-1", "test-2"],
-      results: [
-        {
-          resultId: "result-1",
-          testId: "test-1",
-          candidateId: "cmp-1-a",
-          runId: "run-1",
-          responseText: "Stored prompt-pack answer",
-          latencyMs: 1200,
-        },
-        {
-          resultId: "result-2",
-          testId: "test-1",
-          candidateId: "cmp-1-b",
-        },
-      ],
-      judgments: [],
-      createdAt: "2026-06-05T12:00:00.000Z",
-      updatedAt: "2026-06-05T12:00:00.000Z",
-    });
+    const run = await repo.create(sampleRun());
 
     assert.deepEqual(
       run.candidates.map((candidate) => candidate.blindLabel),
@@ -110,5 +147,213 @@ describe("ModelComparisonRunRepository", () => {
     assert.equal((await repo.get("cmp-judged")).updatedAt, "2026-06-05T12:01:00.000Z");
     assert.equal((await repo.get("cmp-judged")).results[0]?.responseText, "A answer");
     await assert.rejects(() => repo.addJudgment("missing", judgment), /Model comparison missing not found/);
+  });
+
+  it("updates status and upserts results without losing other results", async () => {
+    const repo = createRepo();
+    await repo.create(sampleRun());
+    const running = await repo.updateStatus("cmp-1", { status: "running", updatedAt: "2026-10-15T00:00:01.000Z" });
+    assert.equal(running.status, "running");
+    await repo.upsertResult(
+      "cmp-1",
+      { ...running.results[0]!, responseText: "first answer", runId: "run-1" },
+      "2026-10-15T00:00:02.000Z",
+    );
+    const after = await repo.upsertResult(
+      "cmp-1",
+      { ...running.results[1]!, error: "provider down" },
+      "2026-10-15T00:00:03.000Z",
+    );
+    assert.equal(after.results.length, 2);
+    assert.equal(after.results[0]?.responseText, "first answer");
+    assert.equal(after.results[1]?.error, "provider down");
+    assert.equal(after.updatedAt, "2026-10-15T00:00:03.000Z");
+    const done = await repo.updateStatus("cmp-1", {
+      status: "failed",
+      updatedAt: "2026-10-15T00:00:04.000Z",
+      completedAt: "2026-10-15T00:00:04.000Z",
+      error: "1 of 2 results failed",
+    });
+    assert.equal(done.completedAt, "2026-10-15T00:00:04.000Z");
+    assert.equal(done.error, "1 of 2 results failed");
+    const cleared = await repo.updateStatus("cmp-1", {
+      status: "running",
+      updatedAt: "2026-10-15T00:00:05.000Z",
+      completedAt: null,
+      error: null,
+    });
+    assert.equal(cleared.completedAt, undefined);
+    assert.equal(cleared.error, undefined);
+  });
+
+  it("keeps omitted completedAt/error and clears them only on explicit null", async () => {
+    const repo = createRepo();
+    await repo.create(sampleRun());
+    await repo.updateStatus("cmp-1", {
+      status: "failed",
+      updatedAt: "2026-10-15T00:01:00.000Z",
+      completedAt: "2026-10-15T00:01:00.000Z",
+      error: "provider down",
+    });
+
+    const kept = await repo.updateStatus("cmp-1", { status: "cancelled", updatedAt: "2026-10-15T00:02:00.000Z" });
+    assert.equal(kept.status, "cancelled");
+    assert.equal(kept.updatedAt, "2026-10-15T00:02:00.000Z");
+    assert.equal(kept.completedAt, "2026-10-15T00:01:00.000Z");
+    assert.equal(kept.error, "provider down");
+
+    const errorCleared = await repo.updateStatus("cmp-1", {
+      status: "queued",
+      updatedAt: "2026-10-15T00:03:00.000Z",
+      error: null,
+    });
+    assert.equal(errorCleared.completedAt, "2026-10-15T00:01:00.000Z");
+    assert.equal(errorCleared.error, undefined);
+
+    const completedCleared = await repo.updateStatus("cmp-1", {
+      status: "queued",
+      updatedAt: "2026-10-15T00:04:00.000Z",
+      completedAt: null,
+    });
+    assert.equal(completedCleared.completedAt, undefined);
+    assert.equal(completedCleared.error, undefined);
+  });
+
+  it("reads and writes a status update inside one immediate transaction", async () => {
+    const { repo, statements } = createRecordingRepo();
+    await repo.create(sampleRun());
+    statements.length = 0;
+
+    await repo.updateStatus("cmp-1", { status: "cancelled", updatedAt: "2026-10-15T00:02:00.000Z" });
+
+    const updateIndex = statements.findIndex((statement) => statement.sql.startsWith("UPDATE model_comparison_runs"));
+    assert.ok(updateIndex >= 0, "updateStatus issued no UPDATE");
+    const readAndWrite = statements.slice(0, updateIndex + 1);
+    assert.ok(
+      readAndWrite.some((statement) => statement.sql.startsWith("SELECT")),
+      "updateStatus read nothing first",
+    );
+    assert.deepEqual(
+      readAndWrite.filter((statement) => !statement.inTransaction).map((statement) => statement.sql),
+      [],
+    );
+  });
+
+  it("claims a run only when the expected status and updatedAt still match", async () => {
+    const repo = createRepo();
+    await repo.create({ ...sampleRun(), completedAt: "2026-06-05T12:30:00.000Z", error: "earlier failure" });
+
+    const claimed = await repo.claimRun("cmp-1", {
+      expectedStatus: "queued",
+      expectedUpdatedAt: "2026-06-05T12:00:00.000Z",
+      updatedAt: "2026-10-15T00:00:00.000Z",
+    });
+    assert.equal(claimed?.status, "running");
+    assert.equal(claimed?.updatedAt, "2026-10-15T00:00:00.000Z");
+    assert.equal(claimed?.completedAt, undefined);
+    assert.equal(claimed?.error, undefined);
+
+    // A second claimer that read the same snapshot loses the race.
+    const lost = await repo.claimRun("cmp-1", {
+      expectedStatus: "queued",
+      expectedUpdatedAt: "2026-06-05T12:00:00.000Z",
+      updatedAt: "2026-10-15T00:00:01.000Z",
+    });
+    assert.equal(lost, undefined);
+    // Right status, stale updatedAt: also no match.
+    const staleLease = await repo.claimRun("cmp-1", {
+      expectedStatus: "running",
+      expectedUpdatedAt: "2026-06-05T12:00:00.000Z",
+      updatedAt: "2026-10-15T00:00:02.000Z",
+    });
+    assert.equal(staleLease, undefined);
+    assert.equal((await repo.get("cmp-1")).updatedAt, "2026-10-15T00:00:00.000Z");
+    assert.equal(
+      await repo.claimRun("missing", {
+        expectedStatus: "queued",
+        expectedUpdatedAt: "2026-06-05T12:00:00.000Z",
+        updatedAt: "2026-10-15T00:00:00.000Z",
+      }),
+      undefined,
+    );
+  });
+
+  it("renews a lease only while the run is running", async () => {
+    const repo = createRepo();
+    await repo.create(sampleRun());
+    assert.equal(await repo.renewRunLease("cmp-1", "2026-10-15T00:00:00.000Z"), false);
+    assert.equal((await repo.get("cmp-1")).updatedAt, "2026-06-05T12:00:00.000Z");
+
+    await repo.updateStatus("cmp-1", { status: "running", updatedAt: "2026-10-15T00:00:00.000Z" });
+    assert.equal(await repo.renewRunLease("cmp-1", "2026-10-15T00:01:00.000Z"), true);
+    assert.equal((await repo.get("cmp-1")).updatedAt, "2026-10-15T00:01:00.000Z");
+
+    await repo.updateStatus("cmp-1", { status: "cancelled", updatedAt: "2026-10-15T00:02:00.000Z" });
+    assert.equal(await repo.renewRunLease("cmp-1", "2026-10-15T00:03:00.000Z"), false);
+    assert.equal((await repo.get("cmp-1")).updatedAt, "2026-10-15T00:02:00.000Z");
+    assert.equal(await repo.renewRunLease("missing", "2026-10-15T00:03:00.000Z"), false);
+  });
+
+  it("finishes a run only while it is still running", async () => {
+    const repo = createRepo();
+    await repo.create(sampleRun());
+    assert.equal(
+      await repo.finishRun("cmp-1", {
+        status: "completed",
+        updatedAt: "2026-10-15T00:00:00.000Z",
+        completedAt: "2026-10-15T00:00:00.000Z",
+        error: null,
+      }),
+      undefined,
+    );
+    assert.equal((await repo.get("cmp-1")).status, "queued");
+
+    await repo.updateStatus("cmp-1", { status: "running", updatedAt: "2026-10-15T00:00:00.000Z" });
+    const finished = await repo.finishRun("cmp-1", {
+      status: "failed",
+      updatedAt: "2026-10-15T00:05:00.000Z",
+      completedAt: "2026-10-15T00:05:00.000Z",
+      error: "1 of 2 results failed.",
+    });
+    assert.equal(finished?.status, "failed");
+    assert.equal(finished?.completedAt, "2026-10-15T00:05:00.000Z");
+    assert.equal(finished?.error, "1 of 2 results failed.");
+
+    // A cancel written elsewhere wins over a late terminal write.
+    await repo.updateStatus("cmp-1", { status: "running", updatedAt: "2026-10-15T00:06:00.000Z" });
+    await repo.updateStatus("cmp-1", {
+      status: "cancelled",
+      updatedAt: "2026-10-15T00:07:00.000Z",
+      completedAt: "2026-10-15T00:07:00.000Z",
+    });
+    assert.equal(
+      await repo.finishRun("cmp-1", {
+        status: "completed",
+        updatedAt: "2026-10-15T00:08:00.000Z",
+        completedAt: "2026-10-15T00:08:00.000Z",
+        error: null,
+      }),
+      undefined,
+    );
+    assert.equal((await repo.get("cmp-1")).status, "cancelled");
+    assert.equal(
+      await repo.finishRun("missing", {
+        status: "completed",
+        updatedAt: "2026-10-15T00:08:00.000Z",
+        completedAt: "2026-10-15T00:08:00.000Z",
+        error: null,
+      }),
+      undefined,
+    );
+  });
+
+  it("rejects updates for unknown comparisons", async () => {
+    const repo = createRepo();
+    await assert.rejects(() =>
+      repo.updateStatus("missing", { status: "running", updatedAt: "2026-10-15T00:00:00.000Z" }),
+    );
+    await assert.rejects(() =>
+      repo.upsertResult("missing", { resultId: "x", testId: "t", candidateId: "c" }, "2026-10-15T00:00:00.000Z"),
+    );
   });
 });

@@ -2289,6 +2289,30 @@
       "maxDependencyMemberAccesses": 5,
       "reason": "Canonical focused prompt-pack run/test and indexed assessment reads extracted from the existing service; default reads, generation policy and missing/foreign rejection remain unchanged.",
       "evidence": "Prepared owner-specific proposal .tmp/architecture-six-owner-repair-proposal-20261014/revision-5; focused canonical artifact/route/report tests, Gateway typecheck and named architecture gate are required before acceptance."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/llm-provider-bedrock.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 4,
+      "reason": "New Amazon Bedrock Converse provider adapter owns request mapping, SigV4/bearer auth and response adaptation behind the existing LlmProviderAdapterHost port, mirroring the Anthropic adapter; it measures four host accesses (request target and tracked JSON dispatch for Converse and ConverseStream).",
+      "evidence": "apps/gateway/src/services/llm-provider-bedrock.test.ts covers payload mapping (user-first guard, empty tool result placeholder), SigV4 and bearer headers, response/tool-use mapping, error mapping, region parsing, malformed credentials, and ConverseStream text/tool/reasoning deltas, exception frames, truncation, missing messageStop, JSON fallback and accounting succeed/fail/cancel; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/llm-provider-bedrock-stream.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "Amazon Bedrock ConverseStream binary event-stream framing and decoding kept in its own helper beside the Bedrock adapter; it is a pure decoder and reaches no adapter host or dependency.",
+      "evidence": "apps/gateway/src/services/llm-provider-bedrock.test.ts decodeBedrockEventStream tests cover frames split mid-prelude, exception frames, empty bodies and byte/event limits, and the ConverseStream adapter tests cover 1/7/64-byte splits and mid-frame truncation; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/model-comparison-execution-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 15,
+      "reason": "WS4 gap-closure program (operator-approved 2026-10-15): live blind model comparison execution split out of the baseline-era comparison owner. The cap covers the repository compare-and-swap claim, lease renewal and conditional terminal write plus the lease TTL override that guard a cross-process claim/lease.",
+      "evidence": "apps/gateway/src/services/model-comparison-execution-service.test.ts covers concurrency 2, status transitions, partial failure, restart of missing/errored results, conflict rejection, cancel abort, stale running recovery past the lease TTL, cross-process claim races, fresh-lease restart rejection, cancels written by another process, empty/approval-paused responses and background-error reporting; packages/storage/src/model-comparison-run-repo.test.ts covers claimRun, renewRunLease and finishRun including no-match paths; the route-port factory test covers delegation of records and run control; routes/model-comparisons.test.ts covers run/cancel status mapping; Gateway typecheck passes."
     }
   ]
 }

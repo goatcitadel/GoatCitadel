@@ -405,6 +405,50 @@ describe("anthropicProviderAdapter", () => {
     expect(chunks).toEqual([]);
   });
 
+  it("streams partial thinking deltas before the block completes and never streams redacted thinking", async () => {
+    const events = [
+      { type: "message_start", message: { id: "msg_t", model: "claude-test", usage: { input_tokens: 3 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Step one. " } },
+      { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Step two." } },
+      { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-t" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "content_block_start", index: 1, content_block: { type: "redacted_thinking", data: "cipher" } },
+      { type: "content_block_stop", index: 1 },
+      { type: "content_block_start", index: 2, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 2, delta: { type: "text_delta", text: "Answer" } },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 4 } },
+      { type: "message_stop" },
+    ];
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+    );
+    const chunks: Array<Record<string, unknown>> = [];
+    for await (const chunk of anthropicProviderAdapter.chatCompletionsStream(
+      { messages: [{ role: "user", content: "think" }], max_tokens: 64 },
+      resolved,
+      "claude-test",
+      host,
+    )) {
+      chunks.push(chunk);
+    }
+    const reasoning = chunks
+      .map(
+        (chunk) =>
+          (chunk.choices as Array<{ delta?: Record<string, unknown> }> | undefined)?.[0]?.delta?.reasoning_content,
+      )
+      .filter((value): value is string => typeof value === "string");
+    expect(reasoning).toEqual(["Step one. ", "Step two."]);
+    const firstReasoningIndex = chunks.findIndex((chunk) => JSON.stringify(chunk).includes("Step one. "));
+    const nativeIndex = chunks.findIndex((chunk) => JSON.stringify(chunk).includes("provider_native_content"));
+    expect(firstReasoningIndex).toBeLessThan(nativeIndex);
+    expect(JSON.stringify(chunks)).toContain('"signature":"sig-t"');
+    expect(chunks.some((chunk) => JSON.stringify(chunk).includes('"reasoning_content":"cipher"'))).toBe(false);
+  });
+
   it("preserves streamed thinking signatures and treats empty tool_use input as pending json", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -479,6 +523,11 @@ describe("anthropicProviderAdapter", () => {
     }
 
     expect(chunks).toEqual([
+      {
+        id: "msg_thinking",
+        model: "claude-test",
+        choices: [{ index: 0, delta: { reasoning_content: "private chain" } }],
+      },
       {
         id: "msg_thinking",
         model: "claude-test",

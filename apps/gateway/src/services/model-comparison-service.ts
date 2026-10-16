@@ -194,7 +194,7 @@ function buildResultPlaceholder(
   };
 }
 
-function computeRunLatencyMs(run?: PromptPackRunRecord): number | undefined {
+export function computeRunLatencyMs(run?: PromptPackRunRecord): number | undefined {
   if (!run?.finishedAt) {
     return undefined;
   }
@@ -206,7 +206,7 @@ function computeRunLatencyMs(run?: PromptPackRunRecord): number | undefined {
   return Math.max(0, finishedAt - startedAt);
 }
 
-function buildModelComparisonAdvisory(run: ModelComparisonRun): ModelComparisonRun["advisory"] {
+export function buildModelComparisonAdvisory(run: ModelComparisonRun): ModelComparisonRun["advisory"] {
   const responseCount = run.results.filter((result) => Boolean(result.responseText?.trim())).length;
   const errorCount = run.results.filter((result) => Boolean(result.error?.trim())).length;
   const missingResultCount = Math.max(0, run.results.length - responseCount - errorCount);
@@ -226,9 +226,9 @@ function buildModelComparisonAdvisory(run: ModelComparisonRun): ModelComparisonR
     judgmentCount: run.judgments.length,
     recommendedNextAction,
     safetyNotes: [
-      "This record compares existing prompt-pack outputs and operator judgments.",
-      "It does not start live provider execution or change routing by itself.",
-      "Use governed Assembly or Cowork runs for live multi-model execution with approvals and budgets.",
+      "This record compares prompt-pack outputs, linked from earlier runs or produced by live runs, and operator judgments.",
+      "Start the comparison to run each prompt-pack test once per candidate through the governed prompt-pack runner.",
+      "Comparing does not change routing by itself.",
     ],
   };
 }
