@@ -14,6 +14,9 @@ export const approvedRawResponseReads = new Map(
     "apps/gateway/src/services/llm-provider-anthropic.ts": new Set(["body.getReader"]),
     "apps/gateway/src/services/llm-service.ts": new Set(["body.getReader"]),
     "apps/gateway/src/services/mcp-http-transport.ts": new Set(["body.getReader"]),
+    // Legacy HTTP+SSE stream: every event is capped at MCP_HTTP_RESPONSE_BODY_MAX_BYTES
+    // by its incremental parser, and every awaited reply has a read deadline.
+    "apps/gateway/src/services/mcp-legacy-sse-transport.ts": new Set(["body.getReader"]),
     // policy-engine's own bounded reader (the analogue of bounded-response-reader.ts).
     // The `body.getReader()` call there is split across statements
     // (`const body = response.body;` then `body.getReader()`), which the two-dot

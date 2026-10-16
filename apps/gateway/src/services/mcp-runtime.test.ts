@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import type { McpServerRecord } from "@goatcitadel/contracts";
 import { __internal, collectMcpBrowserFallbackTargets, discoverMcpTools, invokeMcpRuntimeTool } from "./mcp-runtime.js";
+import { withHttpMcpClient } from "./mcp-http-transport.js";
 
 function createTestServer(script: string, extraArgs: string[] = []): McpServerRecord {
   const now = new Date().toISOString();
@@ -1658,5 +1659,402 @@ describe("mcp runtime", () => {
     // Resolved well inside the timeout budget -- proves this failed structurally
     // rather than waiting out the timeout.
     expect(elapsedMs).toBeLessThan(1200);
+  });
+});
+
+interface LegacySseTestSession {
+  sessionId: string;
+  connection: number;
+  stream: http.ServerResponse;
+  eol: string;
+  host: string;
+}
+
+interface LegacySseTestServer {
+  url: string;
+  host: string;
+  getCount: number;
+  postPaths: string[];
+  getAuthorizations: Array<string | undefined>;
+  postAuthorizations: Array<string | undefined>;
+  closedStreams: number;
+}
+
+type LegacySseTestOutcome =
+  | { status?: number; headers?: Record<string, string>; reply?: Record<string, unknown> }
+  | undefined;
+
+async function withLegacySseMcpServer<T>(
+  input: {
+    endpointFor?: (session: LegacySseTestSession) => string;
+    lineEnding?: "\n" | "\r\n";
+    streamPrefix?: string;
+    splitEndpointAfterCarriageReturn?: boolean;
+    /** When set, GET /sse answers 307 to this location instead of opening the stream. */
+    streamRedirect?: string;
+    onMessage: (input: { message: Record<string, unknown>; session: LegacySseTestSession }) => LegacySseTestOutcome;
+  },
+  run: (server: LegacySseTestServer) => Promise<T>,
+): Promise<T> {
+  const sessions = new Map<string, LegacySseTestSession>();
+  const state: LegacySseTestServer = {
+    url: "",
+    host: "",
+    getCount: 0,
+    postPaths: [],
+    getAuthorizations: [],
+    postAuthorizations: [],
+    closedStreams: 0,
+  };
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (request.method === "GET" && requestUrl.pathname === "/sse") {
+      state.getCount += 1;
+      state.getAuthorizations.push(request.headers.authorization);
+      if (input.streamRedirect) {
+        response.writeHead(307, { location: input.streamRedirect }).end();
+        return;
+      }
+      response.on("close", () => {
+        state.closedStreams += 1;
+      });
+      const eol = input.lineEnding ?? "\n";
+      const session: LegacySseTestSession = {
+        sessionId: `s${state.getCount}`,
+        connection: state.getCount,
+        stream: response,
+        eol,
+        host: request.headers.host ?? "",
+      };
+      sessions.set(session.sessionId, session);
+      response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      const endpoint = input.endpointFor?.(session) ?? `/messages?sessionId=${session.sessionId}`;
+      const prefix = input.streamPrefix ?? "";
+      if (input.splitEndpointAfterCarriageReturn) {
+        // The CRLF after the event name straddles two network chunks.
+        response.write(`${prefix}event: endpoint\r`);
+        setTimeout(() => response.write(`\ndata: ${endpoint}\r\n\r\n`), 30);
+        return;
+      }
+      response.write(`${prefix}event: endpoint${eol}data: ${endpoint}${eol}${eol}`);
+      return;
+    }
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      if (request.method !== "POST") {
+        response.writeHead(405).end();
+        return;
+      }
+      state.postPaths.push(requestUrl.pathname);
+      state.postAuthorizations.push(request.headers.authorization);
+      const session = sessions.get(requestUrl.searchParams.get("sessionId") ?? "");
+      if (requestUrl.pathname !== "/messages" || !session) {
+        response.writeHead(404).end("Session not found");
+        return;
+      }
+      const message = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      const outcome = input.onMessage({ message, session }) ?? {};
+      response.writeHead(outcome.status ?? 202, outcome.headers).end("Accepted");
+      if (outcome.reply !== undefined) {
+        const eol = session.eol;
+        session.stream.write(`event: message${eol}data: ${JSON.stringify(outcome.reply)}${eol}${eol}`);
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Legacy SSE MCP test server did not bind to a TCP port.");
+    }
+    state.host = `127.0.0.1:${address.port}`;
+    state.url = `http://${state.host}`;
+    return await run(state);
+  } finally {
+    for (const session of sessions.values()) {
+      session.stream.end();
+    }
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
+function replyToLegacyHandshake(message: Record<string, unknown>): LegacySseTestOutcome {
+  if (message.method === "initialize") {
+    return {
+      reply: {
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          protocolVersion: "2024-11-05",
+          capabilities: { tools: {} },
+          serverInfo: { name: "legacy-sse-test", version: "1.0.0" },
+        },
+      },
+    };
+  }
+  if (message.method === "notifications/initialized") {
+    return {};
+  }
+  if (message.method === "tools/list") {
+    return {
+      reply: {
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          tools: [{ name: "legacy.search", description: "Search legacy docs", inputSchema: { type: "object" } }],
+        },
+      },
+    };
+  }
+  return undefined;
+}
+
+describe("legacy HTTP+SSE transport", () => {
+  it("completes the endpoint handshake and lists tools through the allowlisted stream", async () => {
+    await withLegacySseMcpServer({ onMessage: ({ message }) => replyToLegacyHandshake(message) }, async (sse) => {
+      const tools = await discoverMcpTools({ ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" }, 1000, {
+        networkAllowlist: [sse.host],
+      });
+
+      expect(tools).toEqual([
+        expect.objectContaining({
+          serverId: "srv-remote",
+          toolName: "legacy.search",
+          description: "Search legacy docs",
+          inputSchema: { type: "object" },
+        }),
+      ]);
+      expect(sse.postPaths.length).toBeGreaterThan(0);
+      expect(new Set(sse.postPaths)).toEqual(new Set(["/messages"]));
+      expect(sse.getCount).toBe(1);
+    });
+  });
+
+  it("refuses a cross-origin message endpoint before posting anything", async () => {
+    await withLegacySseMcpServer({ onMessage: ({ message }) => replyToLegacyHandshake(message) }, async (other) => {
+      await withLegacySseMcpServer(
+        {
+          endpointFor: (session) => `${other.url}/messages?sessionId=${session.sessionId}`,
+          onMessage: ({ message }) => replyToLegacyHandshake(message),
+        },
+        async (sse) => {
+          await expect(
+            discoverMcpTools({ ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" }, 1000, {
+              networkAllowlist: [sse.host, other.host],
+            }),
+          ).rejects.toThrow(/cross-origin/);
+          expect(sse.postPaths).toEqual([]);
+          expect(other.postPaths).toEqual([]);
+        },
+      );
+    });
+  });
+
+  it.each([
+    { name: "a CRLF stream", options: { lineEnding: "\r\n" as const } },
+    { name: "a CRLF split across chunks after the event name", options: { splitEndpointAfterCarriageReturn: true } },
+    { name: "a stream opening with a UTF-8 BOM", options: { streamPrefix: "\uFEFF" } },
+  ])("parses the endpoint handshake from $name", async ({ options }) => {
+    await withLegacySseMcpServer(
+      { ...options, onMessage: ({ message }) => replyToLegacyHandshake(message) },
+      async (sse) => {
+        const tools = await discoverMcpTools({ ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" }, 1000, {
+          networkAllowlist: [sse.host],
+        });
+        expect(tools.map((tool) => tool.toolName)).toEqual(["legacy.search"]);
+        expect(new Set(sse.postPaths)).toEqual(new Set(["/messages"]));
+      },
+    );
+  });
+
+  it("refuses a message endpoint carrying userinfo credentials before posting anything", async () => {
+    await withLegacySseMcpServer(
+      {
+        endpointFor: (session) => `http://user:secret@${session.host}/messages?sessionId=${session.sessionId}`,
+        onMessage: ({ message }) => replyToLegacyHandshake(message),
+      },
+      async (sse) => {
+        await expect(
+          discoverMcpTools({ ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" }, 1000, {
+            networkAllowlist: [sse.host],
+          }),
+        ).rejects.toThrow(/carrying credentials/);
+        expect(sse.postPaths).toEqual([]);
+      },
+    );
+  });
+
+  it("rejects an oversized stream message event", async () => {
+    await withLegacySseMcpServer(
+      {
+        onMessage: ({ message }) => {
+          if (message.method === "tools/list") {
+            return {
+              reply: {
+                jsonrpc: "2.0",
+                id: message.id,
+                result: { tools: [{ name: "legacy.big", description: "x".repeat(1024 * 1024 + 16) }] },
+              },
+            };
+          }
+          return replyToLegacyHandshake(message);
+        },
+      },
+      async (sse) => {
+        await expect(
+          discoverMcpTools({ ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" }, 1000, {
+            networkAllowlist: [sse.host],
+          }),
+        ).rejects.toThrow(/exceeded 1048576 bytes/);
+      },
+    );
+  });
+
+  it("reconnects once when the message endpoint rejects the session before dispatch", async () => {
+    const toolCalls: number[] = [];
+    await withLegacySseMcpServer(
+      {
+        onMessage: ({ message, session }) => {
+          if (message.method === "tools/call") {
+            if (session.connection === 1) {
+              return { status: 404 };
+            }
+            toolCalls.push(session.connection);
+            return {
+              reply: {
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  content: [{ type: "text", text: "legacy ok" }],
+                  structuredContent: { ok: true },
+                },
+              },
+            };
+          }
+          return replyToLegacyHandshake(message);
+        },
+      },
+      async (sse) => {
+        const result = await invokeMcpRuntimeTool(
+          { ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" },
+          { toolName: "legacy.search", arguments: { q: "goatcitadel" } },
+          1000,
+          { networkAllowlist: [sse.host] },
+        );
+
+        expect(result).toMatchObject({
+          ok: true,
+          retryCount: 1,
+          output: { structuredContent: { ok: true }, degradedReason: "expired_session_reconnect" },
+        });
+        expect(sse.getCount).toBe(2);
+        expect(toolCalls).toEqual([2]);
+      },
+    );
+  });
+
+  it("refuses a message POST answered with a redirect instead of following it", async () => {
+    await withLegacySseMcpServer({ onMessage: ({ message }) => replyToLegacyHandshake(message) }, async (other) => {
+      await withLegacySseMcpServer(
+        {
+          onMessage: ({ message, session }) => {
+            if (message.method === "initialize") {
+              return {
+                status: 307,
+                headers: { location: `${other.url}/messages?sessionId=${session.sessionId}` },
+              };
+            }
+            return replyToLegacyHandshake(message);
+          },
+        },
+        async (sse) => {
+          await expect(
+            discoverMcpTools({ ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" }, 1000, {
+              networkAllowlist: [sse.host, other.host],
+            }),
+          ).rejects.toThrow(/redirect/i);
+          expect(sse.postPaths).toEqual(["/messages"]);
+          expect(other.postPaths).toEqual([]);
+        },
+      );
+    });
+  });
+
+  it("refuses a redirected event-stream GET so the endpoint is resolved against the URL that served it", async () => {
+    await withLegacySseMcpServer(
+      { streamRedirect: "/sse/", onMessage: ({ message }) => replyToLegacyHandshake(message) },
+      async (sse) => {
+        await expect(
+          discoverMcpTools({ ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" }, 1000, {
+            networkAllowlist: [sse.host],
+          }),
+        ).rejects.toThrow(/redirect/i);
+        expect(sse.getCount).toBe(1);
+        expect(sse.postPaths).toEqual([]);
+      },
+    );
+  });
+
+  it("rejects a request aborted by the caller mid-flight and closes the event stream", async () => {
+    const controller = new AbortController();
+    await withLegacySseMcpServer(
+      {
+        onMessage: ({ message }) => {
+          if (message.method === "tools/call") {
+            // Accept the POST but never reply on the stream; the caller aborts instead.
+            setTimeout(() => controller.abort(), 20);
+            return {};
+          }
+          return replyToLegacyHandshake(message);
+        },
+      },
+      async (sse) => {
+        const server = { ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" as const };
+        await expect(
+          withHttpMcpClient(
+            server,
+            5000,
+            { networkAllowlist: [sse.host] },
+            async (client) =>
+              await client.request("tools/call", { name: "legacy.search", arguments: {} }, controller.signal),
+            controller.signal,
+          ),
+        ).rejects.toThrow(/aborted/);
+        const deadline = Date.now() + 2000;
+        while (sse.closedStreams < 1 && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        expect(sse.getCount).toBe(1);
+        expect(sse.closedStreams).toBe(1);
+      },
+    );
+  });
+
+  it("sends token auth headers on both the event-stream GET and the message POSTs", async () => {
+    const tokenEnvKey = "GOATCITADEL_TEST_LEGACY_SSE_TOKEN";
+    const token = "legacy-sse-token-value-1234567890";
+    const previous = process.env[tokenEnvKey];
+    process.env[tokenEnvKey] = token;
+    onTestFinished(() => {
+      if (previous === undefined) delete process.env[tokenEnvKey];
+      else process.env[tokenEnvKey] = previous;
+    });
+    await withLegacySseMcpServer({ onMessage: ({ message }) => replyToLegacyHandshake(message) }, async (sse) => {
+      const base = createRemoteTestServer(`${sse.url}/sse`, { authType: "token" });
+      const tools = await discoverMcpTools(
+        { ...base, transport: "sse", policy: { ...base.policy, allowedEnvKeys: [tokenEnvKey] } },
+        1000,
+        { networkAllowlist: [sse.host] },
+      );
+
+      expect(tools.map((tool) => tool.toolName)).toEqual(["legacy.search"]);
+      expect(sse.getAuthorizations).toEqual([`Bearer ${token}`]);
+      expect(sse.postAuthorizations.length).toBeGreaterThanOrEqual(3);
+      expect(new Set(sse.postAuthorizations)).toEqual(new Set([`Bearer ${token}`]));
+    });
   });
 });

@@ -109,7 +109,11 @@ export interface CitadelStructureSnapshot {
 export type CitadelStructureChange =
   | { type: "charter"; charter: Omit<CitadelCharterInput, "citadelId"> }
   | { type: "chamber"; chamber: Omit<CitadelChamberInput, "citadelId"> }
-  | { type: "setup"; charter: Omit<CitadelCharterInput, "citadelId">; chambers: Array<Omit<CitadelChamberInput, "citadelId">> };
+  | {
+      type: "setup";
+      charter: Omit<CitadelCharterInput, "citadelId">;
+      chambers: Array<Omit<CitadelChamberInput, "citadelId">>;
+    };
 
 /** Data-only command executed atomically by the persistence owner. */
 export interface CitadelStructureMutation {
@@ -256,6 +260,22 @@ export function resolveCitadelScope(source: CitadelScopeSource | null | undefine
   }
   const chamberId = trimmedOrUndefined(source.chamberId);
   return chamberId ? { citadelId, chamberId } : { citadelId };
+}
+
+/** Server-built Watchtower authority for one citadel-scoped read. Never parsed from a request. */
+export interface CitadelAccessScope {
+  citadelId: string;
+  /** Citadels the authenticated actor may read; "all" only for the local operator auth class. */
+  readableCitadelIds: "all" | readonly string[];
+}
+
+/** Whether the scope's actor may read the scope's citadel. Blank ids are never readable. */
+export function canReadCitadel(scope: CitadelAccessScope): boolean {
+  const citadelId = trimmedOrUndefined(scope.citadelId);
+  if (!citadelId) {
+    return false;
+  }
+  return scope.readableCitadelIds === "all" || scope.readableCitadelIds.includes(citadelId);
 }
 
 export interface EffectiveRuntimeScopeSource {
@@ -479,16 +499,32 @@ export interface CitadelTemplateTarget {
 }
 
 /** Translate a reviewed template into one data-only persistence command. */
-export function createCitadelTemplateMutation(citadelId: string, expectedRevision: string, template: CitadelTemplate): CitadelStructureMutation {
-  return { citadelId, expectedRevision, change: {
-    type: "setup",
-    charter: {
-      purpose: template.purpose, kind: template.kind, goals: template.goals,
-      boundaries: template.boundaries, successDefinition: template.successDefinition,
-      riskPosture: template.riskPosture, modelPolicyDefault: template.modelPolicyDefault,
+export function createCitadelTemplateMutation(
+  citadelId: string,
+  expectedRevision: string,
+  template: CitadelTemplate,
+): CitadelStructureMutation {
+  return {
+    citadelId,
+    expectedRevision,
+    change: {
+      type: "setup",
+      charter: {
+        purpose: template.purpose,
+        kind: template.kind,
+        goals: template.goals,
+        boundaries: template.boundaries,
+        successDefinition: template.successDefinition,
+        riskPosture: template.riskPosture,
+        modelPolicyDefault: template.modelPolicyDefault,
+      },
+      chambers: template.chambers.map((chamber) => ({
+        name: chamber.name,
+        sensitivity: chamber.sensitivity,
+        sealed: chamber.sealed,
+      })),
     },
-    chambers: template.chambers.map((chamber) => ({ name: chamber.name, sensitivity: chamber.sensitivity, sealed: chamber.sealed })),
-  } };
+  };
 }
 
 export function applyCitadelTemplate(

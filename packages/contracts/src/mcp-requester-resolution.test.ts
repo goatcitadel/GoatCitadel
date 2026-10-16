@@ -148,6 +148,9 @@ describe("requester-scoped MCP contracts", () => {
 
   it("accepts only canonical non-secret requester configuration", () => {
     expect(() => assertMcpServerConnectionConfiguration(requesterConfiguration())).not.toThrow();
+    expect(() => assertMcpServerConnectionConfiguration({ ...requesterConfiguration(), transport: "sse" })).toThrow(
+      /Streamable HTTP \(http\) transport/,
+    );
     for (const patch of [
       { transport: "stdio" },
       { url: "https://secret.example.test/path?token=canary" },

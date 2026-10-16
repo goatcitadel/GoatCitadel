@@ -1,11 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CronJobRecord, CronRunRecord, DurableRunStatus } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import {
   computeNextCronRunAt,
   COST_REPORT_HOURLY_JOB_ID,
   CronAutomationService,
-  EXPERIMENTAL_NO_AGENT_CRON_ENV,
   type CronAutomationServiceDeps,
   didCronJobRunInCurrentWindow,
   IMPROVEMENT_WEEKLY_JOB_ID,
@@ -935,7 +934,7 @@ describe("CronAutomationService job behavior", () => {
     }
   });
 
-  it("keeps no_agent cron jobs behind the explicit experimental env gate", async () => {
+  it("creates, runs now, and runs on schedule for no_agent jobs without any env gate", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-15T12:03:00.000Z"));
     const db = new FakeDb();
@@ -955,7 +954,10 @@ describe("CronAutomationService job behavior", () => {
           schedule: "0 12 * * * UTC",
           actionConfig: { noAgent: { command: "echo" } },
         }),
-      ).rejects.toThrow(EXPERIMENTAL_NO_AGENT_CRON_ENV);
+      ).resolves.toMatchObject({ jobId: "new-no-agent", action: "no_agent" });
+
+      await expect(service.runCronJobNow("new-no-agent")).resolves.toMatchObject({ status: "ok" });
+      expect(noAgent).toHaveBeenCalledTimes(1);
 
       cronJobs.upsert(
         buildTaskJob({
@@ -965,10 +967,9 @@ describe("CronAutomationService job behavior", () => {
           actionConfig: { noAgent: { command: "echo" } },
         }),
       );
-
-      await expect(service.runCronJobNow("legacy-no-agent")).rejects.toThrow(EXPERIMENTAL_NO_AGENT_CRON_ENV);
       await service.runDueTaskCronJobs(new Date("2026-05-15T12:03:00.000Z"));
-      expect(noAgent).not.toHaveBeenCalled();
+      expect(noAgent).toHaveBeenCalledTimes(2);
+      expect(cronJobs.get("legacy-no-agent")).toMatchObject({ lastRunStatus: "ok", lastRunOutput: "alert" });
       await expect(service.updateCronJob("legacy-no-agent", { enabled: false }, 1)).resolves.toMatchObject({
         enabled: false,
       });
@@ -1909,10 +1910,6 @@ describe("shared-host cron admission", () => {
 });
 
 describe("no_agent cron action", () => {
-  beforeEach(() => {
-    vi.stubEnv(EXPERIMENTAL_NO_AGENT_CRON_ENV, "true");
-  });
-
   it("skips delivery when stdout is empty", async () => {
     const realtime = vi.fn();
     const service = makeServiceWithNoAgent({
@@ -2138,10 +2135,6 @@ describe("agent_turn cron action", () => {
 });
 
 describe("no_agent workdir forwarding", () => {
-  beforeEach(() => {
-    vi.stubEnv(EXPERIMENTAL_NO_AGENT_CRON_ENV, "true");
-  });
-
   it("forwards workdir into the no_agent runner", async () => {
     const captured: Array<{ workdir?: string }> = [];
     const service = makeServiceWithNoAgent({
@@ -2308,10 +2301,6 @@ describe("CronAutomationService.retryCronReviewQueueItem", () => {
 });
 
 describe("runCronJobNow returns runId", () => {
-  beforeEach(() => {
-    vi.stubEnv(EXPERIMENTAL_NO_AGENT_CRON_ENV, "true");
-  });
-
   it("returns the runId for the manual run", async () => {
     const service = makeServiceWithNoAgent({
       realtime: vi.fn(),
@@ -2333,10 +2322,6 @@ describe("runCronJobNow returns runId", () => {
 });
 
 describe("findCronRunById", () => {
-  beforeEach(() => {
-    vi.stubEnv(EXPERIMENTAL_NO_AGENT_CRON_ENV, "true");
-  });
-
   it("returns undefined for unknown run ids", async () => {
     const service = makeServiceWithNoAgent({
       realtime: vi.fn(),

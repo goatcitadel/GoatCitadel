@@ -117,6 +117,41 @@ describe("TranscriptLog", () => {
 });
 
 describe("TranscriptLog sanitization", () => {
+  it("findEventOffset returns the appended offset, and undefined for unknown ids or a missing file", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-transcripts-${randomUUID()}`);
+    createdDirs.push(root);
+    const log = new TranscriptLog(root);
+    const sessionId = "session-find-offset";
+
+    assert.equal(await log.findEventOffset(sessionId, "event-0"), undefined);
+
+    const offsets: number[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      offsets.push(await log.append(buildEvent(sessionId, index)));
+    }
+    await fs.promises.appendFile(path.join(root, `${sessionId}.jsonl`), "{not json event-9\n", "utf8");
+
+    assert.equal(await log.findEventOffset(sessionId, "event-0"), offsets[0]);
+    assert.equal(await log.findEventOffset(sessionId, "event-2"), offsets[2]);
+    assert.equal(await log.findEventOffset(sessionId, "event-9"), undefined);
+    assert.equal(await log.findEventOffset(sessionId, "unknown"), undefined);
+  });
+
+  it("findEventOffset returns byte offsets for non-ASCII content", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-transcripts-${randomUUID()}`);
+    createdDirs.push(root);
+    const log = new TranscriptLog(root);
+    const sessionId = "session-find-utf8";
+    const first = { ...buildEvent(sessionId, 0), payload: { text: "café 😀" } };
+    const second = buildEvent(sessionId, 1);
+
+    const firstOffset = await log.append(first);
+    const secondOffset = await log.append(second);
+
+    assert.equal(await log.findEventOffset(sessionId, first.eventId), firstOffset);
+    assert.equal(await log.findEventOffset(sessionId, second.eventId), secondOffset);
+  });
+
   it("skips and quarantines a malformed JSONL row instead of crashing", async () => {
     const transcriptsDir = fs.mkdtempSync(path.join(os.tmpdir(), "gc-transcript-sanitize-"));
     createdDirs.push(transcriptsDir);

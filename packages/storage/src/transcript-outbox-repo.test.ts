@@ -78,6 +78,21 @@ describe("TranscriptOutboxRepository", () => {
     assert.equal(repo.markDelivered("missing-event", { transcriptOffset: 99 }), undefined);
   });
 
+  it("markAttemptStarted stamps lastAttemptAt without counting a failure and ignores delivered rows", () => {
+    const repo = createRepo();
+    const event = transcriptEvent();
+    repo.enqueue(event);
+
+    const started = repo.markAttemptStarted(event.eventId, { attemptedAt: "2026-04-20T00:01:00.000Z" });
+    assert.equal(started?.lastAttemptAt, "2026-04-20T00:01:00.000Z");
+    assert.equal(started?.attemptCount, 0);
+
+    repo.markDelivered(event.eventId, { deliveredAt: "2026-04-20T00:02:00.000Z", transcriptOffset: 7 });
+    const afterDelivered = repo.markAttemptStarted(event.eventId, { attemptedAt: "2026-04-20T00:09:00.000Z" });
+    assert.equal(afterDelivered?.lastAttemptAt, "2026-04-20T00:02:00.000Z");
+    assert.equal(repo.markAttemptStarted("missing-event", { attemptedAt: "2026-04-20T00:09:00.000Z" }), undefined);
+  });
+
   it("falls back on malformed rows and invalid serialized transcript events", () => {
     const row = {
       event_id: "event-bad-json",

@@ -98,6 +98,7 @@
     "verify:api:compat": "node scripts/verification/run.mjs api-compat",
     "verify:operator:proof": "node scripts/verification/run.mjs operator-proof",
     "verify:durable:recovery": "node scripts/verification/run.mjs durable-recovery",
+    "verify:cron:no-agent": "pnpm --filter @goatcitadel/gateway exec vitest run src/services/gateway/cron-no-agent-local-proof.test.ts --maxWorkers=2",
     "verify:self-configuration": "node scripts/verification/run.mjs self-configuration",
     "verify:chat-evolution": "node scripts/verification/run.mjs chat-evolution",
     "verify:usage:reconciliation": "node scripts/verification/run.mjs usage-reconciliation",
