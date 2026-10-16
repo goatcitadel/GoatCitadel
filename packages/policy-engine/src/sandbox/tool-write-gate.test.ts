@@ -124,6 +124,15 @@ describe("assertToolWritePath", () => {
     ).toThrow(/runtime_protected_path/i);
   });
 
+  it("refuses deleting or moving away a folder that contains a protected path", () => {
+    const broadSandbox: Sandbox = { ...fixture.sandbox, writeJailRoots: [fixture.runtimeRoot] };
+    expect(() => assertToolWritePath(fixture.jailRoot, broadSandbox, "delete")).toThrow(
+      /contains a protected runtime folder/i,
+    );
+    expect(() => assertToolWritePath(path.join(fixture.jailRoot, "exports"), broadSandbox, "delete")).not.toThrow();
+    expect(() => assertToolWritePath(path.join(fixture.jailRoot, "exports"), broadSandbox, "write")).not.toThrow();
+  });
+
   it.runIf(process.platform !== "win32")("refuses a link inside an operator root that escapes it", () => {
     const link = path.join(fixture.deletableRoot, "escape");
     fs.symlinkSync(fixture.outside, link);

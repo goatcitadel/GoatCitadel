@@ -18,7 +18,8 @@ import {
  *   only in operator roots that opted into `allowDelete`.
  * - Hard-forbidden targets (system, credential, profile, runtime config/secrets/
  *   database/audit paths) are refused everywhere, even inside an allowed root.
- * - A delete may not remove a write root itself.
+ * - A delete may not remove a write root itself, nor any folder that contains
+ *   a runtime-protected path.
  */
 export type ToolWriteIntent = "write" | "delete";
 
@@ -51,8 +52,24 @@ export function assertToolWritePath(
   assertNotHardForbiddenWritePath(resolvedTarget, sandbox);
   if (intent === "delete") {
     assertNotWriteRootItself(resolvedTarget, sandbox);
+    assertNotProtectedPathAncestor(resolvedTarget, sandbox);
   }
   return resolvedTarget;
+}
+
+/**
+ * A recursive delete (or moving away a folder) removes everything beneath the
+ * target, so refuse any target that contains a runtime-protected path, even
+ * when the target itself is not protected.
+ */
+function assertNotProtectedPathAncestor(resolvedTarget: string, sandbox: ToolSandbox): void {
+  const protectedPaths = sandbox.runtimeWriteProtection?.protectedPaths ?? [];
+  const contained = protectedPaths.find((protectedPath) => isSamePathOrDescendant(resolvedTarget, protectedPath));
+  if (contained) {
+    throw new Error(
+      `Path contains a protected runtime folder and cannot be deleted or moved by tools: ${resolvedTarget} (contains ${contained})`,
+    );
+  }
 }
 
 /** Refuse hard-forbidden targets regardless of which root or grant admitted them. */

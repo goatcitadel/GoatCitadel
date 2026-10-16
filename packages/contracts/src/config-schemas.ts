@@ -137,13 +137,18 @@ export const ToolPolicyConfigSchema = z
           .array(
             z
               .object({
-                path: SandboxJailRootSchema,
+                /** Required unless `preset` is set; a preset entry's path is resolved on the server. */
+                path: z.string().max(1024).optional(),
                 allowDelete: z.boolean().default(false),
                 label: z.string().max(120).optional(),
                 preset: z.enum(["os_temp"]).optional(),
                 addedAt: z.string().max(64).optional(),
               })
-              .strict(),
+              .strict()
+              .refine((root) => root.preset !== undefined || (root.path ?? "").trim().length > 0, {
+                message: "Operator write root needs a non-empty path unless it uses a preset.",
+                path: ["path"],
+              }),
           )
           .max(32)
           .default([]),
