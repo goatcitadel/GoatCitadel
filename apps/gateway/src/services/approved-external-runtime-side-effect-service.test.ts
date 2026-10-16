@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { executeApprovedExternalRuntimeSideEffect } from "./approved-external-runtime-side-effect-service.js";
-import { claimIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
+import {
+  claimIdempotentExternalSideEffect,
+  DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS,
+} from "./external-side-effect-runner-service.js";
 
 const cleanups: Array<() => void> = [];
 const asyncStorageByStorage = new WeakMap<Storage, ReturnType<typeof createSqliteAsyncStorage>>();
@@ -273,6 +276,8 @@ describe("approved external runtime side-effect boundary", () => {
     };
     const seeded = await claimIdempotentExternalSideEffect({
       mutationStore: runtimeStorage(storage).mutationIdempotency,
+      // Live runs now hold the default takeover lease; seed the same shape.
+      claimLeaseDurationMs: DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS,
       sideEffectRunStore: runtimeStorage(storage).externalSideEffectRuns,
       workspaceId: "workspace-1",
       boundary: "approved_external_runtime",
@@ -341,6 +346,7 @@ describe("approved external runtime side-effect boundary", () => {
     };
     const seeded = await claimIdempotentExternalSideEffect({
       mutationStore: runtimeStorage(storage).mutationIdempotency,
+      claimLeaseDurationMs: DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS,
       sideEffectRunStore: runtimeStorage(storage).externalSideEffectRuns,
       runClaimTransaction: (work) => runtimeStorage(storage).runImmediateTransaction(work),
       workspaceId: "workspace-1",
@@ -385,6 +391,7 @@ describe("approved external runtime side-effect boundary", () => {
     };
     const seeded = await claimIdempotentExternalSideEffect({
       mutationStore: runtimeStorage(storage).mutationIdempotency,
+      claimLeaseDurationMs: DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS,
       sideEffectRunStore: runtimeStorage(storage).externalSideEffectRuns,
       runClaimTransaction: (work) => runtimeStorage(storage).runImmediateTransaction(work),
       workspaceId: "workspace-1",
@@ -437,6 +444,8 @@ describe("approved external runtime side-effect boundary", () => {
     };
     const seeded = await claimIdempotentExternalSideEffect({
       mutationStore: runtimeStorage(storage).mutationIdempotency,
+      // Live runs now hold the default takeover lease; seed the same shape.
+      claimLeaseDurationMs: DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS,
       sideEffectRunStore: runtimeStorage(storage).externalSideEffectRuns,
       workspaceId: "workspace-1",
       boundary: "approved_external_runtime",

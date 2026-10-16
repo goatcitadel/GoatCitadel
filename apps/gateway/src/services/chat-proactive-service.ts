@@ -1771,7 +1771,9 @@ export class ChatProactiveService {
       }
       if (
         sideEffect.status === "blocked" &&
-        (sideEffect.claim.replayOutcome === "in_progress" || sideEffect.claim.replayOutcome === "duplicate")
+        (sideEffect.claim.replayOutcome === "in_progress" ||
+          sideEffect.claim.replayOutcome === "duplicate" ||
+          sideEffect.claim.replayOutcome === "unknown_after_send")
       ) {
         throw new ProactiveSideEffectReconciliationError(
           `Proactive action ${action.actionId} has durable side-effect state ${sideEffect.claim.replayOutcome} but no terminal action row; manual reconciliation is required.`,

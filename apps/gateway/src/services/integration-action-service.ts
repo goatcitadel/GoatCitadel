@@ -877,7 +877,8 @@ function readExternalReplayOutcome(
     value === "duplicate" ||
     value === "in_progress" ||
     value === "payload_mismatch" ||
-    value === "idempotency_unavailable"
+    value === "idempotency_unavailable" ||
+    value === "unknown_after_send"
     ? value
     : undefined;
 }
