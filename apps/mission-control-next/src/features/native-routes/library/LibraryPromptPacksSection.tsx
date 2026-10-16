@@ -145,14 +145,15 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
       }
       setRunAction(action);
       try {
-        if (action === "run") {
-          await runModelComparison(selectedComparison.comparisonId);
-        } else {
-          await cancelModelComparison(selectedComparison.comparisonId);
-        }
+        const updated =
+          action === "run"
+            ? await runModelComparison(selectedComparison.comparisonId)
+            : await cancelModelComparison(selectedComparison.comparisonId);
+        // Report the status the gateway returned, not the one requested: a
+        // cancel can land after the run already finished.
         setNotice({
           tone: "success",
-          message: action === "run" ? "Started the comparison run." : "Cancelled the comparison run.",
+          message: `Comparison status: ${formatComparisonStatus(updated.status)}`,
         });
         await reload();
       } catch (runError) {

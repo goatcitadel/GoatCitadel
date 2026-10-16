@@ -81,7 +81,8 @@ describe("LibraryPromptPacksSection run controls", () => {
 
     expect(apiMocks.runModelComparison).toHaveBeenCalledWith("comparison-1");
     expect(apiMocks.listModelComparisons).toHaveBeenCalledTimes(2);
-    expect(collectText(renderer.root)).toContain("Started the comparison run.");
+    expect(collectText(renderer.root)).toContain("Comparison status: Running");
+    expect(collectText(renderer.root)).not.toContain("Started the comparison run.");
     expect(findButtons(renderer.root, "Cancel run")).toHaveLength(1);
     expect(findButtons(renderer.root, "Run comparison")).toHaveLength(0);
   });
@@ -100,8 +101,26 @@ describe("LibraryPromptPacksSection run controls", () => {
     });
 
     expect(apiMocks.cancelModelComparison).toHaveBeenCalledWith("comparison-1");
-    expect(collectText(renderer.root)).toContain("Cancelled the comparison run.");
+    expect(collectText(renderer.root)).toContain("Comparison status: Cancelled");
+    expect(collectText(renderer.root)).not.toContain("Cancelled the comparison run.");
     expect(findButtons(renderer.root, "Run comparison")).toHaveLength(1);
+  });
+
+  it("reports the status the gateway returned when it differs from the requested action", async () => {
+    apiMocks.listModelComparisons
+      .mockResolvedValueOnce({ items: [comparison("running")] })
+      .mockResolvedValue({ items: [comparison("completed")] });
+    apiMocks.cancelModelComparison.mockResolvedValue(comparison("completed"));
+    const renderer = await renderDetail();
+
+    await act(async () => {
+      await findButtons(renderer.root, "Cancel run")[0]!.props.onClick();
+    });
+
+    expect(apiMocks.cancelModelComparison).toHaveBeenCalledWith("comparison-1");
+    expect(collectText(renderer.root)).toContain("Comparison status: Done");
+    expect(collectText(renderer.root)).not.toContain("Comparison status: Cancelled");
+    expect(collectText(renderer.root)).not.toContain("Cancelled the comparison run.");
   });
 
   it("offers no run control for a completed comparison", async () => {
