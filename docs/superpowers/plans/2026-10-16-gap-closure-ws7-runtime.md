@@ -169,4 +169,137 @@ Behavior:
 
 ## PR B — Tasks 7.1, 7.2, 7.4, 7.5, 7.6
 
-<!-- PR B tasks are appended below once the survey of their owners is complete. -->
+Survey corrections to the program plan (recorded as rulings in the SDD ledger):
+- 7.2: in SQLite mode transcripts are per-session JSONL files (`packages/storage/src/transcript-log.ts`), not a table; Postgres `transcript_events` already has `PRIMARY KEY (session_id, event_id)` and `append` already reuses the existing sequence. A unique index has nothing to attach to in SQLite mode, so idempotency comes from an outbox attempt marker plus an eventId lookup on the retry path. No schema change.
+- 7.4: `CitadelAccessScope` does not exist yet, and `workspaces-route-service.ts` has no scope check to copy (only an optional filter; `routes/citadels.ts` 404s unknown citadels). This task defines the scope type and the check.
+- 7.6: the pinned MSVC `14.44.35207` + Windows SDK `10.0.26100.0` exist on this host, so the native task is attempted.
+
+### Task 5: Legacy HTTP+SSE MCP transport (7.1)
+
+**Files:**
+- Create: `apps/gateway/src/services/mcp-legacy-sse-transport.ts` (keeps `mcp-http-transport.ts` focused; add an allowance entry to `scripts/verification/baselines/architecture-new-service-allowances.json` if the architecture metrics lane requires one for this path)
+- Modify: `apps/gateway/src/services/mcp-http-transport.ts` (`withHttpMcpClient` dispatches `server.transport === "sse"` to the legacy client; both return `HttpMcpClient`)
+- Modify: `apps/gateway/src/routes/mcp.ts` (~L780-955 preview copy)
+- Test: `apps/gateway/src/services/mcp-runtime.test.ts` (reuse the real `node:http` server pattern of `withRemoteMcpHttpServer`, L59-91; add a GET-stream variant)
+
+**Interfaces:**
+- Produces: `withLegacySseMcpClient<T>(server: McpServerRecord, timeoutMs: number, options: McpRuntimeTransportOptions, run: (client: HttpMcpClient) => Promise<T>, signal?: AbortSignal): Promise<T>`.
+
+Behavior (MCP 2024-11-05 HTTP+SSE):
+1. `GET server.url` with `Accept: text/event-stream` plus the same auth headers (`buildMcpHttpAuthHeaders`) through `fetchAllowlisted` with `options.networkAllowlist`.
+2. Read SSE events until the first `event: endpoint`; its `data` is a URL resolved against `server.url`. Bound the wait with the existing 25 s read timeout (`MCP_HTTP_RESPONSE_READ_TIMEOUT_MS`, or the caller's `timeoutMs` when smaller).
+3. Refuse (`MCP SSE server <label> announced a cross-origin message endpoint.`) unless `new URL(endpoint).origin === new URL(server.url).origin`; keep the `fetchAllowlisted` call (with `options.networkAllowlist`) for every POST so the endpoint is allowlist-checked too.
+4. `request()` POSTs the JSON-RPC message to the endpoint (expect 2xx, typically 202) and resolves with the `event: message` whose JSON `id` matches, read off the GET stream. `notify()` POSTs without awaiting a stream reply. Every stream event is capped at `MCP_HTTP_RESPONSE_BODY_MAX_BYTES` (1 MB) and each response waits at most the read timeout.
+5. `initialize` → `notifications/initialized` → `run(client)`; `close()` aborts the GET stream.
+6. Session failure retried once: the existing `invokeMcpRuntimeTool` retry already reconnects for `isExplicitlyRetrySafeMcpSessionFailure`; make a POST to the endpoint that answers 404 before dispatch surface as the same expired-session pre-dispatch error so that path applies.
+
+Preview copy (`routes/mcp.ts`): name the transport truthfully. `runtimePath` stays `generic_remote_http_sse`; the `runtime_supported` next action becomes "Connect and invoke through the governed MCP runtime path (Streamable HTTP, or the legacy HTTP+SSE handshake for `sse` records, which only POSTs to a same-origin, allowlisted endpoint); Gateway policy, approvals, network allowlists, and audit still apply." Keep `GOATCITADEL_EXPERIMENTAL_REMOTE_MCP_TRANSPORTS` as the gate for *unsupported-auth* record creation (allowlisted `sse` servers with supported auth were already runtime-supported, just on the wrong wire protocol). Update the stale line in `GOATCITADEL_PRODUCT_GAP_REVIEW_CLAUDE.md:123` if it still claims stdio-only.
+
+- [ ] **Step 1: Write failing tests** in `mcp-runtime.test.ts` (describe "legacy HTTP+SSE transport"): a helper server answering `GET /sse` with `text/event-stream`, writing `event: endpoint\ndata: /messages?sessionId=s1\n\n`, accepting `POST /messages` with 202 and pushing `event: message\ndata: <json-rpc reply>\n\n` on the open stream. Cases:
+  - handshake ok: `discoverMcpTools({ ...createRemoteTestServer(url + "/sse"), transport: "sse" }, 1000, { networkAllowlist: [host] })` returns the listed tool, and the server saw POSTs only at `/messages`.
+  - cross-origin endpoint rejected: endpoint on another listening port → rejects with `cross-origin`, and neither server recorded a POST.
+  - oversize rejected: a `message` event larger than 1 MB → rejects with `exceeded 1048576 bytes`.
+  - session failure retried once: first POST to the endpoint returns 404 before dispatch on the first connection only; `invokeMcpRuntimeTool` returns `ok: true`, `retryCount: 1`, and two GET connections were opened.
+- [ ] **Step 2: Run** `pnpm --filter @goatcitadel/gateway exec vitest run src/services/mcp-runtime.test.ts --maxWorkers=2` → new tests FAIL.
+- [ ] **Step 3: Implement** the legacy client and the dispatch in `withHttpMcpClient`, reusing the bounded-read helpers (export small helpers from `mcp-http-transport.ts` rather than copying them).
+- [ ] **Step 4: Run** the file again plus `src/routes/mcp.test.ts` → PASS. Update the copy assertions in `mcp.test.ts` that pin the old next-action string.
+- [ ] **Step 5: Commit** `feat(gateway): legacy HTTP+SSE MCP transport with same-origin endpoint fence`.
+
+### Task 6: Transcript outbox idempotency (7.2)
+
+**Files:**
+- Modify: `packages/storage/src/transcript-outbox-repo.ts` (add `markAttemptStarted(eventId, { attemptedAt })`: sets `last_attempt_at` without touching `attempt_count`, only while `delivered_at IS NULL`)
+- Modify: `packages/storage/src/transcript-log.ts` and `packages/storage/src/postgres-transcript-log.ts` (add `findEventOffset(sessionId: string, eventId: string): Promise<number | undefined>`; JSONL: stream the session file line by line and return the byte offset of the line whose `eventId` matches; Postgres: `SELECT event_sequence FROM transcript_events WHERE session_id=@sessionId AND event_id=@eventId`)
+- Modify: `packages/gateway-core/src/event-ingest.ts` (`flushTranscriptOutboxSession`)
+- Test: `packages/storage/src/transcript-outbox-repo.test.ts`, `packages/storage/src/transcript-log.test.ts`, `packages/storage/src/postgres-transcript-log.test.ts`, `packages/gateway-core/src/event-ingest.test.ts`
+
+**Interfaces:**
+- Produces: `TranscriptOutboxRepository.markAttemptStarted(eventId: string, input: { attemptedAt: string }): TranscriptOutboxRecord | undefined`; `findEventOffset` on both transcript logs.
+
+Drain algorithm per record:
+1. If `record.lastAttemptAt` is set (an earlier attempt began and may have appended), `const existing = await storage.transcripts.findEventOffset(record.sessionId, record.eventId)`; if found, skip the append and use that offset.
+2. Otherwise `await storage.transcriptOutbox.markAttemptStarted(record.eventId, { attemptedAt: now })`, then `append`.
+3. `markDelivered` as today. On failure: `markFailed` as today, and log with `logger.child("event-ingest").warn("transcript append failed after event commit", { sessionId, eventId, attemptCount, error })` using gateway-core's structured logger (`./logger.js`). Remove the `console.warn` and its eslint-disable comment. Leave the unrelated billing `console.warn` alone.
+
+- [ ] **Step 1: Write failing tests:**
+  - event-ingest (real `Storage({ dbPath: ":memory:", transcriptsDir })`): ingest an event, make `transcriptOutbox.markDelivered` throw once (then delegate), drain again → `storage.transcripts.read(sessionId)` has exactly one event with that eventId and the outbox row is delivered.
+  - crash variant: for a pending outbox row call `markAttemptStarted` + `transcripts.append` manually (process death before `markDelivered`), then drain → still exactly one line.
+  - the existing "returns success even when transcript append fails after commit" test asserts the structured logger warn instead of `vi.spyOn(console, "warn")`.
+  - transcript-log: `findEventOffset` returns the offset `append` returned, `undefined` for an unknown id or missing file. Postgres log: fake statement returns the sequence.
+  - outbox repo: `markAttemptStarted` sets `lastAttemptAt`, keeps `attemptCount`; no-op on a delivered row.
+- [ ] **Step 2: Run** `pnpm --filter @goatcitadel/storage exec tsx --test src/transcript-outbox-repo.test.ts src/transcript-log.test.ts src/postgres-transcript-log.test.ts` and `pnpm --filter @goatcitadel/gateway-core exec vitest run src/event-ingest.test.ts --maxWorkers=2` → FAIL.
+- [ ] **Step 3: Implement.** Rebuild storage dist if gateway-core resolves it from `dist` (`pnpm --filter @goatcitadel/storage build`).
+- [ ] **Step 4: Run** the same commands → PASS.
+- [ ] **Step 5: Commit** `fix(gateway-core): idempotent transcript outbox drain with structured logging`.
+
+### Task 7: Watchtower access control on citadel cron listing (7.4)
+
+**Files:**
+- Modify: `packages/contracts/src/citadels.ts` (add `CitadelAccessScope`, `canReadCitadel`)
+- Modify: `packages/storage/src/cron-job-repo.ts` (`listByCitadel(scope: CitadelAccessScope)`; delete the TODO)
+- Modify: `apps/gateway/src/services/gateway/cron-automation-service.ts` (`listCronJobsForCitadel(scope)`), `apps/gateway/src/services/cron-route-service.ts` (port method), `apps/gateway/src/routes/dashboard.ts` (`GET /api/v1/cron/jobs?citadelId=`)
+- Test: `packages/storage/src/cron-job-repo.citadel.test.ts`, `apps/gateway/src/routes/dashboard.cron.test.ts`, `packages/contracts/src/citadels.test.ts`
+
+**Interfaces:**
+```ts
+/** Server-built Watchtower authority for one citadel-scoped read. Never parsed from a request. */
+export interface CitadelAccessScope {
+  citadelId: string;
+  /** Citadels the authenticated actor may read; "all" only for the local operator auth class. */
+  readableCitadelIds: "all" | readonly string[];
+}
+export function canReadCitadel(scope: CitadelAccessScope): boolean; // false for blank id; true for "all"; else membership
+```
+- Repo: `listByCitadel(scope)` returns `[]` when `!canReadCitadel(scope)`; otherwise today's query (citadel rows plus global `citadel_id IS NULL` rows — global schedules are installation-wide; say so in the JSDoc).
+- Gateway check (first caller): the route accepts optional `citadelId` (`z.string().trim().min(1).max(200)`); without it the route behaves as today. With it, the service loads the citadel through `storage.citadels` (unknown → 404 `{ error: "Citadel <id> not found." }`, as `routes/citadels.ts` does), builds the scope server-side (`readableCitadelIds: "all"` for the operator access class that `/api/v1/cron` already requires per `route-access.ts`; any other caller gets `[]`), and returns 403 `{ error: "Citadel <id> is outside your Watchtower access scope." }` when `canReadCitadel` is false.
+
+- [ ] **Step 1: Write failing tests:** contracts `canReadCitadel` (blank false, "all" true, listed true, unlisted false); repo: denied scope → `[]`, allowed → that citadel's jobs plus global jobs, never another citadel's; route: allowed → 200 with items, unknown citadel → 404, denied → 403, no `citadelId` → unchanged list.
+- [ ] **Step 2: Run** `pnpm --filter @goatcitadel/contracts exec vitest run src/citadels.test.ts`, `pnpm --filter @goatcitadel/storage exec tsx --test src/cron-job-repo.citadel.test.ts`, `pnpm --filter @goatcitadel/gateway exec vitest run src/routes/dashboard.cron.test.ts --maxWorkers=2` → FAIL.
+- [ ] **Step 3: Implement**; rebuild contracts dist.
+- [ ] **Step 4: Run** again → PASS; `pnpm --filter @goatcitadel/gateway typecheck`.
+- [ ] **Step 5: Commit** `feat: scope-checked citadel cron listing`.
+
+### Task 8: Graduate no-agent cron (7.5)
+
+**Files:**
+- Modify: `apps/gateway/src/services/gateway/cron-no-agent-support.ts` (delete `EXPERIMENTAL_NO_AGENT_CRON_ENV`, `isExperimentalNoAgentCronEnabled`, `assertExperimentalNoAgentCronEnabled`, `buildNoAgentCronDisabledMessage`, `isOnlyNoAgentDisableUpdate`, `assertCronActionMutationAllowed`, `isCronActionEnabledForScheduledRun`, and their call sites)
+- Modify: `apps/gateway/src/services/gateway/cron-automation-service.ts`, `apps/gateway/src/routes/dashboard.ts` (`isUnsupportedCronActionError` and its 409 branches), tests `cron-automation-service.test.ts`, `dashboard.cron.test.ts`
+- Create: `apps/gateway/src/services/gateway/cron-no-agent-local-proof.test.ts`; root script `verify:cron:no-agent` → `pnpm --filter @goatcitadel/gateway exec vitest run src/services/gateway/cron-no-agent-local-proof.test.ts --maxWorkers=2`
+- Modify docs: `docs/1_0_CONTRACT.md` (~L110), `docs/1_0_RELEASE_EVIDENCE.md` (~L154), `docs/cron-no-agent-subagent-controls-verify.md`
+
+Proof content (local-only execution): a `CronAutomationService` wired with the real `runNoAgentCommand` runs a `no_agent` job whose command is `process.execPath` with args `["-e", "process.stdout.write('cron-local-ok')"]`; assert exit 0 and stdout surfaced in the `cron_no_agent_output` realtime event; no model/provider dependency invoked (stubs that throw if called); `shell: false` preserved (an arg containing `&&` is passed literally); the timeout path kills the child.
+
+Contract text: move the L110 bullet out of the "must not claim" list into shipped behavior: "`no_agent` cron jobs run a local command (no model call, `shell: false`, bounded timeout) under the operator-only `/api/v1/cron` route class; proof lane `pnpm verify:cron:no-agent`." Update the release-evidence and verify-checklist docs to match.
+
+- [ ] **Step 1:** Write the proof test; flip `cron-automation-service.test.ts` "keeps no_agent cron jobs behind the explicit experimental env gate" to expect create / run-now / scheduled execution to work without any env stub; delete the `vi.stubEnv(EXPERIMENTAL_NO_AGENT_CRON_ENV, …)` lines; replace the route 409 test in `dashboard.cron.test.ts` with one asserting `no_agent` create returns 2xx.
+- [ ] **Step 2: Run** those files → FAIL.
+- [ ] **Step 3:** Remove the gate and the route mapping; update docs; add the root script.
+- [ ] **Step 4: Run** the files + `pnpm verify:cron:no-agent` → PASS; `git grep -n GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON` returns only plan/history docs.
+- [ ] **Step 5: Commit** `feat(gateway): graduate no-agent cron with a local-only proof lane`.
+
+### Task 9: Windows cell capacity owners (7.6)
+
+**Files:**
+- Modify: `apps/remote-worker-windows-cell-native/src/cell_controller_main.cpp` (~L107-216)
+- Modify: `apps/remote-worker-windows-cell-native/src/cell_controller_protocol.hpp` (L226-233 comment: drop "The installed service does not yet supply this owner")
+- Modify: `apps/remote-worker-windows-cell-native/tests/cell_controller_protocol_test.cpp` and `scripts/packaging/remote-worker-windows-cell-controller-protocol.test.mjs` (asserted counts)
+
+**Interfaces:** three static members on `Connection` with the exact `observe_capacity` / `observe_backing_capacity` / `observe_inventory` pointer shapes from `cell_controller_protocol.hpp`, e.g.
+```cpp
+static DWORD ObserveCapacity(void* context, CellProvisioningJournal& journal, const CellProvisioningAnchor& anchor,
+  const CellFileSha256& digest, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
+  CellProvisioningFootprint* output) noexcept;
+```
+Each casts `context` to `Connection&`, requires the measurement hold that `BeginMeasurement` acquired and verified for this request (workload quiescence), returns `ERROR_NOT_SUPPORTED` without touching the journal when the hold is absent, and otherwise delegates to the journal observation API that operation uses (find it from the fixture lambdas and `cell_controller_protocol.cpp` call sites ~L1140/L1157/L1196). Wire all three into `owner` in `Run()` beside `observe_pool_capacity`.
+
+- [ ] **Step 1:** In the protocol fixture, change `native-capacity-missing-hold` per the program plan to expect success once the hold owner is supplied, and add coverage that capacity, backing-capacity and inventory still refuse (`ERROR_NOT_SUPPORTED`, journal bytes unchanged) without a hold.
+- [ ] **Step 2: Run** `node --test scripts/packaging/remote-worker-windows-cell-controller-protocol.test.mjs` → FAIL.
+- [ ] **Step 3: Implement**; update the asserted counts in the `.mjs` test to the new fixture output.
+- [ ] **Step 4: Run** the protocol test (ASAN and non-ASAN) plus `remote-worker-windows-cell-capacity.test.mjs`, `-backing-capacity`, `-mounted-capacity`, `-joined-capacity-wire`, `-installed-pool` → PASS.
+- [ ] **Step 5: Commit** `feat(remote-worker): installed cell capacity, backing and inventory owners`.
+- If the toolchain cannot build, stop and report BLOCKED with the exact compiler/linker output; PR B ships without it.
+
+### Task 10: PR B gates
+
+- [ ] `pnpm typecheck`, `pnpm verify:architecture:metrics`, `node scripts/verify-repo-hygiene.mjs`, `git diff --check origin/main...HEAD`, `pnpm docs:check`.
+- [ ] Push, open PR B against `main` (stacked on PR A's branch if PR A has not merged; say so in the PR body).
