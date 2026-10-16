@@ -270,12 +270,7 @@ export async function runCockpitProviderConnectionProof({ context, browser, stac
               plan: endpointSaved,
               request: endpointRequest,
             });
-            await panel
-              .getByText(
-                "The Gateway reports this change complete. Current provider evidence confirms the saved change.",
-                { exact: true },
-              )
-              .waitFor();
+            await panel.getByText("Change complete. The saved provider settings match it.", { exact: true }).waitFor();
 
             await panel.getByRole("combobox", { name: "Credential storage", exact: true }).selectOption("env");
             assert.equal(
@@ -361,12 +356,7 @@ export async function runCockpitProviderConnectionProof({ context, browser, stac
               "The saved replacement key did not authenticate a fresh provider request.",
             );
             assert.ok(catalog.items?.some((item) => item.id === DETERMINISTIC_LLM_MODEL));
-            await panel
-              .getByText(
-                "The Gateway reports this change complete. Current provider evidence confirms the saved change.",
-                { exact: true },
-              )
-              .waitFor();
+            await panel.getByText("Change complete. The saved provider settings match it.", { exact: true }).waitFor();
             await panel.scrollIntoViewIfNeeded();
             await audit("saved");
             return {

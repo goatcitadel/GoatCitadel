@@ -152,7 +152,9 @@ describe("Inbox run recovery", () => {
     expect(api.fetchDurableRun).toHaveBeenCalledTimes(3);
     expect(api.retryDurableRun).toHaveBeenCalledOnce();
     expect(api.retryDurableRun).toHaveBeenCalledWith("run-a", { reason: "operator_inbox_retry" });
-    expect(container.textContent).toContain("Inspect the current run to verify execution and effects");
+    expect(container.textContent).toContain(
+      "Recovery requested. Run status: Queued. Use Open run to check what it did.",
+    );
     expect(api.recoverDurableDeadLetter).not.toHaveBeenCalled();
   });
 
@@ -162,7 +164,7 @@ describe("Inbox run recovery", () => {
     await act(async () => button("Retry run").click());
     await act(async () => button("Confirm retry run").click());
     expect(api.retryDurableRun).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("The run or dead letter changed");
+    expect(container.textContent).toContain("The run changed. Refresh it before requesting recovery.");
   });
 
   it("locks retry after an uncertain mutation response", async () => {
@@ -188,7 +190,9 @@ describe("Inbox run recovery", () => {
     await act(async () => button("Retry run").click());
     await act(async () => button("Confirm retry run").click());
     expect(api.retryDurableRun).toHaveBeenCalledTimes(2);
-    expect(container.textContent).toContain("Inspect the current run to verify execution and effects");
+    expect(container.textContent).toContain(
+      "Recovery requested. Run status: Queued. Use Open run to check what it did.",
+    );
   });
 
   it("recovers only the exact unresolved dead letter", async () => {
@@ -225,6 +229,8 @@ describe("Inbox run recovery", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(container.textContent).toContain("This stopped run is no longer waiting for recovery.");
+    const runLink = [...container.querySelectorAll("a")].find((link) => link.textContent === "Open run");
+    expect(runLink?.getAttribute("href")).toContain("/work/runs/run-a");
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 });

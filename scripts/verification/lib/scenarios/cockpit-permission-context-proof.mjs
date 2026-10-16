@@ -140,7 +140,7 @@ export async function revokeDisposableAutonomousGrant({ page, api, workspaceId, 
     await dialog.waitFor();
     for (const text of [created.grantId, workspaceId, request.capabilityPatterns[0], request.expiresAt])
       assert.ok((await dialog.innerText()).includes(text), `Revocation review omitted ${text}.`);
-    assert.match(await dialog.innerText(), /no atomic revision precondition/);
+    assert.match(await dialog.innerText(), /is not blocked/);
     assert.match(await dialog.innerText(), /does not prove already-running work stopped/);
     await capture("autonomous-grant-review", dialog);
     const before = writes.length;

@@ -35,7 +35,7 @@ export function ModelsSettings() {
       <section aria-label="Model setup" className="mt-4">
         <h3 className="font-display text-md font-semibold text-fg">Guided model setup</h3>
         <p className="mt-1 text-sm text-fg-secondary">
-          Review the Gateway default, connection evidence, and model choices before using Chat.
+          Check the default model, provider connections, and model choices before using Chat.
         </p>
         {onboarding.isLoading ? (
           <p role="status" className="mt-3 text-sm text-fg-muted">

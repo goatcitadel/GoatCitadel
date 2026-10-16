@@ -32,7 +32,7 @@ const FOUNDATION_PROMPT = "Reply with exactly: CHAT_OK";
 const FOUNDATION_REPLY = "CHAT_OK";
 const FOUNDATION_OPERATOR_TOKEN = "verification-usability-operator-token";
 // Fresh profiles open the default Cockpit shell; each transcript turn is one article.
-const COCKPIT_TURN_SELECTOR = 'article[aria-label="Conversation messages"]';
+const COCKPIT_TURN_SELECTOR = "article[data-turn-id]";
 const COMPLETED_ASSISTANT_CONTENT_SELECTOR = `${COCKPIT_TURN_SELECTOR} .mc-assistant-markdown-assistant`;
 const GATEWAY_CHAT_FAULT_DEFECT_ID = "GC-USAB-002";
 const GATEWAY_CHAT_FAULT_STEP_IDS = Object.freeze([

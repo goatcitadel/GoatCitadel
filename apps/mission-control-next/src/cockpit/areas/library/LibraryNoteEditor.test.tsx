@@ -91,7 +91,7 @@ it("saves the exact reviewed revision and retains success inside the real dialog
   await act(async () => {
     await client.invalidateQueries();
   });
-  expect(document.querySelector('[role="dialog"] [role="status"]')?.textContent).toContain("Canonical version 2");
+  expect(document.querySelector('[role="dialog"] [role="status"]')?.textContent).toContain("Version 2");
 });
 it("blocks stale preflight, preserves dirty input and keeps error through refreshed props", async () => {
   await render();

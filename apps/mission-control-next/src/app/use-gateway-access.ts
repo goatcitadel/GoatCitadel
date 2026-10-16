@@ -118,7 +118,7 @@ export function useGatewayAccess(options?: { batchStartupReads?: boolean }): Use
         setGatewayBusy(false);
         setGatewayAccess({
           status: "needs-auth",
-          message: "Gateway access changed. Verify the current caller to continue.",
+          message: "Gateway access changed. Sign in again to continue.",
           healthDetail: "Credential custody changed; previous caller evidence was invalidated.",
         });
       }),

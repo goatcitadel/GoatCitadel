@@ -233,8 +233,8 @@ function PolicyForm({ workspaceId, toolName }: { workspaceId: string; toolName: 
             </label>
           </details>
           <p className="text-xs text-fg-muted">
-            Uses the Gateway-authenticated caller and Gateway-selected profile and override. No task, run, or source
-            attribution is supplied. The chosen agent is a proposed actor for this check.
+            Checks as you, with the Gateway's selected profile and override. No task, run, or source is attached. The
+            chosen agent is only proposed for this check.
           </p>
           <label className="block text-xs text-fg-muted">
             Arguments to evaluate
@@ -364,8 +364,8 @@ function PolicyResult({ value }: { value: PolicyInspectionResult }) {
         <p className="text-xs">{decision.reasonCodes.length - 12} further reason codes were returned.</p>
       ) : null}
       <p className="text-xs text-fg-muted">
-        Deny rules take precedence over matching allows and grants. Approval requirements, paths and current caller
-        permissions still apply at execution.
+        Deny rules take precedence over matching allows and grants. Approval requirements, paths and your permissions
+        still apply when it runs.
       </p>
       <p className="text-xs text-fg-muted">
         Recorded advisory snapshot at <time dateTime={value.checkedAt}>{value.checkedAt}</time>. Re-evaluate after

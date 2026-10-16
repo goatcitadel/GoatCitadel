@@ -8,7 +8,7 @@ export function PortablePackPreview({ preview }: { preview: CapabilityPackPrevie
   const [limit, setLimit] = useState(30),
     { manifest } = preview;
   return (
-    <section aria-label="Pack owner preview" className="space-y-3">
+    <section aria-label="Pack preview" className="space-y-3">
       <header>
         <h4 className="break-words text-base font-semibold text-fg">{manifest.name}</h4>
         <p className="mt-1 break-words text-sm text-fg-secondary">{manifest.description}</p>
@@ -77,11 +77,10 @@ export function PortablePackStagedEvidence({ owner }: { owner: PortablePacksOwne
   const [limit, setLimit] = useState(20);
   const items = owner.data?.staged ?? [];
   return (
-    <section aria-label="Staged pack evidence" className="space-y-3">
-      <h4 className="text-sm font-semibold text-fg">Recent staging evidence</h4>
+    <section aria-label="Staged pack records" className="space-y-3">
+      <h4 className="text-sm font-semibold text-fg">Recent staging records</h4>
       <p className="text-xs text-fg-muted">
-        Bounded owner sample from the latest 100 installation evidence envelopes. This is not a complete pack history or
-        a readiness count.
+        Sample from the latest 100 installation records. This is not a complete pack history or a readiness count.
       </p>
       <ul className="space-y-2">
         {items.slice(0, limit).map((item, index) => (
@@ -95,11 +94,11 @@ export function PortablePackStagedEvidence({ owner }: { owner: PortablePacksOwne
             </p>
             <p>
               {item.latestMaterialization
-                ? `Review evidence recorded ${item.latestMaterialization.materializedAt}; callable state unchanged.`
+                ? `Review recorded ${item.latestMaterialization.materializedAt}; availability unchanged.`
                 : "Staged for review; no activation is established."}
             </p>
             <details>
-              <summary className="cursor-pointer">Evidence identity</summary>
+              <summary className="cursor-pointer">Record identity</summary>
               <code className="mt-1 block break-all font-mono text-xs">{item.evidenceEnvelopeId ?? "Unavailable"}</code>
             </details>
             <Button
@@ -107,7 +106,7 @@ export function PortablePackStagedEvidence({ owner }: { owner: PortablePacksOwne
               disabled={owner.locked || !item.evidenceEnvelopeId || !item.stagedAssets.length}
               onClick={() => owner.requestRecord(item)}
             >
-              Review evidence for {item.name}
+              Record review for {item.name}
             </Button>
           </li>
         ))}

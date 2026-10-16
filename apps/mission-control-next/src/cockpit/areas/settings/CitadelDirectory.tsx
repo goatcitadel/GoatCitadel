@@ -97,7 +97,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
         </p>
       ) : !query.isLoading && !ready ? (
         <p role="alert" className="text-sm text-status-failed">
-          Citadel record evidence is unavailable. Refresh before editing.
+          Citadel records could not load. Refresh before editing.
         </p>
       ) : null}
       {mode ? (
@@ -177,7 +177,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
                       <dd className="break-all font-mono">{record.citadelId}</dd>
                       <dt>Slug</dt>
                       <dd className="break-all">{record.slug}</dd>
-                      <dt>Revision</dt>
+                      <dt>Version</dt>
                       <dd className="break-all font-mono">{record.revision}</dd>
                       <dt>Default workspace</dt>
                       <dd className="break-all">{record.defaultWorkspaceId || "None saved"}</dd>

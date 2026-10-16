@@ -183,9 +183,9 @@ describe("MCP server inspection", () => {
       void client.invalidateQueries({ queryKey: ["system", "managed-runtime-settings"] });
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(container.textContent).toContain("Checking test evidence and Chat availability for changes");
+    expect(container.textContent).toContain("Checking test results and Chat availability for changes");
     expect(container.textContent).toContain("Static MCP in Chat is enabled");
-    expect(container.textContent).toContain("Retained test evidence is stale for this inspection");
+    expect(container.textContent).toContain("The last test result is out of date");
     expect(container.textContent).toContain("64 approved receipt candidates");
     expect(container.textContent).not.toContain("No task result is verified");
     expect(button("View tested Chat turn")).toBeUndefined();
@@ -201,7 +201,7 @@ describe("MCP server inspection", () => {
       void client.invalidateQueries({ queryKey: ["settings", "mcp-test-evidence"] });
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    await vi.waitFor(() => expect(container.textContent).toContain("Could not refresh retained test evidence"));
+    await vi.waitFor(() => expect(container.textContent).toContain("Could not refresh test results"));
     expect(container.textContent).toContain("64 approved receipt candidates");
     expect(container.textContent).not.toContain("No task result is verified");
     expect(button("Copy sample task").disabled).toBe(true);

@@ -52,7 +52,7 @@ export function LibraryMemoryReceipt({
           (key) => binding[key] !== request[key as keyof MemoryLifecyclePendingApproval],
         )
       ) {
-        throw new Error("The canonical approval does not match this memory request.");
+        throw new Error("The saved approval does not match this memory request.");
       }
       const operations = (
         approval.payload.request as { mutation?: { operations?: MemoryBatchMutationOperation[] } } | undefined
@@ -74,7 +74,7 @@ export function LibraryMemoryReceipt({
               Object.keys(operation.patch).length !== 1 ||
               operation.patch.pinned !== (batchAction === "pin")))
       ) {
-        throw new Error("The canonical batch operation does not match this reviewed memory action.");
+        throw new Error("The saved batch operation does not match this reviewed memory action.");
       }
       const [item, history] = await Promise.all([
         readLibraryMemoryItem(itemId, workspaceId),
@@ -125,7 +125,7 @@ export function LibraryMemoryReceipt({
   });
   const view = recordView(receipt);
   const data = view.record;
-  let message = "Checking canonical memory request, effect and item readback…";
+  let message = "Checking the saved memory request, its result and the item…";
   if (data && view.phase === "ready") {
     if (data.approval.status === "pending")
       message = "Approval requested. No memory change is confirmed yet. Review the persisted request below.";
@@ -134,21 +134,21 @@ export function LibraryMemoryReceipt({
     else if (data.approval.actionOutcome === "policy_blocked")
       message = "Memory effect blocked by policy. Your draft is retained.";
     else if (data.effect?.status === "failed")
-      message = "Memory effect failed. Inspect the persisted outcome before retrying. Your draft is retained.";
+      message = "Memory effect failed. Check the decision below before retrying. Your draft is retained.";
     else if (data.effect?.status === "pending" || data.effect?.status === "running")
       message = "Memory effect is pending. Approval alone does not confirm a memory change.";
     else if (data.effect?.status === "completed" && data.effectResultMatches && data.change)
       message = "Original memory effect completed; matching change history confirmed.";
     else
       message =
-        "Original memory effect is not verified. Canonical effect and matching history are required; your draft is retained.";
+        "The memory change is not verified yet: its saved result and matching history are needed. Your draft is kept.";
   }
   return (
     <section aria-label="Memory request receipt" className="grid gap-2" aria-live="polite">
       {receipt.isError ? (
         <Callout tone="warning">
-          Memory outcome is not verified; current owner evidence is unavailable.{" "}
-          {describeApiError(receipt.error).summary} Your draft is retained.
+          Memory outcome is not verified; the saved record couldn't be read. {describeApiError(receipt.error).summary}{" "}
+          Your draft is retained.
         </Callout>
       ) : (
         <p role="status">{message}</p>
@@ -159,18 +159,18 @@ export function LibraryMemoryReceipt({
             {view.stale ? "Last verified memory decision" : "Memory decision"}:{" "}
             {presentApprovalStatus(data.approval.status).label}.
           </p>
-          {view.stale ? <p>Previous readback retained while current owner evidence is checked.</p> : null}
+          {view.stale ? <p>Showing the earlier result while the saved record is checked again.</p> : null}
           {data.item ? (
             <details>
               <summary>
                 {view.stale ? "Last verified memory record" : "Current memory record"}:{" "}
                 {presentMemoryStatus(data.item.status).label}
               </summary>
-              <p>Readback title: {data.item.title}</p>
+              <p>Saved title: {data.item.title}</p>
               <p className="whitespace-pre-wrap break-words">{data.item.content}</p>
               <p>
-                <TimeText prefix="Updated" value={data.item.updatedAt} absolute />. Current readback is separate from
-                the original effect.
+                <TimeText prefix="Updated" value={data.item.updatedAt} absolute />. This is the saved record now,
+                checked separately from the original change.
               </p>
               <TechnicalDetails label="Memory receipt provenance">
                 <p>Updated: {data.item.updatedAt}</p>

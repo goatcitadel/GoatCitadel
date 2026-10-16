@@ -30,7 +30,7 @@ describe("conversation starters", () => {
       "Help me plan a change. Ask what I want to achieve and what context I can share.",
     );
     expect(document.activeElement?.id).toBe("cockpit-chat-draft");
-    expect(container.querySelector('a[href="/library/knowledge?shell=cockpit"]')).not.toBeNull();
+    expect(container.querySelector('a[href^="/library/knowledge"]')).not.toBeNull();
   });
   it.each([{ draft: "keep this" }, { historicalReadOnly: true }, { sending: true }])(
     "never overwrites or starts work in a restricted state %o",

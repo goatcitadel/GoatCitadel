@@ -240,10 +240,26 @@ export async function runCockpitCommandPaletteProof({ context, browser, stack, c
           await openPalette("density");
           await palette().getByRole("option", { name: "Switch to comfortable density", exact: true }).click();
           const config = await api("/api/v1/llm/config");
+          // The palette names the Gateway default by catalog labels ("Model · Provider"), falling back to the model id.
+          const models = await requestJson(
+            stack.gatewayUrl,
+            `/api/v1/llm/models?providerId=${encodeURIComponent(config.activeProviderId)}`,
+          );
+          const modelLabel =
+            (models.ok ? (models.body?.items ?? []) : []).find((model) => model.id === config.activeModel)?.label ||
+            config.activeModel;
+          const providerLabel =
+            (config.providerConfigs ?? []).find((provider) => provider.providerId === config.activeProviderId)?.label ||
+            undefined;
+          const defaultModelLabel = !modelLabel
+            ? (providerLabel ?? "Unknown model")
+            : providerLabel
+              ? `${modelLabel} · ${providerLabel}`
+              : modelLabel;
           await openPalette("model");
           await palette()
             .getByText(
-              `Gateway default: ${config.activeProviderId} / ${config.activeModel}. Opens reviewed Settings. Conversation overrides stay in Chat.`,
+              `Default model: ${defaultModelLabel}. Opens reviewed Settings. Conversation overrides stay in Chat.`,
               { exact: true },
             )
             .waitFor();

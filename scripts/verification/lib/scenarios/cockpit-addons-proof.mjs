@@ -154,7 +154,7 @@ export async function runCockpitAddonsProof({ context, browser, stack, citadelId
             .click();
           await page.getByRole("tab", { name: "Add-ons & packs", exact: true }).click();
           await panel.getByRole("alert").filter({ hasText: "outcome is uncertain" }).waitFor();
-          await panel.getByRole("button", { name: "Refresh add-on evidence", exact: true }).click();
+          await panel.getByRole("button", { name: "Refresh add-ons", exact: true }).click();
           await selected.getByText("not installed", { exact: true }).waitFor();
           assert.equal(await selected.getByRole("button", { name: "Review install", exact: true }).isDisabled(), true);
           assert.equal(await page.evaluate(() => window.__addonProofDocument), "same-document");

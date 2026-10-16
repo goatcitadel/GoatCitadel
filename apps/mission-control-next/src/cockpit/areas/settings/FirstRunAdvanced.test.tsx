@@ -132,8 +132,8 @@ describe("native advanced first-run disclosure", () => {
         </QueryClientProvider>,
       ),
     );
-    await vi.waitFor(() => expect(container.textContent).toContain("Recent run evidence is unavailable"));
-    expect(container.textContent).toContain("Recent run evidence is unavailable");
-    expect(container.textContent).toContain("Evidence envelopes are unavailable");
+    await vi.waitFor(() => expect(container.textContent).toContain("Recent runs could not load"));
+    expect(container.textContent).toContain("Recent runs could not load");
+    expect(container.textContent).toContain("Installation records could not load");
   });
 });

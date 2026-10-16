@@ -101,7 +101,7 @@ export function HealthBackupAction({
       </Button>
       {!readAvailable ? (
         <p role="status" className="text-xs text-fg-muted">
-          Current backup owner evidence is unavailable or refreshing. Creation requires a current read.
+          Backup status is unavailable or refreshing. Back up now needs a current status check.
         </p>
       ) : null}
       {message ? (
@@ -143,7 +143,7 @@ export function HealthBackupAction({
           if (!value) close();
         }}
         title="Review backup creation"
-        description="Create a host-wide backup through the Gateway's existing backup owner."
+        description="Create a host-wide backup of this installation."
       >
         {reading ? (
           <p role="status">Reading current operator access and backup records…</p>

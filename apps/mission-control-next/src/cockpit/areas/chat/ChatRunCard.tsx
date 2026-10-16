@@ -62,7 +62,7 @@ export function ChatRunCard({
             href={`/work/runs/${encodeURIComponent(durableRunId)}`}
             className="inline-flex min-h-8 items-center font-medium text-accent hover:underline max-sm:min-h-11"
           >
-            Open durable evidence
+            Open run in Work
           </NativeOwnerLink>
         ) : null}
       </div>

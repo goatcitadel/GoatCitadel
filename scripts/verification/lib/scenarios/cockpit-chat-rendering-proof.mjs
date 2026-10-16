@@ -344,7 +344,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
           assertRenderingRunLink({
             sessionId,
             turn: recordedTurn,
-            href: await runPanel.getByRole("link", { name: "Open durable evidence", exact: true }).getAttribute("href"),
+            href: await runPanel.getByRole("link", { name: "Open run in Work", exact: true }).getAttribute("href"),
           });
           await capture("recorded-delegation");
           await closeInspector();
@@ -481,9 +481,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
             element.scrollTop = top ? 0 : element.scrollHeight;
             element.dispatchEvent(new window.Event("scroll", { bubbles: true }));
           }, position === "top");
-          const article = messages
-            .getByRole("article", { name: "Conversation messages", exact: true })
-            .filter({ hasText: content });
+          const article = messages.locator("article[data-turn-id]").filter({ hasText: content });
           await article.waitFor({ timeout: 15_000 });
           return article;
         }

@@ -118,7 +118,7 @@ export async function runCockpitWorkHistoryProof({ context, browser, stack, cita
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/work/history?shell=cockpit"), {
             waitUntil: "domcontentloaded",
           });
-          const list = page.getByRole("list", { name: "Durable run history" });
+          const list = page.getByRole("list", { name: "Run history" });
           await list.waitFor({ timeout: 30_000 });
           await page.waitForFunction(
             (theme) => document.documentElement.dataset.theme === theme,
@@ -174,7 +174,7 @@ export async function runCockpitWorkHistoryProof({ context, browser, stack, cita
           await list.locator("li[aria-posinset='1']").getByRole("link", { name: "Open run record" }).waitFor();
           if ((await page.locator("main").innerText()).includes("Excluded "))
             throw new Error("Foreign or unbound record leaked into history.");
-          await page.getByRole("heading", { name: "Durable runs", exact: true }).scrollIntoViewIfNeeded();
+          await page.getByRole("heading", { name: "Runs", exact: true }).scrollIntoViewIfNeeded();
           await page.addScriptTag({ path: axeSourcePath });
           const axe = await auditPageAccessibility(page);
           const blocking = axe.violations.filter((item) => ["serious", "critical"].includes(item.impact));

@@ -13,7 +13,7 @@ import { taskRecordsEqual } from "../../../features/native-routes/ops/task-detai
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { readCockpitLocation } from "../../app/cockpit-back-guard";
 
-const PRIORITIES: readonly TaskRecord["priority"][] = ["normal", "low", "high", "urgent"];
+const PRIORITIES: readonly TaskRecord["priority"][] = ["low", "normal", "high", "urgent"];
 
 interface Draft {
   base: TaskRecord;

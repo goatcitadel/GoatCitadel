@@ -227,8 +227,12 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
           await row.waitFor();
           const navCount = await nav.getByRole("button", { name: /^Inbox/u }).innerText();
           const ownerCount = before.counts.updates;
-          const countLabel = ownerCount.complete ? String(ownerCount.known) : `${ownerCount.known}+`;
-          assert.equal(await updates.getByLabel("Updates Gateway count", { exact: true }).innerText(), countLabel);
+          const countLabel = ownerCount.complete
+            ? String(ownerCount.known)
+            : ownerCount.known > 0
+              ? `At least ${ownerCount.known}`
+              : "Not fully checked";
+          assert.equal(await updates.locator('[data-inbox-count="updates"]').innerText(), countLabel);
           assert.ok((await updates.innerText()).includes("0 read from shown updates"));
           const navigationBaseline = navigations;
           stage = "selection leaves the row unviewed";
@@ -243,7 +247,7 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
           await row.waitFor({ state: "hidden" });
           await updates.getByRole("button", { name: "Show read updates (1)", exact: true }).waitFor();
           assert.equal(await nav.getByRole("button", { name: /^Inbox/u }).innerText(), navCount);
-          assert.equal(await updates.getByLabel("Updates Gateway count", { exact: true }).innerText(), countLabel);
+          assert.equal(await updates.locator('[data-inbox-count="updates"]').innerText(), countLabel);
           assertInboxOwnerUnchanged(before, await readInbox());
           await capture("hidden");
           stage = "show and hide are reversible";

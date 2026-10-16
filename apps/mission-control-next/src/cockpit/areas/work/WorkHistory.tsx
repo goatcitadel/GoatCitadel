@@ -40,9 +40,9 @@ export function WorkHistory() {
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-xl font-semibold text-fg">Work history</h1>
-          <p className="text-sm text-fg-secondary">Saved workspace runs, conversations, and recent activity signals.</p>
+          <p className="text-sm text-fg-secondary">Saved runs, conversations, and recent activity in this workspace.</p>
           <p className="mt-1 text-xs text-fg-muted">
-            Activity signals are retained for a limited window. Open a conversation or run for its full saved record.
+            Recent activity is kept for a limited time. Open a conversation or run for its full saved record.
           </p>
         </div>
         <Button
@@ -91,7 +91,7 @@ export function WorkHistory() {
           {history.entries.length === 0 ? (
             <EmptyState
               title="No recent work returned"
-              description="No scoped conversations or activity signals were returned in this window."
+              description="No conversations or activity for this workspace in this window."
             />
           ) : (
             <WindowedRecordList
@@ -105,7 +105,7 @@ export function WorkHistory() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-xs font-medium text-fg-muted">
-                        {entry.kind === "conversation" ? "Conversation" : "Activity signal"}
+                        {entry.kind === "conversation" ? "Conversation" : "Activity"}
                       </p>
                       <p className="mt-1 text-sm font-medium text-fg">{entry.title}</p>
                     </div>
@@ -117,7 +117,8 @@ export function WorkHistory() {
                       href={entry.href}
                       className="mt-2 inline-block text-sm font-medium text-accent hover:underline"
                     >
-                      Open record
+                      {entry.href.startsWith("/work/runs/") ? "Open run" : "Open conversation"}
+                      <span className="sr-only">: {entry.title}</span>
                     </NativeOwnerLink>
                   ) : null}
                 </article>

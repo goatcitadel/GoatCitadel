@@ -60,7 +60,7 @@ it("shows actual owner diagnostics and manual handoffs without process mutation 
   expect(renderer.root.findAllByType("button").map((item) => item.children.join(""))).toEqual([
     "Refresh Gateway process",
   ]);
-  expect(JSON.stringify(renderer.toJSON())).toContain("never run by this page");
+  expect(JSON.stringify(renderer.toJSON())).toContain("never runs the commands below");
   expect(JSON.stringify(renderer.toJSON())).toContain("Verify process ownership");
 });
 it("shows unavailable evidence when the canonical read fails", async () => {

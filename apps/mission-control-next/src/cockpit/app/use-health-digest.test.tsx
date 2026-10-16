@@ -100,16 +100,16 @@ it.each(["verified", "failed", "stale"] as const)(
     await render();
     await settle();
     expect(status.tone).toBe("neutral");
-    expect(status.label).toContain("lack live proof");
+    expect(status.label).toMatch(/^\d+ checks? unverified$/);
     inboxState.isError = true;
     await render();
     await settle();
     expect(status.tone).toBe("neutral");
-    expect(status.label).toContain("lack live proof");
+    expect(status.label).toMatch(/^\d+ checks? unverified$/);
     await act(async () => persistGatewayAuthState({ mode: "none" }));
     await settle();
     expect(status.tone).toBe("neutral");
-    expect(status.label).toContain("lack live proof");
+    expect(status.label).toMatch(/^\d+ checks? unverified$/);
   },
 );
 it("digest retains existence and missing proof when Inbox cached absence precedes creation", async () => {
@@ -119,7 +119,7 @@ it("digest retains existence and missing proof when Inbox cached absence precede
   });
   await render();
   await settle();
-  expect(status.label).toContain("lack live proof");
+  expect(status.label).toMatch(/^\d+ checks? unverified$/);
 });
 it("uses the real loader to retain source observation time across transport failure and recover independently", async () => {
   await render();
@@ -139,15 +139,15 @@ it("uses the real loader to retain source observation time across transport fail
   await act(async () => status.retry());
   await settle();
   expect(status.phase).toBe("checking");
-  expect(status.label).toContain("Checking for changes");
+  expect(status.label).toBe("Checking…");
   await act(async () => {
     fail(new TypeError("Failed to fetch"));
   });
   await settle();
   expect(status.phase).toBe("stale");
   expect(status.tone).toBe("neutral");
-  expect(status.label).toContain("Stale");
-  expect(status.title).toContain("summary: last observed");
+  expect(status.label).toBe("Checks out of date");
+  expect(status.title).toContain("Health summary: last checked");
   expect(data().summary).toMatchObject({
     state: "unavailable",
     retryable: true,
@@ -156,8 +156,8 @@ it("uses the real loader to retain source observation time across transport fail
   expect(data().npu).toMatchObject({ state: "current", value: { enabled: true } });
   const gateway = deriveSystemHealthChecks(data(), null, "none").find((check) => check.id === "gateway")!;
   expect(gateway.status).toEqual({ label: "Stale", tone: "neutral" });
-  expect(gateway.detail).toContain("The health summary is responding");
-  expect(gateway.detail).toContain("Retained observation is stale");
+  expect(gateway.detail).toBe("The health summary could not be read.");
+  expect(gateway.lastKnown).toMatch(/^Last known \(Health summary, checked .+\): The health summary is responding/);
   api.fetchHealthSummary.mockResolvedValueOnce(summary);
   await act(async () => status.retry());
   await settle();
@@ -248,7 +248,7 @@ it("shares one core health read across shell consumers and explicitly defers opt
     api.fetchChannelRuntimeStatus,
   ])
     expect(read).not.toHaveBeenCalled();
-  expect(status.label).toContain("Core checks");
+  expect(status.label).not.toContain("·");
   expect(status.title).toContain("Managed local runtimes, integrations, channels and workers are checked on System");
   const scope = healthQueryScope(client, "workspace-a", getGatewayAccessRevision());
   const sources = client.getQueryData<SystemHealthSources>(healthDigestKey("workspace-a", scope[1], scope[2], true))!;
@@ -315,13 +315,13 @@ it("retains inspected runtime failures without extra reads and fences them on wo
     );
   await show("workspace-a");
   await settle();
-  expect(status.label).toContain("Earlier system check needs review");
+  expect(status.label).toBe("Earlier check needs review");
   expect(status.tone).toBe("failed");
-  expect(status.title).toContain("retained evidence");
+  expect(status.title).toContain("This is an earlier result");
   await show("workspace-b");
   await settle();
-  expect(status.label).toContain("Core checks");
-  expect(status.label).not.toContain("Earlier system check");
+  expect(status.label).not.toContain("·");
+  expect(status.label).not.toContain("Earlier");
   expect(api.fetchNpuStatus).not.toHaveBeenCalled();
   expect(api.fetchLlamaCppStatus).not.toHaveBeenCalled();
 });

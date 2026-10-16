@@ -62,7 +62,7 @@ function KnowledgeMatch({ row, index }: { row: Record<string, unknown>; index: n
     <li className="grid min-w-0 grid-cols-1 gap-1 wrap-anywhere rounded-md border border-line p-2">
       <h3>{text(attribution.title) ?? `Match ${index + 1}: title unavailable`}</h3>
       <p className="whitespace-pre-wrap break-words">
-        {redacted ? "Excerpt redacted by the source owner." : (text(row.snippet) ?? "Excerpt unavailable")}
+        {redacted ? "Excerpt redacted by its source." : (text(row.snippet) ?? "Excerpt unavailable")}
       </p>
       <p className="break-words text-sm">Source: {text(attribution.sourceRef) ?? "Unavailable"}</p>
       <p className="text-sm">

@@ -17,6 +17,8 @@ interface WidgetFrameProps {
   title: string;
   source: string;
   ownerHref: string;
+  /** Names the destination page, never a generic "source". */
+  ownerLabel: string;
   scope?: string;
   loading: boolean;
   refreshing: boolean;
@@ -29,6 +31,7 @@ function WidgetFrame({
   title,
   source,
   ownerHref,
+  ownerLabel,
   scope = "installation",
   loading,
   refreshing,
@@ -44,7 +47,7 @@ function WidgetFrame({
           <p className="mt-0.5 text-xs text-fg-muted">{source}</p>
         </div>
         <Button size="sm" disabled={refreshing} onClick={refresh}>
-          Refresh
+          Refresh<span className="sr-only"> {title}</span>
         </Button>
       </div>
       {loading ? (
@@ -63,7 +66,7 @@ function WidgetFrame({
         scope={scope}
         className="mt-3 inline-block text-sm font-medium text-accent hover:underline"
       >
-        Open source controls
+        {ownerLabel}
       </SystemOwnerLink>
     </section>
   );
@@ -101,6 +104,7 @@ function AgenticRunsWidget({ workspaceId }: { workspaceId: string }) {
       title="Agentic runs"
       source="Workspace agentic runs · first 200"
       ownerHref={`/work?workspaceId=${encodeURIComponent(workspaceId)}`}
+      ownerLabel="Open runs in Work"
       loading={query.isLoading}
       refreshing={query.isFetching}
       error={query.error}
@@ -134,6 +138,7 @@ function ApprovalsWidget({ workspaceId }: { workspaceId: string }) {
       title="Approval queue"
       source="Workspace-linked pending approvals · first 200"
       ownerHref={`/inbox?view=history&workspaceId=${encodeURIComponent(workspaceId)}`}
+      ownerLabel="Open Inbox"
       loading={query.isLoading}
       refreshing={query.isFetching}
       error={query.error}
@@ -171,7 +176,8 @@ function RuntimeWidget() {
     <WidgetFrame
       title="Runtime truth"
       source="Gateway host-wide health snapshot"
-      ownerHref="/system/runtime"
+      ownerHref="/system/runtime/diagnostics"
+      ownerLabel="Open runtime diagnostics"
       loading={query.isLoading}
       refreshing={query.isFetching}
       error={query.error}
@@ -206,6 +212,7 @@ function TasksWidget({ workspaceId }: { workspaceId: string }) {
       title="Task status"
       source="Workspace active tasks · first 200"
       ownerHref={`/work?workspaceId=${encodeURIComponent(workspaceId)}`}
+      ownerLabel="Open tasks in Work"
       loading={query.isLoading}
       refreshing={query.isFetching}
       error={query.error}
@@ -236,6 +243,7 @@ function UsageWidget() {
       title="Usage and cost"
       source="Gateway-wide day-scope usage"
       ownerHref="/system/spend/details"
+      ownerLabel="Open spend details"
       loading={query.isLoading}
       refreshing={query.isFetching}
       error={query.error}

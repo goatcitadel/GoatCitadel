@@ -113,7 +113,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
               scope={[workspaceId, taskId]}
               href={`/work/runs/${encodeURIComponent((task.proactiveContext?.durableRunId ?? task.agenticContext?.durableRunId)!)}`}
             >
-              Open linked runtime run
+              Open linked run
             </NativeOwnerLink>
           ) : null}
           {taskSessionId ? (

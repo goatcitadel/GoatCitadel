@@ -1239,7 +1239,7 @@ test("cockpit Code Mode journey keeps owner probes while using cockpit controls"
     { kind: "click", name: "Build editor", exact: true },
   ]);
   assert.ok(
-    cockpit.operations.some((operation) => operation.kind === "click" && operation.name === "Open durable evidence"),
+    cockpit.operations.some((operation) => operation.kind === "click" && operation.name === "Open run in Work"),
   );
   // Run details sits in the phone overflow menu, so it goes through the layout-aware turn action.
   assert.ok(

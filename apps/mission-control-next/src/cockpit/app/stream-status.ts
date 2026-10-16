@@ -24,7 +24,7 @@ export function presentCockpitStream(state: EventStreamConnectionState, replayRe
   const native = STREAM_STATUS[state];
   return {
     ...native,
-    label: native.label + (state === "open" && replayRecovery ? " · Replay recovery" : ""),
+    label: native.label + (state === "open" && replayRecovery ? " · Catching up" : ""),
     ariaLabel: "Live updates: " + truth.strip,
   };
 }

@@ -39,12 +39,12 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
       </p>
       {s.loading ? (
         <p role="status" className="text-sm">
-          Loading hook evidence…
+          Loading hooks…
         </p>
       ) : null}
       {s.error ? (
         <p role="alert" className="text-sm text-status-failed">
-          Hook evidence could not load.
+          Hooks could not load.
         </p>
       ) : null}
       {s.data?.issues.map((issue) => (
@@ -68,7 +68,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
         </Button>
         <Button onClick={() => s.openView("history")}>Delivery history</Button>
         <Button disabled={s.loading || s.mutation.pending} onClick={() => void s.reload()}>
-          Refresh hook evidence
+          Refresh hooks
         </Button>
       </div>
       {s.view === "new" ? (
@@ -227,7 +227,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
             <>
               <p className="text-xs text-fg-muted">
                 Showing at most {limit} of {plural(s.selectedRuns.length, "returned delivery", "returned deliveries")}.
-                Payloads and remote response bodies remain in Gateway evidence.
+                Payloads and remote response bodies stay in the Gateway's records.
               </p>
               <ul className="space-y-2">
                 {s.selectedRuns.slice(0, limit).map((run) => (

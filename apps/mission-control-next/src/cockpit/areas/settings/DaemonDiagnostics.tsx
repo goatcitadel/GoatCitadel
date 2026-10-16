@@ -23,7 +23,7 @@ export function DaemonDiagnostics() {
           Refresh Gateway process
         </Button>
       </div>
-      {daemon.isLoading ? <p role="status">Loading Gateway process evidence…</p> : null}
+      {daemon.isLoading ? <p role="status">Loading Gateway process status…</p> : null}
       {daemon.isError ? <p role="alert">{describeApiError(daemon.error).summary}</p> : null}
       {status ? (
         <>
@@ -40,8 +40,8 @@ export function DaemonDiagnostics() {
           </TechnicalDetails>
           <p>{status.controlMessage}</p>
           <p>
-            Start, stop and restart remain with the external process owner. Commands below are manual handoffs and are
-            never run by this page.
+            Start, stop and restart the Gateway outside this app, with the process manager that runs it. This page never
+            runs the commands below.
           </p>
           <ul className="space-y-2" aria-label="Gateway process diagnostics">
             {(status.diagnostics ?? []).slice(0, 30).map((item) => (
@@ -53,7 +53,7 @@ export function DaemonDiagnostics() {
           </ul>
           {status.controlHandoff ? (
             <details>
-              <summary>Process owner and commands</summary>
+              <summary>Process manager and commands</summary>
               <p>
                 {status.controlHandoff.owner} · {status.controlHandoff.serviceName}
               </p>

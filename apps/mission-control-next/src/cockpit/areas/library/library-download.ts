@@ -63,7 +63,7 @@ export async function readArtifactDownload(
   )
     throw new Error("Artifact evidence changed. Refresh before downloading.");
   if (item.publicProjection?.contentRedacted || item.publicProjection?.artifactRedacted)
-    throw new Error("The Gateway redacted this artifact. Canonical content is not available for download.");
+    throw new Error("This artifact was redacted. Its content is not available for download.");
   const bytes = new TextEncoder().encode(item.content);
   const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
     .map((byte) => byte.toString(16).padStart(2, "0"))

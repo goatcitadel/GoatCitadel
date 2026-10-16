@@ -82,7 +82,7 @@ function LibraryNoteEditorContent({
             );
             if (!fresh || fresh.revision !== review.revision || fresh.lifecycleStatus !== "active")
               throw new Error(
-                "The note changed during review. Close this review and reload the canonical note. Your draft is preserved.",
+                "The note changed during review. Close this review and reload the note. Your draft is kept.",
               );
           }
         },
@@ -115,7 +115,7 @@ function LibraryNoteEditorContent({
         );
       setOutcome({
         error: false,
-        text: `${saved.title} ${review.action === "archive" ? "archived" : "saved"}. Canonical version ${saved.revision}.`,
+        text: `${saved.title} ${review.action === "archive" ? "archived" : "saved"}. Version ${saved.revision}.`,
       });
       await client.invalidateQueries({ queryKey: ["library", "notes", workspaceId] });
       await client.invalidateQueries({ queryKey: ["library", "note-history", workspaceId] });
@@ -123,7 +123,7 @@ function LibraryNoteEditorContent({
       if (operation.current())
         setOutcome({
           error: true,
-          text: `${describeApiError(cause).summary} Save is not confirmed. Check the canonical note before retrying.`,
+          text: `${describeApiError(cause).summary} Save is not confirmed. Check the saved note before retrying.`,
         });
     } finally {
       setBusy(false);
@@ -142,8 +142,8 @@ function LibraryNoteEditorContent({
       </p>
       {stale ? (
         <Callout tone="warning">
-          The canonical note changed. Your draft is retained. Discard it to load the latest version before reviewing
-          another save.
+          The saved note changed, so your draft started from an older version. Your draft is kept. Discard it to load
+          the latest version before reviewing another save.
         </Callout>
       ) : null}
       {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
@@ -259,7 +259,7 @@ function LibraryNoteEditorContent({
           <p>
             {review?.action === "archive"
               ? "Archive removes this note from active lists and retains its history."
-              : "Save persists this note and creates its next canonical version."}
+              : "Save stores this note as its next version."}
           </p>
           {outcome ? (
             <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout>

@@ -115,6 +115,28 @@ it("does not show zero grants or allow a write when the bounded grant owner is u
   ).toBe(true);
 });
 
+it("names each grant's actions by its tool, decision and scope, never its ID", async () => {
+  api.fetchToolGrants.mockResolvedValue({
+    items: [
+      {
+        grantId: "grant-secret-id",
+        toolPattern: "session.status",
+        decision: "allow",
+        scope: "workspace",
+        scopeRef: "workspace-a",
+        grantType: "persistent",
+        createdBy: "operator",
+        createdAt: "2026-10-01T00:00:00.000Z",
+      },
+    ],
+  });
+  await render();
+  const labels = view!.root.findAllByType("button").map((item) => String(item.props["aria-label"] ?? ""));
+  expect(labels).toContain("Inspect grant: session.status · allow · workspace");
+  expect(labels).toContain("Revoke grant: session.status · allow · workspace");
+  expect(labels.some((label) => label.includes("grant-secret-id"))).toBe(false);
+});
+
 it("keeps separate unsent drafts for the same workspace/tool across installations", async () => {
   await render();
   await act(async () => input("Tool pattern").props.onChange({ target: { value: "installation-a.*" } }));

@@ -146,10 +146,10 @@ export function SystemDiagnostics() {
 
       <section aria-labelledby="diagnostics-recovery-title" className="rounded-lg border border-line bg-raised p-4">
         <h2 id="diagnostics-recovery-title" className="font-display text-lg font-semibold text-fg">
-          Durable queue recovery
+          Queue recovery
         </h2>
         <p className="mt-1 text-xs text-fg-muted">
-          Workspace-scoped Inbox projection. Its owner coverage determines whether the count is complete.
+          From this workspace's Inbox. The count is complete only when every source could be checked.
         </p>
         {inbox.isLoading ? (
           <p role="status" className="mt-3 text-sm text-fg-muted">
@@ -163,7 +163,7 @@ export function SystemDiagnostics() {
         ) : null}
         {inbox.data && !inbox.isError && !scopedInbox ? (
           <p role="alert" className="mt-3 text-sm text-status-failed">
-            Recovery projection contains records outside the selected workspace.
+            The recovery list contains records outside the selected workspace.
           </p>
         ) : null}
         {scopedInbox && !inbox.isError ? (

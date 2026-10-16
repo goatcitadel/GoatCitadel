@@ -70,8 +70,7 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
             Guided setup
           </Button>
           <p className="text-xs text-fg-muted">
-            Use the adapter's typed fields. Credentials are held by the dedicated secure-input owner and sent only
-            through secure fields.
+            Use the adapter's typed fields. Credentials are kept in secure storage and sent only through secure fields.
           </p>
         </div>
       </details>
@@ -91,7 +90,7 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
             }}
           />
           <span className="mt-1 block text-xs text-fg-muted">
-            Expert adapter configuration. Sensitive fields use the same secure owner as guided setup and are redacted
+            Expert adapter configuration. Sensitive fields use the same secure storage as guided setup and are hidden
             after saving.
           </span>
         </label>

@@ -276,7 +276,7 @@ async function main() {
             await page.getByRole("button", { name: "Send", exact: true }).click();
             // Cockpit also previews the latest reply in the conversation rail; assert the transcript message itself.
             await page
-              .getByLabel("Conversation messages")
+              .locator("article[data-turn-id]")
               .getByText("Verification stub reply.", { exact: true })
               .first()
               .waitFor({ timeout: 60_000 });

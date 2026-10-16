@@ -246,7 +246,7 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
           assert.equal(await panel.getByLabel("Connection label", { exact: true }).inputValue(), `${label} retained`);
           await capture("stale-draft");
           stage = "retain a committed but lost save result across a Settings page remount";
-          await panel.getByRole("button", { name: "Apply retained input to current revision", exact: true }).click();
+          await panel.getByRole("button", { name: "Apply my input to latest version", exact: true }).click();
           await page.route(`**${route}`, async (intercept) => {
             if (intercept.request().method() !== "PATCH") {
               await intercept.continue();
@@ -267,7 +267,7 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
           // The failure cleanup reads the saved owner independently. Wait for that exact revision before leave review.
           await panel
             .getByText(
-              `Your input is retained. Saved revision ${committed.revision} must be reviewed before retrying.`,
+              `Your input is kept. It started from an older version; review saved version ${committed.revision} before retrying.`,
               { exact: true },
             )
             .waitFor();
@@ -307,7 +307,7 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
             key,
             value:
               typeof value === "object"
-                ? "Structured value; inspect in advanced editor after discarding or rebasing"
+                ? "Structured value; open the advanced editor after discarding your input or applying it to the latest version"
                 : String(value),
           }));
           const assertPublicReview = async () => {
@@ -370,7 +370,7 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
           await panel.getByLabel("Connection label", { exact: true }).waitFor();
           await panel
             .getByText(
-              `Your input is retained. Saved revision ${committed.revision} must be reviewed before retrying.`,
+              `Your input is kept. It started from an older version; review saved version ${committed.revision} before retrying.`,
               { exact: true },
             )
             .waitFor();

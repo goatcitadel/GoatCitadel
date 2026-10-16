@@ -195,7 +195,7 @@ export class InboxProjectionService {
               ...(approval.linkage?.turnId ? { turnId: approval.linkage.turnId } : {}),
               ...(approval.linkage?.durableRunId ? { runId: approval.linkage.durableRunId } : {}),
             },
-            href: `/ops/approvals?approvalId=${encodeURIComponent(approval.approvalId)}&shell=classic`,
+            href: `/ops/approvals?approvalId=${encodeURIComponent(approval.approvalId)}`,
           }),
         ),
       };
@@ -243,8 +243,8 @@ export class InboxProjectionService {
               ...(plan.origin.turnId ? { turnId: plan.origin.turnId } : {}),
             },
             href: plan.origin.sessionId
-              ? `/chat?sessionId=${encodeURIComponent(plan.origin.sessionId)}&shell=classic`
-              : "/ops/runtime?shell=classic",
+              ? `/chat?sessionId=${encodeURIComponent(plan.origin.sessionId)}`
+              : "/system/runtime",
           }),
         ),
       };
@@ -277,7 +277,7 @@ export class InboxProjectionService {
             createdAt: candidate.createdAt,
             updatedAt: candidate.updatedAt,
             source: { workspaceId, proposalId: candidate.candidateId },
-            href: "/library/memory?shell=classic",
+            href: "/library/memory",
           }),
         ),
       };
@@ -314,10 +314,10 @@ export class InboxProjectionService {
               ...(proposal.turnId ? { turnId: proposal.turnId } : {}),
             },
             href: proposal.sessionId
-              ? `/chat?sessionId=${encodeURIComponent(proposal.sessionId)}&shell=classic`
+              ? `/chat?sessionId=${encodeURIComponent(proposal.sessionId)}`
               : proposal.targetKind === "personal_note"
-                ? "/library/notes?shell=classic"
-                : "/library/artifacts?shell=classic",
+                ? "/library/notes"
+                : "/library/artifacts",
           }),
         ),
       };
@@ -349,7 +349,7 @@ export class InboxProjectionService {
             createdAt: proposal.createdAt,
             updatedAt: proposal.updatedAt,
             source: { workspaceId, proposalId: proposal.proposalId },
-            href: "/library/capabilities?shell=classic",
+            href: "/library/capabilities",
           }),
         ),
       };
@@ -372,7 +372,7 @@ export class InboxProjectionService {
             createdAt: item.candidate.createdAt,
             updatedAt: item.candidate.updatedAt,
             source: { workspaceId, proposalId: item.candidate.candidateId },
-            href: "/library/curator?shell=classic",
+            href: "/library/curator",
           }),
         ),
       };
@@ -410,7 +410,7 @@ export class InboxProjectionService {
             createdAt: run.createdAt,
             updatedAt: run.updatedAt,
             source: { workspaceId, runId: run.runId },
-            href: `/ops/runtime?runId=${encodeURIComponent(run.runId)}&shell=classic`,
+            href: `/ops/runtime?runId=${encodeURIComponent(run.runId)}`,
           }),
         ),
       };
@@ -436,7 +436,7 @@ export class InboxProjectionService {
           summary: bounded(letter.reason),
           createdAt: letter.createdAt,
           source: { workspaceId, runId: letter.runId, deadLetterId: letter.deadLetterId },
-          href: `/ops/runtime?runId=${encodeURIComponent(letter.runId)}&shell=classic`,
+          href: `/ops/runtime?runId=${encodeURIComponent(letter.runId)}`,
         });
       }
       return {
@@ -468,7 +468,7 @@ export class InboxProjectionService {
           createdAt: trace.startedAt,
           expiresAt: prompt.expiresAt,
           source: { workspaceId, sessionId: trace.sessionId, turnId: trace.turnId, promptId: prompt.promptId },
-          href: `/chat?sessionId=${encodeURIComponent(trace.sessionId)}&shell=classic`,
+          href: `/chat?sessionId=${encodeURIComponent(trace.sessionId)}`,
         });
       }
       return {
@@ -594,7 +594,7 @@ export class InboxProjectionService {
             "A watched Chat child run reached completed status. Open the run to inspect its output and delegation outcome.",
           createdAt: finishedAt,
           source: { workspaceId, runId: child.runId },
-          href: `/ops/runtime?runId=${encodeURIComponent(child.runId)}&shell=classic`,
+          href: `/ops/runtime?runId=${encodeURIComponent(child.runId)}`,
         });
       }
       return {

@@ -21,10 +21,10 @@ import { LibraryKnowledgeWorkspace } from "./LibraryKnowledgeWorkspace";
 import { LibraryCommunications } from "./LibraryCommunications";
 import { LibraryCurator } from "./LibraryCurator";
 import { LibraryJourney } from "./LibraryJourney";
+import { LIBRARY_SECTION_LABELS } from "./library-sections";
 
 const NATIVE_SECTIONS = ["agents", "knowledge", "communications", "curator", "journey", "prompt-packs"] as const;
 type NativeSection = (typeof NATIVE_SECTIONS)[number];
-const SECTION_LABELS: Partial<Record<string, string>> = { communications: "Mail", "prompt-packs": "Prompt packs" };
 
 export function LibraryArea() {
   const route = useCockpitRoute();
@@ -75,7 +75,7 @@ export function LibraryArea() {
                 }
               }}
             >
-              {section ? (SECTION_LABELS[section] ?? section[0]!.toUpperCase() + section.slice(1)) : "Skills and tools"}
+              {LIBRARY_SECTION_LABELS[section ?? "capabilities"]}
             </a>
           ))}
       </nav>
@@ -117,7 +117,7 @@ export function LibraryArea() {
               <h1 className="font-display text-xl font-semibold">Library</h1>
               <p className="text-sm text-fg-secondary">
                 Manage workspace notes and memory, transfer files and artifacts, and inspect skills, agents and governed
-                knowledge. Use the sections above to open each owner.
+                knowledge. Use the sections above to open each one.
               </p>
               <nav aria-label="Library governance" className="flex flex-wrap gap-3">
                 {[

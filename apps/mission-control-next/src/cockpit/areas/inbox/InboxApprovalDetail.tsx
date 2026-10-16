@@ -151,7 +151,7 @@ export function InboxApprovalDetail({
       ) : null}
       {recordAnswered(view) && !approval && !settled && !decisionNotice ? (
         <p className="text-fg-muted">
-          This approval is no longer waiting. Open Approvals for the current record and outcome.
+          This approval is no longer waiting. Its record is not available in this workspace.
         </p>
       ) : null}
       {approval ? (
@@ -217,7 +217,7 @@ export function InboxApprovalDetail({
             </section>
           ) : (
             <p className="text-fg-muted">
-              A structured preview is not available here. Open the full approval record before deciding.
+              A structured preview is not available, so this approval can&apos;t be decided here.
             </p>
           )}
           {approval.rollbackNote ? <p className="text-fg-secondary">Recovery: {approval.rollbackNote}</p> : null}

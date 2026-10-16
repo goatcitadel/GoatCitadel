@@ -66,7 +66,7 @@ export function McpElicitationRequests({ workspaceId }: { workspaceId: string })
                 </p>
                 <Button
                   size="sm"
-                  aria-label={`Inspect MCP request ${item.elicitationId}`}
+                  aria-label={`Inspect request: ${item.prompt.text.slice(0, 80)}`}
                   onClick={() => setSelected(item.elicitationId)}
                 >
                   Inspect request

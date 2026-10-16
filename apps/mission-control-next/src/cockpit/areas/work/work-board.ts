@@ -39,5 +39,5 @@ export function workRunTitle(run: DurableRunRecord): string {
   if (run.workflowKey === "chat.turn.execute") return "Chat turn";
   if (run.workflowKey === "orchestration.plan.execute") return "Supervised plan";
   if (run.workflowKey === "proactive.tick") return "Background work";
-  return "Durable workflow";
+  return "Workflow run";
 }

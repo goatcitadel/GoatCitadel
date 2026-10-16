@@ -73,7 +73,9 @@ it("refuses foreign scope and malformed original Chat binding", async () => {
   api.run.mockImplementation(async (id) =>
     id === "wait" ? wait : { ...original, payload: { ...payload, turnId: "different" } },
   );
-  await expect(readApprovalFollowOn(approval, "one", () => true)).rejects.toThrow("admitted turn");
+  await expect(readApprovalFollowOn(approval, "one", () => true)).rejects.toThrow(
+    "conversation turn this approval was for",
+  );
 });
 it("does not fetch work after current access changes during the lifecycle read", async () => {
   await expect(readApprovalFollowOn(approval, "one", () => false)).rejects.toThrow("access changed");

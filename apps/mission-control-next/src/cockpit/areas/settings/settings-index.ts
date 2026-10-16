@@ -42,7 +42,7 @@ const CONTROL_TERMS: Record<string, string> = {
   tools: "approval prompt mode allow deny scoped tool grant create revoke expiry",
   "trust-policy": "trust source provenance blocker callability last use",
   hooks: "register delete webhook signing lifecycle event delivery test history redrive",
-  budget: "budget preference cost posture spend",
+  budget: "budget preference cost saver balanced power spend",
   "citadel-overview": "charter purpose chambers gatehouse template archive restore brief",
   workspaces: "workspace create edit metadata name description archive restore citadel directory",
   citadel: "setup mason questions blueprint draft review stage",

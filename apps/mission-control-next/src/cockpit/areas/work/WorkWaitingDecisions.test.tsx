@@ -35,7 +35,7 @@ it("uses only explicit Gateway run-decision linkage and names incomplete evidenc
     "/inbox?approvalId=a",
     "/work/runs/run-a",
   ]);
-  expect(JSON.stringify(renderer.toJSON())).toContain("coverage is incomplete");
+  expect(JSON.stringify(renderer.toJSON())).toContain("couldn't be checked");
   expect(JSON.stringify(renderer.toJSON())).not.toContain("Unrelated");
   act(() => renderer.unmount());
 });
@@ -46,8 +46,8 @@ it("shows decision source failures without treating them as no decisions", async
   await act(async () => {
     renderer = create(<WorkWaitingDecisions workspaceId="default" />);
   });
-  expect(JSON.stringify(renderer.toJSON())).toContain("Decision linkage unavailable");
-  expect(JSON.stringify(renderer.toJSON())).not.toContain("No run-linked decisions");
+  expect(JSON.stringify(renderer.toJSON())).toContain("Decisions unavailable");
+  expect(JSON.stringify(renderer.toJSON())).not.toContain("No decisions linked");
   act(() => renderer.unmount());
   state.isError = false;
 });

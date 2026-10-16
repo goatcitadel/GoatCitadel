@@ -245,7 +245,7 @@ export function useCandidateApprovalContinuation({
         receipt.revision <= plan.revision
       )
         throw new Error("Candidate continuation receipt does not confirm this action.");
-      publish(key, "Continuation recorded. Inspect canonical plan settlement and candidate availability.");
+      publish(key, "Continuation recorded. Check the plan and the candidate's availability before relying on it.");
       if (isCurrent()) await onSettled();
     } catch (cause) {
       // Gateway answered and recorded nothing: no replay lock, the exact plan may be continued again.
@@ -253,7 +253,7 @@ export function useCandidateApprovalContinuation({
       const message = refused
         ? `Gateway did not accept the continuation. ${describeApiError(cause).summary}`
         : dispatched
-          ? "Candidate continuation outcome is uncertain. This exact attempt is locked; refresh canonical state."
+          ? "Candidate continuation outcome is uncertain. This attempt is locked; refresh to see the saved state."
           : cause instanceof Error
             ? cause.message
             : "Candidate approval could not be checked.";

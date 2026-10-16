@@ -14,7 +14,7 @@ import { useFirstRunSetup, type FirstRunStep } from "./use-first-run-setup";
 
 const STEPS: readonly { id: FirstRunStep; label: string; detail: string }[] = [
   { id: "model", label: "Choose a model", detail: "Connect a provider and confirm the default model." },
-  { id: "safety", label: "Set your safety posture", detail: "Review the approval rule before finishing setup." },
+  { id: "safety", label: "Choose your safety settings", detail: "Review the approval rule before finishing setup." },
   {
     id: "message",
     label: "Send a test message",
@@ -99,7 +99,7 @@ export function FirstRunArea() {
             ) : null}
             {step === "safety" ? (
               <div className="space-y-4">
-                <h2 className="font-display text-lg font-semibold text-fg">Set your safety posture</h2>
+                <h2 className="font-display text-lg font-semibold text-fg">Choose your safety settings</h2>
                 <p className="text-sm text-fg-secondary">
                   Current tool approval rule: {describeToolApprovalMode(state.settings.toolApprovalMode)}.
                 </p>

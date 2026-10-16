@@ -47,6 +47,7 @@ describe("MCP operator requests", () => {
     );
     await act(async () => button("Inspect MCP requests").click());
     await vi.waitFor(() => expect(container.textContent).toContain("Pick a folder"));
+    expect(button("Inspect request").getAttribute("aria-label")).toBe("Inspect request: Pick a folder");
     await act(async () => button("Inspect request").click());
     expect(container.querySelector('form[aria-label="Answer request"]')).not.toBeNull();
     let release!: () => void;

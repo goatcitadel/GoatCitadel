@@ -172,7 +172,7 @@ it("reports a replayed grant that has since been revoked instead of calling it n
 
 it("explains that rotation keeps the actor's access and locks a receipt with a different expiry", async () => {
   await render();
-  await click("Review rotating the grant for agent");
+  await click("Review rotation for agent");
   expect(dialog()!.textContent).toContain("Access is checked by actor, so agent keeps the same access");
   vi.mocked(rotateBrowserSessionGrant).mockResolvedValue({
     ...grant,
@@ -187,7 +187,7 @@ it("explains that rotation keeps the actor's access and locks a receipt with a d
 
 it("states whether the actor keeps other access before revoking, and revokes once", async () => {
   await render([grant, { ...grant, grantId: "g-other" }]);
-  await click("Review revoking the grant for agent");
+  await click("Review revoke for agent");
   expect(dialog()!.textContent).toContain("1 other active grant for this actor remain");
   vi.mocked(revokeBrowserSessionGrant).mockResolvedValue({ ...grant, revokedAt: "2026-10-07T12:00:00.000Z" });
   await click("Revoke grant");
@@ -198,7 +198,7 @@ it("states whether the actor keeps other access before revoking, and revokes onc
 it("refuses a grant change when the session moved to another workspace, before any request", async () => {
   vi.mocked(fetchBrowserSession).mockResolvedValue({ ...session, workspaceId: "two" });
   await render();
-  await click("Review revoking the grant for agent");
+  await click("Review revoke for agent");
   await click("Revoke grant");
   expect(revokeBrowserSessionGrant).not.toHaveBeenCalled();
   expect(dialog()!.textContent).toContain("not in the current workspace");
@@ -207,7 +207,7 @@ it("refuses a grant change when the session moved to another workspace, before a
 it("offers no grant form or actions on a closed session", async () => {
   await render([grant], { ...session, status: "closed" });
   expect(container.textContent).toContain("Closed sessions cannot receive grants.");
-  expect(button("Review rotating the grant for agent")).toBeUndefined();
+  expect(button("Review rotation for agent")).toBeUndefined();
 });
 
 it("creates a never-expiring grant only when chosen, with a warning in the review and no TTL sent", async () => {

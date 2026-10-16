@@ -168,7 +168,7 @@ describe("Inbox document proposal", () => {
     expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(1);
     expect(api.fetchDocumentPatchProposal).toHaveBeenCalledTimes(3);
     expect(api.applyDocumentPatchProposal).toHaveBeenCalledWith("proposal-a", "default");
-    expect(container.textContent).toContain("Gateway recorded this document proposal as applied");
+    expect(container.textContent).toContain("Proposal applied. Use Open notes to see the current document.");
   });
 
   it("rejects the same exact reviewed proposal through its owner", async () => {
@@ -177,7 +177,7 @@ describe("Inbox document proposal", () => {
     await act(async () => button("Confirm rejection").click());
     expect(api.rejectDocumentPatchProposal).toHaveBeenCalledWith("proposal-a", "default");
     expect(api.applyDocumentPatchProposal).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("Gateway recorded this document proposal as rejected");
+    expect(container.textContent).toContain("Proposal rejected.");
   });
 
   it("applies (a versioned, reversible change) with a primary button and confirms either decision as primary", async () => {
@@ -221,7 +221,7 @@ describe("Inbox document proposal", () => {
       item: { ...proposal, derivedDiff: `-${"x".repeat(64_001)}` },
     });
     await renderDetail();
-    expect(container.textContent).toContain("too large for bounded Inbox review");
+    expect(container.textContent).toContain("too large to review in Inbox");
     expect(container.textContent).not.toContain("Review apply");
     expect(container.querySelector("pre")?.textContent?.length).toBeLessThanOrEqual(4_000);
   });
@@ -267,7 +267,7 @@ describe("Inbox document proposal", () => {
       .mockResolvedValue({ item: { ...proposal, state: "applied" } });
     await act(async () => button("Confirm apply").click());
     await vi.waitFor(() => expect(container.textContent).toContain("This proposal is no longer waiting."));
-    expect(container.textContent).toContain("Gateway recorded this document proposal as applied");
+    expect(container.textContent).toContain("Proposal applied. Use Open notes to see the current document.");
     expect(container.textContent).not.toContain("+After");
   });
 
@@ -300,7 +300,7 @@ describe("Inbox document proposal", () => {
     await act(async () => button("Review apply").click());
     await act(async () => button("Confirm apply").click());
     expect(api.applyDocumentPatchProposal).toHaveBeenCalledTimes(2);
-    expect(container.textContent).toContain("Gateway recorded this document proposal as applied");
+    expect(container.textContent).toContain("Proposal applied. Use Open notes to see the current document.");
   });
 });
 

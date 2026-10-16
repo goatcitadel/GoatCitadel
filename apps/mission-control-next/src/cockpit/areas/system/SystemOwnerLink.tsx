@@ -18,7 +18,7 @@ export function SystemOwnerLink({
   if (owner.kind !== "native")
     return (
       <span role="status" className="text-xs text-fg-muted">
-        Source owner unavailable
+        This page is not available here
       </span>
     );
   return (

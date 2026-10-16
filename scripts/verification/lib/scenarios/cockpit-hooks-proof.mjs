@@ -101,8 +101,7 @@ export async function runCockpitHooksProof({ context, browser, stack, citadelId,
           const description = await dialog.innerText();
           assert.ok(description.includes(workspace.workspaceId) && description.includes("tool.call.after"));
           assert.ok(
-            description.includes("Future matching events may send metadata") &&
-              description.includes("no atomic revision precondition"),
+            description.includes("Future matching events may send metadata") && description.includes("is not blocked"),
           );
           assert.equal(description.includes(secret), false);
           await capture("registration-review");

@@ -45,7 +45,7 @@ export function MemoryMaintenanceView({
     <>
       {!data?.maintenanceEnabled || !data.maintenanceDurableReady ? (
         <Callout>
-          Memory maintenance requires the maintenance and durable execution features. Controls remain locked.
+          Memory maintenance needs the maintenance and resumable runs features turned on. Controls stay locked.
         </Callout>
       ) : (
         <>
@@ -63,7 +63,7 @@ export function MemoryMaintenanceView({
               request({
                 label: "Run memory maintenance",
                 consequence:
-                  "Queue a durable maintenance run under the current policy. Admission is separate from completed work.",
+                  "Queue a maintenance run under the current policy. Starting it is not the same as finishing it.",
                 revision: data.maintenanceStatus?.policy.revision ?? "",
                 maintenance: true,
                 check: async () =>
@@ -71,8 +71,8 @@ export function MemoryMaintenanceView({
                 apply: async () => {
                   const admitted = await runMemoryMaintenanceNow({ workspaceId, triggerSource: "manual" });
                   if (admitted.workspaceId !== workspaceId || !admitted.runId || !admitted.durableRunId)
-                    throw new Error("Maintenance receipt does not identify this workspace and durable run.");
-                  return "Maintenance admitted. Read its canonical run below to verify progress and effects.";
+                    throw new Error("The maintenance response does not match this workspace and run.");
+                  return "Maintenance accepted. Open its run below to follow progress and results.";
                 },
               })
             }
@@ -110,7 +110,7 @@ export function MemoryMaintenanceView({
                 scope={ownerScope}
                 href={"/work/runs/" + encodeURIComponent(run.durableRunId) + "?shell=cockpit"}
               >
-                Open durable maintenance run
+                Open maintenance run
               </NativeOwnerLink>
             ) : null}
           </li>
@@ -206,9 +206,7 @@ function RecommendationItem({
                     throw new Error("Recommendation rejection receipt mismatch.");
                 }
                 return (
-                  "Recommendation " +
-                  action +
-                  " receipt returned. Refreshed policy and recommendation below are canonical."
+                  "Recommendation " + action + " receipt returned. The policy and recommendation below are refreshed."
                 );
               },
             })

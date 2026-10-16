@@ -13,6 +13,8 @@ import { CALLER_SOURCE_LABELS } from "./settings-vocabulary";
 
 export function GatewayAuthSettings() {
   const caller = useCurrentAccess();
+  const signedInAs = caller.data ? (CALLER_SOURCE_LABELS[caller.data.actorSource] ?? "An operator") : "An operator";
+  const canChangeSettings = Boolean(caller.data?.operatorAccess);
   const [logoutReview, setLogoutReview] = useState(false);
   const settings = useQuery({ queryKey: ["settings", "gateway-auth"], queryFn: fetchSettings });
   return (
@@ -40,15 +42,15 @@ export function GatewayAuthSettings() {
       {settings.isError ? <p role="alert">{describeApiError(settings.error).summary}</p> : null}
       <p role="status">
         {caller.isPending
-          ? "Checking current caller permissions…"
+          ? "Checking what you can change…"
           : caller.isError
-            ? "Current caller permissions unavailable. Configured authentication does not establish your access."
+            ? "Your access could not be checked. Configured sign-in settings do not show what you can change."
             : caller.data?.actorId
-              ? `Current caller: ${CALLER_SOURCE_LABELS[caller.data.actorSource] ?? "An operator"}. ${caller.data.operatorAccess ? "Operator routes permitted; individual policy gates still apply." : "Operator changes are not permitted."}`
+              ? `Signed in as: ${signedInAs}. ${canChangeSettings ? "You can change operator settings; individual policy checks still apply." : "You cannot change operator settings."}`
               : "No identified operator. This Gateway permits anonymous configuration access."}
       </p>
       {caller.data?.actorId ? (
-        <TechnicalDetails label="Caller details">
+        <TechnicalDetails label="Sign-in details">
           <p className="break-all font-mono text-xs">
             {caller.data.actorSource} · {caller.data.actorId}
           </p>

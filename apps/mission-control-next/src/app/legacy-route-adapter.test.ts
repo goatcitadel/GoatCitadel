@@ -216,7 +216,7 @@ describe("mission-control-next route model", () => {
     expect(getRouteLabel({ area: "cowork" })).toBe("Chat");
     expect(getRouteDescription({ area: "cowork", section: "board" })).toContain("Multi-agent board");
     expect(getRouteDescription({ area: "cowork" })).toContain("One chat workspace");
-    expect(getRouteDescription({ area: "settings", section: "budget" })).toContain("Set budget mode");
+    expect(getRouteDescription({ area: "settings", section: "budget" })).toContain("Choose a budget preference");
 
     expect(
       buildNavigationTarget(

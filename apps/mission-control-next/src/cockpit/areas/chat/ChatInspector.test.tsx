@@ -264,9 +264,7 @@ describe("conversation inspector", () => {
     Object.assign(input.contextDockProps!.prefs as object, { planningMode: "auto", webMode: "off" });
     await act(async () => root.render(<ChatInspector input={input} initialTab="thread" />));
     expect(container.textContent).toContain("Session control for session-1");
-    expect(container.textContent).toContain(
-      "Conversation context actions are unavailable until their current owner is ready.",
-    );
+    expect(container.textContent).toContain("Conversation context actions are not available right now.");
     expect(container.querySelector('[aria-label="Conversation execution settings"]')).not.toBeNull();
   });
 

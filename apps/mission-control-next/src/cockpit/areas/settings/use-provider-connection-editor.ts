@@ -96,10 +96,10 @@ export function useProviderConnectionEditor(
         saved.apiKeySource !== storage ||
         (storage === "env" && saved.apiKeyRef !== next.request.credentialEnvVar)
       ) {
-        throw new Error("The credential owner has not confirmed the selected storage target.");
+        throw new Error("Credential storage has not confirmed the selected location.");
       }
     }
-    if (!stillConnected()) throw new Error("The Gateway connection changed during the readback.");
+    if (!stillConnected()) throw new Error("The Gateway connection changed while checking the saved result.");
     if (next.request.profile?.baseUrl)
       draft.acceptSaved(next.request.profile.baseUrl, current.revision, next.request.profile.baseUrl);
     await reload();
@@ -138,7 +138,7 @@ export function useProviderConnectionEditor(
       ) {
         setProviderConnectionAttempt(id, undefined);
         await withFreshReads(reload);
-        setError("Provider settings changed. Review the current revision before creating a change.");
+        setError("Provider settings changed. Review the latest version before creating a change.");
         return;
       }
       if (
@@ -147,9 +147,7 @@ export function useProviderConnectionEditor(
       ) {
         setProviderConnectionAttempt(id, undefined);
         await reload();
-        setError(
-          "The registered credential environment variable changed. Refresh and review its current owner before continuing.",
-        );
+        setError("The registered credential environment variable changed. Refresh and review it before continuing.");
         return;
       }
       submitted = true;
@@ -162,7 +160,7 @@ export function useProviderConnectionEditor(
         },
       );
       if (!matchesConnectionAttempt(plan, pending))
-        throw new Error("The returned plan does not match the reviewed provider and settings revision.");
+        throw new Error("The returned plan does not match the reviewed provider and settings version.");
       const next = {
         ...pending,
         plan,
@@ -205,7 +203,7 @@ export function useProviderConnectionEditor(
         plan.revision < current.plan.revision ||
         !matchesConnectionAttempt(plan, current)
       ) {
-        throw new Error("The Gateway returned different change evidence.");
+        throw new Error("The Gateway returned a different change than the one you reviewed.");
       }
       const next = {
         ...current,
@@ -218,7 +216,7 @@ export function useProviderConnectionEditor(
       await verifySaved(next);
       setProviderConnectionAttempt(id, { ...next, busy: false, verified: connectionPlanCompleted(plan) });
     } catch {
-      setError("Current change evidence is unavailable. The last reviewed state is retained; no action was sent.");
+      setError("The change status could not load. Your last review is kept; nothing was sent.");
     } finally {
       const saved = readProviderConnectionAttempt(id);
       if (saved?.busy) setProviderConnectionAttempt(id, { ...saved, busy: false });
@@ -358,7 +356,7 @@ export function useProviderConnectionEditor(
           : undefined;
       if (readProviderConnectionAttempt(id) !== checking || switched()) return;
       if (!plan || !matchesConnectionAttempt(plan, current))
-        throw new Error("The Gateway returned different change evidence.");
+        throw new Error("The Gateway returned a different change than the one you reviewed.");
       const message =
         current.plan && verdict === "failed_confirm_by_readback"
           ? "The Gateway released this action after an error and the plan was re-read. Review its current step before acting again."
@@ -386,7 +384,7 @@ export function useProviderConnectionEditor(
           ...latest,
           uncertain: true,
           message:
-            "The plan was recovered, but current provider evidence does not confirm it yet. Inspect provider activity before another request.",
+            "The change was found, but the saved provider settings do not show it yet. Refresh the change status before another request.",
         });
     } finally {
       const saved = readProviderConnectionAttempt(id);

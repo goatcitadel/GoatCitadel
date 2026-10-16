@@ -581,7 +581,7 @@ export function adaptCodeModeStepForCockpit(sourceStep) {
     if (operation.kind === "click-pattern" && operation.namePattern === "Open durable run trace ") {
       return [
         { kind: "click-turn-action", name: "Run details" },
-        { kind: "click", name: "Open durable evidence", exact: true },
+        { kind: "click", name: "Open run in Work", exact: true },
       ];
     }
     if (operation.kind === "assert-text" && operation.value === "Signed evidence receipt") {
@@ -1984,7 +1984,7 @@ async function executeOperation(page, operation, state) {
     }
     case "click-turn-action": {
       // Phones move every turn action except Retry and Copy into "More turn actions".
-      const turn = page.locator('article[aria-label="Conversation messages"]').last();
+      const turn = page.locator("article[data-turn-id]").last();
       await clickTurnAction(turn, operation.name, { timeout: ACTION_TIMEOUT_MS });
       return { kind: operation.kind, accessibleName: operation.name };
     }
@@ -2118,7 +2118,7 @@ async function executeOperation(page, operation, state) {
     }
     case "assert-single-failure": {
       const failureMessage = /^This turn failed before completion\. Retry once, or narrow the request/iu;
-      const turn = page.locator('article[aria-label="Conversation messages"]');
+      const turn = page.locator("article[data-turn-id]");
       await turn.getByText(failureMessage).waitFor({ state: "visible" });
       const [messageCopies, failedBadges, retryControls, duplicateAlerts] = await Promise.all([
         page.getByText(failureMessage).count(),

@@ -86,7 +86,7 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
       {!workspaceId ? <p role="status">Select a workspace before reviewing permission profiles.</p> : null}
       {snapshot.isFetching ? (
         <p role="status" className="text-sm text-fg-muted">
-          Reading current permission evidence…
+          Loading permissions…
         </p>
       ) : null}
       {snapshot.isError ? (
@@ -241,7 +241,7 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
           <p>{plural(reviewed.activeProfiles.length, "current explicit selection")} in the reviewed scope.</p>
           <TechnicalDetails label="Reviewed identity">
             <code className="block break-all font-mono">
-              Workspace {reviewed.target.workspaceId} · Profile {reviewed.profile.profileId} · Selection revision{" "}
+              Workspace {reviewed.target.workspaceId} · Profile {reviewed.profile.profileId} · Selection version{" "}
               {reviewed.revision}
             </code>
           </TechnicalDetails>

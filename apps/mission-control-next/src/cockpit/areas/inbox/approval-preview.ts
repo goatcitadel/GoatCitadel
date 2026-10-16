@@ -28,13 +28,14 @@ export function approvalPreview(approval: ApprovalRequest): {
   const source = approval.linkage?.sessionId
     ? "Conversation"
     : approval.linkage?.durableRunId || approval.linkage?.runId
-      ? "Durable run"
-      : "Gateway request";
+      ? "Run"
+      : "Request";
   return {
     title,
     summary,
     source,
-    href: `/ops/approvals?approvalId=${encodeURIComponent(approval.approvalId)}&shell=classic`,
+    // The cockpit Inbox owns approval decisions (GL-05).
+    href: `/inbox?approvalId=${encodeURIComponent(approval.approvalId)}`,
   };
 }
 

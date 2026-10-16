@@ -12,7 +12,7 @@ it("labels every schedule with the zone the Gateway actually uses", () => {
     "Runs in UTC (the Gateway default when the expression names no timezone).",
   );
   expect(scheduleTimezoneSummary("0 0 * * * Unrecognized/Zone")).toContain("not recognized");
-  expect(scheduleCadence("0 0 * * * Unrecognized/Zone")).toBe("Custom schedule: 0 0 * * * Unrecognized/Zone");
+  expect(scheduleCadence("0 0 * * * Unrecognized/Zone")).toBe("Custom schedule");
 });
 
 it("projects guided timing from a saved expression and keeps an explicit timezone", () => {
@@ -30,7 +30,7 @@ it("normalises whitespace before matching and words weekly cadences", () => {
   expect(scheduleTiming("0  9 * * *")).toEqual({ cadence: "daily", time: "09:00", zone: null });
   expect(scheduleCadence("0 2 * * 0")).toBe("Every week on Sunday at 02:00 UTC");
   expect(scheduleCadence("30 18 * * 5 Europe/Paris")).toBe("Every week on Friday at 18:30 Europe/Paris");
-  expect(scheduleCadence("0 2 * * 7")).toBe("Custom schedule: 0 2 * * 7");
+  expect(scheduleCadence("0 2 * * 7")).toBe("Custom schedule");
   // Guided presets have no weekly form, so the editor keeps a weekly expression as a custom expression.
   expect(scheduleTiming("0 2 * * 0")).toEqual({ cadence: "custom", time: null, zone: null });
 });

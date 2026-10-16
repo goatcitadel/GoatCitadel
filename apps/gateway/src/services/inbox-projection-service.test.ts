@@ -439,7 +439,7 @@ describe("Gateway inbox projection", () => {
         sessionId: "session-a",
         turnId: "turn-a",
       },
-      href: "/chat?sessionId=session-a&shell=classic",
+      href: "/chat?sessionId=session-a",
     });
     expect(projection.coverage.find((entry) => entry.source === "change_plans")?.state).toBe("partial");
     expect(JSON.stringify(projection)).not.toContain("Foreign plan");
@@ -469,7 +469,7 @@ describe("Gateway inbox projection", () => {
     expect(projection.items.map((item) => item.id)).toEqual(["document_proposal:document-a"]);
     expect(projection.items[0]).toMatchObject({
       source: { workspaceId: "workspace-a", proposalId: "document-a" },
-      href: "/library/notes?shell=classic",
+      href: "/library/notes",
     });
     expect(projection.coverage.find((entry) => entry.source === "document_proposals")?.state).toBe("partial");
     expect(JSON.stringify(projection)).not.toContain("private proposed text");
@@ -768,7 +768,7 @@ describe("Gateway inbox projection", () => {
       group: "updates",
       createdAt: recent,
       source: { workspaceId: "workspace-a", runId: "child-good" },
-      href: "/ops/runtime?runId=child-good&shell=classic",
+      href: "/ops/runtime?runId=child-good",
     });
     expect(projection.coverage.find((entry) => entry.source === "completed_background_runs")?.state).toBe("partial");
     expect(projection.counts.updates).toEqual({ known: 1, complete: false });

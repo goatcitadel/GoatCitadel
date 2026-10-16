@@ -46,14 +46,14 @@ describe("MobileStatusStrip", () => {
       ),
     );
     const strip = container.querySelector<HTMLElement>('[aria-label="System status"]')!;
-    expect(strip.textContent).toContain("Checking system…");
+    expect(strip.textContent).toContain("Checking…");
     expect(strip.textContent).toContain("Reconnecting to updates");
-    await vi.waitFor(() => expect(strip.textContent).toContain("Some system checks lack live proof"));
+    await vi.waitFor(() => expect(strip.textContent).toContain("unverified"));
     const healthDot = strip.querySelector<HTMLElement>("[data-health-tone]")!;
     expect(healthDot.title).toContain(
       "Managed local runtimes, integrations, channels and workers are checked on System › Health.",
     );
-    expect(healthDot.querySelector(".sr-only")?.textContent).toBe("Core checks · Some system checks lack live proof");
+    expect(healthDot.querySelector(".sr-only")?.textContent).toMatch(/^\d+ checks? unverified$/);
     const stream = strip.querySelector<HTMLElement>("[data-stream-state]")!;
     expect(stream.title).toBe("Reconnecting to updates");
     expect(stream.querySelector(".sr-only")?.textContent).toBe("Reconnecting to updates");
@@ -72,7 +72,7 @@ it("exposes replay recovery and transport degradation accessibly", async () => {
   expect(container.querySelector('[data-stream-state="open"]')?.getAttribute("aria-label")).toBe(
     "Live updates: Streaming (replay recovery)",
   );
-  expect(container.textContent).toContain("Replay recovery");
+  expect(container.textContent).toContain("Updates connected · Catching up");
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>

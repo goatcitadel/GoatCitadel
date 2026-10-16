@@ -311,7 +311,7 @@ describe("native provider owner composition", () => {
     await click("Review provider profile");
     config = { ...config, revision: 8 };
     await render();
-    expect(container.textContent).toContain("This review is stale");
+    expect(container.textContent).toContain("This review is out of date");
     expect(button("Apply reviewed provider profile").disabled).toBe(true);
     await click("Keep editing");
     expect(container.querySelector<HTMLInputElement>('input[aria-labelledby$="-label"]')?.value).toBe("Retained");
@@ -363,7 +363,7 @@ describe("native provider owner composition", () => {
   it("cancels credential removal without dispatch and preserves the exact reviewed revision", async () => {
     await render();
     await click("Remove saved API credential");
-    expect(container.textContent).toContain("Reviewed settings revision 7");
+    expect(container.textContent).toContain("Reviewed settings version 7");
     await click("Keep credential");
     expect(api.deleteProviderSecret).not.toHaveBeenCalled();
     await click("Remove saved API credential");

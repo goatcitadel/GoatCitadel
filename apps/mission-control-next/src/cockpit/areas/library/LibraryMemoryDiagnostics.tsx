@@ -103,7 +103,7 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
       <Button disabled={memory.loading} onClick={() => void memory.reload()}>
         Refresh memory diagnostics
       </Button>
-      {memory.loading ? <p role="status">Reading canonical memory diagnostics…</p> : null}
+      {memory.loading ? <p role="status">Reading memory diagnostics…</p> : null}
       {memory.error ? <Callout tone="error">{memory.error}</Callout> : null}
       {data && !data.memoryAdminEnabled ? (
         <Callout>Memory administration is {ADMIN_STATE[data.memoryAdminState]}. Changes stay locked.</Callout>

@@ -88,7 +88,7 @@ export async function runUxBudgetInboxWaits(environment) {
             throw new Error("Reviewing the Inbox answer changed the canonical Chat wait.");
           }
           await page.getByRole("button", { name: "Confirm answer" }).click();
-          await review.getByText("Gateway accepted the answer", { exact: false }).waitFor();
+          await review.getByText("Answer sent", { exact: false }).waitFor();
           const after = await requestJson(stack.gatewayUrl, inboxUrl);
           assertOk(after, `read ${variant} answered Inbox question`);
           if (after.body?.items?.some((entry) => entry.id === item.id)) {

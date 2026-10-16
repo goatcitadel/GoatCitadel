@@ -12,7 +12,7 @@ import { TASK_PRIORITY_LABELS } from "./work-vocabulary";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 
-const PRIORITIES: readonly TaskRecord["priority"][] = ["normal", "low", "high", "urgent"];
+const PRIORITIES: readonly TaskRecord["priority"][] = ["low", "normal", "high", "urgent"];
 
 export function WorkTaskCreate({
   workspaceId,
@@ -71,7 +71,7 @@ export function WorkTaskCreate({
       <div>
         <h2 className="font-display text-lg font-semibold text-fg">New task</h2>
         <p className="text-sm text-fg-secondary">
-          Add an operator task to this workspace. Creating a task does not start a runtime run.
+          Add an operator task to this workspace. Creating a task does not start a run.
         </p>
       </div>
       {message ? (

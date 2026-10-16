@@ -11,6 +11,7 @@ import { Callout } from "../../ui/Callout";
 import { Field } from "../../ui/Field";
 import { LibraryAgentEditor } from "./LibraryAgentEditor";
 import { LibraryImportedAgents } from "./LibraryImportedAgents";
+import { LIBRARY_SECTION_LABELS } from "./library-sections";
 
 export function LibraryAgentsWorkspace({ workspaceId }: { workspaceId: string }) {
   const access = useProjectAccess(workspaceId);
@@ -42,7 +43,7 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
   }
   return (
     <section className="mx-auto grid w-full max-w-5xl gap-4 p-4" aria-label="Library Agents">
-      <h1 className="font-display text-xl font-semibold text-fg">Agents</h1>
+      <h1 className="font-display text-xl font-semibold text-fg">{LIBRARY_SECTION_LABELS.agents}</h1>
       <p className="text-sm text-fg-secondary">
         Installation profiles and workspace imported definitions. Tool access remains governed by Gateway policy and
         grants.
@@ -91,7 +92,7 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
               />
             )}
           </Field>
-          <p className="text-sm text-fg-muted">Up to 160 installation profiles returned by the owner.</p>
+          <p className="text-sm text-fg-muted">Up to 160 installation profiles.</p>
           <ul className="grid gap-2">
             {query.data?.items
               .filter((item) =>

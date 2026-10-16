@@ -5,6 +5,7 @@ import { Sheet } from "../../ui/Sheet";
 import { Dialog } from "../../ui/Dialog";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
 import { TimeText } from "../../ui/TimeText";
 
 const inputClass =
@@ -46,7 +47,7 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
   return (
     <section id="citadel-vault" aria-label="Citadel Vault" className="space-y-4">
       <header className="space-y-1">
-        <h3 className="font-display text-md font-semibold text-fg">Vault</h3>
+        <h3 className="font-display text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-vault"]}</h3>
         <p className="text-sm text-fg-secondary">
           Secrets for {vault.snapshot?.record?.name ?? "the selected Citadel"}. The Gateway seals values with a Citadel
           key held in the OS keychain. Names and update times are listed here.
@@ -161,7 +162,7 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
             />
           </label>
           <p className="text-xs text-fg-muted">
-            The value is sent only to the Vault owner when you seal and store. Replacing an existing name requires
+            The value is sent only to the Vault when you seal and store. Replacing an existing name requires
             confirmation.
           </p>
           <div className="flex flex-wrap gap-2">

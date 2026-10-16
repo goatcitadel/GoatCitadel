@@ -21,7 +21,7 @@ export async function readLibraryMemoryItem(itemId: string, workspaceId: string)
     cursor = result.nextCursor;
   }
   throw new Error(
-    "Memory lookup exceeded the bounded enumeration window. The selected item is not confirmed; use the detailed memory owner.",
+    "Memory lookup exceeded the bounded enumeration window. The selected item is not confirmed; narrow the Memory search to find it.",
   );
 }
 export const sameMemoryItem = (a: MemoryItemRecord, b: MemoryItemRecord) =>

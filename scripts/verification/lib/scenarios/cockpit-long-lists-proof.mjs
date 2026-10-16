@@ -194,7 +194,7 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
             await page.getByRole("button", { name: "Load older runs", exact: true }).click();
             await page.getByText("105 saved runs loaded.", { exact: false }).waitFor();
             await verifyWindow(
-              page.getByRole("list", { name: "Durable run history", exact: true }),
+              page.getByRole("list", { name: "Run history", exact: true }),
               fixture.runs.map((item) => item.runId),
             );
             const history = page.getByRole("list", { name: "Conversations and activity", exact: true });

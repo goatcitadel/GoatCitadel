@@ -8,6 +8,7 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { canConfirmInboxChangePlan } from "./inbox-change-plan-guard";
@@ -37,7 +38,7 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
       </div>
       {!item.source.planId ? (
         <p role="alert" className="text-status-failed">
-          This Inbox item has no change-plan ID. Open its owner to review the current record.
+          This Inbox item has no change-plan ID, so it can&apos;t be reviewed here.
         </p>
       ) : null}
       {view.phase === "loading" ? (
@@ -57,7 +58,7 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {recordAnswered(view) && !plan ? (
         <p className="text-fg-muted">
-          This change plan is no longer waiting in the selected workspace. Open its owner to inspect the current status.
+          This change plan is no longer waiting in the selected workspace. It may have been applied or cancelled.
         </p>
       ) : null}
       {scopeChanged ? (
@@ -84,9 +85,7 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
             </p>
           ) : null}
           {plan.expiresAt && !canConfirmInboxChangePlan(plan) && plan.status === "awaiting_confirmation" ? (
-            <p className="text-fg-secondary">
-              This confirmation has expired. Refresh the owner before taking another action.
-            </p>
+            <p className="text-fg-secondary">This confirmation has expired. Refresh before taking another action.</p>
           ) : null}
           {canConfirm ? (
             <Button
@@ -98,8 +97,12 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
               Review {confirmation?.purpose === "rollback" ? "rollback" : "confirmation"}
             </Button>
           ) : null}
-          {!confirmation && !completed ? <p className="text-xs text-fg-muted">{actionGuidance(plan)}</p> : null}
-          {plan.origin.surface === "settings" && !plan.origin.sessionId && !plan.origin.turnId ? (
+          {!confirmation && !completed ? (
+            <p className="text-xs text-fg-muted">
+              {actionGuidance(plan)} <ApprovalLink plan={plan} workspaceId={workspaceId} />
+            </p>
+          ) : null}
+          {continuesInSettings(plan) ? (
             <InboxSettingsContinuation
               key={control.identity}
               plan={plan}
@@ -116,12 +119,15 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
       ) : null}
       {result ? (
         <div role="status" className="space-y-1 text-fg-secondary">
-          <p>Gateway recorded the request. Current returned status: {presentChangePlanStatus(result.status).label}.</p>
+          <p>Confirmation recorded. Plan status: {presentChangePlanStatus(result.status).label}.</p>
           {result.status === "awaiting_approval" ? (
-            <p>A separate canonical approval is required before the change can apply.</p>
+            <p>
+              It needs a separate approval before the change can apply.{" "}
+              <ApprovalLink plan={result} workspaceId={workspaceId} />
+            </p>
           ) : null}
           {result.result?.summary ? <p>{result.result.summary}</p> : null}
-          <p>Open the owner to inspect the latest outcome and evidence.</p>
+          <p>Refresh to see the latest outcome.</p>
         </div>
       ) : null}
       {error ? (
@@ -135,7 +141,7 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
           if (!open && !pending) control.cancelReview();
         }}
         title={reviewedAction?.purpose === "rollback" ? "Confirm rollback" : "Confirm change plan"}
-        description="The Gateway will check this exact plan revision and decide whether it can apply or needs another approval."
+        description="This exact plan version is checked again before it applies. It may still need another approval."
       >
         {review && reviewedAction ? (
           <div className="mb-3 space-y-2 text-sm text-fg-secondary">
@@ -168,21 +174,41 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
   );
 }
 
+/** A Settings-started plan whose continuation (with its own approval link) renders in this detail. */
+function continuesInSettings(plan: ChangePlanRecord): boolean {
+  return plan.origin.surface === "settings" && !plan.origin.sessionId && !plan.origin.turnId;
+}
+
+/** The plan's separate approval, when the plan names it; the Inbox owns approval decisions. */
+function ApprovalLink({ plan, workspaceId }: { plan: ChangePlanRecord; workspaceId: string }) {
+  const approvalId = plan.requiredAction?.kind === "approval" ? plan.requiredAction.approvalId : undefined;
+  if (!approvalId || continuesInSettings(plan)) return null;
+  return (
+    <NativeOwnerLink
+      href={`/inbox?approvalId=${encodeURIComponent(approvalId)}&workspaceId=${encodeURIComponent(workspaceId)}`}
+      scope={[workspaceId, plan.planId, approvalId]}
+      className="font-medium text-accent hover:underline"
+    >
+      Open approval
+    </NativeOwnerLink>
+  );
+}
+
 function actionGuidance(plan: ChangePlanRecord): string {
   switch (plan.requiredAction?.kind) {
     case "approval":
-      return "A separate canonical approval is required. Review it in Approvals; the decision alone does not prove this plan applied.";
+      return "This plan needs a separate approval. Deciding it alone does not show this plan applied.";
     case "public_form":
-      return "This plan needs form details in its owning Chat or Settings flow.";
+      return "This plan needs form details in the Chat or Settings flow that started it.";
     case "secure_input":
-      return "This plan needs protected input in its existing secure owner flow. No secret entry is available in Inbox.";
+      return "This plan needs protected input in the secure flow that started it. Secrets can't be entered in Inbox.";
     case "oauth":
-      return "This plan needs its provider-owned OAuth flow.";
+      return "This plan needs the provider's sign-in flow.";
     case "native_path_picker":
       return "This plan needs the native desktop path picker.";
     case "artifact_review":
-      return "This plan needs a verified artifact review in its owning flow.";
+      return "This plan needs a verified artifact review in the flow that started it.";
     default:
-      return "Review the current owner record for the next action or recovery step.";
+      return "Refresh to see the next step for this plan.";
   }
 }

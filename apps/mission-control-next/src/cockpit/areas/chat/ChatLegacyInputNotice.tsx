@@ -156,7 +156,7 @@ export function ChatLegacyInputNotice({
     <div className="mt-2 text-xs text-fg-secondary">
       {retained ? (
         <>
-          <p>Older text is saved without a verified caller identity. It has not been imported.</p>
+          <p>You have an unsent draft from an earlier session. It has not been added here; review it first.</p>
           <Button
             ref={reviewTrigger}
             size="sm"

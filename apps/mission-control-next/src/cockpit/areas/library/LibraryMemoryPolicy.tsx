@@ -75,7 +75,7 @@ export function MemoryPolicy({
         ))}
         {draft.hasRemoteChanges ? (
           <Callout tone="warning">
-            The policy changed. Your draft remains separate. Review current policy before rebasing.
+            The policy changed. Your draft started from an older version. Review the current policy below before saving.
             <p>
               Current: {maintenancePolicySentence(policy.enabled, policy.runMode)}{" "}
               {policy.providerId || policy.model
@@ -115,7 +115,7 @@ export function MemoryPolicy({
                   throw new Error("Policy receipt does not confirm the reviewed revision.");
                 same(buildMemoryMaintenancePolicyPatch(toMemoryMaintenancePolicyDraft(updated)), patch);
                 draft.acceptSaved(toMemoryMaintenancePolicyDraft(updated), updated.revision, draft.value);
-                return "Memory maintenance policy saved with a new canonical revision.";
+                return "Memory maintenance policy saved as a new version.";
               },
             });
           }}

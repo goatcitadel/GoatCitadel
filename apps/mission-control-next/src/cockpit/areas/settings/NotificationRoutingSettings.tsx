@@ -111,7 +111,7 @@ export function NotificationRoutingSettings({
                   <p role="status" className="my-2 text-sm">
                     Latest test for {target.label}: {s.testDelivery(target.targetId)!.status.replaceAll("_", " ")}.{" "}
                     {s.testPending(target.targetId)
-                      ? "Refresh evidence before another send."
+                      ? "Refresh delivery status before another send."
                       : "Confirmed by the Gateway."}
                   </p>
                 ) : null}
@@ -177,7 +177,7 @@ export function NotificationRoutingSettings({
             <Button onClick={() => setLimit((value) => value + 20)}>Show more routing records</Button>
           ) : null}
           <details>
-            <summary className="cursor-pointer text-sm">Recent delivery evidence</summary>
+            <summary className="cursor-pointer text-sm">Recent deliveries</summary>
             <p className="my-2 text-xs text-fg-muted">
               Latest {plural(s.deliveries.length, "returned record")}; this is a bounded history window.
             </p>

@@ -11,9 +11,7 @@ export interface ResourcePreview {
 }
 function boundedText(value: string) {
   if (typeof value !== "string" || new TextEncoder().encode(value).byteLength > RESOURCE_PREVIEW_BYTES)
-    throw new Error(
-      "This content exceeds the 128 KiB Library preview limit. Use its management surface to inspect it.",
-    );
+    throw new Error("This content is larger than the 128 KiB Library preview limit, so it is not shown here.");
   return value;
 }
 function artifactIdentity(item: ChatGeneratedArtifactRecord) {
@@ -69,9 +67,7 @@ export async function readLibraryResource(
         !Number.isSafeInteger(expected.version) ||
         expected.version < 1
       )
-        throw new Error(
-          "The artifact has incomplete version, hash, or workspace evidence. Open its management surface to inspect it.",
-        );
+        throw new Error("The artifact's version, hash or workspace is incomplete, so it is not previewed here.");
       const { item } = await fetchChatGeneratedArtifact(expected.artifactId, workspaceId, citadelId);
       if (!item || artifactIdentity(item) !== artifactIdentity(expected))
         throw new Error("The artifact changed after listing. Refresh the directory before previewing it again.");

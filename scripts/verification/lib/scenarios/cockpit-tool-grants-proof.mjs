@@ -112,7 +112,12 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
           await panel
             .getByText("Tool grant recorded. Effective policy and approval gates still apply.", { exact: true })
             .waitFor();
-          await panel.getByRole("button", { name: `Inspect grant ${receipt.grantId}`, exact: true }).click();
+          await panel
+            .getByRole("button", {
+              name: `Inspect grant: ${receipt.toolPattern} · ${receipt.decision} · ${receipt.scope}`,
+              exact: true,
+            })
+            .click();
           const detail = page.getByRole("dialog", { name: "Recorded tool grant", exact: true });
           await detail.waitFor();
           assert.ok((await detail.innerText()).includes(receipt.grantId));
@@ -148,7 +153,12 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
           };
           await audit("recorded");
           await detail.getByRole("button", { name: "Close dialog", exact: true }).click();
-          await panel.getByRole("button", { name: `Revoke grant ${receipt.grantId}`, exact: true }).click();
+          await panel
+            .getByRole("button", {
+              name: `Revoke grant: ${receipt.toolPattern} · ${receipt.decision} · ${receipt.scope}`,
+              exact: true,
+            })
+            .click();
           const revoke = page.getByRole("dialog", { name: "Revoke tool grant", exact: true });
           await revoke.waitFor();
           assert.ok((await revoke.innerText()).includes(receipt.grantId));

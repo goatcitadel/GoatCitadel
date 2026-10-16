@@ -34,7 +34,7 @@ export function SettingsApprovalOwnerAction({
     return (
       <p role="status" className="text-sm text-fg-muted">
         {disabled
-          ? "Wait for the current owner action before opening its approval."
+          ? "Wait for the current action to finish before opening its approval."
           : "Refresh the current change to verify its exact approval."}
       </p>
     );

@@ -99,7 +99,7 @@ export async function runCockpitFirstRunGuardProof({ context, stack, requestJson
               await area.getByRole("button", { name: "Finish setup and open Chat", exact: true }).isDisabled(),
               true,
             );
-            await area.getByRole("button", { name: /Step 2.*Set your safety posture/u }).click();
+            await area.getByRole("button", { name: /Step 2.*Choose your safety settings/u }).click();
             const approval = area.getByRole("combobox", { name: "Approval rule", exact: true });
             await approval.selectOption("approve_risky");
             await area.getByRole("button", { name: "Exit setup", exact: true }).click();

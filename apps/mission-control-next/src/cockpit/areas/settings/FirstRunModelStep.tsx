@@ -33,7 +33,7 @@ export function FirstRunModelStep({
     <div className="space-y-4">
       <h2 className="font-display text-lg font-semibold text-fg">Choose a model</h2>
       <p className="break-words text-sm text-fg-secondary">
-        Current default:{" "}
+        Default model:{" "}
         {label && state.settings.llm.activeModel
           ? `${label} · ${state.settings.llm.activeModel}`
           : "No model confirmed"}

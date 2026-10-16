@@ -205,6 +205,8 @@ export async function runCockpitMcpPolicyRequestsProof({ context, browser, stack
             declined = await seed("unsupported", { type: "array", items: { type: "string" } }),
             unknown = await seed("unknown"),
             foreign = await seed("foreign", schema, `foreign-${variant}`);
+          // Each row button is named by the first 80 characters of its request prompt.
+          const inspectRequestName = (request) => `Inspect request: ${request.prompt.text.slice(0, 80).trim()}`;
           const responseRoute = (request) =>
             `/api/v1/mcp/elicitations/${encodeURIComponent(request.elicitationId)}/respond`;
           const readRequest = async (request) => {
@@ -308,18 +310,12 @@ export async function runCockpitMcpPolicyRequestsProof({ context, browser, stack
           stage = "inspect seeded operator requests with exact scope";
           const requests = page.getByRole("region", { name: "MCP operator requests", exact: true });
           await requests.getByRole("button", { name: "Inspect MCP requests", exact: true }).click();
-          await requests
-            .getByRole("button", { name: `Inspect MCP request ${accepted.elicitationId}`, exact: true })
-            .waitFor();
+          await requests.getByRole("button", { name: inspectRequestName(accepted), exact: true }).waitFor();
           assert.equal(
-            await requests
-              .getByRole("button", { name: `Inspect MCP request ${foreign.elicitationId}`, exact: true })
-              .count(),
+            await requests.getByRole("button", { name: inspectRequestName(foreign), exact: true }).count(),
             0,
           );
-          await requests
-            .getByRole("button", { name: `Inspect MCP request ${accepted.elicitationId}`, exact: true })
-            .click();
+          await requests.getByRole("button", { name: inspectRequestName(accepted), exact: true }).click();
           const form = page.getByRole("region", { name: "MCP response form", exact: true });
           await form.getByLabel("Display name (required)", { exact: true }).fill("Reviewed display");
           await form.getByLabel("Copies", { exact: true }).fill("2");
@@ -350,9 +346,7 @@ export async function runCockpitMcpPolicyRequestsProof({ context, browser, stack
           assert.ok((await form.innerText()).includes("does not confirm remote delivery or durable execution"));
           await capture("accepted");
           stage = "withhold unsupported acceptance and explicitly decline";
-          await requests
-            .getByRole("button", { name: `Inspect MCP request ${declined.elicitationId}`, exact: true })
-            .click();
+          await requests.getByRole("button", { name: inspectRequestName(declined), exact: true }).click();
           assert.equal(
             await form.getByRole("button", { name: "Review accept response", exact: true }).isDisabled(),
             true,
@@ -375,9 +369,7 @@ export async function runCockpitMcpPolicyRequestsProof({ context, browser, stack
             action: "decline",
           });
           stage = "retain actual committed-response loss across remount";
-          await requests
-            .getByRole("button", { name: `Inspect MCP request ${unknown.elicitationId}`, exact: true })
-            .click();
+          await requests.getByRole("button", { name: inspectRequestName(unknown), exact: true }).click();
           let lostReceipt;
           const lose = async (route) => {
             const response = await route.fetch();
@@ -407,9 +399,7 @@ export async function runCockpitMcpPolicyRequestsProof({ context, browser, stack
             .click();
           await page.getByRole("tab", { name: "MCP servers", exact: true }).click();
           await requests.getByRole("button", { name: "Inspect MCP requests", exact: true }).click();
-          await requests
-            .getByRole("button", { name: `Inspect MCP request ${unknown.elicitationId}`, exact: true })
-            .click();
+          await requests.getByRole("button", { name: inspectRequestName(unknown), exact: true }).click();
           await form.getByText(/^MCP response outcome is unconfirmed/).waitFor();
           assert.equal(
             await form.getByRole("button", { name: "Review cancel response", exact: true }).isDisabled(),

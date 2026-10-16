@@ -32,7 +32,7 @@ export function CitadelMetadataEditor({
         <dl className="space-y-1 text-xs text-fg-muted">
           <dt>Citadel ID</dt>
           <dd className="break-all font-mono">{selected?.citadelId ?? "Unavailable"}</dd>
-          <dt>Saved revision</dt>
+          <dt>Saved version</dt>
           <dd className="break-all font-mono">{selected?.revision ?? "Unavailable"}</dd>
         </dl>
       ) : null}

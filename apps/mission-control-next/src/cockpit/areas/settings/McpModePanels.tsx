@@ -35,7 +35,7 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
           {issue}
         </p>
       ))}
-      <section aria-label="MCP server mode evidence" className="space-y-3 rounded-md border border-line p-3">
+      <section aria-label="MCP server mode" className="space-y-3 rounded-md border border-line p-3">
         <h4 className="font-display text-md font-semibold text-fg">Server mode preview</h4>
         {serverMode ? (
           <>
@@ -100,10 +100,10 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
             ) : null}
           </>
         ) : (
-          <p>Server mode evidence is unavailable.</p>
+          <p>Server mode could not load.</p>
         )}
       </section>
-      <section aria-label="Remote MCP preview evidence" className="space-y-3 rounded-md border border-line p-3">
+      <section aria-label="Remote MCP preview" className="space-y-3 rounded-md border border-line p-3">
         <h4 className="font-display text-md font-semibold text-fg">Remote MCP preview</h4>
         {remotePreview ? (
           <>
@@ -115,7 +115,7 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
               catalog templates · {remotePreview.summary.runtimeSupported} eligible according to this projection.
             </p>
             <p>
-              Configuration and catalog evidence only. Eligibility is not a connection check, grant or successful tool
+              Configuration and catalog records only. Eligibility is not a connection check, grant or successful tool
               invocation.
             </p>
             <label className="block">
@@ -163,7 +163,7 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
             ) : null}
           </>
         ) : (
-          <p>Remote MCP evidence is unavailable.</p>
+          <p>Remote MCP preview could not load.</p>
         )}
       </section>
     </div>

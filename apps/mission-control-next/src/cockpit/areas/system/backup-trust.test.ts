@@ -34,7 +34,7 @@ describe("exact backup trust and shared health summary", () => {
     expect(trust).toBe("unknown");
     const check = backupHealthCheck(trust, true);
     expect(check.status.label).toBe("Not verified yet");
-    expect(summarizeHealthChecks([check]).label).toBe("Some system checks lack live proof");
+    expect(summarizeHealthChecks([check]).label).toBe("Some system checks could not be confirmed");
     expect(backupHealthCheck("none", true).status.label).toBe("Not verified yet");
     expect(backupTrustFromInbox(projection("none"))).toBe("unknown");
     expect(backupTrustFromInbox(projection("none"), null)).toBe("none");

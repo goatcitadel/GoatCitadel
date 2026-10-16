@@ -36,7 +36,7 @@ export type ComposerSendBlock =
   | { kind: "historical"; message: string }
   | { kind: "blocked"; message: string };
 
-export const ROUTE_CHECKING_MESSAGE = "Checking the chat route. Send will wait for the Gateway check.";
+export const ROUTE_CHECKING_MESSAGE = "Checking the selected model… Send waits until the check finishes.";
 
 /**
  * A slash command is committed once its first token (`/word`, followed by whitespace or the end of the
@@ -69,7 +69,8 @@ export function composerSendBlock(props: SendBlockProps): ComposerSendBlock | nu
     return { kind: "blocked", message: "A decision is waiting above. Resolve it to keep going." };
   if (props.runVariablePanel?.open)
     return { kind: "blocked", message: "Apply or close the run variables before sending." };
-  if (props.composerPalette?.globalOpen) return { kind: "blocked", message: "Choose a palette item before sending." };
+  if (props.composerPalette?.globalOpen)
+    return { kind: "blocked", message: "Choose an item in Commands and context, or close it, before sending." };
   if (props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged)
     return { kind: "blocked", message: "Acknowledge the route fallback before sending." };
   if (
@@ -87,7 +88,7 @@ export function composerSendBlock(props: SendBlockProps): ComposerSendBlock | nu
       kind: "blocked",
       message:
         resolveChatRouteReadiness(props).sendHint ??
-        "Sending is unavailable right now. Check the provider and model above, or open the classic view for details.",
+        "Sending is unavailable right now. Check the provider and model above.",
     };
   }
   return null;

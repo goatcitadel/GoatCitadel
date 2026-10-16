@@ -99,7 +99,7 @@ export async function runUxBudgetInboxChanges(environment) {
             throw new Error("Reviewing the Inbox confirmation changed the canonical plan.");
           }
           await page.getByRole("button", { name: "Confirm change" }).click();
-          await detail.getByText("Gateway recorded the request", { exact: false }).waitFor();
+          await detail.getByText("Confirmation recorded", { exact: false }).waitFor();
           const after = await requestJson(stack.gatewayUrl, ownerUrl);
           assertOk(after, `read ${variant} confirmed change plan`);
           if (after.body?.revision <= seeded.revision || after.body?.status === "awaiting_confirmation") {
@@ -222,7 +222,7 @@ export async function runUxBudgetInboxChanges(environment) {
             .getByRole("button", { name: decision === "apply" ? "Confirm apply" : "Confirm rejection" })
             .click();
           await detail
-            .getByText(`Gateway recorded this document proposal as ${decision === "apply" ? "applied" : "rejected"}`, {
+            .getByText(`Proposal ${decision === "apply" ? "applied" : "rejected"}.`, {
               exact: false,
             })
             .waitFor();

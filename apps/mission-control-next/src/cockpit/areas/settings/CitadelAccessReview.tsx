@@ -9,6 +9,7 @@ import {
   presentWardEffect,
 } from "./citadel-vocabulary";
 import { Button } from "../../ui/Button";
+import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
 
 export function CitadelAccessReview({
   snapshot,
@@ -27,9 +28,9 @@ export function CitadelAccessReview({
     snapshot.structure.chambers.find((chamber) => chamber.chamberId === chamberId)?.name ?? "Another Chamber";
   const expires = (value: string | null | undefined) => (value ? formatAbsoluteTime(value) : "never");
   const groups = [
-    { label: "Council", items: snapshot.council.map((item) => item.agentId) },
+    { label: CITADEL_PAGE_LABELS["citadel-council"], items: snapshot.council.map((item) => item.agentId) },
     {
-      label: "Wards",
+      label: CITADEL_PAGE_LABELS["citadel-wards"],
       items: snapshot.wards.map((item) => `${item.name}: ${item.actionPattern} · ${presentWardEffect(item.effect)}`),
     },
     {
@@ -54,7 +55,7 @@ export function CitadelAccessReview({
       className="space-y-3 rounded-md border border-status-waiting/40 bg-sunken p-3 text-sm text-fg-secondary"
     >
       <h4 className="font-medium text-fg">Current access rules</h4>
-      <p role="status">The reviewed rules changed. Inspect the current owner before retrying.</p>
+      <p role="status">The access rules changed since your review. Check the current rules below before retrying.</p>
       <p>
         {snapshot.structure.record?.name ?? snapshot.citadelId} ·{" "}
         {snapshot.structure.record ? presentCitadelLifecycle(snapshot.structure.record.lifecycleStatus) : "No profile"}
@@ -64,7 +65,7 @@ export function CitadelAccessReview({
         Policy:{" "}
         {snapshot.structure.charter
           ? `${presentRiskPosture(snapshot.structure.charter.riskPosture)} · ${presentModelPolicy(snapshot.structure.charter.modelPolicyDefault)}`
-          : "Default posture"}
+          : "Default settings"}
       </p>
       <details>
         <summary className="cursor-pointer">Chambers and access rules</summary>

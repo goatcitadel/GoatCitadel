@@ -79,10 +79,9 @@ export function ScheduleAdvancedFields({
     <details className="rounded-md border border-line p-3">
       <summary className="cursor-pointer text-sm font-medium text-accent">Advanced job settings</summary>
       <p className="mt-2 text-sm text-fg-secondary">
-        Optional Gateway-supported configuration. No credentials belong here. Paths, capabilities and approvals remain
-        Gateway-governed. Task and other basic actions do not support action configuration. Watchdog accepts a canonical
-        watchdog object with checkId, severityThreshold and notifyHomeChannel; existing no_agent/agent_turn
-        configuration is preserved when unchanged.
+        Optional. Never put credentials here. Path, capability and approval rules still apply. Task and the other basic
+        actions take no action configuration. Watchdog takes a watchdog object with checkId, severityThreshold and
+        notifyHomeChannel; existing no_agent/agent_turn configuration is kept when unchanged.
       </p>
       <div className="mt-3 grid gap-3">
         {(Object.keys(labels) as (keyof typeof labels)[]).map((key) => (

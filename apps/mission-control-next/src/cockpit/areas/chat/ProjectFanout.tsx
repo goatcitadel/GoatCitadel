@@ -51,7 +51,7 @@ export function ProjectFanout({
           <h3>{GRANT_HEADINGS[grant.status] ?? "Project grant"}</h3>
           <p className="text-sm">{formatGrantStatus(grant)}</p>
           <p className="break-words text-sm">{grant.reason}</p>
-          <p className="break-words text-sm">Recorded caller: {grant.grantor}</p>
+          <p className="break-words text-sm">Granted by: {grant.grantor}</p>
           <TechnicalDetails>
             <p className="break-all">Grant {grant.grantId}</p>
           </TechnicalDetails>

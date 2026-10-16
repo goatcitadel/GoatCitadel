@@ -14,6 +14,7 @@ import { queryKeys } from "../../data/query-keys";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { presentWorkflow } from "./inbox-vocabulary";
 import { classifyOperationFailure } from "./approval-operation-attempts";
@@ -74,7 +75,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
         !sameRunRecoveryEvidence(reviewed, latest)
       ) {
         setReviewed(null);
-        setError("The run or dead letter changed. Refresh the current record before requesting recovery.");
+        setError("The run changed. Refresh it before requesting recovery.");
         rereadSuperseded();
         return;
       }
@@ -86,7 +87,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
       setReviewed(null);
       setCompleted(true);
       setNotice(
-        `Gateway recorded the request. Current run status: ${presentRunStatus(result.status).label}. Inspect the current run to verify execution and effects.`,
+        `Recovery requested. Run status: ${presentRunStatus(result.status).label}. Use Open run to check what it did.`,
       );
       rereadSuperseded();
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
@@ -96,11 +97,11 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
       setReviewed(null);
       if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
         // Gateway answered and recorded nothing: recovery stays available.
-        setError(`Gateway did not accept the recovery request. ${describeApiError(cause).summary}`);
+        setError(`Recovery was not accepted. ${describeApiError(cause).summary}`);
       } else if (mutationAttempted) {
         setOutcomeUncertain(true);
         setError(
-          `Recovery outcome is uncertain. Inspect the current run in Ops before taking another action. ${describeApiError(cause).summary}`,
+          `Recovery outcome is uncertain. Use Open run to check its status before taking another action. ${describeApiError(cause).summary}`,
         );
       } else {
         setError(`Could not check the current run. ${describeApiError(cause).summary}`);
@@ -153,6 +154,13 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
             Workflow: {presentWorkflow(evidence.run.workflowKey)}. Status: {presentRunStatus(evidence.run.status).label}
             . Attempts: {evidence.run.attemptCount} of {evidence.run.maxAttempts}.
           </p>
+          <NativeOwnerLink
+            href={`/work/runs/${encodeURIComponent(evidence.run.runId)}`}
+            scope={[workspaceId, item.id, evidence.run.runId]}
+            className="w-fit text-sm font-medium text-accent hover:underline"
+          >
+            Open run
+          </NativeOwnerLink>
           <TechnicalDetails label="Run identifiers">
             <p className="break-all font-mono text-xs">
               Workflow {evidence.run.workflowKey} · Run {evidence.run.runId}
@@ -161,13 +169,13 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
           </TechnicalDetails>
           {item.kind === "dead_letter" && !evidence.deadLetter ? (
             <p className="text-fg-muted">
-              This stopped run is no longer waiting for recovery. Open Ops for its current record.
+              This stopped run is no longer waiting for recovery. Use Open run to see its current status.
             </p>
           ) : null}
           {!eligible ? (
             <p className="text-fg-muted">
-              This item cannot be recovered here from the current owner record. Admitted Chat runs need a new mutation;
-              other runs may need an owner review or have exhausted their retry budget.
+              This run can&apos;t be recovered from Inbox. Chat runs are retried by sending the message again in Chat;
+              other runs may have changed since this item was listed or have used all their retries.
             </p>
           ) : null}
         </>
@@ -199,7 +207,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
       ) : null}
       {pending ? (
         <p role="status" className="text-fg-muted">
-          Checking the owner record and requesting recovery…
+          Checking the run and requesting recovery…
         </p>
       ) : null}
       {notice ? (

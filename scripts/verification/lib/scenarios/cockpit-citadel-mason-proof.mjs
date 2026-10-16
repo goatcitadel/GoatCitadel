@@ -222,7 +222,7 @@ export async function runCockpitCitadelMasonProof({ context, browser, stack, vie
           const navigation = page.getByRole("navigation", { name: "Settings pages", exact: true });
           await navigation.getByRole("link", { name: "General", exact: true }).click();
           await navigation.getByRole("link", { name: "Citadel", exact: true }).click();
-          await page.getByRole("tab", { name: "Citadel setup", exact: true }).click();
+          await page.getByRole("tab", { name: "Guided setup · Mason", exact: true }).click();
           await panel.getByText(/^Citadel staging outcome is unconfirmed/).waitFor();
           assert.equal(intercepted, 1);
           assert.deepEqual(await api(`${ownerPath}/structure`), after);

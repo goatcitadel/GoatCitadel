@@ -18,7 +18,7 @@ describe("complete cockpit health projection", () => {
     const checks = deriveSystemHealthChecks(missing, null);
     expect(checks).toHaveLength(9);
     expect(checks.every((check) => check.status.tone === "neutral")).toBe(true);
-    expect(summarizeHealthChecks(checks).label).toContain("lack live proof");
+    expect(summarizeHealthChecks(checks).label).toContain("could not be confirmed");
   });
 
   it("reports owner problems while keeping registry-only worker health unknown", () => {

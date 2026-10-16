@@ -135,7 +135,7 @@ export function useNotificationRoutingActions(s: NotificationRoutingState) {
     prepare(
       { kind: "test", target },
       "Send test notification?",
-      `Send a real notification to ${target.label} in workspace ${s.workspaceId}, using ${target.kind === "channel_connection" ? `channel ${target.channelConnectionId}` : `webhook reference ${target.webhookUrlSecretRef}`}. This has an external side effect. The destination is re-read before sending; this API has no atomic revision precondition.`,
+      `Send a real notification to ${target.label} in workspace ${s.workspaceId}, using ${target.kind === "channel_connection" ? `channel ${target.channelConnectionId}` : `webhook reference ${target.webhookUrlSecretRef}`}. This has an external side effect. The destination is checked again before sending, but a change made elsewhere at the same moment is not blocked.`,
     );
   }
   async function confirmReview() {

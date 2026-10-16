@@ -13,27 +13,35 @@ import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
 
-const ACTIONS: ReadonlyArray<{ action: TaskBulkAction; verb: string; consequence: string }> = [
+const count = (n: number) => plural(n, "task");
+const ACTIONS: ReadonlyArray<{
+  action: TaskBulkAction;
+  verb: string;
+  confirm: (n: number) => string;
+  consequence: string;
+}> = [
   {
     action: "unblock",
     verb: "Unblock",
+    confirm: (n) => `Unblock ${count(n)}`,
     consequence: "Returns each task to assigned and resets its retry count. It does not start any work.",
   },
   {
     action: "retry",
     verb: "Retry",
+    confirm: (n) => `Retry ${count(n)}`,
     consequence:
       "Records one retry attempt per task. A task past its retry budget becomes blocked with a distress signal. It does not start a run.",
   },
   {
     action: "close",
-    verb: "Close",
+    verb: "Mark done",
+    confirm: (n) => `Mark ${count(n)} done`,
     consequence: "Marks each task done. The Gateway refuses the whole batch if any task has no deliverable.",
   },
 ];
-const count = (n: number) => plural(n, "task");
 
-/** Reviewed bulk task actions for the selected operator tasks. Runtime runs are never part of a task action. */
+/** Reviewed bulk task actions for the selected operator tasks. Runs are never part of a task action. */
 export function WorkTaskBulkActions({
   workspaceId,
   selected,
@@ -95,12 +103,12 @@ export function WorkTaskBulkActions({
       role="group"
     >
       <p className="text-sm text-fg">
-        <strong>{count(selected.length)} selected.</strong> Runtime runs are not affected by task actions.
+        <strong>{count(selected.length)} selected.</strong> Runs are not affected by task actions.
       </p>
       {locked ? (
         <Callout tone="warning">
-          A selected task has a pending or unconfirmed action in this app session. Inspect its owner record before
-          continuing.
+          A selected task has a pending or unconfirmed action in this app session. Open the task to check its current
+          state before continuing.
         </Callout>
       ) : null}
       <div className="flex flex-wrap gap-2">
@@ -127,7 +135,7 @@ export function WorkTaskBulkActions({
         onOpenChange={(open) => {
           if (!open) close();
         }}
-        title={review ? `Review: ${review.action.verb} ${count(review.tasks.length)}` : "Review task action"}
+        title={review ? `Review: ${review.action.confirm(review.tasks.length)}` : "Review task action"}
         description="Operator tasks in this workspace."
       >
         {review ? (
@@ -141,8 +149,7 @@ export function WorkTaskBulkActions({
             </ul>
             <p>{review.action.consequence}</p>
             <p className="text-fg-secondary">
-              Each task is re-read first, then the Gateway checks every revision: if any task changed, nothing is
-              applied.
+              Each task is checked again first. If any task changed since you selected it, nothing is applied.
             </p>
             {outcome ? <Callout tone="error">{outcome}</Callout> : null}
             <div className="flex flex-wrap gap-2">
@@ -151,7 +158,7 @@ export function WorkTaskBulkActions({
               </Button>
               {outcome ? null : (
                 <Button variant="primary" disabled={busy || locked} onClick={() => void confirm()}>
-                  {busy ? "Applying…" : `${review.action.verb} ${count(review.tasks.length)}`}
+                  {busy ? "Applying…" : review.action.confirm(review.tasks.length)}
                 </Button>
               )}
             </div>

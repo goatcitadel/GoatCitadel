@@ -76,6 +76,6 @@ export function requireInboxConfirmationReceipt(reviewed: ChangePlanRecord, rece
     !CHANGE_PLAN_STATUSES.includes(receipt.status) ||
     receipt.requiredAction?.actionNonce === reviewed.requiredAction?.actionNonce
   ) {
-    throw new Error("Gateway returned an unexpected change-plan receipt.");
+    throw new Error("The saved result did not match the reviewed change plan.");
   }
 }

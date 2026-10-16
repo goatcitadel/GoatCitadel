@@ -44,7 +44,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
         </Button>
         {owner.panel ? <Button onClick={owner.closePanel}>Back to channels</Button> : null}
       </div>
-      {owner.loading && !data ? <p role="status">Loading channel owners…</p> : null}
+      {owner.loading && !data ? <p role="status">Loading channels…</p> : null}
       {owner.error ? (
         <p role="alert" className="text-status-failed">
           {owner.error}
@@ -128,7 +128,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                   <dd>
                     {owner.draftConnection.label} · {owner.draftConnection.connectionId}
                   </dd>
-                  <dt>Current revision</dt>
+                  <dt>Current version</dt>
                   <dd className="break-all">{owner.draftConnection.revision}</dd>
                 </dl>
               ) : (
@@ -151,7 +151,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                   }
                   onClick={() => void owner.handleAcceptConnectionReview()}
                 >
-                  Use current connection revision
+                  Use latest connection version
                 </Button>
               </div>
             </section>
@@ -159,7 +159,10 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
           {channelDraft.hasRemoteChanges ? (
             <section className="space-y-2 rounded-md border border-line p-3 text-sm">
               <h3 className="font-semibold">Channel draft changed</h3>
-              <p>Your input is retained. Saved revision {selectedDraft?.revision} must be reviewed before retrying.</p>
+              <p>
+                Your input is kept. It started from an older version; review saved version {selectedDraft?.revision}{" "}
+                before retrying.
+              </p>
               <details>
                 <summary className="cursor-pointer">Current saved public fields</summary>
                 <dl className="space-y-1">
@@ -168,7 +171,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                       <dt>{key}</dt>
                       <dd className="break-words">
                         {typeof value === "object"
-                          ? "Structured value; inspect in advanced editor after discarding or rebasing"
+                          ? "Structured value; open the advanced editor after discarding your input or applying it to the latest version"
                           : String(value)}
                       </dd>
                     </div>
@@ -176,7 +179,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                 </dl>
               </details>
               <Button disabled={disabled} onClick={channelDraft.rebaseToCurrent}>
-                Apply retained input to current revision
+                Apply my input to latest version
               </Button>
             </section>
           ) : null}

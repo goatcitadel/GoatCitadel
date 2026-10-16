@@ -76,10 +76,10 @@ it("shows current backup existence despite an older Inbox absence observation", 
   expect(container.textContent).toContain("Not verified yet");
   expect(container.textContent).toContain("A backup record exists");
   expect(container.textContent).not.toContain("No backup yet");
-  expect(container.textContent).toContain("Checks awaiting evidence");
+  expect(container.textContent).toContain("Checks not yet confirmed");
   api.fetchHealthSummary.mockRejectedValue(new TypeError("Failed to fetch"));
   await tick(60_010);
-  expect(container.textContent).toContain("Retained observation is stale");
+  expect(container.textContent).toContain("Last known (Health summary, checked");
   expect(container.textContent).not.toContain("No backup yet");
 });
 
@@ -104,16 +104,26 @@ it("shows stale prior observations after actual API transport rejection and clea
   expect(container.textContent).toContain("Available checks report no problems");
   api.fetchHealthSummary.mockRejectedValue(new TypeError("Failed to fetch"));
   await tick(60_010);
-  expect(container.textContent).toContain("Retained observation is stale");
-  expect(container.textContent).toContain("last observed");
+  expect(container.textContent).toContain("Last known: checked");
   expect(container.textContent).toContain("cannot be verified");
-  expect(container.textContent).toContain("The health summary is responding");
+  // The current state comes first; the earlier result is its own line, never joined into one sentence.
+  const lines = [...container.querySelectorAll("article p")].map((node) => node.textContent ?? "");
+  expect(lines).toContain("The health summary could not be read.");
+  expect(
+    lines.some(
+      (line) =>
+        line.startsWith("Last known (Health summary, checked ") &&
+        line.endsWith("): The health summary is responding."),
+    ),
+  ).toBe(true);
+  expect(lines.some((line) => line.includes("could not be read") && line.includes("is responding"))).toBe(false);
+  for (const key of ["llama:", "npu:", "last observed"]) expect(container.textContent).not.toContain(key);
   api.fetchHealthSummary.mockResolvedValue({
     database: { reachable: true, issues: [] },
     daemonStatus: { supported: true, running: true, diagnostics: [] },
     backups: { latest: null },
   });
   await tick(60_010);
-  expect(container.textContent).not.toContain("Retained observation is stale");
+  expect(container.textContent).not.toContain("Last known");
   expect(container.textContent).toContain("Available checks report no problems");
 });

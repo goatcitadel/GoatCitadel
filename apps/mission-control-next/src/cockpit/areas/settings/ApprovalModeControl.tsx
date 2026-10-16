@@ -77,7 +77,7 @@ export function ApprovalModeEditor({
       ) : null}
       {settings.data && !settings.isError && !ready ? (
         <p role="alert" className="mt-3 text-sm text-status-failed">
-          Gateway approval mode, deployment profile, or revision is unavailable. Refresh before changing this rule.
+          The approval mode, deployment profile, or saved version could not load. Refresh before changing this rule.
         </p>
       ) : null}
       {ready ? (
@@ -88,7 +88,7 @@ export function ApprovalModeEditor({
           </p>
           <TechnicalDetails>
             <p className="break-all font-mono text-xs">
-              Settings revision {settings.data?.revision} · {settings.data?.deploymentProfile ?? "unknown"}
+              Settings version {settings.data?.revision} · {settings.data?.deploymentProfile ?? "unknown"}
             </p>
           </TechnicalDetails>
           <label className="mt-3 block max-w-sm text-sm font-medium text-fg">
@@ -123,9 +123,9 @@ export function ApprovalModeEditor({
           ) : null}
           {draft.hasRemoteChanges ? (
             <div role="status" className="mt-2 space-y-2 text-sm text-fg-secondary">
-              <p>The saved rule changed after this draft began. Review the current rule before rebasing.</p>
+              <p>The saved rule changed. Your draft started from an older version. Review the saved rule first.</p>
               <Button size="sm" disabled={locked || Boolean(review)} onClick={draft.rebaseToCurrent}>
-                Review draft against current revision
+                Apply draft to latest version
               </Button>
             </div>
           ) : null}
@@ -166,9 +166,9 @@ export function ApprovalModeEditor({
             ) : null}
           </div>
           {!confirmed ? <ApprovedSettingsContinuation plan={change.change.plan} onSettled={change.refresh} /> : null}
-          <TechnicalDetails label="Change evidence">
+          <TechnicalDetails label="Change record">
             <p className="break-all font-mono text-xs">
-              Plan {change.change.receipt.planId} · revision {change.change.receipt.revision}
+              Plan {change.change.receipt.planId} · version {change.change.receipt.revision}
             </p>
           </TechnicalDetails>
         </div>
@@ -201,7 +201,7 @@ export function ApprovalModeEditor({
       >
         <div className="mb-3">
           <TechnicalDetails>
-            <p className="break-all font-mono text-xs">Reviewed at settings revision {review?.revision ?? "unknown"}</p>
+            <p className="break-all font-mono text-xs">Reviewed at settings version {review?.revision ?? "unknown"}</p>
           </TechnicalDetails>
         </div>
         <div className="flex flex-wrap gap-2">

@@ -19,7 +19,7 @@ describe("native approved decision receipt", () => {
     assert.doesNotThrow(() => assertApprovedDecisionReceipt(evidence()));
     for (const suffix of [
       "Follow-on settlement is pending.",
-      "Follow-on work failed. Inspect the persisted outcome before retrying.",
+      "Follow-on work failed. Check its saved outcome before retrying.",
       "Follow-on action is blocked by policy.",
       "Approval effects settled. Linked work has its own execution outcome.",
     ])
@@ -105,6 +105,7 @@ describe("approval rule browser owner assertions", () => {
       "and tool grants ",
     ])
       assert.throws(() => assertApprovalModeBypassReview(current.replace(token, "")));
+    assert.throws(() => assertApprovalModeBypassReview(`${current} Reviewed at settings version 4.`));
     assert.throws(() => assertApprovalModeBypassReview(`${current} Reviewed at settings revision 4.`));
     assert.throws(() => assertApprovalModeBypassReview(current.replace("Nuclear risk", "Critical risk")));
   });

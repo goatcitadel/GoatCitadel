@@ -185,12 +185,9 @@ function ProjectsWorkspace({ workspaceId, citadelId }: { workspaceId: string; ci
                 <TechnicalDetails>
                   <p>Revision {project.revision}</p>
                 </TechnicalDetails>
-                <Button
-                  className="justify-self-start"
-                  aria-label={`${pins.isPinned(project.projectId) ? "Unpin" : "Pin"} ${project.name}`}
-                  onClick={() => pins.togglePinned(project.projectId)}
-                >
+                <Button className="justify-self-start" onClick={() => pins.togglePinned(project.projectId)}>
                   {pins.isPinned(project.projectId) ? "Unpin" : "Pin"}
+                  <span className="sr-only"> {project.name}</span>
                 </Button>
               </article>
             )}

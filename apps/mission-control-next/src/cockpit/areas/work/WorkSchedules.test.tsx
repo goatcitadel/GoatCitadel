@@ -292,7 +292,7 @@ describe("Work schedules", () => {
     await render();
     await review();
     await click("Pause");
-    await click("Keep schedule");
+    await click("Don't pause");
     expect(pauseCronJob).not.toHaveBeenCalled();
     expect(deleteCronJob).not.toHaveBeenCalled();
     await click("Pause");
@@ -387,6 +387,26 @@ describe("Work schedules", () => {
     expect(runCronJobNow).not.toHaveBeenCalled();
   });
 
+  it("links a requested run to its run page when the Gateway names one", async () => {
+    vi.mocked(runCronJobNow).mockResolvedValueOnce({
+      jobId: "job-a",
+      runId: "cron-run-1",
+      status: "pending",
+      childDurableRunId: "run-77",
+    });
+    await render();
+    await review();
+    await click("Run now");
+    await click("Run schedule now");
+    await vi.waitFor(() => expect(container.textContent).toContain("Run requested."));
+    const link = [...container.querySelectorAll("a")].find((item) => item.textContent === "Open run");
+    expect(link?.getAttribute("href")).toContain("/work/runs/run-77");
+    const reviewButton = [...container.querySelectorAll("button")].find(
+      (item) => item.textContent?.trim() === "Review schedule",
+    );
+    expect(reviewButton?.getAttribute("aria-label")).toBe("Review schedule: Daily review");
+  });
+
   it("retains a lost run response lock across route remounts", async () => {
     vi.mocked(runCronJobNow).mockRejectedValueOnce(new Error("response lost"));
     await render();
@@ -453,7 +473,7 @@ describe("Work schedules", () => {
         (button) => button.textContent?.trim() === "Run schedule now",
       )?.disabled,
     ).toBe(true);
-    await click("Keep schedule");
+    await click("Don't run now");
     const actionButtons = [...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) =>
       ["Run now", "Pause", "Delete schedule…"].includes(button.textContent?.trim() ?? ""),
     );
@@ -511,7 +531,7 @@ describe("Work schedules", () => {
     await click("Pause instead");
     expect(container.textContent).toContain("Pause this schedule?");
     expect(deleteCronJob).not.toHaveBeenCalled();
-    await click("Keep schedule");
+    await click("Don't pause");
     await click("Delete schedule…");
     // Deletion is confirmed only by the owner's exact not-found answer on the follow-up read.
     vi.mocked(fetchCronJob).mockResolvedValueOnce(job()).mockRejectedValueOnce(ownerGone("job-a"));

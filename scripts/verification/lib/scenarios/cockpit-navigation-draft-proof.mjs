@@ -49,7 +49,7 @@ export async function proveCatalogDraftNavigation({ page, readGrants }) {
     const origin = await page.evaluate(() => performance.timeOrigin),
       sourceUrl = page.url();
     const { field, value } = await fillNavigationGrantDraft(page);
-    const trigger = () => page.getByRole("link", { name: "Inspect tools", exact: true }).click();
+    const trigger = () => page.getByRole("link", { name: "Open tools in Library", exact: true }).click();
     await reviewNavigationDraft(page, trigger, "Cancel");
     assert.equal(await field.inputValue(), value);
     assert.deepEqual(writes, []);

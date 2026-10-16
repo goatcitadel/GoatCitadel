@@ -64,7 +64,7 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
     groups?.binding,
   );
   if (!groups?.specialists || !groups.learnedMemory || !groups.binding)
-    return <p role="status">Conversation context actions are unavailable until their current owner is ready.</p>;
+    return <p role="status">Conversation context actions are not available right now.</p>;
   const ownersCurrent = Object.values(groups).every((group) => group.isCurrent());
   const busy =
     !ownersCurrent ||
@@ -258,7 +258,7 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
                       openReview(
                         "learnedMemory",
                         "Mark this memory stale?",
-                        "Mark this recorded item superseded for the current conversation. This does not delete its historical evidence.",
+                        "Mark this recorded item superseded for the current conversation. Its history is kept.",
                         "Mark stale",
                         () => dock.onUpdateMemoryStatus(item.itemId, "superseded"),
                         fingerprint,
@@ -282,7 +282,7 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
             openReview(
               "learnedMemory",
               "Rebuild learned memory?",
-              "Rebuild this conversation's learned-memory records through the existing Gateway lifecycle owner. The returned rebuild receipt and current records remain distinct from future turn execution.",
+              "Rebuild the learned memory saved for this conversation. The rebuild result is recorded separately and does not by itself change how future replies run.",
               "Rebuild learned memory",
               dock.onRebuildLearnedMemory,
               (current) => `${current.selectedSessionId}:${current.selectedSession.workspaceId ?? ""}`,
@@ -357,8 +357,8 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
         </fieldset>
         {bindingDraft.hasRemoteChanges ? (
           <p role="alert">
-            The canonical binding changed while this draft was edited. Discard the draft and review current binding
-            before saving.
+            The binding changed somewhere else while you edited this draft. Discard the draft and check the recorded
+            binding below before saving.
           </p>
         ) : null}
         {dock.binding ? (

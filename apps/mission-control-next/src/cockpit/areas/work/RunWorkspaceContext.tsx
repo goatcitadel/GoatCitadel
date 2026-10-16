@@ -44,7 +44,7 @@ export function RunWorkspaceContext({ trace, workspaceId }: { trace: ObserveRunT
         />
       ) : (
         <p className="mt-3 text-sm text-fg-muted">
-          Worktree context unavailable: this run has no consistent Gateway-resolved conversation in this workspace.
+          Worktree context unavailable: this run has no single matching conversation in this workspace.
         </p>
       )}
     </section>

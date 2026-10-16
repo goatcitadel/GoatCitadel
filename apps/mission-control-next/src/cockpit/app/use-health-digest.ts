@@ -1,4 +1,4 @@
-import { formatAbsoluteTime } from "@goatcitadel/mission-control-shared/content/format";
+import { formatAbsoluteTime, plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
@@ -9,8 +9,8 @@ import {
 import type { StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useDesktopUpdates } from "../../features/desktop-updates/desktop-update-bridge";
 import { backupTrustFromInbox } from "../areas/system/backup-trust";
-import { summarizeHealthChecks } from "../areas/system/health-overview";
-import { deriveSystemHealthChecks, hasDeferredHealthChecks } from "../areas/system/system-health";
+import type { HealthCheck } from "../areas/system/health-overview";
+import { deriveSystemHealthChecks, hasDeferredHealthChecks, HEALTH_SOURCE_LABELS } from "../areas/system/system-health";
 import {
   loadSystemHealthDigest,
   loadSystemHealthSources,
@@ -102,14 +102,14 @@ export function useHealthDigestStatus(
       return {
         phase: "stale",
         tone: earlierProblems.some((check) => check.status.tone === "failed") ? "failed" : "waiting",
-        label: `Earlier system check needs review · ${earlierProblems.map((check) => check.title).join(", ")}`,
-        title: `${earlierProblems.map((check) => check.detail).join(" ")} Last inspected ${formatAbsoluteTime(inspected.dataUpdatedAt)}. Recheck on System › Health; this is retained evidence.`,
+        label: "Earlier check needs review",
+        title: `${earlierProblems.map((check) => `${check.title}: ${check.detail}${check.lastKnown ? ` ${check.lastKnown}` : ""}`).join(" ")} Last checked ${formatAbsoluteTime(inspected.dataUpdatedAt)}. This is an earlier result; recheck on System › Health.`,
         retry: () => void inspected.refetch(),
       };
   }
   if (view.record) {
     const scopedInbox = !inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined;
-    const summary = summarizeHealthChecks(
+    const summary = summarizeDigest(
       deriveSystemHealthChecks(
         view.record,
         desktopUpdates,
@@ -118,27 +118,25 @@ export function useHealthDigestStatus(
           view.record.summary.state === "current" ? view.record.summary.value.backups.latest : undefined,
         ),
       ),
+      deferOptionalSources,
     );
-    const label = deferOptionalSources ? `Core checks · ${summary.label}` : summary.label;
     const deferredNote = deferOptionalSources
       ? "Managed local runtimes, integrations, channels and workers are checked on System › Health."
       : DEFERRED_NOTE;
-    const title = hasDeferredHealthChecks(view.record)
-      ? `${label.replace(/[.!?]+$/, "")}. ${deferredNote.replace(/[.!?]+$/, "")}`
-      : label;
+    const title = hasDeferredHealthChecks(view.record) ? `${summary.sentence} ${deferredNote}` : summary.sentence;
     const staleSources = staleHealthSources(view.record);
     if (!query.isFetching && staleSources.length) {
       const observations = staleSources
         .map(
           ({ name, observedAt }) =>
-            `${name}: last observed ${observedAt ? formatAbsoluteTime(observedAt) : "at an unavailable time"}`,
+            `${HEALTH_SOURCE_LABELS[name]}: last checked ${observedAt ? formatAbsoluteTime(observedAt) : "at an unknown time"}`,
         )
         .join(". ");
       return {
         phase: "stale",
-        label: `Stale system checks · ${label}`,
+        label: "Checks out of date",
         tone: "neutral",
-        title: `${title}. ${observations}. Some sources could not refresh; retained observations are not current health.`,
+        title: `${title} ${observations}. Some checks could not refresh, so these are earlier results.`,
         retry,
       };
     }
@@ -147,24 +145,51 @@ export function useHealthDigestStatus(
       : "Last check time unavailable.";
     if (view.stale) {
       const failed = view.phase === "error" && !query.isFetching;
-      const retainedLabel = `${failed ? "Stale system checks" : "Checking for changes…"} · ${label}`;
       return {
         phase: failed ? "stale" : "checking",
-        label: `${retainedLabel}. ${lastChecked}`,
+        label: failed ? "Checks out of date" : "Checking…",
         tone: "neutral",
-        title: `${title}. ${lastChecked} ${failed ? "The refresh failed; showing earlier evidence." : "Checking for changes; showing earlier evidence."}`,
+        title: `${title} ${lastChecked} ${failed ? "The refresh failed; showing earlier results." : "Checking again; showing earlier results."}`,
         retry,
       };
     }
-    return { phase: "ready", label, tone: summary.tone, title: `${title}. ${lastChecked}`, retry };
+    return { phase: "ready", label: summary.label, tone: summary.tone, title: `${title} ${lastChecked}`, retry };
   }
   if (view.phase === "error")
     return {
       phase: "unavailable",
-      label: "System checks unavailable",
+      label: "Checks unavailable",
       tone: "neutral",
-      title: "System checks unavailable",
+      title: "System checks unavailable. Retry, or open System › Health.",
       retry,
     };
-  return { phase: "checking", label: "Checking system…", tone: "neutral", title: "Checking system…", retry };
+  return { phase: "checking", label: "Checking…", tone: "neutral", title: "Checking system…", retry };
+}
+
+/** One short state for the 248px rail (SH-13); the full sentence goes in the title. */
+function summarizeDigest(
+  checks: readonly HealthCheck[],
+  coreOnly: boolean,
+): { label: string; sentence: string; tone: StatusTone } {
+  const problems = checks.filter((check) => check.status.tone === "failed" || check.status.tone === "waiting");
+  if (problems.length) {
+    const label = `${plural(problems.length, "check")} ${problems.length === 1 ? "needs" : "need"} review`;
+    return {
+      label,
+      sentence: `${label}: ${problems.map((check) => check.title).join(", ")}.`,
+      tone: problems.some((check) => check.status.tone === "failed") ? "failed" : "waiting",
+    };
+  }
+  if (!checks.length)
+    return { label: "Checks unverified", sentence: "No system checks reported yet.", tone: "neutral" };
+  const unknown = checks.filter((check) => check.status.tone === "neutral" && !check.notSetUp);
+  if (unknown.length)
+    return {
+      label: `${plural(unknown.length, "check")} unverified`,
+      sentence: `Not verified yet: ${unknown.map((check) => check.title).join(", ")}.`,
+      tone: "neutral",
+    };
+  return coreOnly
+    ? { label: "Core checks passing", sentence: "Core system checks report no problems.", tone: "done" }
+    : { label: "All checks passing", sentence: "System checks report no problems.", tone: "done" };
 }

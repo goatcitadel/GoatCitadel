@@ -83,7 +83,8 @@ export function BudgetModeControl() {
         await settings.refetch();
         setNotice({
           tone: "waiting",
-          message: "Budget settings changed. Review the current mode and rebase your saved draft before retrying.",
+          message:
+            "Budget settings changed. Your draft started from an older version. Review the current mode, then apply your draft to the latest version before retrying.",
         });
         return false;
       }
@@ -133,7 +134,7 @@ export function BudgetModeControl() {
             Budget preference
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
-            A saved cost posture for operator review. This is not a dollar limit.
+            A saved preference for how much to spend on models. This is not a dollar limit.
           </p>
         </div>
         <Button
@@ -166,7 +167,7 @@ export function BudgetModeControl() {
         <>
           <p className="mt-3 text-xs text-fg-muted">Current: {budgetModeLabel(current)}</p>
           <TechnicalDetails>
-            <p className="break-all font-mono text-xs">Settings revision {settings.data?.revision}</p>
+            <p className="break-all font-mono text-xs">Settings version {settings.data?.revision}</p>
           </TechnicalDetails>
           <label className="mt-3 block max-w-sm text-sm font-medium text-fg">
             Mode
@@ -195,7 +196,7 @@ export function BudgetModeControl() {
             <div role="status" className="mt-2 space-y-2 text-sm text-fg-secondary">
               <p>The saved setting changed after this draft began. Current: {budgetModeLabel(current)}.</p>
               <Button size="sm" onClick={draft.rebaseToCurrent}>
-                Review draft against current revision
+                Apply draft to latest version
               </Button>
             </div>
           ) : null}

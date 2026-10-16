@@ -297,7 +297,7 @@ export async function runCockpitCitadelBlueprintProof({ context, browser, stack,
           );
           await page.getByRole("tab", { name: "Appearance", exact: true }).waitFor();
           await nav.getByRole("link", { name: "Citadel", exact: true }).click();
-          await page.getByRole("tab", { name: "Blueprint", exact: true }).click();
+          await page.getByRole("tab", { name: "Export/import · Blueprint", exact: true }).click();
           await page.waitForURL(sourceUrl);
           await panel.getByText(`Citadel: ${id}`, { exact: true }).waitFor();
           // Remount reads the current export. Inspect its exact artifact before reopening the retained input.

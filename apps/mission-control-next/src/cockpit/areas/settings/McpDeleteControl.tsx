@@ -63,7 +63,7 @@ export function McpDeleteControl({
               <dd>
                 <code className="break-all font-mono">{control.review.serverId}</code>
               </dd>
-              <dt>Reviewed revision</dt>
+              <dt>Reviewed version</dt>
               <dd>
                 <code className="break-all font-mono">{control.review.revision}</code>
               </dd>

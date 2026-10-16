@@ -105,7 +105,7 @@ const APPROVAL_MODE: Record<ToolApprovalMode, string> = {
   approve_risky: "Risky tool calls need approval",
   bypass: "Approvals bypassed",
 };
-export const approvalModeLabel = (value: string) => lookup(APPROVAL_MODE, value, "Approval posture unknown");
+export const approvalModeLabel = (value: string) => lookup(APPROVAL_MODE, value, "Approval setting unknown");
 
 const EFFECT_SOURCE: Record<ToolEffectSourceKind, string> = {
   builtin: "Built-in",

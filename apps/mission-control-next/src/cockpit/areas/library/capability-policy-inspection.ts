@@ -97,7 +97,7 @@ function profileIdentity(value: Record<string, unknown>, input: PolicyInspection
     (value.permissionProfileId !== undefined && value.permissionProfileId !== record.profileId) ||
     (value.localOperatorOverrideId !== undefined && typeof value.localOperatorOverrideId !== "string")
   ) {
-    throw new Error("The effective permission profile has inconsistent owner evidence.");
+    throw new Error("The effective permission profile has inconsistent saved records.");
   }
   const override = value.localOperatorOverride;
   if (value.localOperatorOverrideId !== undefined || override !== undefined) {
@@ -109,7 +109,7 @@ function profileIdentity(value: Record<string, unknown>, input: PolicyInspection
       !value.localOperatorOverrideId ||
       (override as Record<string, unknown>).overrideId !== value.localOperatorOverrideId
     ) {
-      throw new Error("The effective operator override has incomplete or inconsistent owner evidence.");
+      throw new Error("The effective override has incomplete or inconsistent saved records.");
     }
   }
   return {
@@ -180,7 +180,7 @@ export async function inspectSelectedToolPolicy(
     decision.permissionProfileId !== after.profileId ||
     decision.localOperatorOverrideId !== after.overrideId
   ) {
-    throw new Error("The policy context changed during evaluation. The advisory result is withheld; inspect again.");
+    throw new Error("The policy context changed during evaluation. The advisory result is withheld; check again.");
   }
   return { decision, profileLabel: after.label, checkedAt: new Date().toISOString() };
 }

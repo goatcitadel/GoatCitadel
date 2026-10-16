@@ -239,7 +239,7 @@ export async function runCockpitPermissionManagementProof({ context, browser, st
             .waitFor();
           assert.equal(writes.length, count, "Stale review dispatched a profile mutation.");
           await fullPanel.getByRole("button", { name: "Refresh permission profiles", exact: true }).click();
-          await panel.getByRole("button", { name: "Rebase permission draft to current profile", exact: true }).click();
+          await panel.getByRole("button", { name: "Apply draft to latest version", exact: true }).click();
           stage = "archive the reviewed profile";
           await panel.getByRole("button", { name: "Review profile archive", exact: true }).click();
           await review(panel).waitFor();

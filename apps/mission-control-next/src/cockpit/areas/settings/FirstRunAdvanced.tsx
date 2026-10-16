@@ -51,7 +51,7 @@ export function FirstRunAdvanced({ workspaceId }: { workspaceId: string }) {
         scope={workspaceId}
         className="text-sm font-medium text-accent hover:underline"
       >
-        Inspect setup and release verification in System diagnostics
+        Open setup and release checks in System diagnostics
       </NativeOwnerLink>
       <McpDraftLeave {...leave.dialogProps} />
     </section>

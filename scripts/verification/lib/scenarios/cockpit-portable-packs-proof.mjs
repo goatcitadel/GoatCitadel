@@ -356,7 +356,7 @@ export async function runCockpitPortablePacksProof({ context, browser, stack, ci
           assert.equal(exported.mutationSemantics, "none");
           await sheet().getByRole("button", { name: "Close pack inspection", exact: true }).click();
           stage = "materialize review evidence with unchanged callability";
-          await panel.getByRole("button", { name: `Review evidence for ${label}`, exact: true }).click();
+          await panel.getByRole("button", { name: `Record review for ${label}`, exact: true }).click();
           const recordPath = `/api/v1/capability-packs/staged/${encodeURIComponent(receipt.evidenceEnvelopeId)}/materialize`,
             recordResponse = waitPost(recordPath);
           await dialog("Record pack review evidence")
@@ -417,7 +417,7 @@ export async function runCockpitPortablePacksProof({ context, browser, stack, ci
           await panel.getByText(/^Pack action outcome is unconfirmed\./u).waitFor();
           assert.equal(
             await panel
-              .getByRole("button", { name: `Review evidence for ${label}`, exact: true })
+              .getByRole("button", { name: `Record review for ${label}`, exact: true })
               .first()
               .isDisabled(),
             true,

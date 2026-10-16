@@ -38,8 +38,19 @@ const WorkflowSkillCaptureControl = lazy(() =>
   })),
 );
 
+const TURN_NAME_WORDS = 8;
+
+/** Names a turn by its position and the start of its prompt so the transcript's articles are distinguishable. */
+function turnAccessibleName(prompt: string, position?: number): string {
+  const words = prompt.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  const start = words.slice(0, TURN_NAME_WORDS).join(" ") + (words.length > TURN_NAME_WORDS ? "…" : "");
+  const label = position ? `Message ${position}` : "Message";
+  return start ? `${label}: ${start}` : label;
+}
+
 export function Turn({
   turn,
+  position,
   previewText,
   streaming,
   actions,
@@ -48,6 +59,8 @@ export function Turn({
   onReviewPlan,
 }: {
   turn: ChatThreadTurnRecord;
+  /** One-based position in the conversation, when known. */
+  position?: number;
   previewText: string | null;
   streaming: boolean;
   actions: MissionThreadedActiveSessionSurfaceProps;
@@ -63,7 +76,7 @@ export function Turn({
   return (
     <article
       className="mx-auto w-full max-w-3xl space-y-4 px-3 py-5 sm:px-6"
-      aria-label="Conversation messages"
+      aria-label={turnAccessibleName(capture?.summary ?? turn.userMessage.content, position)}
       data-turn-id={turn.turnId}
     >
       <div className="cockpit-chat-user-bubble ml-auto rounded-lg border border-line-subtle bg-raised p-3">

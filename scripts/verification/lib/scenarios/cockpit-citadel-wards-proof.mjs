@@ -267,7 +267,7 @@ export async function runCockpitCitadelWardsProof({ context, browser, stack, vie
           const nav = page.getByRole("navigation", { name: "Settings pages", exact: true });
           await nav.getByRole("link", { name: "General", exact: true }).click();
           await nav.getByRole("link", { name: "Citadel", exact: true }).click();
-          await page.getByRole("tab", { name: "Wards", exact: true }).click();
+          await page.getByRole("tab", { name: "Rules · Wards", exact: true }).click();
           await panel.getByText(/^Citadel access outcome is unconfirmed/).waitFor();
           await panel.getByRole("button", { name: "Add Ward · Unsaved", exact: true }).click();
           assert.equal(await editor.getByRole("textbox", { name: "Name", exact: true }).inputValue(), unknown.name);

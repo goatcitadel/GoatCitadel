@@ -29,13 +29,13 @@ export function ProviderProfileReview({
       title={kind === "transport" ? "Review provider transport" : "Review provider profile"}
       description={
         kind === "transport"
-          ? "Apply only request transport through the dedicated Gateway configuration owner with the exact reviewed revision."
+          ? "Apply only the request transport settings. Saving stops if they changed since your review."
           : "Submit this public profile through the Gateway's governed Settings change plan. Saved transport stays unchanged."
       }
     >
       {draft ? (
         <div className="space-y-3 text-sm text-fg-secondary">
-          <p>Reviewed settings revision {revision}</p>
+          <p>Reviewed settings version {revision}</p>
           {draft.governedCreation ? (
             <p>
               Credential storage:{" "}
@@ -51,7 +51,7 @@ export function ProviderProfileReview({
               "Base URL": draft.provider.baseUrl,
               "API style": draft.provider.apiStyle,
               "Credential mode": draft.provider.authMode || "Provider default",
-              "Profile default model": draft.provider.defaultModel || "Gateway default",
+              "Provider's suggested model": draft.provider.defaultModel || "None (uses the default model)",
               "Credential environment reference": draft.provider.apiKeyEnv || "None",
               "Google project": draft.provider.googleProjectId,
               "Google project environment": draft.provider.googleProjectIdEnv,
@@ -127,7 +127,7 @@ export function ProviderProfileReview({
           ) : null}
           {!current ? (
             <p role="alert" className="text-status-waiting">
-              This review is stale. Close it and review the current draft and settings revision.
+              This review is out of date. Close it and review the current draft and saved settings.
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">

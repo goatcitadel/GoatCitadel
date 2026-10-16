@@ -62,7 +62,7 @@ export function IntegrationMeetSettings({ owner: s }: { owner: IntegrationSettin
           Review meeting preparation
         </Button>
         <Button disabled={s.meetMutation.pending || s.loading} onClick={() => void s.reload()}>
-          Refresh meeting evidence
+          Refresh meeting status
         </Button>
       </div>
       <details>
@@ -77,7 +77,7 @@ export function IntegrationMeetSettings({ owner: s }: { owner: IntegrationSettin
           </ul>
         ) : (
           <p role="status" className="mt-2 text-sm text-status-waiting">
-            Prerequisite evidence is unavailable.
+            Prerequisites could not be checked.
           </p>
         )}
       </details>

@@ -22,7 +22,7 @@ export function IntegrationFormFields({
   if (!schema)
     return (
       <p role="status" className="text-sm text-fg-muted">
-        Structured configuration fields are unavailable. Refresh the owner or inspect the advanced configuration.
+        Structured configuration fields are unavailable. Refresh, or check the advanced configuration.
       </p>
     );
   return (
@@ -63,13 +63,12 @@ export function IntegrationFormFields({
                 />
                 {field.type === "json" ? (
                   <p className="text-xs text-fg-muted">
-                    Structured values are inspection-only here. Use this connector’s dedicated setup owner to change
-                    them.
+                    Structured values are inspection-only here. Change them in this connector’s own setup.
                   </p>
                 ) : null}
                 {credential ? (
                   <p className="text-xs text-fg-muted">
-                    Use the supported secure setup owner for this credential. General configuration cannot replace it.
+                    Use this connector’s secure setup for this credential. General configuration cannot replace it.
                   </p>
                 ) : null}
                 {field.secretRef && field.type === "text" && field.key.endsWith("Env") ? (
@@ -78,7 +77,7 @@ export function IntegrationFormFields({
                 {field.secretRef && field.type === "url" ? (
                   <p className="text-xs text-fg-muted">
                     Enter a public endpoint URL. Keep an unchanged masked value to retain its saved credential.
-                    Credential-bearing URLs cannot be replaced here; use this connector’s supported credential owner or
+                    Credential-bearing URLs cannot be replaced here; use this connector’s secure credential setup or
                     reference.
                   </p>
                 ) : null}

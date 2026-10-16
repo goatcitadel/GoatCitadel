@@ -57,7 +57,7 @@ it("opens the advanced expression for a custom schedule without changing it", as
   await render("*/5 * * * *");
   expect(select().value).toBe("custom");
   expect(container.querySelector('input[type="time"]')).toBeNull();
-  expect(container.textContent).toContain("Custom schedule: */5 * * * *");
+  expect(container.textContent).toContain("Every 5 minutes");
 });
 
 it("keeps Custom expression selected after choosing it, until a guided option is chosen", async () => {

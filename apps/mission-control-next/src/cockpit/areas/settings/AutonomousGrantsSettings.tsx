@@ -66,10 +66,10 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
       <Button size="sm" disabled={snapshot.isFetching || control.pending} onClick={() => void snapshot.refetch()}>
         Refresh autonomous grants
       </Button>
-      {snapshot.isFetching ? <p role="status">Reading autonomous grant evidence…</p> : null}
+      {snapshot.isFetching ? <p role="status">Loading autonomous grants…</p> : null}
       {snapshot.isError ? (
         <p role="alert">
-          Grant evidence unavailable: {snapshot.error instanceof Error ? snapshot.error.message : "Gateway read failed"}
+          Grants could not load: {snapshot.error instanceof Error ? snapshot.error.message : "Gateway read failed"}
         </p>
       ) : null}
       {control.checking ? <p role="status">Reviewing the exact current grant…</p> : null}
@@ -133,7 +133,7 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
                   </dd>
                   <dt>Grantor</dt>
                   <dd>{grant.grantor}</dd>
-                  <dt>Last owner update</dt>
+                  <dt>Last updated</dt>
                   <dd>
                     <TimeText absolute value={grant.updatedAt} />
                   </dd>
@@ -163,7 +163,7 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
         })}
       </ul>
       {!snapshot.isFetching && !snapshot.isError && !items.length ? (
-        <p className="text-sm text-fg-muted">No grants match the current owner view.</p>
+        <p className="text-sm text-fg-muted">No grants match this view.</p>
       ) : null}
       {items.length > limit ? (
         <Button size="sm" onClick={() => setLimit((value) => value + 30)}>

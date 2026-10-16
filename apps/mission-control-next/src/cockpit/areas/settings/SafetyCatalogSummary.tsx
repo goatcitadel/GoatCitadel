@@ -10,8 +10,8 @@ export function SafetyCatalogSummary() {
   const query = useQuery({ queryKey: queryKeys.capabilities(), queryFn: loadCapabilityCatalog });
   const catalog = query.isError ? undefined : query.data;
   const links = [
-    { kind: "tool", label: "Tools", action: "Inspect tools" },
-    { kind: "skill", label: "Skills", action: "Inspect skills" },
+    { kind: "tool", label: "Tools", action: "Open tools in Library" },
+    { kind: "skill", label: "Skills", action: "Open skills in Library" },
   ];
   return (
     <section aria-labelledby="safety-catalog-title" className="mt-4 rounded-lg border border-line bg-sunken p-4">
@@ -21,7 +21,7 @@ export function SafetyCatalogSummary() {
             Tools and skills
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
-            Review availability, policy evidence, trust, and settings in Library. An entry in the catalog does not
+            Library shows availability, policy, trust, and settings for each entry. An entry in the catalog does not
             bypass approvals or grant permission for a specific action.
           </p>
         </div>
@@ -31,7 +31,7 @@ export function SafetyCatalogSummary() {
       </div>
       {query.isPending ? (
         <p role="status" className="mt-3 text-sm text-fg-muted">
-          Loading capability evidence…
+          Loading tools and skills…
         </p>
       ) : null}
       {query.isError ? (
@@ -43,7 +43,7 @@ export function SafetyCatalogSummary() {
         <>
           {catalog.issues.length ? (
             <p className="mt-3 text-sm text-status-waiting">
-              Some catalog sources are unavailable. Library shows their coverage and current evidence.
+              Some catalog sources are unavailable, so these counts may be incomplete.
             </p>
           ) : null}
           <div className="mt-3 grid gap-3 sm:grid-cols-2">

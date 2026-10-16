@@ -28,9 +28,7 @@ async function lastTurn(page, content) {
     element.scrollTop = element.scrollHeight;
     element.dispatchEvent(new element.ownerDocument.defaultView.Event("scroll", { bubbles: true }));
   });
-  const turn = messages
-    .getByRole("article", { name: "Conversation messages", exact: true })
-    .filter({ hasText: content });
+  const turn = messages.locator("article[data-turn-id]").filter({ hasText: content });
   await turn.waitFor();
   return turn;
 }

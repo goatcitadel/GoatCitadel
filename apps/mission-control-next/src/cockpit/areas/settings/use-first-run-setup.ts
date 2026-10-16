@@ -104,7 +104,7 @@ export function useFirstRunSetup(workspaceId: string | undefined) {
               : approval.draft.isDirty || approval.draft.hasRemoteChanges
                 ? "Save or reconcile the approval-rule draft, then refresh checks and review the current rule."
                 : !approvalReady
-                  ? "Refresh checks to confirm the current approval rule and settings revision."
+                  ? "Refresh checks to confirm the current approval rule and saved settings."
                   : !progress.safeApprovalMode
                     ? "Choose and save an approval rule that keeps prompts, then refresh checks and review the current rule."
                     : !safetyConfirmed

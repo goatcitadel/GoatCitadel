@@ -28,7 +28,7 @@ export function ApprovalReviewSummary({ approval, workspaceId }: { approval: App
       </p>
       <p>
         <strong>Expiry:</strong>{" "}
-        {approval.expiresAt ? <TimeText value={approval.expiresAt} absolute /> : "No expiry recorded by Gateway"}
+        {approval.expiresAt ? <TimeText value={approval.expiresAt} absolute /> : "No expiry set"}
         {approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now() ? " · Expired" : ""}
       </p>
       {/* Generic targets arrive already labelled ("Path", "Target"); purpose-specific ones are bare values. */}
@@ -70,7 +70,7 @@ export function ApprovalReviewSummary({ approval, workspaceId }: { approval: App
         <strong>Consequence:</strong>{" "}
         {evidence?.consequence ??
           approval.explanation?.riskExplanation ??
-          "Gateway may execute the exact reviewed action after approval; deny withholds authorization. The decision alone does not prove work resumed or completed."}
+          "After approval, the exact reviewed action may run; denying withholds it. The decision alone does not show the work resumed or completed."}
       </p>
       <TechnicalDetails label="Scope identifiers">
         <p className="break-all font-mono text-xs">

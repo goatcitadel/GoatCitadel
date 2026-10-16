@@ -60,7 +60,10 @@ export function LibraryEngineeringReceipt({
               ? "Original learning effect completed with the exact learning and action."
               : "No completed learning effect is confirmed by this receipt."}
           </p>
-          <p>Current learning: {data.current.status}. This readback is separate from the original effect.</p>
+          <p>
+            Current learning: {data.current.status}. This is the saved record now, checked separately from the original
+            change.
+          </p>
           <TechnicalDetails label="Learning effect provenance">
             <p>
               {data.effect?.effectId} · {data.effect?.status} · {data.effect?.completedAt}

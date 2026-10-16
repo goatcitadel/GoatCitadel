@@ -130,7 +130,7 @@ function AuditRecovery({
         attemptKey,
         token,
         "resolved",
-        "Resume request recorded. Read the original linked work for its current outcome.",
+        "Resume requested. Use Open run detail to check its outcome.",
       );
       if (!access.current()) return;
       setReview(undefined);
@@ -145,11 +145,11 @@ function AuditRecovery({
           attemptKey,
           token,
           "uncertain",
-          `Resume outcome is uncertain. Inspect current work before another request. ${describeApiError(cause).summary}`,
+          `Resume outcome is uncertain. Use Open run detail to check it before another request. ${describeApiError(cause).summary}`,
         );
       if (access.current()) {
         setNotice(
-          `${refused ? "Gateway did not accept the resume request. " : sent ? "Resume outcome is uncertain. Inspect current work before another request. " : ""}${describeApiError(cause).summary}`,
+          `${refused ? "Resume was not accepted. " : sent ? "Resume outcome is uncertain. Use Open run detail to check it before another request. " : ""}${describeApiError(cause).summary}`,
         );
         setReview(undefined);
       }
@@ -168,10 +168,10 @@ function AuditRecovery({
           <Button disabled={audit.isFetching || busy} onClick={() => void refresh()}>
             Refresh audit and recovery
           </Button>
-          {audit.isPending ? <p role="status">Reading canonical audit and recovery…</p> : null}
+          {audit.isPending ? <p role="status">Loading decision history and recovery…</p> : null}
           {audit.error ? (
             <p role="alert">
-              {describeApiError(audit.error).summary} Retained evidence may be stale; recovery is unavailable.
+              {describeApiError(audit.error).summary} What is shown may be out of date; recovery is unavailable.
             </p>
           ) : null}
           {notice && !attempt ? <p role="status">{notice}</p> : null}
@@ -220,7 +220,7 @@ function AuditRecovery({
                   </NativeOwnerLink>
                 </>
               ) : (
-                <p>No canonical durable run was returned for recovery.</p>
+                <p>No run is linked to this approval for recovery.</p>
               )}
               {approval.linkage?.sessionId ? (
                 <NativeOwnerLink
@@ -275,7 +275,7 @@ function AuditRecovery({
           if (!value && !busy) setReview(undefined);
         }}
         title="Resume paused run"
-        description="Request continuation of the original canonical checkpoint. Approval decisions and actual resumed work remain separate."
+        description="Ask the run to continue from where it paused. This request alone does not show the work completed."
       >
         <p>Workspace: {workspaceName}</p>
         <TechnicalDetails label="Run identifiers">

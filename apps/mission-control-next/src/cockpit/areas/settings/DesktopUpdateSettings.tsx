@@ -67,7 +67,7 @@ export function DesktopUpdateSettings() {
               </p>
               <p className="text-xs text-fg-muted">
                 {offered.publisherSigned
-                  ? "Verified signed release evidence."
+                  ? "Signed release verified."
                   : "Unsigned preview. Checksum verification does not establish publisher signing."}
               </p>
               {status.phase === "downloading" ? (

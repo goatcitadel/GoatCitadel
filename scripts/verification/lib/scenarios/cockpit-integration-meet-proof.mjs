@@ -127,8 +127,7 @@ export async function runCockpitIntegrationMeetProof({ context, browser, stack, 
           assert.ok(text.includes(meetingUrl) && text.includes("fixture-reference-unverified"));
           assert.ok(text.includes("microphone permission") && text.includes("may contact OpenAI"));
           assert.ok(
-            text.includes("do not join Google Meet or establish live audio") &&
-              text.includes("no atomic revision precondition"),
+            text.includes("do not join Google Meet or establish live audio") && text.includes("is not blocked"),
           );
           await capture("preparation-review");
           await dialog.getByRole("button", { name: "Cancel meeting action", exact: true }).click();

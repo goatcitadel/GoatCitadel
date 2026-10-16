@@ -55,7 +55,7 @@ function CapabilityOwnerLink({ item }: { item: CapabilityCatalogEntry }) {
       encodeURIComponent(item.kind),
     { search: window.location.search, hash: window.location.hash, workspaceId: activeWorkspaceId ?? "default" },
   );
-  if (owner.kind !== "native") return <p role="status">Current capability owner unavailable</p>;
+  if (owner.kind !== "native") return <p role="status">Capability settings unavailable</p>;
   return (
     <NativeOwnerLink href={owner.href} scope={[activeCitadelId, activeWorkspaceId, item.kind, item.capabilityId]}>
       {item.kind === "skill" ? "Open current skills view" : "Open current capability view"}

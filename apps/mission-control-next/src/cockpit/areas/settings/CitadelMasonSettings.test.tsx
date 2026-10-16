@@ -113,7 +113,7 @@ afterEach(async () => {
 describe("native Mason", () => {
   it("shows the honest session/global and no-CAS boundary", () => {
     expect(container.textContent).toContain("global setup records");
-    expect(container.textContent).toContain("no atomic revision guard");
+    expect(container.textContent).toContain("does not block a change made elsewhere");
     expect(button("Start setup").disabled).toBe(false);
   });
   it("requires answer review, cancel is zero-write, and structured save avoids model inference", async () => {

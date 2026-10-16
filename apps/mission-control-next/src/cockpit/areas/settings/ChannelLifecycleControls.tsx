@@ -161,7 +161,7 @@ export function ChannelLifecycleControls({
       if (current()) {
         setNotice(
           review.action === "delete"
-            ? "Deletion confirmed by the Gateway owner."
+            ? "Deleted. The Gateway confirmed it."
             : "Saved channel state confirmed. Connectivity has not been tested.",
         );
         setReview(null);
@@ -212,7 +212,7 @@ export function ChannelLifecycleControls({
         title="Review channel lifecycle change"
         description={
           draft
-            ? "Delete this exact saved draft and its temporary credentials. Existing finalized connections remain governed by their own owner."
+            ? "Delete this exact saved draft and its temporary credentials. Finished connections are not affected."
             : "This affects the saved installation-wide connection and may stop its runtime. External messages and previously completed actions cannot be undone here."
         }
       >

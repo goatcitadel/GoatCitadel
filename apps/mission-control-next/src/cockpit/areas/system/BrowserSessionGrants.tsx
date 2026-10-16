@@ -227,20 +227,16 @@ export function BrowserSessionGrants({
               </TechnicalDetails>
               {live && active ? (
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <Button
-                    disabled={busy || operation.locked}
-                    onClick={() => openGrantReview("rotate", grant)}
-                    aria-label={`Review rotating the grant for ${grant.actorId}`}
-                  >
-                    Review rotation
+                  <Button disabled={busy || operation.locked} onClick={() => openGrantReview("rotate", grant)}>
+                    {/* The actor is the row's visible heading and the grant's subject, so it names the row. */}
+                    Review rotation<span className="sr-only"> for {grant.actorId}</span>
                   </Button>
                   <Button
                     variant="danger"
                     disabled={busy || operation.locked}
                     onClick={() => openGrantReview("revoke", grant)}
-                    aria-label={`Review revoking the grant for ${grant.actorId}`}
                   >
-                    Review revoke
+                    Review revoke<span className="sr-only"> for {grant.actorId}</span>
                   </Button>
                 </div>
               ) : null}

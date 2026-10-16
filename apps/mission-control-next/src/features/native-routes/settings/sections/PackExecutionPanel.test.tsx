@@ -183,7 +183,7 @@ it("native child inspection hands off only the canonical linked proposal and cur
   api.list.mockResolvedValue({ items: [saved] });
   api.get.mockResolvedValue(child);
   await render(true);
-  await click("Inspect linked owner");
+  await click("Open in Inbox");
   expect(inspect).toHaveBeenCalledWith("/inbox?item=capability_proposal%3Aproposal&workspaceId=a");
   expect(api.respond).not.toHaveBeenCalled();
   expect(api.confirm).not.toHaveBeenCalled();

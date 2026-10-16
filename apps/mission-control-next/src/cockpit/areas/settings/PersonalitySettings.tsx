@@ -56,7 +56,7 @@ export function PersonalitySettings() {
       ) : null}
       {!catalog.isLoading && !catalog.isError && !ready ? (
         <p role="alert" className="text-sm text-status-failed">
-          The Gateway did not provide a reviewable personality catalog and revision.
+          The personality list and its saved version could not load.
         </p>
       ) : null}
       {ready ? (
@@ -91,7 +91,7 @@ export function PersonalitySettings() {
           </label>
           {selected ? (
             <div className="space-y-2 rounded-md border border-line-subtle bg-sunken p-3 text-sm text-fg-secondary">
-              <p>{selected.description || "No description supplied by the owner."}</p>
+              <p>{selected.description || "No description."}</p>
               <dl className="grid gap-1">
                 <dt className="font-medium text-fg">Tone</dt>
                 <dd>{selected.tone || "Default voice"}</dd>
@@ -138,7 +138,7 @@ export function PersonalitySettings() {
           </div>
           {catalog.isFetching ? (
             <p role="status" className="text-xs text-fg-muted">
-              Refreshing saved personality evidence…
+              Refreshing saved personalities…
             </p>
           ) : null}
         </>

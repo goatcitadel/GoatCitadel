@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
-import { buildClassicOwnerUrl } from "./classic-owner-navigation.mjs";
+
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export function selectTrustProofCapability(snapshot) {
   assert.equal(snapshot.readOnly, true);
@@ -70,12 +71,13 @@ export async function runCockpitTrustPolicyProof({ context, browser, stack, cita
           const capability = selectTrustProofCapability(snapshot);
           const label = capability.title ?? capability.capabilityId;
           const panel = page.getByRole("region", { name: "Trust and policy", exact: true });
-          await panel.getByRole("searchbox", { name: "Search trust evidence", exact: true }).waitFor();
-          assert.ok((await panel.innerText()).includes("across recorded scopes"));
-          await panel.getByRole("combobox", { name: "Evidence type", exact: true }).selectOption("capability");
-          await panel.getByRole("searchbox", { name: "Search trust evidence", exact: true }).fill(label);
-          await panel.getByRole("button", { name: `Inspect trust evidence ${label}`, exact: true }).click();
-          const dialog = page.getByRole("dialog", { name: `Trust evidence: ${label}`, exact: true });
+          await panel.getByRole("searchbox", { name: "Search trust records", exact: true }).waitFor();
+          assert.ok((await panel.innerText()).includes("Read-only snapshot of recorded trust."));
+          await panel.getByRole("combobox", { name: "Type", exact: true }).selectOption("capability");
+          await panel.getByRole("searchbox", { name: "Search trust records", exact: true }).fill(label);
+          // The row button is named by its visible text: the label, then "Capability · <state> · <owner>".
+          await panel.getByRole("button", { name: new RegExp(`^${escapeRegExp(label)}\\s*Capability · `) }).click();
+          const dialog = page.getByRole("dialog", { name: `Trust record: ${label}`, exact: true });
           await dialog.waitFor();
           const detail = await dialog.innerText();
           assert.ok(
@@ -86,11 +88,12 @@ export async function runCockpitTrustPolicyProof({ context, browser, stack, cita
           assert.ok(detail.includes(capability.trustLabel ?? capability.lifecycleState ?? "Unknown"));
           if (capability.reviewWarning) assert.ok(detail.includes(capability.reviewWarning));
           for (const required of capability.requires ?? []) assert.ok(detail.includes(`Requires ${required}`));
-          assert.equal(
-            await dialog
-              .getByRole("link", { name: "Open Library / Capabilities in detailed settings", exact: true })
-              .getAttribute("href"),
-            buildClassicOwnerUrl("/library/capabilities?shell=classic"),
+          // The owner link opens the native Library page that manages this capability (never the classic view).
+          const ownerLink = dialog.getByRole("link", { name: /^Open Library \/ (?:Capabilities|Skills)$/u });
+          assert.match(
+            (await ownerLink.getAttribute("href")) ?? "",
+            /^\/library(?:\?|$)/u,
+            "Trust owner link left the cockpit Library.",
           );
           await page.addScriptTag({ path: axeSourcePath });
           const screenshotDir = path.join(context.artifactRoot, "screenshots");
@@ -109,9 +112,9 @@ export async function runCockpitTrustPolicyProof({ context, browser, stack, cita
           };
           await audit("detail");
           await dialog.getByRole("button", { name: "Close dialog", exact: true }).click();
-          const search = panel.getByRole("searchbox", { name: "Search trust evidence", exact: true });
+          const search = panel.getByRole("searchbox", { name: "Search trust records", exact: true });
           await search.fill("verification-no-match-b015e925-543f-4e10");
-          await panel.getByText("No trust evidence matches these filters.", { exact: true }).waitFor();
+          await panel.getByText("No trust records match these filters.", { exact: true }).waitFor();
           await search.fill("");
           const refresh = page.waitForResponse(isSnapshot);
           await panel.getByRole("button", { name: "Refresh trust snapshot", exact: true }).click();

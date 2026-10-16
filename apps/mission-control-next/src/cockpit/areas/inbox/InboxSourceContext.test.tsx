@@ -23,7 +23,7 @@ const item: OperatorInboxItem = {
   summary: "Review actual owner",
   createdAt: "2026-10-01T00:00:00Z",
   source: { sessionId: "s", workspaceId: "w", approvalId: "a" },
-  href: "/ops/approvals?shell=classic&approvalId=a",
+  href: "/ops/approvals?approvalId=a",
 };
 const message: InboxSourceMessage = {
   messageId: "m",

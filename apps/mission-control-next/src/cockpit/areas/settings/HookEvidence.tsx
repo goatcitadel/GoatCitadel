@@ -86,7 +86,7 @@ export function HookRunEvidence({ run, workspaceLabel }: { run: HookRunRecord; w
         {run.errorText ? (
           <>
             <dt>Error</dt>
-            <dd>Delivery failure detail is redacted; inspect Gateway audit evidence.</dd>
+            <dd>Delivery failure detail is hidden here; the Gateway audit log keeps it.</dd>
           </>
         ) : null}
       </dl>
@@ -108,7 +108,7 @@ export function HookRunEvidence({ run, workspaceLabel }: { run: HookRunRecord; w
           </dd>
           {run.durableRunId ? (
             <>
-              <dt>Durable run</dt>
+              <dt>Run</dt>
               <dd className="break-all">{run.durableRunId}</dd>
             </>
           ) : null}

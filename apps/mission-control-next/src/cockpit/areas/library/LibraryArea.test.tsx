@@ -4,6 +4,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LibraryArea } from "./LibraryArea";
+import { LIBRARY_SECTION_LABELS } from "./library-sections";
+import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
 vi.mock("./CapabilityCatalog", () => ({ CapabilityCatalog: () => <div>Capability directory</div> }));
 vi.mock("./MeshCapabilityPublications", () => ({
   MeshCapabilityPublications: ({ workspaceId }: { workspaceId: string }) => (
@@ -82,22 +84,35 @@ describe("native Library prompt packs", () => {
     const tab = container.querySelector('[aria-current="page"]');
     expect(tab?.textContent).toBe("Prompt packs");
   });
+  it("names every section tab with the label its page heading uses", async () => {
+    await navigate("/library?shell=cockpit");
+    const tabs = [...container.querySelectorAll<HTMLAnchorElement>('nav[aria-label="Library sections"] a')];
+    expect(tabs.length).toBeGreaterThan(0);
+    for (const tab of tabs) {
+      const section = (new URL(tab.href, "http://cockpit.invalid").pathname.split("/")[2] ??
+        "capabilities") as keyof typeof LIBRARY_SECTION_LABELS;
+      expect(tab.textContent).toBe(LIBRARY_SECTION_LABELS[section]);
+    }
+  });
 });
 
 describe("native Library resource routes", () => {
   it("preserves native Citadel Overview and Blueprint route continuity with exact selected scope", async () => {
     await navigate("/library/citadel-overview?shell=cockpit");
     expect(container.textContent).toContain("Overview for personal");
+    expect(container.querySelector("h1")?.textContent).toBe(CITADEL_PAGE_LABELS["citadel-overview"]);
     expect(container.textContent).not.toContain("Capability directory");
     expect(container.querySelector('[aria-current="page"]')).toBeNull();
     await navigate("/library/citadel-blueprint?shell=cockpit");
     expect(container.textContent).toContain("Blueprint for personal");
+    expect(container.querySelector("h1")?.textContent).toBe("Export/import · Blueprint");
     expect(container.textContent).not.toContain("Capability directory");
     await navigate("/library/citadel-wards?shell=cockpit");
     expect(container.textContent).toContain("Wards for personal");
     expect(container.querySelector('a[href="/library/citadel-wards?shell=classic"]')).toBeNull();
     await navigate("/library/citadel?shell=cockpit");
     expect(container.textContent).toContain("Mason for personal");
+    expect(container.querySelector("h1")?.textContent).toBe(CITADEL_PAGE_LABELS.citadel);
     await navigate("/library/citadel-council?shell=cockpit");
     expect(container.textContent).toContain("Council for personal");
     await navigate("/library/citadel-vault?shell=cockpit");

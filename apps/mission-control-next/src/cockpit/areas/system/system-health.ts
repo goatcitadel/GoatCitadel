@@ -18,7 +18,7 @@ function unknown(id: HealthCheck["id"], title: string, detail: string, inspectPa
   return { id, title, detail, inspectPath, status: { label: "Unknown", tone: "neutral" } };
 }
 
-/** Known to be off. Labelled plainly and kept out of the "lack live proof" summary. */
+/** Known to be off. Labelled plainly and kept out of the "could not be confirmed" summary. */
 function notSetUp(
   id: HealthCheck["id"],
   title: string,
@@ -52,7 +52,7 @@ export function deriveSystemHealthChecks(
     const observed = missing
       .map(
         ({ name, observedAt }) =>
-          `${HEALTH_SOURCE_LABELS[name]}: ${observedAt ? formatAbsoluteTime(observedAt) : "time unavailable"}`,
+          `${HEALTH_SOURCE_LABELS[name]}, checked ${observedAt ? formatAbsoluteTime(observedAt) : "at an unknown time"}`,
       )
       .join("; ");
     // Current actionable evidence remains authoritative even if another contributing source is stale.
@@ -61,7 +61,8 @@ export function deriveSystemHealthChecks(
       ...check,
       notSetUp: false,
       status: actionable ? check.status : { label: "Stale", tone: "neutral" },
-      detail: `${check.detail} Retained observation is stale (last observed ${observed}). ${earlier.find((item) => item.id === check.id)?.detail ?? "Earlier evidence is incomplete."}`,
+      // The current state stays in `detail`; the earlier result is a separate line, never joined into one sentence.
+      lastKnown: `Last known (${observed}): ${earlier.find((item) => item.id === check.id)?.detail ?? "no earlier result is available."}`,
     };
   });
 }

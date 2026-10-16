@@ -54,7 +54,18 @@ export function scheduleCadence(value: string): string {
           : `Every week on ${WEEKDAY_NAMES[Number(timed.day)]}`;
     return `${when} at ${timed.time}${suffix}`;
   }
-  return expression === "0 * * * *" ? `Every hour${suffix}` : `Custom schedule: ${value}`;
+  return intervalCadence(expression, suffix) ?? "Custom schedule";
+}
+/** Minute steps and hourly offsets; callers keep the raw expression in the advanced field or a title. */
+function intervalCadence(expression: string, suffix: string): string | null {
+  if (expression === "* * * * *") return "Every minute";
+  const step = /^\*\/(\d{1,2}) \* \* \* \*$/.exec(expression);
+  if (step && Number(step[1]) >= 1 && Number(step[1]) < 60)
+    return Number(step[1]) === 1 ? "Every minute" : `Every ${Number(step[1])} minutes`;
+  const hourly = /^(\d{1,2}) \* \* \* \*$/.exec(expression);
+  if (!hourly || Number(hourly[1]) >= 60) return null;
+  const minute = Number(hourly[1]);
+  return minute === 0 ? `Every hour${suffix}` : `Every hour at :${String(minute).padStart(2, "0")}${suffix}`;
 }
 
 export type ScheduleCadence = "daily" | "weekdays" | "hourly" | "custom";

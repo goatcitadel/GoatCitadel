@@ -207,7 +207,7 @@ export async function runCockpitMcpModePreviewsProof({ context, browser, stack, 
             waitOwner(REMOTE),
             dialog.getByRole("button", { name: "Refresh MCP previews", exact: true }).click(),
           ]);
-          await dialog.getByText("Remote MCP evidence is unavailable.", { exact: true }).waitFor();
+          await dialog.getByText("Remote MCP preview could not load.", { exact: true }).waitFor();
           assert.equal(await remoteList.count(), 0);
           assert.equal(await descriptorList.count(), 1);
           await capture("partial");

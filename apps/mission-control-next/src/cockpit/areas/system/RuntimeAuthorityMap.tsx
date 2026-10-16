@@ -8,6 +8,8 @@ import { TimeText } from "../../ui/TimeText";
 import { SystemOwnerLink } from "./SystemOwnerLink";
 import { AUTHORITY_CLASS_LABELS, AUTHORITY_DOMAIN, AUTHORITY_FRESHNESS, AUTHORITY_POSTURE } from "./system-vocabulary";
 
+const ATTENTION_POSTURES: ReadonlySet<RuntimeAuthorityItem["posture"]> = new Set(["critical", "attention"]);
+
 /** Server-authored references map to cockpit routes here; record data never supplies an href. */
 function hrefFor(reference: RuntimeAuthorityReference): string {
   switch (reference.kind) {
@@ -44,7 +46,7 @@ function AuthorityRecord({ item, workspaceId }: { item: RuntimeAuthorityItem; wo
       </div>
       <p className="break-words">{item.state}</p>
       <ul className="space-y-1">
-        <li className="break-words">Owner: {item.owner}</li>
+        <li className="break-words">Managed by: {item.owner}</li>
         <li className="break-words">Source: {item.source}</li>
         <li>Scope: {item.scope.kind === "workspace" ? "Current workspace" : "Citadel runtime"}</li>
         <li>Observed: {observed(item.observedAt)}</li>
@@ -78,7 +80,7 @@ export function RuntimeAuthorityMap({ workspaceId }: { workspaceId: string }) {
     void projection.reload().finally(() => setReloading(false));
   };
   const items = projection.data?.items ?? [];
-  const attention = items.filter((item) => item.posture === "critical" || item.posture === "attention").length;
+  const attention = items.filter((item) => ATTENTION_POSTURES.has(item.posture)).length;
   return (
     <section
       aria-labelledby="runtime-authority-title"

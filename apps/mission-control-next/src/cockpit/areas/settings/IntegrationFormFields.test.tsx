@@ -52,7 +52,7 @@ const gmail: IntegrationFormSchema = {
   ],
 } as IntegrationFormSchema;
 
-const LOCK_NOTICE = "Use the supported secure setup owner for this credential.";
+const LOCK_NOTICE = "Use this connector’s secure setup for this credential.";
 const input = (label: string) => {
   const node = [...container.querySelectorAll("label")].find((item) => item.textContent?.startsWith(label));
   return container.querySelector<HTMLInputElement>(`#${CSS.escape(node?.getAttribute("for") ?? "")}`);

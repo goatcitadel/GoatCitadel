@@ -197,7 +197,7 @@ export async function runCockpitProviderManagementProof({ context, browser, stac
           await editor.getByLabel("Provider ID", { exact: true }).fill(providerId);
           await editor.getByLabel("Provider label", { exact: true }).fill(label);
           await editor.getByLabel("Provider base URL", { exact: true }).fill(stub.baseUrl);
-          await editor.getByLabel("Profile default model", { exact: true }).fill(DETERMINISTIC_LLM_MODEL);
+          await editor.getByLabel("Provider's suggested model", { exact: true }).fill(DETERMINISTIC_LLM_MODEL);
           await editor.getByLabel("Provider API style", { exact: true }).selectOption("openai-chat-completions");
           await editor.getByLabel("Credential mode", { exact: true }).selectOption("api-key");
           await editor.getByLabel("API key environment variable", { exact: true }).fill(envVar);

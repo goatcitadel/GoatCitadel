@@ -173,7 +173,7 @@ export async function runCockpitCitadelOverviewProof({ context, browser, stack, 
             waitUntil: "domcontentloaded",
           });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
-          panel = page.getByRole("region", { name: "Citadel Overview", exact: true });
+          panel = page.getByRole("region", { name: "Citadel overview", exact: true });
           const reviewTemplate = async () => {
             await panel
               .getByRole("article")
@@ -316,7 +316,7 @@ export async function runCockpitCitadelOverviewProof({ context, browser, stack, 
             .click();
           await page
             .getByRole("navigation", { name: "Library sections", exact: true })
-            .getByRole("link", { name: "Capabilities", exact: true })
+            .getByRole("link", { name: "Skills and tools", exact: true })
             .click();
           await page.evaluate(() => {
             window.history.pushState(null, "", "/library/citadel-overview?shell=cockpit");

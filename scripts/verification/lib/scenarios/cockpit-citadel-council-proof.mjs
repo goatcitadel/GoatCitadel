@@ -259,7 +259,7 @@ export async function runCockpitCitadelCouncilProof({ context, browser, stack, v
           const nav = page.getByRole("navigation", { name: "Settings pages", exact: true });
           await nav.getByRole("link", { name: "General", exact: true }).click();
           await nav.getByRole("link", { name: "Citadel", exact: true }).click();
-          await page.getByRole("tab", { name: "Council", exact: true }).click();
+          await page.getByRole("tab", { name: "Agents · Council", exact: true }).click();
           await panel.getByText(/^Citadel access outcome is unconfirmed/).waitFor();
           await manage.click();
           await panel.getByRole("combobox", { name: "Council agent", exact: true }).selectOption(profile.agentId);

@@ -60,7 +60,7 @@ it("reviews exactly the selected tasks, sends nothing on Cancel and one request 
   vi.mocked(commitTaskBulkAction).mockResolvedValue({ kind: "confirmed", tasks: [], changed: 2, matched: 0 });
   await render([task("a"), task("b")]);
   expect(container.textContent).toContain("2 tasks selected");
-  expect(container.textContent).toContain("Runtime runs are not affected");
+  expect(container.textContent).toContain("Runs are not affected");
   await act(async () => button("Unblock…")!.click());
   for (const text of ["Task a", "Task b", "Blocked", "Returns each task to assigned", "nothing is applied"])
     expect(dialog()?.textContent).toContain(text);
@@ -68,11 +68,11 @@ it("reviews exactly the selected tasks, sends nothing on Cancel and one request 
   await act(async () => button("Cancel")!.click());
   expect(dialog()).toBeNull();
   expect(commitTaskBulkAction).not.toHaveBeenCalled();
-  expect(button("Close…")!.className).not.toContain("border-status-failed");
-  await act(async () => button("Close…")!.click());
+  expect(button("Mark done…")!.className).not.toContain("border-status-failed");
+  await act(async () => button("Mark done…")!.click());
   expect(dialog()?.textContent).toContain("refuses the whole batch if any task has no deliverable");
-  expect(button("Close 2 tasks")!.className).toContain("bg-accent");
-  await act(async () => button("Close 2 tasks")!.click());
+  expect(button("Mark 2 tasks done")!.className).toContain("bg-accent");
+  await act(async () => button("Mark 2 tasks done")!.click());
   expect(commitTaskBulkAction).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ action: "close", workspaceId: "ws", reviewed: [task("a"), task("b")] }),
   );
@@ -99,8 +99,8 @@ it("keeps the selection and refreshes when the tasks changed or conflicted", asy
 it("reports a refusal or an unconfirmed outcome without claiming success", async () => {
   vi.mocked(commitTaskBulkAction).mockResolvedValue({ kind: "uncertain", message: "socket hang up" });
   await render([task("a")]);
-  await act(async () => button("Close…")!.click());
-  await act(async () => button("Close 1 task")!.click());
+  await act(async () => button("Mark done…")!.click());
+  await act(async () => button("Mark 1 task done")!.click());
   expect(dialog()?.textContent).toContain("socket hang up");
   expect(onSettled).not.toHaveBeenCalled();
 });
@@ -108,5 +108,5 @@ it("reports a refusal or an unconfirmed outcome without claiming success", async
 it("offers no action without a selection", async () => {
   await render([]);
   expect(button("Unblock…")?.disabled).toBe(true);
-  expect(button("Close…")?.disabled).toBe(true);
+  expect(button("Mark done…")?.disabled).toBe(true);
 });
