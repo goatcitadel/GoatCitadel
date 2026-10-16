@@ -1,6 +1,7 @@
 import { APPROVAL_EXECUTION_LINKAGE_POSTGRES_SQL } from "../approval-execution-linkage-migration.js";
 import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_POSTGRES_SQL } from "../approval-execution-linkage-index-repair.js";
 import { CHANNEL_GUIDED_SETUP_POSTGRES_SQL } from "../channel-guided-setup-schema.js";
+import { MAIL_DRAFTS_POSTGRES_SQL, MAIL_DRAFTS_SCHEMA_CONVERGENCE_POSTGRES_SQL } from "../mail-draft-schema.js";
 import { CHAT_ROUTED_CONTEXT_ADMISSION_POSTGRES_SQL } from "../chat-routed-context-admission-schema.js";
 import { HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL } from "../heartbeat-feature-binding-schema.js";
 import { COMMITMENT_OCCURRENCE_POSTGRES_SQL } from "../commitment-occurrence-schema.js";
@@ -15175,6 +15176,21 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "session_control_unique_index_authority",
     sql: buildPostgresV211SessionControlIndexAuthoritySql(),
     integritySha256: "3a9f7bc1529c9024d79436b5f9926231b3067d8ecb10814f5eb37d3adac4346e",
+  },
+  {
+    // Parity with SQLite v265.
+    version: 212,
+    name: "mail_drafts",
+    sql: MAIL_DRAFTS_POSTGRES_SQL,
+    integritySha256: "ed491a03d198388aa6dc845ceae97f9b940248f7a1905ede1b06f02f692d8be9",
+  },
+  {
+    // Upgraded installs got v212's additive table while fresh installs get the
+    // v2-rendered shape (no CHECK); converge both for the canonical shape gate.
+    version: 213,
+    name: "mail_drafts_schema_convergence",
+    sql: MAIL_DRAFTS_SCHEMA_CONVERGENCE_POSTGRES_SQL,
+    integritySha256: "9f285b44c93f18901fb1405bb04e244f07b230371091df13bc76e8ac2f3856e7",
   },
 ];
 

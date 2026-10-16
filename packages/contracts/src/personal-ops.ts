@@ -101,7 +101,9 @@ export interface MailDraftRecord {
   subject: string;
   bodyText: string;
   approvalId?: string;
-  status: "draft" | "approval_required" | "sent" | "failed";
+  status: "draft" | "approval_required" | "sent" | "failed" | "send_unavailable";
+  failureReason?: string;
+  sentAt?: string;
   createdAt: string;
   updatedAt: string;
 }

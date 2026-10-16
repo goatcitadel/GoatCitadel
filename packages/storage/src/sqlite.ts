@@ -1,6 +1,7 @@
 import { APPROVAL_EXECUTION_LINKAGE_SQLITE_SQL } from "./approval-execution-linkage-migration.js";
 import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_SQLITE_SQL } from "./approval-execution-linkage-index-repair.js";
 import { createChannelGuidedSetupSchema } from "./channel-guided-setup-schema.js";
+import { createMailDraftSchema } from "./mail-draft-schema.js";
 import { upgradeChatRoutedContextAdmissionSchema } from "./chat-routed-context-admission-schema.js";
 import { upgradeHeartbeatFeatureBindingSchema } from "./heartbeat-feature-binding-schema.js";
 import { upgradeCommitmentOccurrenceSchema } from "./commitment-occurrence-schema.js";
@@ -7442,6 +7443,7 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
       },
       // PostgreSQL v115 backing-index names need convergence; SQLite already owns the canonical names.
       { version: 264, name: "session_control_unique_index_authority", up: () => undefined },
+      { version: 265, name: "mail_drafts", up: createMailDraftSchema },
     ],
   },
 ];

@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 264,
+      "expectedCount": 265,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 264,
+      "expectedLastVersion": 265,
       "migrations": [
         {
           "version": 1,
@@ -1856,15 +1856,22 @@
           "groupName": "canonical",
           "definitionSha256": "3da3bc9feb85ec5b8eb4871afd9f7a7a007d9556a50bb639621c9e44432581fe",
           "implementationSha256": "cb37e5d9f7cd1aa169cb1e2fe5bf8b761211a7c2c1e0c9cbbb7949466a7071b2"
+        },
+        {
+          "version": 265,
+          "name": "mail_drafts",
+          "groupName": "canonical",
+          "definitionSha256": "b3a4ca2362501bbbabae737ef1af4449f5893ee58a16c4233a529e8450ec591a",
+          "implementationSha256": "7b74f1d90aba4f878b9efcce6739fe021e74fada8297db8e15942de52b59c0bf"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 211,
+      "expectedCount": 213,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 211,
+      "expectedLastVersion": 213,
       "migrations": [
         {
           "version": 1,
@@ -3135,6 +3142,18 @@
           "name": "session_control_unique_index_authority",
           "definitionSha256": "97d2625b07e78a876ce4ab5cc82993b6e558bc0d622e510765a406c5dcf21bb5",
           "runtimeIntegritySha256": "3a9f7bc1529c9024d79436b5f9926231b3067d8ecb10814f5eb37d3adac4346e"
+        },
+        {
+          "version": 212,
+          "name": "mail_drafts",
+          "definitionSha256": "8d5625eb9bef97d90884372279dabf35e9057ddad73928282c13084d353e44ab",
+          "runtimeIntegritySha256": "ed491a03d198388aa6dc845ceae97f9b940248f7a1905ede1b06f02f692d8be9"
+        },
+        {
+          "version": 213,
+          "name": "mail_drafts_schema_convergence",
+          "definitionSha256": "cf4ad110ded236332ec80cbc8a7d67fb7a08abee4aa636456ae531139d53a0e7",
+          "runtimeIntegritySha256": "9f285b44c93f18901fb1405bb04e244f07b230371091df13bc76e8ac2f3856e7"
         }
       ]
     }
