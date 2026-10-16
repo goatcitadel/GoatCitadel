@@ -22,7 +22,10 @@ import {
   type CommsHost,
   type CommsPreApproval,
 } from "./comms-service.js";
-import type { ExternalSideEffectRunStore } from "./external-side-effect-runner-service.js";
+import {
+  DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS,
+  type ExternalSideEffectRunStore,
+} from "./external-side-effect-runner-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 
 function createHost(): CommsHost & { invokeAndUnwrap: ReturnType<typeof vi.fn> } {
@@ -975,6 +978,40 @@ describe("comms pre-approved invocation", () => {
     expect(JSON.stringify(outcome)).toContain("already settled");
     expect(JSON.stringify(outcome)).not.toContain("approval_required");
     expect([...sideEffectRunStore.runs.values()][0]).toMatchObject({ status: "failed_before_boundary" });
+  });
+});
+
+describe("comms claim takeover lease", () => {
+  // A store with the dispatch marker would otherwise give every claim the default lease.
+  function createLeaseRecordingHost(base: ReturnType<typeof createGmailHost>) {
+    const claim = vi.fn(base.mutationStore.claim);
+    const host = { ...base.host, mutationStore: { ...base.mutationStore, claim, markDispatched: vi.fn() } };
+    return { host, claim };
+  }
+
+  it("never leases a plain send or create claim, whose boundary is marked only after dispatch", async () => {
+    const gmail = createLeaseRecordingHost(createGmailHost());
+    await commsGmailSend(gmail.host, gmailInput({ idempotencyKey: "lease-gmail" }));
+    const smtp = createLeaseRecordingHost(createSmtpHost());
+    await commsSmtpSend(smtp.host, gmailInput({ connectionId: "conn-smtp", idempotencyKey: "lease-smtp" }));
+    const calendar = createLeaseRecordingHost(createCalendarHost());
+    await commsCalendarCreate(calendar.host, calendarInput({ idempotencyKey: "lease-cal" }));
+
+    const claims = [gmail, smtp, calendar].flatMap(({ claim }) => claim.mock.calls.map(([input]) => input));
+    expect(claims).toHaveLength(3);
+    for (const input of claims) expect(input).not.toHaveProperty("leaseDurationMs");
+  });
+
+  it("keeps the default takeover lease for a pre-approved invoke, which marks before dispatch", async () => {
+    const { host, claim } = createLeaseRecordingHost(createGmailHost());
+
+    await commsGmailSend(
+      host,
+      gmailInput({ idempotencyKey: "lease-approved" }),
+      createRecordingPreApproval("ap-lease"),
+    );
+
+    expect(claim.mock.calls[0]?.[0]).toMatchObject({ leaseDurationMs: DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS });
   });
 });
 

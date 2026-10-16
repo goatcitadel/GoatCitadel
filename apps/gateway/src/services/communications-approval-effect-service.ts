@@ -290,7 +290,13 @@ export class CommunicationsApprovalEffectService {
     }
     const record = result as Record<string, unknown>;
     const replayOutcome = record.replayOutcome;
-    if (replayOutcome === "duplicate" || replayOutcome === "in_progress" || replayOutcome === "payload_mismatch") {
+    if (
+      replayOutcome === "duplicate" ||
+      replayOutcome === "in_progress" ||
+      replayOutcome === "payload_mismatch" ||
+      // A fenced claim that crossed the dispatch boundary is never redispatched.
+      replayOutcome === "unknown_after_send"
+    ) {
       if (replayOutcome === "duplicate" && (await this.isLedgerRunCompleted(record.sideEffectRunId))) {
         return { replayed: true };
       }
