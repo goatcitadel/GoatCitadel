@@ -200,12 +200,8 @@ describe("dashboard cron routes", () => {
     expect(updateCronJob).not.toHaveBeenCalled();
   });
 
-  it("returns conflict when no_agent creation is disabled by the runtime gate", async () => {
-    const createCronJob = vi.fn(() => {
-      throw new Error(
-        "no_agent cron execution is experimental and disabled by default. Set GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON=true only for local, explicitly governed experiments.",
-      );
-    });
+  it("accepts no_agent creation without any runtime env gate", async () => {
+    const createCronJob = vi.fn((input: Record<string, unknown>) => ({ ...input, revision: 1 }));
 
     app = Fastify();
     app.decorate("services", { cron: { createCronJob } } as never);
@@ -223,10 +219,8 @@ describe("dashboard cron routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({
-      error: expect.stringContaining("GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON"),
-    });
+    expect(response.statusCode, response.body).toBe(201);
+    expect(createCronJob).toHaveBeenCalledTimes(1);
   });
 
   it("updates cron fields without schema rejection", async () => {

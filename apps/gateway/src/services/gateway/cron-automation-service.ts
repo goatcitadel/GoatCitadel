@@ -31,12 +31,7 @@ import {
   normalizeAgentTurnCronActionConfig,
   runAgentTurnCronJob,
 } from "./cron-agent-turn-support.js";
-import {
-  assertCronActionMutationAllowed,
-  isCronActionEnabledForScheduledRun,
-  normalizeNoAgentCronActionConfig,
-  runNoAgentCronJob,
-} from "./cron-no-agent-support.js";
+import { normalizeNoAgentCronActionConfig, runNoAgentCronJob } from "./cron-no-agent-support.js";
 import {
   COST_REPORT_HOURLY_JOB_ID,
   IMPROVEMENT_WEEKLY_JOB_ID,
@@ -45,11 +40,6 @@ import {
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./cron-job-ids.js";
-export {
-  buildNoAgentCronDisabledMessage,
-  EXPERIMENTAL_NO_AGENT_CRON_ENV,
-  isExperimentalNoAgentCronEnabled,
-} from "./cron-no-agent-support.js";
 
 export {
   COST_REPORT_HOURLY_JOB_ID,
@@ -299,7 +289,6 @@ export class CronAutomationService {
       throw new Error(`Cron job already exists: ${jobId}`);
     }
     const action = normalizeCronJobAction(input.action);
-    assertCronActionMutationAllowed(action, "create");
     const job: CronJobRecord = {
       jobId,
       revision: 1,
@@ -356,7 +345,6 @@ export class CronAutomationService {
   ): Promise<CronJobRecord> {
     const current = await this.getCronJob(jobId);
     const action = input.action !== undefined ? normalizeCronJobAction(input.action) : current.action;
-    assertCronActionMutationAllowed(action, "update", current, input);
     const updated: CronJobRecord = {
       ...current,
       name: input.name !== undefined ? normalizeCronJobName(input.name) : current.name,
@@ -1224,7 +1212,7 @@ export class CronAutomationService {
         }
         continue;
       }
-      if (!isScheduledCronAction(job.action) || !isCronActionEnabledForScheduledRun(job.action) || !job.enabled) {
+      if (!isScheduledCronAction(job.action) || !job.enabled) {
         continue;
       }
       if (!isCronJobActive(job, now)) {

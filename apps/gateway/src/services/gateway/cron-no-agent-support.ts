@@ -1,7 +1,7 @@
-import type { CronJobRecord } from "@goatcitadel/contracts";
+import { redactSecretText, type CronJobRecord } from "@goatcitadel/contracts";
 import type { CronJobRuntimeTelemetryPatch } from "@goatcitadel/storage";
 
-export const EXPERIMENTAL_NO_AGENT_CRON_ENV = "GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON";
+const NO_AGENT_STDERR_SUMMARY_MAX_LENGTH = 300;
 
 type NoAgentRunHandler = (input: {
   command: string;
@@ -9,20 +9,6 @@ type NoAgentRunHandler = (input: {
   workdir?: string;
   timeoutMs?: number;
 }) => Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }>;
-
-type CronActionUpdateInput = {
-  name?: string;
-  action?: CronJobRecord["action"];
-  description?: string;
-  schedule?: string;
-  enabled?: boolean;
-  endAt?: string | null;
-  actionConfig?: unknown;
-  workdir?: string | null;
-  contextFrom?: string | null;
-  lastRunOutput?: string | null;
-  lastRunId?: string | null;
-};
 
 export function normalizeNoAgentCronActionConfig(rawValue: Record<string, unknown>): CronJobRecord["actionConfig"] {
   const rawNoAgent =
@@ -62,39 +48,6 @@ export function normalizeNoAgentCronActionConfig(rawValue: Record<string, unknow
   };
 }
 
-export function isCronActionEnabledForScheduledRun(action: CronJobRecord["action"]): boolean {
-  return action !== "no_agent" || isExperimentalNoAgentCronEnabled();
-}
-
-export function assertCronActionMutationAllowed(
-  action: CronJobRecord["action"],
-  operation: "create" | "update",
-  current?: CronJobRecord,
-  input?: CronActionUpdateInput,
-): void {
-  if (action !== "no_agent" || isExperimentalNoAgentCronEnabled()) {
-    return;
-  }
-  if (operation === "update" && current?.action === "no_agent" && input && isOnlyNoAgentDisableUpdate(input)) {
-    return;
-  }
-  throw new Error(buildNoAgentCronDisabledMessage());
-}
-
-export function assertExperimentalNoAgentCronEnabled(): void {
-  if (!isExperimentalNoAgentCronEnabled()) {
-    throw new Error(buildNoAgentCronDisabledMessage());
-  }
-}
-
-export function isExperimentalNoAgentCronEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return /^(1|true|yes|on)$/i.test(env[EXPERIMENTAL_NO_AGENT_CRON_ENV]?.trim() ?? "");
-}
-
-export function buildNoAgentCronDisabledMessage(): string {
-  return `no_agent cron execution is experimental and disabled by default. Set ${EXPERIMENTAL_NO_AGENT_CRON_ENV}=true only for local, explicitly governed experiments.`;
-}
-
 export async function runNoAgentCronJob(input: {
   job: CronJobRecord;
   normalizedJobId: string;
@@ -108,7 +61,6 @@ export async function runNoAgentCronJob(input: {
   publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => Promise<unknown>;
   computeNextCronRunAt: (schedule: string, from: Date, endAt?: string) => string | undefined;
 }): Promise<Record<string, unknown>> {
-  assertExperimentalNoAgentCronEnabled();
   const noAgentConfig = input.job.actionConfig?.noAgent;
   if (!noAgentConfig?.command) {
     throw new Error(`no_agent cron job missing command: ${input.normalizedJobId}`);
@@ -122,6 +74,22 @@ export async function runNoAgentCronJob(input: {
   const finishedAt = new Date().toISOString();
   const stdoutTrimmed = runResult.stdout.replace(/\r?\n$/, "");
   const hasOutput = stdoutTrimmed.length > 0;
+  const failed = runResult.timedOut || (runResult.exitCode !== null && runResult.exitCode !== 0);
+  // A spawn error settles with exitCode null and no timeout; that is a failed run too.
+  const spawnFailed = runResult.exitCode === null && !runResult.timedOut;
+  if (hasOutput) {
+    await input.publishRealtime("cron_job_run", "cron", {
+      type: "cron_no_agent_output",
+      jobId: input.job.jobId,
+      runId: input.runId,
+      output: stdoutTrimmed,
+      deliveryChannel: noAgentConfig.deliveryChannel,
+    });
+  }
+  if (failed || spawnFailed) {
+    // The caller records this as a failed run (lastRunStatus "failed", lastFailure, evidence).
+    throw new Error(summarizeNoAgentFailure(input.normalizedJobId, runResult));
+  }
   const saved = await input.mergeCronJobRuntimeTelemetry(
     input.job.jobId,
     {
@@ -137,43 +105,30 @@ export async function runNoAgentCronJob(input: {
     },
     finishedAt,
   );
-  if (hasOutput) {
-    await input.publishRealtime("cron_job_run", "cron", {
-      type: "cron_no_agent_output",
-      jobId: saved.jobId,
-      runId: input.runId,
-      output: stdoutTrimmed,
-      deliveryChannel: noAgentConfig.deliveryChannel,
-    });
-  }
-  if (runResult.timedOut || (runResult.exitCode !== null && runResult.exitCode !== 0)) {
-    throw new Error(
-      `no_agent cron job failed: ${input.normalizedJobId} (exitCode=${String(runResult.exitCode)}, timedOut=${String(
-        runResult.timedOut,
-      )})`,
-    );
-  }
   return {
-    ...runResult,
+    result: "ok",
     action: input.job.action,
+    exitCode: runResult.exitCode,
+    timedOut: false,
+    stdout: runResult.stdout,
+    stderr: runResult.stderr,
     runId: input.runId,
     hasOutput,
     nextRunAt: saved.nextRunAt,
   };
 }
 
-function isOnlyNoAgentDisableUpdate(input: CronActionUpdateInput): boolean {
-  return (
-    input.enabled === false &&
-    input.name === undefined &&
-    input.action === undefined &&
-    input.description === undefined &&
-    input.schedule === undefined &&
-    input.endAt === undefined &&
-    input.actionConfig === undefined &&
-    input.workdir === undefined &&
-    input.contextFrom === undefined &&
-    input.lastRunOutput === undefined &&
-    input.lastRunId === undefined
-  );
+/** Failed-run summary: exit code, timeout flag, and a bounded, redacted stderr tail. */
+function summarizeNoAgentFailure(
+  normalizedJobId: string,
+  runResult: { stderr: string; exitCode: number | null; timedOut: boolean },
+): string {
+  const stderr = redactSecretText(runResult.stderr.replace(/\s+/g, " ").trim()).value;
+  const bounded =
+    stderr.length > NO_AGENT_STDERR_SUMMARY_MAX_LENGTH
+      ? `...${stderr.slice(stderr.length - NO_AGENT_STDERR_SUMMARY_MAX_LENGTH + 3)}`
+      : stderr;
+  return `no_agent cron job failed: ${normalizedJobId} (exitCode=${String(runResult.exitCode)}, timedOut=${String(
+    runResult.timedOut,
+  )})${bounded ? ` stderr: ${bounded}` : ""}`;
 }

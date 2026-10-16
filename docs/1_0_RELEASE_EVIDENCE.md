@@ -149,9 +149,9 @@ Current shell posture for this map:
 
 - Mesh readiness is owned by [packages/mesh-core/src/mesh-service.ts](../packages/mesh-core/src/mesh-service.ts), Gateway routing in [apps/gateway/src/services/mesh-route-service.ts](../apps/gateway/src/services/mesh-route-service.ts) and [apps/gateway/src/routes/mesh.ts](../apps/gateway/src/routes/mesh.ts), contracts in [packages/contracts/src/mesh.ts](../packages/contracts/src/mesh.ts), and Settings visibility in [apps/mission-control-next/src/features/native-routes/SettingsNativePage.tsx](../apps/mission-control-next/src/features/native-routes/SettingsNativePage.tsx). `GET /api/v1/mesh/readiness` reports blockers and evidence-lane status for local node, join-token lifecycle, mTLS/tailnet posture, lease lifecycle, session-owner failover, replication offsets, Gateway route visibility, and Settings visibility. `pnpm verify:mesh:readiness` is the named promotion lane and exercises join, lease acquire/renew/release, owner claim/takeover, replication event/offset behavior, and readiness diagnostics.
 
-### Experimental Cron
+### No-Agent Cron
 
-- `GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON` / `no_agent` cron execution is experimental, local-only, disabled by default, and outside the `1.0` merge guarantee. Do not cite the superpowers plan or manual checklist as shipped release evidence unless this flag is separately promoted in [docs/1_0_CONTRACT.md](./1_0_CONTRACT.md) and backed by current proof lanes.
+- `no_agent` cron jobs run a local command (no model call, `shell: false`, bounded timeout) under the operator-only `/api/v1/cron` route class, with no environment gate. `pnpm verify:cron:no-agent` is the named local-only proof lane: it wires the real `CronAutomationService` to the real command runner and asserts stdout delivery in the `cron_no_agent_output` realtime event, literal (non-shell) argument passing, `ok` and `failed` run outcomes with evidence, bounded redacted stderr summaries, child termination on timeout, and that no model or provider handler is invoked. It proves the source checkout only; it does not prove an installed app. The manual checklist in [docs/cron-no-agent-subagent-controls-verify.md](./cron-no-agent-subagent-controls-verify.md) is a sanity probe, not release evidence.
 
 ### Extensions
 
