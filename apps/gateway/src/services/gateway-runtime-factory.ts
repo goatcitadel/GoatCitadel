@@ -125,7 +125,8 @@ export function createGatewayAdminRuntime(config: GatewayRuntimeConfig): Gateway
 }
 
 function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInstance {
-  const channelStreams = getChannelStreamRuntime(gateway);
+  // Resolved at call time so admin/cron runtimes that only init() never construct the stream runtime.
+  const channelStreams = () => getChannelStreamRuntime(gateway);
   return {
     get browserSessionRuntimeService() {
       return gateway.browserSessionRuntimeService;
@@ -151,7 +152,7 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
     createRemoteWorkerAdmissionNativeRequestHandler: (config) => composeGatewayNativeWorkerHandler(gateway, config),
     attachDevDiagnosticsLogger: (logger) => gateway.attachDevDiagnosticsLogger(logger),
     close: async () => {
-      await channelStreams.close();
+      await channelStreams().close();
       await gateway.close();
     },
     getOnboardingStartupState: () => gateway.getOnboardingStartupState(),
@@ -160,13 +161,13 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
     recordDevDiagnostic: (input) =>
       gateway.recordDevDiagnostic(input as Parameters<GatewayService["recordDevDiagnostic"]>[0]),
     stopExternalAdmission: async () => {
-      await channelStreams.close();
+      await channelStreams().close();
       await gateway.stopExternalAdmission();
     },
     startDeferredInit: async (signal) => {
       await gateway.startDeferredInit(signal);
       // Persistent channel streams start only on the serving path, never for admin/cron CLIs that call init().
-      if (!signal?.aborted) await channelStreams.sync();
+      if (!signal?.aborted) await channelStreams().sync();
     },
     validateCompanionAccessToken: (token) => gateway.validateCompanionAccessToken(token),
     validateDeviceAccessToken: (token) => gateway.validateDeviceAccessToken(token),
