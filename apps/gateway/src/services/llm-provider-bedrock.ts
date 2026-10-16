@@ -25,6 +25,8 @@ import { decodeBedrockEventStream } from "./llm-provider-bedrock-stream.js";
 const MAX_BEDROCK_ERROR_BODY_BYTES = 64 * 1024;
 const BEDROCK_ERROR_BODY_TIMEOUT_MS = 5000;
 const BEDROCK_EVENT_STREAM_CONTENT_TYPE = "application/vnd.amazon.eventstream";
+const BEDROCK_SECURITY_TOKEN_ECHO_PATTERN = /(x-amz-security-token\s*[:=]\s*)[^\s,;"'&]+/gi;
+const BEDROCK_CREDENTIAL_ECHO_PATTERN = /(Credential\s*=\s*)[^\s,;"'&]+/gi;
 const BEDROCK_REGION_PATTERN = /bedrock-runtime(?:-fips)?\.([a-z]{2}(?:-gov)?-[a-z]+-\d)\./;
 const BEDROCK_IMAGE_FORMATS: Readonly<Record<string, string>> = {
   "image/png": "png",
@@ -171,7 +173,8 @@ async function* streamBedrockConverseResponse(
     for await (const event of decodeBedrockEventStream(dispatched.response.body)) {
       await accounting?.renewLease();
       if (event.messageType !== "event") {
-        const message = typeof event.payload.message === "string" ? event.payload.message : "unknown error";
+        const message =
+          typeof event.payload.message === "string" ? redactBedrockErrorText(event.payload.message) : "unknown error";
         throw new Error(`Bedrock stream error (${event.exceptionType ?? event.eventType}): ${message}`);
       }
       const payload = event.payload;
@@ -513,7 +516,7 @@ export function adaptBedrockConverseResponse(json: Record<string, unknown>, mode
   const message = isRecord(output?.message) ? output.message : undefined;
   const blocks = Array.isArray(message?.content) ? message.content.filter(isRecord) : [];
   const textParts: string[] = [];
-  const reasoning: Array<Record<string, unknown>> = [];
+  const reasoningParts: string[] = [];
   const toolCalls: Array<Record<string, unknown>> = [];
   for (const block of blocks) {
     if (typeof block.text === "string") {
@@ -526,7 +529,7 @@ export function adaptBedrockConverseResponse(json: Record<string, unknown>, mode
       });
     } else if (isRecord(block.reasoningContent) && isRecord(block.reasoningContent.reasoningText)) {
       const text = block.reasoningContent.reasoningText.text;
-      if (typeof text === "string" && text) reasoning.push({ type: "reasoning", text });
+      if (typeof text === "string" && text) reasoningParts.push(text);
     }
   }
   const usage = normalizeBedrockUsage(isRecord(json.usage) ? json.usage : undefined);
@@ -539,7 +542,8 @@ export function adaptBedrockConverseResponse(json: Record<string, unknown>, mode
         message: {
           role: "assistant",
           content: textParts.join(""),
-          ...(reasoning.length > 0 ? { provider_native_content: reasoning } : {}),
+          // Private reasoning rides on reasoning_content, which LlmService strips from public projections.
+          ...(reasoningParts.length > 0 ? { reasoning_content: reasoningParts.join("") } : {}),
           ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
         },
         finish_reason: mapBedrockStopReason(typeof json.stopReason === "string" ? json.stopReason : undefined),
@@ -595,12 +599,18 @@ function readBedrockErrorMessage(text: string): string {
     const parsed = JSON.parse(text) as unknown;
     if (isRecord(parsed)) {
       const message = parsed.message ?? parsed.Message;
-      if (typeof message === "string" && message.trim()) return message.trim().slice(0, 400);
+      if (typeof message === "string" && message.trim()) return redactBedrockErrorText(message.trim()).slice(0, 400);
     }
   } catch {
     // Non-JSON bodies fall through to the bounded text snippet.
   }
-  return text.slice(0, 400);
+  return redactBedrockErrorText(text).slice(0, 400);
+}
+
+function redactBedrockErrorText(text: string): string {
+  return text
+    .replace(BEDROCK_SECURITY_TOKEN_ECHO_PATTERN, "$1[REDACTED]")
+    .replace(BEDROCK_CREDENTIAL_ECHO_PATTERN, "$1[REDACTED]");
 }
 
 function messageText(content: ChatCompletionRequest["messages"][number]["content"]): string {

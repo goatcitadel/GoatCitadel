@@ -717,4 +717,54 @@ describe("LlmService output-cap recovery", () => {
       }
     },
   );
+
+  it("never rewrites a signed Bedrock payload to recover from an output-cap rejection", async () => {
+    const { service, storage } = createHarness("bedrock-messages", "test-model", "bedrock");
+    const fetchMock = vi.fn(async () => jsonResponse({ message: "Range of max_tokens should be [1, 2048]" }, 400));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      service.chatCompletions(
+        {
+          providerId: "bedrock",
+          model: "test-model",
+          messages: [{ role: "user", content: "answer" }],
+          max_tokens: 4096,
+        },
+        attribution("bedrock-cap"),
+      ),
+    ).rejects.toThrow(/Range of max_tokens/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(storage.modelUsageEvents.list({ turnId: "turn-bedrock-cap" }).items).toEqual([
+      expect.objectContaining({ effectiveOutputTokenCap: 4096 }),
+    ]);
+
+    const retry = (
+      service as unknown as {
+        retryTrackedOutputCapFailure: (input: Record<string, unknown>) => Promise<unknown>;
+      }
+    ).retryTrackedOutputCapFailure.bind(service);
+    const payload = {
+      messages: [{ role: "user", content: [{ text: "answer" }] }],
+      inferenceConfig: { maxTokens: 4096 },
+    };
+    await expect(
+      retry({
+        resolved: { provider: { providerId: "bedrock", apiStyle: "bedrock-messages" }, apiKey: "test-key" },
+        model: "test-model",
+        attribution: attribution("bedrock-direct"),
+        transportAttemptIndex: 0,
+        target: { url: "https://provider.example.test/v1/model/test-model/converse", headers: {} },
+        payload,
+        timeoutMs: 1_000,
+        dispatched: {
+          response: jsonResponse({}, 400),
+          effectivePayload: payload,
+          outputCapRetriesRemaining: 1,
+        },
+        providerErrorText: "Range of max_tokens should be [1, 2048]",
+      }),
+    ).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

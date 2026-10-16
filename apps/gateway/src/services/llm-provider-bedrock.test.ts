@@ -7,6 +7,7 @@ import {
   bedrockProviderAdapter,
   buildBedrockConversePayload,
   parseBedrockRegion,
+  signBedrockRequest,
 } from "./llm-provider-bedrock.js";
 import { decodeBedrockEventStream } from "./llm-provider-bedrock-stream.js";
 import {
@@ -288,7 +289,8 @@ describe("adaptBedrockConverseResponse", () => {
     expect(message.tool_calls).toEqual([
       { id: "tooluse_1", type: "function", function: { name: "search", arguments: '{"q":"goat"}' } },
     ]);
-    expect(message.provider_native_content).toEqual([{ type: "reasoning", text: "thinking about goats" }]);
+    expect(message.reasoning_content).toBe("thinking about goats");
+    expect(message).not.toHaveProperty("provider_native_content");
     expect(String(message.content)).not.toContain("thinking about goats");
     expect(choice?.finish_reason).toBe("tool_calls");
     expect(response.usage).toEqual({ prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 });
@@ -428,6 +430,72 @@ describe("bedrockProviderAdapter.chatCompletions", () => {
     await expect(
       bedrockProviderAdapter.chatCompletions(simpleRequest, bedrockResolution(), "m", createHost()),
     ).rejects.toThrow(/blocked redirect/);
+  });
+
+  it("redacts SigV4 credential material echoed in upstream error text", async () => {
+    const echoed =
+      "Signature mismatch for x-amz-security-token:FQoGZXIvYXdzEXAMPLETOKEN and " +
+      "Credential=AKIATESTTESTTESTTEST/20261015/us-west-2/bedrock/aws4_request, SignedHeaders=host";
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: echoed }), {
+          status: 403,
+          headers: { "content-type": "application/json", "x-amzn-errortype": "InvalidSignatureException" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(echoed, { status: 403, headers: { "content-type": "text/plain" } }));
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const error = await bedrockProviderAdapter
+        .chatCompletions(simpleRequest, bedrockResolution(), "m", createHost())
+        .then(
+          () => undefined,
+          (failure: unknown) => failure as Error,
+        );
+      expect(error?.message).toContain("x-amz-security-token:[REDACTED]");
+      expect(error?.message).toContain("Credential=[REDACTED]");
+      expect(error?.message).not.toContain("FQoGZXIvYXdzEXAMPLETOKEN");
+      expect(error?.message).not.toContain("AKIATESTTESTTESTTEST");
+      expect(error?.message).toContain("SignedHeaders=host");
+    }
+  });
+
+  it("sends exactly the bytes it signed", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-15T12:34:56Z"));
+    try {
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(converseJson(simpleConverseResponse));
+      const request: ChatCompletionRequest = {
+        messages: [
+          { role: "system", content: "Be brief." },
+          { role: "user", content: "Count the goats." },
+        ],
+        max_tokens: 256,
+        temperature: 0.2,
+      };
+      await bedrockProviderAdapter.chatCompletions(
+        request,
+        bedrockResolution(),
+        "anthropic.claude-test:0",
+        createHost(),
+      );
+      const [url, init] = fetchMock.mock.calls[0] ?? [];
+      const sentHeaders = init?.headers as Record<string, string>;
+      const resigned = await signBedrockRequest({
+        url: String(url),
+        body: String(init?.body),
+        headers: { "Content-Type": "application/json" },
+        region: "us-west-2",
+        credentials: {
+          accessKeyId: "AKIATESTTESTTESTTEST",
+          secretAccessKey: SIGV4_SECRET,
+          sessionToken: "test-session",
+        },
+      });
+      expect(sentHeaders["x-amz-date"]).toBe("20261015T123456Z");
+      expect(sentHeaders.authorization).toBe(resigned.authorization);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fails locally when the conversation does not start with a user message", async () => {
@@ -722,6 +790,24 @@ describe("bedrockProviderAdapter.chatCompletionsStream", () => {
     expect(chunks[0]?.choices?.[0]?.message).toMatchObject({ role: "assistant", content: "Hi there" });
     expect(chunks[0]?.usage).toMatchObject({ total_tokens: 5 });
     expect(usage.calls).toEqual(["succeed"]);
+  });
+
+  it("keeps fallback reasoning on reasoning_content, never provider_native_content", async () => {
+    const chunks = await collectStream(
+      converseJson({
+        ...simpleConverseResponse,
+        output: {
+          message: {
+            role: "assistant",
+            content: [{ reasoningContent: { reasoningText: { text: "private hmm" } } }, { text: "Hi there" }],
+          },
+        },
+      }),
+    );
+    const message = chunks[0]?.choices?.[0]?.message as Record<string, unknown>;
+    expect(message.reasoning_content).toBe("private hmm");
+    expect(message).not.toHaveProperty("provider_native_content");
+    expect(message.content).toBe("Hi there");
   });
 
   it("maps HTTP errors and blocks redirects", async () => {

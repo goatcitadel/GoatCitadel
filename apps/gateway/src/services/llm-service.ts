@@ -1316,7 +1316,7 @@ export class LlmService {
       ) {
         return baseResult;
       }
-      if (!outputCapField) {
+      if (!outputCapField?.rewritable) {
         return baseResult;
       }
       let errorText: string;
@@ -1352,7 +1352,7 @@ export class LlmService {
     },
   ): Promise<LlmTrackedJsonDispatch | undefined> {
     const outputCapField = resolveOutputCapPayloadField(input.dispatched.effectivePayload);
-    if (!outputCapField || input.dispatched.outputCapRetriesRemaining <= 0) return undefined;
+    if (!outputCapField?.rewritable || input.dispatched.outputCapRetriesRemaining <= 0) return undefined;
     const requestedOutputTokenCap = input.dispatched.logicalRequestedOutputTokenCap ?? outputCapField.value;
     const decision = resolveOutputCapRecovery({
       errorText: input.providerErrorText,
@@ -4538,17 +4538,28 @@ function applyMaxTokensPayloadField(input: {
   input.payload.max_tokens = input.maxTokens;
 }
 
-function resolveOutputCapPayloadField(
+type OutputCapPayloadField =
+  | { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; value: number; rewritable: true }
+  | { field: "inferenceConfig.maxTokens"; value: number; rewritable: false };
+
+/**
+ * Reads the single output-cap field of a provider payload. Bedrock's nested
+ * `inferenceConfig.maxTokens` is evidence for accounting and dispatch guards
+ * only: its body is SigV4-signed, so output-cap recovery must never rewrite it.
+ */
+export function resolveOutputCapPayloadField(
   payload: Readonly<Record<string, unknown>>,
-): { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; value: number } | undefined {
-  const candidates = (["max_tokens", "max_completion_tokens", "max_output_tokens"] as const)
-    .map((field) => ({ field, value: payload[field] }))
-    .filter(
-      (
-        candidate,
-      ): candidate is { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; value: number } =>
-        Number.isSafeInteger(candidate.value) && (candidate.value as number) > 0,
-    );
+): OutputCapPayloadField | undefined {
+  const isOutputCap = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) > 0;
+  const candidates: OutputCapPayloadField[] = [];
+  for (const field of ["max_tokens", "max_completion_tokens", "max_output_tokens"] as const) {
+    const value = payload[field];
+    if (isOutputCap(value)) candidates.push({ field, value, rewritable: true });
+  }
+  const inferenceConfig = payload.inferenceConfig;
+  if (isRecord(inferenceConfig) && isOutputCap(inferenceConfig.maxTokens)) {
+    candidates.push({ field: "inferenceConfig.maxTokens", value: inferenceConfig.maxTokens, rewritable: false });
+  }
   return candidates.length === 1 ? candidates[0] : undefined;
 }
 

@@ -10,7 +10,7 @@ import {
   createCompletionStreamAggregate,
 } from "./chat-agent-completion-adapters.js";
 import { bedrockEventFrame, bedrockEventStreamResponse, concatBytes } from "./llm-provider-bedrock.test-support.js";
-import { LlmService } from "./llm-service.js";
+import { LlmService, resolveOutputCapPayloadField } from "./llm-service.js";
 import { projectLlmConfigPublicValue } from "./provider-settings-public-projection.js";
 import { SecretStoreService, SecretStoreUnavailableError } from "./secret-store-service.js";
 
@@ -1471,6 +1471,57 @@ describe("LlmService", () => {
       expect(result.url.endsWith("/converse")).toBe(true);
       expect(result.headers.get("authorization")).toMatch(/^AWS4-HMAC-SHA256 /);
       expect(result.headers.get("authorization")).not.toContain("test-secret");
+    });
+
+    it("reads the Bedrock inferenceConfig output cap as read-only evidence", () => {
+      expect(resolveOutputCapPayloadField({ messages: [], inferenceConfig: { maxTokens: 256 } })).toEqual({
+        field: "inferenceConfig.maxTokens",
+        value: 256,
+        rewritable: false,
+      });
+      expect(resolveOutputCapPayloadField({ max_tokens: 64 })).toEqual({
+        field: "max_tokens",
+        value: 64,
+        rewritable: true,
+      });
+      expect(resolveOutputCapPayloadField({ max_tokens: 64, inferenceConfig: { maxTokens: 256 } })).toBeUndefined();
+      expect(resolveOutputCapPayloadField({ inferenceConfig: { maxTokens: 0 } })).toBeUndefined();
+      expect(resolveOutputCapPayloadField({ inferenceConfig: { temperature: 0.2 } })).toBeUndefined();
+    });
+
+    it("never returns Bedrock reasoning text from a public completion", async () => {
+      const service = createBedrockService("aws-bedrock-api-key", { BEDROCK_API_KEY: "bedrock-env-key" });
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              output: {
+                message: {
+                  role: "assistant",
+                  content: [
+                    { reasoningContent: { reasoningText: { text: "PRIVATE-BEDROCK-REASONING", signature: "sig" } } },
+                    { text: "hi there" },
+                  ],
+                },
+              },
+              stopReason: "end_turn",
+              usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ) as unknown as typeof fetch;
+      try {
+        const completion = await service.chatCompletions({
+          providerId: "bedrock",
+          model: bedrockModel,
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect((completion.choices?.[0]?.message as { content?: unknown })?.content).toBe("hi there");
+        expect(JSON.stringify(completion)).not.toContain("PRIVATE-BEDROCK-REASONING");
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
 
     it("streams ConverseStream text deltas", async () => {
