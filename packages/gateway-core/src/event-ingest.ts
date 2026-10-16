@@ -456,6 +456,7 @@ async function flushTranscriptOutboxSession(
   const pending = await storage.transcriptOutbox.listPending(input.limit ?? 100, input.sessionId);
   let deliveredCount = 0;
   let targetOffset = 0;
+  const targetWasPending = pending.some((record) => record.eventId === input.targetEventId);
 
   for (const record of pending) {
     try {
@@ -491,6 +492,13 @@ async function flushTranscriptOutboxSession(
         error: message,
       });
       break;
+    }
+  }
+  if (input.targetEventId && !targetWasPending) {
+    // Another drain may have delivered the target first; report its recorded offset.
+    const delivered = await storage.transcriptOutbox.get(input.targetEventId);
+    if (delivered?.deliveredAt && typeof delivered.transcriptOffset === "number") {
+      targetOffset = delivered.transcriptOffset;
     }
   }
   return { deliveredCount, targetOffset };

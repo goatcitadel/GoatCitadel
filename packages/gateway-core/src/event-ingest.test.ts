@@ -818,6 +818,7 @@ describe("EventIngestService", () => {
       transcriptOutbox: {
         enqueue: vi.fn(),
         listPending: vi.fn(() => []),
+        get: vi.fn(() => undefined),
       },
       transcripts: {
         append: vi.fn(),
@@ -911,6 +912,7 @@ describe("EventIngestService", () => {
       transcriptOutbox: {
         enqueue: vi.fn(),
         listPending: vi.fn(() => []),
+        get: vi.fn(() => undefined),
       },
       transcripts: {
         append: vi.fn(),
@@ -1172,6 +1174,37 @@ describe("EventIngestService", () => {
         const transcript = await storage.transcripts.read(sessionId);
         expect(transcript.filter((entry) => entry.eventId === "evt-1")).toHaveLength(1);
         expect(storage.transcriptOutbox.get("evt-1")?.deliveredAt).toBeDefined();
+      }),
+      20_000,
+    );
+
+    it(
+      "reports the delivered offset when a concurrent drain delivered the target first",
+      withStorage(async (storage) => {
+        const service = new EventIngestService(asAsyncStorage(storage));
+        await service.ingest({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey: "idem-outbox-4a",
+          payload: buildPayload(),
+        });
+        const enqueue = storage.transcriptOutbox.enqueue.bind(storage.transcriptOutbox);
+        let rival: Promise<number> | undefined;
+        vi.spyOn(storage.transcriptOutbox, "enqueue").mockImplementation((...args) => {
+          const record = enqueue(...args);
+          rival = service.flushPendingTranscriptOutbox();
+          return record;
+        });
+
+        const result = await service.ingest({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey: "idem-outbox-4b",
+          payload: { ...buildPayload(), eventId: "evt-2" },
+        });
+        await rival;
+
+        const row = storage.transcriptOutbox.get("evt-2");
+        expect(row?.transcriptOffset).toBeGreaterThan(0);
+        expect(result.transcriptOffset).toBe(row?.transcriptOffset);
       }),
       20_000,
     );
