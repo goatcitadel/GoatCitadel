@@ -39,6 +39,9 @@ export interface MattermostStreamAdapterDeps {
 /** users/me is a small metadata document; anything larger is not a Mattermost user record. */
 const USERS_ME_READ_LIMITS = { maxBytes: 64 * 1024, timeoutMs: 15_000, label: "Mattermost users/me" };
 
+/** Sequence number of the authentication challenge; its reply carries `seq_reply` equal to this. */
+const AUTH_CHALLENGE_SEQ = 1;
+
 /** The bot sends `{"action":"ping"}` this often; the server answers with a pong frame. */
 export const MATTERMOST_PING_INTERVAL_MS = 30_000;
 /** Three missed pongs (no frame at all for this long) means a half-open socket. */
@@ -47,6 +50,7 @@ export const MATTERMOST_IDLE_TIMEOUT_MS = 90_000;
 interface MattermostFrame {
   event?: unknown;
   seq?: unknown;
+  seq_reply?: unknown;
   status?: unknown;
   data?: unknown;
 }
@@ -224,7 +228,7 @@ export function createMattermostStreamAdapter(
         let settled = false;
         let chain: Promise<void> = Promise.resolve();
         let ready = false;
-        let seq = 1;
+        let seq = AUTH_CHALLENGE_SEQ;
         let pingTimer: ReturnType<typeof setInterval> | undefined;
         const markReadyOnce = () => {
           if (ready) return;
@@ -278,7 +282,16 @@ export function createMattermostStreamAdapter(
             return;
           }
           if (frame.status === "FAIL") {
-            finish(new ChannelStreamAuthError("Mattermost rejected the websocket authentication challenge"));
+            // Only a FAIL reply to the authentication challenge means the token was rejected; a FAIL
+            // reply to a ping (or anything else) must not auth-stop the runner.
+            if (frame.seq_reply === AUTH_CHALLENGE_SEQ) {
+              finish(new ChannelStreamAuthError("Mattermost rejected the websocket authentication challenge"));
+            } else {
+              ctx.diagnostic(
+                "frame_failed",
+                "Mattermost reported a failed websocket request (not the authentication challenge).",
+              );
+            }
             return;
           }
           if (frame.status === "OK" || frame.event === "hello") {

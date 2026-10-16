@@ -261,7 +261,7 @@ export class ChannelStreamRuntimeService {
       () => undefined,
     );
     this.retiring.add(settled);
-    void settled.then(() => this.retiring.delete(settled));
+    settled.then(() => this.retiring.delete(settled)).catch(() => undefined);
   }
 
   private safeDiagnostic(input: Parameters<ChannelStreamRuntimeDeps["recordDevDiagnostic"]>[0]): void {

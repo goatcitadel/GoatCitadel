@@ -265,6 +265,18 @@ describe("mattermost stream adapter", () => {
     expect(socket.closed).toBe(true);
   });
 
+  it("does not auth-stop the runner on a FAIL reply to a ping (seq_reply != auth challenge)", async () => {
+    const h = harness();
+    const run = h.adapter.run(h.ctx());
+    const socket = await h.socketOf();
+    socket.open();
+    socket.push({ status: "FAIL", seq_reply: 7, error: { message: "ping failed" } });
+    socket.push(posted(post({ id: "after-fail" })));
+    socket.end();
+    await run;
+    expect(h.emitted.map((entry) => entry.event.message.eventId)).toEqual(["after-fail"]);
+  });
+
   it("throws ChannelStreamAuthError on a users/me 401 or 403 before opening a socket", async () => {
     for (const status of [401, 403]) {
       const h = harness({ me: () => new Response("denied", { status }) });
