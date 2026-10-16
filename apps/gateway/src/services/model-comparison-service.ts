@@ -188,10 +188,15 @@ function buildResultPlaceholder(
     testId,
     candidateId,
     runId: linkedRun?.runId,
-    responseText: linkedRun?.responseText?.trim() || undefined,
+    // Unfinished runs (including those paused for approval) hold partial text; blind judges must not see it.
+    responseText: isRunSettled(linkedRun) ? linkedRun?.responseText?.trim() || undefined : undefined,
     latencyMs: computeRunLatencyMs(linkedRun),
     error: linkedRun?.error ?? (linkedRun?.status === "failed" ? "Prompt-pack run failed." : undefined),
   };
+}
+
+function isRunSettled(run?: PromptPackRunRecord): boolean {
+  return run?.status === "completed" || run?.status === "failed";
 }
 
 export function computeRunLatencyMs(run?: PromptPackRunRecord): number | undefined {

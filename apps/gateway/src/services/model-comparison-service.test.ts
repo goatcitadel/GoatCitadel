@@ -77,6 +77,40 @@ describe("ModelComparisonService", () => {
     });
   });
 
+  it("does not copy partial text from linked runs that have not finished", async () => {
+    const unfinished = (status: PromptPackRunRecord["status"]): PromptPackRunRecord => ({
+      runId: `run-${status}`,
+      packId: "pack-1",
+      testId: "test-a",
+      status,
+      providerId: "openai",
+      model: "gpt-5",
+      responseText: "partial text that must stay hidden",
+      startedAt: "2026-06-05T12:00:00.000Z",
+    });
+    for (const status of ["approval_paused", "running", "queued"] as const) {
+      const service = new ModelComparisonService({
+        repository: new InMemoryModelComparisonRepository(),
+        clock: () => new Date("2026-06-05T12:00:00.000Z"),
+        idFactory: idSequence("comparison-1"),
+        listPromptPackTests: async () => [testRecord("test-a")],
+        listPromptPackRunsByTest: async () => [unfinished(status)],
+      });
+      const run = await service.createComparison({
+        packId: "pack-1",
+        testIds: ["test-a"],
+        candidates: [
+          { providerId: "openai", model: "gpt-5" },
+          { providerId: "anthropic", model: "claude" },
+        ],
+      });
+      const linked = run.results.find((result) => result.candidateId === run.candidates[0]?.candidateId);
+      expect(linked?.runId).toBe(`run-${status}`);
+      expect(linked?.responseText).toBeUndefined();
+      expect(run.advisory?.responseCount).toBe(0);
+    }
+  });
+
   it("persists judgments only for comparison tests and candidates", async () => {
     const repository = new InMemoryModelComparisonRepository();
     const service = new ModelComparisonService({

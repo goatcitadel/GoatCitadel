@@ -61,6 +61,7 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   canonicalJsonString,
+  describeAwsAuthModeApiStyleMismatch,
   ExternalServiceError,
   findProviderTemplate,
   inferProviderForModelId,
@@ -603,6 +604,10 @@ export class LlmService {
         headers: mergeProviderHeaders(existing?.headers, input.upsertProvider.headers),
         capabilities: input.upsertProvider.capabilities ?? existing?.capabilities,
       });
+      const authModeMismatch = describeAwsAuthModeApiStyleMismatch(merged.apiStyle, merged.authMode);
+      if (authModeMismatch) {
+        throw new Error(`Provider "${merged.providerId}": ${authModeMismatch}`);
+      }
       this.providers.set(merged.providerId, merged);
       this.googleCloudAuth.invalidate(merged.providerId);
       this.secretStatusCache.delete(merged.providerId);
