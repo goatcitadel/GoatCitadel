@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Work only in this worktree. Never edit the main checkout `C:\personal-ai`. Never `git stash`.
+- Work only in this worktree. Never edit the main checkout. Never `git stash`.
 - Search with `git grep` (the Grep tool silently omits matches on this tree).
 - Vitest: `pnpm --filter @goatcitadel/gateway exec vitest run <file> --maxWorkers=2`, at low priority, one heavy job at a time. Re-run a failed file alone before treating it as a real failure.
 - Storage tests: `pnpm --filter @goatcitadel/storage exec tsx --test <file>`. Test SQLite through `TempSqliteFiles`.
@@ -102,7 +102,7 @@ Table `mail_drafts`: `draft_id TEXT PRIMARY KEY`, `workspace_id TEXT`, `account_
 - [ ] **Step 7: Real-PG lineage test** `mail-draft-repo.postgres.test.ts`, skipped unless `GOATCITADEL_TEST_POSTGRES_URL` is set (copy the schema-scoped setup from `channel-guided-setup.postgres.test.ts`).
   - (a) *Fresh*: run the full `POSTGRES_MIGRATIONS`, then repo round-trip and CAS `transition`.
   - (b) *Upgraded*: in a second schema, run `POSTGRES_MIGRATIONS.filter(m => m.version <= 211)`, `DROP TABLE mail_drafts`, then run the full list. It must succeed, which includes the schema-shape gate. Then round-trip.
-  - Run it locally against a disposable cluster: `"C:\Program Files\PostgreSQL\16\bin\initdb.exe" -D <scratchpad>\pg -U postgres -A trust`, `pg_ctl -D … -o "-p 54329" start`, `createdb -p 54329 -U postgres goatcitadel_test`, then `GOATCITADEL_TEST_POSTGRES_URL=postgresql://postgres@127.0.0.1:54329/goatcitadel_test`. Stop the cluster afterwards.
+  - Run it locally against a disposable cluster: `"<PostgreSQL 16 bin directory>\initdb.exe" -D <scratchpad>\pg -U postgres -A trust`, `pg_ctl -D … -o "-p 54329" start`, `createdb -p 54329 -U postgres goatcitadel_test`, then `GOATCITADEL_TEST_POSTGRES_URL=postgresql://postgres@127.0.0.1:54329/goatcitadel_test`. Stop the cluster afterwards.
 - [ ] **Step 8:** Run `node --test scripts/verify-storage-migration-parity.test.mjs` and the storage package typecheck. Commit `feat: persist mail drafts in storage`.
 
 ### Task 2: Pre-approved comms invocation + idempotent calendar create (spec 2.3)
