@@ -8,7 +8,14 @@ import { asRecord, asString, type JsonRecord } from "./webhook-json-helpers.js";
  * the default certificate fetcher, whose URLs are fixed Google constants.
  */
 
-export type GoogleChatCertFetcher = (url: string) => Promise<{ certs: Record<string, string>; maxAgeSeconds?: number }>;
+/**
+ * `forceRefresh` asks a caching fetcher to bypass its cache once (used when a
+ * token names a kid the cached set lacks, e.g. right after a key rotation).
+ */
+export type GoogleChatCertFetcher = (
+  url: string,
+  options?: { forceRefresh?: boolean },
+) => Promise<{ certs: Record<string, string>; maxAgeSeconds?: number }>;
 
 export type GoogleChatAudienceType = "project_number" | "endpoint_url";
 
@@ -32,6 +39,8 @@ export const GOOGLE_CHAT_AUDIENCE_TYPES: readonly GoogleChatAudienceType[] = ["p
 const GOOGLE_OIDC_ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
 const CLOCK_SKEW_SECONDS = 60;
 const DEFAULT_CERT_MAX_AGE_SECONDS = 60 * 60;
+/** Minimum spacing between fetches of one URL when an unknown kid forces a refresh. */
+const MIN_FORCED_REFRESH_INTERVAL_MS = 30_000;
 const MAX_CERT_RESPONSE_BYTES = 64 * 1024;
 const CERT_FETCH_TIMEOUT_MS = 10_000;
 const ALLOWED_CERT_URLS = new Set([GOOGLE_CHAT_CERTS_URL, GOOGLE_OIDC_CERTS_URL]);
@@ -78,8 +87,14 @@ export async function verifyGoogleChatBearer(input: {
   }
   const kid = asString(decoded.header.kid);
   const certsUrl = input.audienceType === "project_number" ? GOOGLE_CHAT_CERTS_URL : GOOGLE_OIDC_CERTS_URL;
-  const { certs } = await input.fetchCerts(certsUrl);
-  const pem = kid && Object.prototype.hasOwnProperty.call(certs, kid) ? certs[kid] : undefined;
+  if (!kid) {
+    return { ok: false, reason: "unknown_kid" };
+  }
+  let pem = pickCert((await input.fetchCerts(certsUrl)).certs, kid);
+  if (!pem) {
+    // One bounded refetch that bypasses the cache: Google may have rotated keys since the cached set.
+    pem = pickCert((await input.fetchCerts(certsUrl, { forceRefresh: true })).certs, kid);
+  }
   if (!pem) {
     return { ok: false, reason: "unknown_kid" };
   }
@@ -87,6 +102,10 @@ export async function verifyGoogleChatBearer(input: {
     return { ok: false, reason: "bad_signature" };
   }
   return checkClaims(decoded.claims, input.audienceType, input.audience, (input.now ?? Date.now)());
+}
+
+function pickCert(certs: Record<string, string>, kid: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(certs, kid) ? certs[kid] : undefined;
 }
 
 function checkClaims(
@@ -180,15 +199,23 @@ export function createCachedGoogleChatCertFetcher(
   upstream: GoogleChatCertFetcher,
   now: () => number = Date.now,
 ): GoogleChatCertFetcher {
-  const cache = new Map<string, { expiresAt: number; value: Awaited<ReturnType<GoogleChatCertFetcher>> }>();
-  return async (url) => {
+  const cache = new Map<
+    string,
+    { fetchedAt: number; expiresAt: number; value: Awaited<ReturnType<GoogleChatCertFetcher>> }
+  >();
+  return async (url, options) => {
     const cached = cache.get(url);
-    if (cached && cached.expiresAt > now()) {
+    // A forced refresh is honored at most once per MIN_FORCED_REFRESH_INTERVAL_MS per URL, so a
+    // stream of tokens with made-up kids cannot turn into a stream of upstream fetches.
+    const forced =
+      options?.forceRefresh === true && (!cached || now() - cached.fetchedAt >= MIN_FORCED_REFRESH_INTERVAL_MS);
+    if (cached && cached.expiresAt > now() && !forced) {
       return cached.value;
     }
     const value = await upstream(url);
     const maxAgeSeconds = value.maxAgeSeconds ?? DEFAULT_CERT_MAX_AGE_SECONDS;
-    cache.set(url, { expiresAt: now() + maxAgeSeconds * 1000, value });
+    const fetchedAt = now();
+    cache.set(url, { fetchedAt, expiresAt: fetchedAt + maxAgeSeconds * 1000, value });
     return value;
   };
 }

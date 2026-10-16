@@ -148,6 +148,15 @@ describe("Google Chat app webhook route", () => {
     expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
   });
 
+  it("returns 400 when an audience is configured without a service-account key (no Chat app mode)", async () => {
+    const ctx = await buildApp({ connection: buildConnection({ serviceAccountKeyEnv: undefined }) });
+    const response = await post(ctx.app, validToken());
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: expect.stringContaining("service-account key") });
+    expect(ctx.fetchCerts).not.toHaveBeenCalled();
+    expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
+  });
+
   it("dispatches a verified message with a stable idempotency key, and replays with the identical key", async () => {
     const ctx = await buildApp({ connection: buildConnection() });
     const token = validToken();

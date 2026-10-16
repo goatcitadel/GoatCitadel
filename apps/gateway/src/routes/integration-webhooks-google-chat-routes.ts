@@ -36,6 +36,18 @@ export function registerGoogleChatWebhookRoutes(
       rawBodyKey: "googleChatRawBody",
       missingRawBodyError: "Missing Google Chat raw request body",
       verifySignature: async ({ request, connection }) => {
+        // Mirrors channel-core capability truth: inbound exists only in Chat app (service-account) mode.
+        if (
+          !readConfigString(connection.config.serviceAccountKeyEnv) &&
+          !readConfigString(connection.config.serviceAccountKey)
+        ) {
+          return {
+            ok: false as const,
+            statusCode: 400,
+            error:
+              "Google Chat inbound requires Chat app mode: configure a service-account key (serviceAccountKeyEnv or serviceAccountKey)",
+          };
+        }
         const audienceType = connection.config.audienceType;
         const audience = readConfigString(connection.config.audience);
         if (!isGoogleChatAudienceType(audienceType) || !audience) {

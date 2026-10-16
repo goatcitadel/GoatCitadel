@@ -3257,6 +3257,40 @@ describe("executeTool", () => {
       expect(new Headers(deleteCall?.[1].headers).get("authorization")).toBe("Bearer ya29.app-token");
     });
 
+    it("rejects Google Chat unsend in webhook mode because only Chat app mode can delete", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = googleChatApiFetchMock();
+      vi.stubGlobal("fetch", fetchMock);
+      const webhookStorage = {
+        integrationConnections: {
+          get: vi.fn(() => ({
+            connectionId: "conn-google-chat-webhook",
+            key: "google-chat",
+            config: { webhookUrl: "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=k&token=t" },
+          })),
+        },
+        commsDeliveries: googleChatAppStorage("delivery-google-chat-webhook-unsend").commsDeliveries,
+      } as unknown as Storage & AsyncStorage;
+
+      const outcome = await executeTool(
+        {
+          toolName: "channel.unsend",
+          args: { connectionId: "conn-google-chat-webhook", messageId: "spaces/AAAA/messages/m1" },
+          agentId: "operator",
+          sessionId: "sess-google-chat-webhook-unsend",
+        },
+        googleChatPolicy,
+        webhookStorage,
+      ).catch((error: unknown) => ({
+        status: "thrown",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+
+      expect(JSON.stringify(outcome)).toContain("requires Chat app (service-account) mode");
+      expect(outcome).not.toMatchObject({ status: "sent" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it("rejects an invalid Google Chat message name before any fetch", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
       const fetchMock = googleChatApiFetchMock();

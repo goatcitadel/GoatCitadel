@@ -188,6 +188,61 @@ describe("verifyGoogleChatBearer", () => {
   });
 });
 
+describe("unknown kid certificate refresh", () => {
+  const ROTATED_KID = "rotated-in";
+
+  it("refetches once, bypassing the cache, when a token names a kid the cached set lacks", async () => {
+    let nowMs = NOW_MS;
+    const upstream = vi
+      .fn<GoogleChatCertFetcher>()
+      .mockResolvedValueOnce({ certs: { [KID]: PUBLIC_PEM }, maxAgeSeconds: 3600 })
+      .mockResolvedValue({ certs: { [KID]: PUBLIC_PEM, [ROTATED_KID]: PUBLIC_PEM }, maxAgeSeconds: 3600 });
+    const fetchCerts = createCachedGoogleChatCertFetcher(upstream, () => nowMs);
+    const verifyAt = (token: string) =>
+      verifyGoogleChatBearer({
+        authorizationHeader: `Bearer ${token}`,
+        audienceType: "project_number",
+        audience: PROJECT_NUMBER,
+        fetchCerts,
+        now: () => nowMs,
+      });
+
+    await expect(verifyAt(signToken(projectClaims()))).resolves.toEqual({ ok: true });
+    expect(upstream).toHaveBeenCalledTimes(1);
+
+    nowMs += 120_000;
+    const rotated = signToken(projectClaims({ iat: nowMs / 1000 - 10 }), { alg: "RS256", kid: ROTATED_KID });
+    await expect(verifyAt(rotated)).resolves.toEqual({ ok: true });
+    expect(upstream).toHaveBeenCalledTimes(2);
+    // The refreshed set is cached: the rotated kid now verifies without another fetch.
+    await expect(verifyAt(rotated)).resolves.toEqual({ ok: true });
+    expect(upstream).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds forced refreshes so a stream of unknown kids cannot hammer Google", async () => {
+    let nowMs = NOW_MS;
+    const upstream = vi.fn<GoogleChatCertFetcher>(async () => ({ certs: { [KID]: PUBLIC_PEM } }));
+    const fetchCerts = createCachedGoogleChatCertFetcher(upstream, () => nowMs);
+    const verifyKid = (kid: string) =>
+      verifyGoogleChatBearer({
+        authorizationHeader: `Bearer ${signToken(projectClaims({ iat: nowMs / 1000 - 10 }), { alg: "RS256", kid })}`,
+        audienceType: "project_number",
+        audience: PROJECT_NUMBER,
+        fetchCerts,
+        now: () => nowMs,
+      });
+
+    // First fetch populates the cache; the unknown kid gets no forced refresh inside the minimum interval.
+    await expect(verifyKid("unknown-1")).resolves.toEqual({ ok: false, reason: "unknown_kid" });
+    expect(upstream).toHaveBeenCalledTimes(1);
+    nowMs += 31_000;
+    await expect(verifyKid("unknown-2")).resolves.toEqual({ ok: false, reason: "unknown_kid" });
+    expect(upstream).toHaveBeenCalledTimes(2);
+    await expect(verifyKid("unknown-3")).resolves.toEqual({ ok: false, reason: "unknown_kid" });
+    expect(upstream).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("createCachedGoogleChatCertFetcher", () => {
   it("caches certs per URL for maxAge and refetches after expiry", async () => {
     let nowMs = NOW_MS;
