@@ -5,7 +5,6 @@ import type {
   ChatCompletionResponse,
   ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
-import type { ModelUsageAttemptHandle } from "@goatcitadel/gateway-core";
 import type {
   LlmProviderAdapter,
   LlmProviderAdapterHost,
@@ -17,6 +16,7 @@ import {
   applyEstimatedCostToChatResponseWithSource,
   applyEstimatedCostToStreamChunkWithSource,
   observeProviderUsageWithTrustedEstimate,
+  withUsageEvent,
 } from "./llm-pricing.js";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
@@ -253,17 +253,6 @@ async function* streamBedrockConverseResponse(
   } finally {
     if (!terminal) await accounting?.cancel(new Error("stream consumer cancelled"));
   }
-}
-
-function withUsageEvent<T extends object>(
-  value: T,
-  accounting: ModelUsageAttemptHandle | undefined,
-  priorModelUsageEventIds: readonly string[],
-): T & { model_usage_event_id?: string; model_usage_event_ids?: string[] } {
-  const eventIds = [...new Set([...priorModelUsageEventIds, ...(accounting ? [accounting.eventId] : [])])];
-  return eventIds.length > 0
-    ? { ...value, model_usage_event_id: eventIds.at(-1), model_usage_event_ids: eventIds }
-    : value;
 }
 
 /**

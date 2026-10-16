@@ -303,6 +303,22 @@ export function applyEstimatedCostToChatResponseWithSource(
   );
 }
 
+/** Tags a provider response or stream chunk with its model-usage event ids. */
+export function withUsageEvent<T extends object>(
+  value: T,
+  accounting: { readonly eventId: string } | undefined,
+  priorModelUsageEventIds: readonly string[] = [],
+): T & { model_usage_event_id?: string; model_usage_event_ids?: string[] } {
+  const eventIds = [...new Set([...priorModelUsageEventIds, ...(accounting ? [accounting.eventId] : [])])];
+  return eventIds.length > 0
+    ? {
+        ...value,
+        model_usage_event_id: eventIds.at(-1),
+        model_usage_event_ids: eventIds,
+      }
+    : value;
+}
+
 export function applyEstimatedCostToStreamChunkWithSource(
   chunk: Record<string, unknown>,
   input: { providerId?: string; model?: string },

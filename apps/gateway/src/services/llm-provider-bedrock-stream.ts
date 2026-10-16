@@ -14,9 +14,9 @@ export interface BedrockStreamEvent {
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
-const utf8Encode = (bytes: Uint8Array): string => textDecoder.decode(bytes);
-const utf8Decode = (text: string): Uint8Array => textEncoder.encode(text);
-const codec = new EventStreamCodec(utf8Encode, utf8Decode);
+const toUtf8 = (bytes: Uint8Array): string => textDecoder.decode(bytes);
+const fromUtf8 = (text: string): Uint8Array => textEncoder.encode(text);
+const codec = new EventStreamCodec(toUtf8, fromUtf8);
 
 /**
  * Decodes the AWS binary event stream (`application/vnd.amazon.eventstream`)
@@ -50,7 +50,7 @@ export async function* decodeBedrockEventStream(
         }
         if (buffer.byteLength < totalLength) break;
         const frameBytes = buffer.subarray(0, totalLength);
-        buffer = buffer.slice(totalLength);
+        buffer = buffer.subarray(totalLength);
         eventCount += 1;
         if (eventCount > maxEvents) {
           throw new Error(`Bedrock event stream exceeded ${maxEvents} events.`);

@@ -536,6 +536,17 @@ describe("decodeBedrockEventStream", () => {
     await expect(drain(streamOf(twoFrames, 7), { maxEvents: 1 })).rejects.toThrow(/exceeded 1 events/);
     await expect(drain(streamOf(twoFrames, 7), { maxBytes: 10 })).rejects.toThrow(/exceeded 10 bytes/);
   });
+
+  it("rejects a frame that declares a length below the minimum frame size", async () => {
+    const malformed = new Uint8Array(16);
+    new DataView(malformed.buffer).setUint32(0, 8, false);
+    const drain = async () => {
+      for await (const _event of decodeBedrockEventStream(streamOf(malformed, 16))) {
+        // Draining only exercises the length guard.
+      }
+    };
+    await expect(drain()).rejects.toThrow(/malformed/);
+  });
 });
 
 describe("bedrockProviderAdapter.chatCompletionsStream", () => {
