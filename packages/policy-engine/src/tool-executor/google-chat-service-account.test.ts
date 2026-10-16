@@ -112,6 +112,18 @@ describe("getGoogleChatAccessToken", () => {
     );
   });
 
+  it("drains a failed token response body before throwing", async () => {
+    const failed = new Response("upstream error", { status: 503 });
+    await expect(
+      getGoogleChatAccessToken(
+        keyJson(),
+        async () => failed,
+        () => NOW_MS,
+      ),
+    ).rejects.toThrow(/token request failed \(503\)/);
+    expect(failed.bodyUsed).toBe(true);
+  });
+
   it("exposes the message resource-name pattern used to gate unsend", () => {
     expect(GOOGLE_CHAT_MESSAGE_NAME_PATTERN.test("spaces/S/messages/M")).toBe(true);
     expect(GOOGLE_CHAT_MESSAGE_NAME_PATTERN.test("spaces/S/messages/M/extra")).toBe(false);
@@ -177,8 +189,13 @@ describe("Google Chat service-account bounded response reads", () => {
         apiFetch: async () => new Response(JSON.stringify({ thread: { name: "spaces/S/threads/T" } })),
       }),
     ).resolves.toBe("spaces/S/threads/T");
+    const missing = new Response("nope", { status: 404 });
+    await expect(readGoogleChatMessageThread({ ...input, apiFetch: async () => missing })).rejects.toThrow(
+      /^google-chat\.send could not read the reply message thread \(404\)$/,
+    );
+    expect(missing.bodyUsed).toBe(true);
     await expect(
-      readGoogleChatMessageThread({ ...input, apiFetch: async () => new Response("nope", { status: 404 }) }),
-    ).resolves.toBeUndefined();
+      readGoogleChatMessageThread({ ...input, apiFetch: async () => new Response(JSON.stringify({ thread: {} })) }),
+    ).rejects.toThrow(/could not resolve the reply message thread/);
   });
 });

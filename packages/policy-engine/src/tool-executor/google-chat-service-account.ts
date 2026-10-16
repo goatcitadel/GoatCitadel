@@ -57,6 +57,7 @@ export async function getGoogleChatAccessToken(
     body: new URLSearchParams({ grant_type: JWT_BEARER_GRANT, assertion }).toString(),
   });
   if (!response.ok) {
+    await discardBody(response);
     throw new Error(`Google Chat service-account token request failed (${response.status})`);
   }
   const body = await readJsonRecord(response);
@@ -135,7 +136,7 @@ export async function readGoogleChatMessageThread(input: {
   messageName: string;
   tokenFetch: GoogleChatTokenFetcher;
   apiFetch: GoogleChatApiFetch;
-}): Promise<string | undefined> {
+}): Promise<string> {
   assertGoogleChatMessageName(input.messageName);
   const accessToken = await getGoogleChatAccessToken(input.keyJson, input.tokenFetch);
   const response = await input.apiFetch(`${GOOGLE_CHAT_API_BASE}/${input.messageName}`, {
@@ -144,11 +145,14 @@ export async function readGoogleChatMessageThread(input: {
   });
   if (!response.ok) {
     await discardBody(response);
-    return undefined;
+    throw new Error(`google-chat.send could not read the reply message thread (${response.status})`);
   }
   const thread = (await readJsonRecord(response)).thread;
   const name = thread && typeof thread === "object" ? (thread as Record<string, unknown>).name : undefined;
-  return typeof name === "string" && GOOGLE_CHAT_THREAD_NAME_PATTERN.test(name) ? name : undefined;
+  if (typeof name !== "string" || !GOOGLE_CHAT_THREAD_NAME_PATTERN.test(name)) {
+    throw new Error("google-chat.send could not resolve the reply message thread");
+  }
+  return name;
 }
 
 export function assertGoogleChatMessageName(messageName: string): void {

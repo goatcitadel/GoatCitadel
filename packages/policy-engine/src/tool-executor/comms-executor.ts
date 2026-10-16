@@ -1768,7 +1768,12 @@ async function googleChatAppSend(
   if (replyRef && GOOGLE_CHAT_THREAD_NAME_PATTERN.test(replyRef)) {
     threadName = replyRef;
   } else if (replyRef && GOOGLE_CHAT_MESSAGE_NAME_PATTERN.test(replyRef)) {
+    // Throws (before any Chat mutation) when the thread cannot be read: a reply never silently goes top-level.
     threadName = await readGoogleChatMessageThread({ keyJson, messageName: replyRef, ...fetchers });
+  } else if (replyRef) {
+    throw new Error(
+      "Google Chat reply reference must be a thread (spaces/{space}/threads/{thread}) or message (spaces/{space}/messages/{message}) resource name",
+    );
   }
   return sendGoogleChatAppMessage({
     keyJson,
