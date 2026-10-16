@@ -17,9 +17,15 @@ export function LlamaSetupSettings({ workspaceId }: { workspaceId?: string }) {
           cockpit
           buttonComponent={Button}
           workspaceId={workspaceId}
-          renderApprovalAction={(plan, pending) => <SettingsApprovalOwnerAction
-            plan={plan} owner="llama-setup" workspaceId={workspaceId} disabled={pending} label="Open approval details"
-          />}
+          renderApprovalAction={(plan, pending) => (
+            <SettingsApprovalOwnerAction
+              plan={plan}
+              owner="llama-setup"
+              workspaceId={workspaceId}
+              disabled={pending}
+              label="Open approval details"
+            />
+          )}
         />
       ) : (
         <p role="status">Select a workspace to record a setup plan and review its approval.</p>

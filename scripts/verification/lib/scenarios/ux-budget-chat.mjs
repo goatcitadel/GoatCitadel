@@ -189,7 +189,7 @@ export async function runUxBudgetChat(environment) {
           );
           const messages = page.locator('[aria-label="Messages"]');
           await messages.waitFor({ timeout: 30_000 });
-          const scroller = messages.locator('[data-transcript-scroller]');
+          const scroller = messages.locator("[data-transcript-scroller]");
           await scroller.waitFor();
           const artifactCard = messages
             .locator('[aria-label="Saved artifacts"]')

@@ -379,7 +379,12 @@ export function NativeDisclosureCard({
   const [isOpen, setIsOpen] = useState(() => defaultOpen || globalThis.location?.hash === `#${id}`);
   const [hasOpened, setHasOpened] = useState(isOpen);
   useEffect(() => {
-    const openTarget = () => { if (globalThis.location?.hash === `#${id}`) { setIsOpen(true); setHasOpened(true); } };
+    const openTarget = () => {
+      if (globalThis.location?.hash === `#${id}`) {
+        setIsOpen(true);
+        setHasOpened(true);
+      }
+    };
     globalThis.window?.addEventListener?.("hashchange", openTarget);
     return () => globalThis.window?.removeEventListener?.("hashchange", openTarget);
   }, [id]);

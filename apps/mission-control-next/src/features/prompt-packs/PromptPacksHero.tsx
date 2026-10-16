@@ -73,16 +73,21 @@ export function PromptPacksHero({
         </div>
       </header>
 
-      <details className="mc-next-inline-details"><summary>Pack overview</summary><section className="mc-pp-summary-row" aria-label="Prompt pack overview">
-        {summaryCards.map((card) => (
-          <article key={card.label} className="mc-pp-summary-card">
-            <span>{card.label}</span>
-            <strong>{card.value}</strong>
-            <p>{card.detail}</p>
-          </article>
-        ))}
-      </section>
-      {hasReport && passRate !== undefined && passThreshold !== undefined ? <AssessmentThresholdBar passRate={passRate} threshold={passThreshold / 100} /> : null}</details>
+      <details className="mc-next-inline-details">
+        <summary>Pack overview</summary>
+        <section className="mc-pp-summary-row" aria-label="Prompt pack overview">
+          {summaryCards.map((card) => (
+            <article key={card.label} className="mc-pp-summary-card">
+              <span>{card.label}</span>
+              <strong>{card.value}</strong>
+              <p>{card.detail}</p>
+            </article>
+          ))}
+        </section>
+        {hasReport && passRate !== undefined && passThreshold !== undefined ? (
+          <AssessmentThresholdBar passRate={passRate} threshold={passThreshold / 100} />
+        ) : null}
+      </details>
 
       <section className="mc-pp-command-strip" aria-label="Prompt pack run controls">
         <div className="mc-pp-command-copy">
@@ -117,7 +122,6 @@ export function PromptPacksHero({
           </NativeButton>
         </div>
       </section>
-
 
       {error ? (
         <div className="mc-pp-alert danger" role="alert">

@@ -440,7 +440,9 @@ export async function runExternalSourcesBrowserFlow({
         if (!(await include.isDisabled()) || (await include.isChecked())) {
           throw new Error("an attached external source can still be selected for the next turn");
         }
-        await picker.getByText("Including external sources in new Chat turns is temporarily unavailable", { exact: false }).waitFor();
+        await picker
+          .getByText("Including external sources in new Chat turns is temporarily unavailable", { exact: false })
+          .waitFor();
         await picker.getByText("No sources selected", { exact: true }).waitFor();
         await picker.getByRole("button", { name: "Done reviewing sources", exact: true }).click();
         await picker.waitFor({ state: "detached" });
@@ -475,7 +477,9 @@ export async function runExternalSourcesBrowserFlow({
         const picker = await openSourcePicker(page);
         const chip = attachedChip(picker, comboState.sourceLabel);
         await chip.getByText("Source details and actions", { exact: true }).click();
-        await chip.getByRole("button", { name: "Request a governed knowledge copy of this source", exact: true }).click();
+        await chip
+          .getByRole("button", { name: "Request a governed knowledge copy of this source", exact: true })
+          .click();
         // The notice can land in a collapsed or live-region node behind the open picker; the
         // approval reference is the request truth, and the next step resolves it in the inbox.
         const notice = page.getByText(/Knowledge copy requested\. Resolve approval /u).first();
@@ -493,7 +497,9 @@ export async function runExternalSourcesBrowserFlow({
         // Queue rows only summarize; the decision controls live in the selected approval's inspector.
         await page.getByText(KNOWLEDGE_APPROVAL_KIND, { exact: true }).first().click({ timeout: 60_000 });
         await page
-          .locator(".mc-next-approvals-inspector").getByRole("button", { name: "Approve now", exact: true }).click({ timeout: 60_000 });
+          .locator(".mc-next-approvals-inspector")
+          .getByRole("button", { name: "Approve now", exact: true })
+          .click({ timeout: 60_000 });
         await page.getByText("Approve this request?", { exact: false }).waitFor();
         await page.getByRole("button", { name: "Approve", exact: true }).click();
         // The pending knowledge approval leaves the queue once resolved.
