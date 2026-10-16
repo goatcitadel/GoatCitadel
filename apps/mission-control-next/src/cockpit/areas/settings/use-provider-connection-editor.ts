@@ -4,17 +4,13 @@ import {
   type ChangePlanProviderConnectionRequest,
   type ChangePlanRecord,
 } from "@goatcitadel/contracts";
-import {
-  createChangePlan,
-  fetchChangePlan,
-  fetchLlmConfig,
-  fetchProviderSecretStatus,
-} from "@goatcitadel/mission-control-shared/api/client";
+import { createChangePlan, fetchChangePlan, fetchLlmConfig } from "@goatcitadel/mission-control-shared/api/client";
 import type { ProviderModelCatalogOption } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import {
   classifyMutationAttempt,
   fetchMutationAttempt,
 } from "@goatcitadel/mission-control-shared/api/mutation-attempts";
+import { confirmSavedProviderConnection } from "./provider-connection-verify";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
 import {
   dispatchTrackedMutation,
@@ -76,29 +72,7 @@ export function useProviderConnectionEditor(
     stillConnected: () => boolean = () => true,
   ): Promise<void> {
     if (!connectionPlanCompleted(next.plan)) return;
-    const current = await fetchLlmConfig();
-    const saved = current.providers.find((item) => item.providerId === id);
-    if (
-      !Number.isSafeInteger(current.revision) ||
-      current.revision <= next.baseRevision ||
-      !saved ||
-      (next.request.profile?.baseUrl && saved.baseUrl !== next.request.profile.baseUrl)
-    ) {
-      throw new Error("The current provider does not confirm the completed change.");
-    }
-    if (next.request.credentialAction === "replace_api_key") {
-      const status = await fetchProviderSecretStatus(id);
-      const storage = next.request.credentialStorage ?? "keychain";
-      if (
-        status.providerId !== id ||
-        !status.hasSecret ||
-        status.source !== storage ||
-        saved.apiKeySource !== storage ||
-        (storage === "env" && saved.apiKeyRef !== next.request.credentialEnvVar)
-      ) {
-        throw new Error("Credential storage has not confirmed the selected location.");
-      }
-    }
+    const current = await confirmSavedProviderConnection(id, next);
     if (!stillConnected()) throw new Error("The Gateway connection changed while checking the saved result.");
     if (next.request.profile?.baseUrl)
       draft.acceptSaved(next.request.profile.baseUrl, current.revision, next.request.profile.baseUrl);

@@ -56,12 +56,17 @@ export function scheduleCadence(value: string): string {
   }
   return intervalCadence(expression, suffix) ?? "Custom schedule";
 }
-/** Minute steps and hourly offsets; callers keep the raw expression in the advanced field or a title. */
+/**
+ * Hourly offsets and hour steps, the interval forms the Gateway parser accepts ("M *\/N * * *"); a minute step such
+ * as "*\/15 * * * *" stays a custom expression. Callers keep the raw expression in the advanced field or a title.
+ */
 function intervalCadence(expression: string, suffix: string): string | null {
   if (expression === "* * * * *") return "Every minute";
-  const step = /^\*\/(\d{1,2}) \* \* \* \*$/.exec(expression);
-  if (step && Number(step[1]) >= 1 && Number(step[1]) < 60)
-    return Number(step[1]) === 1 ? "Every minute" : `Every ${Number(step[1])} minutes`;
+  const hourStep = /^(\d{1,2}) \*\/(\d{1,2}) \* \* \*$/.exec(expression);
+  if (hourStep && Number(hourStep[1]) < 60 && Number(hourStep[2]) >= 1 && Number(hourStep[2]) < 24) {
+    const every = Number(hourStep[2]) === 1 ? "Every hour" : `Every ${Number(hourStep[2])} hours`;
+    return `${every} at :${hourStep[1]!.padStart(2, "0")}${suffix}`;
+  }
   const hourly = /^(\d{1,2}) \* \* \* \*$/.exec(expression);
   if (!hourly || Number(hourly[1]) >= 60) return null;
   const minute = Number(hourly[1]);

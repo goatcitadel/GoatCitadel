@@ -72,9 +72,9 @@ export async function readArtifactDownload(
     throw new Error("Artifact content does not match its recorded hash. Download withheld.");
   const extension =
     item.kind === "markdown" ? "md" : item.kind === "html" ? "html" : item.kind === "mermaid" ? "mmd" : "txt";
-  // eslint-disable-next-line no-control-regex -- download filenames must strip control bytes, which are invalid in OS filenames.
   const title =
     item.title
+      // eslint-disable-next-line no-control-regex -- download filenames must strip control bytes, which are invalid in OS filenames.
       .replace(/[<>:"/\\|?*\u0000-\u001f]/gu, "-")
       .trim()
       .slice(0, 120) || "artifact";
