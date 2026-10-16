@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   ApprovalCreateInput,
   ApprovalRequest,
@@ -69,8 +70,7 @@ export interface CommunicationsDashboardServiceDependencies {
 const DEFAULT_WORKSPACE_ID = "default";
 const MAIL_SEND_EXECUTION_COPY = "Approving sends this exact message once through the connected account.";
 const CALENDAR_CREATE_EXECUTION_COPY = "Approving creates this exact event once on the connected calendar.";
-const SEND_APPROVAL_UNCERTAIN_REASON =
-  "The send approval request did not complete, so nothing was sent and this draft will not request another approval.";
+const MAX_FAILURE_DETAIL_LENGTH = 300;
 const DEFAULT_INBOX_LIMIT = 10;
 const DEFAULT_AGENDA_LIMIT = 20;
 const INTEGRATION_CONNECTION_LIMIT = 200;
@@ -106,7 +106,7 @@ export class CommunicationsDashboardService {
     const store = this.requireDraftStore();
     const now = this.nowIso();
     const draft: MailDraftRecord = {
-      draftId: createStableDraftId(now, input.accountId, input.to, input.subject),
+      draftId: `mail_draft_${randomUUID()}`,
       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       accountId: input.accountId,
       to: input.to,
@@ -175,29 +175,34 @@ export class CommunicationsDashboardService {
       };
     }
     if (existing.status !== "draft") {
-      // Replaying a send whose response was lost returns the recorded outcome
-      // instead of requesting a second high-risk approval for the same draft.
+      // Replaying a send whose response was lost (or whose request died mid-flight) returns the
+      // recorded outcome instead of requesting a second high-risk approval for the same draft.
       return existing;
+    }
+    // Fence first: claim the draft before the approval exists, so a crash between approval
+    // creation and settlement can never let a replay request a second approval.
+    const claimed = await store.transition(draftId, ["draft"], { status: "approval_required", updatedAt: now });
+    if (!claimed) {
+      return (await store.find(draftId)) ?? existing;
     }
     let approvalId: string;
     try {
-      approvalId = await this.createSendApproval(existing);
+      approvalId = await this.createSendApproval(claimed);
     } catch (error) {
       // The approval may have persisted before the failure. Never request another one for this draft.
-      await store.transition(draftId, ["draft"], {
+      await store.transition(draftId, ["approval_required"], {
         status: "failed",
-        failureReason: SEND_APPROVAL_UNCERTAIN_REASON,
-        updatedAt: now,
+        failureReason: describeSendApprovalFailure(error),
+        updatedAt: this.nowIso(),
       });
       throw error;
     }
-    const settled = await store.transition(draftId, ["draft"], {
+    const settled = await store.transition(draftId, ["approval_required"], {
       status: "approval_required",
       approvalId,
-      updatedAt: now,
+      updatedAt: this.nowIso(),
     });
-    // When another process settled the draft first, its recorded outcome is the truth.
-    return settled ?? (await store.find(draftId)) ?? { ...existing, approvalId, status: "approval_required" };
+    return settled ?? (await store.find(draftId)) ?? { ...claimed, approvalId };
   }
 
   private createSendApproval(existing: MailDraftRecord): Promise<string> {
@@ -240,10 +245,7 @@ export class CommunicationsDashboardService {
   public async createCalendarEventPlaceholder(input: CreateCalendarEventInput): Promise<CalendarEventRecord> {
     const { workspaceId, ...event } = input;
     const now = this.nowIso();
-    const eventId = createStableDraftId(now, event.accountId, event.attendees, event.title).replace(
-      "mail_draft_",
-      "calendar_event_",
-    );
+    const eventId = `calendar_event_${randomUUID()}`;
     const hashed: CalendarCreateApprovalInput = {
       eventId,
       accountId: event.accountId,
@@ -722,13 +724,11 @@ async function createCommunicationsApproval(
   return approval.approvalId;
 }
 
-function createStableDraftId(nowIso: string, accountId: string, recipients: string[], subject: string): string {
-  const seed = `${nowIso}:${accountId}:${recipients.join(",")}:${subject}`;
-  let hash = 0;
-  for (let index = 0; index < seed.length; index += 1) {
-    hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
-  }
-  return `mail_draft_${hash.toString(16)}`;
+/** Readable, bounded failure reason; nothing was sent and the draft never requests another approval. */
+function describeSendApprovalFailure(error: unknown): string {
+  const detail = error instanceof Error && error.message.trim() ? error.message.trim() : "unknown error";
+  const bounded = detail.length > MAX_FAILURE_DETAIL_LENGTH ? `${detail.slice(0, MAX_FAILURE_DETAIL_LENGTH)}…` : detail;
+  return `The send approval request failed (${bounded}); nothing was sent and this draft will not request another approval.`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

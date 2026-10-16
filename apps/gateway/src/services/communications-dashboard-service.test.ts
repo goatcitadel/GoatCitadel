@@ -311,7 +311,7 @@ describe("communications dashboard service", () => {
     await expect(service.sendDraft(draft.draftId)).rejects.toThrow("storage write outcome unknown");
     const replay = await service.sendDraft(draft.draftId);
     expect(replay).toMatchObject({ draftId: draft.draftId, status: "failed" });
-    expect(replay.failureReason).toEqual(expect.any(String));
+    expect(replay.failureReason).toContain("storage write outcome unknown");
     expect(replay.approvalId).toBeUndefined();
     expect(createApproval).toHaveBeenCalledOnce();
   });
@@ -429,6 +429,78 @@ describe("communications dashboard service", () => {
     expect(replay).toMatchObject({ status: "approval_required", approvalId: first.approvalId });
     expect(createApproval).toHaveBeenCalledOnce();
     expect(await serviceB.getDraft(draft.draftId)).toEqual(replay);
+  });
+
+  it("gives identical drafts created at the same instant distinct random ids", async () => {
+    const mailDrafts = createMailDraftStore();
+    const service = createCommunicationsDashboardService({ now: () => new Date(NOW), mailDrafts });
+    const input = { accountId: "acct-a", to: ["operator@example.test"], subject: "Twice", bodyText: "Double click." };
+
+    const first = await service.createDraft(input);
+    const second = await service.createDraft(input);
+
+    expect(first.draftId).not.toBe(second.draftId);
+    expect(first.draftId).toMatch(/^mail_draft_[0-9a-f-]{36}$/u);
+    expect(await service.getDraft(first.draftId)).toMatchObject({ status: "draft", subject: "Twice" });
+    expect(await service.getDraft(second.draftId)).toMatchObject({ status: "draft", subject: "Twice" });
+  });
+
+  it("never requests a second approval for a draft fenced by a request that died mid-flight", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const mailDrafts = createMailDraftStore();
+    // As if a previous process claimed the draft, then crashed before recording the approval id.
+    const fenced = await mailDrafts.create({
+      draftId: "mail_draft_fenced",
+      accountId: "acct-a",
+      to: ["operator@example.test"],
+      cc: [],
+      bcc: [],
+      subject: "Fenced",
+      bodyText: "Claimed before the crash.",
+      status: "approval_required",
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    const service = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval, mailDrafts });
+
+    const replay = await service.sendDraft("mail_draft_fenced");
+
+    expect(createApproval).not.toHaveBeenCalled();
+    expect(replay).toEqual(fenced);
+    expect(replay.approvalId).toBeUndefined();
+  });
+
+  it("fences the draft before the approval exists so a send racing the request returns the claim", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => {
+      await gate;
+      return createApprovalRecord(input);
+    });
+    const mailDrafts = createMailDraftStore();
+    const serviceA = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval, mailDrafts });
+    const serviceB = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval, mailDrafts });
+    const draft = await serviceA.createDraft({
+      accountId: "acct-a",
+      to: ["operator@example.test"],
+      subject: "Raced",
+      bodyText: "Other process.",
+    });
+
+    const first = serviceA.sendDraft(draft.draftId);
+    await vi.waitFor(() => expect(createApproval).toHaveBeenCalledOnce());
+    const other = await serviceB.sendDraft(draft.draftId);
+    release();
+
+    expect(other).toMatchObject({ status: "approval_required" });
+    expect(other.approvalId).toBeUndefined();
+    expect(await first).toMatchObject({
+      status: "approval_required",
+      approvalId: "22222222-2222-4222-8222-222222222222",
+    });
+    expect(createApproval).toHaveBeenCalledOnce();
   });
 
   it("projects only unbound connections and connections bound to the requested workspace", async () => {
