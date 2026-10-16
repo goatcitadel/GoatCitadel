@@ -88,7 +88,7 @@ describe("ModelComparisonService", () => {
       responseText: "partial text that must stay hidden",
       startedAt: "2026-06-05T12:00:00.000Z",
     });
-    for (const status of ["approval_paused", "running", "queued"] as const) {
+    for (const status of ["approval_paused", "running", "queued", "failed"] as const) {
       const service = new ModelComparisonService({
         repository: new InMemoryModelComparisonRepository(),
         clock: () => new Date("2026-06-05T12:00:00.000Z"),
