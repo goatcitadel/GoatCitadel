@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 #include <thread>
 
 DWORD RunCellVirtualDiskLayoutJournalFixture(const goatcitadel::worker_cell::CellDiskLayoutPlan&,
@@ -1770,8 +1771,9 @@ void CleanupBindingCases(const Parent& parent, const CellControllerRequest& requ
 }
 // Operations 14-16 through the actual controller session and the production
 // installed observers. Without the hold owner, dispatch refuses before even the
-// parent opens; with it, exactly one hold is acquired, retained and verified
-// through the observer, then released.
+// parent opens. With it, the request is dispatched past the ownership gate; the
+// hold/observer path is unreachable without SeManageVolumePrivilege on this host,
+// so the hold-present delegation is proven by the direct cases below.
 void QuiescenceOwnerCases(const Parent& parent, const std::wstring& root, const Wire& encoded, const CellControllerRequest& request) {
   const auto before = JournalBytes(parent, request.cell_name);
   CellProvisioningJournal unopened;
@@ -1798,6 +1800,25 @@ void QuiescenceOwnerCases(const Parent& parent, const std::wstring& root, const 
   Code(CellInstalledCapacity::ObserveInventory(&denied, unopened, request.anchor, {}, {20000, 64, 1000}, allow, &inventory), ERROR_LOCK_VIOLATION,
     "installed inventory observation rechecks its hold before journal access");
   Check(denied.checks == 3, "each installed observation verifies the hold exactly once before delegating");
+  // Hold present and verified: each owner reaches the journal API, so its result
+  // is the unopened journal's own refusal, not an ownership or hold refusal.
+  Counted granted;
+  const CellFileSha256 head{};
+  const CellFootprintScanLimits limits{20000, 64, 1000};
+  CellProvisioningFootprint journal_footprint; CellProvisioningBackingFootprint journal_backing; CellProvisioningInventory journal_inventory;
+  const auto direct_footprint = unopened.ObserveMountedFootprint(request.anchor, head, limits, allow, &journal_footprint);
+  const auto direct_backing = unopened.ObserveBackingFootprint(request.anchor, head, 1000, allow, &journal_backing);
+  const auto direct_inventory = unopened.ObserveMountedInventory(request.anchor, head, limits, allow, &journal_inventory);
+  const auto held_footprint = CellInstalledCapacity::Observe(&granted, unopened, request.anchor, head, limits, allow, &footprint);
+  const auto held_backing = CellInstalledCapacity::ObserveBacking(&granted, unopened, request.anchor, head, 1000, allow, &backing);
+  const auto held_inventory = CellInstalledCapacity::ObserveInventory(&granted, unopened, request.anchor, head, limits, allow, &inventory);
+  Check(granted.checks == 3, "a granted hold is verified exactly once per installed observation");
+  for (const auto& [held_error, direct_error] : {std::pair{held_footprint, direct_footprint}, std::pair{held_backing, direct_backing},
+      std::pair{held_inventory, direct_inventory}})
+    Check(held_error == direct_error && held_error != ERROR_SUCCESS && held_error != ERROR_NOT_SUPPORTED && held_error != ERROR_LOCK_VIOLATION,
+      "hold-present delegation returns the unopened journal's own refusal");
+  Check(footprint == CellProvisioningFootprint{} && inventory == CellProvisioningInventory{} && backing.checkpoint_sha256 == CellFileSha256{},
+    "journal refusal under a granted hold exposes no observation");
   auto absent = parent; absent.path += L"\\absent-quiescence-owner";
   const auto missing = Exchange(absent, root, encoded, "native-capacity-missing-hold", &request.volume_records,
     &request.format_records, &request.protection_records, &request.creation_records, &request.mount_records, &request.mounted_workspace_records);
@@ -1807,16 +1828,17 @@ void QuiescenceOwnerCases(const Parent& parent, const std::wstring& root, const 
   const auto held = Exchange(parent, root, encoded, "native-capacity-held", &request.volume_records,
     &request.format_records, &request.protection_records, &request.creation_records, &request.mount_records, &request.mounted_workspace_records);
   // Supplied ownership is dispatched: the actual controller now opens the real
-  // recorded journal instead of refusing composition. This unprivileged,
-  // unmounted fixture cannot complete a live scan, so the request still ends
-  // in a bounded receipt without an observation frame.
+  // recorded journal instead of refusing composition. For ops 14-16 the hold is
+  // acquired only after that open succeeds, which requires SeManageVolumePrivilege.
+  // This fixture is unprivileged, so the expected outcome is an explicit stop at
+  // the recorded disk with no hold and no observer call. A privileged run fails
+  // here on purpose and must re-baseline this case instead of passing vacuously.
   Check(held.client_error == ERROR_SUCCESS && held.result.receipt_acknowledged && held.result.error != ERROR_SUCCESS &&
     held.result.error != ERROR_NOT_SUPPORTED && !held.result.capacity_written && !held.result.creation_attempted,
     "composed hold and observers dispatch capacity past ownership checks to the recorded journal");
-  Check(held.hold_calls <= 1 && held.hold_releases == held.hold_calls && held.observe_held == held.observe_calls &&
-    held.observe_calls <= held.hold_calls, "observers run only inside the single retained hold, which is released with the session");
-  if (held.result.error == ERROR_PRIVILEGE_NOT_HELD) Check(!held.hold_calls && !held.observe_calls && held.records.empty(),
-    "the unprivileged fixture stops at the recorded disk before measurement");
+  Code(held.result.error, ERROR_PRIVILEGE_NOT_HELD, "the unprivileged fixture stops at the recorded disk before measurement");
+  Check(held.hold_calls == 0 && held.hold_releases == 0 && held.observe_calls == 0 && held.observe_held == 0 && held.records.empty(),
+    "without SeManageVolumePrivilege the hold and observers are never reached");
   Check(JournalBytes(parent, request.cell_name) == before, "held installed observation never changes the journal");
 }
 void CapacityCases(const Parent& parent, const std::wstring& root, const Wire& wire,
