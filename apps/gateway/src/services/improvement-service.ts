@@ -399,23 +399,6 @@ interface ImprovementActivationRow {
   failure_reason: string | null;
 }
 
-export interface SurfaceRouteOverrideSignalInput {
-  citadelId: string;
-  workspaceId: string;
-  sessionId: string;
-  turnId: string;
-  fromMode: string;
-  toMode: string;
-  autoConfidence: number;
-  promptFeatureHash: string;
-}
-
-export interface SurfaceRouteOverrideExemplar {
-  fromMode: string;
-  toMode: string;
-  recordedAt: string;
-}
-
 /**
  * Callbacks needed from GatewayService.
  */
@@ -1458,58 +1441,6 @@ export class ImprovementService {
         status: approval.status,
       },
     });
-  }
-
-  public async recordSurfaceRouteOverrideSignal(input: SurfaceRouteOverrideSignalInput): Promise<void> {
-    if (!(await this.localObservationEnabled())) return;
-    const fingerprint = `surface_route_override:${input.citadelId}:${input.fromMode}->${input.toMode}:${input.promptFeatureHash}`;
-    await this.recordImprovementSignal({
-      sourceService: "surface-router",
-      sourceType: "surface_route_override",
-      sourceId: input.sessionId,
-      sourceEventId: input.turnId,
-      idempotencyKey: `${input.sessionId}:${fingerprint}`,
-      workspaceId: input.workspaceId,
-      origin: "human",
-      signalClass: "runtime",
-      signalKind: "surface_route_override",
-      outcome: "negative",
-      fingerprint,
-      sessionId: input.sessionId,
-      turnId: input.turnId,
-      metadata: {
-        citadelId: input.citadelId,
-        fromMode: input.fromMode,
-        toMode: input.toMode,
-        autoConfidence: input.autoConfidence,
-      },
-    });
-  }
-
-  public async listSurfaceRouteOverrideExemplars(
-    citadelId: string,
-    limit = 8,
-  ): Promise<SurfaceRouteOverrideExemplar[]> {
-    const exemplars: SurfaceRouteOverrideExemplar[] = [];
-    for (const signal of await this.listImprovementSignals(500)) {
-      if (exemplars.length >= limit) {
-        break;
-      }
-      if (signal.signalKind !== "surface_route_override") {
-        continue;
-      }
-      const meta = safeJsonRecord(signal.metadata);
-      if (asOptionalString(meta.citadelId) !== citadelId) {
-        continue;
-      }
-      const fromMode = asOptionalString(meta.fromMode);
-      const toMode = asOptionalString(meta.toMode);
-      if (!fromMode || !toMode) {
-        continue;
-      }
-      exemplars.push({ fromMode, toMode, recordedAt: signal.recordedAt });
-    }
-    return exemplars;
   }
 
   async recordPromptLabBenchmarkCompletionSignal(input: {

@@ -123,7 +123,10 @@ describe("system health checks", () => {
       tone: "done",
     });
     const unknown = deriveHealthChecks({ ...healthy, database: undefined }, "verified");
-    expect(summarizeHealthChecks(unknown)).toEqual({ label: "Some system checks lack live proof", tone: "neutral" });
+    expect(summarizeHealthChecks(unknown)).toEqual({
+      label: "Some system checks could not be confirmed",
+      tone: "neutral",
+    });
     expect(summarizeHealthChecks(deriveHealthChecks(healthy, "stale"))).toEqual({
       label: "1 system check needs review",
       tone: "waiting",

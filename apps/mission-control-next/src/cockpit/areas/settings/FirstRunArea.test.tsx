@@ -118,7 +118,7 @@ describe("native first-run setup", () => {
     await render();
     expect(button("Continue to safety").disabled).toBe(false);
     await click("Continue to safety");
-    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Set your safety posture");
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Choose your safety settings");
     expect(api.completeOnboarding).not.toHaveBeenCalled();
   });
   it("does not continue when the fresh model read loses readiness", async () => {
@@ -160,7 +160,7 @@ describe("native first-run setup", () => {
     await click("Advanced: edit provider profiles");
     expect(api.navigate).toHaveBeenCalledWith("/settings/models?shell=cockpit#providers");
     await click("Guided model owner ready");
-    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Set your safety posture");
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Choose your safety settings");
     expect(button("Open Chat")).toBeUndefined();
     expect(api.completeOnboarding).not.toHaveBeenCalled();
   });

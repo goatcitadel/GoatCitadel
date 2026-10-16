@@ -19,7 +19,7 @@ describe("cockpit document title", () => {
     expect(cockpitDocumentTitle("Settings", "models", "settings")).toBe("GoatCitadel Settings · Models");
     expect(cockpitDocumentTitle("Settings", "citadel", "settings")).toBe("GoatCitadel Settings · Citadel");
     expect(cockpitDocumentTitle("Library", "prompt-packs", "library")).toBe("GoatCitadel Library · Prompt packs");
-    expect(cockpitDocumentTitle("Library", "citadel", "library")).toBe("GoatCitadel Library · Citadel setup");
+    expect(cockpitDocumentTitle("Library", "citadel", "library")).toBe("GoatCitadel Library · Guided setup · Mason");
   });
 
   it("maps cockpit system and work views onto their ops labels and humanises unknown slugs", () => {

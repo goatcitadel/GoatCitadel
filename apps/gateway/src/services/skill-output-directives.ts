@@ -44,9 +44,10 @@ interface ParsedAttributes {
  *   - Directory traversal sequences (`..`).
  *   - Leading `.` (hidden files / dotfiles).
  *
- * Channel delivery is not yet wired to these directives, so today's exploit
- * surface is zero — but adding the guard here prevents the wiring follow-up
- * from inheriting the vulnerability.
+ * Channel delivery is wired: connector-delivery.ts (applyAsDocumentDirectives)
+ * turns parsed directives into channel attachments, so this guard is the
+ * line of defense for that path and keeps future callers from inheriting the
+ * vulnerability.
  */
 function isSafeFileName(fileName: string): boolean {
   if (fileName.length === 0) return false;

@@ -1,5 +1,5 @@
 import type { AgentCommitmentRecord } from "@goatcitadel/contracts";
-import type { SessionAutonomyPrefsRecord } from "@goatcitadel/storage";
+import { resolveHourInTimeZone, type SessionAutonomyPrefsRecord } from "@goatcitadel/storage";
 
 /**
  * Commitment sweep (P1-F3).
@@ -17,10 +17,12 @@ const DEFAULT_DUE_LIMIT = 50;
 const DEFAULT_ACTIVE_HOURS: ActiveHoursWindow = { startHour: 8, endHour: 22 };
 
 export interface ActiveHoursWindow {
-  /** Inclusive local start hour [0, 23]. */
+  /** Inclusive start hour [0, 23] in `tz` (host-local when absent). */
   startHour: number;
-  /** Exclusive local end hour [1, 24]. Supports overnight windows (start > end). */
+  /** Exclusive end hour [1, 24]. Supports overnight windows (start > end). */
   endHour: number;
+  /** Optional IANA timezone. Unknown values fall back to the host's local hour. */
+  tz?: string;
 }
 
 export interface CommitmentSweepDeps {
@@ -90,7 +92,8 @@ export async function runCommitmentSweep(deps: CommitmentSweepDeps): Promise<Com
       result.skippedCooldown += 1;
       continue;
     }
-    const activeHours = deps.resolveActiveHours?.(commitment.sessionId) ?? DEFAULT_ACTIVE_HOURS;
+    const activeHours =
+      deps.resolveActiveHours?.(commitment.sessionId) ?? toActiveHoursWindow(prefs) ?? DEFAULT_ACTIVE_HOURS;
     if (!isWithinActiveHours(now, activeHours)) {
       result.skippedActiveHours += 1;
       continue;
@@ -114,6 +117,20 @@ export async function runCommitmentSweep(deps: CommitmentSweepDeps): Promise<Com
 }
 
 /**
+ * Adapt a session's persisted `{start,end,tz}` active-hours record to the
+ * sweep's window shape. Returns undefined when the prefs carry no window.
+ */
+export function toActiveHoursWindow(
+  prefs: Partial<Pick<SessionAutonomyPrefsRecord, "activeHours">>,
+): ActiveHoursWindow | undefined {
+  if (!prefs.activeHours) {
+    return undefined;
+  }
+  const { start, end, tz } = prefs.activeHours;
+  return tz ? { startHour: start, endHour: end, tz } : { startHour: start, endHour: end };
+}
+
+/**
  * Remaining cooldown seconds for a session. Mirrors
  * `chat-proactive-service.getProactiveCooldownRemainingSeconds`.
  */
@@ -132,14 +149,14 @@ export function getCooldownRemainingSeconds(
 }
 
 /**
- * Pure active-hours check against the local hour of `now`. Supports overnight
- * windows (e.g. `{ startHour: 22, endHour: 6 }`). A full-day window
- * (`startHour === endHour`) is always active.
+ * Pure active-hours check against the hour of `now` in `window.tz` (host-local
+ * when absent or invalid). Supports overnight windows (e.g. `{ startHour: 22,
+ * endHour: 6 }`). A full-day window (`startHour === endHour`) is always active.
  */
 export function isWithinActiveHours(now: Date, window: ActiveHoursWindow): boolean {
   const start = clampHour(window.startHour);
   const end = clampHour(window.endHour);
-  const hour = now.getHours();
+  const hour = resolveHourInTimeZone(now, window.tz);
   if (start === end) {
     return true; // full-day / always active
   }

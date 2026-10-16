@@ -21,7 +21,7 @@ type Submission = {
 /** A canonical receipt acknowledges only the exact draft reviewed for that submission. */
 export function useChatBindingDraftReceipt(
   draft: BindingDraft,
-  canonical: BindingValue,
+  saved: BindingValue,
   updatedAt: string | undefined,
   owner: BindingOwner | undefined,
 ) {
@@ -37,12 +37,12 @@ export function useChatBindingDraftReceipt(
       owner.phase !== "resolved" ||
       owner.receipt?.kind !== "external-binding" ||
       !owner.isCurrent() ||
-      JSON.stringify(canonical) !== JSON.stringify(submitted.reviewed)
+      JSON.stringify(saved) !== JSON.stringify(submitted.reviewed)
     )
       return;
     pending.current = undefined;
-    draft.acceptSaved(canonical, updatedAt, submitted.raw);
-  }, [draft, canonical, updatedAt, owner]);
+    draft.acceptSaved(saved, updatedAt, submitted.raw);
+  }, [draft, saved, updatedAt, owner]);
   return (reviewed: BindingValue) => {
     if (!owner) return;
     pending.current = {

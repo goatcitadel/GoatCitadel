@@ -3,7 +3,7 @@ import { fetchAutonomousActivationGrants } from "@goatcitadel/mission-control-sh
 
 export const AUTONOMOUS_GRANT_REVOKE_INPUT = { revokedBy: "operator", reason: "Revoked from Settings." };
 export const AUTONOMOUS_GRANT_BOUNDARY =
-  "Revocation stops this saved grant from admitting new activations. It does not prove already-running work stopped. The API has no atomic revision precondition; the exact current record is checked before dispatch.";
+  "Revocation stops this saved grant from admitting new activations. It does not prove already-running work stopped. The current saved grant is checked first, but a change made elsewhere at the same moment is not blocked.";
 export const grantsEqual = (left: unknown, right: unknown) => canonicalJsonString(left) === canonicalJsonString(right);
 
 export function assertAutonomousGrant(value: AutonomousActivationGrantRecord): void {

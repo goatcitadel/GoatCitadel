@@ -154,12 +154,12 @@ export function LocalOperatorOverrides({ workspaceId }: { workspaceId: string })
         </Button>
       </fieldset>
       <p className="text-xs text-fg-muted">
-        The Gateway API does not provide override revision checks. Reviews re-read current settings and active
-        overrides; the database owns the expiry window. No tools run as part of this action.
+        Reviews read current settings and active overrides again, but changes made in the meantime are not blocked. The
+        saved expiry time decides when an override ends. No tools run as part of this action.
       </p>
       {attempt ? <p role={attempt.phase === "uncertain" ? "alert" : "status"}>{attempt.message}</p> : null}
       {control.message ? <p role="status">{control.message}</p> : null}
-      {control.checking ? <p role="status">Reading the override owner…</p> : null}
+      {control.checking ? <p role="status">Checking saved overrides…</p> : null}
       <PermissionManagementReview
         control={control}
         renderButton={({ label, secondary, ...props }) => (

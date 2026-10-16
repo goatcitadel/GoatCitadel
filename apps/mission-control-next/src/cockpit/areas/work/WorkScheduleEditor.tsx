@@ -154,8 +154,8 @@ export function WorkScheduleEditor({
       />
       {stale ? (
         <p role="alert">
-          This schedule changed. Your draft is preserved. Review the latest settings and explicitly rebase your draft
-          before saving.
+          This schedule changed after you started editing. Your draft is kept, but it started from an older version.
+          Check the latest settings, then apply your draft to the latest version before saving.
         </p>
       ) : null}
       {stale ? (
@@ -166,7 +166,7 @@ export function WorkScheduleEditor({
             editor.setValue((current) => ({ ...current, base: job }));
           }}
         >
-          Use current revision with my draft
+          Apply my draft to the latest version
         </Button>
       ) : null}
       {!review && feedback ? <p role={feedbackFailed ? "alert" : "status"}>{feedback}</p> : null}

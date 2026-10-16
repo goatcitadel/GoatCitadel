@@ -62,8 +62,8 @@ export function ExtensionConfigurationGuidance({ guidance }: { guidance?: Integr
                 {field.kind === "secret_ref" ? (
                   <p>
                     {field.referenceKind === "environment"
-                      ? "Environment reference: provide only a variable name through the supported setup owner, never the secret value."
-                      : "Credential reference: use the supported secure credential owner; do not paste a credential into general configuration or Chat."}
+                      ? "Environment reference: provide only a variable name through the supported setup, never the secret value."
+                      : "Credential reference: use the supported secure credential setup; do not paste a credential into general configuration or Chat."}
                   </p>
                 ) : null}
                 {field.kind === "choice" ? (

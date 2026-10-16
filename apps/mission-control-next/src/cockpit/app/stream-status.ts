@@ -20,7 +20,11 @@ export const HEALTH_TONE_BG: Readonly<Record<StatusTone, string>> = {
 };
 
 export function presentCockpitStream(state: EventStreamConnectionState, replayRecovery = false) {
- const truth = describeRealtimeTruthUi(state, replayRecovery ? "replay-gap" : "authoritative");
- const native = STREAM_STATUS[state];
- return {...native, label: native.label + (state === "open" && replayRecovery ? " · Replay recovery" : ""), ariaLabel: "Live updates: " + truth.strip};
+  const truth = describeRealtimeTruthUi(state, replayRecovery ? "replay-gap" : "authoritative");
+  const native = STREAM_STATUS[state];
+  return {
+    ...native,
+    label: native.label + (state === "open" && replayRecovery ? " · Catching up" : ""),
+    ariaLabel: "Live updates: " + truth.strip,
+  };
 }

@@ -13,6 +13,7 @@ import { queryKeys } from "../../data/query-keys";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { classifyOperationFailure } from "./approval-operation-attempts";
 import { canResolveInboxMemoryProposal } from "./memory-proposal-guard";
 import { nullWhenMissing } from "./inbox-record-read";
@@ -96,9 +97,9 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
           learning.insight !== review.candidate.proposedInsight ||
           JSON.stringify(learning.sourceRefs) !== JSON.stringify(review.candidate.sourceRefs)
         ) {
-          throw new Error("Gateway returned an unexpected memory learning.");
+          throw new Error("The saved learning did not match the reviewed proposal.");
         }
-        setNotice("Gateway promoted the proposal to a memory learning. Review Memory for the current learning record.");
+        setNotice("Promoted to workspace memory. Use Open Memory to see the saved learning.");
       } else {
         const rejected = await rejectTraceMemoryCandidate(candidateId);
         if (
@@ -106,9 +107,9 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
           rejected.workspaceId !== workspaceId ||
           rejected.status !== "rejected"
         ) {
-          throw new Error("Gateway returned an unexpected proposal status.");
+          throw new Error("The saved proposal status did not match the rejection.");
         }
-        setNotice("Gateway rejected the proposal. Review Memory for its current status.");
+        setNotice("Proposal rejected.");
       }
       setReview(null);
       setCompleted(true);
@@ -118,11 +119,11 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
       setReview(null);
       if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
         // Gateway answered and recorded nothing: the decisions stay available.
-        setError(`Gateway did not accept the decision. ${describeApiError(cause).summary}`);
+        setError(`The decision was not accepted. ${describeApiError(cause).summary}`);
       } else if (mutationAttempted) {
         setOutcomeUncertain(true);
         setError(
-          `Decision outcome is uncertain. Inspect the current proposal in Memory before taking another action. ${describeApiError(cause).summary}`,
+          `Decision outcome is uncertain. Use Open Memory to check the proposal before taking another action. ${describeApiError(cause).summary}`,
         );
       } else {
         setError(`Could not check the current proposal. ${describeApiError(cause).summary}`);
@@ -151,7 +152,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
       </div>
       {!candidateId ? (
         <p role="alert" className="text-status-failed">
-          This Inbox item has no proposal ID. Open Memory for the current record.
+          This Inbox item has no proposal ID, so it can&apos;t be reviewed here. Use Open Memory to find it.
         </p>
       ) : null}
       {view.phase === "loading" ? (
@@ -170,7 +171,9 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
       ) : null}
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {recordAnswered(view) && candidateId && !candidate ? (
-        <p className="text-fg-muted">This proposal is no longer waiting. Open Memory to check its current status.</p>
+        <p className="text-fg-muted">
+          This proposal is no longer waiting. Use Open Memory to check its current status.
+        </p>
       ) : null}
       {candidate && candidate.workspaceId === workspaceId ? (
         <>
@@ -187,7 +190,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
             </details>
           ) : null}
           <p className="text-xs text-fg-muted">
-            Promotion writes this insight into durable memory for this workspace. The Gateway owns the final decision.
+            Promoting saves this insight to this workspace&apos;s long-term memory. It is checked again before saving.
           </p>
         </>
       ) : null}
@@ -235,6 +238,13 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
           {error}
         </p>
       ) : null}
+      <NativeOwnerLink
+        href="/library/memory"
+        scope={[workspaceId, item.id]}
+        className="w-fit text-sm font-medium text-accent hover:underline"
+      >
+        Open Memory
+      </NativeOwnerLink>
       <Dialog
         open={Boolean(review)}
         onOpenChange={(open) => {
@@ -243,7 +253,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
         title={review?.action === "promote" ? "Promote this proposal" : "Reject this proposal"}
         description={
           review?.action === "promote"
-            ? "This writes the reviewed insight into durable workspace memory."
+            ? "This saves the reviewed insight to this workspace's long-term memory."
             : "This records a rejection of the reviewed proposal."
         }
       >

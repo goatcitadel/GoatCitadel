@@ -22,6 +22,7 @@ import {
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { classifyOperationFailure } from "./approval-operation-attempts";
 import { callableImpactLabels, curatorRiskAsApprovalRisk, improvementEvaluationLabels } from "./inbox-vocabulary";
 
@@ -157,13 +158,13 @@ export function InboxImprovementProposalDetail({
         result.review.currentRevision?.changeHash !== reviewing.review.currentRevision?.changeHash ||
         result.review.candidate.status !== result.status
       )
-        throw new Error("Gateway returned an unexpected proposal receipt.");
+        throw new Error("The saved result did not match the reviewed proposal.");
       setReviewing(null);
       setCompleted(true);
       setNotice(
         reviewing.decision === "approve"
-          ? "Gateway approved the reviewed candidate. Activation is a separate governed action."
-          : "Gateway rejected the reviewed candidate.",
+          ? "Proposal kept. It is not active yet; turning it on is a separate step."
+          : "Proposal discarded.",
       );
       rereadSuperseded();
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
@@ -171,11 +172,11 @@ export function InboxImprovementProposalDetail({
       setReviewing(null);
       if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
         // Gateway answered and recorded nothing: the decisions stay available.
-        setError(`Gateway did not accept the decision. ${describeApiError(cause).summary}`);
+        setError(`The decision was not accepted. ${describeApiError(cause).summary}`);
       } else if (mutationAttempted) {
         setUncertain(true);
         setError(
-          `Decision outcome is uncertain. Inspect the current Curator record before trying again. ${describeApiError(cause).summary}`,
+          `Decision outcome is uncertain. Use Open Curator to check the proposal before trying again. ${describeApiError(cause).summary}`,
         );
       } else setError(`Could not check the current proposal. ${describeApiError(cause).summary}`);
     } finally {
@@ -202,7 +203,7 @@ export function InboxImprovementProposalDetail({
       </div>
       {!item.source.proposalId ? (
         <p role="alert" className="text-status-failed">
-          This item has no candidate ID. Open Curator for its current record.
+          This item has no candidate ID, so it can&apos;t be reviewed here. Use Open Curator to find it.
         </p>
       ) : null}
       {view.phase === "loading" ? (
@@ -222,7 +223,7 @@ export function InboxImprovementProposalDetail({
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {recordAnswered(view) && !current ? (
         <p className="text-fg-muted">
-          The proposal is no longer in the selected workspace Inbox. Open Curator for its current status.
+          The proposal is no longer in this workspace&apos;s Inbox. Use Open Curator to check its current status.
         </p>
       ) : null}
       {scopeChanged ? (
@@ -250,8 +251,8 @@ export function InboxImprovementProposalDetail({
           ) : null}
           {!current.reviewPrecondition ? (
             <p role="status" className="text-status-waiting">
-              This Gateway cannot bind a decision to the reviewed version. Update the Gateway before deciding from
-              Inbox.
+              This GoatCitadel version can&apos;t tie a decision to the version you reviewed. Update GoatCitadel before
+              deciding from Inbox.
             </p>
           ) : null}
           {!completed && !uncertain && !scopeChanged ? (
@@ -270,7 +271,7 @@ export function InboxImprovementProposalDetail({
                 ) : (
                   <p key={decision} className="text-xs text-fg-muted">
                     {decision === "approve" ? "Keep" : "Discard"} unavailable:{" "}
-                    {current.disabledReasons[decision] ?? "The owner has not marked this action ready."}
+                    {current.disabledReasons[decision] ?? "Curator has not marked this action ready."}
                   </p>
                 ),
               )}
@@ -293,13 +294,20 @@ export function InboxImprovementProposalDetail({
           {error}
         </p>
       ) : null}
+      <NativeOwnerLink
+        href="/library/curator"
+        scope={[workspaceId, item.id]}
+        className="w-fit text-sm font-medium text-accent hover:underline"
+      >
+        Open Curator
+      </NativeOwnerLink>
       <Dialog
         open={Boolean(reviewing)}
         onOpenChange={(open) => {
           if (!open && !pending) setReviewing(null);
         }}
         title={reviewing?.decision === "approve" ? "Keep improvement proposal" : "Discard improvement proposal"}
-        description="The Gateway will check this workspace, status, and reviewed version before saving. Keeping a proposal does not activate it."
+        description="The workspace, status and reviewed version are checked again before saving. Keeping a proposal does not turn it on."
       >
         {reviewing ? <p className="mb-3 text-sm text-fg-secondary">{reviewing.review.candidate.summary}</p> : null}
         <div className="flex flex-wrap gap-2">

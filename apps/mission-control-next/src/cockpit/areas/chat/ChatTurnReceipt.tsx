@@ -55,9 +55,10 @@ export function TurnReceipt({ turn }: { turn: ChatThreadTurnRecord }) {
         })
       }
       className="mt-2 inline-flex min-h-8 items-center text-left text-xs text-fg-muted hover:text-accent max-sm:min-h-11"
-      aria-label="Inspect message details"
     >
       {details || status}
+      {/* The name starts with the visible receipt (WCAG 2.5.3), then says what the button does. */}
+      <span className="sr-only"> · Open message details</span>
     </button>
   );
 }

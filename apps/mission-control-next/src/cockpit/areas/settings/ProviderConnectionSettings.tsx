@@ -149,7 +149,7 @@ function ProviderConnectionEditor({
   return (
     <div className="mt-4 space-y-3">
       <p className="text-xs text-fg-muted">
-        Settings revision {revision} · Credential: {provider.hasApiKey ? "Configured" : "Not reported as configured"}.
+        Settings version {revision} · Credential: {provider.hasApiKey ? "Configured" : "Not reported as configured"}.
         Saved values are never displayed.
       </p>
       <label className="block text-sm font-medium text-fg">
@@ -175,12 +175,12 @@ function ProviderConnectionEditor({
       ) : null}
       {draft.hasRemoteChanges ? (
         <div role="status" className="space-y-2 text-sm text-status-waiting">
-          <p>The provider changed after this draft began. Review the current endpoint before rebasing.</p>
+          <p>The provider changed. Your draft started from an older version. Review the current endpoint first.</p>
           <p className="break-all">
-            Current endpoint: {provider.sanitizedEndpointIdentity ?? "Inspect the current provider owner"}
+            Current endpoint: {provider.sanitizedEndpointIdentity ?? "Unavailable. Refresh this provider."}
           </p>
           <Button size="sm" disabled={disabled} onClick={draft.rebaseToCurrent}>
-            Review draft against current revision
+            Apply draft to latest version
           </Button>
         </div>
       ) : null}
@@ -289,15 +289,13 @@ function ProviderConnectionEditor({
               ) : null}
               <p className="flex flex-wrap items-center gap-2 text-xs">
                 <RiskBadge risk={plan.risk} />
-                <span>Plan revision {plan.revision}</span>
+                <span>Plan version {plan.revision}</span>
               </p>
               {connectionPlanCompleted(plan) && attempt.verified && !attempt.uncertain ? (
-                <p className="text-status-done">
-                  The Gateway reports this change complete. Current provider evidence confirms the saved change.
-                </p>
+                <p className="text-status-done">Change complete. The saved provider settings match it.</p>
               ) : null}
               {connectionPlanCompleted(plan) && !attempt.verified ? (
-                <p role="status">The plan reports completion; current provider evidence is not yet confirmed.</p>
+                <p role="status">The change reports complete, but the saved provider settings do not show it yet.</p>
               ) : null}
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" disabled={attempt.busy || editor.refreshing} onClick={() => void editor.refresh()}>
@@ -323,12 +321,12 @@ function ProviderConnectionEditor({
                   />
                 ) : null}
               </div>
-              <TechnicalDetails label="Change evidence">
+              <TechnicalDetails label="Change record">
                 <p className="break-all font-mono text-xs">
                   Plan {plan.planId} · installation workspace {plan.origin.workspaceId}
                 </p>
                 <p className="break-all font-mono text-xs">
-                  {plan.evidenceRefs.length ? plan.evidenceRefs.join(", ") : "No evidence recorded yet"}
+                  {plan.evidenceRefs.length ? plan.evidenceRefs.join(", ") : "Nothing recorded yet"}
                 </p>
               </TechnicalDetails>
             </>
@@ -346,7 +344,7 @@ function ProviderConnectionEditor({
           scope={JSON.stringify([provider.providerId, revision, attempt?.planKey, plan?.planId, plan?.revision])}
           className="inline-block text-sm font-medium text-accent hover:underline"
         >
-          {plan ? "Inspect current connection plan in Inbox" : "Inspect recent Gateway activity"}
+          {plan ? "Open connection change in Inbox" : "Open recent activity in System"}
         </NativeOwnerLink>
       ) : null}
       <ChatChangePlanActionDialog

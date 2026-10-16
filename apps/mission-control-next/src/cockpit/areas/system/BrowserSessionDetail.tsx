@@ -255,8 +255,8 @@ function SessionPosture({
   }
 
   return (
-    <section className="grid min-w-0 grid-cols-1 gap-2 rounded-lg border border-line p-3" aria-label="Session posture">
-      <h3 className="font-display text-md font-semibold">Session posture</h3>
+    <section className="grid min-w-0 grid-cols-1 gap-2 rounded-lg border border-line p-3" aria-label="Session overview">
+      <h3 className="font-display text-md font-semibold">Session overview</h3>
       <dl className="grid min-w-0 grid-cols-1 gap-2 text-sm sm:grid-cols-2">
         <div>
           <dt className="font-medium">Workspace</dt>
@@ -315,8 +315,8 @@ function SessionPosture({
         <div className="grid min-w-0 grid-cols-1 gap-3 text-sm wrap-anywhere">
           <p>
             Closes this session and revokes its {plural(activeGrants.length, "active grant")}. New tool access through
-            this session is refused once it closes; calls already admitted are not interrupted, and browser state is not
-            cleared. A closed session cannot be reopened or receive new grants.
+            this session is refused once it closes; calls already allowed to start are not interrupted, and browser
+            state is not cleared. A closed session cannot be reopened or receive new grants.
           </p>
           {outcome ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
           <div className="flex flex-wrap gap-2">

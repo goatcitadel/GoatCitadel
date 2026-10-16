@@ -77,7 +77,7 @@ describe("cockpit runtime authority map", () => {
     const records = list.querySelectorAll(":scope > li");
     expect(records).toHaveLength(2);
     expect(records[0]!.textContent).toContain("Durable run ledger");
-    expect(records[0]!.textContent).toContain("Runs · Canonical record");
+    expect(records[0]!.textContent).toContain("Runs · Saved record");
     // Classification is neutral text; only freshness and posture read as status.
     expect([...records[0]!.querySelectorAll("[data-tone]")].map((badge) => badge.textContent)).toEqual([
       "Current",
@@ -85,10 +85,10 @@ describe("cockpit runtime authority map", () => {
     ]);
     expect(records[0]!.textContent).toContain("Current");
     expect(records[0]!.textContent).toContain("OK");
-    expect(records[0]!.textContent).toContain("Owner: Gateway durable runs");
+    expect(records[0]!.textContent).toContain("Managed by: Gateway durable runs");
     expect(records[0]!.textContent).toContain("Source: durable_runs table");
     expect(records[0]!.textContent).toContain("Scope: Current workspace");
-    expect(records[1]!.textContent).toContain("Retained signal");
+    expect(records[1]!.textContent).toContain("Recorded signal");
     expect(records[1]!.textContent).toContain("Stale");
     expect(records[1]!.textContent).toContain("Needs attention");
     expect(records[1]!.textContent).toContain("Scope: Citadel runtime");

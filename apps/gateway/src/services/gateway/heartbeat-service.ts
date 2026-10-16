@@ -211,7 +211,8 @@ export function getHeartbeatIntervalRemainingSeconds(
 
 /** Adapt the persisted `{start,end}` active-hours window to the sweep's shape. */
 function toActiveHoursWindow(prefs: Pick<SessionAutonomyPrefsRecord, "activeHours">): ActiveHoursWindow {
-  return { startHour: prefs.activeHours.start, endHour: prefs.activeHours.end };
+  const { start, end, tz } = prefs.activeHours;
+  return tz ? { startHour: start, endHour: end, tz } : { startHour: start, endHour: end };
 }
 
 /**

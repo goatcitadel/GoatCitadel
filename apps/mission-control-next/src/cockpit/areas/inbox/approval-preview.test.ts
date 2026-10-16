@@ -15,13 +15,15 @@ const approval = {
 } satisfies ApprovalRequest;
 
 describe("approval preview", () => {
-  it("uses canonical linkage and a focused classic decision link", () => {
+  it("uses canonical linkage and the native Inbox approval link", () => {
     expect(approvalPreview(approval)).toEqual({
       title: "Tool invoke",
       summary: "Review the exact request and its effects before deciding.",
       source: "Conversation",
-      href: "/ops/approvals?approvalId=approval%2Fone%3Ftwo&shell=classic",
+      href: "/inbox?approvalId=approval%2Fone%3Ftwo",
     });
+    expect(approvalPreview({ ...approval, linkage: { runId: "run-1" } }).source).toBe("Run");
+    expect(approvalPreview({ ...approval, linkage: undefined }).source).toBe("Request");
   });
 
   it("uses a generated explanation when available, without making a decision", () => {

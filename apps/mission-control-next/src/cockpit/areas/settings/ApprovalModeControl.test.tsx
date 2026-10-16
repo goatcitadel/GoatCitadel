@@ -223,7 +223,7 @@ describe("cockpit tool approval rule", () => {
     await vi.waitFor(() => expect(container.textContent).toContain("Approval settings changed"));
     expect(container.querySelector("select")!.value).toBe("approve_risky");
     expect(button("Save approval rule").disabled).toBe(true);
-    await click("Review draft against current revision");
+    await click("Apply draft to latest version");
     await click("Save approval rule");
     expect(api.patchSettings).toHaveBeenCalledExactlyOnceWith({
       expectedRevision: 3,
@@ -283,7 +283,7 @@ describe("cockpit tool approval rule", () => {
   it("fails closed when the owner profile is missing", async () => {
     delete owner.deploymentProfile;
     await render();
-    expect(container.textContent).toContain("Gateway approval mode, deployment profile, or revision is unavailable");
+    expect(container.textContent).toContain("The approval mode, deployment profile, or saved version could not load");
     expect(container.querySelector("select")).toBeNull();
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
@@ -328,9 +328,9 @@ describe("cockpit tool approval rule", () => {
     await render();
     await choose("approve_risky");
     await click("Save approval rule");
-    expect(container.textContent).toContain("Gateway rejected the stale settings revision");
+    expect(container.textContent).toContain("Not saved: the settings changed since your draft started");
     expect(container.textContent).not.toContain("Save outcome is uncertain");
-    await click("Review draft against current revision");
+    await click("Apply draft to latest version");
     await click("Save approval rule");
     expect(api.patchSettings).toHaveBeenLastCalledWith({ expectedRevision: 3, toolApprovalMode: "approve_risky" });
   });

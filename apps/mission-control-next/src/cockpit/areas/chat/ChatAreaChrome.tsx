@@ -164,7 +164,7 @@ export function ChatEmptyState({ rail }: { rail: MissionThreadedRenderSurfaceInp
       ) : (
         <>
           <p className="font-display text-lg font-medium text-fg">Choose a conversation</p>
-          <p className="max-w-sm text-sm text-fg-secondary">Choose a thread or start a new conversation.</p>
+          <p className="max-w-sm text-sm text-fg-secondary">Pick one from the list, or start a new conversation.</p>
           <Button onClick={() => void rail.onCreateSession()} disabled={rail.creatingSession}>
             {rail.creatingSession ? "Creating…" : "New conversation"}
           </Button>

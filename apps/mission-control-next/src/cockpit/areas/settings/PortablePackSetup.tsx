@@ -103,8 +103,8 @@ export function PortablePackSetup({
         />
       ))}
       {owner.children.length ? (
-        <section aria-label="Linked setup owners" className="space-y-3">
-          <h5 className="text-sm font-semibold text-fg">Linked setup owners</h5>
+        <section aria-label="Linked setup steps" className="space-y-3">
+          <h5 className="text-sm font-semibold text-fg">Linked setup steps</h5>
           {owner.children.map((child) => {
             const item = packChildItem(child);
             return (
@@ -115,16 +115,16 @@ export function PortablePackSetup({
                 </p>
                 <code className="block break-all font-mono text-xs text-fg-muted">{child.planId}</code>
                 {item ? (
-                  <Button onClick={() => onInspect(packInboxUrl(item, workspaceId))}>Inspect linked owner</Button>
+                  <Button onClick={() => onInspect(packInboxUrl(item, workspaceId))}>Open in Inbox</Button>
                 ) : (
-                  <p className="text-sm text-status-waiting">Exact owner handoff is unavailable.</p>
+                  <p className="text-sm text-status-waiting">This step cannot be opened from here.</p>
                 )}
               </article>
             );
           })}
           <p className="text-xs text-fg-muted">
-            Inbox rechecks the scoped canonical item. Completed or unavailable items may no longer appear. Specialized
-            approvals, artifact review and runtime input stay with those owners.
+            Inbox checks each item again when it opens. Completed or unavailable items may no longer appear. Specialized
+            approvals, artifact review and runtime input are handled on their own pages.
           </p>
         </section>
       ) : null}
@@ -150,8 +150,8 @@ export function PortablePackSetup({
               {owner.review.manifest.provenance.contentHash}
             </code>
             <p className="text-xs text-fg-muted">
-              The bundled definition is re-read before requesting this workspace plan. Review its separate owner
-              confirmation before any setup executes.
+              The bundled definition is read again before requesting this workspace plan. Each setup step asks for its
+              own confirmation before anything runs.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button disabled={owner.attempt.phase !== "idle"} onClick={() => void owner.confirmSetup()}>

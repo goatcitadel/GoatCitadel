@@ -61,7 +61,6 @@ export interface PreparedOutboundExecution {
   workspaceSnapshotOptIn: { workspaceSnapshot?: ChatWorkspaceSnapshotRequest };
   requestPrefs: OutboundRequestPrefsSnapshot;
   effectiveMode: ChatMode;
-  shouldAutoRoute: boolean;
   executionProviderId: string | undefined;
   executionModel: string | undefined;
   outboundPrefs: ReturnType<typeof resolveOutboundExecutionPrefs>;
@@ -182,7 +181,6 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
       workspaceSnapshotOptIn,
       requestPrefs,
       effectiveMode,
-      shouldAutoRoute,
       executionProviderId,
       executionModel,
       outboundPrefs,
@@ -668,8 +666,7 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
                   ...templateInvocationOptIn,
                   ...workspaceSnapshotOptIn,
                   ...outboundPrefs,
-                  mode: shouldAutoRoute ? undefined : effectiveMode,
-                  ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
+                  mode: effectiveMode,
                   providerId: routeExecutionProviderId,
                   model: routeExecutionModel,
                   routeDecision: routeExecutionDecision,
@@ -763,8 +760,7 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
                     ...templateInvocationOptIn,
                     ...workspaceSnapshotOptIn,
                     ...outboundPrefs,
-                    mode: shouldAutoRoute ? undefined : effectiveMode,
-                    ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
+                    mode: effectiveMode,
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,

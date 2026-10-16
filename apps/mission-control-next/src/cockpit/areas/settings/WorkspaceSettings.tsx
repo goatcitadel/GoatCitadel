@@ -141,7 +141,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
       ) : null}
       {!workspaces.isLoading && !workspaces.isError && !ready ? (
         <p role="alert" className="text-sm text-status-failed">
-          Workspace scope evidence is unavailable. Refresh the directory before editing.
+          Workspaces could not load. Refresh the directory before editing.
         </p>
       ) : null}
       {!citadels.isLoading && !citadels.isError && parent?.lifecycleStatus !== "active" ? (
@@ -158,7 +158,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
               <dl className="mt-2 space-y-1">
                 <dt>Workspace ID</dt>
                 <dd className="break-all font-mono">{selectedId}</dd>
-                <dt>Revision</dt>
+                <dt>Version</dt>
                 <dd className="font-mono">{selected?.revision ?? "Unavailable"}</dd>
                 <dt>Slug</dt>
                 <dd className="break-all font-mono">{selected?.slug ?? "Unavailable"}</dd>
@@ -226,7 +226,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
       ) : null}
       {action.pending ? (
         <p role="status" className="text-sm text-fg-muted">
-          Waiting for the Gateway workspace owner…
+          Waiting for the Gateway to confirm…
         </p>
       ) : null}
       {lifecycle.notice ? (

@@ -24,13 +24,9 @@ import {
 } from "./library-resources";
 import { TimeText } from "../../ui/TimeText";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { LIBRARY_SECTION_LABELS } from "./library-sections";
 
-const TITLES = {
-  memory: "Memory",
-  notes: "Notes",
-  files: "Files",
-  artifacts: "Artifacts",
-} as const;
+const TITLES = LIBRARY_SECTION_LABELS;
 export function LibraryResources({
   kind,
   workspaceId,

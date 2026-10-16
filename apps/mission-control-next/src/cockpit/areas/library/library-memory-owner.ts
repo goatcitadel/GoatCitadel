@@ -6,15 +6,23 @@ export async function readLibraryMemoryItem(itemId: string, workspaceId: string)
   let cursor: string | undefined;
   for (let page = 0; page < 20; page += 1) {
     const result = await fetchMemoryItems({ workspaceId, status: "all", limit: 500, cursor });
-    const item = result.items.find(value => value.itemId === itemId);
+    const item = result.items.find((value) => value.itemId === itemId);
     if (item) {
       const legacy = item.metadata.workspaceId;
-      if ((item.workspaceId && item.workspaceId !== workspaceId) || (legacy !== undefined && legacy !== workspaceId) || (item.workspaceId && legacy !== undefined && item.workspaceId !== legacy)) throw new Error("This memory item has inconsistent workspace evidence.");
+      if (
+        (item.workspaceId && item.workspaceId !== workspaceId) ||
+        (legacy !== undefined && legacy !== workspaceId) ||
+        (item.workspaceId && legacy !== undefined && item.workspaceId !== legacy)
+      )
+        throw new Error("This memory item has inconsistent workspace evidence.");
       return item;
     }
     if (!result.nextCursor) return null;
     cursor = result.nextCursor;
   }
-  throw new Error("Memory lookup exceeded the bounded enumeration window. The selected item is not confirmed; use the detailed memory owner.");
+  throw new Error(
+    "Memory lookup exceeded the bounded enumeration window. The selected item is not confirmed; narrow the Memory search to find it.",
+  );
 }
-export const sameMemoryItem = (a: MemoryItemRecord, b: MemoryItemRecord) => canonicalJsonString(a) === canonicalJsonString(b);
+export const sameMemoryItem = (a: MemoryItemRecord, b: MemoryItemRecord) =>
+  canonicalJsonString(a) === canonicalJsonString(b);

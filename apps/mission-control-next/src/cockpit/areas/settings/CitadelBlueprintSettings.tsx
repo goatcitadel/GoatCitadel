@@ -13,6 +13,7 @@ import {
 } from "../../../features/native-routes/library/citadel-blueprint-artifact";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 
 export function CitadelBlueprintSettings({ citadelId }: { citadelId: string }) {
@@ -31,7 +32,7 @@ export function CitadelBlueprintSettings({ citadelId }: { citadelId: string }) {
       className="mt-4 space-y-4 border-t border-line-subtle pt-4"
     >
       <header>
-        <h3 className="font-display text-md font-semibold text-fg">Blueprint</h3>
+        <h3 className="font-display text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-blueprint"]}</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Export a portable Charter and Chambers, or validate and review an import for this Citadel.
         </p>
@@ -162,7 +163,7 @@ export function CitadelBlueprintSettings({ citadelId }: { citadelId: string }) {
           </div>
           {control.importState.busy ? (
             <p role="status" className="text-sm text-fg-muted">
-              Checking the Blueprint owner…
+              Checking the saved Blueprint…
             </p>
           ) : null}
           {control.importState.error ? (
@@ -216,7 +217,7 @@ export function CitadelBlueprintSettings({ citadelId }: { citadelId: string }) {
         <dl className="space-y-2 break-words text-sm text-fg-secondary">
           <dt>Citadel</dt>
           <dd className="font-mono">{citadelId}</dd>
-          <dt>Reviewed revision</dt>
+          <dt>Reviewed version</dt>
           <dd className="break-all font-mono">{control.reviewedTarget?.revision}</dd>
           <dt>Current Charter</dt>
           <dd>{control.reviewedTarget?.charter?.purpose ?? "No Charter yet"}</dd>

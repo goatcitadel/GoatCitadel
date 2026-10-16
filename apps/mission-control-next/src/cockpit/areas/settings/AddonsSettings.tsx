@@ -29,7 +29,7 @@ export function AddonsSettings() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h3 className="font-display text-lg font-semibold">Add-on applications</h3>
         <Button disabled={owner.loading || owner.mutation.pending} onClick={() => void owner.reload()}>
-          Refresh add-on evidence
+          Refresh add-ons
         </Button>
       </div>
       <p className="text-sm text-fg-secondary">{ADDON_OWNER_BOUNDARY}</p>
@@ -38,12 +38,12 @@ export function AddonsSettings() {
       </p>
       {owner.loading ? (
         <p role="status" className="text-sm">
-          Loading add-on evidence…
+          Loading add-ons…
         </p>
       ) : null}
       {owner.error ? (
         <p role="alert" className="text-sm text-status-failed">
-          The add-on catalog and installation evidence could not load. Refresh before reviewing an action.
+          The add-on catalog and installation records could not load. Refresh before reviewing an action.
         </p>
       ) : null}
       {owner.notice ? (

@@ -6,6 +6,7 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { CitadelAccessReview } from "./CitadelAccessReview";
+import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
 
 export function CitadelCouncilSettings({ citadelId }: { citadelId: string }) {
   const c = useCitadelCouncil(citadelId),
@@ -42,7 +43,7 @@ export function CitadelCouncilSettings({ citadelId }: { citadelId: string }) {
       className="mt-4 space-y-4 border-t border-line-subtle pt-4"
     >
       <header>
-        <h3 className="font-display text-md font-semibold text-fg">Council</h3>
+        <h3 className="font-display text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-council"]}</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Seat existing agents by reference. Membership does not indicate a running agent or copy its profile. Per-seat
           grant ceilings remain governed by policy.
@@ -210,7 +211,7 @@ export function CitadelCouncilSettings({ citadelId }: { citadelId: string }) {
           <dd className="break-all font-mono text-xs">{review?.agentId}</dd>
           <dt>Citadel</dt>
           <dd>{citadelId}</dd>
-          <dt>Reviewed access revision</dt>
+          <dt>Reviewed access version</dt>
           <dd className="break-all font-mono text-xs">{review?.before.revision}</dd>
         </dl>
         <div className="mt-4 flex flex-wrap gap-2">

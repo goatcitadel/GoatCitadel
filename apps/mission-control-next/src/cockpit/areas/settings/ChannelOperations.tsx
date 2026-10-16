@@ -55,9 +55,9 @@ export function ChannelOperations({
         <section aria-label="Channel journey" className="space-y-2 text-sm">
           <h4 className="font-semibold">Channel journey</h4>
           <Button disabled={journey.loading} onClick={() => journey.setRevision((value) => value + 1)}>
-            Refresh channel evidence
+            Refresh channel status
           </Button>
-          {journey.loading ? <p role="status">Loading channel evidence…</p> : null}
+          {journey.loading ? <p role="status">Loading channel status…</p> : null}
           {journey.result?.errors.map((error) => (
             <p key={error} role="alert">
               {error}
@@ -82,7 +82,7 @@ export function ChannelOperations({
             ))}
           </ul>
           {journey.result && !journey.result.deliveries.length ? (
-            <p className="text-fg-muted">No delivery evidence is available.</p>
+            <p className="text-fg-muted">No deliveries recorded yet.</p>
           ) : null}
         </section>
       ) : null}
@@ -111,8 +111,8 @@ export function ChannelOperations({
             </Button>
           </div>
           <p className="text-xs text-fg-muted">
-            Pairing actions reread the current user and status. This owner does not offer an atomic revision
-            precondition; its returned record confirms the result.
+            Pairing actions read the current user and status again first, but changes made in the meantime are not
+            blocked. The saved result is checked afterward.
           </p>
           {discord.pendingPairings.length + discord.approvedPairings.length > 0 ? (
             <ul className="max-h-80 space-y-2 overflow-auto">
@@ -152,7 +152,7 @@ export function ChannelOperations({
       <Dialog
         open={review !== null}
         title="Review Discord pairing"
-        description="Approve only users you recognize. Revoking removes this pairing's access through the Gateway owner."
+        description="Approve only users you recognize. Revoking removes this pairing's access."
         onOpenChange={(open) => {
           if (!open) setReview(null);
         }}
@@ -165,9 +165,7 @@ export function ChannelOperations({
             <p className="break-all">
               Connection {connection.label} · user {review.pairing.userId} · code {review.pairing.code}
             </p>
-            {!currentReview ? (
-              <p role="alert">Pairing evidence changed. Close and review its current identity.</p>
-            ) : null}
+            {!currentReview ? <p role="alert">This pairing changed. Close and review who it is now.</p> : null}
             <div className="flex flex-wrap gap-2">
               <Button
                 variant={review.action === "revoke" ? "danger" : "primary"}

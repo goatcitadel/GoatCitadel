@@ -141,6 +141,20 @@ describe("cockpit saved board detail", () => {
     expect(container.textContent).toContain("50% used");
     expect(container.textContent).toContain("Known costUnknown");
     expect(container.textContent).toContain("Host-wide status applies beyond the selected workspace");
+    // Each widget names its own destination and its own Refresh, never a shared generic label.
+    const links = [...container.querySelectorAll<HTMLAnchorElement>("a")].map((link) => [
+      link.textContent,
+      new URL(link.href, "http://cockpit.invalid").pathname,
+    ]);
+    expect(links).toEqual(
+      expect.arrayContaining([
+        ["Open spend details", "/system/spend/details"],
+        ["Open runtime diagnostics", "/system/runtime/diagnostics"],
+      ]),
+    );
+    expect(container.textContent).not.toContain("Open source controls");
+    const refreshNames = [...container.querySelectorAll("section[aria-label] button")].map((node) => node.textContent);
+    expect(refreshNames).toEqual(expect.arrayContaining(["Refresh Usage and cost", "Refresh Runtime truth"]));
     const placements = [...container.querySelectorAll<HTMLElement>(".cockpit-saved-board-placement")];
     expect(placements).toHaveLength(2);
     expect(

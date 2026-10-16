@@ -96,7 +96,7 @@ it("keeps the current canonical decision and linked execution visible after leav
   expect(api.replay).toHaveBeenCalledWith("a");
   expect(api.run).toHaveBeenCalledWith("original-run");
   expect(api.resolve).not.toHaveBeenCalled();
-  expect(host.textContent).toContain("Approval wait settlement: Done");
+  expect(host.textContent).toContain("Approval wait: Done");
   api.lifecycle.mockResolvedValue({
     approval: settled,
     canonical: { approvalId: "a", runId: "wait" },
@@ -106,6 +106,6 @@ it("keeps the current canonical decision and linked execution visible after leav
   await act(async () => {
     await client.invalidateQueries({ queryKey: ["approval-settlement"] });
   });
-  await vi.waitFor(() => expect(host.textContent).toContain("No original durable execution was returned"));
+  await vi.waitFor(() => expect(host.textContent).toContain("No original run was found"));
   expect(host.textContent).not.toContain("Original linked work: Done");
 });

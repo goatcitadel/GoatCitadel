@@ -6,7 +6,10 @@ import { chromium } from "playwright";
 import assert from "node:assert/strict";
 import { createRunContext, finalizeRunContext, releaseRunContext, runScenario } from "./verification/lib/shared.mjs";
 import { requestJson, startVerificationStack, stopVerificationStack } from "./verification/lib/runtime.mjs";
-import { DETERMINISTIC_LLM_MODEL, startDeterministicLlmStub } from "./verification/lib/scenarios/deterministic-llm-stub.mjs";
+import {
+  DETERMINISTIC_LLM_MODEL,
+  startDeterministicLlmStub,
+} from "./verification/lib/scenarios/deterministic-llm-stub.mjs";
 import { runCockpitFirstRunGuardProof } from "./verification/lib/scenarios/cockpit-first-run-proof.mjs";
 
 async function main() {
@@ -266,33 +269,46 @@ async function main() {
             await page.getByRole("button", { name: "Finish setup and open Chat" }).click();
             await page.waitForURL((url) => url.pathname === "/chat", { timeout: 30_000 });
             const complete = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/state");
-            if (!complete.ok || complete.body?.completed !== true) throw new Error("Cockpit did not complete the reviewed first-run setup before Chat.");
+            if (!complete.ok || complete.body?.completed !== true)
+              throw new Error("Cockpit did not complete the reviewed first-run setup before Chat.");
             const composer = await openCockpitComposer(page);
             await composer.fill("Give me a short first answer.");
             await page.getByRole("button", { name: "Send", exact: true }).click();
             // Cockpit also previews the latest reply in the conversation rail; assert the transcript message itself.
             await page
-              .getByLabel("Conversation messages")
+              .locator("article[data-turn-id]")
               .getByText("Verification stub reply.", { exact: true })
               .first()
               .waitFor({ timeout: 60_000 });
             let verified;
             for (let attempt = 0; attempt < 30; attempt += 1) {
               const state = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/state");
-              if (state.ok && state.body?.firstTask?.status === "verified") { verified = state.body.firstTask; break; }
+              if (state.ok && state.body?.firstTask?.status === "verified") {
+                verified = state.body.firstTask;
+                break;
+              }
               await page.waitForTimeout(500);
             }
             const elapsedMs = Date.now() - coldStartMs;
             if (!verified?.sessionId || !verified?.turnId || !verified?.providerId || !verified?.model) {
               throw new Error("Gateway did not verify a completed provider-backed first Chat answer.");
             }
-            const thread = await requestJson(stack.gatewayUrl, `/api/v1/chat/sessions/${encodeURIComponent(verified.sessionId)}/thread`);
+            const thread = await requestJson(
+              stack.gatewayUrl,
+              `/api/v1/chat/sessions/${encodeURIComponent(verified.sessionId)}/thread`,
+            );
             const after = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/state");
             if (!thread.ok || !after.ok) throw new Error("Independent canonical first-answer readback failed.");
-            assertVerifiedFirstAnswer({ before: before.body, completed: complete.body, after: after.body, verified,
+            assertVerifiedFirstAnswer({
+              before: before.body,
+              completed: complete.body,
+              after: after.body,
+              verified,
               turn: thread.body?.turns?.find((turn) => turn.turnId === verified.turnId),
-              providerDispatches: llmStub.completionDispatches() - providerDispatchesBefore });
-            if (elapsedMs >= 180_000) throw new Error(`Isolated source first answer took ${elapsedMs}ms; the three-minute target is 180000ms.`);
+              providerDispatches: llmStub.completionDispatches() - providerDispatchesBefore,
+            });
+            if (elapsedMs >= 180_000)
+              throw new Error(`Isolated source first answer took ${elapsedMs}ms; the three-minute target is 180000ms.`);
             await page.goto(`${stack.uiUrl}/settings/first-run?shell=cockpit`, { waitUntil: "domcontentloaded" });
             await page.getByRole("button", { name: /Step 3.*Send a test message/u }).click();
             await page.getByText("First response: Verified", { exact: false }).waitFor({ timeout: 30_000 });
@@ -302,16 +318,39 @@ async function main() {
             await page.screenshot({ path: screenshot });
             return {
               status: "passed",
-              notes: ["This measures an isolated source stack with a provider seeded through Gateway setup APIs and a deterministic loopback reply; it does not prove a live external provider or packaged Windows first-run.",
-                "Cold-start elapsed time includes the preceding desktop/mobile negative first-run fixtures."],
-              metrics: { elapsedMs, targetMs: 180_000, verifiedProviderId: verified.providerId, verifiedModel: verified.model,
-                sessionId: verified.sessionId, turnId: verified.turnId, actualCanonicalTurnReadback: true,
-                providerDispatches: llmStub.completionDispatches() - providerDispatchesBefore, settingsPreserved: true,
-                providerProvisionedThroughUi: false, liveExternalProvider: false, installedWindowsJourney: false },
-              artifacts: { diagnostics: [], screenshots: ["screenshots/install-source-first-answer.png"], traces: [], logs: [], perf: [], playwright: [] },
+              notes: [
+                "This measures an isolated source stack with a provider seeded through Gateway setup APIs and a deterministic loopback reply; it does not prove a live external provider or packaged Windows first-run.",
+                "Cold-start elapsed time includes the preceding desktop/mobile negative first-run fixtures.",
+              ],
+              metrics: {
+                elapsedMs,
+                targetMs: 180_000,
+                verifiedProviderId: verified.providerId,
+                verifiedModel: verified.model,
+                sessionId: verified.sessionId,
+                turnId: verified.turnId,
+                actualCanonicalTurnReadback: true,
+                providerDispatches: llmStub.completionDispatches() - providerDispatchesBefore,
+                settingsPreserved: true,
+                providerProvisionedThroughUi: false,
+                liveExternalProvider: false,
+                installedWindowsJourney: false,
+              },
+              artifacts: {
+                diagnostics: [],
+                screenshots: ["screenshots/install-source-first-answer.png"],
+                traces: [],
+                logs: [],
+                perf: [],
+                playwright: [],
+              },
             };
-          } finally { await browserContext.close(); }
-        } finally { await browser.close(); }
+          } finally {
+            await browserContext.close();
+          }
+        } finally {
+          await browser.close();
+        }
       },
     );
 
@@ -428,7 +467,10 @@ export function assertVerifiedFirstAnswer({ before, completed, after, verified, 
   assert.equal(turn?.trace?.model, verified.model);
   assert.equal(turn?.trace?.routing?.primaryProviderId, verified.providerId);
   assert.equal(turn?.assistantMessage?.content, "Verification stub reply.");
-  assert.ok(Number.isInteger(providerDispatches) && providerDispatches > 0, "No actual loopback model dispatch was recorded.");
+  assert.ok(
+    Number.isInteger(providerDispatches) && providerDispatches > 0,
+    "No actual loopback model dispatch was recorded.",
+  );
 }
 
 /**

@@ -129,7 +129,11 @@ describe("Inbox capability proposal detail", () => {
     api.fetchOperatorInbox.mockResolvedValueOnce({ ...projection, items: [] });
     await render();
     expect(api.fetchCapabilityProposal).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("no longer in the selected workspace Inbox");
+    expect(container.textContent).toContain("no longer in this workspace's Inbox");
+    const capabilitiesLink = [...container.querySelectorAll("a")].find(
+      (link) => link.textContent === "Open capabilities",
+    );
+    expect(capabilitiesLink?.getAttribute("href")).toContain("/library/capabilities");
   });
 
   it("hides foreign, resolved, and changed owner records", () => {

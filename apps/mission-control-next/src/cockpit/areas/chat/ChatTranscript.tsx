@@ -221,6 +221,7 @@ export function ChatTranscript({
     visibleTurns.length > 100
       ? visibleTurns.slice(props.followOutput ? -100 : 0, props.followOutput ? undefined : 100)
       : visibleTurns;
+  const fallbackOffset = props.followOutput ? visibleTurns.length - fallbackTurns.length : 0;
   const footerContext: TranscriptFooterContext = {
     ...(virtualized ? {} : { renderedTurns: fallbackTurns }),
     props,
@@ -288,9 +289,10 @@ export function ChatTranscript({
                 threadEndRef,
                 jumpToLatest,
               }}
-              itemContent={(_index, turn) => (
+              itemContent={(index, turn) => (
                 <Turn
                   turn={turn}
+                  position={index + 1}
                   previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
                   streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
                   actions={props}
@@ -302,10 +304,11 @@ export function ChatTranscript({
             />
           ) : (
             <>
-              {fallbackTurns.map((turn) => (
+              {fallbackTurns.map((turn, index) => (
                 <div key={turn.turnId}>
                   <Turn
                     turn={turn}
+                    position={fallbackOffset + index + 1}
                     previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
                     streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
                     actions={props}

@@ -98,16 +98,16 @@ export function ApprovalSettlement({
       ) : null}
       {query.isError ? (
         <p role="alert">
-          Decision retained; follow-on refresh unavailable. {describeApiError(query.error).summary} Retained outcomes
-          may be stale.
+          Decision recorded; follow-on work couldn&apos;t be refreshed. {describeApiError(query.error).summary} What is
+          shown may be out of date.
         </p>
       ) : null}
       {/* Background polling stays quiet; only the outcome lines above and below are live regions. */}
-      {query.isFetching ? <p className="text-fg-muted">Checking canonical follow-on work…</p> : null}
+      {query.isFetching ? <p className="text-fg-muted">Checking follow-on work…</p> : null}
       {state?.wait ? (
         <p>
-          Approval wait settlement: {presentRunStatus(state.wait.status).label}. This records approval bookkeeping, not
-          original execution.
+          Approval wait: {presentRunStatus(state.wait.status).label}. This tracks the approval itself, not the original
+          work.
         </p>
       ) : null}
       {run ? (
@@ -116,7 +116,7 @@ export function ApprovalSettlement({
           {run.lastError}
         </p>
       ) : state ? (
-        <p>No original durable execution was returned. Approval settlement is separate from execution.</p>
+        <p>No original run was found. A recorded decision does not show the work ran.</p>
       ) : (
         <p>Original linked work outcome is not yet verified.</p>
       )}

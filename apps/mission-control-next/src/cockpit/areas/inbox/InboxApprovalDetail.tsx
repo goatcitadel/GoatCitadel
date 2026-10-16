@@ -36,7 +36,9 @@ export function InboxApprovalDetail({
   const access = useProjectAccess(workspaceId);
   const [decisionNotice, setDecisionNotice] = useState("");
   const noticeRef = useRef<HTMLParagraphElement>(null);
-  useEffect(() => { if (decisionNotice) noticeRef.current?.focus(); }, [decisionNotice]);
+  useEffect(() => {
+    if (decisionNotice) noticeRef.current?.focus();
+  }, [decisionNotice]);
   const queryClient = useQueryClient();
   const approvalId = item.source.approvalId;
   // The same key as Chat's blocker card, so moving between them is a cache hit (IN-11).
@@ -69,9 +71,18 @@ export function InboxApprovalDetail({
   const specialist = Boolean(approval && ["code_mode.run", "remote_worker.native_runtime"].includes(approval.kind));
   const specialistQuery = useQuery({
     queryKey: ["approvals", "specialist", access.identity, approval],
-    queryFn: () => readSpecialistEvidence(approval!), enabled: specialist, retry: false, staleTime: 0,
+    queryFn: () => readSpecialistEvidence(approval!),
+    enabled: specialist,
+    retry: false,
+    staleTime: 0,
   });
-  const specialistEvidence = approval && !specialistQuery.isError && specialistQuery.data && specialistEvidenceMatches(approval, specialistQuery.data) ? specialistQuery.data : undefined;
+  const specialistEvidence =
+    approval &&
+    !specialistQuery.isError &&
+    specialistQuery.data &&
+    specialistEvidenceMatches(approval, specialistQuery.data)
+      ? specialistQuery.data
+      : undefined;
 
   return (
     <section aria-label="Current approval" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
@@ -108,8 +119,17 @@ export function InboxApprovalDetail({
           {decisionNotice}
         </p>
       ) : null}
-      {view.record ? <ApprovalAuditRecovery approval={view.record} workspaceId={workspaceId} checking={checking || query.isError} /> : null}
-      {view.record?.kind === "change_plan_effect" && ["llama_cpp_setup", "llama_cpp_configuration"].includes(String(view.record.payload.targetResourceId)) && view.record.linkage?.workspaceId === workspaceId && !query.isError ? <NativeOwnerLink href="/settings/models#local-ai" scope={access.identity}>Return to llama.cpp setup</NativeOwnerLink> : null}
+      {view.record ? (
+        <ApprovalAuditRecovery approval={view.record} workspaceId={workspaceId} checking={checking || query.isError} />
+      ) : null}
+      {view.record?.kind === "change_plan_effect" &&
+      ["llama_cpp_setup", "llama_cpp_configuration"].includes(String(view.record.payload.targetResourceId)) &&
+      view.record.linkage?.workspaceId === workspaceId &&
+      !query.isError ? (
+        <NativeOwnerLink href="/settings/models#local-ai" scope={access.identity}>
+          Return to llama.cpp setup
+        </NativeOwnerLink>
+      ) : null}
       {settled?.kind === "code_mode.run" ? <ApprovalCodeOutcome approval={settled} workspaceId={workspaceId} /> : null}
       {settled ? <ApprovalSettlement approval={settled} workspaceId={workspaceId} /> : null}
       {settled ? (
@@ -131,7 +151,7 @@ export function InboxApprovalDetail({
       ) : null}
       {recordAnswered(view) && !approval && !settled && !decisionNotice ? (
         <p className="text-fg-muted">
-          This approval is no longer waiting. Open Approvals for the current record and outcome.
+          This approval is no longer waiting. Its record is not available in this workspace.
         </p>
       ) : null}
       {approval ? (
@@ -147,7 +167,9 @@ export function InboxApprovalDetail({
           {approval.explanation?.riskExplanation ? (
             <p className="text-fg-secondary">{approval.explanation.riskExplanation}</p>
           ) : null}
-          {approval.explanationError ? <p role="alert">Approval summary unavailable: {approval.explanationError}</p> : null}
+          {approval.explanationError ? (
+            <p role="alert">Approval summary unavailable: {approval.explanationError}</p>
+          ) : null}
           {approval.explanation?.saferAlternative ? (
             <p className="text-fg-secondary">Safer option: {approval.explanation.saferAlternative}</p>
           ) : null}
@@ -157,7 +179,9 @@ export function InboxApprovalDetail({
               {evidence.targets.length ? (
                 <ul className="list-disc space-y-1 pl-5 text-fg-secondary">
                   {evidence.targets.map((target) => (
-                    <li className="break-all" key={target}>{target}</li>
+                    <li className="break-all" key={target}>
+                      {target}
+                    </li>
                   ))}
                 </ul>
               ) : null}
@@ -172,11 +196,15 @@ export function InboxApprovalDetail({
                   ))}
                 </ul>
               ) : null}
-              {evidence.commands.length ? <ApprovalShellExplanations commands={evidence.commands} explanations={approval.shellExplanations} /> : null}
+              {evidence.commands.length ? (
+                <ApprovalShellExplanations commands={evidence.commands} explanations={approval.shellExplanations} />
+              ) : null}
               {evidence.supporting.length ? (
                 <ul className="list-disc space-y-1 pl-5 text-fg-secondary">
                   {evidence.supporting.map((support) => (
-                    <li className="break-all" key={support}>{support}</li>
+                    <li className="break-all" key={support}>
+                      {support}
+                    </li>
                   ))}
                 </ul>
               ) : null}
@@ -189,11 +217,26 @@ export function InboxApprovalDetail({
             </section>
           ) : (
             <p className="text-fg-muted">
-              A structured preview is not available here. Open the full approval record before deciding.
+              A structured preview is not available, so this approval can&apos;t be decided here.
             </p>
           )}
           {approval.rollbackNote ? <p className="text-fg-secondary">Recovery: {approval.rollbackNote}</p> : null}
-          {specialist ? <><Button disabled={specialistQuery.isFetching} onClick={() => void specialistQuery.refetch()}>Refresh specialist evidence</Button>{specialistEvidence ? <SpecialistApprovalReview approval={approval} evidence={specialistEvidence} /> : <p role="alert">{specialistQuery.error ? describeApiError(specialistQuery.error).summary : "Specialist evidence is unavailable or changed. Refresh before approving."}</p>}</> : null}
+          {specialist ? (
+            <>
+              <Button disabled={specialistQuery.isFetching} onClick={() => void specialistQuery.refetch()}>
+                Refresh specialist evidence
+              </Button>
+              {specialistEvidence ? (
+                <SpecialistApprovalReview approval={approval} evidence={specialistEvidence} />
+              ) : (
+                <p role="alert">
+                  {specialistQuery.error
+                    ? describeApiError(specialistQuery.error).summary
+                    : "Specialist evidence is unavailable or changed. Refresh before approving."}
+                </p>
+              )}
+            </>
+          ) : null}
           {evidence || specialist ? (
             <InboxApprovalActions
               specialistEvidence={specialistEvidence}
@@ -203,7 +246,9 @@ export function InboxApprovalDetail({
               focusAction={focusAction}
               checking={checking || (specialist && specialistQuery.isFetching)}
               onResolved={rereadSettled}
-              onInvalidated={(message) => rereadSettled(message ?? "The approval changed. Review the refreshed record before deciding.")}
+              onInvalidated={(message) =>
+                rereadSettled(message ?? "The approval changed. Review the refreshed record before deciding.")
+              }
             />
           ) : null}
           <p className="text-xs text-fg-muted">

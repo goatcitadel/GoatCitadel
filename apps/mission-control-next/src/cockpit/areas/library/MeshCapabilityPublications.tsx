@@ -146,7 +146,7 @@ export function MeshCapabilityPublications({ workspaceId }: { workspaceId: strin
             Mesh capability publications
           </h2>
           <p className="mt-1 text-fg-secondary">
-            Capabilities published by admitted mesh nodes, with exact digests, health and activation state.
+            Capabilities published by accepted mesh nodes, with exact digests, health and activation state.
           </p>
         </div>
         <Button size="sm" disabled={busy || ops.loading} onClick={() => void ops.reload()}>
@@ -210,7 +210,7 @@ export function MeshCapabilityPublications({ workspaceId }: { workspaceId: strin
           Reading mesh publications…
         </p>
       ) : ops.inspection && !manifests.length ? (
-        <p className="text-fg-muted">No admitted node has published a capability manifest into this workspace.</p>
+        <p className="text-fg-muted">No accepted node has published a capability manifest into this workspace.</p>
       ) : manifests.length ? (
         <ul aria-label="Published mesh capability manifests" className="space-y-3">
           {manifests.map((manifest) => (

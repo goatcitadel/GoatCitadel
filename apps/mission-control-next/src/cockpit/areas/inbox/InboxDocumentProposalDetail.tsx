@@ -1,4 +1,9 @@
-import { DocumentProposalTarget, DocumentProposalDiff } from "./DocumentProposalTarget";
+import {
+  DocumentLibraryLink,
+  DocumentProposalTarget,
+  DocumentProposalDiff,
+  documentLibraryLabel,
+} from "./DocumentProposalTarget";
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { DocumentPatchProposalRecord, OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
@@ -127,7 +132,7 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
         updated.derivedDiff !== review.proposal.derivedDiff ||
         (review.decision === "apply" && (!updated.appliedTargetId || !updated.appliedContentHash))
       ) {
-        throw new Error("Gateway returned an unexpected document-proposal receipt.");
+        throw new Error("The saved result did not match the reviewed proposal.");
       }
       setReview(null);
       setResult(updated);
@@ -138,11 +143,11 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
       setReview(null);
       if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
         // Gateway answered and recorded nothing: the decision stays available.
-        setError(`Gateway did not accept the document decision. ${describeApiError(cause).summary}`);
+        setError(`The document decision was not accepted. ${describeApiError(cause).summary}`);
       } else if (mutationAttempted) {
         setOutcomeUncertain(true);
         setError(
-          `Document decision outcome is uncertain. Inspect the current proposal in its owner before trying again. ${describeApiError(cause).summary}`,
+          `Document decision outcome is uncertain. Use ${documentLibraryLabel(review.proposal.targetKind)} to check the document before trying again. ${describeApiError(cause).summary}`,
         );
       } else {
         setError(`Could not check the current document proposal. ${describeApiError(cause).summary}`);
@@ -171,7 +176,7 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
       </div>
       {!item.source.proposalId ? (
         <p role="alert" className="text-status-failed">
-          This Inbox item has no proposal ID. Open its owner to review it.
+          This Inbox item has no proposal ID, so it can&apos;t be reviewed here.
         </p>
       ) : null}
       {view.phase === "loading" ? (
@@ -190,7 +195,7 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
       ) : null}
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {recordAnswered(view) && !proposal ? (
-        <p className="text-fg-muted">This proposal is no longer waiting. Open its owner for the latest status.</p>
+        <p className="text-fg-muted">This proposal is no longer waiting. It may have been applied or rejected.</p>
       ) : null}
       {scopeChanged ? (
         <p role="alert" className="text-fg-secondary">
@@ -212,15 +217,16 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
             </p>
           </TechnicalDetails>
           <div className="space-y-2 rounded-md border border-line bg-sunken p-3">
-            <h4 className="font-medium text-fg">Server-derived replacement diff</h4>
+            <h4 className="font-medium text-fg">Replacement diff</h4>
             <DocumentProposalDiff diff={reviewable ? proposal.derivedDiff : proposal.derivedDiff.slice(0, 4_000)} />
           </div>
           {!reviewable ? (
             <p className="text-fg-secondary">
-              This diff is empty or too large for bounded Inbox review. Open its owning document flow to inspect it; no
-              decision is available here.
+              This diff is empty or too large to review in Inbox, so no decision is available here. Use{" "}
+              {documentLibraryLabel(proposal.targetKind)} to see the document.
             </p>
           ) : null}
+          <DocumentLibraryLink proposal={proposal} />
           {canDecide ? (
             <div className="flex flex-wrap gap-2">
               <Button
@@ -248,10 +254,13 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
         </p>
       ) : null}
       {result ? (
-        <p role="status" className="text-fg-secondary">
-          Gateway recorded this document proposal as {presentDocumentProposalState(result.state).label.toLowerCase()}.
-          Open its owner to inspect the current document version and evidence.
-        </p>
+        <div role="status" className="space-y-2 text-fg-secondary">
+          <p>
+            Proposal {presentDocumentProposalState(result.state).label.toLowerCase()}. Use{" "}
+            {documentLibraryLabel(result.targetKind)} to see the current document.
+          </p>
+          {proposal ? null : <DocumentLibraryLink proposal={result} />}
+        </div>
       ) : null}
       {error ? (
         <p role="alert" className="text-status-failed">
@@ -266,7 +275,7 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
         title={review?.decision === "apply" ? "Apply document patch" : "Reject document patch"}
         description={
           review?.decision === "apply"
-            ? "This replaces the reviewed note body or creates a new artifact version. The Gateway checks the target base before applying."
+            ? "This replaces the reviewed note body or creates a new artifact version. It applies only if the document has not changed since the proposal was made."
             : "This rejects the reviewed proposal without changing the target document."
         }
       >

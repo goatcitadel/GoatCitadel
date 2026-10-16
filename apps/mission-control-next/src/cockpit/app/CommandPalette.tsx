@@ -234,7 +234,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               {activeWorkspaceId
                 ? "Workspace: " + (workspaceName ?? "current workspace") + "."
                 : "No workspace selected."}
-              {" Type at least two characters to search records. Installation shared results are labeled."}
+              {" Type at least two characters to search."}
             </p>
             {creationNotice}
             <p className="px-3 py-2 text-sm text-fg-secondary">

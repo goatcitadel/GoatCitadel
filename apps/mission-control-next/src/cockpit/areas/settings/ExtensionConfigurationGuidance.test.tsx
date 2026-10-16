@@ -47,7 +47,7 @@ it("shows prerequisites, field guidance and an explicitly proposed sample withou
   await act(async () => root.render(<ExtensionConfigurationGuidance guidance={guidance} />));
   expect(container.textContent).toContain("Create a service account before setup");
   expect(container.textContent).toContain("Use the service URL");
-  expect(container.textContent).toContain("supported secure credential owner");
+  expect(container.textContent).toContain("supported secure credential setup");
   expect(container.textContent).toContain("not an execution result");
   expect(container.querySelectorAll("input,textarea,select")).toHaveLength(0);
   expect(container.textContent).not.toContain("https://author.invalid");

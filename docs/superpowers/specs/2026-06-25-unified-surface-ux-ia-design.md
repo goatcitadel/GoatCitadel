@@ -1,4 +1,5 @@
 # Unified "Chat" Surface — UX / IA Layer Design
+> **Superseded (2026-10-15):** Chat is the only conversation surface. The surface classifier, LLM judge and `/api/v1/surface/classify` were removed; `autoRoute` survives only as a deprecated, ignored field for stored durable payloads.
 
 - **Date:** 2026-06-25
 - **Status:** Approved (design); pending implementation plan

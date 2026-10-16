@@ -177,13 +177,15 @@ export function SettingsArea() {
       <EmptyState
         title="Settings destination unavailable"
         description="This capability is hidden from the current release. Technical display preferences do not enable it."
+        action={<SettingsHomeLink navigate={navigate} />}
       />
     );
   if (rest[0] && !PAGES.some((item) => item.id === rest[0] || item.entries.some((entry) => entry.section === rest[0])))
     return (
       <EmptyState
         title="Settings destination unavailable"
-        description="This link does not identify a supported settings destination. Open Settings to choose a current page."
+        description="This link does not match a settings page. Choose a page from Settings."
+        action={<SettingsHomeLink navigate={navigate} />}
       />
     );
   if (
@@ -194,7 +196,8 @@ export function SettingsArea() {
     return (
       <EmptyState
         title="Settings destination unavailable"
-        description="This link does not identify a supported section on this settings page. Open Settings to choose a current section."
+        description="This link does not match a section on this settings page. Choose a section from Settings."
+        action={<SettingsHomeLink navigate={navigate} />}
       />
     );
 
@@ -203,7 +206,6 @@ export function SettingsArea() {
       <header>
         <h1 className="font-display text-xl font-semibold text-fg">Settings</h1>
         <p className="text-sm text-fg-secondary">Find a setting, or review the controls available in this cockpit.</p>
-        <p className="mt-1 text-xs text-fg-muted">Additional controls open in detailed settings.</p>
         <a
           href="/settings/first-run"
           onClick={(event) => {
@@ -312,10 +314,9 @@ function SettingsDestinations({
       {entries.map((entry) => (
         <li key={entry.href} className="min-w-0 rounded-md border border-line-subtle bg-sunken">
           {entry.destination === "detailed" ? (
-            <div role="status" className="flex min-h-20 items-start gap-3 p-3">
+            <a href={entry.href} className="flex min-h-20 items-start gap-3 p-3 hover:bg-canvas">
               <SettingsDestinationContent entry={entry} />
-              <span>Native settings owner unavailable</span>
-            </div>
+            </a>
           ) : (
             <a
               href={entry.href}
@@ -341,6 +342,22 @@ function SettingsDestinations({
   );
 }
 
+function SettingsHomeLink({ navigate }: { navigate: (href: string) => void }) {
+  return (
+    <a
+      href="/settings/general"
+      onClick={(event) => {
+        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+        event.preventDefault();
+        navigate("/settings/general");
+      }}
+      className="text-sm font-medium text-accent hover:underline"
+    >
+      Open Settings
+    </a>
+  );
+}
+
 function SettingsDestinationContent({ entry }: { entry: SettingsIndexEntry }) {
   return (
     <>
@@ -350,7 +367,7 @@ function SettingsDestinationContent({ entry }: { entry: SettingsIndexEntry }) {
         <span className="mt-1 block text-xs text-fg-muted">{entry.description}</span>
         <span className="mt-1 block text-xs text-fg-secondary">
           {entry.destination === "detailed"
-            ? "Opens detailed settings"
+            ? `${entry.label} controls are only in the classic view. Opens the classic view`
             : entry.completeNative
               ? "Opens cockpit controls"
               : "Opens cockpit controls and management links"}

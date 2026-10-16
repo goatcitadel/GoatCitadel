@@ -78,7 +78,7 @@ describe("capability detail evidence", () => {
       <CapabilityPolicyEvidence item={entry} callableKnown workspacePolicy={policy} workspacePolicyState="ready" />,
     );
     expect(html).toContain("Current workspace tools profile: Review first");
-    expect(html).toContain("Approval posture: Every tool call needs approval");
+    expect(html).toContain("Approval setting: Every tool call needs approval");
     expect(html).toContain("Local operator override active");
     expect(html).toContain("current grants");
     expect(

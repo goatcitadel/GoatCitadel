@@ -192,9 +192,9 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
             review.action === "retrieve" && rows
               ? `Gateway returned ${plural(rows.length, "match", "matches")} under the source conversation's read policy.`
               : documentId
-                ? "Gateway returned a persisted document receipt. Indexing and context admission remain separate."
+                ? "Document saved. Indexing and use in conversations are checked separately."
                 : response.outcome === "executed"
-                  ? "Gateway reports the tool executed. Inspect owner evidence before relying on context availability."
+                  ? "The tool ran. It is not yet confirmed as available to conversations."
                   : "Gateway returned a result. Completion and context availability are not independently confirmed.",
           rows,
           documentId,
@@ -223,8 +223,7 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
     >
       <h2 className="font-display text-lg">Knowledge ingest and retrieval</h2>
       <p className="text-sm text-fg-secondary">
-        Choose the source conversation explicitly. Gateway tool policy, source admission and read access remain
-        authoritative.
+        Choose the source conversation. Tool policy and read access still decide what this conversation can use.
       </p>
       {sessions.error ? <Callout tone="error">{describeApiError(sessions.error).summary}</Callout> : null}
       {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
@@ -309,8 +308,8 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
               : review?.draft.query}
           </p>
           <Callout tone="warning">
-            Ingest persists source material. Indexing can invoke an embedding provider. Retrieval may return only
-            content admitted for this conversation.
+            Ingest persists source material. Indexing can invoke an embedding provider. Retrieval returns only content
+            allowed for this conversation.
           </Callout>
           <KnowledgeResults
             outcome={outcome}

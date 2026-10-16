@@ -75,7 +75,7 @@ export function ProjectDetail({
       ).items.find((item) => item.projectId === project.projectId && item.workspaceId === workspaceId);
       if (!access.current()) return;
       if (!fresh || fresh.revision !== project.revision || fresh.lifecycleStatus !== project.lifecycleStatus)
-        throw new Error("This project changed. Refresh and review its current revision before trying again.");
+        throw new Error("This project changed. Refresh and review its current version before trying again.");
       if (kind === "conversation") {
         if (fresh.lifecycleStatus !== "active") throw new Error("Restore this project before starting a conversation.");
         const session = await createChatSession(

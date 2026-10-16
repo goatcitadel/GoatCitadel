@@ -91,9 +91,7 @@ export function McpServerEditor({
             </p>
           ) : null}
           {!query.isFetching && !server ? (
-            <p role="alert">
-              Current editable server evidence is unavailable. Your retained draft has not been discarded.
-            </p>
+            <p role="alert">The saved server settings could not load. Your draft is kept.</p>
           ) : null}
           {control.notice ? (
             <p role={control.notice.tone === "error" ? "alert" : "status"}>{control.notice.message}</p>
@@ -216,11 +214,11 @@ export function McpServerEditor({
             </p>
           ) : null}
           {server?.packChange ? <p>Saving clears this server's existing pack ownership marker.</p> : null}
-          <p>Credentials and trust remain with their existing owners. This form does not edit them.</p>
+          <p>Credentials and trust are managed separately. This form does not edit them.</p>
           <details>
             <summary>Reviewed server identity</summary>
             <code className="block break-all font-mono">
-              {serverId} · {server?.revision || "Revision unavailable"}
+              {serverId} · {server?.revision || "Version unavailable"}
             </code>
           </details>
           {reviewed ? (

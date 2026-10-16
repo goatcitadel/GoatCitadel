@@ -62,7 +62,7 @@ export function EffectivePermissionContexts({
         Workspace context from the Gateway. Session, task or run overrides may produce a different decision; this view
         grants no execution authority.
       </p>
-      {refreshing ? <p role="status">Refreshing effective context evidence…</p> : null}
+      {refreshing ? <p role="status">Refreshing effective permissions…</p> : null}
       {rows(false)}
       <details>
         <summary className="cursor-pointer">Legacy compatibility policy contexts</summary>

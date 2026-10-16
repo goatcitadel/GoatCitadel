@@ -97,8 +97,8 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
       <details className="text-sm">
         <summary className="cursor-pointer font-medium">Advertised operator actions</summary>
         <p className="mt-2 text-xs text-fg-muted">
-          Review each action before dispatch. External writes may be irreversible. Saved connection state is rechecked;
-          this action API has no atomic revision precondition.
+          Review each action before dispatch. External writes may be irreversible. The saved connection is read again
+          first, but changes made in the meantime are not blocked.
         </p>
         {s.selectedCatalog?.operatorActions?.length ? (
           <div className="mt-3 space-y-4">
@@ -175,20 +175,20 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
                 : "Not reported"}
             </p>
           ) : null}
-          <TechnicalDetails label="Owner evidence">
+          <TechnicalDetails label="Action result">
             <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">
               {JSON.stringify(s.lastOperatorActionResult, null, 2)}
             </pre>
           </TechnicalDetails>
         </section>
       ) : null}
-      <TechnicalDetails label="Connection identity and revision">
+      <TechnicalDetails label="Connection identity and version">
         <dl className="space-y-1 font-mono text-xs">
           <dt>Connection</dt>
           <dd className="break-all">{connection.connectionId}</dd>
           <dt>Catalog</dt>
           <dd>{connection.catalogId}</dd>
-          <dt>Revision</dt>
+          <dt>Version</dt>
           <dd className="break-all">{connection.revision}</dd>
           <dt>Updated</dt>
           <dd>
@@ -210,8 +210,8 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
           {s.operatorReview?.action.label} on {s.operatorReview?.connection.label}
         </p>
         <p className="mt-2 text-xs text-fg-muted">
-          The exact saved connection and catalog action are read again before dispatch. The action API has no atomic
-          revision precondition.
+          The saved connection and catalog action are read again before running, but changes made in the meantime are
+          not blocked.
         </p>
         {!s.operatorReviewCurrent ? (
           <p role="alert">The reviewed input or view changed. Close and review again.</p>

@@ -14,9 +14,9 @@ const VIEWS = [
   { id: "board", label: "Board", path: "/work" },
   { id: "history", label: "History", path: "/work/history" },
   { id: "schedules", label: "Schedules", path: "/work/schedules" },
-  { id: "kanban", label: "Task actions", path: "/work/kanban" },
+  { id: "kanban", label: "Classic Kanban", path: "/work/kanban" },
   { id: "archive", label: "Archived tasks", path: "/work/archive" },
-  { id: "automation", label: "Automation Designer", path: "/work/automation" },
+  { id: "automation", label: "Automation designer", path: "/work/automation" },
 ] as const;
 
 export function WorkArea() {

@@ -64,17 +64,14 @@ export function ProviderRoutingSettings() {
     review.model === routingModel,
   );
   return (
-    <section
-      aria-label="Installation default routing"
-      className="mt-4 space-y-3 rounded-lg border border-line bg-raised p-4"
-    >
-      <h3 className="font-display text-md font-semibold text-fg">Installation default routing</h3>
+    <section aria-label="Default model" className="mt-4 space-y-3 rounded-lg border border-line bg-raised p-4">
+      <h3 className="font-display text-md font-semibold text-fg">Default model</h3>
       <p className="text-sm text-fg-secondary">
-        Gateway default: {activeProviderId ? gatewayDefaultLabel : "Unavailable"}. Existing saved Chat choices retain
-        their own routing.
+        Default model: {activeProviderId ? gatewayDefaultLabel : "Unavailable"}. Conversations that already chose a
+        model keep their choice.
       </p>
       <Button size="sm" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-        Review installation routing
+        Change default model
       </Button>
       <div hidden={!open} className="space-y-3">
         <ProviderModelSearch
@@ -141,10 +138,10 @@ export function ProviderRoutingSettings() {
         {routingEditor.hasRemoteChanges ? (
           <div className="space-y-2">
             <p role="status" className="text-sm text-status-waiting">
-              Routing changed elsewhere. Your draft is retained.
+              The default model changed elsewhere. Your draft started from an older version and is kept.
             </p>
             <Button disabled={locked} onClick={routingEditor.rebaseToCurrent}>
-              Apply routing draft to current revision
+              Apply draft to latest version
             </Button>
           </div>
         ) : null}
@@ -154,7 +151,7 @@ export function ProviderRoutingSettings() {
             disabled={!routingProviderId || catalog.loading}
             onClick={() => void loadModelsForProvider(routingProviderId, { force: true })}
           >
-            Refresh routing models
+            Refresh models
           </Button>
           <Button
             variant="primary"
@@ -167,7 +164,7 @@ export function ProviderRoutingSettings() {
               })
             }
           >
-            Review default routing change
+            Review default model change
           </Button>
         </div>
       </div>
@@ -178,15 +175,15 @@ export function ProviderRoutingSettings() {
       ) : null}
       {catalog.error ? (
         <p role="alert" className="text-sm text-status-failed">
-          Routing evidence unavailable: {catalog.error}
+          Models could not load: {catalog.error}
         </p>
       ) : null}
       <ProviderOutcomeCheck mutation={routing.mutation} reload={catalog.reload} />
       <ProviderChangeStatus change={routingChange.change} onRefresh={routingChange.refresh} onReview={setPlan} />
       <Dialog
         open={Boolean(review)}
-        title="Change installation default routing?"
-        description="Apply the reviewed provider and model through the Gateway. Existing saved Chat selections keep their own preferences."
+        title="Change the default model?"
+        description="New conversations use this provider and model. Conversations that already chose a model keep their choice."
         onOpenChange={(next) => {
           if (!next && !locked) setReview(null);
         }}

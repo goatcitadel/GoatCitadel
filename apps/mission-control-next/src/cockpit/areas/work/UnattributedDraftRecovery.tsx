@@ -11,8 +11,8 @@ export function UnattributedDraftRecovery({
       className="space-y-2 rounded-md border border-line p-3 text-sm text-fg-secondary"
     >
       <p>
-        An earlier draft has no verified caller attribution. Its bytes are preserved separately. Recover it only if this
-        is your input; this does not save it to the Gateway.
+        An earlier draft was found, but this browser can't confirm who wrote it. It is kept separately. Recover it only
+        if it is your input; recovering does not save it.
       </p>
       <Button disabled={editor.isDirty} onClick={editor.recoverUnattributedDraft}>
         This is my draft — recover input

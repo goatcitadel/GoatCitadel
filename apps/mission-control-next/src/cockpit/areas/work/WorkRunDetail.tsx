@@ -107,7 +107,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
         <>
           <header className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-xs font-semibold text-accent">Durable run</p>
+              <p className="text-xs font-semibold text-accent">Run</p>
               <h1 className="max-w-3xl font-display text-xl font-semibold text-fg">{workRunTitle(run)}</h1>
               <p className="mt-1 text-xs text-fg-muted">
                 <TimeText value={run.updatedAt} prefix="Updated" />
@@ -116,7 +116,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
             <StatusBadge status={presentRunStatus(run.status, { waitingOnOperator: pendingApproval })} />
           </header>
           <p className="rounded-md border border-line bg-sunken p-3 text-sm text-fg-secondary">
-            This page reads Gateway evidence.{" "}
+            This page shows the saved run record.{" "}
             {sessionId ? (
               <>
                 <NativeOwnerLink
@@ -157,7 +157,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
           <section className="rounded-lg border border-line bg-raised p-4">
             <h2 className="font-display text-lg font-semibold text-fg">Run history</h2>
             {data.durable.timeline.state === "available" ? (
-              data.durable.timeline.items.length ? (
+              data.durable.timeline.items.length > 0 ? (
                 <ol className="mt-3 grid gap-2">
                   {data.durable.timeline.items.slice(-12).map((event) => (
                     <li

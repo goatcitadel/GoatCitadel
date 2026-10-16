@@ -119,7 +119,7 @@ export async function loadLibraryResources(input: ResourceQuery): Promise<Resour
     return {
       items: items.map((item) => ({ kind, item })),
       nextCursor: response.nextCursor,
-      coverage: `Workspace and canonical global memory. ${withheld ? "Some inconsistent scope records were withheld." : `${response.total} matching records at the enumeration snapshot.`} ${response.nextCursor ? "More pages are available." : "End of this enumeration."}`,
+      coverage: `Workspace and global memory. ${withheld ? "Some inconsistent scope records were withheld." : `${response.total} matching records at the enumeration snapshot.`} ${response.nextCursor ? "More pages are available." : "End of this enumeration."}`,
     };
   }
   const text = query.trim().toLowerCase();

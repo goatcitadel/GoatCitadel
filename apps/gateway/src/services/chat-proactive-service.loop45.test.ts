@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@goatcitadel/storage", () => ({
+vi.mock("@goatcitadel/storage", async () => ({
+  resolveHourInTimeZone: (await vi.importActual<typeof import("@goatcitadel/storage")>("@goatcitadel/storage")).resolveHourInTimeZone,
   DEFAULT_SESSION_AUTONOMY_PREFS: {
     proactiveMode: "off",
     maxActionsPerHour: 0,

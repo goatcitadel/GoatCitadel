@@ -70,7 +70,6 @@ export function ThreadList({
                 <button
                   type="button"
                   onClick={() => rail.onSelectSession(session.sessionId)}
-                  aria-label={rail.renderSessionLabel(session.sessionId)}
                   aria-current={session.sessionId === rail.selectedSessionId ? "page" : undefined}
                   className="flex w-full items-start rounded-md p-2 text-left hover:bg-sunken aria-[current=page]:bg-sunken"
                 >

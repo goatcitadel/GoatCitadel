@@ -93,7 +93,7 @@ it.each(["before confirmation", "after rejected preflight"])(
     expect(getByRole("dialog").textContent).not.toContain("Changed schedule");
     expect(getByRole("button", { name: "Pause schedule" }).hasAttribute("disabled")).toBe(true);
     expect(pauseCronJob).not.toHaveBeenCalled();
-    await click("Keep schedule");
+    await click("Don't pause");
     await click("Pause");
     expect(getByRole("dialog").textContent).toContain("Changed schedule");
     expect(getByRole("button", { name: "Pause schedule" }).hasAttribute("disabled")).toBe(false);

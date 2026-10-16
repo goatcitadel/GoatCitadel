@@ -42,7 +42,7 @@ it("uses actual runtime and backup owners, retaining owner context and missing o
     expect(BACKUP_INSPECT_PATH).toBe("/system/runtime#ops-runtime-backups");
     expect(links[3]?.getAttribute("href")).toBe("/system/runtime?shell=cockpit&workspaceId=w#backups");
     expect(links[3]?.textContent).toBe("Legacy runtime continuation");
-    expect(container.textContent).toContain("Source owner unavailable");
+    expect(container.textContent).toContain("This page is not available here");
   } finally {
     act(() => root.unmount());
     window.history.replaceState(null, "", originalLocation);

@@ -49,7 +49,7 @@ export function FirstRunDefaults({ workspaceId }: { workspaceId: string }) {
       ) : null}
       {control.draft.hasRemoteChanges ? (
         <div className="grid gap-2 text-sm text-fg-secondary">
-          <p>The settings revision changed. Your draft remains available.</p>
+          <p>The saved settings changed. Your draft started from an older version and is kept.</p>
           <Button disabled={control.locked} onClick={control.rebase}>
             Apply draft to current defaults
           </Button>

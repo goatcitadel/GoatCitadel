@@ -36,9 +36,11 @@ describe("Chat session controls", () => {
   it("uses the existing controller to rename the current conversation", async () => {
     const context = dock();
     await act(async () => root.render(<ChatSessionTitle title="Original title" dock={context} />));
-    await act(async () =>
-      (container.querySelector('button[title="Rename conversation"]') as HTMLButtonElement).click(),
-    );
+    const rename = container.querySelector("h1 button") as HTMLButtonElement;
+    // The name starts with the visible title and says what the button does; no tooltip-only affordance.
+    expect(rename.textContent).toBe("Original title · Rename conversation");
+    expect(rename.hasAttribute("title")).toBe(false);
+    await act(async () => rename.click());
     expect(context.onRenameTitleChange).toHaveBeenCalledWith("Original title");
     await act(async () => (container.querySelector('button[type="submit"]') as HTMLButtonElement).click());
     expect(context.onRenameSession).toHaveBeenCalledOnce();

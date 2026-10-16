@@ -67,7 +67,7 @@ export function presentChangeStatusLabel(value: ChangePlanStatus | string): stri
 
 /** How the current caller reached the Gateway, in plain words; the raw source belongs in technical details. */
 export const CALLER_SOURCE_LABELS: Record<GatewayCurrentAccess["actorSource"], string> = {
-  none: "An unidentified caller",
+  none: "An unidentified visitor",
   token: "A local operator token",
   basic: "A username and password sign-in",
   loopback: "This computer (local loopback access)",

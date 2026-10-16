@@ -49,7 +49,7 @@ export function ProviderProfileFields(
         {field("providerId", "Provider ID", props.existing)}
         {field("label", "Provider label")}
         {field("baseUrl", "Provider base URL")}
-        {field("defaultModel", "Profile default model")}
+        {field("defaultModel", "Provider's suggested model")}
         <label className="text-sm text-fg-secondary">
           <span id={`${id}-api-style`}>Provider API style</span>
           <select

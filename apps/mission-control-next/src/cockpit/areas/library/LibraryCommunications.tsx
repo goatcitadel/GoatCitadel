@@ -13,6 +13,7 @@ import { LibraryMailCompose } from "./LibraryMailCompose";
 import { useLibraryOperation } from "./use-library-operation";
 import { TimeText } from "../../ui/TimeText";
 import { mailProviderLabel, triageLabel } from "./library-vocabulary";
+import { LIBRARY_SECTION_LABELS } from "./library-sections";
 
 const SYNC_STATUS: Readonly<Record<MailAccountRecord["syncStatus"], StatusPresentation>> = {
   ready: { label: "Ready", tone: "done" },
@@ -55,7 +56,7 @@ export function LibraryCommunications({ workspaceId }: { workspaceId: string }) 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-4 overflow-y-auto p-4">
       <header className="grid min-w-0 gap-2">
-        <h1 className="font-display text-xl font-semibold">Mail</h1>
+        <h1 className="font-display text-xl font-semibold">{LIBRARY_SECTION_LABELS.communications}</h1>
         <p className="text-sm text-fg-secondary">
           Inbox, agenda and contacts read through governed integrations for{" "}
           <span title={workspaceId}>{workspaceName ?? `workspace ${workspaceId}`}</span>. Sending is approval-gated and

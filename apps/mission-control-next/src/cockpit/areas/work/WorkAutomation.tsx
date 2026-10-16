@@ -55,7 +55,7 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
     `ops:${workspaceId}:automation:designer`,
     { taskDescription: "", trigger: "", frequency: "", successCriteria: "", constraints: "" },
     undefined,
-    { label: "Automation Designer" },
+    { label: "Automation designer" },
   );
   const draft = editor.value;
   const identity = JSON.stringify([base, workspaceId, draft]);
@@ -137,7 +137,7 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
   };
   return (
     <section className="mx-auto grid max-w-5xl gap-4 p-4 sm:p-6">
-      <h1 className="font-display text-xl font-semibold text-fg">Automation Designer</h1>
+      <h1 className="font-display text-xl font-semibold text-fg">Automation designer</h1>
       <p className="text-sm text-fg-secondary">
         Draft a reviewable recipe for {workspaceName ?? "this workspace"}. Preview and template export do not create a
         schedule, activate capabilities, import into an external service, or prove execution. Gateway governance still

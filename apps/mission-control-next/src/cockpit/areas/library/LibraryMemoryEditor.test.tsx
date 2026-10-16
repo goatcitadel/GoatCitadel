@@ -383,7 +383,7 @@ it("tracks an independent decision, running effect, completed history and later 
   });
   await vi.waitFor(() =>
     expect(document.querySelector('[aria-label="Memory request receipt"]')?.textContent).toContain(
-      "current owner evidence is unavailable",
+      "the saved record couldn't be read",
     ),
   );
   expect(document.querySelector('[aria-label="Memory request receipt"]')?.textContent).not.toContain(
@@ -436,7 +436,7 @@ it("does not replace newer canonical effect evidence with a late pending respons
   });
   await vi.waitFor(() =>
     expect(document.querySelector('[aria-label="Memory request receipt"]')?.textContent).toContain(
-      "Checking canonical",
+      "Checking the saved memory request",
     ),
   );
   vi.mocked(fetchApprovalReplay).mockResolvedValue(replay("approved", "completed"));

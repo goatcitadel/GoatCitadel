@@ -7,7 +7,7 @@ function summaryLine(projection: OperatorInboxResponse): string {
   const hasGap = inboxReadGaps(projection).length > 0;
   if (total.known === 0) {
     return hasGap
-      ? "No known items, but some sources could not be read completely."
+      ? "Nothing found, but some sources couldn't be checked completely."
       : "Nothing needs your attention in the checked sources.";
   }
   return inboxCountIsExact(projection, total.complete)
@@ -26,11 +26,11 @@ export function InboxCoverageSummary({ projection }: { projection: OperatorInbox
       {gaps.length > 0 ? (
         <details className="mt-2 text-xs text-fg-muted">
           <summary className="cursor-pointer font-medium text-fg-secondary">
-            Coverage is incomplete for {plural(gaps.length, "source")}
+            Couldn&apos;t fully check {plural(gaps.length, "source")}
           </summary>
           <ul className="mt-2 list-disc space-y-1 pl-5">
             {gaps.map((source) => (
-              <li key={source.source}>{source.detail ?? "This source could not be read completely."}</li>
+              <li key={source.source}>{source.detail ?? "This source couldn't be checked completely."}</li>
             ))}
           </ul>
         </details>

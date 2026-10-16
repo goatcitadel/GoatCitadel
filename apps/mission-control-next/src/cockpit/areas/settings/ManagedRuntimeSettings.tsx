@@ -75,7 +75,7 @@ export function ManagedRuntimeSettings() {
               : "Unknown"}
           </p>
           <TechnicalDetails>
-            <p className="break-all font-mono text-xs">Settings revision {settings.data?.revision}</p>
+            <p className="break-all font-mono text-xs">Settings version {settings.data?.revision}</p>
           </TechnicalDetails>
           {control.managed ? (
             <>
@@ -134,7 +134,7 @@ export function ManagedRuntimeSettings() {
                     enabled: {String(control.current.enabled)}; auto-start: {String(control.current.autoStart)}.
                   </p>
                   <Button size="sm" disabled={control.locked} onClick={draft.rebaseToCurrent}>
-                    Review draft against current revision
+                    Apply draft to latest version
                   </Button>
                 </div>
               ) : null}

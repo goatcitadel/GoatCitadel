@@ -62,7 +62,7 @@ async function render(workspace = "workspace", dirty = false, runId = "audit:rev
   );
 }
 const link = () =>
-  [...host.querySelectorAll("a")].find((item) => item.textContent?.includes("Inspect durable replay audit"))!;
+  [...host.querySelectorAll("a")].find((item) => item.textContent?.includes("Open run for the run-again check"))!;
 async function click(name: string) {
   const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent === name)!;
   expect(button).toBeTruthy();

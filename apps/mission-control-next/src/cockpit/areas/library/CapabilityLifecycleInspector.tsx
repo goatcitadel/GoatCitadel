@@ -64,8 +64,8 @@ function LifecycleInspector({ item, workspaceId }: { item: CapabilityCatalogEntr
       {proposal.isFetching || candidate.isFetching ? <p role="status">Reading governed capability evidence…</p> : null}
       {proposal.error || candidate.error ? (
         <Callout tone="error">
-          {describeApiError(proposal.error ?? candidate.error).summary} No lifecycle change is available without the
-          canonical owner.
+          {describeApiError(proposal.error ?? candidate.error).summary} No lifecycle change is available until the saved
+          record can be read.
         </Callout>
       ) : null}
       {proposal.data ? (
@@ -171,8 +171,8 @@ function CandidateVersions({
         text: result.pendingApproval
           ? "Lifecycle approval requested. Callability has not changed; wait for approval and effect settlement."
           : result.noMutationRequired
-            ? "The canonical owner reports no change was required."
-            : "A governed change plan was returned. Inspect canonical candidate state; execution and callability are not confirmed by plan creation.",
+            ? "No change was needed."
+            : "A change plan was created. Creating a plan does not run it or make the capability callable; check the plan below.",
         approvalId: result.pendingApproval?.approvalId,
         reviewedCandidate: fresh,
         changePlan: "changePlan" in result ? result.changePlan : undefined,

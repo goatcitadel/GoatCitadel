@@ -72,8 +72,8 @@ const CODE_MODE_HELPER_SOURCE =
 const CODE_MODE_HELPER_REPLY = ["Deterministic governed helper:", "", "```ts", CODE_MODE_HELPER_SOURCE, "```"].join(
   "\n",
 );
-const STREAM_RELOAD_PARTIAL_TEXT = Array.from({ length: 20 }, (_, index) =>
-  `Paragraph ${index + 1}: saved.`).join("\n\n",
+const STREAM_RELOAD_PARTIAL_TEXT = Array.from({ length: 20 }, (_, index) => `Paragraph ${index + 1}: saved.`).join(
+  "\n\n",
 );
 const DELEGATION_OUTPUTS = Object.freeze([
   "Deterministic research handoff.",
@@ -160,9 +160,17 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
   const cockpitInlineDecisionsOnly = options.cockpitInlineDecisionsOnly === true;
   const cockpitStreamReloadOnly = options.cockpitStreamReloadOnly === true;
   const cockpitDocumentsOnly = options.cockpitDocumentsOnly === true;
-  if ([cockpitCodeModeOnly, cockpitStopOnly, cockpitErrorOnly, cockpitPersistenceOnly, cockpitInlineDecisionsOnly,
-    cockpitStreamReloadOnly, cockpitDocumentsOnly,
-    ].filter(Boolean).length > 1) {
+  if (
+    [
+      cockpitCodeModeOnly,
+      cockpitStopOnly,
+      cockpitErrorOnly,
+      cockpitPersistenceOnly,
+      cockpitInlineDecisionsOnly,
+      cockpitStreamReloadOnly,
+      cockpitDocumentsOnly,
+    ].filter(Boolean).length > 1
+  ) {
     throw new Error("select one dedicated cockpit browser proof");
   }
   if (cockpitCodeModeOnly && (requestedBundleIds?.size !== 1 || !requestedBundleIds.has("chat-agentic-durable-code"))) {
@@ -177,7 +185,10 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
   if (cockpitPersistenceOnly && (requestedBundleIds?.size !== 1 || !requestedBundleIds.has("chat-lifecycle"))) {
     throw new Error("cockpit persistence proof requires only the chat-lifecycle fixture bundle");
   }
-  if (cockpitInlineDecisionsOnly && (requestedBundleIds?.size !== 1 || !requestedBundleIds.has("chat-agentic-durable-code"))) {
+  if (
+    cockpitInlineDecisionsOnly &&
+    (requestedBundleIds?.size !== 1 || !requestedBundleIds.has("chat-agentic-durable-code"))
+  ) {
     throw new Error("cockpit inline decisions proof requires only the chat-agentic-durable-code fixture bundle");
   }
   if (cockpitStreamReloadOnly && (requestedBundleIds?.size !== 1 || !requestedBundleIds.has("chat-lifecycle"))) {
@@ -191,8 +202,8 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
     requestedBundleIds.has("settings-core-auth-provider") ||
     requestedBundleIds.has("settings-governance-runtime-integrations");
   const needsLibraryContentFixture = requestedBundleIds === null || requestedBundleIds.has("library-content");
-  const needsChatCodeFixture = !cockpitInlineDecisionsOnly &&
-    (requestedBundleIds === null || requestedBundleIds.has("chat-agentic-durable-code"));
+  const needsChatCodeFixture =
+    !cockpitInlineDecisionsOnly && (requestedBundleIds === null || requestedBundleIds.has("chat-agentic-durable-code"));
   const stub = await startDeterministicLlmStub({
     replyText: "Verification stub reply.",
     expectedAuthorization: "Bearer verification-stub-key",
@@ -300,45 +311,90 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
       );
       if (!sourceStep) throw new Error("Chat stop-and-retry browser step is unavailable");
       await runBrowserActionBundle(context, {
-        baseSha, browser, bundleId: "cockpit-chat-stop", cockpit: true, deps, fixture,
-        registeredSteps: [adaptStopStepForCockpit(sourceStep)], sessionId: session.sessionId, stack, stub,
+        baseSha,
+        browser,
+        bundleId: "cockpit-chat-stop",
+        cockpit: true,
+        deps,
+        fixture,
+        registeredSteps: [adaptStopStepForCockpit(sourceStep)],
+        sessionId: session.sessionId,
+        stack,
+        stub,
       });
       const phoneSession = await createActionSession(stack.gatewayUrl, fixture.workspaceId);
       await runBrowserActionBundle(context, {
-        baseSha, browser, bundleId: "cockpit-chat-stop-phone", cockpit: true, deps,
+        baseSha,
+        browser,
+        bundleId: "cockpit-chat-stop-phone",
+        cockpit: true,
+        deps,
         fixture: { ...fixture, actionSession: phoneSession, stopCancelledTurnId: undefined },
-        registeredSteps: [adaptStopStepForCockpit(sourceStep)], sessionId: phoneSession.sessionId,
-        stack, stub, viewport: { width: 390, height: 844 },
+        registeredSteps: [adaptStopStepForCockpit(sourceStep)],
+        sessionId: phoneSession.sessionId,
+        stack,
+        stub,
+        viewport: { width: 390, height: 844 },
       });
       return;
     }
 
     if (cockpitErrorOnly) {
       await runBrowserActionBundle(context, {
-        baseSha, browser, bundleId: "cockpit-chat-error", cockpit: true, deps, fixture,
-        registeredSteps: [cockpitChatErrorStep()], sessionId: session.sessionId, stack, stub,
+        baseSha,
+        browser,
+        bundleId: "cockpit-chat-error",
+        cockpit: true,
+        deps,
+        fixture,
+        registeredSteps: [cockpitChatErrorStep()],
+        sessionId: session.sessionId,
+        stack,
+        stub,
       });
       const phoneSession = await createActionSession(stack.gatewayUrl, fixture.workspaceId);
       await runBrowserActionBundle(context, {
-        baseSha, browser, bundleId: "cockpit-chat-error-phone", cockpit: true, deps,
+        baseSha,
+        browser,
+        bundleId: "cockpit-chat-error-phone",
+        cockpit: true,
+        deps,
         fixture: { ...fixture, actionSession: phoneSession },
-        registeredSteps: [cockpitChatErrorStep()], sessionId: phoneSession.sessionId,
-        stack, stub, viewport: { width: 390, height: 844 },
+        registeredSteps: [cockpitChatErrorStep()],
+        sessionId: phoneSession.sessionId,
+        stack,
+        stub,
+        viewport: { width: 390, height: 844 },
       });
       return;
     }
 
     if (cockpitPersistenceOnly) {
       await runBrowserActionBundle(context, {
-        baseSha, browser, bundleId: "cockpit-chat-persistence", cockpit: true, deps, fixture,
-        registeredSteps: [cockpitChatPersistenceStep()], sessionId: session.sessionId, stack, stub,
+        baseSha,
+        browser,
+        bundleId: "cockpit-chat-persistence",
+        cockpit: true,
+        deps,
+        fixture,
+        registeredSteps: [cockpitChatPersistenceStep()],
+        sessionId: session.sessionId,
+        stack,
+        stub,
       });
       const phoneSession = await createActionSession(stack.gatewayUrl, fixture.workspaceId);
       await runBrowserActionBundle(context, {
-        baseSha, browser, bundleId: "cockpit-chat-persistence-phone", cockpit: true, deps,
+        baseSha,
+        browser,
+        bundleId: "cockpit-chat-persistence-phone",
+        cockpit: true,
+        deps,
         fixture: { ...fixture, actionSession: phoneSession },
-        registeredSteps: [cockpitChatPersistenceStep({ phone: true })], sessionId: phoneSession.sessionId,
-        stack, stub, viewport: { width: 390, height: 844 },
+        registeredSteps: [cockpitChatPersistenceStep({ phone: true })],
+        sessionId: phoneSession.sessionId,
+        stack,
+        stub,
+        viewport: { width: 390, height: 844 },
       });
       return;
     }
@@ -350,25 +406,51 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
       if (!sourceStep) throw new Error("Chat approval and user-input browser step is unavailable");
       const registeredSteps = [adaptInlineDecisionsStepForCockpit(sourceStep)];
       await runBrowserActionBundle(context, {
-        baseSha, browser, bundleId: "cockpit-chat-inline-decisions", cockpit: true, deps, fixture,
-        registeredSteps, sessionId: fixture.sessions.approval, stack, stub,
+        baseSha,
+        browser,
+        bundleId: "cockpit-chat-inline-decisions",
+        cockpit: true,
+        deps,
+        fixture,
+        registeredSteps,
+        sessionId: fixture.sessions.approval,
+        stack,
+        stub,
       });
       const phoneApproval = await createActionSession(stack.gatewayUrl, fixture.workspaceId);
       const phoneUserInput = await createActionSession(stack.gatewayUrl, fixture.workspaceId);
-      await checkedRequest(stack.gatewayUrl, "/api/v1/dev/verification/chat-approval-scenario", {
-        method: "POST", body: { sessionId: phoneApproval.sessionId, workspaceId: fixture.workspaceId },
-      }, "seed phone Chat approval",
+      await checkedRequest(
+        stack.gatewayUrl,
+        "/api/v1/dev/verification/chat-approval-scenario",
+        {
+          method: "POST",
+          body: { sessionId: phoneApproval.sessionId, workspaceId: fixture.workspaceId },
+        },
+        "seed phone Chat approval",
       );
-      await checkedRequest(stack.gatewayUrl, "/api/v1/dev/verification/chat-user-input-scenario", {
-        method: "POST", body: { sessionId: phoneUserInput.sessionId, workspaceId: fixture.workspaceId },
-      }, "seed phone Chat user input",
+      await checkedRequest(
+        stack.gatewayUrl,
+        "/api/v1/dev/verification/chat-user-input-scenario",
+        {
+          method: "POST",
+          body: { sessionId: phoneUserInput.sessionId, workspaceId: fixture.workspaceId },
+        },
+        "seed phone Chat user input",
       );
       await runBrowserActionBundle(context, {
-        baseSha, browser, bundleId: "cockpit-chat-inline-decisions-phone", cockpit: true, deps,
-        fixture: { ...fixture, sessions: { ...fixture.sessions, approval: phoneApproval.sessionId,
-          userInput: phoneUserInput.sessionId },
+        baseSha,
+        browser,
+        bundleId: "cockpit-chat-inline-decisions-phone",
+        cockpit: true,
+        deps,
+        fixture: {
+          ...fixture,
+          sessions: { ...fixture.sessions, approval: phoneApproval.sessionId, userInput: phoneUserInput.sessionId },
         },
-        registeredSteps, sessionId: phoneApproval.sessionId, stack, stub,
+        registeredSteps,
+        sessionId: phoneApproval.sessionId,
+        stack,
+        stub,
         viewport: { width: 390, height: 844 },
       });
       return;
@@ -376,15 +458,30 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
 
     if (cockpitStreamReloadOnly) {
       await runBrowserActionBundle(context, {
-        baseSha, browser, bundleId: "cockpit-chat-stream-reload", cockpit: true, deps, fixture,
-        registeredSteps: [cockpitChatStreamReloadStep()], sessionId: session.sessionId, stack, stub,
+        baseSha,
+        browser,
+        bundleId: "cockpit-chat-stream-reload",
+        cockpit: true,
+        deps,
+        fixture,
+        registeredSteps: [cockpitChatStreamReloadStep()],
+        sessionId: session.sessionId,
+        stack,
+        stub,
       });
       const phoneSession = await createActionSession(stack.gatewayUrl, fixture.workspaceId);
       await runBrowserActionBundle(context, {
-        baseSha, browser, bundleId: "cockpit-chat-stream-reload-phone", cockpit: true, deps,
+        baseSha,
+        browser,
+        bundleId: "cockpit-chat-stream-reload-phone",
+        cockpit: true,
+        deps,
         fixture: { ...fixture, actionSession: phoneSession, streamReloadCorrelation: undefined },
-        registeredSteps: [cockpitChatStreamReloadStep()], sessionId: phoneSession.sessionId,
-        stack, stub, viewport: { width: 390, height: 844 },
+        registeredSteps: [cockpitChatStreamReloadStep()],
+        sessionId: phoneSession.sessionId,
+        stack,
+        stub,
+        viewport: { width: 390, height: 844 },
       });
       return;
     }
@@ -392,17 +489,31 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
     if (cockpitDocumentsOnly) {
       const desktopNote = await seedCockpitDocumentNote(stack.gatewayUrl, fixture.workspaceId, "desktop");
       await runBrowserActionBundle(context, {
-        baseSha, browser, bundleId: "cockpit-chat-documents", cockpit: true, deps,
+        baseSha,
+        browser,
+        bundleId: "cockpit-chat-documents",
+        cockpit: true,
+        deps,
         fixture: { ...fixture, cockpitDocumentNote: desktopNote },
-        registeredSteps: [cockpitChatDocumentsStep()], sessionId: session.sessionId, stack, stub,
+        registeredSteps: [cockpitChatDocumentsStep()],
+        sessionId: session.sessionId,
+        stack,
+        stub,
       });
       const phoneSession = await createActionSession(stack.gatewayUrl, fixture.workspaceId);
       const phoneNote = await seedCockpitDocumentNote(stack.gatewayUrl, fixture.workspaceId, "phone");
       await runBrowserActionBundle(context, {
-        baseSha, browser, bundleId: "cockpit-chat-documents-phone", cockpit: true, deps,
+        baseSha,
+        browser,
+        bundleId: "cockpit-chat-documents-phone",
+        cockpit: true,
+        deps,
         fixture: { ...fixture, actionSession: phoneSession, cockpitDocumentNote: phoneNote },
-        registeredSteps: [cockpitChatDocumentsStep({ phone: true })], sessionId: phoneSession.sessionId,
-        stack, stub, viewport: { width: 390, height: 844 },
+        registeredSteps: [cockpitChatDocumentsStep({ phone: true })],
+        sessionId: phoneSession.sessionId,
+        stack,
+        stub,
+        viewport: { width: 390, height: 844 },
       });
       return;
     }
@@ -453,7 +564,10 @@ export function adaptCodeModeStepForCockpit(sourceStep) {
     if (operation.kind === "fill" && operation.label === "Message composer") {
       return [{ ...operation, label: "Message" }];
     }
-    if (operation.kind === "click" && operation.name === "Open turn: Create a deterministic TypeScript helper snippet.") {
+    if (
+      operation.kind === "click" &&
+      operation.name === "Open turn: Create a deterministic TypeScript helper snippet."
+    ) {
       return [];
     }
     if (operation.kind === "click" && operation.name === "Hide build editor") {
@@ -465,7 +579,9 @@ export function adaptCodeModeStepForCockpit(sourceStep) {
       return [{ kind: "return-to-cockpit-chat" }, { kind: "assert-text", value: "CHAT_CODE_MODE_OK" }];
     }
     if (operation.kind === "click-pattern" && operation.namePattern === "Open durable run trace ") {
-      return [{ kind: "click-turn-action", name: "Run details" }, { kind: "click", name: "Open durable evidence", exact: true },
+      return [
+        { kind: "click-turn-action", name: "Run details" },
+        { kind: "click", name: "Open run in Work", exact: true },
       ];
     }
     if (operation.kind === "assert-text" && operation.value === "Signed evidence receipt") {
@@ -480,7 +596,8 @@ export function adaptCodeModeStepForCockpit(sourceStep) {
     ...sourceStep,
     bundleId: "cockpit-chat-code-mode",
     stepId: "cockpit.chat.code-mode-artifacts",
-    expectedResult: "Cockpit Chat launches a governed Code Mode helper, reviews its approval, immutable artifacts, named proof, and durable run evidence, and explains unavailable receipt signing in the isolated keychain-free host.",
+    expectedResult:
+      "Cockpit Chat launches a governed Code Mode helper, reviews its approval, immutable artifacts, named proof, and durable run evidence, and explains unavailable receipt signing in the isolated keychain-free host.",
     operations,
   };
 }
@@ -493,11 +610,15 @@ export function adaptStopStepForCockpit(sourceStep) {
     ...sourceStep,
     bundleId: "cockpit-chat-stop",
     stepId: "cockpit.chat.stop-and-retry",
-    expectedResult: "Cockpit Chat stops a stalled turn, records cancellation, retries the exact prompt, and completes the new durable turn.",
+    expectedResult:
+      "Cockpit Chat stops a stalled turn, records cancellation, retries the exact prompt, and completes the new durable turn.",
     operations: sourceStep.operations.flatMap((operation) => {
-      if (operation.kind === "fill" && operation.label === "Message composer") return [{ ...operation, label: "Message" }];
+      if (operation.kind === "fill" && operation.label === "Message composer")
+        return [{ ...operation, label: "Message" }];
       if (operation.kind === "click" && operation.name === "Stop turn") {
-        return [{ ...operation, name: "Stop response" }, { kind: "api", probe: "chat-stop-cancelled" },
+        return [
+          { ...operation, name: "Stop response" },
+          { kind: "api", probe: "chat-stop-cancelled" },
         ];
       }
       if (operation.kind === "click" && operation.name === "Retry turn") return [{ ...operation, name: "Retry" }];
@@ -514,7 +635,8 @@ function cockpitChatErrorStep() {
     bundleId: "cockpit-chat-error",
     stepId: "cockpit.chat.provider-error",
     routeSlug: "chat",
-    expectedResult: "Cockpit Chat shows one clear failure with the exact failed Chat and durable run evidence and a route to inspect it.",
+    expectedResult:
+      "Cockpit Chat shows one clear failure with the exact failed Chat and durable run evidence and a route to inspect it.",
     operations: [
       { kind: "api", probe: "arm-provider-error" },
       { kind: "fill", label: "Message", value: "Fail this deterministic usability turn." },
@@ -531,7 +653,8 @@ export function cockpitChatPersistenceStep({ phone = false } = {}) {
     bundleId: "cockpit-chat-persistence",
     stepId: "cockpit.chat.reload-export-archive-restore",
     routeSlug: "chat",
-    expectedResult: "Cockpit Chat reloads an exact completed turn, exports it, then archives and restores the scoped conversation.",
+    expectedResult:
+      "Cockpit Chat reloads an exact completed turn, exports it, then archives and restores the scoped conversation.",
     operations: [
       { kind: "fill", label: "Message", value: "Persist this deterministic cockpit conversation." },
       { kind: "click", name: "Send", exact: true },
@@ -541,16 +664,22 @@ export function cockpitChatPersistenceStep({ phone = false } = {}) {
       { kind: "assert-text", value: DETERMINISTIC_LLM_DEFAULT_REPLY },
       { kind: "api", probe: "chat-persistence-readback" },
       { kind: "click", name: "Conversation actions", exact: true },
-      { kind: "download", name: "Export conversation", exact: true,
-        expectedFileNamePattern: "^[a-zA-Z0-9_-]+-snapshot\\.json$", contentContract: "chat-conversation-v1",
+      {
+        kind: "download",
+        name: "Export conversation",
+        exact: true,
+        expectedFileNamePattern: "^[a-zA-Z0-9_-]+-snapshot\\.json$",
+        contentContract: "chat-conversation-v1",
       },
       { kind: "click", name: "Conversation actions", exact: true },
       { kind: "click", name: "Archive conversation", exact: true },
       { kind: "confirm", name: "Archive" },
       { kind: "api", probe: "chat-persistence-archived" },
-      phone ? { kind: "select", label: "Choose conversation", value: "history:archived" }
+      phone
+        ? { kind: "select", label: "Choose conversation", value: "history:archived" }
         : { kind: "click", name: "Archived", exact: true },
-      phone ? { kind: "select-action-session" }
+      phone
+        ? { kind: "select-action-session" }
         : { kind: "click", name: "Usability browser action session", exact: true },
       { kind: "assert-text", value: "Persist this deterministic cockpit conversation." },
       { kind: "click", name: "Conversation actions", exact: true },
@@ -572,7 +701,8 @@ export function adaptInlineDecisionsStepForCockpit(sourceStep) {
     ...sourceStep,
     bundleId: "cockpit-chat-inline-decisions",
     stepId: "cockpit.chat.inline-approval-and-user-input",
-    expectedResult: "Cockpit Chat reviews a danger approval and answers a user-input wait, then checks both exact durable runs.",
+    expectedResult:
+      "Cockpit Chat reviews a danger approval and answers a user-input wait, then checks both exact durable runs.",
     operations: [
       { kind: "fixture-session", sessionKey: "approval" },
       { kind: "assert-text", value: "Approval needed" },
@@ -594,7 +724,8 @@ export function cockpitChatStreamReloadStep() {
     bundleId: "cockpit-chat-stream-reload",
     stepId: "cockpit.chat.streaming-reload",
     routeSlug: "chat",
-    expectedResult: "Cockpit Chat reloads a running stream without redispatching the provider, retains partial text, and can stop the exact turn.",
+    expectedResult:
+      "Cockpit Chat reloads a running stream without redispatching the provider, retains partial text, and can stop the exact turn.",
     operations: [
       { kind: "api", probe: "arm-reload-provider" },
       { kind: "fill", label: "Message", value: "Keep this deterministic response visible after reload." },
@@ -612,9 +743,14 @@ export function cockpitChatStreamReloadStep() {
 }
 
 async function seedCockpitDocumentNote(gatewayUrl, workspaceId, target) {
-  const created = await checkedRequest(gatewayUrl, "/api/v1/notes", {
-    method: "POST", body: { workspaceId, title: `Cockpit ${target} document note`, body: "Original document body." },
-  }, `seed ${target} cockpit note`,
+  const created = await checkedRequest(
+    gatewayUrl,
+    "/api/v1/notes",
+    {
+      method: "POST",
+      body: { workspaceId, title: `Cockpit ${target} document note`, body: "Original document body." },
+    },
+    `seed ${target} cockpit note`,
   );
   if (!created.body?.noteId || created.body.workspaceId !== workspaceId || created.body.revision !== 1) {
     throw new Error(`seeded ${target} note lacks exact Gateway identity, scope, or revision`);
@@ -627,12 +763,14 @@ async function readCockpitDocumentNote(state) {
   if (!expected?.noteId || expected.workspaceId !== state.fixture.workspaceId) {
     throw new Error("cockpit document note fixture lacks exact workspace scope");
   }
-  const listed = await checkedRequest(state.gatewayUrl,
-    `/api/v1/notes?workspaceId=${encodeURIComponent(expected.workspaceId)}`, {}, "cockpit note readback",
+  const listed = await checkedRequest(
+    state.gatewayUrl,
+    `/api/v1/notes?workspaceId=${encodeURIComponent(expected.workspaceId)}`,
+    {},
+    "cockpit note readback",
   );
   const matches = (listed.body?.items ?? []).filter((note) => note.noteId === expected.noteId);
-  if (matches.length !== 1 || matches[0].workspaceId !== expected.workspaceId ||
-      matches[0].title !== expected.title) {
+  if (matches.length !== 1 || matches[0].workspaceId !== expected.workspaceId || matches[0].title !== expected.title) {
     throw new Error("cockpit note readback lost exact identity, title, or workspace scope");
   }
   return matches[0];
@@ -649,7 +787,8 @@ export async function pollCockpitDocumentNote(loadNote, revision, body, options 
     if (Date.now() >= deadline) break;
     await wait(options.pollIntervalMs ?? 50);
   } while (Date.now() < deadline);
-  throw new Error(`cockpit document has revision ${note?.revision} and body ${JSON.stringify(note?.body)}; expected revision ${revision}`,
+  throw new Error(
+    `cockpit document has revision ${note?.revision} and body ${JSON.stringify(note?.body)}; expected revision ${revision}`,
   );
 }
 
@@ -661,15 +800,17 @@ async function proveCockpitDocumentNote(state, revision, body) {
 export function cockpitChatDocumentsStep({ phone = false } = {}) {
   const noteTitle = `Cockpit ${phone ? "phone" : "desktop"} document note`;
   const openInspector = phone
-    ? [{ kind: "click", name: "Conversation actions", exact: true },
-      { kind: "click", name: "Inspect conversation", exact: true },
+    ? [
+        { kind: "click", name: "Conversation actions", exact: true },
+        { kind: "click", name: "Inspect conversation", exact: true },
       ]
     : [{ kind: "click", name: "Inspect", exact: true }];
   return {
     bundleId: "cockpit-chat-documents",
     stepId: "cockpit.chat.document-revision",
     routeSlug: "chat",
-    expectedResult: "Cockpit Chat edits a scoped note, preserves a stale draft, rebases on the Gateway revision, and reloads the saved version.",
+    expectedResult:
+      "Cockpit Chat edits a scoped note, preserves a stale draft, rebases on the Gateway revision, and reloads the saved version.",
     operations: [
       ...openInspector,
       { kind: "click", name: "Files", exact: true },
@@ -722,10 +863,11 @@ async function runBrowserActionBundle(context, input) {
         colorScheme: "dark",
         permissions: ["clipboard-read", "clipboard-write"],
         ...(input.recordVideo !== false
-          ? { recordVideo: {
-            dir: path.join(context.artifactRoot, "playwright"),
-            size: input.viewport ?? { width: 1440, height: 1024 },
-          },
+          ? {
+              recordVideo: {
+                dir: path.join(context.artifactRoot, "playwright"),
+                size: input.viewport ?? { width: 1440, height: 1024 },
+              },
             }
           : {}),
       });
@@ -884,9 +1026,13 @@ export function filterExpectedBrowserConsoleMessages(snapshot, browserActionStep
     ).length;
   const expectedBrowserConflicts = browserActionSteps
     .flatMap((step) => step.operatorActions ?? [])
-    .filter((action) => action.kind === "browser-mutation-rejection" &&
-      action.probe === "cockpit-document-stale-save" && action.status === 409 &&
-      action.method === "PATCH" && /^\/api\/v1\/notes\/[^/]+$/u.test(action.requestPath ?? ""),
+    .filter(
+      (action) =>
+        action.kind === "browser-mutation-rejection" &&
+        action.probe === "cockpit-document-stale-save" &&
+        action.status === 409 &&
+        action.method === "PATCH" &&
+        /^\/api\/v1\/notes\/[^/]+$/u.test(action.requestPath ?? ""),
     );
   const expectedConflictCount = expectedProbeConflictCount + expectedBrowserConflicts.length;
   let remainingExpected = expectedConflictCount;
@@ -900,22 +1046,28 @@ export function filterExpectedBrowserConsoleMessages(snapshot, browserActionStep
     return true;
   });
 
-  const keychainUnavailableShown = browserActionSteps.some((step) =>
+  const keychainUnavailableShown = browserActionSteps.some(
+    (step) =>
       ["cockpit.chat.code-mode-artifacts", "route.chat.code-mode-artifacts"].includes(step.stepId) &&
       step.status === "passed" &&
-    step.operatorActions?.some((action) => action.kind === "terminal-ui-readback" &&
-      action.value === "OS keychain is unavailable",
+      step.operatorActions?.some(
+        (action) => action.kind === "terminal-ui-readback" && action.value === "OS keychain is unavailable",
       ),
   );
-  const receiptFailures = (snapshot.networkRecords ?? []).filter((record) =>
-    record.kind === "response" && record.method === "POST" && record.status === 503 &&
-    /^\/api\/v1\/runs\/[^/]+\/evidence-receipt$/u.test(record.path ?? ""),
+  const receiptFailures = (snapshot.networkRecords ?? []).filter(
+    (record) =>
+      record.kind === "response" &&
+      record.method === "POST" &&
+      record.status === 503 &&
+      /^\/api\/v1\/runs\/[^/]+\/evidence-receipt$/u.test(record.path ?? ""),
   );
-  const receiptConsoleErrors = consoleMessages.filter((message) => message.type === "error" &&
-    message.text === "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  const receiptConsoleErrors = consoleMessages.filter(
+    (message) =>
+      message.type === "error" &&
+      message.text === "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
   );
-  const acknowledgeReceiptUnavailable = keychainUnavailableShown &&
-    receiptFailures.length === 1 && receiptConsoleErrors.length === 1;
+  const acknowledgeReceiptUnavailable =
+    keychainUnavailableShown && receiptFailures.length === 1 && receiptConsoleErrors.length === 1;
   if (acknowledgeReceiptUnavailable) {
     consoleMessages = consoleMessages.filter((message) => message !== receiptConsoleErrors[0]);
   }
@@ -979,7 +1131,10 @@ export function filterExpectedBrowserConsoleMessages(snapshot, browserActionStep
   const acknowledgedReceiptUnavailableCount = acknowledgeReceiptUnavailable ? 1 : 0;
   return {
     snapshot: { ...snapshot, consoleMessages },
-    acknowledgedCount: acknowledgedRevisionConflictCount + acknowledgedSseRecoveryCount + acknowledgedReceiptUnavailableCount +
+    acknowledgedCount:
+      acknowledgedRevisionConflictCount +
+      acknowledgedSseRecoveryCount +
+      acknowledgedReceiptUnavailableCount +
       (acknowledgeScheduleAbsence ? 1 : 0),
     acknowledgedRevisionConflictCount,
     acknowledgedSseRecoveryCount,
@@ -1681,7 +1836,8 @@ async function executeOperation(page, operation, state) {
     }
     case "click-inspector": {
       const inspector = page.getByLabel("Inspector: Conversation", { exact: true });
-      const locator = await firstVisibleLocator(page,
+      const locator = await firstVisibleLocator(
+        page,
         inspector.getByRole("button", { name: operation.name, exact: true }),
         `inspector control not found: ${operation.name}`,
       );
@@ -1692,19 +1848,30 @@ async function executeOperation(page, operation, state) {
         }
         const requestPath = `/api/v1/notes/${encodeURIComponent(note.noteId)}`;
         const [response] = await Promise.all([
-          page.waitForResponse((candidate) => candidate.request().method() === "PATCH" &&
-            new URL(candidate.url()).pathname === requestPath, { timeout: ACTION_TIMEOUT_MS },
+          page.waitForResponse(
+            (candidate) =>
+              candidate.request().method() === "PATCH" && new URL(candidate.url()).pathname === requestPath,
+            { timeout: ACTION_TIMEOUT_MS },
           ),
           locator.click(),
         ]);
         const requestBody = response.request().postDataJSON();
-        if (response.status() !== 409 || !isDeepStrictEqual(requestBody, {
-          workspaceId: note.workspaceId, body: "Draft held across a revision conflict.", expectedRevision: 2,
-        })) {
+        if (
+          response.status() !== 409 ||
+          !isDeepStrictEqual(requestBody, {
+            workspaceId: note.workspaceId,
+            body: "Draft held across a revision conflict.",
+            expectedRevision: 2,
+          })
+        ) {
           throw new Error("browser stale note save did not receive the exact revision-2 Gateway rejection");
         }
-        return { kind: "browser-mutation-rejection", probe: "cockpit-document-stale-save",
-          status: response.status(), method: "PATCH", requestPath,
+        return {
+          kind: "browser-mutation-rejection",
+          probe: "cockpit-document-stale-save",
+          status: response.status(),
+          method: "PATCH",
+          requestPath,
         };
       }
       await locator.click();
@@ -1763,8 +1930,11 @@ async function executeOperation(page, operation, state) {
       const locator = await editableLocator(page, "Choose conversation");
       const deadline = Date.now() + ACTION_TIMEOUT_MS;
       while (Date.now() < deadline) {
-        if (await locator.locator("option").evaluateAll((options, sessionId) =>
-          options.some((option) => option.value === sessionId), state.sessionId)) {
+        if (
+          await locator
+            .locator("option")
+            .evaluateAll((options, sessionId) => options.some((option) => option.value === sessionId), state.sessionId)
+        ) {
           await locator.selectOption(state.sessionId);
           return { kind: "select", accessibleName: "Choose conversation", sessionId: state.sessionId };
         }
@@ -1792,7 +1962,9 @@ async function executeOperation(page, operation, state) {
     case "pending-approval": {
       if (!Number.isInteger(operation.index) || operation.index < 0 || operation.index > 1)
         throw new Error("pending approval selection requires an exact baseline index");
-      const approvalId = requireText(Object.keys(state.approvalDecisionBaseline ?? {})[operation.index], "pending approval identity",
+      const approvalId = requireText(
+        Object.keys(state.approvalDecisionBaseline ?? {})[operation.index],
+        "pending approval identity",
       );
       // The pending-approval inspector is a Classic owner.
       const params = new URLSearchParams({ theme: "dark", approvalId, shell: "classic", shellScope: "visit" });
@@ -1812,7 +1984,7 @@ async function executeOperation(page, operation, state) {
     }
     case "click-turn-action": {
       // Phones move every turn action except Retry and Copy into "More turn actions".
-      const turn = page.locator('article[aria-label="Conversation messages"]').last();
+      const turn = page.locator("article[data-turn-id]").last();
       await clickTurnAction(turn, operation.name, { timeout: ACTION_TIMEOUT_MS });
       return { kind: operation.kind, accessibleName: operation.name };
     }
@@ -1946,7 +2118,7 @@ async function executeOperation(page, operation, state) {
     }
     case "assert-single-failure": {
       const failureMessage = /^This turn failed before completion\. Retry once, or narrow the request/iu;
-      const turn = page.locator('article[aria-label="Conversation messages"]');
+      const turn = page.locator("article[data-turn-id]");
       await turn.getByText(failureMessage).waitFor({ state: "visible" });
       const [messageCopies, failedBadges, retryControls, duplicateAlerts] = await Promise.all([
         page.getByText(failureMessage).count(),
@@ -1956,14 +2128,25 @@ async function executeOperation(page, operation, state) {
       ]);
       // Counted after the others: on phones this opens the turn's overflow menu, which hides the page from role queries.
       const runControls = await countTurnAction(turn, "Run details");
-      if (messageCopies !== 1 || failedBadges !== 1 || retryControls !== 1 || runControls !== 1 || duplicateAlerts !== 0) {
-        const owners = await page.getByText(failureMessage).evaluateAll((nodes) => nodes.map((node) => ({
-          tag: node.tagName, classes: node.className, parentTag: node.parentElement?.tagName,
-          parentClasses: node.parentElement?.className, grandparentTag: node.parentElement?.parentElement?.tagName,
-          grandparentClasses: node.parentElement?.parentElement?.className,
-        })),
+      if (
+        messageCopies !== 1 ||
+        failedBadges !== 1 ||
+        retryControls !== 1 ||
+        runControls !== 1 ||
+        duplicateAlerts !== 0
+      ) {
+        const owners = await page.getByText(failureMessage).evaluateAll((nodes) =>
+          nodes.map((node) => ({
+            tag: node.tagName,
+            classes: node.className,
+            parentTag: node.parentElement?.tagName,
+            parentClasses: node.parentElement?.className,
+            grandparentTag: node.parentElement?.parentElement?.tagName,
+            grandparentClasses: node.parentElement?.parentElement?.className,
+          })),
         );
-        throw new Error(`Chat failure repeated or lost recovery actions: messages=${messageCopies}, badges=${failedBadges}, retry=${retryControls}, run=${runControls}, alerts=${duplicateAlerts}, owners=${JSON.stringify(owners)}`,
+        throw new Error(
+          `Chat failure repeated or lost recovery actions: messages=${messageCopies}, badges=${failedBadges}, retry=${retryControls}, run=${runControls}, alerts=${duplicateAlerts}, owners=${JSON.stringify(owners)}`,
         );
       }
       if (await countTurnAction(turn, "Save answer")) {
@@ -2151,19 +2334,28 @@ function validateBrowserDownloadContentContract(operation, buffer, context) {
   switch (operation.contentContract) {
     case "chat-conversation-v1": {
       const correlation = context.persistenceCorrelation;
-      if (!correlation || correlation.sessionId !== context.sessionId ||
-          payload.session?.sessionId !== correlation.sessionId || payload.thread?.sessionId !== correlation.sessionId ||
-          typeof payload.exportedAt !== "string" || !Number.isFinite(Date.parse(payload.exportedAt))) {
+      if (
+        !correlation ||
+        correlation.sessionId !== context.sessionId ||
+        payload.session?.sessionId !== correlation.sessionId ||
+        payload.thread?.sessionId !== correlation.sessionId ||
+        typeof payload.exportedAt !== "string" ||
+        !Number.isFinite(Date.parse(payload.exportedAt))
+      ) {
         throw new Error("browser Chat snapshot does not identify the exact session and export time");
       }
       const turns = Array.isArray(payload.thread.turns) ? payload.thread.turns : [];
-      const matches = turns.filter((turn) => turn?.turnId === correlation.turnId &&
-        turn?.trace?.sessionId === correlation.sessionId && turn?.trace?.durable?.runId === correlation.runId &&
-        turn?.trace?.status === "completed" &&
-        turn?.userMessage?.content === "Persist this deterministic cockpit conversation." &&
-        turn?.assistantMessage?.content === DETERMINISTIC_LLM_DEFAULT_REPLY,
+      const matches = turns.filter(
+        (turn) =>
+          turn?.turnId === correlation.turnId &&
+          turn?.trace?.sessionId === correlation.sessionId &&
+          turn?.trace?.durable?.runId === correlation.runId &&
+          turn?.trace?.status === "completed" &&
+          turn?.userMessage?.content === "Persist this deterministic cockpit conversation." &&
+          turn?.assistantMessage?.content === DETERMINISTIC_LLM_DEFAULT_REPLY,
       );
-      if (matches.length !== 1) throw new Error("browser Chat snapshot lost or changed the exact completed durable turn");
+      if (matches.length !== 1)
+        throw new Error("browser Chat snapshot lost or changed the exact completed durable turn");
       return;
     }
     case "citadel-blueprint-v1": {
@@ -2414,11 +2606,18 @@ async function apiProbe(probe, state) {
       if (note.revision !== 2 || note.body !== "Saved through cockpit Chat.") {
         throw new Error("concurrent note edit did not start from the browser-saved revision");
       }
-      const updated = await checkedRequest(state.gatewayUrl, `/api/v1/notes/${encodeURIComponent(note.noteId)}`, {
-        method: "PATCH", body: { workspaceId: state.fixture.workspaceId, expectedRevision: note.revision,
-          body: "Concurrent Gateway update.",
+      const updated = await checkedRequest(
+        state.gatewayUrl,
+        `/api/v1/notes/${encodeURIComponent(note.noteId)}`,
+        {
+          method: "PATCH",
+          body: {
+            workspaceId: state.fixture.workspaceId,
+            expectedRevision: note.revision,
+            body: "Concurrent Gateway update.",
           },
-      }, "cockpit document concurrent edit",
+        },
+        "cockpit document concurrent edit",
       );
       if (updated.body?.revision !== 3 || updated.body?.body !== "Concurrent Gateway update.") {
         throw new Error("concurrent Gateway edit did not advance the exact note to revision 3");
@@ -2433,31 +2632,40 @@ async function apiProbe(probe, state) {
       if (typeof state.stub?.replaceDispatchPlan !== "function") {
         throw new Error("deterministic provider does not support dispatch-plan replacement");
       }
-      state.fixture.streamReloadDispatchStart = state.stub.requestSummaries().filter((item) => item.stream === true).length;
+      state.fixture.streamReloadDispatchStart = state.stub
+        .requestSummaries()
+        .filter((item) => item.stream === true).length;
       state.stub.replaceDispatchPlan([{ type: "stream_stall", emittedText: STREAM_RELOAD_PARTIAL_TEXT }]);
       return { status: 200, outcome: "next provider stream armed with one partial frame" };
     }
     case "chat-stream-running": {
       const running = await waitForExactChatTurnStatus(state, {
-        userContent: "Keep this deterministic response visible after reload.", status: "running",
+        userContent: "Keep this deterministic response visible after reload.",
+        status: "running",
       });
-      state.fixture.streamReloadCorrelation = { runId: running.runId, turnId: running.turnId,
+      state.fixture.streamReloadCorrelation = {
+        runId: running.runId,
+        turnId: running.turnId,
         sessionId: running.sessionId,
       };
       return running;
     }
     case "chat-stream-persisted-prefix": {
       const expected = state.fixture.streamReloadCorrelation;
-      if (!expected || expected.sessionId !== state.sessionId) throw new Error("stream reload correlation is unavailable");
+      if (!expected || expected.sessionId !== state.sessionId)
+        throw new Error("stream reload correlation is unavailable");
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5_000);
       const chunkTypes = [];
       let buffered = "";
       try {
         const path = `/api/v1/chat/sessions/${encodeURIComponent(expected.sessionId)}/turns/${encodeURIComponent(expected.turnId)}/stream`;
-        const response = await fetch(`${state.gatewayUrl}${path}`, withOperatorAuth({
-          signal: controller.signal, headers: { Accept: "text/event-stream" },
-        }),
+        const response = await fetch(
+          `${state.gatewayUrl}${path}`,
+          withOperatorAuth({
+            signal: controller.signal,
+            headers: { Accept: "text/event-stream" },
+          }),
         );
         if (!response.ok || !response.body) throw new Error(`retained stream returned ${response.status}`);
         const reader = response.body.getReader();
@@ -2475,7 +2683,9 @@ async function apiProbe(probe, state) {
               const chunk = JSON.parse(data.slice(6));
               chunkTypes.push(chunk.type);
               if (chunk.type === "delta" && typeof chunk.delta === "string" && chunk.delta.length > 0) {
-                return { status: response.status, outcome: `retained stream includes ${chunk.delta.length} safe text characters after ${chunkTypes.length} events`,
+                return {
+                  status: response.status,
+                  outcome: `retained stream includes ${chunk.delta.length} safe text characters after ${chunkTypes.length} events`,
                 };
               }
             }
@@ -2492,9 +2702,11 @@ async function apiProbe(probe, state) {
     }
     case "chat-stream-reloaded": {
       const expected = state.fixture.streamReloadCorrelation;
-      if (!expected || expected.sessionId !== state.sessionId) throw new Error("stream reload correlation is unavailable");
+      if (!expected || expected.sessionId !== state.sessionId)
+        throw new Error("stream reload correlation is unavailable");
       const running = await waitForExactChatTurnStatus(state, {
-        userContent: "Keep this deterministic response visible after reload.", status: "running",
+        userContent: "Keep this deterministic response visible after reload.",
+        status: "running",
       });
       if (running.runId !== expected.runId || running.turnId !== expected.turnId) {
         throw new Error("reload changed the canonical streaming turn or durable run");
@@ -2503,14 +2715,18 @@ async function apiProbe(probe, state) {
       if (dispatches !== state.fixture.streamReloadDispatchStart + 1) {
         throw new Error(`reload redispatched the provider stream: ${dispatches} requests`);
       }
-      return { status: running.status, outcome: `exact running turn ${running.turnId} and durable run ${running.runId} retained after reload without redispatch`,
+      return {
+        status: running.status,
+        outcome: `exact running turn ${running.turnId} and durable run ${running.runId} retained after reload without redispatch`,
       };
     }
     case "chat-stream-cancelled": {
       const expected = state.fixture.streamReloadCorrelation;
-      if (!expected || expected.sessionId !== state.sessionId) throw new Error("stream reload correlation is unavailable");
+      if (!expected || expected.sessionId !== state.sessionId)
+        throw new Error("stream reload correlation is unavailable");
       const cancelled = await waitForExactChatTurnStatus(state, {
-        userContent: "Keep this deterministic response visible after reload.", status: "cancelled",
+        userContent: "Keep this deterministic response visible after reload.",
+        status: "cancelled",
       });
       if (cancelled.runId !== expected.runId || cancelled.turnId !== expected.turnId) {
         throw new Error("Stop cancelled a different Chat turn or durable run after reload");
@@ -2521,9 +2737,12 @@ async function apiProbe(probe, state) {
       if (typeof state.stub?.replaceDispatchPlan !== "function") {
         throw new Error("deterministic provider does not support dispatch-plan replacement");
       }
-      state.stub.replaceDispatchPlan(Array.from({ length: 12 }, () => ({
-        type: "provider_error", code: "synthetic_provider_failure", message: "Synthetic provider failure.",
-      })),
+      state.stub.replaceDispatchPlan(
+        Array.from({ length: 12 }, () => ({
+          type: "provider_error",
+          code: "synthetic_provider_failure",
+          message: "Synthetic provider failure.",
+        })),
       );
       return { status: 200, outcome: "provider completion armed to return a deterministic in-band failure" };
     }
@@ -2557,29 +2776,43 @@ async function apiProbe(probe, state) {
         assistantContent: DETERMINISTIC_LLM_DEFAULT_REPLY,
       });
       state.fixture.persistenceCorrelation = {
-        runId: completed.runId, sessionId: completed.sessionId, turnId: completed.turnId,
+        runId: completed.runId,
+        sessionId: completed.sessionId,
+        turnId: completed.turnId,
       };
       return completed;
     }
     case "chat-persistence-readback": {
       const expected = state.fixture.persistenceCorrelation;
-      if (!expected || expected.sessionId !== state.sessionId) throw new Error("Chat persistence proof has no exact original turn");
-      const response = await checkedRequest(state.gatewayUrl,
-        `/api/v1/chat/sessions/${encodeURIComponent(state.sessionId)}/thread?includeDecisionTrace=true`, {}, probe,
+      if (!expected || expected.sessionId !== state.sessionId)
+        throw new Error("Chat persistence proof has no exact original turn");
+      const response = await checkedRequest(
+        state.gatewayUrl,
+        `/api/v1/chat/sessions/${encodeURIComponent(state.sessionId)}/thread?includeDecisionTrace=true`,
+        {},
+        probe,
       );
-      const matches = (Array.isArray(response.body?.turns) ? response.body.turns : []).filter((turn) =>
-        turn?.turnId === expected.turnId && turn?.trace?.sessionId === expected.sessionId &&
-        turn?.trace?.durable?.runId === expected.runId && turn?.trace?.status === "completed" &&
-        turn?.userMessage?.content === "Persist this deterministic cockpit conversation." &&
-        turn?.assistantMessage?.content === DETERMINISTIC_LLM_DEFAULT_REPLY,
+      const matches = (Array.isArray(response.body?.turns) ? response.body.turns : []).filter(
+        (turn) =>
+          turn?.turnId === expected.turnId &&
+          turn?.trace?.sessionId === expected.sessionId &&
+          turn?.trace?.durable?.runId === expected.runId &&
+          turn?.trace?.status === "completed" &&
+          turn?.userMessage?.content === "Persist this deterministic cockpit conversation." &&
+          turn?.assistantMessage?.content === DETERMINISTIC_LLM_DEFAULT_REPLY,
       );
       if (matches.length !== 1) throw new Error("Chat reload did not preserve the exact completed turn");
-      const run = await checkedRequest(state.gatewayUrl,
-        `/api/v1/durable/runs/${encodeURIComponent(expected.runId)}`, {}, probe,
+      const run = await checkedRequest(
+        state.gatewayUrl,
+        `/api/v1/durable/runs/${encodeURIComponent(expected.runId)}`,
+        {},
+        probe,
       );
       validateDurableRunCorrelation(run.body, expected);
       if (run.body?.status !== "completed") throw new Error("Chat reload's exact durable run is not completed");
-      return { status: response.status, outcome: `reloaded exact Chat turn ${expected.turnId} and durable run ${expected.runId}`,
+      return {
+        status: response.status,
+        outcome: `reloaded exact Chat turn ${expected.turnId} and durable run ${expected.runId}`,
       };
     }
     case "chat-persistence-archived":
@@ -2844,22 +3077,33 @@ async function apiProbe(probe, state) {
     case "inline-approval-settled":
     case "cockpit-inline-approval-settled": {
       const approvalSessionId = requireText(state.fixture.sessions?.approval, "approval fixture session");
-      const resolved = await pollResolvedBlockerEvidence(async () => {
-        const [approvals, thread] = await Promise.all([
-          checkedRequest(state.gatewayUrl, "/api/v1/approvals?limit=100", {}, probe),
-          checkedRequest(state.gatewayUrl,
-            `/api/v1/chat/sessions/${encodeURIComponent(approvalSessionId)}/thread?includeDecisionTrace=true`, {}, probe,
+      const resolved = await pollResolvedBlockerEvidence(
+        async () => {
+          const [approvals, thread] = await Promise.all([
+            checkedRequest(state.gatewayUrl, "/api/v1/approvals?limit=100", {}, probe),
+            checkedRequest(
+              state.gatewayUrl,
+              `/api/v1/chat/sessions/${encodeURIComponent(approvalSessionId)}/thread?includeDecisionTrace=true`,
+              {},
+              probe,
             ),
-        ]);
-        return { approvalSessionId, approvals: approvals.body?.items, approvalTurns: thread.body?.turns };
-      }, { validateSnapshot: validateResolvedApprovalEvidence },
+          ]);
+          return { approvalSessionId, approvals: approvals.body?.items, approvalTurns: thread.body?.turns };
+        },
+        { validateSnapshot: validateResolvedApprovalEvidence },
       );
       const turn = resolved.snapshot.approvalTurns.find((item) => item.turnId === resolved.evidence.approvalTurnId);
       const runId = requireText(turn.trace.durable.runId, "approval blocker durable run ID");
-      const run = await checkedRequest(state.gatewayUrl, `/api/v1/durable/runs/${encodeURIComponent(runId)}`, {}, probe,
+      const run = await checkedRequest(
+        state.gatewayUrl,
+        `/api/v1/durable/runs/${encodeURIComponent(runId)}`,
+        {},
+        probe,
       );
       validateDurableRunCorrelation(run.body, { runId, sessionId: approvalSessionId, turnId: turn.turnId });
-      return { status: 200, outcome: `exact approval ${resolved.evidence.approvalId} and bound durable turn settled before leaving its conversation`,
+      return {
+        status: 200,
+        outcome: `exact approval ${resolved.evidence.approvalId} and bound durable turn settled before leaving its conversation`,
       };
     }
     case "cockpit-inline-decisions": {
@@ -2868,11 +3112,17 @@ async function apiProbe(probe, state) {
       const resolved = await pollResolvedBlockerEvidence(async () => {
         const [approvals, approvalThread, userInputThread] = await Promise.all([
           checkedRequest(state.gatewayUrl, "/api/v1/approvals?limit=100", {}, probe),
-          checkedRequest(state.gatewayUrl,
-            `/api/v1/chat/sessions/${encodeURIComponent(approvalSessionId)}/thread?includeDecisionTrace=true`, {}, probe,
+          checkedRequest(
+            state.gatewayUrl,
+            `/api/v1/chat/sessions/${encodeURIComponent(approvalSessionId)}/thread?includeDecisionTrace=true`,
+            {},
+            probe,
           ),
-          checkedRequest(state.gatewayUrl,
-            `/api/v1/chat/sessions/${encodeURIComponent(userInputSessionId)}/thread?includeDecisionTrace=true`, {}, probe,
+          checkedRequest(
+            state.gatewayUrl,
+            `/api/v1/chat/sessions/${encodeURIComponent(userInputSessionId)}/thread?includeDecisionTrace=true`,
+            {},
+            probe,
           ),
         ]);
         return {
@@ -2890,15 +3140,21 @@ async function apiProbe(probe, state) {
       const approvalRunId = requireText(approvalTurn?.trace?.durable?.runId, "approval blocker durable run ID");
       const [approvalRun, userInputRun] = await Promise.all([
         checkedRequest(state.gatewayUrl, `/api/v1/durable/runs/${encodeURIComponent(approvalRunId)}`, {}, probe),
-        checkedRequest(state.gatewayUrl,
-          `/api/v1/durable/runs/${encodeURIComponent(resolved.evidence.userInputRunId)}`, {}, probe,
+        checkedRequest(
+          state.gatewayUrl,
+          `/api/v1/durable/runs/${encodeURIComponent(resolved.evidence.userInputRunId)}`,
+          {},
+          probe,
         ),
       ]);
       validateDurableRunCorrelation(approvalRun.body, {
-        runId: approvalRunId, sessionId: approvalSessionId, turnId: resolved.evidence.approvalTurnId,
+        runId: approvalRunId,
+        sessionId: approvalSessionId,
+        turnId: resolved.evidence.approvalTurnId,
       });
       validateDurableRunCorrelation(userInputRun.body, {
-        runId: resolved.evidence.userInputRunId, sessionId: userInputSessionId,
+        runId: resolved.evidence.userInputRunId,
+        sessionId: userInputSessionId,
         turnId: resolved.evidence.userInputTurnId,
       });
       validateSelectedUserInputResponse(userInputRun.body?.payload?.userInputResponses);
@@ -3902,7 +4158,9 @@ async function apiProbe(probe, state) {
       const archived = await checkedRequest(
         state.gatewayUrl,
         `/api/v1/citadels/${encodeURIComponent(isolatedId)}/archive`,
-        { method: "POST", body: { expectedRevision: after.body.items.find((item) => item.citadelId === isolatedId)?.revision },
+        {
+          method: "POST",
+          body: { expectedRevision: after.body.items.find((item) => item.citadelId === isolatedId)?.revision },
         },
         probe,
       );
@@ -4574,10 +4832,11 @@ export function validatePromptPackBenchmarkDispatchRecords(records, baselineCoun
     );
     if (
       matches.length !== 2 ||
-      !isDeepStrictEqual(
-        matches.map((record) => record?.model).sort(),
-        [...PROMPT_PACK_BENCHMARK_MODELS].sort()) ||
-      matches.some((record) => record?.messageCount !== signature.messageCount || record?.behavior !== undefined ||
+      !isDeepStrictEqual(matches.map((record) => record?.model).sort(), [...PROMPT_PACK_BENCHMARK_MODELS].sort()) ||
+      matches.some(
+        (record) =>
+          record?.messageCount !== signature.messageCount ||
+          record?.behavior !== undefined ||
           !isDeepStrictEqual(record?.promptMetadata?.roles, ["system", "system", "user"]),
       )
     ) {
@@ -5147,7 +5406,9 @@ export async function interactiveLocator(page, name, exact) {
       page.getByRole(role, { name: pattern, exact }),
     ),
     ...(exact
-      ? [summary.filter({ has: page.getByText(name, { exact: true }) }), summary.and(page.getByText(name, { exact: true })),
+      ? [
+          summary.filter({ has: page.getByText(name, { exact: true }) }),
+          summary.and(page.getByText(name, { exact: true })),
         ]
       : [summary.filter({ hasText: pattern })]),
     summary.and(page.getByLabel(name, { exact })),
@@ -5420,13 +5681,18 @@ export function validateResolvedBlockerCapabilityProfile(envelope, expected) {
 }
 
 export function validateSelectedUserInputResponse(responses) {
-  if (!Array.isArray(responses) || !responses.some((item) =>
-    item?.kind === "single_select" &&
-    item?.response?.optionId === "option-a" &&
-    item?.selectedOption?.optionId === "option-a" &&
-    item?.selectedOption?.label === "Continue with the current plan" &&
-    typeof item?.answeredAt === "string" && item.answeredAt.length > 0,
-    )) {
+  if (
+    !Array.isArray(responses) ||
+    !responses.some(
+      (item) =>
+        item?.kind === "single_select" &&
+        item?.response?.optionId === "option-a" &&
+        item?.selectedOption?.optionId === "option-a" &&
+        item?.selectedOption?.label === "Continue with the current plan" &&
+        typeof item?.answeredAt === "string" &&
+        item.answeredAt.length > 0,
+    )
+  ) {
     throw new Error("user-input answer was not durably recorded with the selected fixture option");
   }
   return true;
@@ -5969,7 +6235,8 @@ async function waitForExactCompletedChatTurn(
         )
       : undefined;
     latestStatus = turn?.trace?.status ?? "missing";
-    if (turn?.trace?.status === "completed" &&
+    if (
+      turn?.trace?.status === "completed" &&
       (typeof expectedAssistantContent === "function"
         ? expectedAssistantContent(turn)
         : turn?.assistantMessage?.content === expectedAssistantContent)
@@ -6007,13 +6274,14 @@ async function waitForExactChatTurnStatus(state, expected) {
       {},
       "wait for exact Chat stop or retry state",
     );
-    const turn = (Array.isArray(thread.body?.turns) ? thread.body.turns : []).find((candidate) =>
-      candidate?.trace?.sessionId === state.sessionId &&
-      candidate?.userMessage?.content === expected.userContent &&
-      candidate?.turnId !== expected.excludingTurnId &&
-      candidate?.trace?.status === expected.status &&
-      (expected.failureRequired !== true || typeof candidate?.trace?.failure?.failureClass === "string") &&
-      (expected.assistantContent === undefined || candidate?.assistantMessage?.content === expected.assistantContent),
+    const turn = (Array.isArray(thread.body?.turns) ? thread.body.turns : []).find(
+      (candidate) =>
+        candidate?.trace?.sessionId === state.sessionId &&
+        candidate?.userMessage?.content === expected.userContent &&
+        candidate?.turnId !== expected.excludingTurnId &&
+        candidate?.trace?.status === expected.status &&
+        (expected.failureRequired !== true || typeof candidate?.trace?.failure?.failureClass === "string") &&
+        (expected.assistantContent === undefined || candidate?.assistantMessage?.content === expected.assistantContent),
     );
     if (turn) {
       const correlation = {
@@ -6038,10 +6306,11 @@ async function waitForExactChatTurnStatus(state, expected) {
         };
       }
     } else {
-      latestStatus = (Array.isArray(thread.body?.turns) ? thread.body.turns : [])
-        .filter((candidate) => candidate?.userMessage?.content === expected.userContent)
-        .map((candidate) => `${String(candidate.turnId)}:${String(candidate.trace?.status)}`)
-        .join(", ") || "missing";
+      latestStatus =
+        (Array.isArray(thread.body?.turns) ? thread.body.turns : [])
+          .filter((candidate) => candidate?.userMessage?.content === expected.userContent)
+          .map((candidate) => `${String(candidate.turnId)}:${String(candidate.trace?.status)}`)
+          .join(", ") || "missing";
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   } while (Date.now() < deadline);
@@ -6051,25 +6320,32 @@ async function waitForExactChatTurnStatus(state, expected) {
 async function waitForExactChatSessionView(state, expectedView) {
   const deadline = Date.now() + ACTION_TIMEOUT_MS;
   const otherView = expectedView === "archived" ? "active" : "archived";
-  const query = (view) => `/api/v1/chat/sessions?${new URLSearchParams({
-    workspaceId: state.fixture.workspaceId, scope: "mission", view, limit: "200",
-  })}`;
+  const query = (view) =>
+    `/api/v1/chat/sessions?${new URLSearchParams({
+      workspaceId: state.fixture.workspaceId,
+      scope: "mission",
+      view,
+      limit: "200",
+    })}`;
   let lastObserved = "missing";
   while (Date.now() < deadline) {
     const [target, other] = await Promise.all([
       checkedRequest(state.gatewayUrl, query(expectedView), {}, `Chat ${expectedView} readback`),
       checkedRequest(state.gatewayUrl, query(otherView), {}, `Chat ${otherView} readback`),
     ]);
-    const exact = (Array.isArray(target.body?.items) ? target.body.items : [])
-      .filter((item) => item?.sessionId === state.sessionId,
+    const exact = (Array.isArray(target.body?.items) ? target.body.items : []).filter(
+      (item) => item?.sessionId === state.sessionId,
     );
-    const wrongView = (Array.isArray(other.body?.items) ? other.body.items : [])
-      .filter((item) => item?.sessionId === state.sessionId,
+    const wrongView = (Array.isArray(other.body?.items) ? other.body.items : []).filter(
+      (item) => item?.sessionId === state.sessionId,
     );
-    if (exact.length === 1 && wrongView.length === 0 &&
-        exact[0].workspaceId === state.fixture.workspaceId &&
-        exact[0].lifecycleStatus === expectedView &&
-        (expectedView === "archived" ? Boolean(exact[0].archivedAt) : !exact[0].archivedAt)) {
+    if (
+      exact.length === 1 &&
+      wrongView.length === 0 &&
+      exact[0].workspaceId === state.fixture.workspaceId &&
+      exact[0].lifecycleStatus === expectedView &&
+      (expectedView === "archived" ? Boolean(exact[0].archivedAt) : !exact[0].archivedAt)
+    ) {
       return { status: target.status, outcome: `exact scoped Chat session ${state.sessionId} is ${expectedView}` };
     }
     lastObserved = `target=${exact.length}:${String(exact[0]?.lifecycleStatus)}, other=${wrongView.length}`;

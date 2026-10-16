@@ -14,6 +14,7 @@ import { LibraryFileDownload } from "./LibraryFileDownload";
 import { Callout } from "../../ui/Callout";
 import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
 import { TimeText } from "../../ui/TimeText";
+import { LIBRARY_SECTION_LABELS } from "./library-sections";
 
 export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string }) {
   const access = useLibraryOperation(JSON.stringify(["knowledge", workspaceId]));
@@ -27,7 +28,7 @@ export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string
   return (
     <section className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-4 p-4" aria-label="Library Knowledge">
       <header>
-        <h1 className="font-display text-xl">Knowledge</h1>
+        <h1 className="font-display text-xl">{LIBRARY_SECTION_LABELS.knowledge}</h1>
         <p className="text-sm text-fg-secondary">
           Source material, governed imports, retrieval evidence and Engineering learnings.
         </p>
@@ -45,9 +46,7 @@ export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string
       </Field>
       <section className="grid gap-3">
         <h2 className="font-display text-lg">Memory files</h2>
-        <p className="text-sm text-fg-secondary">
-          Installation memory files returned by the file owner, not a workspace-only directory.
-        </p>
+        <p className="text-sm text-fg-secondary">Installation memory files, not a workspace-only directory.</p>
         {files.error ? <Callout tone="error">{describeApiError(files.error).summary}</Callout> : null}
         {files.isPending ? <p role="status">Reading memory files…</p> : null}
         <ul className="grid gap-2">

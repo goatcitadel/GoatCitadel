@@ -61,7 +61,7 @@ function SystemSessionEvidence({
       <NativePageFrame
         kicker={routeKicker(props.route)}
         title="Sessions"
-        description="Recent conversation metadata and canonical control for a selected Chat session."
+        description="Recent conversation details, with controls for the selected Chat session."
         area="ops"
         loading={runtime.loading}
         error={runtime.error}
@@ -90,9 +90,7 @@ function SystemSessionEvidence({
         {sessionId ? (
           <SessionControlManager key={sessionId} sessionId={sessionId} workspaceId={props.activeWorkspaceId} />
         ) : (
-          <p className="text-sm text-fg-muted">
-            Choose a session's Details to inspect its recorded fields and canonical control.
-          </p>
+          <p className="text-sm text-fg-muted">Choose a session's Details to see its recorded fields and controls.</p>
         )}
         {/* This inspector is admitted only for session metadata; schedule and notification actions have separate owners. */}
         <RuntimeRecordInspector

@@ -70,6 +70,27 @@ Sentence case; buttons are verbs that name their action. The product speaks to "
 
 Values are presented, never dumped. Statuses, kinds and risk go through the `status-vocabulary` presenters (risk reads Safe, Caution, Danger, Nuclear). Times use `TimeText`: relative when recent, with the full date and time as its title. Money, sizes, durations and counts use the shared `format` helpers: two-decimal money with "<$0.01" for tiny amounts and "Unknown" rather than $0.00, sizes in KB or MB, and counts through `plural()` instead of "item(s)". Names come before IDs; workspace, provider, model, actor, run and task IDs, revisions, raw ISO times and JSON appear only in `TechnicalDetails`. `scripts/check-mission-control-next-raw-values.mjs` ratchets the remaining exceptions down.
 
+Every sentence that points somewhere links there. "Open Approvals", "See its record in Ops" or "Review it in Classic" never appear without the link in the same element, and links name their destination by its cockpit name ("Open in System", "Open run"). A link to the Classic view says what only Classic can do ("Rename or delete files · classic view"). Accessible names start with the visible text, so a button whose label reads "Review schedule" is named "Review schedule: Nightly backup", never something else.
+
+### Glossary
+
+Internal architecture words stay in code, logs and `TechnicalDetails`. Operator copy uses the right-hand column.
+
+| Internal term | Say instead |
+| --- | --- |
+| projection, Gateway-authored list | the page or list by name ("Inbox", "Activity") |
+| durable run, runtime run, activity signal | run |
+| canonical record, owner record | saved record, or just the thing ("the task") |
+| owner, owner view | the page that manages it, by name ("Settings › Models") |
+| posture (cost, auth, signal) | setting or state ("Cost limit", "Sign-in") |
+| caller, actor source | you, this browser, this token |
+| admitted, admission | accepted, allowed to start |
+| readback, owner verification | checked the saved result |
+| revision, rebase | version; "your draft started from an older version" |
+| live proof, evidence | checked just now; record or proof when that is literally what is shown |
+| replay | history, or run again |
+| scope mismatch | some items couldn't be checked |
+
 ## Components to reuse
 
 Start from the cockpit primitives in `apps/mission-control-next/src/cockpit/ui` (`Button`, `Field`, `EmptyState`, and their siblings) and the shared components in `packages/mission-control-shared/src/components` before writing a new one. Server state goes through TanStack Query and the shared API clients; realtime events invalidate queries. Keep loading, error, empty, stale, partial, reconnecting, blocked, and unavailable states distinct, and keep dangerous actions explicit with their scope and consequence.

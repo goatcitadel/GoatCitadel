@@ -33,12 +33,12 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
       <header>
         <h3 className="font-display text-base font-semibold text-fg">Capability packs</h3>
         <p className="mt-1 text-sm text-fg-secondary">
-          Inspect bundled packs or preview a portable manifest. Staging and recording review add installation evidence
+          Inspect bundled packs or preview a portable manifest. Staging and recording review add installation records
           only; they do not install, enable, connect or invoke capabilities.
         </p>
         <p className="mt-2 text-xs text-fg-muted">
           Policy defaults are advisory labels. Portable content hashes are declared metadata, not independently verified
-          bytes. Existing Gateway policy and owner checks remain authoritative.
+          bytes. Gateway policy and its usual checks still apply.
         </p>
       </header>
       <div className="flex flex-wrap gap-2">
@@ -51,7 +51,7 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
       </div>
       {owner.loading ? (
         <p role="status" className="text-sm text-fg-muted">
-          Reading pack evidence…
+          Loading packs…
         </p>
       ) : null}
       {owner.error ? (
@@ -202,8 +202,7 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
                 />
               ) : (
                 <p className="text-sm text-fg-muted">
-                  Local portable manifests are inspection and evidence only. The setup owner resolves bundled
-                  definitions.
+                  Local portable manifests are for inspection and records only. Setup uses the bundled definitions.
                 </p>
               )}
             </>
@@ -225,7 +224,7 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
       <Dialog
         open={Boolean(owner.review)}
         title={owner.review?.kind === "record" ? "Record pack review evidence" : "Stage reviewed pack"}
-        description="This records installation evidence only. Capability availability, tools and runtime policy are unchanged."
+        description="This adds an installation record only. Capability availability, tools and runtime policy are unchanged."
         onOpenChange={(open) => {
           if (!open && !pending) owner.cancelReview();
         }}
@@ -237,8 +236,8 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
             </p>
             <p className="text-sm text-fg-secondary">
               {owner.review.kind === "stage"
-                ? "The Gateway preview is read again before staging. This legacy staging owner has no atomic revision precondition; the exact receipt and saved evidence are checked afterward."
-                : "Record review for every asset in this exact staged evidence record. Unsupported assets stay blocked; activation remains with existing governed owners."}
+                ? "The preview is read again before staging, but changes made in the meantime are not blocked. The saved result is checked afterward."
+                : "Record review for every asset in this staged record. Unsupported assets stay blocked; turning capabilities on still needs its own review."}
             </p>
             <code className="block break-all font-mono text-xs text-fg-muted">
               {owner.review.kind === "stage"

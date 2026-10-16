@@ -8,7 +8,6 @@ import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hoo
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
 import { type PendingAttachmentDocumentMode } from "../mission-threaded-controller-helpers";
 import type { MissionControlActiveSessionSurfaceProps } from "../MissionControlActiveSessionSurface";
-import { useSurfaceClassifyPreview } from "../useSurfaceClassifyPreview";
 import { createChatComposerActionProps } from "./createChatComposerActionProps";
 import { createChatComposerContextProps } from "./createChatComposerContextProps";
 import { createChatMediaProps } from "./createChatMediaProps";
@@ -151,8 +150,6 @@ type Input = {
   activeGeneratedArtifact: ChatGeneratedArtifactRecord | null;
   agenticControlPending: string | null;
   pinnedGoal: string | undefined;
-  surfacePreview: ReturnType<typeof useSurfaceClassifyPreview>;
-  autoRouteActive: false;
 };
 
 /** Assembles the six focused session presentation sections when a session is selected. */
@@ -210,8 +207,6 @@ export function createChatActiveSessionPresentation({
   activeGeneratedArtifact,
   agenticControlPending,
   pinnedGoal,
-  surfacePreview,
-  autoRouteActive,
 }: Input) {
   const activeSessionSurfaceProps: MissionControlActiveSessionSurfaceProps | null = session.threadController
     .selectedSession
@@ -371,8 +366,6 @@ export function createChatActiveSessionPresentation({
           pinnedGoal,
           activeStreamRef: coordination.activeStreamRef,
           draft,
-          surfacePreview,
-          autoRouteActive,
           orchestration: submission.orchestration,
           runPresentation: surfaceRuntime.runPresentation,
           goalActions: composer.goalActions,

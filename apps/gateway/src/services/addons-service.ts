@@ -79,6 +79,40 @@ const ArenaHealthPayloadSchema = z.object({
   uiEntryPath: z.string().optional(),
 });
 
+interface AddonLaunchSpec {
+  command: string;
+  args: string[];
+  healthUrl: string;
+  readyTimeoutMs: number;
+  buildEnv(context: { installedPath: string; addonsRootDir: string }): Promise<Record<string, string>>;
+  probeReady(healthUrl: string, timeoutMs: number): Promise<{ ready: boolean } | undefined>;
+}
+
+const ADDON_LAUNCH_SPECS: Record<string, AddonLaunchSpec> = {
+  arena: {
+    command: "corepack",
+    args: ["pnpm", "--filter", "@arena/server", "start"],
+    healthUrl: ARENA_SERVER_HEALTH_URL,
+    readyTimeoutMs: 12_000,
+    buildEnv: async ({ installedPath, addonsRootDir }) => ({
+      ARENA_HOST: "127.0.0.1",
+      ARENA_PORT: String(ARENA_SERVER_PORT),
+      CORS_ORIGIN: ARENA_LAUNCH_URL.replace(/\/$/, ""),
+      GOATCITADEL_BASE_URL: "http://127.0.0.1:8787",
+      ARENA_DB_PATH: await prepareArenaDataPath(installedPath, addonsRootDir),
+    }),
+    probeReady: async (healthUrl, timeoutMs) => (await waitForArenaReady(healthUrl, timeoutMs)) ?? undefined,
+  },
+};
+
+export function listAddonLaunchSpecIds(): string[] {
+  return Object.keys(ADDON_LAUNCH_SPECS);
+}
+
+export function listAddonCatalogIds(): string[] {
+  return ADDON_CATALOG.map((entry) => entry.addonId);
+}
+
 const ADDON_CATALOG: AddonCatalogEntry[] = [
   {
     addonId: "arena",
@@ -386,37 +420,33 @@ export class AddonsService {
     if (current.enabled === false || current.runtimeStatus === "disabled") {
       throw new Error(`Add-on ${addonId} is disabled. Enable it before launch.`);
     }
-    if (addonId !== "arena") {
-      throw new Error(`Launch flow is not implemented for add-on ${addonId}.`);
+    const spec = ADDON_LAUNCH_SPECS[addonId];
+    if (!spec) {
+      throw new Error(`Add-on ${addonId} does not declare a launch spec.`);
     }
     const installedPath = assertAddonPathWithinRoot(current.installedPath, this.addonsRootDir);
     if (!fsSync.existsSync(installedPath)) {
       throw new Error(`Installed add-on path is missing: ${installedPath}`);
     }
     const alreadyRunning = typeof current.pid === "number" && isProcessRunning(current.pid);
+    let pid = current.pid;
     if (!alreadyRunning) {
-      const arenaDbPath = await prepareArenaDataPath(installedPath, this.addonsRootDir);
-      const child = spawnDetachedCommand("corepack", ["pnpm", "--filter", "@arena/server", "start"], installedPath, {
-        ARENA_HOST: "127.0.0.1",
-        ARENA_PORT: String(ARENA_SERVER_PORT),
-        CORS_ORIGIN: ARENA_LAUNCH_URL.replace(/\/$/, ""),
-        GOATCITADEL_BASE_URL: "http://127.0.0.1:8787",
-        ARENA_DB_PATH: arenaDbPath,
-      });
-      current.pid = child.pid;
+      const env = await spec.buildEnv({ installedPath, addonsRootDir: this.addonsRootDir });
+      pid = spawnDetachedCommand(spec.command, spec.args, installedPath, env).pid;
     }
 
-    const probe = await waitForArenaReady(ARENA_SERVER_HEALTH_URL, 12_000);
+    const probe = await spec.probeReady(spec.healthUrl, spec.readyTimeoutMs);
     const ready = probe?.ready ?? false;
     const updated: AddonInstalledRecord = {
       ...current,
+      pid,
       installedPath,
       enabled: true,
       webEntryMode: addon.webEntryMode,
       launchUrl: current.launchUrl ?? addon.launchUrl,
       runtimeStatus: ready ? "running" : "error",
       updatedAt: new Date().toISOString(),
-      lastError: ready ? undefined : `Arena health check did not report uiReady at ${ARENA_SERVER_HEALTH_URL}.`,
+      lastError: ready ? undefined : `${addon.label} health check did not report ready at ${spec.healthUrl}.`,
     };
     manifest.items[addonId] = updated;
     await this.writeManifest(manifest);

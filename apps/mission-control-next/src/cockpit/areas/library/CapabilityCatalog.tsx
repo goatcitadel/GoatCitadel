@@ -41,6 +41,7 @@ import {
 } from "./capability-catalog";
 import { catalogHref, readCatalogLocation } from "./capability-catalog-route";
 import { AREA_COLUMN } from "../../ui/area-layout";
+import { LIBRARY_SECTION_LABELS } from "./library-sections";
 const TAB_LABELS = {
   overview: "Overview",
   policy: "Policy",
@@ -194,7 +195,7 @@ export function CapabilityCatalog() {
     <section className={`${AREA_COLUMN} flex h-full min-h-0 flex-col gap-3 p-4 sm:p-6`}>
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="font-display text-xl font-semibold text-fg">Skills and tools</h1>
+          <h1 className="font-display text-xl font-semibold text-fg">{LIBRARY_SECTION_LABELS.capabilities}</h1>
           <p className="text-sm text-fg-secondary">
             Inspect skills, tools, and other capabilities from the Gateway catalog.
           </p>
@@ -250,7 +251,7 @@ export function CapabilityCatalog() {
           {missingSelection ? (
             <EmptyState
               title="Capability unavailable"
-              description="The linked capability is not in this catalog view. Refresh its owner evidence or return to the catalog."
+              description="The linked capability is not in this catalog view. Refresh, or return to the catalog."
               action={
                 <Button size="sm" onClick={() => route.navigate(catalogHref(location.filters), { replace: true })}>
                   Return to catalog

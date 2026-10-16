@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@goatcitadel/storage", () => ({
+vi.mock("@goatcitadel/storage", async () => ({
+  resolveHourInTimeZone: (await vi.importActual<typeof import("@goatcitadel/storage")>("@goatcitadel/storage")).resolveHourInTimeZone,
   DEFAULT_SESSION_AUTONOMY_PREFS: {
     proactiveMode: "auto_safe",
     maxActionsPerHour: 0,

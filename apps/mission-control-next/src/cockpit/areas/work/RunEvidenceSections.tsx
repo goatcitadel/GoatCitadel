@@ -126,7 +126,8 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
                               className="mt-1 inline-block text-accent hover:underline"
                               href={`/work/runs/${encodeURIComponent(step.durableRunId)}`}
                             >
-                              Open child run evidence
+                              Open child run
+                              <span className="sr-only">: {step.role}</span>
                             </NativeOwnerLink>
                           ) : null}
                         </li>

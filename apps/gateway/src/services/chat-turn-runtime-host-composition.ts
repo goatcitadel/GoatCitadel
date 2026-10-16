@@ -268,10 +268,8 @@ function composeEntryExtras(
   | "triggerChatSessionProactive"
   | "updateActiveLeafOrThrow"
   | "updateChatSessionPrefs"
-  | "surfaceRouter"
   | "readChatSessionMode"
   | "persistChatSessionMode"
-  | "recordSurfaceRouteOverrideSignal"
   | "recoverDecisionCommittedHeartbeat"
   | "reconcileTerminalChatAdmission"
   | "subagentFanout"
@@ -291,10 +289,8 @@ function composeEntryExtras(
     updateActiveLeafOrThrow: (sessionId, previousActiveTurnId, nextActiveTurnId) =>
       source.updateActiveLeafOrThrow(sessionId, previousActiveTurnId, nextActiveTurnId),
     updateChatSessionPrefs: (sessionId, input) => source.updateChatSessionPrefs(sessionId, input),
-    surfaceRouter: source.surfaceRouter,
     readChatSessionMode: source.readChatSessionMode,
     persistChatSessionMode: source.persistChatSessionMode,
-    recordSurfaceRouteOverrideSignal: source.recordSurfaceRouteOverrideSignal,
     recoverDecisionCommittedHeartbeat: (identity) => source.recoverDecisionCommittedHeartbeat(identity),
     reconcileTerminalChatAdmission: (activeAdmission) => source.reconcileTerminalChatAdmission(activeAdmission),
     // R3-8: the turn services register turn-scoped agent.fanout executors on

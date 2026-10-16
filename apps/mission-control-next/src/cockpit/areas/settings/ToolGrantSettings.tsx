@@ -198,8 +198,7 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
         ) : null}
         {grantsReady ? (
           <p className="text-xs text-fg-muted">
-            Showing {Math.min(limit, grants.length)} of {grants.length} matching records in a bounded 400-record owner
-            read.
+            Showing {Math.min(limit, grants.length)} of {grants.length} matching records from the latest 400 grants.
           </p>
         ) : null}
         <ul className="space-y-2">
@@ -219,13 +218,17 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
                   </p>
                 ) : null}
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" aria-label={`Inspect grant ${grant.grantId}`} onClick={() => setDetail(grant)}>
+                  <Button
+                    size="sm"
+                    aria-label={`Inspect grant: ${grant.toolPattern} · ${grant.decision} · ${grant.scope}`}
+                    onClick={() => setDetail(grant)}
+                  >
                     Inspect grant
                   </Button>
                   <Button
                     size="sm"
                     variant="danger"
-                    aria-label={`Revoke grant ${grant.grantId}`}
+                    aria-label={`Revoke grant: ${grant.toolPattern} · ${grant.decision} · ${grant.scope}`}
                     disabled={Boolean(grant.revokedAt || attempt || owner.isFetching || review)}
                     onClick={() => actions.requestRevoke(grant)}
                   >

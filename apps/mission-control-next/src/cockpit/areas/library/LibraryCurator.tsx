@@ -22,8 +22,14 @@ import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { curatorRecommendationLabel, skillStateLabel } from "./capability-vocabulary";
 import { catalogHref } from "./capability-catalog-route";
 import { useLibraryOperation } from "./use-library-operation";
+import { LIBRARY_SECTION_LABELS } from "./library-sections";
 
 type Sort = "usage" | "score" | "name";
+const SORTS: Record<Sort, { label: string; heading: string }> = {
+  usage: { label: "Usage", heading: "Skills, most used first" },
+  score: { label: "Score", heading: "Skills, highest score first" },
+  name: { label: "Name", heading: "Skills, A to Z" },
+};
 type Outcome = { error: boolean; text: string };
 const ARCHIVE_REASON = "manual archive from Mission Control";
 const CARD = "grid min-w-0 grid-cols-1 gap-3 rounded-lg border border-line p-3";
@@ -150,7 +156,7 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
   return (
     <div className="grid min-w-0 grid-cols-1 gap-4 overflow-y-auto p-4">
       <header className="grid min-w-0 gap-2">
-        <h1 className="font-display text-xl font-semibold">Skill curator</h1>
+        <h1 className="font-display text-xl font-semibold">{LIBRARY_SECTION_LABELS.curator}</h1>
         <p className="text-sm text-fg-secondary">
           Grades installed skills by usage and proposes archives. Reports never change a skill; archiving is a separate,
           reviewed action that disables a skill installation-wide.
@@ -176,7 +182,7 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
       {status.data ? (
         <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-3">
           <section className={CARD} aria-label="Curated skills">
-            <h2 className="font-display text-md font-semibold">Skills, sorted by {sort}</h2>
+            <h2 className="font-display text-md font-semibold">{SORTS[sort].heading}</h2>
             <p className="text-sm text-fg-secondary">
               {plural(status.data.items.length, "skill")} · {status.data.cycleDays}-day cycle ·{" "}
               <TimeText prefix="graded" value={status.data.generatedAt} />
@@ -189,9 +195,11 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
                   value={sort}
                   onChange={(event) => setSort(event.target.value as Sort)}
                 >
-                  <option value="usage">Usage</option>
-                  <option value="score">Score</option>
-                  <option value="name">Name</option>
+                  {(Object.keys(SORTS) as Sort[]).map((key) => (
+                    <option key={key} value={key}>
+                      {SORTS[key].label}
+                    </option>
+                  ))}
                 </select>
               )}
             </Field>

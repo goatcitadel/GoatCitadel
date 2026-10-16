@@ -64,7 +64,7 @@ export function ChatInspectorTurnPanel({ selectedTurn }: { selectedTurn: ChatThr
           className="text-sm font-medium text-accent hover:underline"
           href={`/work/runs/${encodeURIComponent(selectedTurn.trace.durable.runId)}`}
         >
-          Open durable evidence
+          Open run in Work
         </NativeOwnerLink>
       ) : null}
     </div>

@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import { useId, type FormEvent } from "react";
 import { SCHEDULE_ACTION_LABELS } from "./work-vocabulary";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
@@ -14,6 +14,16 @@ const CREATE_ACTIONS = [
   "watchdog",
 ] as const;
 export type CreateScheduleAction = (typeof CREATE_ACTIONS)[number];
+/** One plain line per action; built-in maintenance reuses the matching built-in job. */
+const CREATE_ACTION_DESCRIPTIONS: Readonly<Record<CreateScheduleAction, string>> = {
+  task: "Adds a task to the task list each time it runs. It does not start a run.",
+  improvement: "Runs the built-in improvement review.",
+  backup: "Runs the built-in backup.",
+  memory_flush: "Runs the built-in memory flush.",
+  cost_report: "Runs the built-in cost report.",
+  update_review: "Runs the built-in update review.",
+  watchdog: "Runs a health check. Choose the check under Advanced job settings.",
+};
 export function WorkScheduleCreateForm({
   name,
   schedule,
@@ -47,6 +57,7 @@ export function WorkScheduleCreateForm({
   advanced: ScheduleSettingsDraft;
   onAdvanced: (key: keyof ScheduleSettingsDraft, value: string) => void;
 }) {
+  const actionDescriptionId = useId();
   return (
     <form
       aria-label="New schedule"
@@ -73,6 +84,7 @@ export function WorkScheduleCreateForm({
         <select
           value={createAction}
           disabled={locked}
+          aria-describedby={actionDescriptionId}
           onChange={(event) => {
             onAction(event.target.value as CreateScheduleAction);
           }}
@@ -85,10 +97,15 @@ export function WorkScheduleCreateForm({
           ))}
         </select>
       </label>
+      <p id={actionDescriptionId} className="text-xs text-fg-secondary">
+        {CREATE_ACTION_DESCRIPTIONS[createAction]}
+        {createAction === "task" || createAction === "watchdog"
+          ? ""
+          : " It may skip a run, for example while that built-in job is turned off; the last outcome says why."}
+      </p>
       <p className="text-xs text-fg-muted">
-        Gateway-wide schedule. The Gateway validates timing and owns future runs. Times run in UTC unless the expression
-        ends with a timezone name (for example 0 9 * * * America/New_York); verify the next-run receipt. Creation does
-        not prove a scheduled job executed.
+        Applies across workspaces. Times run in UTC unless the expression ends with a timezone name (for example 0 9 * *
+        * America/New_York); check the next run after saving. Creating a schedule does not run it.
       </p>
       <ScheduleAdvancedFields value={advanced} locked={locked} onChange={onAdvanced} />
       {createUncertain ? (

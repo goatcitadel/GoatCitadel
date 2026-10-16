@@ -61,7 +61,7 @@ export function LocalAiFitEvidence({
 }) {
   return (
     <EvidenceDetails
-      label="Full model fit evidence"
+      label="Full model fit details"
       values={{
         modelId: fit.modelId,
         backend: fit.backend,
@@ -139,7 +139,7 @@ export function LocalAiHardware({ readiness }: { readiness: LocalAiReadinessResp
           freeDiskBytes: hardware.disk.freeBytes,
         }}
       />
-      <h4 className="font-medium text-fg">GPU evidence</h4>
+      <h4 className="font-medium text-fg">GPU details</h4>
       {!hardware.gpu.length ? (
         <p>No GPU measurements were returned. This does not establish that the host has no GPU.</p>
       ) : (
@@ -165,7 +165,7 @@ export function LocalAiHardware({ readiness }: { readiness: LocalAiReadinessResp
         GPU records {hardware.gpu.length ? gpuPage * LIMIT + 1 : 0}–
         {Math.min((gpuPage + 1) * LIMIT, hardware.gpu.length)} of {hardware.gpu.length}.
       </p>
-      <EvidencePager label="GPU evidence" page={gpuPage} count={hardware.gpu.length} select={setGpuPage} />
+      <EvidencePager label="GPU details" page={gpuPage} count={hardware.gpu.length} select={setGpuPage} />
       <h4 className="font-medium text-fg">Runtime detection</h4>
       <p>
         {"Showing "}
@@ -229,8 +229,8 @@ export function LocalAiJobs({ readiness }: { readiness: LocalAiReadinessResponse
   return (
     <div className="space-y-4 text-sm text-fg-secondary">
       <p>
-        These job and endpoint records are retained in Gateway process memory. They are not a durable execution history.
-        Download and serve requests currently record approval intent only.
+        These job and endpoint records live in Gateway memory and are lost when the Gateway restarts. They are not a run
+        history. Download and serve requests currently record approval intent only.
       </p>
       {(
         [
@@ -266,7 +266,7 @@ export function LocalAiJobs({ readiness }: { readiness: LocalAiReadinessResponse
                     ) : null}
                     <code className="block break-all font-mono">{job.jobId}</code>
                     <EvidenceDetails
-                      label="Job evidence"
+                      label="Job records"
                       values={{
                         jobId: job.jobId,
                         modelId: job.modelId,
@@ -336,7 +336,7 @@ export function LocalAiJobs({ readiness }: { readiness: LocalAiReadinessResponse
                 <p>Smoke test: {formatLocalAiFit(endpoint.smokeStatus)}</p>
                 <code className="block break-all font-mono">{endpoint.baseUrl}</code>
                 <EvidenceDetails
-                  label="Endpoint evidence"
+                  label="Endpoint records"
                   values={{
                     endpointId: endpoint.endpointId,
                     providerId: endpoint.providerId,

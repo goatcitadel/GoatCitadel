@@ -28,8 +28,8 @@ export function FirstRunDemo({ workspaceId }: { workspaceId: string }) {
       <h2 className="font-display text-lg font-semibold text-fg">Try a local demo</h2>
       <p className="text-sm text-fg-secondary">{DEMO_BOOTSTRAP_CONSEQUENCE}</p>
       <p className="text-sm text-fg-secondary">
-        Sample records: {control.state?.status?.replaceAll("_", " ") ?? "Not checked"}. This is not model execution or
-        completed approval evidence.
+        Sample records: {control.state?.status?.replaceAll("_", " ") ?? "Not checked"}. Samples are not model output or
+        completed approvals.
       </p>
       {control.message || control.attempt ? (
         <p role="status" className="text-sm text-fg-secondary">
@@ -82,8 +82,8 @@ export function FirstRunDemo({ workspaceId }: { workspaceId: string }) {
         }}
       >
         <p className="mb-4 break-words text-sm text-fg-secondary">
-          Workspace: {control.review?.state.workspace?.name ?? "The Gateway selects or creates GoatCitadel Demo"}.
-          Existing data can be reused; this operation does not accept an expected revision.
+          Workspace: {control.review?.state.workspace?.name ?? "GoatCitadel Demo (reused or created)"}. Existing demo
+          data can be reused. Preparing goes ahead even if the demo changed since you opened this review.
         </p>
         <div className="flex flex-wrap gap-2">
           <Button variant="primary" disabled={control.locked} onClick={() => void control.confirm()}>

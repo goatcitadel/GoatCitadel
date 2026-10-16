@@ -184,7 +184,7 @@ export function ProviderManagementSettings() {
       </div>
       {credentials.secretState.data ? (
         <p className="text-xs text-fg-muted">
-          Credential owner:{" "}
+          Saved credential:{" "}
           {credentials.secretState.data.hasSecret
             ? `Present (${credentials.secretState.data.source})`
             : "No stored API credential"}
@@ -218,7 +218,7 @@ export function ProviderManagementSettings() {
           if (!next) close();
         }}
         title={mode === "new" ? "New provider profile" : "Edit provider profile"}
-        description="Public configuration uses the existing Gateway settings owner. Credentials are supplied in a separate secure action."
+        description="Save the profile here. Credentials are added separately through the secure credential action."
       >
         <div className="space-y-3">
           <ProviderProfileFields
@@ -230,9 +230,12 @@ export function ProviderManagementSettings() {
           />
           {profile.providerEditor.hasRemoteChanges ? (
             <div className="space-y-2 text-sm text-status-waiting">
-              <p>Saved settings changed. Review the refreshed owner before rebasing this retained draft.</p>
+              <p>
+                Saved settings changed. Your draft started from an older version and is kept. Review the saved settings
+                first.
+              </p>
               <Button disabled={locked} onClick={profile.providerEditor.rebaseToCurrent}>
-                Apply draft to current revision
+                Apply draft to latest version
               </Button>
             </div>
           ) : null}
@@ -291,8 +294,8 @@ export function ProviderManagementSettings() {
         description={`Remove the stored API credential for ${credentials.pendingDeleteSecret?.label ?? "this provider"}. Requests using it may fail until a replacement is configured.`}
       >
         <p className="mb-3 text-sm text-fg-secondary">
-          Reviewed settings revision {credentials.pendingDeleteSecret?.revision}. The Gateway governs removal of all
-          saved API key storage sources.
+          Reviewed settings version {credentials.pendingDeleteSecret?.revision}. The Gateway handles removal from each
+          place the API key is saved.
         </p>
         {credentials.pendingDeleteSecret?.revision !== config?.revision ? (
           <p role="alert" className="mb-3 text-sm text-status-waiting">

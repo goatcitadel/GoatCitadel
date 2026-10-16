@@ -297,8 +297,8 @@ export function InboxArea() {
       ) : null}
       {inbox.data && !scopeMatches && !inbox.isError ? (
         <EmptyState
-          title="Inbox scope mismatch"
-          description="The returned projection contains records outside the selected workspace. No items or counts are shown."
+          title="Some items couldn't be checked"
+          description="The Inbox returned items from outside the selected workspace, so no items or counts are shown."
           action={<Button onClick={() => void inbox.refetch()}>Try again</Button>}
         />
       ) : null}
@@ -319,8 +319,8 @@ export function InboxArea() {
                   <h2 id={`inbox-${group.id}`} className="font-display text-md font-semibold text-fg">
                     {group.label}
                   </h2>
-                  <span aria-label={`${group.label} Gateway count`} className="text-xs text-fg-muted">
-                    {exact ? count.known : count.known > 0 ? `${count.known}+` : "0 known"}
+                  <span data-inbox-count={group.id} className="text-xs text-fg-muted">
+                    {exact ? count.known : count.known > 0 ? `At least ${count.known}` : "Not fully checked"}
                   </span>
                 </header>
                 {group.id === "updates" ? (
@@ -332,7 +332,7 @@ export function InboxArea() {
                       {readScope === "operator"
                         ? "Read status is saved for this operator and workspace."
                         : readScope === "browser_local" && localReads.available
-                          ? "Read status is browser-local for this installation and workspace."
+                          ? "Read status is saved in this browser for this workspace."
                           : "Read storage unavailable."}
                     </p>
                     {readNotice ? <p role="status">{readNotice}</p> : null}
@@ -360,10 +360,10 @@ export function InboxArea() {
                 {items.length === 0 ? (
                   <p className="text-sm text-fg-muted">
                     {group.id === "updates" && viewedCount > 0
-                      ? "No unread updates from this response."
+                      ? "No unread updates."
                       : exact
                         ? "Nothing waiting here."
-                        : "No known items returned in this group."}
+                        : "Nothing found here, but not every source could be checked."}
                   </p>
                 ) : (
                   <WindowedRecordList

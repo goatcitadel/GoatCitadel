@@ -89,7 +89,7 @@ it("shows exact scope and consequences, cancels with zero writes, then requires 
   expect(text(review)).toContain(`workspace ${grant.workspaceId}`);
   expect(text(review)).toContain(grant.capabilityPatterns[0]);
   expect(text(review)).toContain("does not prove already-running work stopped");
-  expect(text(review)).toContain("no atomic revision precondition");
+  expect(text(review)).toContain("is not blocked");
   await click("Keep autonomous grant");
   expect(api.revokeAutonomousActivationGrant).not.toHaveBeenCalled();
   await click(`Review revocation of ${grant.grantId}`);

@@ -83,8 +83,7 @@ export function PackPlanControls({
               </p>
             ) : null}
             <p className="text-xs text-fg-muted">
-              The exact plan is read again before submitting its revision and action nonce. A changed action is
-              withheld.
+              The plan is read again before submitting. If the action changed, it is not sent.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button disabled={owner.attempt.phase !== "idle"} onClick={() => void owner.confirm()}>

@@ -35,7 +35,7 @@ it("keeps complete long scope, targets, commands and consequences in the bounded
   expect(review.textContent).toContain(`folder/${token}`);
   expect(review.textContent).toContain(`https://example.invalid/${token}`);
   expect(review.textContent).toContain(`Recover ${token}`);
-  expect(review.textContent).toContain("The decision alone does not prove work resumed or completed.");
+  expect(review.textContent).toContain("The decision alone does not show the work resumed or completed.");
   expect(review.querySelector("pre")?.textContent).toBe(`Commands: ${command}`);
   expect(review.querySelector("pre")?.classList.contains("max-w-full")).toBe(true);
 });

@@ -86,8 +86,7 @@ export function ThreadConversationSurface({
       <header className="mc-next-threaded-header">
         <div className="mc-next-threaded-header-copy">
           <ThreadedModeControl
-            mode={props.modeOverridePending ?? (props.autoRouteActive ? undefined : props.mode)}
-            preview={props.surfaceRoutePreview}
+            mode={props.modeOverridePending ?? props.mode}
             onOverride={props.onModeOverride}
             variant="compact"
           />

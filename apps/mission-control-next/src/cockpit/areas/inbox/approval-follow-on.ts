@@ -24,7 +24,7 @@ export async function readApprovalFollowOn(approval: ApprovalRequest, workspaceI
       throw new Error("The follow-on record does not match this approval scope.");
   }
   if (lifecycle.canonical?.approvalId && lifecycle.canonical.approvalId !== approval.approvalId)
-    throw new Error("Canonical lifecycle belongs to another approval.");
+    throw new Error("The saved record belongs to another approval.");
   const linkage = replay.approval.linkage;
   const readRun = async (id: string) => {
     checkAccess();
@@ -74,7 +74,7 @@ export async function readApprovalFollowOn(approval: ApprovalRequest, workspaceI
           payload.sessionId !== linkage?.sessionId ||
           payload.turnId !== linkage?.turnId
         )
-          throw new Error("Original Chat work does not match this approval's admitted turn.");
+          throw new Error("Original Chat work does not match the conversation turn this approval was for.");
       } else if (record.payload.workspaceId !== workspaceId) {
         throw new Error("Original work workspace is not verified.");
       }

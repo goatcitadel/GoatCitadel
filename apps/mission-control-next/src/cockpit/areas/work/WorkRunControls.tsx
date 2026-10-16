@@ -21,6 +21,7 @@ import { queryKeys } from "../../data/query-keys";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { canControlWorkRun, sameWorkRunEvidence, type WorkRunAction } from "./work-run-control-guard";
 import { NOTICE_TONE_CLASS, RUN_ACTION_CONFIRM } from "./work-vocabulary";
@@ -148,7 +149,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
       if (mutationAttempted) {
         setOutcomeUncertain(true);
         setError(
-          `Action outcome is uncertain. Inspect the current run in Ops before another action. ${describeApiError(cause).summary}`,
+          `Action outcome is uncertain. Use Refresh to check the current run before another action. ${describeApiError(cause).summary}`,
         );
       } else {
         setError(`Could not check the current run. ${describeApiError(cause).summary}`);
@@ -212,15 +213,17 @@ export function WorkRunControls({ runId }: { runId: string }) {
       ) : null}
       {run?.status === "dead_lettered" && recordAnswered(letterView) && letterView.record && !deadLetter ? (
         <p className="text-fg-muted">
-          No single unresolved failed delivery for this run is in the recent recovery list. Review recovery in Ops.
+          No single unresolved failed delivery for this run is in the recent recovery list.{" "}
+          <NativeOwnerLink href="/system/diagnostics" scope={[workspaceId, runId]} className="font-medium text-accent">
+            Open recovery in System
+          </NativeOwnerLink>
         </p>
       ) : null}
       {run && available.length === 0 && !(run.status === "dead_lettered" && !deadLetter) ? (
         <p className="text-fg-muted">
           {admittedChatNeedsNewMutation
             ? "This Chat reply can't be retried from here. Send the request again in its conversation."
-            : "No direct control is available from this run state or workspace."}{" "}
-          See its full record in Ops.
+            : "No direct control is available from this run state or workspace."}
         </p>
       ) : null}
       {run && available.length > 0 && !completed && !outcomeUncertain ? (

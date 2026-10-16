@@ -21,6 +21,7 @@ import {
   computeChatTurnAdmissionMaterialSha256,
   createAuthenticatedOperatorAdmissionContext,
   freezeChatTurnRequestActor,
+  reconstructAdmittedChatTurnRequest,
   type AuthenticatedOperatorAdmissionContext,
 } from "./session-control-service.js";
 import { buildHeartbeatOccurrencePlan } from "./heartbeat-occurrence-service.js";
@@ -1329,3 +1330,17 @@ function record(patch: Partial<SessionMutationAdmissionRecord> = {}): SessionMut
     ...patch,
   };
 }
+
+describe("stored legacy surface derivation compatibility", () => {
+  it("reconstructs a stored v1 autoRoute derivation after the auto-router was retired", () => {
+    const effective = { content: "x", mode: "chat", autoRoute: false } as never;
+    const derivation = {
+      version: 1,
+      originalMode: null,
+      originalAutoRoute: true,
+      effectiveMode: "chat",
+      effectiveAutoRoute: false,
+    } as const;
+    expect(reconstructAdmittedChatTurnRequest(effective, derivation)).toEqual({ content: "x", autoRoute: true });
+  });
+});

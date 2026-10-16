@@ -4,15 +4,10 @@ import { CitadelMasonSettings } from "../settings/CitadelMasonSettings";
 import { CitadelWardsSettings } from "../settings/CitadelWardsSettings";
 import { CitadelCouncilSettings } from "../settings/CitadelCouncilSettings";
 import { CitadelVaultSettings } from "../settings/CitadelVaultSettings";
+import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
 
-const GOVERNANCE_SECTIONS = {
-  "citadel-overview": "Citadel Overview",
-  "citadel-blueprint": "Citadel Blueprint",
-  citadel: "Citadel Mason",
-  "citadel-wards": "Citadel Wards",
-  "citadel-council": "Citadel Council",
-  "citadel-vault": "Citadel Vault",
-} as const;
+// Headings use the shared Citadel page names so Library, Settings, the nav rail and document titles agree.
+const GOVERNANCE_SECTIONS = CITADEL_PAGE_LABELS;
 
 export function isLibraryGovernanceSection(section: string): section is keyof typeof GOVERNANCE_SECTIONS {
   return Object.hasOwn(GOVERNANCE_SECTIONS, section);

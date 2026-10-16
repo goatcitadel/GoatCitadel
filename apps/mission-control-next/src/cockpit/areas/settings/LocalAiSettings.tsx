@@ -62,9 +62,7 @@ export function LocalAiSettings() {
         </p>
       ))}
       {!control.loading && !readiness ? (
-        <p className="text-sm text-fg-secondary">
-          Local AI evidence is unavailable. Refresh before reviewing a request.
-        </p>
+        <p className="text-sm text-fg-secondary">Local AI status could not load. Refresh before reviewing a request.</p>
       ) : null}
       {control.notice ? (
         <p
@@ -189,7 +187,7 @@ export function LocalAiSettings() {
                   ))}
                 </ul>
               ) : (
-                <p>No limitations were returned by the fit owner.</p>
+                <p>No limitations were reported.</p>
               )}
               <LocalAiFitEvidence
                 recommendation={selected}
@@ -254,7 +252,7 @@ export function LocalAiSettings() {
           )
         ) : (
           <p role="status" className="text-sm text-fg-secondary">
-            Current evidence is unavailable while readiness is loading or failed.
+            Current status is unavailable while readiness is loading or failed.
           </p>
         )}
       </Sheet>

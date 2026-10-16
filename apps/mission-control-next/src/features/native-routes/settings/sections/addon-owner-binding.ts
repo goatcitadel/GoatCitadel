@@ -3,7 +3,7 @@ import { canonicalJsonString, type AddonStatusRecord } from "@goatcitadel/contra
 export type AddonAction = "install" | "update" | "enable" | "disable" | "launch" | "stop" | "uninstall";
 export const ADDON_ACTIONS: AddonAction[] = ["install", "update", "enable", "disable", "launch", "stop", "uninstall"];
 export const ADDON_OWNER_BOUNDARY =
-  "Add-ons are experimental host applications. Installation and update download and build repository code on this computer. These APIs have no atomic revision precondition; the current owner record is checked before dispatch.";
+  "Add-ons are experimental host applications. Installation and update download and build repository code on this computer. The current saved add-on is checked first, but a change made elsewhere at the same moment is not blocked.";
 export const addonRecordsEqual = (a: unknown, b: unknown) => canonicalJsonString(a) === canonicalJsonString(b);
 
 export function assertAddonStatus(value: AddonStatusRecord, addonId: string) {

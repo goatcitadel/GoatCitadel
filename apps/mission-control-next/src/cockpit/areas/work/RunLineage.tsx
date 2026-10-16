@@ -51,7 +51,7 @@ export function RunLineage({ trace, workspaceId }: { trace: ObserveRunTraceRespo
         />
       ) : (
         <p className="mt-3 text-sm text-fg-muted">
-          Lineage unavailable: this run has no consistent Gateway-resolved conversation in this workspace.
+          Lineage unavailable: this run has no single matching conversation in this workspace.
         </p>
       )}
     </section>

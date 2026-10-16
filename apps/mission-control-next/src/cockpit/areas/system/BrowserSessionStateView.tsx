@@ -34,23 +34,23 @@ export function BrowserSessionStateView({
   const state = projection?.state;
   return (
     <>
-      {pending ? <p role="status">Reading state projection…</p> : null}
+      {pending ? <p role="status">Reading saved browser state…</p> : null}
       {error ? <Callout tone="error">{describeApiError(error).summary}</Callout> : null}
       {grantsError ? (
         <Callout tone="error">
-          {describeApiError(grantsError).summary} Tool posture is unavailable until grants can be read.
+          {describeApiError(grantsError).summary} Tool access is unknown until grants can be read.
         </Callout>
       ) : grantsPending ? (
         <p role="status">Reading grants…</p>
       ) : null}
       {grants && grants.length >= LIST_LIMIT ? (
         <p className="text-sm text-fg-secondary">
-          Posture uses the newest {LIST_LIMIT} grants. Older grants exist; counts may be incomplete.
+          Tool access uses the newest {LIST_LIMIT} grants. Older grants exist; counts may be incomplete.
         </p>
       ) : null}
       {posture ? (
-        <section className={CARD} aria-label="State and tool posture">
-          <h3 className="font-display text-md font-semibold">State and tool posture</h3>
+        <section className={CARD} aria-label="State and tool access">
+          <h3 className="font-display text-md font-semibold">State and tool access</h3>
           <p className="text-sm text-fg-secondary">
             From session records, scoped grants and retained guard events. This does not show that a browser is open,
             bound or active; tools still pass policy checks and guardrails.
@@ -81,8 +81,8 @@ export function BrowserSessionStateView({
         </section>
       ) : null}
       {state && projection ? (
-        <section className={CARD} aria-label="Read-only state projection">
-          <h3 className="font-display text-md font-semibold">Read-only state projection</h3>
+        <section className={CARD} aria-label="Saved browser state">
+          <h3 className="font-display text-md font-semibold">Saved browser state</h3>
           <p className="text-sm text-fg-secondary">
             Counts and origins come from volatile browser-session memory. Cookie, storage and page values are never
             shown.

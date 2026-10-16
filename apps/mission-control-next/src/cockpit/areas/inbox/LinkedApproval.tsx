@@ -60,8 +60,8 @@ export function LinkedApproval({ approvalId }: { approvalId: string }) {
     return (
       <section aria-label="Approval outside this run" className="space-y-3">
         <p role="status">
-          This approval does not match the selected run or session filter. Inspect its canonical record in Inbox after
-          leaving this run filter.
+          This approval does not match the selected run or session filter. Use Inspect approval record to open it
+          without the filter.
         </p>
         <NativeOwnerLink
           scope={[access.identity, approvalId, runId, sessionId]}

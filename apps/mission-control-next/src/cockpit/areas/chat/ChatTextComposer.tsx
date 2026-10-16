@@ -2,7 +2,6 @@ import type { ComposerProps } from "./ChatTextComposer.types";
 export type { ComposerProps } from "./ChatTextComposer.types";
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
 import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
-import { useCockpitShellSwitch } from "../../app/use-cockpit-shell-switch";
 import { Button } from "../../ui/Button";
 import { ChatComposerControls } from "./ChatComposerControls";
 import { ChatComposerPalette } from "./ChatComposerPalette";
@@ -61,7 +60,6 @@ export function ChatTextComposer({
   reasoningEfforts?: ChatCompletionReasoningEffort[];
 }) {
   const capture = getWorkflowSkillCaptureDisplay(props.draft);
-  const shellSwitch = useCockpitShellSwitch(props.selectedSessionId);
   useAutoGrowTextarea(props.composerRef, props.draft, { minLines: 1, maxLines: 8 });
   const [externalSourceOpenToken, setExternalSourceOpenToken] = useState(0);
   const [composing, setComposing] = useState(false);
@@ -94,19 +92,19 @@ export function ChatTextComposer({
     !props.hasActiveStream &&
     !props.historicalReadOnly &&
     !props.sessionControlBanner;
-  const admitted = props.canSend || Boolean(props.hasActiveStream && props.canSendWhileRunning);
+  const sendAllowed = props.canSend || Boolean(props.hasActiveStream && props.canSendWhileRunning);
   const block = gatewayUnavailable
     ? GATEWAY_UNAVAILABLE_BLOCK
     : localReady
       ? null
-      : composerSendBlock({ ...props, canSend: admitted });
+      : composerSendBlock({ ...props, canSend: sendAllowed });
   const routeChecking = block?.kind === "route-checking";
   // The controller performs a fresh, authoritative preflight before dispatch. Let an explicit
   // send start that path while the display preflight is still debouncing this draft.
   const routeCheckingSend = routeChecking && !props.sending && !props.hasActiveStream;
   const canSubmit = Boolean(
     localReady ||
-    (Boolean(props.draft.trim() || props.pendingAttachments.length) && ((admitted && !block) || routeCheckingSend)),
+    (Boolean(props.draft.trim() || props.pendingAttachments.length) && ((sendAllowed && !block) || routeCheckingSend)),
   );
   // A route check that settles quickly never flashes or re-announces its hint.
   const showRouteHint = useSettled(routeChecking, ROUTE_CHECK_HINT_DELAY_MS);
@@ -295,14 +293,7 @@ export function ChatTextComposer({
             >
               Commands and context
             </button>{" "}
-            · Shift+Enter for a new line ·{" "}
-            <button
-              type="button"
-              onClick={shellSwitch.visit}
-              className="inline-flex min-h-8 items-center font-medium text-accent hover:underline max-sm:min-h-11"
-            >
-              Open classic view
-            </button>
+            · Shift+Enter for a new line
           </p>
           {props.hasActiveStream ? (
             <Button type="submit" variant="primary" size="sm" disabled={!canSubmit}>
@@ -346,7 +337,7 @@ export function ChatTextComposer({
                 ? "Open Work schedules to review and create a scheduled job."
                 : command === "/timer"
                   ? "Open a reminder that stays with this conversation."
-                  : "Read the current session state from the Gateway."}{" "}
+                  : "Show the current status of this conversation."}{" "}
               Nothing is sent to the model.
             </p>
           ) : null}
@@ -366,7 +357,6 @@ export function ChatTextComposer({
           ) : null}
         </div>
       </div>
-      {shellSwitch.feedback}
     </form>
   );
 }

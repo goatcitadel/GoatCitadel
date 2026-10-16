@@ -1,4 +1,5 @@
 # Unified Surface Auto-Router — Gateway Core (Phase 1A) Implementation Plan
+> **Superseded (2026-10-15):** Chat is the only conversation surface. The surface classifier, LLM judge and `/api/v1/surface/classify` were removed; `autoRoute` survives only as a deprecated, ignored field for stored durable payloads.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

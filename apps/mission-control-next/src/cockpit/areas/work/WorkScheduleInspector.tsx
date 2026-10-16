@@ -16,6 +16,13 @@ const SCHEDULE_CONFIRM: Readonly<Record<ScheduleAction, string>> = {
   resume: "Resume schedule",
   cancel: "Delete schedule",
 };
+/** Dismissing the review names what does not happen; only deletion keeps the schedule. */
+const SCHEDULE_DISMISS: Readonly<Record<ScheduleAction, string>> = {
+  run: "Don't run now",
+  pause: "Don't pause",
+  resume: "Don't resume",
+  cancel: "Keep schedule",
+};
 
 interface WorkScheduleInspectorProps {
   selected: CronJobRecordResponse;
@@ -90,7 +97,7 @@ export function WorkScheduleInspector({
         <Dialog
           open={true}
           title="Review schedule action"
-          description="Gateway-wide action. The current revision is rechecked before persistence; review expires after one minute."
+          description="Applies across workspaces. The schedule is checked again before anything is saved; this review expires after one minute."
           onOpenChange={(open) => {
             if (!open) {
               operations.invalidate();
@@ -126,18 +133,18 @@ export function WorkScheduleInspector({
               : pending === "resume"
                 ? "Resume enables future recurring occurrences."
                 : pending === "run"
-                  ? "Run now submits the saved action configuration immediately. Gateway policy and approval gates still apply."
+                  ? "Run now starts the saved action immediately. Policy and approvals still apply."
                   : "Delete permanently removes the schedule and stops future occurrences."}
           </p>
           <p className="text-sm text-fg">
             {pending === "cancel"
               ? `Delete “${reviewSnapshot?.name}”? Future runs stop and it can't be restored.`
-              : `${pending === "run" ? "Run now" : pending === "pause" ? "Pause" : "Resume"} this schedule? The Gateway will recheck its current record before the request.`}
+              : `${pending === "run" ? "Run now" : pending === "pause" ? "Pause" : "Resume"} this schedule? The current schedule is checked again before the request is sent.`}
           </p>
           {pending === "run" ? (
             <p className="text-xs text-fg-muted">
-              Run now has no atomic configuration revision check. Acknowledgement confirms a request; inspect the
-              recorded run for execution results.
+              Run now does not lock the schedule settings while it starts. A confirmation means the request was
+              accepted, not that the run succeeded; check its outcome afterwards.
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">
@@ -166,7 +173,7 @@ export function WorkScheduleInspector({
                 setPending(null);
               }}
             >
-              Keep schedule
+              {SCHEDULE_DISMISS[pending]}
             </Button>
           </div>
         </Dialog>

@@ -15,7 +15,7 @@ describe("GatewayService.buildChatTurnRuntimeHost", () => {
     const stub = {
       storage: {}, config: {}, turnRuntime: {}, backgroundTasks: new Set(), hooksService: {},
       llmService: {}, steerService: {}, subagentFanout,
-      improvementService: { listSurfaceRouteOverrideExemplars: vi.fn(() => []) },
+      improvementService: {},
       durableFanout: undefined as undefined | { execute: ReturnType<typeof vi.fn> },
     };
     const builders = GatewayService.prototype as unknown as {
@@ -42,7 +42,7 @@ describe("GatewayService.buildChatTurnRuntimeHost", () => {
       llmService: {},
       steerService: {},
       config: {},
-      improvementService: { listSurfaceRouteOverrideExemplars: vi.fn(() => []) },
+      improvementService: {},
       subagentFanout,
     };
 
@@ -65,7 +65,7 @@ describe("GatewayService.buildChatTurnRuntimeHost", () => {
       llmService: {},
       steerService: {},
       config: {},
-      improvementService: { listSurfaceRouteOverrideExemplars: vi.fn(() => []) },
+      improvementService: {},
       subagentFanout: {},
       finalizeDurableChatRun,
     };
@@ -94,7 +94,7 @@ describe("GatewayService.buildChatTurnRuntimeHost", () => {
       llmService: {},
       steerService: {},
       config: {},
-      improvementService: { listSurfaceRouteOverrideExemplars: vi.fn(() => []) },
+      improvementService: {},
       subagentFanout: {},
     };
     const host = (
