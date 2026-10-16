@@ -15,6 +15,7 @@ import {
   commsCalendarCreate,
   commsGmailSend,
   commsSmtpSend,
+  CommsPreApprovalSettledError,
   type CommsHost,
   type CommsPreApproval,
 } from "./comms-service.js";
@@ -92,8 +93,6 @@ export const CALENDAR_CONNECTION_CHANGED_REASON =
   "The calendar account changed after approval; nothing was created. Request approval again.";
 const MAIL_MISSING_WORKSPACE_REASON = "The mail send approval names no workspace; nothing was sent.";
 const CALENDAR_MISSING_WORKSPACE_REASON = "The calendar create approval names no workspace; nothing was created.";
-/** Thrown by `buildCommsPreApproval` when the approval's pending action is already settled. */
-const PRE_APPROVAL_SETTLED_MESSAGE = "Approved communications action already settled; refusing to invoke again.";
 const SENT_PROVIDER_STATUSES = new Set(["sent", "created"]);
 
 type ProviderOutcome = { providerId?: string; replayed: boolean };
@@ -290,7 +289,7 @@ export class CommunicationsApprovalEffectService {
     try {
       return await invoke(buildCommsPreApproval(this.deps.storage, approval.approvalId, () => this.now(), workspaceId));
     } catch (error) {
-      if (error instanceof Error && error.message === PRE_APPROVAL_SETTLED_MESSAGE) {
+      if (error instanceof CommsPreApprovalSettledError) {
         throw new CommunicationsApprovalEffectError(
           "approval_not_approved",
           "This approval was already used; nothing was sent again.",

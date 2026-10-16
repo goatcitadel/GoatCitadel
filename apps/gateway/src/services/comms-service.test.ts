@@ -12,6 +12,7 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   buildCommsPreApproval,
+  CommsPreApprovalSettledError,
   commsActivity,
   commsCalendarCreate,
   commsGmailSend,
@@ -817,6 +818,17 @@ describe("comms smtp send external side-effect ledger", () => {
     });
   });
 
+  it("keeps the IMAP/SMTP catalog identity when the connection lookup fails", async () => {
+    const { host, sideEffectRunStore } = createSmtpHost();
+    host.getIntegrationConnection = vi.fn(async () => {
+      throw new Error("connection store unavailable");
+    });
+
+    await commsSmtpSend(host, gmailInput({ connectionId: "conn-smtp", idempotencyKey: "smtp-key-lookup" }));
+
+    expect([...sideEffectRunStore.runs.values()][0]).toMatchObject({ catalogId: "automation.imap-smtp" });
+  });
+
   it("carries pre-approval consent into smtp.send", async () => {
     const { host } = createSmtpHost();
     const preApproval = createRecordingPreApproval("ap-smtp");
@@ -996,7 +1008,7 @@ describe("comms pre-approved invocation", () => {
   it("a settled pending action stops the invoke", async () => {
     const { host, sideEffectRunStore } = createGmailHost();
     const preApproval = createRecordingPreApproval("ap-1", async () => {
-      throw new Error("Approved communications action already settled; refusing to invoke again.");
+      throw new CommsPreApprovalSettledError();
     });
 
     const outcome = await commsGmailSend(host, gmailInput(), preApproval).then(
@@ -1037,6 +1049,25 @@ describe("comms reserved communications idempotency prefix", () => {
       expect(host.invokeAndUnwrap).not.toHaveBeenCalled();
       expect(sideEffectRunStore.runs.size).toBe(0);
     }
+  });
+
+  it("blocks a reserved key padded with whitespace before any claim or invoke", async () => {
+    const { host, sideEffectRunStore } = createGmailHost();
+
+    await expect(commsGmailSend(host, gmailInput({ idempotencyKey: ` ${reserved}` }))).resolves.toEqual(blocked);
+
+    expect(host.invokeAndUnwrap).not.toHaveBeenCalled();
+    expect(sideEffectRunStore.runs.size).toBe(0);
+  });
+
+  it("ledgers the trimmed key so a padded replay matches the original send", async () => {
+    const { host } = createGmailHost();
+
+    await commsGmailSend(host, gmailInput({ idempotencyKey: "mail-key-pad" }));
+    const replay = await commsGmailSend(host, gmailInput({ idempotencyKey: "  mail-key-pad  " }));
+
+    expect(host.invokeAndUnwrap).toHaveBeenCalledTimes(1);
+    expect(replay).toMatchObject({ replayOutcome: "duplicate", idempotencyKey: "mail-key-pad" });
   });
 
   it("still lets a pre-approved send use the communications: key", async () => {
@@ -1154,9 +1185,7 @@ describe("buildCommsPreApproval", () => {
     });
     const preApproval = buildCommsPreApproval(fake as never, "ap-1");
 
-    await expect(preApproval.recordPendingAction(request)).rejects.toThrow(
-      "Approved communications action already settled; refusing to invoke again.",
-    );
+    await expect(preApproval.recordPendingAction(request)).rejects.toBeInstanceOf(CommsPreApprovalSettledError);
     expect(fake.rows.get("ap-1")).toMatchObject({ resolutionStatus: "executed" });
   });
 });

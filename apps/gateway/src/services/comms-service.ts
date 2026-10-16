@@ -94,7 +94,13 @@ export interface CommsPreApproval {
 }
 
 const COMMS_PRE_APPROVAL_TTL_MS = 15 * 60_000;
-const COMMS_PRE_APPROVAL_SETTLED_MESSAGE = "Approved communications action already settled; refusing to invoke again.";
+/** Thrown before the boundary when an approval's pending action is no longer pending: nothing was sent. */
+export class CommsPreApprovalSettledError extends Error {
+  public constructor() {
+    super("Approved communications action already settled; refusing to invoke again.");
+    this.name = "CommsPreApprovalSettledError";
+  }
+}
 
 export function buildCommsPreApproval(
   storage: Pick<AsyncStorage, "pendingApprovalActions">,
@@ -119,7 +125,7 @@ export function buildCommsPreApproval(
       });
       const row = await pendingActions.find(approvalId);
       if (row?.resolutionStatus !== "pending") {
-        throw new Error(COMMS_PRE_APPROVAL_SETTLED_MESSAGE);
+        throw new CommsPreApprovalSettledError();
       }
     },
   };
@@ -608,7 +614,9 @@ async function runLedgeredCommsInvoke(
   // The communications: key space belongs to approved sends (leased claims). A plain
   // caller-supplied key in it would share a mutation identity with an approval's send
   // and let a leased claimer take over the unleased row, so refuse before any claim.
-  if (!spec.preApproval && spec.idempotencyKey?.startsWith(COMMUNICATIONS_IDEMPOTENCY_PREFIX)) {
+  // Normalized once, so the reserved-prefix check and the ledger see the same key.
+  const idempotencyKey = spec.idempotencyKey?.trim() || undefined;
+  if (!spec.preApproval && idempotencyKey?.startsWith(COMMUNICATIONS_IDEMPOTENCY_PREFIX)) {
     return {
       status: "failed",
       deliveryStatus: "blocked",
@@ -632,7 +640,7 @@ async function runLedgeredCommsInvoke(
     connectionId: spec.connectionId,
     actionId: spec.actionId,
     checkedAt: new Date().toISOString(),
-    idempotencyKey: spec.idempotencyKey,
+    idempotencyKey,
     payload: spec.payload,
     label: spec.label,
     execute: async (claim) => {
@@ -680,7 +688,7 @@ const GMAIL_SEND_PROVIDER: LedgeredMailSendProvider = {
 const SMTP_SEND_PROVIDER: LedgeredMailSendProvider = {
   provider: "smtp",
   boundary: COMMS_SMTP_SEND_BOUNDARY,
-  fallbackCatalogId: "automation.smtp",
+  fallbackCatalogId: "automation.imap-smtp",
   toolName: "smtp.send",
   label: "SMTP send (comms)",
 };
