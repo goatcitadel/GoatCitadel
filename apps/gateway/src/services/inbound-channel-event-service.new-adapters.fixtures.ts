@@ -246,7 +246,7 @@ function buildGoogleChat(): NewAdapterCase {
         content: parsed.content,
         metadata: parsed.metadata,
       },
-      ...(parsed.threadName ? { responseOptions: { deliveryReplyToMessageId: parsed.threadName } } : {}),
+      responseOptions: { deliveryReplyToMessageId: parsed.threadName ?? parsed.eventId },
     },
   };
 }

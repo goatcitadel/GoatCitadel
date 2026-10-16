@@ -8,6 +8,7 @@ import {
   type GoogleChatCertFetcher,
 } from "../services/google-chat-webhook.js";
 import { createWebhookRouteOptions } from "./integration-webhooks-shared.js";
+import type { IntegrationConnectionRecord } from "../services/channel-inbound-dispatch.js";
 import { createWebhookHandler, dispatchInboundWebhookMessage, readHeaderValue } from "./webhook-handler-factory.js";
 
 type GoogleChatDispatchPayload = Extract<ReturnType<typeof normalizeGoogleChatEvent>, { kind: "message" }>;
@@ -18,6 +19,7 @@ type GoogleChatDispatchPayload = Extract<ReturnType<typeof normalizeGoogleChatEv
  * replies asynchronously through the Chat API in service-account mode.
  */
 const EMPTY_CHAT_REPLY = Object.freeze({});
+const GOOGLE_CHAT_THREAD_NAME = /^spaces\/[^/]+\/threads\/[^/]+$/;
 
 export function registerGoogleChatWebhookRoutes(
   fastify: FastifyInstance,
@@ -91,33 +93,64 @@ export function registerGoogleChatWebhookRoutes(
         }
         return { kind: "dispatch" as const, parsed: normalized };
       },
-      dispatch: async ({ connectionId, connection, parsed }) => {
-        await dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
-          channel: "google-chat",
-          connectionId,
-          idempotencyKey: `google-chat:${connectionId}:${parsed.eventId}`,
-          eventType: "MESSAGE",
-          bindingTarget: parsed.space,
-          // Google Chat never had inbound, so legacy-open (open_legacy or unset) must never apply:
-          // force allowlist semantics and keep the connection's allowedSenders (empty means deny all).
-          inboundAccessConfig: { ...connection.config, inboundAccessMode: "allowlist" },
-          acceptedConnectionRevision: connection.revision,
-          message: {
-            eventId: parsed.eventId,
-            account: connectionId,
-            room: parsed.space,
-            threadId: parsed.threadName,
-            actorId: parsed.actorId,
-            displayName: parsed.displayName,
-            content: parsed.content,
-            metadata: parsed.metadata,
-          },
-          ...(parsed.threadName ? { responseOptions: { deliveryReplyToMessageId: parsed.threadName } } : {}),
-        });
+      dispatch: async ({ request, reply, connectionId, connection, parsed }) => {
+        try {
+          await dispatchGoogleChatMessage(connectionId, connection, parsed);
+        } catch (error) {
+          request.log.error(
+            {
+              channel: "google-chat",
+              connectionId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            "Google Chat inbound webhook was not acknowledged because durable acceptance failed.",
+          );
+          // Google retries non-2xx deliveries, so a transient acceptance failure must not drop the event.
+          void reply.code(503);
+          return { error: "Durable inbound channel acceptance failed" };
+        }
         return EMPTY_CHAT_REPLY;
       },
     }),
   );
+
+  async function dispatchGoogleChatMessage(
+    connectionId: string,
+    connection: IntegrationConnectionRecord,
+    parsed: GoogleChatDispatchPayload,
+  ): Promise<void> {
+    await dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
+      channel: "google-chat",
+      connectionId,
+      idempotencyKey: `google-chat:${connectionId}:${parsed.eventId}`,
+      eventType: "MESSAGE",
+      bindingTarget: parsed.space,
+      // Google Chat never had inbound, so legacy-open (open_legacy or unset) must never apply:
+      // force allowlist semantics and keep the connection's allowedSenders (empty means deny all).
+      inboundAccessConfig: { ...connection.config, inboundAccessMode: "allowlist" },
+      acceptedConnectionRevision: connection.revision,
+      message: {
+        eventId: parsed.eventId,
+        account: connectionId,
+        room: parsed.space,
+        threadId: parsed.threadName,
+        actorId: parsed.actorId,
+        displayName: parsed.displayName,
+        content: parsed.content,
+        metadata: parsed.metadata,
+      },
+      responseOptions: { deliveryReplyToMessageId: googleChatReplyTarget(parsed) },
+    });
+  }
+}
+
+/**
+ * The reply target is always a name the Chat API send path accepts: the inbound
+ * thread when it is a well-formed thread name, otherwise the inbound message
+ * name (the send path resolves its thread before posting).
+ */
+function googleChatReplyTarget(parsed: GoogleChatDispatchPayload): string {
+  return parsed.threadName && GOOGLE_CHAT_THREAD_NAME.test(parsed.threadName) ? parsed.threadName : parsed.eventId;
 }
 
 function readConfigString(value: unknown): string | undefined {

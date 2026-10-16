@@ -238,6 +238,28 @@ describe("Google Chat app webhook route", () => {
     expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
   });
 
+  it("returns 503 without leaking error text when durable acceptance fails, so Google retries", async () => {
+    const acceptInboundChannelEvent = vi.fn(async () => {
+      throw new Error("storage path C:/secret/inbound.db is locked");
+    });
+    const ctx = await buildApp({ connection: buildConnection(), acceptInboundChannelEvent });
+    const response = await post(ctx.app, validToken());
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "Durable inbound channel acceptance failed" });
+    expect(response.body).not.toContain("inbound.db");
+  });
+
+  it("replies to the inbound message name when the event carries no thread", async () => {
+    const ctx = await buildApp({ connection: buildConnection() });
+    const event = messageEvent();
+    const { thread: _thread, ...messageWithoutThread } = event.message;
+    const response = await post(ctx.app, validToken(), { ...event, message: messageWithoutThread });
+    expect(response.statusCode).toBe(200);
+    expect(ctx.acceptInboundChannelEvent.mock.calls[0]?.[0]).toMatchObject({
+      responseOptions: { deliveryReplyToMessageId: "spaces/S/messages/M" },
+    });
+  });
+
   it("replies ignored for a disabled connection", async () => {
     const ctx = await buildApp({ connection: buildConnection({}, { enabled: false }) });
     const response = await post(ctx.app, validToken());

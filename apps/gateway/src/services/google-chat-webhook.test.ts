@@ -137,6 +137,28 @@ describe("verifyGoogleChatBearer", () => {
     });
   });
 
+  it("rejects a not-yet-valid nbf beyond the skew and a non-numeric nbf", async () => {
+    await expect(verify(`Bearer ${signToken(projectClaims({ nbf: NOW_S + 600 }))}`)).resolves.toEqual({
+      ok: false,
+      reason: "expired",
+    });
+    await expect(verify(`Bearer ${signToken(projectClaims({ nbf: "soon" }))}`)).resolves.toEqual({
+      ok: false,
+      reason: "malformed",
+    });
+    await expect(verify(`Bearer ${signToken(projectClaims({ nbf: NOW_S - 30 }))}`)).resolves.toEqual({ ok: true });
+  });
+
+  it("rejects an inverted or overlong validity window", async () => {
+    await expect(
+      verify(`Bearer ${signToken(projectClaims({ iat: NOW_S - 30, exp: NOW_S + 25 * 3600 }))}`),
+    ).resolves.toEqual({ ok: false, reason: "malformed" });
+    await expect(verify(`Bearer ${signToken(projectClaims({ iat: NOW_S + 30, exp: NOW_S + 30 }))}`)).resolves.toEqual({
+      ok: false,
+      reason: "malformed",
+    });
+  });
+
   it("rejects an unknown kid", async () => {
     await expect(
       verify(`Bearer ${signToken(projectClaims(), { alg: "RS256", kid: "rotated-away", typ: "JWT" })}`),

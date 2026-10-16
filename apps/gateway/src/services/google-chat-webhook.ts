@@ -39,6 +39,8 @@ export const GOOGLE_CHAT_AUDIENCE_TYPES: readonly GoogleChatAudienceType[] = ["p
 
 const GOOGLE_OIDC_ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
 const CLOCK_SKEW_SECONDS = 60;
+/** Upper bound on exp - iat. Google-signed Chat tokens are valid for about one hour. */
+const MAX_TOKEN_LIFETIME_SECONDS = 24 * 60 * 60;
 const DEFAULT_CERT_MAX_AGE_SECONDS = 60 * 60;
 /** Minimum spacing between fetches of one URL when an unknown kid forces a refresh. */
 const MIN_FORCED_REFRESH_INTERVAL_MS = 30_000;
@@ -128,9 +130,21 @@ function checkClaims(
   if (typeof exp !== "number" || typeof iat !== "number" || !Number.isFinite(exp) || !Number.isFinite(iat)) {
     return { ok: false, reason: "malformed" };
   }
+  const nbf = claims.nbf;
+  if (nbf !== undefined && (typeof nbf !== "number" || !Number.isFinite(nbf))) {
+    return { ok: false, reason: "malformed" };
+  }
+  // Google Chat tokens live about an hour; an inverted or overlong window is not a Google-issued token.
+  if (exp <= iat || exp - iat > MAX_TOKEN_LIFETIME_SECONDS) {
+    return { ok: false, reason: "malformed" };
+  }
   const nowSeconds = nowMs / 1000;
-  // Outside the validity window either way (expired, or issued in the future).
-  if (nowSeconds > exp + CLOCK_SKEW_SECONDS || iat > nowSeconds + CLOCK_SKEW_SECONDS) {
+  // Outside the validity window either way (expired, issued in the future, or not yet valid).
+  if (
+    nowSeconds > exp + CLOCK_SKEW_SECONDS ||
+    iat > nowSeconds + CLOCK_SKEW_SECONDS ||
+    (typeof nbf === "number" && nbf > nowSeconds + CLOCK_SKEW_SECONDS)
+  ) {
     return { ok: false, reason: "expired" };
   }
   if (audienceType === "endpoint_url" && (claims.email !== GOOGLE_CHAT_ISSUER || claims.email_verified !== true)) {
