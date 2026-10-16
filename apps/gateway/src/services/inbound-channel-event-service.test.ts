@@ -16,6 +16,7 @@ import {
 import type { DurableInboundChannelAcceptInput } from "./channel-inbound-dispatch.js";
 import { ensureInboundIntegrationChatSession, type ChatSessionDependencies } from "./chat-session-service.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
+import { buildNewAdapterCases } from "./inbound-channel-event-service.new-adapters.fixtures.js";
 
 describe("InboundChannelEventService", () => {
   const cleanups: Array<() => Promise<void>> = [];
@@ -27,7 +28,24 @@ describe("InboundChannelEventService", () => {
     vi.restoreAllMocks();
   });
 
-  it("binds accepted ingress to its trusted revision and strips provider spoofing while preserving retry identity", async () => { const harness = await createHarness(); const input = buildInput({ acceptedConnectionRevision: "a".repeat(64) }); input.message.metadata = { [CHANNEL_INGRESS_ACCEPTED_REVISION_KEY]: "spoofed" }; const first = await harness.service.accept(input); const original = harness.storage.inboundChannelEvents.get(first.inboundEventId)!; expect(original.payload[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY]).toBe("a".repeat(64)); expect((original.payload.message as { metadata?: Record<string, unknown> }).metadata?.[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY]).toBeUndefined(); const retry = await harness.service.accept({ ...input, acceptedConnectionRevision: "b".repeat(64) }); expect(retry.inboundEventId).toBe(first.inboundEventId); expect(harness.storage.inboundChannelEvents.get(first.inboundEventId)?.payload[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY]).toBe("a".repeat(64)); });
+  it("binds accepted ingress to its trusted revision and strips provider spoofing while preserving retry identity", async () => {
+    const harness = await createHarness();
+    const input = buildInput({ acceptedConnectionRevision: "a".repeat(64) });
+    input.message.metadata = { [CHANNEL_INGRESS_ACCEPTED_REVISION_KEY]: "spoofed" };
+    const first = await harness.service.accept(input);
+    const original = harness.storage.inboundChannelEvents.get(first.inboundEventId)!;
+    expect(original.payload[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY]).toBe("a".repeat(64));
+    expect(
+      (original.payload.message as { metadata?: Record<string, unknown> }).metadata?.[
+        CHANNEL_INGRESS_ACCEPTED_REVISION_KEY
+      ],
+    ).toBeUndefined();
+    const retry = await harness.service.accept({ ...input, acceptedConnectionRevision: "b".repeat(64) });
+    expect(retry.inboundEventId).toBe(first.inboundEventId);
+    expect(
+      harness.storage.inboundChannelEvents.get(first.inboundEventId)?.payload[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY],
+    ).toBe("a".repeat(64));
+  });
 
   it("returns after durable acceptance while the model turn remains in flight", async () => {
     const response = deferred<ChatSendMessageResponse>();
@@ -401,6 +419,34 @@ describe("InboundChannelEventService", () => {
       deliveryId: "delivery-1",
     });
   });
+
+  it.each(["ntfy", "mattermost", "signal", "google-chat"] as const)(
+    "accepts a %s adapter event exactly once across reconnect replay and restart",
+    async (name) => {
+      const { input, expectedKey } = (await buildNewAdapterCases()).find((entry) => entry.name === name)!;
+      expect(input.idempotencyKey).toBe(expectedKey);
+      expect(input).not.toHaveProperty("inboundAccessConfig");
+      expect(input).not.toHaveProperty("allowedSenders");
+      const harness = await createHarness();
+
+      const first = await harness.service.accept(input);
+      expect(first.deduped).toBe(false);
+      await waitFor(() => harness.storage.inboundChannelEvents.get(first.inboundEventId)?.status === "completed");
+
+      const replay = await harness.service.accept(structuredClone(input));
+      expect(replay.deduped).toBe(true);
+      expect(replay.inboundEventId).toBe(first.inboundEventId);
+
+      harness.service.close();
+      const restarted = harness.createAdditionalService();
+      const afterRestart = await restarted.accept(structuredClone(input));
+      await restarted.drain();
+      expect(afterRestart.deduped).toBe(true);
+      expect(afterRestart.inboundEventId).toBe(first.inboundEventId);
+      expect(harness.ingestChannelMessage).toHaveBeenCalledTimes(1);
+      expect(harness.respondToExistingChatMessage).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("charges the bot-loop guard once across repeated active-turn retries", async () => {
     let running = true;
