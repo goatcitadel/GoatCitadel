@@ -154,6 +154,7 @@ Approval payloads keep every existing top-level field, because `communicationsMa
   - Previews contain no "does not send" / "does not mutate" text. New copy: mail `"Approving sends this exact message once through the connected account."`, calendar `"Approving creates this exact event once on the connected calendar."`
   - Restart: build service A with an in-memory `mailDrafts` fake (or real SQLite repo via `TempSqliteFiles`), `createDraft` + `sendDraft`. Then build service B over the same repo: `sendDraft(sameId)` returns status `approval_required` with the same `approvalId`, and `createApproval` was called exactly once.
   - The calendar approval linkage now carries `workspaceId` when one is given.
+  - New `getDraft(draftId)` returns the persisted draft (or `undefined`). New route `GET /api/v1/mail/drafts/:draftId` returns 200 with the draft, or 404 `{ error: "Mail draft not found." }`. Add a `getMailDraft(draftId)` client in `packages/mission-control-shared/src/api/personal-ops-operations.ts` next to the existing send client.
 - [ ] **Step 2:** Run them. Expect FAIL.
 - [ ] **Step 3: Implement.** Replace the `drafts` `Map` with the repo. Keep the in-flight `sending` map: it only de-dupes concurrent requests within one process. Use `transition(["draft"] → "approval_required")` to settle; on approval-creation failure use `transition(["draft"] → "failed", failureReason)`. An unknown draft id still returns the transient `failed` record but does not persist it. In the route, call `await service.createDraft(...)` and pass `mailDrafts: fastify.services.storage?.mailDrafts` (find the route-level storage accessor with `git grep -n "fastify.services.storage" apps/gateway/src/routes | head`).
 - [ ] **Step 4:** Run them. Expect PASS.
@@ -209,10 +210,12 @@ export interface CommunicationsApprovalEffectDeps {
 export class CommunicationsApprovalEffectService {
   executeApprovedMailSend(input: { approvalId: string }): Promise<{ disposition: "sent"; providerMessageId?: string; replayed: boolean }>;
   executeApprovedCalendarCreate(input: { approvalId: string }): Promise<{ disposition: "created"; providerEventId?: string; replayed: boolean }>;
+  recordMailSendRejected(input: { approvalId: string }): Promise<{ disposition: "rejected" }>;
 }
 // ApprovalEffectsServiceDeps gains:
 executeApprovedCommunicationsMailSend?(input: { approvalId: string }): Promise<{ disposition: "sent"; providerMessageId?: string; replayed: boolean }>;
 executeApprovedCommunicationsCalendarCreate?(input: { approvalId: string }): Promise<{ disposition: "created"; providerEventId?: string; replayed: boolean }>;
+recordCommunicationsMailSendRejected?(input: { approvalId: string }): Promise<{ disposition: "rejected" }>;
 ```
 Executor algorithm (mail; calendar is the same, without the draft):
 1. `approval = storage.approvals.get(approvalId)`. It must be kind `communications.mail.send` with status `approved`; otherwise `approval_not_approved`.
@@ -225,6 +228,7 @@ Executor algorithm (mail; calendar is the same, without the draft):
    - A failed delivery after the boundary, or a ledger `in_progress`/unknown → `outcome_unknown`. The effect fails and the draft is marked `failed` with reason "Delivery outcome is unknown; check the mailbox before retrying."
 
 Effects service:
+- Deny is visible too (issue #350, "Deny/failure states visible to the operator"): when `approval.kind === "communications.mail.send" && decision === "reject"`, enqueue the same mail effect kind with payload `{ draftId, decision: "reject" }`. Its handler calls `executor.recordMailSendRejected({ approvalId })`, which moves the draft `approval_required → failed` with `failureReason: "Send approval was rejected; nothing was sent."`, never calls a provider, and completes the effect with `result.disposition === "rejected"`. Add a test that pins it.
 - Enqueue in `enqueueResolutionEffects` when `approval.kind === "communications.mail.send" && decision === "approve"`. The upsert copies the mesh pair: targetKind `mail_draft`, targetId `draftId`, `idempotencyKey: buildApprovalEffectIdempotencyKey({...})`, payload `{ draftId, accountId, payloadHash }`. Calendar uses targetKind `calendar_event`, targetId `eventId`. A payload missing its ids → throw `ConflictError` like the memory lifecycle enqueue does.
 - The handlers copy `handleMeshCapabilityActivationApply`. A `CommunicationsApprovalEffectError` → `failEffect` with `lastError: error.message`, `result: { errorCode }`. Any other error → `deferClaimedEffectForRetry`. A missing executor → `failEffect` "Communications effect is missing its executor."
 
@@ -242,7 +246,7 @@ Effects service:
   - Re-enqueueing the same resolution returns the same effectId (double resolve).
   - Restart: complete one worker run, then mark the effect `pending` again (or construct a second `ApprovalEffectsService` over the same storage after forcing lease expiry). Processing again with the same real executor + ledger → the provider invoke count stays 1 and the effect completes with `replayed: true`.
   - An executor throwing `CommunicationsApprovalEffectError("provider_unavailable", …)` → the effect is `failed`, `result.errorCode === "provider_unavailable"`, `lastError` readable.
-  - Rejecting the approval enqueues no communications effect.
+  - Rejecting a mail approval enqueues one mail effect that marks the draft `failed` ("Send approval was rejected; nothing was sent.") with zero provider invokes. Rejecting a calendar approval enqueues no communications effect.
 - [ ] **Step 5:** Run them. Expect FAIL. Implement the enqueue branches, the switch cases and the handlers. Run them. Expect PASS.
 - [ ] **Step 6: Wire `gateway-service.ts`.** Construct `CommunicationsApprovalEffectService` lazily in the effects deps (`executeApprovedCommunicationsMailSend: (input) => this.communicationsApprovalEffects.executeApprovedMailSend(input)`). Build its comms host from the same factory the communications route composition uses (`gateway-route-composition-integrations.ts:605`). Keep the gateway-service delta to a few lines. Add the new file(s) to `architecture-new-service-allowances.json`. Run `pnpm verify:architecture:metrics`.
 - [ ] **Step 7:** Commit `feat: execute approved mail send and calendar create through approval effects`.
@@ -256,7 +260,7 @@ Effects service:
   - Compose intro: `"What you type stays in this browser session. Review saves the draft, including Bcc, on the Gateway. Only Request send approval asks for an approval; approving sends this exact message once."`
   - Receipt callout: `"Send approval requested. Nothing has been sent yet. Approving sends this exact message once."`
   - Review dialog: `"Approving sends this exact message once through the connected account."`
-  - The draft status `sent`/`failed`/`send_unavailable` renders a status line (`"Sent."`, `"Not sent: <failureReason>"`).
+  - The draft status `sent`/`failed`/`send_unavailable` renders a status line (`"Sent."`, `"Not sent: <failureReason>"`). After the approval is decided, the receipt re-reads the draft with `getMailDraft` (on the existing `onRefresh` path) so the operator sees the outcome.
   - Keep the "Request send approval" and Cancel/Confirm behaviors unchanged.
 - [ ] **Step 2:** Run the UI tests (`pnpm --filter @goatcitadel/mission-control-next exec vitest run <files> --maxWorkers=2`) and the shared test. Expect FAIL. Update the components. Run them again. Expect PASS.
 - [ ] **Step 3: Docs.** In the External writeback paragraphs, add one sentence: "Approved `communications.mail.send` and `communications.calendar.create` approvals execute once through approval effects; Gmail, SMTP and calendar sends claim idempotency on `comms_gmail_send`, `comms_smtp_send` and `comms_calendar_create` keyed `communications:<approvalId>`." Then `git grep -n -i "does not send\|does not mutate the external calendar"` over apps/packages/docs: no WS2 hits remain.
