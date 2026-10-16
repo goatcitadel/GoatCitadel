@@ -65,6 +65,7 @@ export function LibraryCommunicationsSection({ activeWorkspaceId, activeWorkspac
     setSaving(true);
     try {
       const draft = await createMailDraft({
+        workspaceId: activeWorkspaceId,
         accountId: primaryAccount.accountId,
         to: to
           .split(",")
