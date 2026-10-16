@@ -679,6 +679,27 @@ describe("dashboard cron routes", () => {
       await expect(service.listCronJobs({ citadelId: "nope", accessClass: "operator" })).rejects.toThrow(/not found/);
       expect(listByCitadel).toHaveBeenCalledTimes(1);
     });
+
+    it("refuses an out-of-scope caller before revealing whether the citadel exists", async () => {
+      const listByCitadel = vi.fn(async () => items);
+      const getCitadel = vi.fn(async (id: string) => (id === "ws-a" ? { citadelId: id } : undefined));
+      const service = new CronAutomationService({
+        storage: { citadels: { getCitadel }, cronJobs: { listByCitadel } },
+      } as never);
+      for (const accessClass of ["device", undefined]) {
+        await expect(service.listCronJobs({ citadelId: "nope", accessClass })).rejects.toBeInstanceOf(
+          PolicyViolationError,
+        );
+        await expect(service.listCronJobs({ citadelId: "ws-a", accessClass })).rejects.toBeInstanceOf(
+          PolicyViolationError,
+        );
+      }
+      expect(getCitadel).not.toHaveBeenCalled();
+      await expect(service.listCronJobs({ citadelId: "nope", accessClass: "operator" })).rejects.toBeInstanceOf(
+        NotFoundError,
+      );
+      expect(listByCitadel).not.toHaveBeenCalled();
+    });
   });
 });
 

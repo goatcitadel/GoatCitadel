@@ -235,7 +235,8 @@ export class CronAutomationService {
    * Lists cron jobs. With a `citadel` request the listing is Watchtower scope-checked: the
    * access scope is built here, on the server (only the local operator access class may read
    * every citadel; any other caller gets an empty readable set) and never from request input.
-   * Throws `NotFoundError` for an unknown citadel and `PolicyViolationError` when outside scope.
+   * Throws `PolicyViolationError` when outside scope (checked first, so an unreadable citadel's
+   * existence is not disclosed) and `NotFoundError` for an unknown citadel the caller may read.
    */
   public async listCronJobs(citadel?: {
     citadelId: string;
@@ -245,17 +246,18 @@ export class CronAutomationService {
     if (!citadel) {
       return await cronJobs.list();
     }
-    if (!(await citadels.getCitadel(citadel.citadelId))) {
-      throw new NotFoundError(`Citadel ${citadel.citadelId} not found.`);
-    }
     const scope: CitadelAccessScope = {
       citadelId: citadel.citadelId,
       readableCitadelIds: citadel.accessClass === "operator" ? "all" : [],
     };
+    // Scope first: a caller who may not read the citadel learns nothing about whether it exists.
     if (!canReadCitadel(scope)) {
       throw new PolicyViolationError({
         message: `Citadel ${citadel.citadelId} is outside your Watchtower access scope.`,
       });
+    }
+    if (!(await citadels.getCitadel(citadel.citadelId))) {
+      throw new NotFoundError(`Citadel ${citadel.citadelId} not found.`);
     }
     return await cronJobs.listByCitadel(scope);
   }

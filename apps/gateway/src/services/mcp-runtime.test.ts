@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import type { McpServerRecord } from "@goatcitadel/contracts";
 import { __internal, collectMcpBrowserFallbackTargets, discoverMcpTools, invokeMcpRuntimeTool } from "./mcp-runtime.js";
+import { withHttpMcpClient } from "./mcp-http-transport.js";
 
 function createTestServer(script: string, extraArgs: string[] = []): McpServerRecord {
   const now = new Date().toISOString();
@@ -1674,9 +1675,14 @@ interface LegacySseTestServer {
   host: string;
   getCount: number;
   postPaths: string[];
+  getAuthorizations: Array<string | undefined>;
+  postAuthorizations: Array<string | undefined>;
+  closedStreams: number;
 }
 
-type LegacySseTestOutcome = { status?: number; reply?: Record<string, unknown> } | undefined;
+type LegacySseTestOutcome =
+  | { status?: number; headers?: Record<string, string>; reply?: Record<string, unknown> }
+  | undefined;
 
 async function withLegacySseMcpServer<T>(
   input: {
@@ -1689,11 +1695,23 @@ async function withLegacySseMcpServer<T>(
   run: (server: LegacySseTestServer) => Promise<T>,
 ): Promise<T> {
   const sessions = new Map<string, LegacySseTestSession>();
-  const state: LegacySseTestServer = { url: "", host: "", getCount: 0, postPaths: [] };
+  const state: LegacySseTestServer = {
+    url: "",
+    host: "",
+    getCount: 0,
+    postPaths: [],
+    getAuthorizations: [],
+    postAuthorizations: [],
+    closedStreams: 0,
+  };
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
     if (request.method === "GET" && requestUrl.pathname === "/sse") {
       state.getCount += 1;
+      state.getAuthorizations.push(request.headers.authorization);
+      response.on("close", () => {
+        state.closedStreams += 1;
+      });
       const eol = input.lineEnding ?? "\n";
       const session: LegacySseTestSession = {
         sessionId: `s${state.getCount}`,
@@ -1723,6 +1741,7 @@ async function withLegacySseMcpServer<T>(
         return;
       }
       state.postPaths.push(requestUrl.pathname);
+      state.postAuthorizations.push(request.headers.authorization);
       const session = sessions.get(requestUrl.searchParams.get("sessionId") ?? "");
       if (requestUrl.pathname !== "/messages" || !session) {
         response.writeHead(404).end("Session not found");
@@ -1730,7 +1749,7 @@ async function withLegacySseMcpServer<T>(
       }
       const message = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
       const outcome = input.onMessage({ message, session }) ?? {};
-      response.writeHead(outcome.status ?? 202).end("Accepted");
+      response.writeHead(outcome.status ?? 202, outcome.headers).end("Accepted");
       if (outcome.reply !== undefined) {
         const eol = session.eol;
         session.stream.write(`event: message${eol}data: ${JSON.stringify(outcome.reply)}${eol}${eol}`);
@@ -1930,5 +1949,91 @@ describe("legacy HTTP+SSE transport", () => {
         expect(toolCalls).toEqual([2]);
       },
     );
+  });
+
+  it("refuses a message POST answered with a redirect instead of following it", async () => {
+    await withLegacySseMcpServer({ onMessage: ({ message }) => replyToLegacyHandshake(message) }, async (other) => {
+      await withLegacySseMcpServer(
+        {
+          onMessage: ({ message, session }) => {
+            if (message.method === "initialize") {
+              return {
+                status: 307,
+                headers: { location: `${other.url}/messages?sessionId=${session.sessionId}` },
+              };
+            }
+            return replyToLegacyHandshake(message);
+          },
+        },
+        async (sse) => {
+          await expect(
+            discoverMcpTools({ ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" }, 1000, {
+              networkAllowlist: [sse.host, other.host],
+            }),
+          ).rejects.toThrow(/redirect/i);
+          expect(sse.postPaths).toEqual(["/messages"]);
+          expect(other.postPaths).toEqual([]);
+        },
+      );
+    });
+  });
+
+  it("rejects a request aborted by the caller mid-flight and closes the event stream", async () => {
+    const controller = new AbortController();
+    await withLegacySseMcpServer(
+      {
+        onMessage: ({ message }) => {
+          if (message.method === "tools/call") {
+            // Accept the POST but never reply on the stream; the caller aborts instead.
+            setTimeout(() => controller.abort(), 20);
+            return {};
+          }
+          return replyToLegacyHandshake(message);
+        },
+      },
+      async (sse) => {
+        const server = { ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" as const };
+        await expect(
+          withHttpMcpClient(
+            server,
+            5000,
+            { networkAllowlist: [sse.host] },
+            async (client) =>
+              await client.request("tools/call", { name: "legacy.search", arguments: {} }, controller.signal),
+            controller.signal,
+          ),
+        ).rejects.toThrow(/aborted/);
+        const deadline = Date.now() + 2000;
+        while (sse.closedStreams < 1 && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        expect(sse.getCount).toBe(1);
+        expect(sse.closedStreams).toBe(1);
+      },
+    );
+  });
+
+  it("sends token auth headers on both the event-stream GET and the message POSTs", async () => {
+    const tokenEnvKey = "GOATCITADEL_TEST_LEGACY_SSE_TOKEN";
+    const token = "legacy-sse-token-value-1234567890";
+    const previous = process.env[tokenEnvKey];
+    process.env[tokenEnvKey] = token;
+    onTestFinished(() => {
+      if (previous === undefined) delete process.env[tokenEnvKey];
+      else process.env[tokenEnvKey] = previous;
+    });
+    await withLegacySseMcpServer({ onMessage: ({ message }) => replyToLegacyHandshake(message) }, async (sse) => {
+      const base = createRemoteTestServer(`${sse.url}/sse`, { authType: "token" });
+      const tools = await discoverMcpTools(
+        { ...base, transport: "sse", policy: { ...base.policy, allowedEnvKeys: [tokenEnvKey] } },
+        1000,
+        { networkAllowlist: [sse.host] },
+      );
+
+      expect(tools.map((tool) => tool.toolName)).toEqual(["legacy.search"]);
+      expect(sse.getAuthorizations).toEqual([`Bearer ${token}`]);
+      expect(sse.postAuthorizations.length).toBeGreaterThanOrEqual(3);
+      expect(new Set(sse.postAuthorizations)).toEqual(new Set([`Bearer ${token}`]));
+    });
   });
 });

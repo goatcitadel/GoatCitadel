@@ -1160,17 +1160,29 @@ describe("EventIngestService", () => {
     it(
       "serializes concurrent drains of the same session into one transcript line",
       withStorage(async (storage, sessionId) => {
-        const hold = vi.spyOn(storage.transcriptOutbox, "markDelivered").mockImplementation(() => undefined);
         const service = new EventIngestService(asAsyncStorage(storage));
+        // Keep the ingest-time drain from seeing the row, so it stays pending with no attempt
+        // recorded (no lastAttemptAt): a drainer then appends without an offset lookup.
+        const listPending = vi.spyOn(storage.transcriptOutbox, "listPending").mockImplementationOnce(() => []);
         await service.ingest({
           endpoint: "/api/v1/gateway/events",
           idempotencyKey: "idem-outbox-3",
           payload: buildPayload(),
         });
-        hold.mockRestore();
-        // Row is appended but still pending; two drainers race over it.
+        listPending.mockRestore();
+        expect(storage.transcriptOutbox.get("evt-1")?.deliveredAt).toBeUndefined();
+        expect(storage.transcriptOutbox.get("evt-1")?.lastAttemptAt).toBeUndefined();
+
+        // A slow append widens the race window: without per-session serialization both drainers
+        // list the same attempt-free row before either delivers it, and both append.
+        const append = storage.transcripts.append.bind(storage.transcripts);
+        const appendSpy = vi.spyOn(storage.transcripts, "append").mockImplementation(async (event) => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          return await append(event);
+        });
         await Promise.all([service.flushPendingTranscriptOutbox(), service.flushPendingTranscriptOutbox()]);
 
+        expect(appendSpy).toHaveBeenCalledTimes(1);
         const transcript = await storage.transcripts.read(sessionId);
         expect(transcript.filter((entry) => entry.eventId === "evt-1")).toHaveLength(1);
         expect(storage.transcriptOutbox.get("evt-1")?.deliveredAt).toBeDefined();
