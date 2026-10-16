@@ -1,4 +1,5 @@
 import { ModelComparisonRunRepository } from "@goatcitadel/storage";
+import { logger } from "@goatcitadel/gateway-core";
 import { generateVaultKey } from "@goatcitadel/contracts/citadel-vault-node";
 import { DEFAULT_CITADEL_ID } from "@goatcitadel/contracts";
 import { getStartupPhaseRecorder } from "../diagnostics/startup-phases.js";
@@ -38,6 +39,7 @@ import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-c
 
 const DEV_VERIFICATION_VAULT_KEY_ENV = "GOATCITADEL_VERIFY_VAULT_KEY_BASE64";
 const VAULT_KEY_BYTES = 32;
+const modelComparisonLog = logger.child("model-comparison-service");
 
 export function resolveDevVerificationVaultKey(
   devVerificationEnabled: boolean,
@@ -376,6 +378,11 @@ export function composeRuntimeAdminRouteDependencies(
       listPromptPackTests: (packId, limit) => gateway.promptPackService.listPromptPackTests(packId, limit),
       listPromptPackRunsByTest: (testId, limit) => gateway.storage.promptPackRuns.listByTest(testId, limit),
       runPromptPackTest: (packId, testId, input) => gateway.promptPackService.runPromptPackTest(packId, testId, input),
+      onBackgroundError: (comparisonId, error) =>
+        modelComparisonLog.error("Model comparison could not record its failed status", {
+          comparisonId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
     }),
     npu: createNpuRoutePort({
       npuSidecar: gateway.npuSidecar,

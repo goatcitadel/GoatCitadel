@@ -43,6 +43,7 @@ export interface ModelComparisonServiceDependencies {
   listPromptPackTests: (packId: string, limit?: number) => Promise<PromptPackTestRecord[]>;
   listPromptPackRunsByTest?: (testId: string, limit?: number) => Promise<PromptPackRunRecord[]>;
   runPromptPackTest?: ModelComparisonPromptPackRunner;
+  onBackgroundError?: (comparisonId: string, error: unknown) => void;
   clock?: () => Date;
   idFactory?: () => string;
 }
@@ -274,7 +275,7 @@ export class ModelComparisonService {
           completedAt: now,
           error: error instanceof Error ? error.message : String(error),
         })
-        .catch(() => undefined);
+        .catch((statusError: unknown) => this.deps.onBackgroundError?.(run.comparisonId, statusError));
     }
   }
 
@@ -335,7 +336,9 @@ export class ModelComparisonService {
       return;
     }
     const latest = await this.deps.repository.get(comparisonId);
-    const failedCount = latest.results.filter((result) => Boolean(result.error?.trim())).length;
+    const failedCount = latest.results.filter(
+      (result) => Boolean(result.error?.trim()) || !result.responseText?.trim(),
+    ).length;
     await this.deps.repository.updateStatus(comparisonId, {
       status: failedCount > 0 ? "failed" : "completed",
       updatedAt: now,
@@ -395,13 +398,29 @@ function applyPromptPackRun(
   pending: ModelComparisonPromptResult,
   promptRun: PromptPackRunRecord,
 ): ModelComparisonPromptResult {
+  const responseText = promptRun.responseText?.trim() || undefined;
   return {
     ...pending,
     runId: promptRun.runId,
-    responseText: promptRun.responseText?.trim() || promptRun.error || undefined,
+    responseText: promptRun.status === "failed" ? undefined : responseText,
     latencyMs: computeRunLatencyMs(promptRun),
-    error: promptRun.status === "failed" ? (promptRun.error ?? "Prompt-pack run failed.") : undefined,
+    error: resolvePromptPackRunError(promptRun, responseText),
   };
+}
+
+function resolvePromptPackRunError(
+  promptRun: PromptPackRunRecord,
+  responseText: string | undefined,
+): string | undefined {
+  if (promptRun.status === "failed") {
+    return promptRun.error ?? "Prompt-pack run failed.";
+  }
+  if (responseText) {
+    return undefined;
+  }
+  return promptRun.status === "approval_paused"
+    ? "Prompt-pack run paused for approval."
+    : "Prompt-pack run returned no response.";
 }
 
 function computeRunLatencyMs(run?: PromptPackRunRecord): number | undefined {
