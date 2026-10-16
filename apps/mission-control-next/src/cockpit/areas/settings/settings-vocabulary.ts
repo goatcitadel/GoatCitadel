@@ -151,7 +151,7 @@ export const BEDROCK_CREDENTIAL_MODE_OPTIONS: ReadonlyArray<{ value: BedrockCred
 ];
 export const AWS_SIGV4_CREDENTIAL_LABEL = "AWS credentials JSON";
 export const AWS_SIGV4_CREDENTIAL_SHAPE = '{"accessKeyId":"…","secretAccessKey":"…","sessionToken":"…"}';
-export const AWS_SIGV4_CREDENTIAL_HELP = `${AWS_SIGV4_CREDENTIAL_SHAPE} — or leave empty to use AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the gateway environment.`;
+export const AWS_SIGV4_CREDENTIAL_HELP = `${AWS_SIGV4_CREDENTIAL_SHAPE}. If no credential is stored, the gateway uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from its environment.`;
 export const AWS_SIGV4_SECURE_INPUT_NOTE = `Enter the AWS credentials JSON: ${AWS_SIGV4_CREDENTIAL_SHAPE}.`;
 export const AWS_SIGV4_ENV_REFERENCE_LABEL = "AWS credentials JSON environment variable name";
 export const AWS_SIGV4_ENV_REFERENCE_SHORT_LABEL = "AWS credentials JSON env name";

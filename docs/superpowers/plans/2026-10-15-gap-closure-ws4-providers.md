@@ -1218,7 +1218,7 @@ git commit -m "feat: enable Amazon Bedrock providers end to end"
 - [ ] **Step 2:** Re-run every focused test file touched in Tasks 1–11, one at a time, `--maxWorkers=2`.
 - [ ] **Step 3:** `pnpm verify:fast` in the background at low priority; fix reds caused by this branch (re-check `origin/main` before treating a red as ours).
 - [ ] **Step 4:** `git diff --check origin/main...HEAD`; `prettier --write` only on changed files (`git diff --name-only origin/main...HEAD -- '*.ts' '*.tsx' '*.json' '*.md'`), then `prettier --check` the same list.
-- [ ] **Step 5:** Repo hygiene: no personal paths (`git diff origin/main...HEAD | grep -n -i "C:\\\\Users\|F:\\\\code\|/f/code/"` → empty).
+- [ ] **Step 5:** Repo hygiene: run `pnpm verify:repo:hygiene` (PowerShell) and confirm it passes.
 - [ ] **Step 6:** Push with `git -c credential.helper='!gh auth git-credential' push -u origin fix/gap-ws4-providers` and open the PR against `main` titled `feat: WS4 providers and evaluation (Bedrock, live model comparisons, incremental thinking)`, body listing the three tasks, the two deliberate deviations, the validation run, and anything not validated (no live AWS account call).
 
 ---

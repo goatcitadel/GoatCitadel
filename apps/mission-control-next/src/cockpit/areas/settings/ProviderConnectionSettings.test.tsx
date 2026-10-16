@@ -321,7 +321,7 @@ describe("cockpit provider connection editing", () => {
     await render();
     expect(container.querySelector("legend")?.textContent).toBe("AWS credentials JSON");
     expect(container.textContent).toContain(
-      "or leave empty to use AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the gateway environment.",
+      "If no credential is stored, the gateway uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from its environment.",
     );
     expect(container.textContent).not.toContain("Use its existing authentication setup below");
     await click("Replace AWS credentials JSON");
