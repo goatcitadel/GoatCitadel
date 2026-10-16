@@ -15178,13 +15178,16 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
   },
   {
     // Nullable TEXT matches the v2 live render, which already carries the
-    // column on fresh installs; upgraded installs gain it here.
+    // column on fresh installs; upgraded installs gain it here. Pre-fence
+    // pending rows may already have dispatched without a marker, so they are
+    // fenced fail-closed.
     version: 212,
     name: "mutation_idempotency_dispatch_fence",
     sql: `
       ALTER TABLE mutation_idempotency ADD COLUMN IF NOT EXISTS dispatched_at TEXT;
+      UPDATE mutation_idempotency SET dispatched_at = updated_at WHERE status = 'pending' AND dispatched_at IS NULL;
     `,
-    integritySha256: "2f9121064d106b16dc4c73fbbbb499a0440b68006f2bf9369f6538017ba53cf7",
+    integritySha256: "29025b8d4e08da07bee4f143a0a3253403cd807bfddcd7ffaf222fec65a3fee1",
   },
 ];
 

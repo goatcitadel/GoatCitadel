@@ -258,6 +258,44 @@ describe("MutationIdempotencyRepository", () => {
     assert.equal(dispatchedAt.notnull, 0);
   });
 
+  it("fences pre-fence pending claims fail-closed when v265 upgrades the ledger", () => {
+    const dbPath = tempDbs.path("goatcitadel-mutation-idempotency-legacy");
+    const before = tempDbs.open({ dbPath });
+    const insert = before.prepare(`
+      INSERT INTO mutation_idempotency
+        (method, route_path, idempotency_key, actor_scope, payload_hash, status, claim_token, claim_expires_at,
+         dispatched_at, created_at, updated_at)
+      VALUES ('POST', 'external_side_effect:legacy', @key, 'operator', 'legacy-hash', @status, @token, NULL,
+        NULL, '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:01.000Z')
+    `);
+    insert.run({ key: "legacy-pending", status: "pending", token: "legacy-token" });
+    insert.run({ key: "legacy-completed", status: "completed", token: null });
+    // Simulate an install whose ledger predates v265.
+    before.prepare("DELETE FROM schema_migrations WHERE version >= 265").run();
+    before.close();
+
+    const repo = new MutationIdempotencyRepository(tempDbs.open({ dbPath }));
+    const identity = {
+      method: "POST",
+      routePath: "external_side_effect:legacy",
+      idempotencyKey: "legacy-pending",
+      actorScope: "operator",
+    };
+    // A pre-fence holder may have dispatched without a marker, so it counts as sent.
+    assert.equal(repo.get(identity)?.dispatchedAt, "2026-10-01T00:00:01.000Z");
+    assert.equal(repo.get({ ...identity, idempotencyKey: "legacy-completed" })?.dispatchedAt, undefined);
+
+    const later = repo.claim({
+      ...identity,
+      payloadHash: "legacy-hash",
+      leaseDurationMs: 1_000,
+      now: "2026-10-16T00:00:00.000Z",
+    });
+    assert.equal(later.outcome, "unknown_after_send");
+    assert.equal(repo.get(identity)?.status, "unknown_after_send");
+    assert.equal(repo.markCompleted({ ...identity, claimToken: "legacy-token" }), false);
+  });
+
   it("refuses redispatch of a stale claim that crossed the dispatch boundary", () => {
     const repo = createRepo();
     const identity = {

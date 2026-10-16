@@ -1861,8 +1861,8 @@
           "version": 265,
           "name": "mutation_idempotency_dispatch_fence",
           "groupName": "canonical",
-          "definitionSha256": "bbd36de5532b53b704f2902b5b58dad94a64ed772cec6dc950427d4731b117a6",
-          "implementationSha256": "932ada13c776f9b8209ca0fdb88d032d39204e5c88250c720616d33dd15e9818"
+          "definitionSha256": "9a6a4b3a33ae78a5a9a8a64cd2d6b12f888ae7dbc1230abe004fc2169740588d",
+          "implementationSha256": "355ba41826018cdce01cbea6c01f6dac6d5f6a7ba23e22347dd62ed106facc47"
         }
       ]
     },
@@ -3146,9 +3146,9 @@
         {
           "version": 212,
           "name": "mutation_idempotency_dispatch_fence",
-          "definitionSha256": "9f21d034a886bc176d2fe0c280948282839f7755056eae3b2ab8117f9460f4ad",
-          "sqlPayloadSha256": "dec98f022a559e609678f3e5d2aa48ca0a6679697060058ea92ff240652f5a38",
-          "runtimeIntegritySha256": "2f9121064d106b16dc4c73fbbbb499a0440b68006f2bf9369f6538017ba53cf7"
+          "definitionSha256": "925adb77c7cbdb1b5ffbbfb26746dda151f7126280da7ac0754a29d4365b6377",
+          "sqlPayloadSha256": "f3c67dca4f585607e1a70cce1c063d59263dc4341e1862d55aa588dfe53e1294",
+          "runtimeIntegritySha256": "29025b8d4e08da07bee4f143a0a3253403cd807bfddcd7ffaf222fec65a3fee1"
         }
       ]
     }

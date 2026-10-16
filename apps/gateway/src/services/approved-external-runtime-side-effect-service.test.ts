@@ -334,6 +334,70 @@ describe("approved external runtime side-effect boundary", () => {
     expect(storage.approvalEvents.listByApprovalId(approvalId)).toHaveLength(1);
   });
 
+  it("takes over an unleased claim only while its durable ledger proves it never crossed the boundary", async () => {
+    for (const ledger of ["claimed_not_sent", "external_call_started"] as const) {
+      const { storage, approvalId, request } = createHarness(`unleased-${ledger}`);
+      // Unleased seed: the shape a claim had before runs held the default lease.
+      const seeded = await claimIdempotentExternalSideEffect({
+        mutationStore: runtimeStorage(storage).mutationIdempotency,
+        sideEffectRunStore: runtimeStorage(storage).externalSideEffectRuns,
+        workspaceId: "workspace-1",
+        boundary: "approved_external_runtime",
+        catalogId: request.toolName,
+        actionId: approvalId,
+        actorScope: "workspace-1",
+        idempotencyKey: `approved-external-runtime:${approvalId}`,
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        payload: {
+          approvalId,
+          toolName: request.toolName,
+          args: request.args ?? {},
+          sessionId: request.sessionId,
+          taskId: request.taskId,
+          runId: request.runId ?? request.policyContext?.runId,
+        },
+      });
+      if (ledger === "external_call_started") {
+        storage.externalSideEffectRuns.markExternalCallStarted(seeded.sideEffectRunId!, undefined);
+        // A crashed holder: its ledger row is stale by database age.
+        storage.gatewaySql
+          .prepare("UPDATE external_side_effect_runs SET updated_at = ? WHERE run_id = ?")
+          .run("2020-01-01T00:00:00.000Z", seeded.sideEffectRunId!);
+      }
+      const execute = vi.fn(async (markExternalCallStarted: () => Promise<void>) => {
+        await markExternalCallStarted();
+        return {
+          outcome: "executed" as const,
+          policyReason: "approved plugin mutation executed after takeover",
+          auditEventId: `audit-unleased-${ledger}`,
+          result: { providerMutationId: `mutation-unleased-${ledger}` },
+        };
+      });
+
+      const result = await executeApprovedExternalRuntimeSideEffect({
+        storage: runtimeStorage(storage),
+        approvalId,
+        request,
+        execute,
+      });
+
+      if (ledger === "claimed_not_sent") {
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject({ outcome: "executed", auditEventId: "audit-unleased-claimed_not_sent" });
+        expect(storage.externalSideEffectRuns.get(seeded.sideEffectRunId!)).toMatchObject({ status: "completed" });
+      } else {
+        expect(execute).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          outcome: "blocked",
+          result: { manualReconciliationRequired: true, resumeState: "manual_review_unknown_external_outcome" },
+        });
+        expect(storage.externalSideEffectRuns.get(seeded.sideEffectRunId!)).toMatchObject({
+          status: "unknown_external_outcome",
+        });
+      }
+    }
+  });
+
   it("does not let a fast host clock terminalize a fresh claimed-not-sent owner", async () => {
     const { storage, approvalId, request } = createHarness("fast-clock-fresh-claim");
     const payload = {

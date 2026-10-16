@@ -11,7 +11,7 @@ import { MutationIdempotencyRepository } from "./mutation-idempotency-repo.js";
 const connectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
 
 test(
-  "real PostgreSQL upgraded installs gain the mutation idempotency dispatch fence without losing pending claims",
+  "real PostgreSQL upgraded installs gain the mutation idempotency dispatch fence and fence legacy pending claims",
   {
     skip: connectionString ? false : "Set GOATCITADEL_TEST_POSTGRES_URL to a disposable PostgreSQL instance.",
   },
@@ -35,7 +35,9 @@ test(
         `INSERT INTO ${schema}.mutation_idempotency
            (method, route_path, idempotency_key, actor_scope, payload_hash, status, claim_token, claim_expires_at, created_at, updated_at)
          VALUES ('POST', 'external_side_effect:legacy', 'legacy-pending', 'operator:upgrade', 'legacy-hash', 'pending',
-           'legacy-token', '2026-10-16T00:00:01.000Z', '2026-10-16T00:00:00.000Z', '2026-10-16T00:00:00.000Z')`,
+           'legacy-token', '2026-10-16T00:00:01.000Z', '2026-10-16T00:00:00.000Z', '2026-10-16T00:00:00.000Z'),
+           ('POST', 'external_side_effect:legacy', 'legacy-completed', 'operator:upgrade', 'legacy-hash', 'completed',
+           NULL, NULL, '2026-10-16T00:00:00.000Z', '2026-10-16T00:00:00.000Z')`,
       );
 
       // The full registry (not a canonical prefix) runs the schema-shape gate.
@@ -65,16 +67,18 @@ test(
       const legacy = repo.get(identity);
       assert.equal(legacy?.status, "pending");
       assert.equal(legacy?.claimToken, "legacy-token");
-      assert.equal(legacy?.dispatchedAt, undefined);
+      // A pre-fence holder may have dispatched without a marker: fenced fail-closed.
+      assert.equal(legacy?.dispatchedAt, "2026-10-16T00:00:00.000Z");
+      assert.equal(repo.get({ ...identity, idempotencyKey: "legacy-completed" })?.dispatchedAt, undefined);
 
-      // An unmarked legacy claim keeps today's stale-takeover semantics.
-      const takeover = repo.claim({
+      const later = repo.claim({
         ...identity,
         payloadHash: "legacy-hash",
         leaseDurationMs: 1_000,
         now: "2026-10-16T00:00:05.000Z",
       });
-      assert.equal(takeover.outcome === "claimed" ? takeover.claimKind : undefined, "retry_after_stale_claim");
+      assert.equal(later.outcome, "unknown_after_send");
+      assert.equal(repo.get(identity)?.status, "unknown_after_send");
       assert.equal(repo.markCompleted({ ...identity, claimToken: "legacy-token" }), false);
     } finally {
       db?.close();

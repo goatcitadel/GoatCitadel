@@ -10,10 +10,12 @@ import type {
   OperatorActionReversibility,
   WardEffect,
 } from "@goatcitadel/contracts";
+import { logger } from "@goatcitadel/gateway-core";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { wardRequiresDryRun } from "./dry-run-commit-service.js";
 
+const log = logger.child("external-side-effect-runner");
 const EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY = "goatcitadel:external-side-effect-digest:v1";
 const EXTERNAL_SIDE_EFFECT_DESTINATION_DIGEST_DOMAIN_KEY = "goatcitadel:external-side-effect-destination-digest:v1";
 
@@ -81,6 +83,10 @@ type MutationIdempotencyStore = Pick<AsyncStorage["mutationIdempotency"], "claim
  * as long as the mutation store can record the dispatch marker. Takeover may
  * only seize a claim that never crossed the dispatch boundary, so an expired
  * lease can no longer leave a crashed pre-boundary claim `in_progress` forever.
+ *
+ * Hazard: takeover trusts the marker. A caller that dispatches before calling
+ * `markExternalCallStarted()` leaves an unmarked claim that a later run would
+ * take over and send again; such a caller must set `disableDefaultClaimLease`.
  */
 export const DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS = 15 * 60 * 1000;
 
@@ -251,6 +257,12 @@ export interface ExternalSideEffectClaimInput {
    * bounded interval it uses to classify a pre-boundary run as stale.
    */
   claimLeaseDurationMs?: number;
+  /**
+   * Opts out of the default takeover lease (an explicit `claimLeaseDurationMs`
+   * still wins). Required for callers that cannot mark their dispatch boundary
+   * before the provider call: their unmarked claim must never be taken over.
+   */
+  disableDefaultClaimLease?: boolean;
   /**
    * True only when the provider itself deduplicates on this idempotency key,
    * which makes redispatching a stale claim that already crossed the boundary safe.
@@ -888,6 +900,9 @@ function resolveExternalSideEffectClaimLeaseMs(input: ExternalSideEffectClaimInp
   if (input.claimLeaseDurationMs !== undefined) {
     return input.claimLeaseDurationMs;
   }
+  if (input.disableDefaultClaimLease === true) {
+    return undefined;
+  }
   // Takeover is safe by default only where the dispatch marker can fence it.
   return input.mutationStore?.markDispatched ? DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS : undefined;
 }
@@ -1409,9 +1424,14 @@ async function safeMarkIdempotentExternalSideEffectUnknownAfterSend(
       claimToken: claim.claimToken,
       updatedAt,
     });
-  } catch {
+  } catch (error) {
     // Best effort: the run ledger already records the unknown outcome, and a
     // dispatched pending row settles as `unknown_after_send` on takeover.
+    log.warn("external side-effect unknown_after_send settlement failed", {
+      routePath: claim.routePath,
+      sideEffectRunId: claim.sideEffectRunId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 

@@ -1129,7 +1129,7 @@ test("current registries and checked-in manifest cover every migration exactly",
   );
   assert.equal(
     postgres.migrations.find((record) => record.version === 212)?.runtimeIntegritySha256,
-    "2f9121064d106b16dc4c73fbbbb499a0440b68006f2bf9369f6538017ba53cf7",
+    "29025b8d4e08da07bee4f143a0a3253403cd807bfddcd7ffaf222fec65a3fee1",
   );
   assert.equal(postgres.migrations.find((record) => record.version === 63)?.name, "citadel_tables_backfill");
   assert.equal(

@@ -10,6 +10,7 @@ import {
 } from "@goatcitadel/storage";
 import {
   claimIdempotentExternalSideEffect,
+  DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS,
   deriveExternalSideEffectReversibility,
   type ExternalSideEffectExecutionContext,
   type ExternalSideEffectRunStore,
@@ -2804,6 +2805,49 @@ describe("external-side-effect-runner-service", () => {
           status: "blocked",
           blockedReason: "external_side_effect_unknown_after_send",
         });
+        expect(provider).toHaveBeenCalledTimes(1);
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("never takes over an opted-out claim whose holder sent before marking and then crashed", async () => {
+      const storage = openFenceStorage();
+      try {
+        const identity = await readFenceIdentity();
+        const provider = vi.fn();
+        let sent!: () => void;
+        const providerSent = new Promise<void>((resolve) => {
+          sent = resolve;
+        });
+        const sendThenMark = async (claim: ExternalSideEffectExecutionContext) => {
+          // Comms shape: the provider call happens before the boundary marker.
+          provider();
+          sent();
+          // Simulated crash: the holder never returns to mark its boundary.
+          await new Promise<never>(() => undefined);
+          await claim.markExternalCallStarted();
+          return { id: "unreachable" };
+        };
+
+        void runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          requireDurableBoundaryRecord: false,
+          disableDefaultClaimLease: true,
+          execute: sendThenMark,
+        });
+        await providerSent;
+        expect((await storage.mutationIdempotency.get(identity))?.claimExpiresAt).toBeUndefined();
+
+        const retry = await runIdempotentExternalSideEffect({
+          ...fenceJob(storage),
+          requireDurableBoundaryRecord: false,
+          disableDefaultClaimLease: true,
+          checkedAt: new Date(Date.now() + DEFAULT_EXTERNAL_SIDE_EFFECT_CLAIM_LEASE_MS + 60_000).toISOString(),
+          execute: sendThenMark,
+        });
+
+        expect(retry).toMatchObject({ status: "blocked", blockedReason: "external_side_effect_in_progress" });
         expect(provider).toHaveBeenCalledTimes(1);
       } finally {
         await storage.close();

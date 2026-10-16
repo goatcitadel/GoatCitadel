@@ -431,6 +431,8 @@ export async function commsGmailSend(
   const runResult = await runIdempotentExternalSideEffect<Record<string, unknown>>({
     mutationStore: host.mutationStore,
     sideEffectRunStore: host.sideEffectRunStore,
+    // Marks its boundary after the provider call; no takeover lease until the marker is threaded before dispatch.
+    disableDefaultClaimLease: true,
     boundary: COMMS_GMAIL_SEND_BOUNDARY,
     catalogId: connection?.catalogId ?? "automation.gmail",
     connectionId: input.connectionId,
