@@ -2308,6 +2308,14 @@
       "maxDependencyMemberAccesses": 2,
       "reason": "Amazon Bedrock ConverseStream event-stream decoding and chunk adaptation kept in its own helper beside the Bedrock adapter so the adapter stays focused; at most the tracked JSON dispatch and request target reach the adapter host.",
       "evidence": "Added with the Bedrock adapter for the follow-up ConverseStream task in the same branch; focused stream tests and Gateway typecheck are required before acceptance."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/model-comparison-execution-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 6,
+      "reason": "WS4 gap-closure program (operator-approved 2026-10-15): live blind model comparison execution split out of the baseline-era comparison owner.",
+      "evidence": "apps/gateway/src/services/model-comparison-execution-service.test.ts covers concurrency 2, status transitions, partial failure, restart of missing/errored results, conflict rejection, cancel abort, stale running recovery, empty/approval-paused responses and background-error reporting; routes/model-comparisons.test.ts covers run/cancel status mapping; Gateway typecheck passes."
     }
   ]
 }

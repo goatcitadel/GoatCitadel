@@ -16,6 +16,7 @@ import { MobileApprovalKeyService } from "./mobile-approval-key-service.js";
 import { createMobileRoutePort } from "./mobile-route-service.js";
 import { createConfiguredMobilePushProvider } from "./mobile-push-provider.js";
 import { MobilePushService } from "./mobile-push-service.js";
+import { ModelComparisonExecutionService } from "./model-comparison-execution-service.js";
 import { ModelComparisonService } from "./model-comparison-service.js";
 import { createNpuRoutePort } from "./npu-route-service.js";
 import { ResearchSearchBrokerService } from "./research-search-broker-service.js";
@@ -83,6 +84,7 @@ export function composeRuntimeAdminRouteDependencies(
   | "mesh"
   | "mobile"
   | "modelComparisons"
+  | "modelComparisonRuns"
   | "npu"
   | "onboarding"
   | "orchestration"
@@ -151,6 +153,7 @@ export function composeRuntimeAdminRouteDependencies(
       Boolean(await settingsAuthService.getActiveAuthDeviceGrantById(settingsAuthDeps, grantId)),
   });
   const warnedOutsideRootPathFingerprints = new Set<string>();
+  const modelComparisonRuns = new ModelComparisonRunRepository(gateway.storage.gatewaySql);
 
   return {
     authAdmin: {
@@ -374,9 +377,12 @@ export function composeRuntimeAdminRouteDependencies(
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     }),
     modelComparisons: new ModelComparisonService({
-      repository: new ModelComparisonRunRepository(gateway.storage.gatewaySql),
+      repository: modelComparisonRuns,
       listPromptPackTests: (packId, limit) => gateway.promptPackService.listPromptPackTests(packId, limit),
       listPromptPackRunsByTest: (testId, limit) => gateway.storage.promptPackRuns.listByTest(testId, limit),
+    }),
+    modelComparisonRuns: new ModelComparisonExecutionService({
+      repository: modelComparisonRuns,
       runPromptPackTest: (packId, testId, input) => gateway.promptPackService.runPromptPackTest(packId, testId, input),
       onBackgroundError: (comparisonId, error) =>
         modelComparisonLog.error("Model comparison could not record its failed status", {

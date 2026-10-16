@@ -6,8 +6,6 @@ export interface ModelComparisonRoutePort {
   listComparisons: ModelComparisonService["listComparisons"];
   getComparison: ModelComparisonService["getComparison"];
   addJudgment: ModelComparisonService["addJudgment"];
-  startComparison: ModelComparisonService["startComparison"];
-  cancelComparison: ModelComparisonService["cancelComparison"];
 }
 
 export class ModelComparisonRouteService {
@@ -27,13 +25,5 @@ export class ModelComparisonRouteService {
 
   public judgeModelComparison(comparisonId: string, input: ModelComparisonJudgeRequest) {
     return this.modelComparisons.addJudgment(comparisonId, input);
-  }
-
-  public startModelComparison(comparisonId: string) {
-    return this.modelComparisons.startComparison(comparisonId);
-  }
-
-  public cancelModelComparison(comparisonId: string) {
-    return this.modelComparisons.cancelComparison(comparisonId);
   }
 }
