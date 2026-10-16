@@ -281,7 +281,6 @@ it("requires exact confirmation nonce/revision and independently read terminal p
   assert.throws(() => assertComposerConfirmation({ ...value, owner: plan }));
 });
 
-
 it("observes pending wait rejection immediately while preserving its exact awaited error", async () => {
   const error = new Error("Synthetic response wait failed");
   const pending = observePendingWait(Promise.reject(error));
@@ -294,11 +293,22 @@ it("allows an action failure to reach cleanup while its outstanding wait rejects
   let reject;
   const actionError = new Error("Synthetic selection failed");
   let cleaned = false;
-  await assert.rejects(async () => {
-    observePendingWait(new Promise((_, fail) => { reject = fail; }));
-    try { throw actionError; }
-    finally { cleaned = true; reject(new Error("Page closed during cleanup")); }
-  }, (cause) => cause === actionError);
+  await assert.rejects(
+    async () => {
+      observePendingWait(
+        new Promise((_, fail) => {
+          reject = fail;
+        }),
+      );
+      try {
+        throw actionError;
+      } finally {
+        cleaned = true;
+        reject(new Error("Page closed during cleanup"));
+      }
+    },
+    (cause) => cause === actionError,
+  );
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(cleaned, true);
 });

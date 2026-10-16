@@ -23,7 +23,12 @@ export function MobileStatusStrip({
         <span aria-hidden="true" className={`size-2 rounded-full ${HEALTH_TONE_BG[health.tone]}`} />
         <span className="sr-only">{health.label}</span>
       </span>
-      <span title={stream.label} aria-label={stream.ariaLabel} data-stream-state={streamState} className="inline-flex items-center">
+      <span
+        title={stream.label}
+        aria-label={stream.ariaLabel}
+        data-stream-state={streamState}
+        className="inline-flex items-center"
+      >
         <span aria-hidden="true" className={`size-2 rounded-full ${stream.tone}`} />
         <span className="sr-only">{stream.label}</span>
       </span>

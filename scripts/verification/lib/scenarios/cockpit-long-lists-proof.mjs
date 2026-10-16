@@ -349,14 +349,12 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
           }
           async function verifyWindow(list, expectedKeys) {
             await list.locator("li[aria-setsize]").first().waitFor();
-            const rows = await list
-              .locator("li[aria-setsize]")
-              .evaluateAll((items) =>
-                items.map((item) => ({
-                  total: Number(item.getAttribute("aria-setsize")),
-                  key: item.querySelector("[data-record-key]")?.getAttribute("data-record-key"),
-                })),
-              );
+            const rows = await list.locator("li[aria-setsize]").evaluateAll((items) =>
+              items.map((item) => ({
+                total: Number(item.getAttribute("aria-setsize")),
+                key: item.querySelector("[data-record-key]")?.getAttribute("data-record-key"),
+              })),
+            );
             assertWindowedRecords({
               total: rows[0].total,
               rendered: rows.length,

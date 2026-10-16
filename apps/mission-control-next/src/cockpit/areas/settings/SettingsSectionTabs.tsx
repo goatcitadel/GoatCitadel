@@ -64,19 +64,21 @@ export function SettingsSectionTabs({
       className="min-w-0"
     >
       <TabsList aria-label={`${page.label} sections`} className="mt-3 max-w-full overflow-x-auto pb-px">
-        {page.entries.filter((entry) => entry.discoverable).map((entry) => (
-          <TabsTrigger
-            key={entry.section}
-            value={entry.section}
-            className="min-h-11 shrink-0 whitespace-nowrap"
-            onPointerEnter={() => preloadSettingsSection(entry.section)}
-            onFocus={() => preloadSettingsSection(entry.section)}
-            onPointerDown={() => preloadSettingsSection(entry.section)}
-          >
-            {entry.tabLabel ?? entry.label}
-            {entry.releaseStatus === "experimental" ? " · Experimental" : ""}
-          </TabsTrigger>
-        ))}
+        {page.entries
+          .filter((entry) => entry.discoverable)
+          .map((entry) => (
+            <TabsTrigger
+              key={entry.section}
+              value={entry.section}
+              className="min-h-11 shrink-0 whitespace-nowrap"
+              onPointerEnter={() => preloadSettingsSection(entry.section)}
+              onFocus={() => preloadSettingsSection(entry.section)}
+              onPointerDown={() => preloadSettingsSection(entry.section)}
+            >
+              {entry.tabLabel ?? entry.label}
+              {entry.releaseStatus === "experimental" ? " · Experimental" : ""}
+            </TabsTrigger>
+          ))}
       </TabsList>
       {page.entries.map((entry) => (
         <TabsContent
@@ -95,9 +97,11 @@ export function SettingsSectionTabs({
                 </p>
               }
             >
-              {entry.releaseStatus !== "ship" ? <p role="status" className="py-2 text-sm text-fg-secondary">
-                {describeReleaseSurfaceStatus(entry.releaseStatus)}. {entry.releaseNote}
-              </p> : null}
+              {entry.releaseStatus !== "ship" ? (
+                <p role="status" className="py-2 text-sm text-fg-secondary">
+                  {describeReleaseSurfaceStatus(entry.releaseStatus)}. {entry.releaseNote}
+                </p>
+              ) : null}
               {children(entry)}
             </Suspense>
           ) : null}

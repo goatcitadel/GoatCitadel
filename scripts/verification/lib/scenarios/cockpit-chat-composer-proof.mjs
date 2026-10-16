@@ -99,11 +99,13 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
             }
           });
           const openSession = async (id) => {
-            const threadReady = observePendingWait(page.waitForResponse(
-              (response) =>
-                response.request().method() === "GET" &&
-                new URL(response.url()).pathname === `/api/v1/chat/sessions/${encodeURIComponent(id)}/thread`,
-            ));
+            const threadReady = observePendingWait(
+              page.waitForResponse(
+                (response) =>
+                  response.request().method() === "GET" &&
+                  new URL(response.url()).pathname === `/api/v1/chat/sessions/${encodeURIComponent(id)}/thread`,
+              ),
+            );
             await page.goto(
               buildVerificationUiUrl(stack.uiUrl, `/chat?sessionId=${encodeURIComponent(id)}&shell=cockpit`),
               { waitUntil: "domcontentloaded" },
@@ -114,12 +116,14 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           };
           const switchSession = async (target) => {
             const documentStarted = await page.evaluate(() => performance.timeOrigin);
-            const threadReady = observePendingWait(page.waitForResponse(
-              (response) =>
-                response.request().method() === "GET" &&
-                new URL(response.url()).pathname ===
-                  `/api/v1/chat/sessions/${encodeURIComponent(target.sessionId)}/thread`,
-            ));
+            const threadReady = observePendingWait(
+              page.waitForResponse(
+                (response) =>
+                  response.request().method() === "GET" &&
+                  new URL(response.url()).pathname ===
+                    `/api/v1/chat/sessions/${encodeURIComponent(target.sessionId)}/thread`,
+              ),
+            );
             await selectComposerConversation(page, variant, target);
             const response = await threadReady;
             assert.equal(response.ok(), true, "Conversation owner could not hydrate the selected scope");
@@ -166,12 +170,14 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           const removed = { fileName: `remove-${token}.txt`, content: `Removed synthetic attachment ${token}.` };
           const uploads = [];
           for (const item of [retained, removed]) {
-            const responsePromise = observePendingWait(page.waitForResponse(
-              (response) =>
-                new URL(response.url()).pathname === "/api/v1/chat/attachments" &&
-                response.request().method() === "POST" &&
-                response.request().postDataJSON()?.fileName === item.fileName,
-            ));
+            const responsePromise = observePendingWait(
+              page.waitForResponse(
+                (response) =>
+                  new URL(response.url()).pathname === "/api/v1/chat/attachments" &&
+                  response.request().method() === "POST" &&
+                  response.request().postDataJSON()?.fileName === item.fileName,
+              ),
+            );
             const picker = observePendingWait(page.waitForEvent("filechooser"));
             await page.getByRole("button", { name: "Attach files", exact: true }).click();
             await (
@@ -200,12 +206,14 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           assert.equal(await page.getByRole("button", { name: `Remove ${removed.fileName}`, exact: true }).count(), 0);
 
           stage = "at keyboard file attachment";
-          const contextUpload = observePendingWait(page.waitForResponse(
-            (response) =>
-              new URL(response.url()).pathname === "/api/v1/chat/attachments" &&
-              response.request().method() === "POST" &&
-              response.request().postDataJSON()?.fileName === fileName,
-          ));
+          const contextUpload = observePendingWait(
+            page.waitForResponse(
+              (response) =>
+                new URL(response.url()).pathname === "/api/v1/chat/attachments" &&
+                response.request().method() === "POST" &&
+                response.request().postDataJSON()?.fileName === fileName,
+            ),
+          );
           await draft.fill(`@${fileName}`);
           await chooseKeyboardSuggestion(page, draft, new RegExp(`^${escapeRegex(fileName)}(?:\\s|$)`, "u"));
           const contextResponse = await contextUpload;
@@ -503,12 +511,14 @@ async function changePreferences({
   select,
   checkCancel,
 }) {
-  const created = observePendingWait(page.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname === "/api/v1/change-plans" &&
-      response.request().method() === "POST" &&
-      response.request().postDataJSON()?.request?.kind === "session_model",
-  ));
+  const created = observePendingWait(
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/v1/change-plans" &&
+        response.request().method() === "POST" &&
+        response.request().postDataJSON()?.request?.kind === "session_model",
+    ),
+  );
   await select();
   const response = await created;
   assert.equal(response.ok(), true, `Session model review failed: HTTP ${response.status()} ${await response.text()}`);
@@ -526,9 +536,11 @@ async function changePreferences({
     await review.click();
   }
   const confirmationPath = `/api/v1/change-plans/${encodeURIComponent(plan.planId)}/confirmations`;
-  const confirmed = observePendingWait(page.waitForResponse(
-    (response) => response.request().method() === "POST" && new URL(response.url()).pathname === confirmationPath,
-  ));
+  const confirmed = observePendingWait(
+    page.waitForResponse(
+      (response) => response.request().method() === "POST" && new URL(response.url()).pathname === confirmationPath,
+    ),
+  );
   await dialog.getByRole("button", { name: "Apply exact change", exact: true }).click();
   const confirmedResponse = await confirmed;
   assert.equal(confirmedResponse.ok(), true, "The exact model confirmation failed.");
@@ -568,7 +580,6 @@ async function waitUntil(page, predicate, message, attempts = 80) {
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
-
 
 /** Observe rejection before starting an action. Awaiters still receive the original
  * failure, while a failed action can reach its reporting/finally cleanup safely. */
