@@ -32,10 +32,21 @@ afterEach(() => {
 describe("cockpit access gate", () => {
   it("shows Gateway setup diagnosis and retries it natively", async () => {
     const onRetry = vi.fn();
-    await act(async () => root.render(<CockpitAccessGate access={{ status: "misconfigured", message: "Configured auth owner is unavailable" } as never} busy={false} onRetry={onRetry} />));
+    await act(async () =>
+      root.render(
+        <CockpitAccessGate
+          access={{ status: "misconfigured", message: "Configured auth owner is unavailable" } as never}
+          busy={false}
+          onRetry={onRetry}
+        />,
+      ),
+    );
     expect(container.textContent).toContain("Configured auth owner is unavailable");
-    await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Try again")!.click());
-    expect(onRetry).toHaveBeenCalledOnce(); expect(shell.switchShell).not.toHaveBeenCalled();
+    await act(async () =>
+      [...container.querySelectorAll("button")].find((button) => button.textContent === "Try again")!.click(),
+    );
+    expect(onRetry).toHaveBeenCalledOnce();
+    expect(shell.switchShell).not.toHaveBeenCalled();
   });
   it("tells the operator how to start an unreachable Gateway", async () => {
     const onRetry = vi.fn();
@@ -73,8 +84,20 @@ describe("cockpit access gate", () => {
 });
 
 it("restores authentication through the shared native form without requiring a Classic handoff", async () => {
-  await act(async () => root.render(<CockpitAccessGate access={{status:"needs-auth",authMode:"token",message:"Authentication required"} as never} busy={false} onRetry={vi.fn()} />));
-  await act(async () => { await vi.dynamicImportSettled(); });
-  expect(container.querySelector('input#gateway-access-token')).not.toBeNull();
-  expect([...container.querySelectorAll("button")].some(button=>button.textContent?.trim()==="Open classic view")).toBe(false);
+  await act(async () =>
+    root.render(
+      <CockpitAccessGate
+        access={{ status: "needs-auth", authMode: "token", message: "Authentication required" } as never}
+        busy={false}
+        onRetry={vi.fn()}
+      />,
+    ),
+  );
+  await act(async () => {
+    await vi.dynamicImportSettled();
+  });
+  expect(container.querySelector("input#gateway-access-token")).not.toBeNull();
+  expect(
+    [...container.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Open classic view"),
+  ).toBe(false);
 });

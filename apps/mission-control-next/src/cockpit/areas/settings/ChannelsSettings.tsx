@@ -1,5 +1,8 @@
 import { useState } from "react";
-import { createChannelPlanReviewHandoff, channelPlanReviewHref } from "@goatcitadel/mission-control-shared/api/channel-plan-handoff";
+import {
+  createChannelPlanReviewHandoff,
+  channelPlanReviewHref,
+} from "@goatcitadel/mission-control-shared/api/channel-plan-handoff";
 import { ChannelEntryControls } from "../../../features/native-routes/settings/channel-setup/ChannelEntryControls";
 import { useChannelReturnNavigation } from "../../../features/native-routes/settings/sections/use-channel-return-navigation";
 import { useChannelSettings } from "../../../features/native-routes/settings/sections/use-channel-settings";
@@ -14,7 +17,9 @@ import { channelInputClass } from "./ChannelWizardFields";
 
 export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
   const { navigate, search } = useCockpitRoute();
-  const owner = useChannelSettings(workspaceId, (plan) => navigate(channelPlanReviewHref(createChannelPlanReviewHandoff(plan))));
+  const owner = useChannelSettings(workspaceId, (plan) =>
+    navigate(channelPlanReviewHref(createChannelPlanReviewHandoff(plan))),
+  );
   useChannelReturnNavigation(owner, search);
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(20);
@@ -103,7 +108,6 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
             >
               Start guided setup
             </Button>
-
           </div>
         </section>
       ) : owner.panel === "editor" ? (
@@ -281,7 +285,11 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                     <Button onClick={() => owner.draftSelectionGuard.requestTransition(item.draftId)}>
                       Edit {item.label || item.catalogId}
                     </Button>
-                    <ChannelLifecycleControls workspaceId={workspaceId} selection={{ draft: item }} reload={owner.reload} />
+                    <ChannelLifecycleControls
+                      workspaceId={workspaceId}
+                      selection={{ draft: item }}
+                      reload={owner.reload}
+                    />
                   </li>
                 ))}
             </ul>
@@ -298,8 +306,18 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
               <Button disabled={disabled} onClick={() => void owner.editConnection()}>
                 Edit channel setup
               </Button>
-              <ChannelOperations key={selectedConnection.connectionId} connection={selectedConnection} onUpdated={owner.reload} connectorDiagnosticsEnabled={data?.connectorDiagnosticsEnabled} />
-              <ChannelLifecycleControls key={`lifecycle:${selectedConnection.connectionId}`} workspaceId={workspaceId} selection={{ connection: selectedConnection }} reload={owner.reload} />
+              <ChannelOperations
+                key={selectedConnection.connectionId}
+                connection={selectedConnection}
+                onUpdated={owner.reload}
+                connectorDiagnosticsEnabled={data?.connectorDiagnosticsEnabled}
+              />
+              <ChannelLifecycleControls
+                key={`lifecycle:${selectedConnection.connectionId}`}
+                workspaceId={workspaceId}
+                selection={{ connection: selectedConnection }}
+                reload={owner.reload}
+              />
               <details className="text-sm">
                 <summary className="cursor-pointer">Connection identity</summary>
                 <p className="break-all">

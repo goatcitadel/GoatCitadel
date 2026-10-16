@@ -13,11 +13,22 @@ export function FirstRunAdvanced({ workspaceId }: { workspaceId: string }) {
   return (
     <section aria-label="Optional setup" className="grid gap-4 border-t border-line-subtle pt-4">
       <div>
-        <Button aria-expanded={demoOpen} aria-controls="first-run-sample"
-          onClick={() => leave.request(() => setDemoOpen(!demoOpen))}>Explore sample records</Button>
-        <p className="mt-2 text-xs text-fg-muted">Review the local demo before preparing records. Opening these controls changes no data.</p>
+        <Button
+          aria-expanded={demoOpen}
+          aria-controls="first-run-sample"
+          onClick={() => leave.request(() => setDemoOpen(!demoOpen))}
+        >
+          Explore sample records
+        </Button>
+        <p className="mt-2 text-xs text-fg-muted">
+          Review the local demo before preparing records. Opening these controls changes no data.
+        </p>
       </div>
-      {demoOpen ? <div id="first-run-sample"><FirstRunDemo workspaceId={workspaceId} /></div> : null}
+      {demoOpen ? (
+        <div id="first-run-sample">
+          <FirstRunDemo workspaceId={workspaceId} />
+        </div>
+      ) : null}
       <div>
         <Button
           aria-expanded={open}
@@ -35,7 +46,11 @@ export function FirstRunAdvanced({ workspaceId }: { workspaceId: string }) {
           <FirstRunDefaults workspaceId={workspaceId} />
         </div>
       ) : null}
-      <NativeOwnerLink href="/system/diagnostics" scope={workspaceId} className="text-sm font-medium text-accent hover:underline">
+      <NativeOwnerLink
+        href="/system/diagnostics"
+        scope={workspaceId}
+        className="text-sm font-medium text-accent hover:underline"
+      >
         Inspect setup and release verification in System diagnostics
       </NativeOwnerLink>
       <McpDraftLeave {...leave.dialogProps} />

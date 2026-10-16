@@ -276,7 +276,13 @@ describe("Inbox Chat question", () => {
 
   it("keeps the answer form available after the owner refuses an answer", async () => {
     api.answerChatUserInputPrompt.mockRejectedValueOnce(
-      new ApiRequestError("API error 400", { kind: "http", method: "POST", path: "/x", status: 400, body: { message: "Choose one of the offered options." } }),
+      new ApiRequestError("API error 400", {
+        kind: "http",
+        method: "POST",
+        path: "/x",
+        status: 400,
+        body: { message: "Choose one of the offered options." },
+      }),
     );
     await renderDetail();
     const radio = container.querySelector<HTMLInputElement>('input[type="radio"]');

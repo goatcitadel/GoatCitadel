@@ -5,10 +5,7 @@ import { requestJson, startVerificationStack, stopVerificationStack } from "../r
 import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 import { formatArtifactIssue, validateRequiredScenarioArtifacts } from "../scenario-artifact-evidence.mjs";
 import { runAccessibilitySmokeLane } from "./accessibility-smoke-lane.mjs";
-import {
-  DETERMINISTIC_LLM_KEY_ENV,
-  startDeterministicLlmStub,
-} from "./deterministic-llm-stub.mjs";
+import { DETERMINISTIC_LLM_KEY_ENV, startDeterministicLlmStub } from "./deterministic-llm-stub.mjs";
 import { runExternalSourcesBrowserFlow } from "./external-sources-browser-flow.mjs";
 import {
   GATEWAY_CHAT_FAULT_ARTIFACT_NAME,
@@ -761,7 +758,8 @@ async function runChatBrowserLeg(context, input) {
     // Completed transcript text alone does not prove that the streaming UI has
     // released the composer for the next task. Capture the settled control.
     await page.getByRole("button", { name: "Send", exact: true }).waitFor({
-      state: "visible", timeout: 30_000,
+      state: "visible",
+      timeout: 30_000,
     });
     const activeWorkspaceId = await page.evaluate(() => window.localStorage.getItem("goatcitadel.ui.workspace_id.v1"));
     if (activeWorkspaceId !== input.workspaceId) {

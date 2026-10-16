@@ -7,7 +7,11 @@ import {
   fetchIntegrationConnection,
   isApiRequestError,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { getGatewayCallerScope, subscribeGatewayAccessChange, subscribeGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  getGatewayCallerScope,
+  subscribeGatewayAccessChange,
+  subscribeGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { subscribeCockpitHistory } from "../../app/cockpit-history";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import {
@@ -47,9 +51,16 @@ export function ChannelLifecycleControls({
   const [review, setReview] = useState<{ action: "toggle" | "delete"; identity: string; epoch: number } | null>(null);
   const epoch = useRef(0);
   useEffect(() => {
-    const invalidate = () => { epoch.current += 1; setReview(null); };
-    const subscriptions = [subscribeGatewayAccessChange(invalidate), subscribeGatewayCallerScope(invalidate), subscribeCockpitHistory(invalidate)];
-    return () => subscriptions.forEach(unsubscribe => unsubscribe());
+    const invalidate = () => {
+      epoch.current += 1;
+      setReview(null);
+    };
+    const subscriptions = [
+      subscribeGatewayAccessChange(invalidate),
+      subscribeGatewayCallerScope(invalidate),
+      subscribeCockpitHistory(invalidate),
+    ];
+    return () => subscriptions.forEach((unsubscribe) => unsubscribe());
   }, []);
   const [notice, setNotice] = useState("");
   const busy = useRef(false);
@@ -158,7 +169,9 @@ export function ChannelLifecycleControls({
       }
     } catch {
       if (current()) {
-        setNotice("The reviewed change could not be confirmed. Refresh to inspect the saved record. Any uncertain-action lock remains in force.");
+        setNotice(
+          "The reviewed change could not be confirmed. Refresh to inspect the saved record. Any uncertain-action lock remains in force.",
+        );
         setReview(null);
       }
     } finally {
@@ -173,7 +186,11 @@ export function ChannelLifecycleControls({
             Review {connection.enabled ? "disable" : "enable"} channel
           </Button>
         ) : null}
-        <Button variant="danger" disabled={locked} onClick={() => setReview({ action: "delete", identity, epoch: epoch.current })}>
+        <Button
+          variant="danger"
+          disabled={locked}
+          onClick={() => setReview({ action: "delete", identity, epoch: epoch.current })}
+        >
           {draft ? "Delete saved draft" : "Remove channel connection"}
         </Button>
       </div>

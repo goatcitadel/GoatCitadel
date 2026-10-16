@@ -6,9 +6,11 @@ const texts = (source) => findClassicHandoffCopy("item.tsx", source).map((findin
 
 describe("cockpit copy guard", () => {
   it("flags handoff phrasing that points at the classic shell as 'current'", () => {
-    assert.deepEqual(texts('return "A decision is pending. Resolve it in current Chat.";'), ["Resolve it in current Chat"]);
+    assert.deepEqual(texts('return "A decision is pending. Resolve it in current Chat.";'), [
+      "Resolve it in current Chat",
+    ]);
     assert.deepEqual(texts('<ClassicOwnerLink label="current Ops Kanban" />'), ["current Ops Kanban"]);
-    assert.deepEqual(texts('<p>Connection setup is available in current Settings.</p>'), ["current Settings"]);
+    assert.deepEqual(texts("<p>Connection setup is available in current Settings.</p>"), ["current Settings"]);
     assert.deepEqual(texts('<ClassicOwnerLink label="Review in current controls" />'), ["current controls"]);
   });
 

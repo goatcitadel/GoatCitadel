@@ -247,7 +247,11 @@ export function useNotificationRoutingActions(s: NotificationRoutingState) {
               )
             )
               throw new Error("The test delivery record could not be independently confirmed.");
-            retainNotificationTestEvidence(s.key, after.items.find((item) => item.deliveryId === delivery.deliveryId)!, true);
+            retainNotificationTestEvidence(
+              s.key,
+              after.items.find((item) => item.deliveryId === delivery.deliveryId)!,
+              true,
+            );
           },
         );
         message =

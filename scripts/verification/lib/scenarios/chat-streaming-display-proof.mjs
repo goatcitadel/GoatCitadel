@@ -132,7 +132,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
           const composer = page.getByRole("combobox", { name: "Message", exact: true });
           const send = page.getByRole("button", { name: "Send", exact: true });
           const messages = page.getByLabel("Messages", { exact: true });
-          const scroller = messages.locator('[data-transcript-scroller]');
+          const scroller = messages.locator("[data-transcript-scroller]");
           const returnToLatest = async () => {
             const jump = page.getByRole("button", { name: "Jump to latest", exact: true });
             if (await jump.count()) await jump.click();

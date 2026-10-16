@@ -71,7 +71,7 @@ export function useGatewayAccess(options?: { batchStartupReads?: boolean }): Use
       const next = await preflightGatewayAccess({ bootstrap });
       if (generation !== requestGeneration.current || revision !== getGatewayAccessRevision()) return;
       if (next.status === "ready") {
-        const caller = next.onboardingState?.currentAccess ?? await fetchGatewayCurrentAccess();
+        const caller = next.onboardingState?.currentAccess ?? (await fetchGatewayCurrentAccess());
         if (generation !== requestGeneration.current || revision !== getGatewayAccessRevision()) return;
         const scope = JSON.stringify([
           getGatewayApiBaseUrl(),
@@ -82,7 +82,13 @@ export function useGatewayAccess(options?: { batchStartupReads?: boolean }): Use
           caller.grantId,
         ]);
         setGatewayCallerScope(scope);
-        if (batchStartupReads && caller.operatorAccess) beginStartupReadWindow({ installation: getGatewayApiBaseUrl(), accessRevision: revision, caller: scope, callerRevision: getGatewayCallerScopeRevision() });
+        if (batchStartupReads && caller.operatorAccess)
+          beginStartupReadWindow({
+            installation: getGatewayApiBaseUrl(),
+            accessRevision: revision,
+            caller: scope,
+            callerRevision: getGatewayCallerScopeRevision(),
+          });
         setCallerScope(scope);
       }
       setGatewayAccess(next);

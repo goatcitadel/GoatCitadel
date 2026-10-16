@@ -125,7 +125,13 @@ describe("native advanced first-run disclosure", () => {
     expect(api.bootstrapDemo).not.toHaveBeenCalled();
     expect(api.bootstrapOnboarding).not.toHaveBeenCalled();
     expect(api.fetchAgenticRuns).not.toHaveBeenCalled();
-    await act(async () => root.render(<QueryClientProvider client={client}><FirstRunVerification /></QueryClientProvider>));
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <FirstRunVerification />
+        </QueryClientProvider>,
+      ),
+    );
     await vi.waitFor(() => expect(container.textContent).toContain("Recent run evidence is unavailable"));
     expect(container.textContent).toContain("Recent run evidence is unavailable");
     expect(container.textContent).toContain("Evidence envelopes are unavailable");

@@ -127,7 +127,9 @@ export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSe
             disabled={s.saving}
             value={creating ? s.createConfig : s.detailForm.configText}
           />
-          <span className="text-xs text-fg-muted">Inspection only. Use the supported typed fields; credential input belongs to its secure setup owner.</span>
+          <span className="text-xs text-fg-muted">
+            Inspection only. Use the supported typed fields; credential input belongs to its secure setup owner.
+          </span>
         </label>
       ) : (
         <IntegrationFormFields

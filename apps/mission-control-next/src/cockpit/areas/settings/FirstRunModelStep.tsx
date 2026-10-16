@@ -41,7 +41,8 @@ export function FirstRunModelStep({
       </p>
       <p className="text-sm text-fg-secondary">
         Provider and model:{" "}
-        {providerReady ? "Configured for a first send. Send a Chat message after setup to check the first answer."
+        {providerReady
+          ? "Configured for a first send. Send a Chat message after setup to check the first answer."
           : "Setup needed. Connect a provider and refresh checks before continuing."}
       </p>
       <p className="text-sm text-fg-secondary">
@@ -57,14 +58,23 @@ export function FirstRunModelStep({
         </Button>
         {choice ? <Button onClick={() => leave.request(() => setChoice(null))}>Close model controls</Button> : null}
       </div>
-      {!choice ? <div className="space-y-2">
-        <Button variant="primary" aria-describedby="first-run-model-prerequisite" disabled={!canContinue}
-          onClick={() => leave.request(onContinue)}>Continue to safety</Button>
-        <p id="first-run-model-prerequisite" className="text-xs text-fg-muted">
-          {canContinue ? "Continue rechecks the ready default model before reviewing safety."
-            : "Connect and confirm a ready default model, then wait for current checks and pending changes to settle."}
-        </p>
-      </div> : null}
+      {!choice ? (
+        <div className="space-y-2">
+          <Button
+            variant="primary"
+            aria-describedby="first-run-model-prerequisite"
+            disabled={!canContinue}
+            onClick={() => leave.request(onContinue)}
+          >
+            Continue to safety
+          </Button>
+          <p id="first-run-model-prerequisite" className="text-xs text-fg-muted">
+            {canContinue
+              ? "Continue rechecks the ready default model before reviewing safety."
+              : "Connect and confirm a ready default model, then wait for current checks and pending changes to settle."}
+          </p>
+        </div>
+      ) : null}
       {choice === "provider" ? (
         <>
           <CockpitGuidedModelSetup

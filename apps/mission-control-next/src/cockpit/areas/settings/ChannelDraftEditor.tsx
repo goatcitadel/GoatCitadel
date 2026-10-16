@@ -60,14 +60,20 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
         />
         Enable this connection after governed finalization
       </label>
-      <details className="text-sm" open={props.definition.wizard.manualModePolicy === "expert-forward" || wizard.advancedMode}>
+      <details
+        className="text-sm"
+        open={props.definition.wizard.manualModePolicy === "expert-forward" || wizard.advancedMode}
+      >
         <summary className="cursor-pointer">Advanced setup options</summary>
-      <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Setup editor mode">
-        <Button aria-pressed={!wizard.advancedMode} disabled={anyBusy} onClick={wizard.switchToGuidedMode}>
-          Guided setup
-        </Button>
-        <p className="text-xs text-fg-muted">Use the adapter's typed fields. Credentials are held by the dedicated secure-input owner and sent only through secure fields.</p>
-      </div>
+        <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Setup editor mode">
+          <Button aria-pressed={!wizard.advancedMode} disabled={anyBusy} onClick={wizard.switchToGuidedMode}>
+            Guided setup
+          </Button>
+          <p className="text-xs text-fg-muted">
+            Use the adapter's typed fields. Credentials are held by the dedicated secure-input owner and sent only
+            through secure fields.
+          </p>
+        </div>
       </details>
       <ExtensionConfigurationGuidance guidance={props.definition.configurationGuidance} />
       {wizard.advancedMode ? (
@@ -102,7 +108,8 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
                     disabled={anyBusy}
                     onClick={() => wizard.selectStep(item.id)}
                   >
-                    {index + 1}. {item.title}{step.id === item.id ? " · Current" : ""}
+                    {index + 1}. {item.title}
+                    {step.id === item.id ? " · Current" : ""}
                     {isStepComplete(
                       item,
                       props.definition,
@@ -131,7 +138,9 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
             >
               {step.title}
             </h4>
-            <p className="text-xs text-fg-muted">{channelStageLabel(step)} · Step {wizard.activeStepIndex + 1} of {wizard.visibleSteps.length}</p>
+            <p className="text-xs text-fg-muted">
+              {channelStageLabel(step)} · Step {wizard.activeStepIndex + 1} of {wizard.visibleSteps.length}
+            </p>
             {step.description ? <p className="text-sm text-fg-secondary">{step.description}</p> : null}
             <ChannelRichBlocks blocks={step.body} />
             {step.checklist?.map((item) => {
@@ -163,8 +172,17 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
           </article>
         </>
       )}
-      <ChannelFeedback feedback={props.feedback} error={wizard.localError} disabled={blocked} onAcknowledge={props.onAcknowledgeTest} />
-      <ChannelDraftEvidencePanel evidence={props.draftEvidence} loading={props.draftEvidenceLoading} error={props.draftEvidenceError} />
+      <ChannelFeedback
+        feedback={props.feedback}
+        error={wizard.localError}
+        disabled={blocked}
+        onAcknowledge={props.onAcknowledgeTest}
+      />
+      <ChannelDraftEvidencePanel
+        evidence={props.draftEvidence}
+        loading={props.draftEvidenceLoading}
+        error={props.draftEvidenceError}
+      />
       <div className="flex flex-wrap gap-2">
         <Button
           disabled={anyBusy || wizard.activeStepIndex === 0}
@@ -175,26 +193,32 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
         <Button disabled={blocked} onClick={() => void wizard.handleSave()}>
           Save draft
         </Button>
-        {wizard.advancedMode || step.kind === "test" ? <>
-        <Button disabled={blocked} onClick={() => void wizard.handleValidate()}>
-          Validate
-        </Button>
-        <Button disabled={blocked} onClick={() => setReviewTest(signature)}>
-          Review live test
-        </Button>
-        </> : null}
+        {wizard.advancedMode || step.kind === "test" ? (
+          <>
+            <Button disabled={blocked} onClick={() => void wizard.handleValidate()}>
+              Validate
+            </Button>
+            <Button disabled={blocked} onClick={() => setReviewTest(signature)}>
+              Review live test
+            </Button>
+          </>
+        ) : null}
         {step.kind !== "confirm" && wizard.activeStepIndex + 1 < wizard.visibleSteps.length ? (
           <Button variant="primary" disabled={blocked} onClick={() => void wizard.moveForward()}>
             Next step
           </Button>
         ) : null}
-        {wizard.advancedMode || step.kind === "confirm" ? <Button
-          disabled={blocked || Boolean(finalizeDisabledReason(props.dirty, props.feedback))}
-          onClick={() => void wizard.handleFinalize()}
-        >
-          Prepare finalization plan
-        </Button> : null}
-        {step.stage === "identity" || step.stage === "destinations_access" || step.kind === "field-collection" ? props.supplementaryActions : null}
+        {wizard.advancedMode || step.kind === "confirm" ? (
+          <Button
+            disabled={blocked || Boolean(finalizeDisabledReason(props.dirty, props.feedback))}
+            onClick={() => void wizard.handleFinalize()}
+          >
+            Prepare finalization plan
+          </Button>
+        ) : null}
+        {step.stage === "identity" || step.stage === "destinations_access" || step.kind === "field-collection"
+          ? props.supplementaryActions
+          : null}
       </div>
       <p className="text-xs text-fg-muted">
         {finalizeDisabledReason(props.dirty, props.feedback) ??

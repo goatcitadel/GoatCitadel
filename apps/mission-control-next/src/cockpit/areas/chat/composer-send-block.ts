@@ -57,7 +57,8 @@ export function composerSendBlock(props: SendBlockProps): ComposerSendBlock | nu
   if (props.historicalReadOnly)
     return {
       kind: "historical",
-      message: "This is an earlier version of the conversation, so it is read-only. Go back to the latest version to reply.",
+      message:
+        "This is an earlier version of the conversation, so it is read-only. Go back to the latest version to reply.",
     };
   if (props.sessionControlBanner)
     return {
@@ -66,7 +67,8 @@ export function composerSendBlock(props: SendBlockProps): ComposerSendBlock | nu
     };
   if (props.pendingApproval || (props.pendingUserInput && !isBackgroundChatUserInputPrompt(props.pendingUserInput)))
     return { kind: "blocked", message: "A decision is waiting above. Resolve it to keep going." };
-  if (props.runVariablePanel?.open) return { kind: "blocked", message: "Apply or close the run variables before sending." };
+  if (props.runVariablePanel?.open)
+    return { kind: "blocked", message: "Apply or close the run variables before sending." };
   if (props.composerPalette?.globalOpen) return { kind: "blocked", message: "Choose a palette item before sending." };
   if (props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged)
     return { kind: "blocked", message: "Acknowledge the route fallback before sending." };

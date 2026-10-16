@@ -69,20 +69,36 @@ export function ModelsSettings() {
         ) : null}
       </section>
       <section aria-label="Advanced providers" className="mt-4 border-t border-line-subtle pt-4">
-        <Button aria-expanded={expertOpen} aria-controls="expert-provider-controls"
-          onClick={() => expertOpen
-            ? leave.request(() => setExpertOpen(false), getDirtySectionKeys().filter((key) => /^(provider|provider-secret|provider-endpoint):system:/.test(sessionDraftSectionKey(key)) || sessionDraftSectionKey(key) === "provider-routing:system"))
-            : setExpertOpen(true)}>
+        <Button
+          aria-expanded={expertOpen}
+          aria-controls="expert-provider-controls"
+          onClick={() =>
+            expertOpen
+              ? leave.request(
+                  () => setExpertOpen(false),
+                  getDirtySectionKeys().filter(
+                    (key) =>
+                      /^(provider|provider-secret|provider-endpoint):system:/.test(sessionDraftSectionKey(key)) ||
+                      sessionDraftSectionKey(key) === "provider-routing:system",
+                  ),
+                )
+              : setExpertOpen(true)
+          }
+        >
           Advanced provider configuration
         </Button>
-        <p className="mt-2 text-xs text-fg-muted">Inspect catalogs, edit profiles, test connections, and review routing advice.</p>
-        {expertOpen ? <div id="expert-provider-controls" className="mt-4 grid gap-4">
-          <ProviderCatalogSettings />
-          <ProviderConnectionSettings />
-          <ProviderManagementSettings />
-          <ProviderRoutingSettings />
-          <ProviderAdviceSettings />
-        </div> : null}
+        <p className="mt-2 text-xs text-fg-muted">
+          Inspect catalogs, edit profiles, test connections, and review routing advice.
+        </p>
+        {expertOpen ? (
+          <div id="expert-provider-controls" className="mt-4 grid gap-4">
+            <ProviderCatalogSettings />
+            <ProviderConnectionSettings />
+            <ProviderManagementSettings />
+            <ProviderRoutingSettings />
+            <ProviderAdviceSettings />
+          </div>
+        ) : null}
       </section>
       <McpDraftLeave {...leave.dialogProps} />
     </>

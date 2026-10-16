@@ -54,14 +54,33 @@ export function IntegrationFormFields({
                   {field.label}
                   {field.required ? " (required)" : ""}
                 </label>
-                <Field id={id} field={field} value={current} onChange={change} disabled={disabled || credential || field.type === "json"} />
-                {field.type === "json" ? <p className="text-xs text-fg-muted">Structured values are inspection-only here. Use this connector’s dedicated setup owner to change them.</p> : null}
-                {credential ? <p className="text-xs text-fg-muted">Use the supported secure setup owner for this credential. General configuration cannot replace it.</p> : null}
+                <Field
+                  id={id}
+                  field={field}
+                  value={current}
+                  onChange={change}
+                  disabled={disabled || credential || field.type === "json"}
+                />
+                {field.type === "json" ? (
+                  <p className="text-xs text-fg-muted">
+                    Structured values are inspection-only here. Use this connector’s dedicated setup owner to change
+                    them.
+                  </p>
+                ) : null}
+                {credential ? (
+                  <p className="text-xs text-fg-muted">
+                    Use the supported secure setup owner for this credential. General configuration cannot replace it.
+                  </p>
+                ) : null}
                 {field.secretRef && field.type === "text" && field.key.endsWith("Env") ? (
                   <p className="text-xs text-fg-muted">Environment reference; enter a variable name.</p>
                 ) : null}
                 {field.secretRef && field.type === "url" ? (
-                  <p className="text-xs text-fg-muted">Enter a public endpoint URL. Keep an unchanged masked value to retain its saved credential. Credential-bearing URLs cannot be replaced here; use this connector’s supported credential owner or reference.</p>
+                  <p className="text-xs text-fg-muted">
+                    Enter a public endpoint URL. Keep an unchanged masked value to retain its saved credential.
+                    Credential-bearing URLs cannot be replaced here; use this connector’s supported credential owner or
+                    reference.
+                  </p>
                 ) : null}
                 {field.description ? <p className="mt-1 text-xs text-fg-secondary">{field.description}</p> : null}
               </div>
@@ -169,7 +188,8 @@ function Field({
       />
       {secret ? (
         <p className="text-xs text-fg-muted">
-          Stored credentials are not read back. This configuration form cannot accept credentials. Use channel secure setup or the connector's supported credential reference.
+          Stored credentials are not read back. This configuration form cannot accept credentials. Use channel secure
+          setup or the connector's supported credential reference.
         </p>
       ) : null}
     </>

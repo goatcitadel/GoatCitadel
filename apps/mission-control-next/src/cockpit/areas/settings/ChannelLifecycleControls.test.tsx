@@ -9,7 +9,13 @@ import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/a
 import { __resetChannelMutationStateForTests } from "../../../features/native-routes/settings/sections/channel-setup-state";
 import { ChannelLifecycleControls } from "./ChannelLifecycleControls";
 import type { Dialog } from "../../ui/Dialog";
-const api = vi.hoisted(() => ({ fetchChannelSetupDraft: vi.fn(), discardChannelSetupDraft: vi.fn(), fetchIntegrationConnection: vi.fn(), updateIntegrationConnection: vi.fn(), deleteIntegrationConnection: vi.fn() }));
+const api = vi.hoisted(() => ({
+  fetchChannelSetupDraft: vi.fn(),
+  discardChannelSetupDraft: vi.fn(),
+  fetchIntegrationConnection: vi.fn(),
+  updateIntegrationConnection: vi.fn(),
+  deleteIntegrationConnection: vi.fn(),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
   ...(await original<object>()),
   ...api,
@@ -44,7 +50,7 @@ beforeEach(async () => {
   __resetIntegrationConnectionMutationsForTests();
   setGatewayCallerScope("caller-a");
   window.history.replaceState(null, "", "/settings/connections#channels");
-  await new Promise(resolve => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
   api.fetchChannelSetupDraft.mockResolvedValue(draft);
   api.discardChannelSetupDraft.mockResolvedValue({ draftId: draft.draftId, deleted: true });
   container = document.createElement("div");
@@ -101,20 +107,50 @@ it("does not dispatch after caller handoff during preflight", async () => {
   expect(api.discardChannelSetupDraft).not.toHaveBeenCalled();
 });
 
-it.each(["disable", "delete"])("reviews and canonically confirms channel connection %s", async action => {
-  const connection = { connectionId: "connection-1", catalogId: "channel.telegram", key: "telegram", kind: "channel", label: "Fixture", enabled: true, status: "connected", revision: "a".repeat(64), config: {}, createdAt: "2026-10-06" } as IntegrationConnection;
+it.each(["disable", "delete"])("reviews and canonically confirms channel connection %s", async (action) => {
+  const connection = {
+    connectionId: "connection-1",
+    catalogId: "channel.telegram",
+    key: "telegram",
+    kind: "channel",
+    label: "Fixture",
+    enabled: true,
+    status: "connected",
+    revision: "a".repeat(64),
+    config: {},
+    createdAt: "2026-10-06",
+  } as IntegrationConnection;
   const updated = { ...connection, enabled: false, revision: "b".repeat(64) };
   api.fetchIntegrationConnection.mockResolvedValueOnce(connection);
   if (action === "disable") {
-    api.updateIntegrationConnection.mockResolvedValue(updated); api.fetchIntegrationConnection.mockResolvedValueOnce(updated);
+    api.updateIntegrationConnection.mockResolvedValue(updated);
+    api.fetchIntegrationConnection.mockResolvedValueOnce(updated);
   } else {
     api.deleteIntegrationConnection.mockResolvedValue({ deleted: true });
-    api.fetchIntegrationConnection.mockRejectedValueOnce(new ApiRequestError("Missing", { kind: "http", method: "GET", path: "/api/v1/integrations/connections/connection-1", status: 404, body: { code: "ENTITY_NOT_FOUND" } }));
+    api.fetchIntegrationConnection.mockRejectedValueOnce(
+      new ApiRequestError("Missing", {
+        kind: "http",
+        method: "GET",
+        path: "/api/v1/integrations/connections/connection-1",
+        status: 404,
+        body: { code: "ENTITY_NOT_FOUND" },
+      }),
+    );
   }
-  await act(async () => root.render(<ChannelLifecycleControls workspaceId="a" selection={{ connection }} reload={reload} />));
+  await act(async () =>
+    root.render(<ChannelLifecycleControls workspaceId="a" selection={{ connection }} reload={reload} />),
+  );
   await click(action === "disable" ? "Review disable channel" : "Remove channel connection");
   await click("Apply reviewed channel change");
-  if (action === "disable") expect(api.updateIntegrationConnection).toHaveBeenCalledExactlyOnceWith(connection.connectionId, { expectedRevision: connection.revision, enabled: false });
-  else expect(api.deleteIntegrationConnection).toHaveBeenCalledExactlyOnceWith(connection.connectionId, connection.revision);
+  if (action === "disable")
+    expect(api.updateIntegrationConnection).toHaveBeenCalledExactlyOnceWith(connection.connectionId, {
+      expectedRevision: connection.revision,
+      enabled: false,
+    });
+  else
+    expect(api.deleteIntegrationConnection).toHaveBeenCalledExactlyOnceWith(
+      connection.connectionId,
+      connection.revision,
+    );
   expect(reload).toHaveBeenCalledOnce();
 });

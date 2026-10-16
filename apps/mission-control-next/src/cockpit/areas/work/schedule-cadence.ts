@@ -3,8 +3,12 @@ export function scheduleTimezone(value: string): string | null {
   const tokens = value.trim().split(/\s+/);
   if (tokens.length <= 5) return null;
   const zone = tokens.slice(5).join(" ");
-  try { new Intl.DateTimeFormat("en-US", { timeZone: zone }).format(new Date()); return zone; }
-  catch { return null; }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: zone }).format(new Date());
+    return zone;
+  } catch {
+    return null;
+  }
 }
 /** The Gateway evaluates an expression that names no timezone in UTC (cron-automation-service: `timeZone ?? "UTC"`). */
 export const GATEWAY_DEFAULT_SCHEDULE_ZONE = "UTC";
@@ -42,7 +46,12 @@ export function scheduleCadence(value: string): string {
   const expression = cronFields(value);
   const timed = timedCadence(expression);
   if (timed) {
-    const when = timed.day === "1-5" ? "Weekdays" : timed.day === "*" ? "Every day" : `Every week on ${WEEKDAY_NAMES[Number(timed.day)]}`;
+    const when =
+      timed.day === "1-5"
+        ? "Weekdays"
+        : timed.day === "*"
+          ? "Every day"
+          : `Every week on ${WEEKDAY_NAMES[Number(timed.day)]}`;
     return `${when} at ${timed.time}${suffix}`;
   }
   return expression === "0 * * * *" ? `Every hour${suffix}` : `Custom schedule: ${value}`;
@@ -56,10 +65,18 @@ export function scheduleTiming(value: string): { cadence: ScheduleCadence; time:
   // Guided presets have no weekly form: a single weekday stays a custom expression here.
   const timed = /^(\d{1,2}) (\d{1,2}) \* \* (\*|1-5)$/.exec(expression);
   if (timed && Number(timed[1]) < 60 && Number(timed[2]) < 24)
-    return { cadence: timed[3] === "1-5" ? "weekdays" : "daily", time: `${timed[2]!.padStart(2, "0")}:${timed[1]!.padStart(2, "0")}`, zone };
+    return {
+      cadence: timed[3] === "1-5" ? "weekdays" : "daily",
+      time: `${timed[2]!.padStart(2, "0")}:${timed[1]!.padStart(2, "0")}`,
+      zone,
+    };
   return { cadence: expression === "0 * * * *" ? "hourly" : "custom", time: null, zone };
 }
-export function buildScheduleExpression(cadence: Exclude<ScheduleCadence, "custom">, time: string | null, zone: string | null): string {
+export function buildScheduleExpression(
+  cadence: Exclude<ScheduleCadence, "custom">,
+  time: string | null,
+  zone: string | null,
+): string {
   const suffix = zone ? ` ${zone}` : "";
   if (cadence === "hourly") return `0 * * * *${suffix}`;
   const [hour = 9, minute = 0] = (time ?? "09:00").split(":").map(Number);
