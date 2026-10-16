@@ -45,6 +45,19 @@ describe("external-side-effect replay records", () => {
     expect(await records.open({ runId: "run-1", payloadHash: "hash-1" })).toBeUndefined();
   });
 
+  it("refuses a truncated tag or wrong-size iv", async () => {
+    const runs = createRuns();
+    const records = createExternalSideEffectReplayRecords({ resolveKey: () => key, runs });
+    await records.seal({ runId: "run-1", payloadHash: "hash-1", payload: { a: 1 } });
+    const parsed = JSON.parse(runs.records.get("run-1") as string);
+    const shortTag = Buffer.from(parsed.tag, "base64").subarray(0, 4).toString("base64");
+    runs.records.set("run-1", JSON.stringify({ ...parsed, tag: shortTag }));
+    expect(await records.open({ runId: "run-1", payloadHash: "hash-1" })).toBeUndefined();
+    const shortIv = Buffer.from(parsed.iv, "base64").subarray(0, 8).toString("base64");
+    runs.records.set("run-1", JSON.stringify({ ...parsed, iv: shortIv }));
+    expect(await records.open({ runId: "run-1", payloadHash: "hash-1" })).toBeUndefined();
+  });
+
   it("refuses a record sealed for a different run", async () => {
     const runs = createRuns();
     const records = createExternalSideEffectReplayRecords({ resolveKey: () => key, runs });

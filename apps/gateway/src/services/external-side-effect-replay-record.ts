@@ -9,6 +9,7 @@ const REPLAY_KEY_ACCOUNT = "external-side-effect-replay:master_key";
 const AAD_PREFIX = "goatcitadel:external-side-effect-replay:v1";
 const KEY_BYTES = 32;
 const IV_BYTES = 12;
+const TAG_BYTES = 16;
 
 export interface ExternalSideEffectReplayRecords {
   seal(input: { runId: string; payloadHash: string; payload: unknown }): Promise<boolean>;
@@ -51,13 +52,13 @@ export function createExternalSideEffectReplayRecords(
 ): ExternalSideEffectReplayRecords {
   return {
     async seal(input) {
-      const key = deps.resolveKey();
-      if (!key) {
-        return false;
-      }
       try {
+        const key = deps.resolveKey();
+        if (!key) {
+          return false;
+        }
         const iv = randomBytes(IV_BYTES);
-        const cipher = createCipheriv("aes-256-gcm", key, iv);
+        const cipher = createCipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_BYTES });
         cipher.setAAD(buildAad(input.runId, input.payloadHash));
         const ciphertext = Buffer.concat([
           cipher.update(JSON.stringify({ payload: input.payload }), "utf8"),
@@ -99,9 +100,14 @@ export function createExternalSideEffectReplayRecords(
         ) {
           return undefined;
         }
-        const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(record.iv, "base64"));
+        const iv = Buffer.from(record.iv, "base64");
+        const tag = Buffer.from(record.tag, "base64");
+        if (iv.length !== IV_BYTES || tag.length !== TAG_BYTES) {
+          return undefined;
+        }
+        const decipher = createDecipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_BYTES });
         decipher.setAAD(buildAad(run.runId, run.payloadHash));
-        decipher.setAuthTag(Buffer.from(record.tag, "base64"));
+        decipher.setAuthTag(tag);
         const plaintext = Buffer.concat([
           decipher.update(Buffer.from(record.ciphertext, "base64")),
           decipher.final(),
