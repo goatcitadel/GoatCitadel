@@ -275,6 +275,7 @@ export class CommunicationsDashboardService {
         startIso: event.startIso,
         endIso: event.endIso,
         attendees: event.attendees,
+        ...(event.location === undefined ? {} : { location: event.location }),
         execution: CALENDAR_CREATE_EXECUTION_COPY,
       },
       linkage: {
@@ -488,7 +489,9 @@ export function resolveMailProvider(connection: IntegrationConnection): MailAcco
   return undefined;
 }
 
-function resolveCalendarProvider(connection: IntegrationConnection): CalendarAccountRecord["provider"] | undefined {
+export function resolveCalendarProvider(
+  connection: IntegrationConnection,
+): CalendarAccountRecord["provider"] | undefined {
   const key = `${connection.catalogId}:${connection.key}`.toLowerCase();
   if (key.includes("calendar") || key.includes("gmail")) {
     return "google";

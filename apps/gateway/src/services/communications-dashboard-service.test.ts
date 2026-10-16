@@ -399,6 +399,7 @@ describe("communications dashboard service", () => {
       idempotencyKeyPrefix: "communications:",
     });
     expect(request.preview).toMatchObject({
+      location: "Room 1",
       execution: "Approving creates this exact event once on the connected calendar.",
     });
     expect(JSON.stringify(request.preview)).not.toMatch(/does not (send|mutate)/u);

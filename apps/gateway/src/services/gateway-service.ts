@@ -707,11 +707,7 @@ import {
   type SessionControlRuntimeOwner,
 } from "./session-control-runtime-owner.js";
 import { HeartbeatOccurrenceService } from "./heartbeat-occurrence-service.js";
-import {
-  computeEffectiveChatTurnRequestMaterialSha256,
-  deriveChatTurnSurfaceDerivation,
-  freezeChatTurnExecutionRequest,
-} from "./session-control-service.js";
+import { createDurableChatTurnPayload } from "./gateway/durable-chat-turn-payload.js";
 import { createChatCompactionBreakerActionServiceForGateway } from "./chat-compaction-breaker-runtime-service.js";
 import type { ChatCompactionBreakerActionService } from "./chat-compaction-breaker-action-service.js";
 import {
@@ -856,7 +852,7 @@ import { ReviewReadinessService } from "./review-readiness-service.js";
 import { ChatSessionStatusService } from "./chat-session-status-service.js";
 import { ChatTimerService } from "./chat-timer-service.js";
 import { resolveChatRunVariableRequest } from "./chat-run-variable-service.js";
-import { createCommunicationsApprovalEffectService } from "./communications-approval-effect-service.js";
+import { buildCommunicationsApprovalEffectDeps } from "./communications-approval-effect-service.js";
 import {
   createChannelSetupHostForGateway,
   createNotificationRoutingServiceForGateway,
@@ -2294,13 +2290,7 @@ export class GatewayService {
         this.improvementService.executeApprovedImprovementLifecycleMutation(input),
       executeApprovedEngineeringLearningLifecycle: (approvalId) =>
         this.engineeringLearningService.applyApprovedAction(approvalId),
-      // WS2: approved mail sends / calendar creates run once through the comms ledger.
-      executeApprovedCommunicationsMailSend: (input) =>
-        this.communicationsApprovalEffects().executeApprovedMailSend(input),
-      executeApprovedCommunicationsCalendarCreate: (input) =>
-        this.communicationsApprovalEffects().executeApprovedCalendarCreate(input),
-      recordCommunicationsMailSendRejected: (input) =>
-        this.communicationsApprovalEffects().recordMailSendRejected(input),
+      ...buildCommunicationsApprovalEffectDeps(this.storage, () => this.buildCommsHost()),
       enqueueAfterHooks: async (input) => {
         await this.hooksService.enqueueAfterHooks(input);
       },
@@ -3833,10 +3823,6 @@ export class GatewayService {
 
   private buildCommsHost(integrationChannel = this.buildIntegrationChannelService()): CommsHost {
     return createCommsHostForGateway(this.getRouteCompositionPort(), integrationChannel);
-  }
-
-  private communicationsApprovalEffects() {
-    return createCommunicationsApprovalEffectService(this.storage, this.buildCommsHost());
   }
 
   private buildDurableChatTurnWorkflowHost(): durableExecutionService.DurableChatTurnWorkflowHost &
@@ -8573,65 +8559,6 @@ export class GatewayService {
     return undefined;
   }
 
-  private createDurableChatTurnPayload(
-    prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
-    input: ChatSendMessageRequest,
-    threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
-    durableRunId: string,
-  ): DurableChatTurnExecutionPayload {
-    const admission = prepared.turnAdmission?.identity;
-    if (!admission) {
-      throw new Error(`Durable Chat turn ${prepared.turnId} has no frozen mutation admission.`);
-    }
-    if (!prepared.turnAdmission) {
-      throw new Error(`Durable Chat turn ${prepared.turnId} has no admitted request snapshot.`);
-    }
-    const durableRequest = freezeChatTurnExecutionRequest(input);
-    const normalizedDurableRunId = durableRunId.trim();
-    if (!normalizedDurableRunId) {
-      throw new Error(`Durable Chat turn ${prepared.turnId} has no durable run identity for policy derivation.`);
-    }
-    const surfaceDerivation = deriveChatTurnSurfaceDerivation(prepared.turnAdmission.admittedRequest, durableRequest);
-    return {
-      version: "chat.turn.execute.v2",
-      admissionId: admission.admissionId,
-      sessionIncarnationId: admission.sessionIncarnationId,
-      admissionMaterialSha256: admission.materialSha256,
-      workspaceId: admission.workspaceId,
-      admissionAggregateRevision: admission.aggregateRevision,
-      admissionControllerGeneration: admission.controllerGeneration,
-      effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(
-        admission.materialSha256,
-        durableRequest,
-      ),
-      ...(!durableRequest.policyRunId
-        ? {
-            policyRunIdDerivation: {
-              version: 1 as const,
-              kind: "durable_run_id" as const,
-              runId: normalizedDurableRunId,
-            },
-          }
-        : {}),
-      ...(surfaceDerivation ? { surfaceDerivation } : {}),
-      requestActor: prepared.turnAdmission.requestActor,
-      sessionId: prepared.session.sessionId,
-      turnId: prepared.turnId,
-      userMessageId: prepared.userEventId,
-      assistantMessageId: prepared.assistantMessageId,
-      capabilityProfileId: prepared.capabilityProfile?.profileId,
-      capabilityProfileHash: prepared.capabilityProfile?.hashes.profileHash,
-      ...(prepared.featureAdmission ? { featureReferenceSha256: prepared.featureAdmission.referenceSha256 } : {}),
-      branchKind: prepared.branchKind,
-      parentTurnId: prepared.parentTurnId,
-      sourceTurnId: prepared.sourceTurnId,
-      threadEventType,
-      request: {
-        ...durableRequest,
-      },
-    };
-  }
-
   /**
    * File the legacy inert inbox record for a scheduled cron job. Shared by the
    * `task` handler and the `agent_turn` autonomy-disabled / inertInboxFallback
@@ -8703,7 +8630,7 @@ export class GatewayService {
       prepareAgentChatTurn: (sessionId, request, options) => this.prepareAgentChatTurn(sessionId, request, options),
       buildDurableChatTurnPayloadRecord: (prepared, request, durableRunId) =>
         durableChatTurnPayloadToRecord(
-          this.createDurableChatTurnPayload(prepared, request, "chat_thread_turn_appended", durableRunId),
+          createDurableChatTurnPayload(prepared, request, "chat_thread_turn_appended", durableRunId),
         ),
       createDurableRun: (input) => this.durableRunService.createDurableRun(input, { publishRealtime: false }),
       getDurableRun: async (runId) => await this.storage.durableRuns.getRun(runId),
@@ -8859,9 +8786,7 @@ export class GatewayService {
         runImmediateTransaction: async (callback) => await this.storage.runImmediateTransaction(callback),
         createDurableRun: (runInput) => this.durableRunService.createDurableRun(runInput, { publishRealtime: false }),
         buildDurablePayloadRecord: (preparedTurn, request, eventType, durableRunId) =>
-          durableChatTurnPayloadToRecord(
-            this.createDurableChatTurnPayload(preparedTurn, request, eventType, durableRunId),
-          ),
+          durableChatTurnPayloadToRecord(createDurableChatTurnPayload(preparedTurn, request, eventType, durableRunId)),
         persistChatStreamChunk: async (chunk, durableRunId) => {
           await this.persistChatStreamChunk(chunk, durableRunId);
         },

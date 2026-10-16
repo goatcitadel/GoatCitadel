@@ -1912,6 +1912,23 @@ describe("approval lifecycle service", () => {
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
   });
 
+  it.each(["communications.mail.send", "communications.calendar.create"])(
+    "rejects edit decisions for exact-payload %s approvals",
+    async (approvalKind) => {
+      const host = createApprovalHarness({ approvalKind });
+
+      await expect(
+        resolveApproval(host, "approval-1", {
+          decision: "edit",
+          resolvedBy: "operator",
+          editedPayload: { subject: "Edited" },
+        }),
+      ).rejects.toThrow(/Communications approvals bind one exact hashed message or event/);
+
+      expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+    },
+  );
+
   it("marks linked Code Mode runs expired when approval expires", async () => {
     const host = createApprovalHarness({
       approvalKind: "code_mode.run",

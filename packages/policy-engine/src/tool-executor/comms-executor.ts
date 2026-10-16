@@ -4274,6 +4274,7 @@ async function calendarCreate(
   const payload = {
     summary: required(args.title, "title"),
     description: asString(args.description),
+    location: asString(args.location),
     start: { dateTime: required(args.startIso, "startIso"), timeZone: asString(args.timeZone) ?? "UTC" },
     end: { dateTime: required(args.endIso, "endIso"), timeZone: asString(args.timeZone) ?? "UTC" },
     attendees: stringArray(args.attendees).map((email) => ({ email })),

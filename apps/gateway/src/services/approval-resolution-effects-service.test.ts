@@ -7747,4 +7747,54 @@ describe("communications approval effects", () => {
       harness.raw.close();
     }
   });
+  it("never enqueues pending_action_execute for a communications approval with a pending tool.invoke row", async () => {
+    const harness = createCommsEffectHarness();
+    try {
+      const { approval } = await seedMailApproval(harness.storage, "approve");
+      // A mid-send crash leaves the comms pre-approval row pending.
+      await harness.storage.pendingApprovalActions.upsertPending({
+        approvalId: approval.approvalId,
+        actionType: "tool.invoke",
+        request: { toolName: "gmail.send", args: {} },
+      });
+      const { service } = harness.createEffects();
+
+      const enqueued = await service.enqueueResolutionEffects(
+        approval,
+        { decision: "approve", resolvedBy: "operator" },
+        { deferProcessing: true },
+      );
+
+      expect(enqueued.map((effect) => effect.effectKind)).not.toContain("pending_action_execute");
+      expect(enqueued.map((effect) => effect.effectKind)).toContain("communications_mail_send_apply");
+    } finally {
+      harness.raw.close();
+    }
+  });
+
+  it("records an expired mail send approval with the expiry wording", async () => {
+    const harness = createCommsEffectHarness();
+    try {
+      const { approval, draftId } = await seedMailApproval(harness.storage, "reject");
+      const { service, drain } = harness.createEffects();
+
+      const enqueued = await service.enqueueResolutionEffects(
+        approval,
+        { decision: "reject", resolvedBy: "system" },
+        { deferProcessing: true, allowExpired: true, outcome: "expired" },
+      );
+      const mailEffect = enqueued.find((effect) => effect.effectKind === "communications_mail_send_apply");
+      expect(mailEffect?.payload).toEqual({ draftId, decision: "reject", expired: true });
+
+      await drain();
+
+      expect(harness.providerInvokes).toHaveLength(0);
+      expect(await harness.storage.mailDrafts.get(draftId)).toMatchObject({
+        status: "failed",
+        failureReason: "Send approval expired; nothing was sent.",
+      });
+    } finally {
+      harness.raw.close();
+    }
+  });
 });

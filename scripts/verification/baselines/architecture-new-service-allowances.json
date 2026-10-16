@@ -2329,6 +2329,14 @@
       "maxDependencyMemberAccesses": 16,
       "reason": "WS2 gap-closure program: executor for approved communications.mail.send / communications.calendar.create approvals plus the effect-row glue the approval effects worker delegates to. The accesses cover approval, mail-draft and side-effect-run reads, the draft compare-and-set transitions, the injected comms send/create ports, and completing or failing the claimed effect row; the single host callback is the integration-connection read when composing over the route CommsHost. Moving the glue here keeps approval-resolution-effects-service.ts below its baseline (259 -> 258).",
       "evidence": "apps/gateway/src/services/communications-approval-effect-service.test.ts covers send-once with approval consent, second-run replay with one provider invoke, SMTP routing, tampered payload, a non-sending account, outcome-unknown after the boundary, pre-boundary refusal, a settled pending action, a non-approved approval, rejection and calendar create-once; approval-resolution-effects-service.test.ts covers enqueue targets, completion, duplicate resolution, restart replay, terminal error codes, a missing executor and rejection; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/gateway/durable-chat-turn-payload.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS2 gap-closure program: behavior-preserving relocation of GatewayService's pure private createDurableChatTurnPayload (no this. reads) into a gateway composition helper, so the GatewayService line-count gate holds after the communications approval wiring; it reaches no host or dependency.",
+      "evidence": "The function body moved byte-for-byte; both GatewayService call sites (append and retry/edit durable turn starts) call it unchanged. apps/gateway/src/services/gateway/durable-chat-turn-payload.test.ts pins the v2 payload fields, the durable-run policy-run derivation and both fail-closed branches; Gateway typecheck passes."
     }
   ]
 }

@@ -85,6 +85,7 @@ import {
   COMMUNICATIONS_CALENDAR_CREATE_EFFECT_KIND,
   COMMUNICATIONS_MAIL_SEND_EFFECT_KIND,
   buildCommunicationsApprovalEffectUpsert,
+  isCommunicationsApprovalKind,
   runCommunicationsApprovalEffect,
   type CommunicationsApprovalEffectExecutors,
 } from "./communications-approval-effect-service.js";
@@ -795,7 +796,11 @@ export class ApprovalEffectsService {
     if (approval.kind === ENGINEERING_LEARNING_APPROVAL_KIND && input.decision === "approve") {
       enqueued.push(await this.enqueueEngineeringLearningLifecycleApply(approval));
     }
-    const communicationsEffect = buildCommunicationsApprovalEffectUpsert(approval, input.decision);
+    const communicationsEffect = buildCommunicationsApprovalEffectUpsert(
+      approval,
+      input.decision,
+      options.outcome === "expired" || (options.allowExpired === true && !options.outcome),
+    );
     if (communicationsEffect) {
       enqueued.push(await this.approvalEffectRepository.upsert(communicationsEffect));
     }
@@ -813,7 +818,10 @@ export class ApprovalEffectsService {
     );
     const pendingAction = await this.ctx.storage.pendingApprovalActions.find(approval.approvalId);
     if (
-      (input.decision === "approve" && pendingAction?.resolutionStatus === "pending") ||
+      // A communications tool.invoke row only ever runs through the comms ledger effect.
+      (input.decision === "approve" &&
+        pendingAction?.resolutionStatus === "pending" &&
+        !isCommunicationsApprovalKind(approval.kind)) ||
       (approval.kind === "code_mode.run" &&
         (input.decision === "approve" || input.decision === "reject") &&
         !pendingAction)

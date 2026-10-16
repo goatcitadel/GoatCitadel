@@ -716,6 +716,7 @@ export async function commsCalendarCreate(
     startIso: input.startIso,
     endIso: input.endIso,
     attendees: input.attendees,
+    location: input.location,
     timeZone: input.timeZone,
   };
   return runLedgeredCommsInvoke(host, {

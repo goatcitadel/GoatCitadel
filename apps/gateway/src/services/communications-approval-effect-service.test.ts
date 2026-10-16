@@ -25,6 +25,7 @@ const CONNECTIONS: Record<string, Pick<IntegrationConnection, "catalogId" | "key
   "conn-smtp": { catalogId: "automation.imap-smtp", key: "imap-smtp", label: "Work mail" },
   "conn-manual": { catalogId: "automation.mailbox", key: "mailbox", label: "Notes mailbox" },
   "conn-calendar": { catalogId: "automation.google-calendar", key: "google-calendar", label: "Calendar" },
+  "conn-caldav": { catalogId: "automation.caldav", key: "caldav", label: "Work CalDAV" },
 };
 
 function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, unknown>) {
@@ -98,7 +99,10 @@ async function seedApprovedMailSend(storage: AsyncStorage, accountId = "conn-gma
   return { draftId: hashed.draftId, approvalId: approval.approvalId };
 }
 
-async function seedApprovedCalendarCreate(storage: AsyncStorage) {
+async function seedApprovedCalendarCreate(
+  storage: AsyncStorage,
+  overrides: Partial<Pick<CalendarCreateApprovalInput, "accountId" | "location">> = {},
+) {
   const hashed: CalendarCreateApprovalInput = {
     eventId: `calendar_event_${randomUUID()}`,
     accountId: "conn-calendar",
@@ -106,6 +110,7 @@ async function seedApprovedCalendarCreate(storage: AsyncStorage) {
     startIso: "2026-10-20T15:00:00.000Z",
     endIso: "2026-10-20T15:30:00.000Z",
     attendees: ["ops@example.test"],
+    ...overrides,
   };
   const approval = await storage.approvals.create({
     kind: "communications.calendar.create",
@@ -299,6 +304,39 @@ describe("CommunicationsApprovalEffectService mail send", () => {
       failureReason: "Send approval was rejected; nothing was sent.",
     });
   });
+
+  it("records an expired send approval with the expiry wording", async () => {
+    const { storage, invokes, service } = createHarness();
+    const now = new Date().toISOString();
+    const draftId = `mail_draft_${randomUUID()}`;
+    await storage.mailDrafts.create({
+      draftId,
+      accountId: "conn-gmail",
+      to: ["dest@example.test"],
+      cc: [],
+      bcc: [],
+      subject: "Status",
+      bodyText: "All good",
+      status: "approval_required",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const approval = await storage.approvals.create({
+      kind: "communications.mail.send",
+      riskLevel: "danger",
+      payload: { action: "mail_send", draftId },
+      preview: {},
+    });
+    await storage.approvals.resolve(approval.approvalId, { decision: "reject", resolvedBy: "system" });
+
+    await service.recordMailSendRejected({ approvalId: approval.approvalId, expired: true });
+
+    expect(invokes).toHaveLength(0);
+    expect(await storage.mailDrafts.get(draftId)).toMatchObject({
+      status: "failed",
+      failureReason: "Send approval expired; nothing was sent.",
+    });
+  });
 });
 
 describe("CommunicationsApprovalEffectService calendar create", () => {
@@ -317,5 +355,27 @@ describe("CommunicationsApprovalEffectService calendar create", () => {
       args: { connectionId: "conn-calendar", title: "Planning", attendees: ["ops@example.test"] },
       consentContext: { reason: `approval:${approvalId}` },
     });
+  });
+
+  it("carries the approved location into the calendar create", async () => {
+    const { storage, invokes, service } = createHarness();
+    const { approvalId } = await seedApprovedCalendarCreate(storage, { location: "Room 4" });
+
+    await service.executeApprovedCalendarCreate({ approvalId });
+
+    expect(invokes[0]).toMatchObject({ toolName: "calendar.create_event", args: { location: "Room 4" } });
+  });
+
+  it("refuses a calendar account that cannot create events", async () => {
+    const { storage, invokes, service } = createHarness();
+    const { approvalId } = await seedApprovedCalendarCreate(storage, { accountId: "conn-caldav" });
+
+    const error = await expectEffectError(
+      service.executeApprovedCalendarCreate({ approvalId }),
+      "provider_unavailable",
+    );
+
+    expect(error.message).toBe("This calendar account (caldav) cannot create events; connect Google Calendar.");
+    expect(invokes).toHaveLength(0);
   });
 });

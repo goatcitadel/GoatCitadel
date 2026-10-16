@@ -23,7 +23,7 @@ import {
   readCalendarCreateApprovalInput,
   readMailSendApprovalInput,
 } from "./communications-approval-payload.js";
-import { resolveMailProvider } from "./communications-dashboard-service.js";
+import { resolveCalendarProvider, resolveMailProvider } from "./communications-dashboard-service.js";
 
 /**
  * Executes approved `communications.mail.send` / `communications.calendar.create`
@@ -40,6 +40,11 @@ export const COMMUNICATIONS_MAIL_SEND_EFFECT_TARGET_KIND = "mail_draft" as const
 export const COMMUNICATIONS_CALENDAR_CREATE_EFFECT_TARGET_KIND = "calendar_event" as const;
 export const COMMUNICATIONS_MAIL_SEND_APPROVAL_KIND = "communications.mail.send";
 export const COMMUNICATIONS_CALENDAR_CREATE_APPROVAL_KIND = "communications.calendar.create";
+
+/** True for the approval kinds whose execution must stay on the communications ledger. */
+export function isCommunicationsApprovalKind(kind: string): boolean {
+  return kind === COMMUNICATIONS_MAIL_SEND_APPROVAL_KIND || kind === COMMUNICATIONS_CALENDAR_CREATE_APPROVAL_KIND;
+}
 
 export type CommunicationsEffectErrorCode =
   | "approval_not_approved"
@@ -75,6 +80,7 @@ export interface CommunicationsApprovalEffectDeps {
 }
 
 export const MAIL_SEND_REJECTED_REASON = "Send approval was rejected; nothing was sent.";
+export const MAIL_SEND_EXPIRED_REASON = "Send approval expired; nothing was sent.";
 const MAIL_OUTCOME_UNKNOWN_REASON = "Delivery outcome is unknown; check the mailbox before retrying.";
 const CALENDAR_OUTCOME_UNKNOWN_REASON = "Calendar create outcome is unknown; check the calendar before retrying.";
 const PAYLOAD_HASH_MISMATCH_REASON = "The approved message no longer matches its approval; nothing was sent.";
@@ -155,7 +161,7 @@ export class CommunicationsApprovalEffectService {
         "The approved event no longer matches its approval; nothing was created.",
       );
     }
-    await this.readConnection(event.accountId);
+    this.assertCalendarCanCreate(await this.readConnection(event.accountId));
     const result = await this.invokeApproved(approvalId, (preApproval) =>
       this.deps.commsCalendarCreate(
         {
@@ -166,6 +172,7 @@ export class CommunicationsApprovalEffectService {
           startIso: event.startIso,
           endIso: event.endIso,
           attendees: event.attendees,
+          ...(event.location === undefined ? {} : { location: event.location }),
           idempotencyKey: communicationsIdempotencyKey(approvalId),
         },
         preApproval,
@@ -179,14 +186,17 @@ export class CommunicationsApprovalEffectService {
     };
   }
 
-  /** Makes a denied send visible on its draft. Never calls a provider. */
-  public async recordMailSendRejected(input: { approvalId: string }): Promise<{ disposition: "rejected" }> {
+  /** Makes a denied (or expired) send visible on its draft. Never calls a provider. */
+  public async recordMailSendRejected(input: {
+    approvalId: string;
+    expired?: boolean;
+  }): Promise<{ disposition: "rejected" }> {
     const approval = await this.readApproval(input.approvalId, COMMUNICATIONS_MAIL_SEND_APPROVAL_KIND, "rejected");
     const draftId = approval.payload.draftId;
     if (typeof draftId !== "string" || !draftId) {
       throw new CommunicationsApprovalEffectError("invalid_payload", "The rejected mail approval names no draft.");
     }
-    await this.failDraft(draftId, MAIL_SEND_REJECTED_REASON);
+    await this.failDraft(draftId, input.expired ? MAIL_SEND_EXPIRED_REASON : MAIL_SEND_REJECTED_REASON);
     return { disposition: "rejected" };
   }
 
@@ -233,6 +243,16 @@ export class CommunicationsApprovalEffectService {
       "provider_unavailable",
       `This mail account (${provider ?? connection.key}) cannot send; connect Gmail or an SMTP account.`,
     );
+  }
+
+  private assertCalendarCanCreate(connection: IntegrationConnection): void {
+    const provider = resolveCalendarProvider(connection);
+    if (provider !== "google") {
+      throw new CommunicationsApprovalEffectError(
+        "provider_unavailable",
+        `This calendar account (${provider ?? connection.key}) cannot create events; connect Google Calendar.`,
+      );
+    }
   }
 
   /** Runs one approved invoke; a settled pending action fails closed instead of retrying. */
@@ -330,7 +350,10 @@ export interface CommunicationsApprovalEffectExecutors {
   executeApprovedCommunicationsCalendarCreate?(input: {
     approvalId: string;
   }): Promise<{ disposition: "created"; providerEventId?: string; replayed: boolean }>;
-  recordCommunicationsMailSendRejected?(input: { approvalId: string }): Promise<{ disposition: "rejected" }>;
+  recordCommunicationsMailSendRejected?(input: {
+    approvalId: string;
+    expired?: boolean;
+  }): Promise<{ disposition: "rejected" }>;
 }
 
 export type CommunicationsApprovalEffectUpsert = Pick<
@@ -348,6 +371,7 @@ export type CommunicationsApprovalEffectUpsert = Pick<
 export function buildCommunicationsApprovalEffectUpsert(
   approval: ApprovalRequest,
   decision: "approve" | "reject" | "edit",
+  expired = false,
 ): CommunicationsApprovalEffectUpsert | undefined {
   const payload = approval.payload as Record<string, unknown>;
   if (approval.kind === COMMUNICATIONS_MAIL_SEND_APPROVAL_KIND && (decision === "approve" || decision === "reject")) {
@@ -359,10 +383,7 @@ export function buildCommunicationsApprovalEffectUpsert(
             COMMUNICATIONS_MAIL_SEND_EFFECT_KIND,
             COMMUNICATIONS_MAIL_SEND_EFFECT_TARGET_KIND,
             draftId,
-            {
-              draftId,
-              decision: "reject",
-            },
+            { draftId, decision: "reject", ...(expired ? { expired: true } : {}) },
           )
         : throwMissingBinding(approval);
     }
@@ -482,7 +503,8 @@ function selectCommunicationsExecutor(
   }
   if (effect.payload.decision === "reject") {
     const reject = executors.recordCommunicationsMailSendRejected;
-    return reject && ((input) => reject.call(executors, input));
+    const expired = effect.payload.expired === true;
+    return reject && ((input) => reject.call(executors, { ...input, expired }));
   }
   const send = executors.executeApprovedCommunicationsMailSend;
   return send && ((input) => send.call(executors, input));
@@ -500,4 +522,20 @@ export function createCommunicationsApprovalEffectService(
     commsSmtpSend: (input, preApproval) => commsSmtpSend(host, input, preApproval),
     commsCalendarCreate: (input, preApproval) => commsCalendarCreate(host, input, preApproval),
   });
+}
+
+/**
+ * The approval-effects deps for the communications executors. The comms host is built
+ * lazily per effect, the same way the communications routes build theirs.
+ */
+export function buildCommunicationsApprovalEffectDeps(
+  storage: CommunicationsApprovalEffectDeps["storage"],
+  buildHost: () => CommsHost,
+): Required<CommunicationsApprovalEffectExecutors> {
+  const executor = () => createCommunicationsApprovalEffectService(storage, buildHost());
+  return {
+    executeApprovedCommunicationsMailSend: (input) => executor().executeApprovedMailSend(input),
+    executeApprovedCommunicationsCalendarCreate: (input) => executor().executeApprovedCalendarCreate(input),
+    recordCommunicationsMailSendRejected: (input) => executor().recordMailSendRejected(input),
+  };
 }
