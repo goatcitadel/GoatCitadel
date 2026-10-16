@@ -5,6 +5,7 @@ import {
   GOOGLE_CHAT_ISSUER,
   GOOGLE_OIDC_CERTS_URL,
   createCachedGoogleChatCertFetcher,
+  fetchGoogleChatCertsFromGoogle,
   isGoogleChatWebhookPath,
   normalizeGoogleChatEvent,
   parseCacheControlMaxAge,
@@ -413,5 +414,24 @@ describe("isGoogleChatWebhookPath", () => {
     expect(isGoogleChatWebhookPath("/api/v1/integrations/connections/abc/google-chat/webhook")).toBe(true);
     expect(isGoogleChatWebhookPath("/api/v1/integrations/connections/abc/google-chat/webhook?x=1")).toBe(true);
     expect(isGoogleChatWebhookPath("/api/v1/integrations/connections/abc/google-chat/other")).toBe(false);
+  });
+});
+
+describe("fetchGoogleChatCertsFromGoogle bounded read", () => {
+  it("parses PEM certs within the size cap and rejects an oversized response", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ [KID]: PUBLIC_PEM, junk: 1 })));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const result = await fetchGoogleChatCertsFromGoogle(GOOGLE_CHAT_CERTS_URL);
+      expect(result.certs).toEqual({ [KID]: PUBLIC_PEM });
+      fetchMock.mockImplementationOnce(
+        async () => new Response(JSON.stringify({ [KID]: PUBLIC_PEM, pad: "x".repeat(70 * 1024) })),
+      );
+      await expect(fetchGoogleChatCertsFromGoogle(GOOGLE_CHAT_CERTS_URL)).rejects.toThrow(
+        "Google certificate response is too large.",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

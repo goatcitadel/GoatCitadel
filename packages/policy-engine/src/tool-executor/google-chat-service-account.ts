@@ -1,4 +1,5 @@
 import { createHash, createPrivateKey, createSign, type KeyObject } from "node:crypto";
+import { readBoundedResponseJson, type FetchBodyReadLimits } from "../sandbox/network-guard.js";
 
 /**
  * Google Chat app (service-account) client: mints chat.bot access tokens with
@@ -18,6 +19,8 @@ const MALFORMED_KEY_MESSAGE = "Google Chat service-account key is malformed";
 const TOKEN_LIFETIME_SECONDS = 3600;
 const TOKEN_REFRESH_MARGIN_SECONDS = 60;
 const JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+/** Token and Chat message responses are small JSON documents; larger bodies fail closed. */
+const GOOGLE_RESPONSE_READ_LIMITS: FetchBodyReadLimits = { maxBytes: 64 * 1024, timeoutMs: 15_000 };
 
 export type GoogleChatTokenFetcher = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -56,7 +59,7 @@ export async function getGoogleChatAccessToken(
   if (!response.ok) {
     throw new Error(`Google Chat service-account token request failed (${response.status})`);
   }
-  const body = safeJsonRecord(await response.text());
+  const body = await readJsonRecord(response);
   const accessToken = typeof body.access_token === "string" ? body.access_token.trim() : "";
   const expiresIn =
     typeof body.expires_in === "number" && Number.isFinite(body.expires_in) ? body.expires_in : TOKEN_LIFETIME_SECONDS;
@@ -96,11 +99,11 @@ export async function sendGoogleChatAppMessage(input: {
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify(input.threadName ? { ...input.body, thread: { name: input.threadName } } : input.body),
   });
-  const text = await response.text();
   if (!response.ok) {
+    await discardBody(response);
     throw new Error(`google-chat.send failed (${response.status})`);
   }
-  const name = safeJsonRecord(text).name;
+  const name = (await readJsonRecord(response)).name;
   if (typeof name !== "string" || !GOOGLE_CHAT_MESSAGE_NAME_PATTERN.test(name)) {
     throw new Error("google-chat.send returned no message name");
   }
@@ -119,7 +122,7 @@ export async function deleteGoogleChatAppMessage(input: {
     method: "DELETE",
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  await response.text();
+  await discardBody(response);
   if (!response.ok) {
     throw new Error(`google-chat.unsend failed (${response.status})`);
   }
@@ -139,11 +142,11 @@ export async function readGoogleChatMessageThread(input: {
     method: "GET",
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  const text = await response.text();
   if (!response.ok) {
+    await discardBody(response);
     return undefined;
   }
-  const thread = safeJsonRecord(text).thread;
+  const thread = (await readJsonRecord(response)).thread;
   const name = thread && typeof thread === "object" ? (thread as Record<string, unknown>).name : undefined;
   return typeof name === "string" && GOOGLE_CHAT_THREAD_NAME_PATTERN.test(name) ? name : undefined;
 }
@@ -215,11 +218,21 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function safeJsonRecord(text: string): Record<string, unknown> {
+/** Bounded JSON read: size and timeout limits throw; an empty or unparseable body reads as {}. */
+async function readJsonRecord(response: Response): Promise<Record<string, unknown>> {
+  let value: unknown;
   try {
-    const value: unknown = JSON.parse(text);
-    return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-  } catch {
-    return {};
+    value = await readBoundedResponseJson(response, GOOGLE_RESPONSE_READ_LIMITS);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return {};
+    }
+    throw error;
   }
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+/** Releases a body we do not need without buffering it. */
+async function discardBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
 }

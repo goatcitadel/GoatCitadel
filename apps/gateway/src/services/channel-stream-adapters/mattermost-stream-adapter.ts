@@ -5,6 +5,7 @@ import {
   type ChannelStreamAdapter,
   type ChannelStreamRunContext,
 } from "../channel-stream-runtime-service.js";
+import { BoundedResponseReadError, readBoundedResponseJson } from "../bounded-response-reader.js";
 
 /**
  * Mattermost inbound over the bot's WebSocket (`/api/v4/websocket`).
@@ -34,6 +35,9 @@ export interface MattermostStreamAdapterDeps {
   isUrlAllowlisted(url: string): boolean;
   createWebSocket(url: string): MattermostWebSocketLike;
 }
+
+/** users/me is a small metadata document; anything larger is not a Mattermost user record. */
+const USERS_ME_READ_LIMITS = { maxBytes: 64 * 1024, timeoutMs: 15_000, label: "Mattermost users/me" };
 
 /** The bot sends `{"action":"ping"}` this often; the server answers with a pong frame. */
 export const MATTERMOST_PING_INTERVAL_MS = 30_000;
@@ -124,10 +128,22 @@ export function createMattermostStreamAdapter(
       await response.body?.cancel().catch(() => undefined);
       throw new Error(`Mattermost users/me request failed (${response.status})`);
     }
-    const body = asRecord(await response.json().catch(() => undefined));
+    const body = asRecord(await readUsersMe(response));
     const id = str(body?.id);
     if (!id) throw new Error("Mattermost users/me response did not include a bot user id");
     return id;
+  }
+
+  async function readUsersMe(response: Response): Promise<unknown> {
+    try {
+      return await readBoundedResponseJson(response, USERS_ME_READ_LIMITS);
+    } catch (error) {
+      // An empty or unparseable body falls through to the missing-id error; size and timeout limits surface as-is.
+      if (error instanceof BoundedResponseReadError && (error.code === "body_parse" || error.code === "body_missing")) {
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   async function handlePosted(ctx: ChannelStreamRunContext, frame: MattermostFrame, botUserId: string): Promise<void> {

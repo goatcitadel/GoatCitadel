@@ -1,4 +1,5 @@
 import { X509Certificate, createPublicKey, createVerify, type KeyObject } from "node:crypto";
+import { BoundedResponseReadError, readBoundedResponseJson } from "./bounded-response-reader.js";
 import { asRecord, asString, type JsonRecord } from "./webhook-json-helpers.js";
 
 /**
@@ -243,11 +244,20 @@ export const fetchGoogleChatCertsFromGoogle: GoogleChatCertFetcher = async (url)
   if (!response.ok) {
     throw new Error(`Google certificate fetch failed (${response.status}).`);
   }
-  const text = await response.text();
-  if (text.length > MAX_CERT_RESPONSE_BYTES) {
-    throw new Error("Google certificate response is too large.");
+  let body: unknown;
+  try {
+    body = await readBoundedResponseJson(response, {
+      maxBytes: MAX_CERT_RESPONSE_BYTES,
+      timeoutMs: CERT_FETCH_TIMEOUT_MS,
+      label: "Google certificate",
+    });
+  } catch (error) {
+    if (error instanceof BoundedResponseReadError && error.code === "body_limit") {
+      throw new Error("Google certificate response is too large.", { cause: error });
+    }
+    throw error;
   }
-  const parsed = asRecord(JSON.parse(text) as unknown);
+  const parsed = asRecord(body);
   const certs: Record<string, string> = {};
   for (const [kid, pem] of Object.entries(parsed)) {
     if (typeof pem === "string" && pem.includes("-----BEGIN")) {

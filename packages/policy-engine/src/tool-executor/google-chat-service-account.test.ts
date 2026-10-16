@@ -3,8 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GOOGLE_CHAT_BOT_SCOPE,
   GOOGLE_CHAT_MESSAGE_NAME_PATTERN,
+  deleteGoogleChatAppMessage,
   getGoogleChatAccessToken,
+  readGoogleChatMessageThread,
   resetGoogleChatAccessTokenCache,
+  sendGoogleChatAppMessage,
 } from "./google-chat-service-account.js";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -113,5 +116,69 @@ describe("getGoogleChatAccessToken", () => {
     expect(GOOGLE_CHAT_MESSAGE_NAME_PATTERN.test("spaces/S/messages/M")).toBe(true);
     expect(GOOGLE_CHAT_MESSAGE_NAME_PATTERN.test("spaces/S/messages/M/extra")).toBe(false);
     expect(GOOGLE_CHAT_MESSAGE_NAME_PATTERN.test("../spaces/S/messages/M")).toBe(false);
+  });
+});
+
+describe("Google Chat service-account bounded response reads", () => {
+  afterEach(() => {
+    resetGoogleChatAccessTokenCache();
+  });
+
+  const tokenFetch = vi.fn(async () => tokenResponse());
+
+  it("rejects an oversized token response instead of buffering it", async () => {
+    const oversized = new Response(JSON.stringify({ access_token: "t", padding: "x".repeat(70 * 1024) }), {
+      status: 200,
+    });
+    await expect(
+      getGoogleChatAccessToken(
+        keyJson(),
+        async () => oversized,
+        () => NOW_MS,
+      ),
+    ).rejects.toThrow(/exceeded 65536 bytes/);
+  });
+
+  it("treats an unparseable token body as an invalid token response", async () => {
+    await expect(
+      getGoogleChatAccessToken(
+        keyJson(),
+        async () => new Response("not json", { status: 200 }),
+        () => NOW_MS,
+      ),
+    ).rejects.toThrow("Google Chat service-account token response is invalid");
+  });
+
+  it("reads the sent message name, fails closed on an oversized send response, and drains failures", async () => {
+    const send = (apiFetch: (url: string, init: RequestInit) => Promise<Response>) =>
+      sendGoogleChatAppMessage({ keyJson: keyJson(), space: "spaces/S", body: { text: "hi" }, tokenFetch, apiFetch });
+    await expect(send(async () => new Response(JSON.stringify({ name: "spaces/S/messages/M" })))).resolves.toBe(
+      "spaces/S/messages/M",
+    );
+    await expect(
+      send(async () => new Response(JSON.stringify({ name: "spaces/S/messages/M", pad: "x".repeat(70 * 1024) }))),
+    ).rejects.toThrow(/exceeded 65536 bytes/);
+    await expect(send(async () => new Response("denied", { status: 403 }))).rejects.toThrow(
+      /^google-chat\.send failed \(403\)$/,
+    );
+  });
+
+  it("deletes and reads threads without buffering unneeded bodies", async () => {
+    const input = { keyJson: keyJson(), messageName: "spaces/S/messages/M", tokenFetch };
+    await expect(
+      deleteGoogleChatAppMessage({ ...input, apiFetch: async () => new Response("{}", { status: 200 }) }),
+    ).resolves.toBe("spaces/S/messages/M");
+    await expect(
+      deleteGoogleChatAppMessage({ ...input, apiFetch: async () => new Response("gone", { status: 404 }) }),
+    ).rejects.toThrow(/^google-chat\.unsend failed \(404\)$/);
+    await expect(
+      readGoogleChatMessageThread({
+        ...input,
+        apiFetch: async () => new Response(JSON.stringify({ thread: { name: "spaces/S/threads/T" } })),
+      }),
+    ).resolves.toBe("spaces/S/threads/T");
+    await expect(
+      readGoogleChatMessageThread({ ...input, apiFetch: async () => new Response("nope", { status: 404 }) }),
+    ).resolves.toBeUndefined();
   });
 });

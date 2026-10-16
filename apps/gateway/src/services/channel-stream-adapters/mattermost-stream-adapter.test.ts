@@ -402,3 +402,17 @@ describe("mattermost stream liveness", () => {
     expect(socket.sent).toHaveLength(sentAtClose);
   });
 });
+
+describe("mattermost users/me bounded read", () => {
+  it("rejects an oversized users/me body and reports a missing id for an unparseable one", async () => {
+    const oversized = harness({
+      me: () => new Response(JSON.stringify({ id: BOT_ID, pad: "x".repeat(70 * 1024) }), { status: 200 }),
+    });
+    await expect(oversized.adapter.run(oversized.ctx())).rejects.toThrow(
+      "Mattermost users/me response body exceeded 65536 bytes.",
+    );
+    expect(oversized.sockets).toHaveLength(0);
+    const garbled = harness({ me: () => new Response("not json", { status: 200 }) });
+    await expect(garbled.adapter.run(garbled.ctx())).rejects.toThrow("did not include a bot user id");
+  });
+});
