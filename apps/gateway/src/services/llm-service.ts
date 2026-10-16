@@ -2916,26 +2916,29 @@ export class LlmService {
     const useClaudeCodeOAuthHeaders =
       isClaudeCodeOAuthProvider(resolved.provider) && (purpose === "models" || purpose === "messages");
 
-    const isSigV4 = resolveProviderAuthMode(resolved.provider) === "aws-sigv4";
-    const bearerSecret = isSigV4 ? undefined : resolved.apiKey;
+    const dispatchSecret = this.resolveDispatchSecret(resolved);
 
     delete headers.Authorization;
     delete headers["x-api-key"];
-    applyRequestAuthHeaders(headers, explicitAuth, this.env, bearerSecret);
-    if (useClaudeCodeOAuthHeaders && !explicitAuth && resolved.apiKey) {
-      headers.Authorization = `Bearer ${resolved.apiKey}`;
+    applyRequestAuthHeaders(headers, explicitAuth, this.env, dispatchSecret);
+    if (useClaudeCodeOAuthHeaders && !explicitAuth && dispatchSecret) {
+      headers.Authorization = `Bearer ${dispatchSecret}`;
       headers["anthropic-beta"] = "oauth-2025-04-20";
       delete headers["x-api-key"];
-    } else if (useAnthropicNativeHeaders && !explicitAuth && resolved.apiKey) {
-      headers["x-api-key"] = resolved.apiKey;
+    } else if (useAnthropicNativeHeaders && !explicitAuth && dispatchSecret) {
+      headers["x-api-key"] = dispatchSecret;
       delete headers.Authorization;
-    } else if (!explicitAuth && bearerSecret) {
-      headers.Authorization = `Bearer ${bearerSecret}`;
+    } else if (!explicitAuth && dispatchSecret) {
+      headers.Authorization = `Bearer ${dispatchSecret}`;
     }
     if (useAnthropicNativeHeaders || useClaudeCodeOAuthHeaders) {
       headers["anthropic-version"] = "2023-06-01";
     }
     return headers;
+  }
+
+  private resolveDispatchSecret(resolved: ResolvedProvider): string | undefined {
+    return resolveProviderAuthMode(resolved.provider) === "aws-sigv4" ? undefined : resolved.apiKey;
   }
 
   private buildRequestTarget(
@@ -2950,7 +2953,7 @@ export class LlmService {
     if (!auth || auth.type !== "query") {
       return { url: endpoint, headers, dispatcher };
     }
-    const secret = resolveRequestAuthSecret(auth, this.env, resolved.apiKey);
+    const secret = resolveRequestAuthSecret(auth, this.env, this.resolveDispatchSecret(resolved));
     if (!secret) {
       return { url: endpoint, headers, dispatcher };
     }
@@ -3027,6 +3030,19 @@ export class LlmService {
         hasApiKey: true,
         apiKeySource: "inline",
         hasKeychainSecret: false,
+      };
+    }
+    if (
+      resolveProviderAuthMode(provider) === "aws-sigv4" &&
+      this.env.AWS_ACCESS_KEY_ID?.trim() &&
+      this.env.AWS_SECRET_ACCESS_KEY?.trim()
+    ) {
+      return {
+        providerId: provider.providerId,
+        hasApiKey: true,
+        apiKeySource: "env",
+        hasKeychainSecret: false,
+        apiKeyRef: "AWS_ACCESS_KEY_ID",
       };
     }
     return {

@@ -141,6 +141,8 @@ export const PROVIDER_AUTH_MODE_LABELS: Record<LlmProviderAuthMode, string> = {
   "claude-code-oauth": "a Claude Code OAuth token",
   "google-service-account": "a Google service account",
   "google-adc": "Google application default credentials",
+  "aws-sigv4": "AWS access keys (SigV4)",
+  "aws-bedrock-api-key": "a Bedrock API key",
 };
 export const RUNTIME_PROCESS_STATE_LABELS: Record<LlamaCppRuntimeStatus["processState"], string> = {
   stopped: "Stopped",

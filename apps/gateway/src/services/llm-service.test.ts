@@ -5092,6 +5092,46 @@ describe("LlmService", () => {
       expect((await service.resolveProvider("bedrock")).apiKey).toBeUndefined();
     });
 
+    it("never puts SigV4 credential JSON in a query-auth URL", () => {
+      const provider: LlmProviderConfig = {
+        ...sigV4Provider,
+        request: { auth: { type: "query", queryParam: "key" } },
+      };
+      const service = createSigV4Service(provider, {}) as unknown as {
+        buildRequestTarget(
+          resolved: { provider: LlmProviderConfig; apiKey?: string },
+          purpose: string,
+          endpoint: string,
+        ): { url: string };
+      };
+      const target = service.buildRequestTarget(
+        { provider, apiKey: '{"accessKeyId":"A","secretAccessKey":"S"}' },
+        "chat",
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/x/converse",
+      );
+      expect(new URL(target.url).searchParams.has("key")).toBe(false);
+      expect(target.url).not.toContain("secretAccessKey");
+    });
+
+    it("reports env readiness when only AWS_* credentials are present", () => {
+      const service = createSigV4Service(sigV4Provider, {
+        AWS_ACCESS_KEY_ID: "AKIATESTTESTTESTTEST",
+        AWS_SECRET_ACCESS_KEY: "test-secret",
+      }) as unknown as LlmService;
+      expect(service.getProviderSecretStatus("bedrock", { useCache: false })).toMatchObject({
+        hasApiKey: true,
+        apiKeySource: "env",
+        apiKeyRef: "AWS_ACCESS_KEY_ID",
+      });
+      const bare = createSigV4Service(sigV4Provider, {
+        AWS_ACCESS_KEY_ID: "AKIATESTTESTTESTTEST",
+      }) as unknown as LlmService;
+      expect(bare.getProviderSecretStatus("bedrock", { useCache: false })).toMatchObject({
+        hasApiKey: false,
+        apiKeySource: "none",
+      });
+    });
+
     it("rejects inline SigV4 credentials", async () => {
       const service = createSigV4Service({ ...sigV4Provider, apiKey: '{"accessKeyId":"A","secretAccessKey":"S"}' }, {});
       await expect(service.resolveProvider("bedrock")).rejects.toThrow(
