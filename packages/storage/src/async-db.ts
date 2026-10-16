@@ -155,7 +155,9 @@ class SqlitePinnedAsyncDatabaseClient implements AsyncDatabaseClient {
     try {
       this.db.exec(`SAVEPOINT ${savepoint}`);
       try {
-        const result = await callback(this);
+        // Each savepoint level gets its own client so an awaited nested
+        // transaction can nest further, while siblings at one level are rejected.
+        const result = await callback(new SqlitePinnedAsyncDatabaseClient(this.db));
         this.db.exec(`RELEASE SAVEPOINT ${savepoint}`);
         return result;
       } catch (error) {

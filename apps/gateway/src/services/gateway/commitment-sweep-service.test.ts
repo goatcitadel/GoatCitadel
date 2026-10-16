@@ -131,6 +131,24 @@ describe("runCommitmentSweep", () => {
     expect(deliverCommitment).not.toHaveBeenCalled();
   });
 
+  it("uses the session's persisted active hours and timezone when no resolver is wired", async () => {
+    const noonUtc = "2026-06-22T12:00:00.000Z";
+    const losAngeles = createHarness({
+      due: [commitment()],
+      prefsBySession: { "session-1": prefs({ activeHours: { start: 8, end: 22, tz: "America/Los_Angeles" } }) },
+      now: noonUtc, // 05:00 in Los Angeles — outside 08–22
+    });
+    expect((await runCommitmentSweep(losAngeles.deps)).skippedActiveHours).toBe(1);
+    expect(losAngeles.deliverCommitment).not.toHaveBeenCalled();
+
+    const tokyo = createHarness({
+      due: [commitment()],
+      prefsBySession: { "session-1": prefs({ activeHours: { start: 8, end: 22, tz: "Asia/Tokyo" } }) },
+      now: noonUtc, // 21:00 in Tokyo — inside 08–22
+    });
+    expect((await runCommitmentSweep(tokyo.deps)).delivered).toBe(1);
+  });
+
   it("delivers at most one check-in per session per sweep (backlog respects cooldown)", async () => {
     const { deps, deliverCommitment, markDeliveryPending } = createHarness({
       due: [

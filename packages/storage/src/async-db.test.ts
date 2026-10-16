@@ -104,6 +104,35 @@ test("SQLite async transaction client nests with savepoints", async () => {
   }
 });
 
+test("SQLite async transaction client nests awaited transactions more than one level deep", async () => {
+  const db = new SqliteAsyncDatabaseClient(createDatabase({ dbPath: ":memory:" }));
+  try {
+    await db.exec("CREATE TABLE deep_nested_tx_test (id INTEGER PRIMARY KEY)");
+    await db.transaction("immediate", async (tx) => {
+      await tx.transaction("immediate", async (level1) => {
+        await level1.prepare("INSERT INTO deep_nested_tx_test (id) VALUES (?)").run(1);
+        await assert.rejects(
+          level1.transaction("immediate", async (level2) => {
+            await level2.prepare("INSERT INTO deep_nested_tx_test (id) VALUES (?)").run(2);
+            throw new Error("level2 rollback");
+          }),
+          /level2 rollback/,
+        );
+        await level1.transaction("immediate", async (level2) => {
+          await level2.prepare("INSERT INTO deep_nested_tx_test (id) VALUES (?)").run(3);
+        });
+      });
+    });
+    const rows = await db.prepare("SELECT id FROM deep_nested_tx_test ORDER BY id").all<{ id: number }>();
+    assert.deepEqual(
+      rows.map((row) => row.id),
+      [1, 3],
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 test("SQLite async transaction client rejects concurrent nested transactions", async () => {
   const db = new SqliteAsyncDatabaseClient(createDatabase({ dbPath: ":memory:" }));
   try {

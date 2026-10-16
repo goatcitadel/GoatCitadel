@@ -92,7 +92,8 @@ export async function runCommitmentSweep(deps: CommitmentSweepDeps): Promise<Com
       result.skippedCooldown += 1;
       continue;
     }
-    const activeHours = deps.resolveActiveHours?.(commitment.sessionId) ?? DEFAULT_ACTIVE_HOURS;
+    const activeHours =
+      deps.resolveActiveHours?.(commitment.sessionId) ?? toActiveHoursWindow(prefs) ?? DEFAULT_ACTIVE_HOURS;
     if (!isWithinActiveHours(now, activeHours)) {
       result.skippedActiveHours += 1;
       continue;
@@ -113,6 +114,20 @@ export async function runCommitmentSweep(deps: CommitmentSweepDeps): Promise<Com
     }
   }
   return result;
+}
+
+/**
+ * Adapt a session's persisted `{start,end,tz}` active-hours record to the
+ * sweep's window shape. Returns undefined when the prefs carry no window.
+ */
+export function toActiveHoursWindow(
+  prefs: Partial<Pick<SessionAutonomyPrefsRecord, "activeHours">>,
+): ActiveHoursWindow | undefined {
+  if (!prefs.activeHours) {
+    return undefined;
+  }
+  const { start, end, tz } = prefs.activeHours;
+  return tz ? { startHour: start, endHour: end, tz } : { startHour: start, endHour: end };
 }
 
 /**
