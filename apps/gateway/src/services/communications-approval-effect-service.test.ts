@@ -41,6 +41,10 @@ function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, 
   const revisions: Record<string, string> = {};
   /** Errors the next connection reads reject with, in order; empty reads the fixture. */
   const connectionReadFailures: unknown[] = [];
+  /** Workspace bindings per connection; unbound connections serve every workspace. */
+  const connectionWorkspaces: Record<string, string> = {};
+  /** Errors the next ledger run reads reject with, in order. */
+  const ledgerReadFailures: unknown[] = [];
   const host: CommsHost = {
     // Stands in for the policy engine's approval bypass: it only executes a presented
     // `approval:<id>` consent and settles that approval's pending action as executed.
@@ -68,6 +72,7 @@ function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, 
         status: "connected",
         config: {},
         ...known,
+        ...(connectionWorkspaces[connectionId] ? { workspaceId: connectionWorkspaces[connectionId] } : {}),
       } as never;
     },
     emitDiscordTyping: vi.fn(),
@@ -88,14 +93,29 @@ function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, 
       } as AsyncStorage["approvals"],
       mailDrafts: storage.mailDrafts,
       pendingApprovalActions: storage.pendingApprovalActions,
-      externalSideEffectRuns: storage.externalSideEffectRuns,
+      externalSideEffectRuns: {
+        get: (runId: string) =>
+          ledgerReadFailures.length
+            ? Promise.reject(ledgerReadFailures.shift())
+            : storage.externalSideEffectRuns.get(runId),
+      } as AsyncStorage["externalSideEffectRuns"],
     },
     getIntegrationConnection: (connectionId) => host.getIntegrationConnection(connectionId),
     commsGmailSend: (input, preApproval) => commsGmailSend(host, input, preApproval),
     commsSmtpSend: (input, preApproval) => commsSmtpSend(host, input, preApproval),
     commsCalendarCreate: (input, preApproval) => commsCalendarCreate(host, input, preApproval),
   });
-  return { raw, storage, invokes, service, revisions, approvalReadFailures, connectionReadFailures };
+  return {
+    raw,
+    storage,
+    invokes,
+    service,
+    revisions,
+    approvalReadFailures,
+    connectionReadFailures,
+    connectionWorkspaces,
+    ledgerReadFailures,
+  };
 }
 
 const approvedLinkage = (actionType: string, connectorId: string) => ({
@@ -342,6 +362,47 @@ describe("CommunicationsApprovalEffectService mail send", () => {
     expect(invokes).toHaveLength(1);
   });
 
+  it("rethrows a transient ledger read on replay so a delivered send is never settled unknown", async () => {
+    const { storage, invokes, service, ledgerReadFailures } = createHarness();
+    const { draftId, approvalId } = await seedApprovedMailSend(storage);
+    await service.executeApprovedMailSend({ approvalId });
+    const outage = new Error("database is locked");
+    ledgerReadFailures.push(outage);
+
+    await expect(service.executeApprovedMailSend({ approvalId })).rejects.toBe(outage);
+
+    expect(await storage.mailDrafts.get(draftId)).toMatchObject({ status: "sent" });
+    await expect(service.executeApprovedMailSend({ approvalId })).resolves.toMatchObject({ replayed: true });
+    expect(invokes).toHaveLength(1);
+  });
+
+  it("refuses a mail account bound to another workspace and sends from one bound to the approval's", async () => {
+    const { storage, invokes, service, connectionWorkspaces } = createHarness();
+    const foreign = await seedApprovedMailSend(storage);
+    connectionWorkspaces["conn-gmail"] = "workspace-other";
+
+    const error = await expectEffectError(
+      service.executeApprovedMailSend({ approvalId: foreign.approvalId }),
+      "invalid_payload",
+    );
+
+    expect(error.message).toBe(
+      "The mail account belongs to a different workspace than this approval; nothing was sent.",
+    );
+    expect(invokes).toHaveLength(0);
+    expect(await storage.mailDrafts.get(foreign.draftId)).toMatchObject({
+      status: "failed",
+      failureReason: error.message,
+    });
+
+    connectionWorkspaces["conn-gmail"] = "default";
+    const bound = await seedApprovedMailSend(storage);
+    await expect(service.executeApprovedMailSend({ approvalId: bound.approvalId })).resolves.toMatchObject({
+      disposition: "sent",
+    });
+    expect(invokes).toHaveLength(1);
+  });
+
   it("fails a pre-boundary provider refusal as delivery_failed", async () => {
     const { storage, service } = createHarness(() => ({
       status: "failed",
@@ -559,6 +620,19 @@ describe("CommunicationsApprovalEffectService calendar create", () => {
 
     expect(error.message).toBe(
       "The calendar account changed after approval; nothing was created. Request approval again.",
+    );
+    expect(invokes).toHaveLength(0);
+  });
+
+  it("refuses a calendar account bound to another workspace", async () => {
+    const { storage, invokes, service, connectionWorkspaces } = createHarness();
+    const { approvalId } = await seedApprovedCalendarCreate(storage);
+    connectionWorkspaces["conn-calendar"] = "workspace-other";
+
+    const error = await expectEffectError(service.executeApprovedCalendarCreate({ approvalId }), "invalid_payload");
+
+    expect(error.message).toBe(
+      "The calendar account belongs to a different workspace than this approval; nothing was created.",
     );
     expect(invokes).toHaveLength(0);
   });

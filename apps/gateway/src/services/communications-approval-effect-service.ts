@@ -92,6 +92,10 @@ export const MAIL_CONNECTION_CHANGED_REASON =
 export const CALENDAR_CONNECTION_CHANGED_REASON =
   "The calendar account changed after approval; nothing was created. Request approval again.";
 const MAIL_MISSING_WORKSPACE_REASON = "The mail send approval names no workspace; nothing was sent.";
+const MAIL_FOREIGN_WORKSPACE_REASON =
+  "The mail account belongs to a different workspace than this approval; nothing was sent.";
+const CALENDAR_FOREIGN_WORKSPACE_REASON =
+  "The calendar account belongs to a different workspace than this approval; nothing was created.";
 const CALENDAR_MISSING_WORKSPACE_REASON = "The calendar create approval names no workspace; nothing was created.";
 const SENT_PROVIDER_STATUSES = new Set(["sent", "created"]);
 
@@ -124,6 +128,7 @@ export class CommunicationsApprovalEffectService {
     try {
       const connection = await this.readConnection(mail.accountId);
       assertConnectionUnchanged(connection, mail.connectionRevision, MAIL_CONNECTION_CHANGED_REASON);
+      assertConnectionInWorkspace(connection, workspaceId, MAIL_FOREIGN_WORKSPACE_REASON);
       const send = this.selectMailSender(connection);
       const result = await this.invokeApproved(approval, workspaceId, (preApproval) =>
         send(
@@ -183,6 +188,7 @@ export class CommunicationsApprovalEffectService {
     }
     const connection = await this.readConnection(event.accountId);
     assertConnectionUnchanged(connection, event.connectionRevision, CALENDAR_CONNECTION_CHANGED_REASON);
+    assertConnectionInWorkspace(connection, workspaceId, CALENDAR_FOREIGN_WORKSPACE_REASON);
     this.assertCalendarCanCreate(connection);
     const result = await this.invokeApproved(approval, workspaceId, (preApproval) =>
       this.deps.commsCalendarCreate(
@@ -348,7 +354,10 @@ export class CommunicationsApprovalEffectService {
     }
     try {
       return (await this.deps.storage.externalSideEffectRuns.get(runId)).status === "completed";
-    } catch {
+    } catch (error) {
+      // Only a missing run is an unknown outcome; any other read failure propagates so the
+      // effect worker retries instead of settling a delivered send as outcome_unknown.
+      if (!(error instanceof NotFoundError)) throw error;
       return false;
     }
   }
@@ -398,6 +407,13 @@ export class CommunicationsApprovalEffectService {
  * since approval (host, sender, credentials, provider, workspace) advances its revision;
  * that, or an approval that recorded no revision, fails closed before anything is sent.
  */
+/** Unbound connections serve every workspace; a connection bound elsewhere never sends for this one. */
+function assertConnectionInWorkspace(connection: IntegrationConnection, workspaceId: string, reason: string): void {
+  if (connection.workspaceId && connection.workspaceId !== workspaceId) {
+    throw new CommunicationsApprovalEffectError("invalid_payload", reason);
+  }
+}
+
 function assertConnectionUnchanged(
   connection: IntegrationConnection,
   approvedRevision: string | undefined,
