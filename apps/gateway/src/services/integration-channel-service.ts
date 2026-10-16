@@ -244,7 +244,9 @@ export class IntegrationChannelService {
  *
  *   - `tui`  : local terminal; the operator is the local user, there is no
  *              remote sender `actorId` to gate on.
- *   - `ntfy` : outbound-only notification delivery (no inbound messages).
+ *
+ * ntfy is deliberately NOT here: its opt-in stream inbound has a sender (the
+ * topic) that the allowlist gates, so every ntfy connection defaults to allowlist.
  *
  * Every other inbound-capable channel (Discord, Telegram, Slack, WhatsApp,
  * LINE, Nextcloud Talk, Matrix, Mattermost, Teams, ...) is default-safe
@@ -252,7 +254,7 @@ export class IntegrationChannelService {
  * them. An operator who genuinely wants an open posture for one of those
  * channels must opt in via `inboundAccessMode: "open_legacy"`.
  */
-export const OPEN_INBOUND_CHANNELS: ReadonlySet<string> = new Set(["tui", "ntfy"]);
+export const OPEN_INBOUND_CHANNELS: ReadonlySet<string> = new Set(["tui"]);
 
 export async function listIntegrationConnections(
   deps: IntegrationChannelPort,

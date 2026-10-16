@@ -195,7 +195,7 @@ describe("integration-channel-service inbound access defaults", () => {
     });
   });
 
-  it("keeps outbound-only and local channels open (tui, ntfy do not get an allowlist)", async () => {
+  it("keeps local channels open (tui) while ntfy defaults to allowlist", async () => {
     const deps = createDeps();
 
     const tui = await createIntegrationConnection(deps, {
@@ -213,7 +213,26 @@ describe("integration-channel-service inbound access defaults", () => {
     });
 
     expect(tui.config.inboundAccessMode).toBeUndefined();
-    expect(ntfy.config.inboundAccessMode).toBeUndefined();
+    expect(ntfy.config.inboundAccessMode).toBe("allowlist");
+  });
+
+  it("stamps a non-guided stream-enabled ntfy connection as allowlist, denying unknown topic senders", async () => {
+    const deps = createDeps();
+    const ntfy = await createIntegrationConnection(deps, {
+      catalogId: "channel.ntfy",
+      label: "ntfy",
+      config: {
+        baseUrl: "https://ntfy.sh",
+        topic: "goatcitadel-ops",
+        tokenEnv: "NTFY_TOKEN",
+        inboundStreamEnabled: true,
+      },
+    });
+
+    expect(ntfy.config.inboundAccessMode).toBe("allowlist");
+    expect(evaluateChannelInboundAccess({ config: ntfy.config, actorId: "ntfy-topic:goatcitadel-ops" }).allowed).toBe(
+      false,
+    );
   });
 
   it("lets an operator pick an explicit open ('allow all') posture for an inbound channel", async () => {

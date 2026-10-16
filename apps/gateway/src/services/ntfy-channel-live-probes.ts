@@ -1,4 +1,9 @@
-import { redactSecretText, type ChannelProbeReport, type ConnectorDiagnosticReport } from "@goatcitadel/contracts";
+import {
+  NTFY_OUTBOUND_MARKER_TAG,
+  redactSecretText,
+  type ChannelProbeReport,
+  type ConnectorDiagnosticReport,
+} from "@goatcitadel/contracts";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { mapProbeStepsToChecks, parseJsonRecord, inferFailureCategory, asString } from "./channel-probe-result.js";
 type BotProbeChecks = { checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport };
@@ -44,6 +49,8 @@ export async function runNtfyLiveChecks(input: NtfyProbeInput): Promise<BotProbe
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
         Title: "GoatCitadel channel setup probe",
+        // Marks the probe so the inbound stream never echoes it back as a turn.
+        "X-Tags": NTFY_OUTBOUND_MARKER_TAG,
         Priority: normalizeNtfyProbePriority(input.priority),
         ...(input.token ? { Authorization: `Bearer ${input.token}` } : {}),
       },

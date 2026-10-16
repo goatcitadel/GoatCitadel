@@ -28,6 +28,7 @@ describe("ntfy channel live probes", () => {
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer ntfy-test-token");
     expect(headers.get("priority")).toBe("5");
+    expect(headers.get("x-tags")).toBe("goatcitadel-outbound");
     expect(init?.body).toContain("GoatCitadel ntfy probe");
     expect(result.probe).toMatchObject({
       kind: "ntfy_publish",

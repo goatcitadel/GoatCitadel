@@ -26,7 +26,7 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "webhook_destination",
-      contentVersion: "2026.08.ntfy.outbound.v2",
+      contentVersion: "2026.10.ntfy.stream.v3",
       estimatedMinutes: 4,
       difficulty: "beginner",
       manualModePolicy: "available-secondary",
@@ -182,11 +182,11 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
       ],
     },
     adapter: {
-      adapterVersion: "2026.06.ntfy.outbound.v1",
+      adapterVersion: "2026.10.ntfy.stream.v2",
       secretFieldKeys: ["token"],
     },
     validation: {
-      validationVersion: "2026.06.ntfy.outbound.v1",
+      validationVersion: "2026.10.ntfy.stream.v2",
       levels: ["structural", "semantic"],
     },
     testing: {
@@ -275,7 +275,7 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
         inboundStreamEnabled: inboundStreamEnabled ? true : undefined,
         subscribeTopic,
         ...(inboundStreamEnabled && defaultSender && !hasSavedSenders
-          ? { allowedSenders: [`ntfy-topic:${defaultSender}`] }
+          ? { inboundAccessMode: "allowlist", allowedSenders: [`ntfy-topic:${defaultSender}`] }
           : {}),
       });
     },

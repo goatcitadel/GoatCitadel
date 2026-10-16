@@ -129,6 +129,8 @@ export function createNtfyStreamAdapter(deps: NtfyStreamAdapterDeps): ChannelStr
         method: "GET",
         headers: { Authorization: `Bearer ${token}`, Accept: "application/x-ndjson" },
         signal: ctx.signal,
+        // A redirect could leave the allowlisted host; surface it as an error instead.
+        redirect: "error",
       });
       if (response.status === 401 || response.status === 403) {
         await response.body?.cancel().catch(() => undefined);

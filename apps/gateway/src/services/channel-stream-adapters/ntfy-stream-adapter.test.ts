@@ -167,6 +167,7 @@ describe("ntfy stream adapter", () => {
     expect(String(withoutCursor?.[0])).toBe("https://ntfy.example.test/ops/json");
     const headers = new Headers(withCursor?.[1]?.headers);
     expect(headers.get("authorization")).toBe("Bearer secret-token");
+    expect(withCursor?.[1]?.redirect).toBe("error");
   });
 
   it("subscribes to subscribeTopic when set and encodes the topic", async () => {

@@ -380,6 +380,7 @@ describe("channel setup definitions", () => {
     expect(definition.normalize(withToken)).toMatchObject({
       inboundStreamEnabled: true,
       subscribeTopic: "inbox",
+      inboundAccessMode: "allowlist",
       allowedSenders: ["ntfy-topic:inbox"],
     });
 
@@ -425,7 +426,7 @@ describe("channel setup definitions", () => {
     const testStep = definition.wizard.steps.find((step) => step.kind === "test");
     expect(testStep?.title).toBe("Validate the draft");
     expect(JSON.stringify(testStep)).toMatch(/dry-run/i);
-    expect(definition.wizard.contentVersion).toBe("2026.08.ntfy.outbound.v2.guided-2026-10");
+    expect(definition.wizard.contentVersion).toBe("2026.10.ntfy.stream.v3.guided-2026-10");
   });
 
   it("gives guided Nextcloud Talk setup a test step and a finalize confirmation step", () => {

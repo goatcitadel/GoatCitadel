@@ -595,7 +595,17 @@ function createIntegrationChannelPortForGateway(
     },
     syncDiscordRuntime: async () => {
       await gateway.syncDiscordRuntime();
-      await streams.sync();
+      try {
+        await streams.sync();
+      } catch (error) {
+        gateway.recordDevDiagnostic({
+          level: "warn",
+          category: "channels",
+          event: "channel.stream.sync_failed",
+          message: "Channel stream runtime sync failed.",
+          context: { error: (error as Error).message },
+        });
+      }
     },
     syncSignalInboundRuntime: async () => {
       await gateway.syncSignalInboundRuntime();
