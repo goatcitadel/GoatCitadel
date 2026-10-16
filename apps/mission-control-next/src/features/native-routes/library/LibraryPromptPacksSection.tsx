@@ -282,7 +282,7 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
                           items={selectedComparison.advisory.safetyNotes.map((note, index) => ({
                             id: `advisory-note-${index}`,
                             label:
-                              index === 0 ? "Comparison boundary" : index === 1 ? "Runtime effect" : "Execution path",
+                              index === 0 ? "Comparison boundary" : index === 1 ? "Execution path" : "Runtime effect",
                             description: note,
                             meta: selectedComparison.advisory?.summary,
                           }))}

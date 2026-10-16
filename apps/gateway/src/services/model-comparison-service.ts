@@ -226,7 +226,7 @@ export function buildModelComparisonAdvisory(run: ModelComparisonRun): ModelComp
     judgmentCount: run.judgments.length,
     recommendedNextAction,
     safetyNotes: [
-      "This record compares existing prompt-pack outputs and operator judgments.",
+      "This record compares prompt-pack outputs, linked from earlier runs or produced by live runs, and operator judgments.",
       "Start the comparison to run each prompt-pack test once per candidate through the governed prompt-pack runner.",
       "Comparing does not change routing by itself.",
     ],

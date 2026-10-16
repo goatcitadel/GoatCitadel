@@ -241,11 +241,15 @@ function applyPromptPackRun(
   pending: ModelComparisonPromptResult,
   promptRun: PromptPackRunRecord,
 ): ModelComparisonPromptResult {
-  const responseText = promptRun.responseText?.trim() || undefined;
+  // Failed and approval-paused runs never expose partial text to blind judges.
+  const responseText =
+    promptRun.status === "failed" || promptRun.status === "approval_paused"
+      ? undefined
+      : promptRun.responseText?.trim() || undefined;
   return {
     ...pending,
     runId: promptRun.runId,
-    responseText: promptRun.status === "failed" ? undefined : responseText,
+    responseText,
     latencyMs: computeRunLatencyMs(promptRun),
     error: resolvePromptPackRunError(promptRun, responseText),
   };
@@ -258,10 +262,8 @@ function resolvePromptPackRunError(
   if (promptRun.status === "failed") {
     return promptRun.error ?? "Prompt-pack run failed.";
   }
-  if (responseText) {
-    return undefined;
+  if (promptRun.status === "approval_paused") {
+    return "Prompt-pack run paused for approval.";
   }
-  return promptRun.status === "approval_paused"
-    ? "Prompt-pack run paused for approval."
-    : "Prompt-pack run returned no response.";
+  return responseText ? undefined : "Prompt-pack run returned no response.";
 }

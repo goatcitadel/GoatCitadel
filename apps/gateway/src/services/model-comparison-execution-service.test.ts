@@ -233,6 +233,22 @@ describe("ModelComparisonExecutionService", () => {
     expect(paused.every((result) => result.responseText === undefined)).toBe(true);
   });
 
+  it("never offers a paused run's partial text for blind judging", async () => {
+    const { service, executor, created } = await setup(async (_packId, testId, input) =>
+      input.model === "claude"
+        ? promptRun({ testId, status: "approval_paused", responseText: "partial answer before approval" })
+        : promptRun({ testId, responseText: "ok" }),
+    );
+    await executor.startComparison(created.comparisonId);
+    await executor.whenSettled(created.comparisonId);
+    const done = await service.getComparison(created.comparisonId);
+    expect(done.status).toBe("failed");
+    const paused = done.results.filter((result) => result.error === "Prompt-pack run paused for approval.");
+    expect(paused).toHaveLength(2);
+    expect(paused.every((result) => result.responseText === undefined)).toBe(true);
+    expect(JSON.stringify(done.results)).not.toContain("partial answer before approval");
+  });
+
   it("ends failed when a completed prompt-pack run returns no response", async () => {
     const { service, executor, created } = await setup(async (_packId, testId) =>
       promptRun({ testId, responseText: "   " }),
