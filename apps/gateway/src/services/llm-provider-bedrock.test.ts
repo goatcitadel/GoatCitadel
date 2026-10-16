@@ -13,6 +13,7 @@ import {
   bedrockEventFrame as frame,
   bedrockEventStreamResponse as eventStreamResponse,
   concatBytes as concat,
+  streamOf,
 } from "./llm-provider-bedrock.test-support.js";
 
 const SIGV4_SECRET = "test-secret";
@@ -96,17 +97,6 @@ const streamCodec = new EventStreamCodec(
   (bytes) => new TextDecoder().decode(bytes),
   (text) => new TextEncoder().encode(text),
 );
-
-function streamOf(bytes: Uint8Array, splitEvery: number): ReadableStream<Uint8Array> {
-  return new ReadableStream({
-    start(controller) {
-      for (let offset = 0; offset < bytes.length; offset += splitEvery) {
-        controller.enqueue(bytes.slice(offset, offset + splitEvery));
-      }
-      controller.close();
-    },
-  });
-}
 
 const metadataFrame = () => frame("metadata", { usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 } });
 

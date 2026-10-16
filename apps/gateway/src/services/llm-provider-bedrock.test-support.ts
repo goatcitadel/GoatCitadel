@@ -27,8 +27,8 @@ export function concatBytes(parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
-export function bedrockEventStreamResponse(bytes: Uint8Array, splitEvery = 100000): Response {
-  const body = new ReadableStream<Uint8Array>({
+export function streamOf(bytes: Uint8Array, splitEvery: number): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
     start(controller) {
       for (let offset = 0; offset < bytes.length; offset += splitEvery) {
         controller.enqueue(bytes.slice(offset, offset + splitEvery));
@@ -36,7 +36,10 @@ export function bedrockEventStreamResponse(bytes: Uint8Array, splitEvery = 10000
       controller.close();
     },
   });
-  return new Response(body, {
+}
+
+export function bedrockEventStreamResponse(bytes: Uint8Array, splitEvery = 100000): Response {
+  return new Response(streamOf(bytes, splitEvery), {
     status: 200,
     headers: { "content-type": "application/vnd.amazon.eventstream" },
   });

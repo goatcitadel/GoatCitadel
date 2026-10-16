@@ -35,9 +35,12 @@ describe("native provider profile fields", () => {
     expect(markup).not.toContain('value="aws-bedrock-api-key"');
   });
 
-  it("explains the SigV4 credential JSON and the AWS environment fallback", () => {
+  it("labels the SigV4 environment field as a variable name holding the credentials JSON", () => {
     const markup = render({ apiStyle: "bedrock-messages", authMode: "aws-sigv4" });
-    expect(markup).toContain("AWS credentials JSON env");
-    expect(markup).toContain("AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the gateway environment.");
+    expect(markup).toContain("AWS credentials JSON env name");
+    expect(markup).toContain('placeholder="BEDROCK_AWS_CREDENTIALS"');
+    expect(markup).toContain("(and AWS_SESSION_TOKEN) from the gateway environment.");
+    expect(markup).not.toContain("accessKeyId");
+    expect(render({ apiStyle: "bedrock-messages" })).toContain('placeholder="OPENAI_API_KEY"');
   });
 });

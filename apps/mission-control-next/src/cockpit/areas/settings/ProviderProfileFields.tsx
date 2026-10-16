@@ -6,7 +6,8 @@ import {
 } from "../../../features/native-routes/settings/helpers/provider-drafts";
 import { ProviderTransportFields } from "./ProviderTransportFields";
 import {
-  AWS_SIGV4_CREDENTIAL_HELP,
+  AWS_SIGV4_ENV_REFERENCE_HELP,
+  AWS_SIGV4_ENV_REFERENCE_LABEL,
   BEDROCK_CREDENTIAL_MODE_OPTIONS,
   isBedrockCredentialMode,
   LLM_API_STYLE_LABELS,
@@ -95,12 +96,12 @@ export function ProviderProfileFields(
               draft.authMode === "google-service-account"
                 ? "Service-account JSON environment variable"
                 : draft.authMode === "aws-sigv4"
-                  ? "AWS credentials JSON environment variable"
+                  ? AWS_SIGV4_ENV_REFERENCE_LABEL
                   : "API key environment variable",
             )
           : null}
         {draft.authMode === "aws-sigv4" ? (
-          <p className="text-xs text-fg-muted sm:col-span-2">{AWS_SIGV4_CREDENTIAL_HELP}</p>
+          <p className="text-xs text-fg-muted sm:col-span-2">{AWS_SIGV4_ENV_REFERENCE_HELP}</p>
         ) : null}
         {google ? (
           <>

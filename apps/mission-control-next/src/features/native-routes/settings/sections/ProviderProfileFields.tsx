@@ -4,7 +4,9 @@ import {
   type LlmTransportDraft,
 } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
 import {
-  AWS_SIGV4_CREDENTIAL_HELP,
+  AWS_SIGV4_ENV_REFERENCE_HELP,
+  AWS_SIGV4_ENV_REFERENCE_PLACEHOLDER,
+  AWS_SIGV4_ENV_REFERENCE_SHORT_LABEL,
   BEDROCK_CREDENTIAL_MODE_OPTIONS,
   isBedrockCredentialMode,
   LLM_API_STYLE_LABELS,
@@ -156,14 +158,16 @@ export function ProviderProfileFields({
               providerDraft.authMode === "google-service-account"
                 ? "Service-account JSON env"
                 : providerDraft.authMode === "aws-sigv4"
-                  ? "AWS credentials JSON env"
+                  ? AWS_SIGV4_ENV_REFERENCE_SHORT_LABEL
                   : "API key env"
             }
           >
             <input
               className="mc-next-settings-input"
               value={providerDraft.apiKeyEnv}
-              placeholder="OPENAI_API_KEY"
+              placeholder={
+                providerDraft.authMode === "aws-sigv4" ? AWS_SIGV4_ENV_REFERENCE_PLACEHOLDER : "OPENAI_API_KEY"
+              }
               onChange={(event) =>
                 setProviderDraft((current) => ({
                   ...current,
@@ -172,7 +176,7 @@ export function ProviderProfileFields({
               }
             />
             {providerDraft.authMode === "aws-sigv4" ? (
-              <p className="mc-next-settings-field-note">{AWS_SIGV4_CREDENTIAL_HELP}</p>
+              <p className="mc-next-settings-field-note">{AWS_SIGV4_ENV_REFERENCE_HELP}</p>
             ) : null}
           </SettingsField>
         )}

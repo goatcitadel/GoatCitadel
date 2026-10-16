@@ -149,8 +149,36 @@ export const BEDROCK_CREDENTIAL_MODE_OPTIONS: ReadonlyArray<{ value: BedrockCred
   { value: "aws-bedrock-api-key", label: "Bedrock API key" },
   { value: "aws-sigv4", label: "AWS access key (SigV4)" },
 ];
-export const AWS_SIGV4_CREDENTIAL_HELP =
-  '{"accessKeyId":"…","secretAccessKey":"…","sessionToken":"…"} — or leave empty to use AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the gateway environment.';
+export const AWS_SIGV4_CREDENTIAL_LABEL = "AWS credentials JSON";
+export const AWS_SIGV4_CREDENTIAL_SHAPE = '{"accessKeyId":"…","secretAccessKey":"…","sessionToken":"…"}';
+export const AWS_SIGV4_CREDENTIAL_HELP = `${AWS_SIGV4_CREDENTIAL_SHAPE} — or leave empty to use AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the gateway environment.`;
+export const AWS_SIGV4_SECURE_INPUT_NOTE = `Enter the AWS credentials JSON: ${AWS_SIGV4_CREDENTIAL_SHAPE}.`;
+export const AWS_SIGV4_ENV_REFERENCE_LABEL = "AWS credentials JSON environment variable name";
+export const AWS_SIGV4_ENV_REFERENCE_SHORT_LABEL = "AWS credentials JSON env name";
+export const AWS_SIGV4_ENV_REFERENCE_PLACEHOLDER = "BEDROCK_AWS_CREDENTIALS";
+export const AWS_SIGV4_ENV_REFERENCE_HELP =
+  "Name of an environment variable whose value is the AWS credentials JSON. Leave empty to use AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from the gateway environment.";
+/** Label and hint for the field where a provider secret value is pasted, by credential mode. */
+export function presentProviderSecretField(authMode: string | null | undefined): {
+  label: string;
+  placeholder: string;
+  help?: string;
+} {
+  if (authMode === "aws-sigv4") {
+    return {
+      label: AWS_SIGV4_CREDENTIAL_LABEL,
+      placeholder: AWS_SIGV4_CREDENTIAL_SHAPE,
+      help: AWS_SIGV4_CREDENTIAL_HELP,
+    };
+  }
+  if (authMode === "google-service-account") {
+    return {
+      label: "Service-account JSON",
+      placeholder: "Paste service-account JSON to replace the Gateway-owned secret",
+    };
+  }
+  return { label: "Provider secret", placeholder: "Paste a new API key to save" };
+}
 export function isBedrockCredentialMode(value: string | null | undefined): value is BedrockCredentialMode {
   return value === "aws-bedrock-api-key" || value === "aws-sigv4";
 }
