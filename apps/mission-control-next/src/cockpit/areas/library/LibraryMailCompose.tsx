@@ -162,19 +162,17 @@ function LibraryMailComposeContent({
   async function refreshReceipt() {
     const draftId = receipt?.record.draftId;
     const sequence = ++readSequence.current;
-    try {
-      await onRefresh();
-    } catch {
-      // A failed record refresh must not stop the draft re-read below.
-    }
+    // A failed record refresh must not stop the draft re-read below.
+    await Promise.resolve()
+      .then(onRefresh)
+      .catch(() => undefined);
     if (!draftId) return;
-    try {
-      const observed = await getMailDraft(draftId);
-      if (operation.current() && sequence === readSequence.current && observed.draftId === draftId)
-        setReceipt((current) => (current && current.record.draftId === draftId ? { ...current, observed } : current));
-    } catch {
-      // The approval card stays authoritative; a failed re-read must not hide it.
-    }
+    // The approval card stays authoritative; a failed re-read must not hide it.
+    const observed = await Promise.resolve(draftId)
+      .then(getMailDraft)
+      .catch(() => undefined);
+    if (observed && operation.current() && sequence === readSequence.current && observed.draftId === draftId)
+      setReceipt((current) => (current && current.record.draftId === draftId ? { ...current, observed } : current));
   }
 
   function close() {
