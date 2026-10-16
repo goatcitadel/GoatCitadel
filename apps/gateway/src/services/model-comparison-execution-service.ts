@@ -76,7 +76,9 @@ export class ModelComparisonExecutionService {
       release();
       throw error;
     }
-    void this.runInBackground(running, controller.signal).finally(release);
+    void this.runInBackground(running, controller.signal)
+      .catch((error: unknown) => this.reportBackgroundError(comparisonId, error))
+      .finally(release);
     return withAdvisory(running);
   }
 
@@ -124,7 +126,7 @@ export class ModelComparisonExecutionService {
         updatedAt: now,
         completedAt: now,
         error: error instanceof Error ? error.message : String(error),
-      }).catch((statusError: unknown) => this.deps.onBackgroundError?.(run.comparisonId, statusError));
+      }).catch((statusError: unknown) => this.reportBackgroundError(run.comparisonId, statusError));
     }
   }
 
@@ -204,6 +206,10 @@ export class ModelComparisonExecutionService {
 
   private nowIso(): string {
     return (this.deps.clock?.() ?? new Date()).toISOString();
+  }
+
+  private reportBackgroundError(comparisonId: string, error: unknown): void {
+    this.deps.onBackgroundError?.(comparisonId, error);
   }
 }
 
