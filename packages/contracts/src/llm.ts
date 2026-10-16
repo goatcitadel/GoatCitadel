@@ -573,6 +573,8 @@ export interface ChatCompletionRequest {
   requiredRuntimeTarget?: { providerId: string; model?: string };
   messages: ChatCompletionMessage[];
   signal?: AbortSignal;
+  /** Internal: the chat runner opts in to receiving per-chunk display reasoning (delta.reasoning_content). Never sent to providers. */
+  streamReasoningDeltas?: boolean;
   memory?: {
     enabled?: boolean;
     mode?: "qmd" | "off";

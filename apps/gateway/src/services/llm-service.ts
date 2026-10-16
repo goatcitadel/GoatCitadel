@@ -1931,9 +1931,10 @@ export class LlmService {
   }
 
   private async *chatCompletionsStreamInternal(
-    request: ChatCompletionRequest,
+    callerRequest: ChatCompletionRequest,
     attributionInput: ModelUsageAttributionContext = {},
   ): AsyncGenerator<Record<string, unknown>> {
+    const { streamReasoningDeltas, ...request } = callerRequest;
     if (!request.messages || request.messages.length === 0) {
       throw new Error("chat/completions requires at least one message");
     }
@@ -1984,7 +1985,13 @@ export class LlmService {
         }
       }
       for await (const chunk of stream) {
-        yield attachReasoningReceiptToChunk(stripPrivateReasoningFromChunk(chunk), reasoning.receipt);
+        const reasoningByChoice = readChunkReasoningDeltas(chunk);
+        const publicChunk = stripPrivateReasoningFromChunk(chunk);
+        if (!streamReasoningDeltas && reasoningByChoice.size > 0 && isEmptyStreamFrame(publicChunk)) {
+          continue;
+        }
+        const projected = streamReasoningDeltas ? attachReasoningDeltas(publicChunk, reasoningByChoice) : publicChunk;
+        yield attachReasoningReceiptToChunk(projected, reasoning.receipt);
       }
     } finally {
       await this.releaseLocalServiceLease(lease);
@@ -4231,6 +4238,49 @@ const MAX_PUBLIC_RESPONSE_SANITIZE_NODES = 50_000;
 
 function stripPrivateReasoningFromCompletion(response: ChatCompletionResponse): ChatCompletionResponse {
   return sanitizeProviderResponseForPublicProjection(response as Record<string, unknown>) as ChatCompletionResponse;
+}
+
+function readChunkReasoningDeltas(chunk: Record<string, unknown>): Map<number, string> {
+  const result = new Map<number, string>();
+  const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
+  choices.forEach((choice, position) => {
+    if (!isRecord(choice) || !isRecord(choice.delta)) return;
+    const text =
+      typeof choice.delta.reasoning_content === "string"
+        ? choice.delta.reasoning_content
+        : typeof choice.delta.reasoning === "string"
+          ? choice.delta.reasoning
+          : "";
+    if (text) result.set(position, text);
+  });
+  return result;
+}
+
+function attachReasoningDeltas(
+  chunk: Record<string, unknown>,
+  reasoningByChoice: Map<number, string>,
+): Record<string, unknown> {
+  if (reasoningByChoice.size === 0 || !Array.isArray(chunk.choices)) return chunk;
+  return {
+    ...chunk,
+    choices: chunk.choices.map((choice, position) => {
+      const text = reasoningByChoice.get(position);
+      if (!text || !isRecord(choice)) return choice;
+      return { ...choice, delta: { ...(isRecord(choice.delta) ? choice.delta : {}), reasoning_content: text } };
+    }),
+  };
+}
+
+function isEmptyStreamFrame(chunk: Record<string, unknown>): boolean {
+  if (chunk.usage !== undefined) return false;
+  const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
+  return choices.every(
+    (choice) =>
+      isRecord(choice) &&
+      choice.message === undefined &&
+      (choice.finish_reason === undefined || choice.finish_reason === null) &&
+      (!isRecord(choice.delta) || Object.keys(choice.delta).length === 0),
+  );
 }
 
 function stripPrivateReasoningFromChunk(chunk: Record<string, unknown>): Record<string, unknown> {

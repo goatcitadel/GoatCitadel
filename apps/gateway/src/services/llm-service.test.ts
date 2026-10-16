@@ -684,6 +684,80 @@ describe("LlmService", () => {
     expect(payloads.map((payload) => payload.max_tokens)).toEqual([64, 64]);
   });
 
+  describe("per-chunk reasoning deltas", () => {
+    const reasoningSse =
+      'data: {"id":"c1","choices":[{"index":0,"delta":{"reasoning_content":"Think A. "}}]}\n\n' +
+      'data: {"id":"c1","choices":[{"index":0,"delta":{"reasoning_content":"Think B."}}]}\n\n' +
+      'data: {"id":"c1","choices":[{"index":0,"delta":{"content":"OK"}}]}\n\n' +
+      'data: {"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n' +
+      "data: [DONE]\n\n";
+
+    async function collectReasoningStream(
+      streamReasoningDeltas: boolean | undefined,
+    ): Promise<{ chunks: Record<string, unknown>[]; sentPayloads: Record<string, unknown>[] }> {
+      const service = new LlmService(
+        {
+          activeProviderId: "llamacpp",
+          activeModel: "local-model",
+          providers: [
+            {
+              providerId: "llamacpp",
+              label: "llama.cpp",
+              baseUrl: "http://127.0.0.1:8080/v1",
+              apiStyle: "openai-chat-completions",
+              defaultModel: "local-model",
+            },
+          ],
+        },
+        process.env,
+        { secretStore: createNoopSecretStore() },
+      );
+      const originalFetch = globalThis.fetch;
+      const sentPayloads: Record<string, unknown>[] = [];
+      globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        sentPayloads.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(reasoningSse, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }) as unknown as typeof fetch;
+      const chunks: Record<string, unknown>[] = [];
+      try {
+        for await (const chunk of service.chatCompletionsStream({
+          providerId: "llamacpp",
+          model: "local-model",
+          messages: [{ role: "user", content: "hi" }],
+          ...(streamReasoningDeltas === undefined ? {} : { streamReasoningDeltas }),
+        })) {
+          chunks.push(chunk);
+        }
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+      return { chunks, sentPayloads };
+    }
+
+    it("keeps delta.reasoning_content per chunk when the caller opts in", async () => {
+      const { chunks, sentPayloads } = await collectReasoningStream(true);
+      const reasoning = chunks.flatMap((chunk) =>
+        ((chunk.choices as Array<{ delta?: { reasoning_content?: string } }>) ?? [])
+          .map((choice) => choice.delta?.reasoning_content)
+          .filter((text): text is string => typeof text === "string"),
+      );
+      expect(reasoning).toEqual(["Think A. ", "Think B."]);
+      expect(JSON.stringify(sentPayloads)).not.toContain("streamReasoningDeltas");
+    });
+
+    it("drops reasoning-only frames and reasoning text when the caller does not opt in", async () => {
+      const { chunks, sentPayloads } = await collectReasoningStream(undefined);
+      const serialized = JSON.stringify(chunks);
+      expect(serialized).not.toContain("Think A.");
+      expect(serialized).not.toContain("reasoning_content");
+      expect(
+        chunks.filter((c) => JSON.stringify(c).includes('"delta":{}') && !JSON.stringify(c).includes("finish_reason")),
+      ).toHaveLength(0);
+      expect(serialized).toContain("OK");
+      expect(JSON.stringify(sentPayloads)).not.toContain("streamReasoningDeltas");
+    });
+  });
+
   it("preserves developer messages and forwards OpenAI GPT controls", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",
