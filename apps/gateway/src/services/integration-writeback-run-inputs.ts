@@ -17,10 +17,11 @@ import { buildLocalBridgeActionTargets } from "./local-bridge-action-policy.js";
  * provider-side dedupe identifiers never drift between a first attempt and its replay.
  */
 
-export interface ParsedProviderResponse {
+// A type alias (not an interface) so it stays assignable to the replay job's `Record<string, unknown>` value.
+export type ParsedProviderResponse = {
   message?: string;
   output?: Record<string, unknown> | unknown[] | string;
-}
+};
 
 export interface GmailSendPayload {
   provider: "gmail";

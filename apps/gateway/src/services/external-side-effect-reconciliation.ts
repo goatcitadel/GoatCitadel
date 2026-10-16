@@ -22,8 +22,12 @@ export interface CrossedExternalSideEffectReconciliationOptions {
 
 /**
  * Reconciles an `unknown_external_outcome` run that already crossed the external dispatch boundary by
- * asking the owning integration's read-only provider probe whether the effect
- * landed. It never calls `execute`: a crossed run is settled `completed` only
+ * asking the owning integration's provider probe whether the effect landed.
+ * Probes are read-only with one exception: the local-bridge probe re-POSTs the
+ * original request with the same `Idempotency-Key`, and is supplied only when
+ * the operator attests the bridge enforces that key (`idempotencyKeyEnforced`),
+ * so the bridge returns the existing effect instead of creating a second one.
+ * It never calls `execute`: a crossed run is settled `completed` only
  * on positive provider proof, and otherwise stays unknown for an operator.
  *
  * Returns `undefined` when the job supplies no probe so the worker keeps its
