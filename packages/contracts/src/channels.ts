@@ -164,8 +164,10 @@ export const CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS: Readonly<
   },
   "nextcloud-talk": {
     "channel.unsend": "Nextcloud Talk bots cannot delete messages through the bot API.",
+    "channel.typing": "Nextcloud Talk bots have no typing-indicator endpoint.",
   },
   "google-chat": {
+    "channel.react": "Google Chat reactions require user authentication; a Chat app cannot react as itself.",
     "channel.typing": "Google Chat has no typing-indicator API.",
   },
   ntfy: {

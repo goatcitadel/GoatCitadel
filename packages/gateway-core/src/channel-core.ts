@@ -213,7 +213,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
               : "Slack inbound routing remains disabled until a signing secret is configured.",
             ...(hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
               ? [
-                  "When inbound channel voice is enabled, Slack audio file shares are transcribed: the gateway downloads the file from files.slack.com with the bot token (needs the files:read scope, 8 MB cap) and routes the transcript as an untrusted voice turn.",
+                  "When inbound channel voice is enabled, Slack audio file shares are transcribed: the gateway downloads the file from files.slack.com with the bot token (needs the files:read scope, 8 MB cap) and routes the transcript as an untrusted voice turn. files.slack.com must be in the network allowlist (toolPolicy.sandbox.networkAllowlist); otherwise the download is refused and the turn runs on the [voice message] fallback.",
                 ]
               : []),
             "Guided setup can run a sandbox send/delete probe on the bot-token path before finalize.",
@@ -228,12 +228,17 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["botTokenEnv", "botToken", "webhookUrl", "url"]],
   },
   discord: {
+    resolvePlatformUnsupportedActions: (config) =>
+      !hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"]) &&
+      hasAnyConfigured(config, ["webhookUrl", "url"])
+        ? {
+            "channel.react": "Discord webhooks cannot add reactions.",
+            "channel.typing": "Discord webhooks cannot send typing indicators.",
+          }
+        : {},
     resolveSupportedActions: (config) => {
-      const runtimeMode = readConfigString(config, "runtimeMode") === "gateway" ? "gateway" : "bridge";
       if (hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])) {
-        return runtimeMode === "gateway"
-          ? ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"]
-          : ["channel.send", "channel.reply", "channel.react", "channel.unsend"];
+        return ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"];
       }
       if (hasAnyConfigured(config, ["webhookUrl", "url"])) {
         return ["channel.send", "channel.unsend"];
@@ -294,13 +299,13 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       (readConfigString(config, "runtimeMode") ?? "bridge") === "gateway"
         ? [
             "Gateway-mode Discord connections keep a persistent Discord gateway session, so the bot can appear online and route inbound DMs or allowlisted guild messages.",
-            "When inbound channel voice is enabled, Discord voice messages and audio attachments that pass the same pairing and guild allowlist gates as text are downloaded from the Discord CDN (8 MB cap) and transcribed into an untrusted voice turn. Voice messages cannot mention the bot, so in mention-gated guild channels they are not routed.",
+            "When inbound channel voice is enabled, Discord voice messages and audio attachments that pass the same pairing and guild allowlist gates as text are downloaded from the Discord CDN (8 MB cap) and transcribed into an untrusted voice turn. Voice messages cannot mention the bot, so in mention-gated guild channels they are not routed. cdn.discordapp.com and media.discordapp.net must be in the network allowlist (toolPolicy.sandbox.networkAllowlist; discord.com does not cover them); otherwise the download is refused and the turn runs on the [voice message] fallback.",
             "Outbound replies still use the shared Discord send bridge, so reactions and unsend follow the same REST constraints as bridge mode.",
             "Guided setup can run token, channel, sandbox send/delete, and runtime-readiness probes before finalize.",
           ]
         : hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
           ? [
-              "Bridge-mode Discord connections are outbound REST bridges. They support reactions and deleting messages in channels the bot can manage, but they do not create a persistent online presence.",
+              "Bridge-mode Discord connections are outbound REST bridges. They support reactions, deleting messages in channels the bot can manage, and typing indicators through the REST typing endpoint, but they do not create a persistent online presence.",
               "Discord rich sends support uploaded inline files and URL-backed embeds.",
               "Guided setup can run token, channel, and sandbox send/delete probes before finalize.",
             ]
@@ -357,7 +362,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   },
   ntfy: {
     platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS.ntfy,
-    supportedActions: ["channel.send"],
+    supportedActions: ["channel.send", "channel.unsend"],
     supportedAttachmentSources: ["url"],
     resolveInboundModes: (config) => (isNtfyInboundEnabled(config) ? ["stream"] : ["none"]),
     threadCapabilities: {
@@ -392,6 +397,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
             "ntfy inbound is off; set inboundStreamEnabled with a token to subscribe to the topic's JSON stream. Webhook and remote-command inbound are not supported.",
           ]),
       "Token-backed topics should use tokenEnv so secrets are resolved at the tool host boundary.",
+      "ntfy unsend deletes a published notification with DELETE /<topic>/<message id>, using the id ntfy returned on publish; subscribed clients receive a message_delete event.",
       "Dry-run mode validates routing without publishing to the ntfy server.",
     ],
     resolveSetupDiagnostics: (config) =>
@@ -617,7 +623,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["serverUrl"], ["botTokenEnv", "botToken"]],
   },
   imessage: {
-    supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend"],
+    supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
     supportedAttachmentSources: ["url", "inline"],
     inboundModes: ["none"],
     threadCapabilities: {
@@ -638,7 +644,8 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       "BlueBubbles is the local-first callable provider for this Gateway build.",
       "Photon/Spectrum provider metadata is recognized for diagnostics, but sends fail closed until a Photon adapter is installed.",
       "Attachment sends to brand-new handles require BlueBubbles chat creation support.",
-      "Reactions and unsend require BlueBubbles Private API support.",
+      "Reactions, unsend, and typing indicators require BlueBubbles Private API support.",
+      "Typing indicators post to the BlueBubbles chat typing endpoint and need a chat GUID target (chat_guid:iMessage;-;+15551234567); handles and chat ids are not resolved for typing.",
     ],
     requiredAnyOf: [
       ["bridgeUrl", "baseUrl", "serverUrl"],
@@ -756,6 +763,11 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     ],
   },
 };
+
+/** Channel keys that have an explicit capability rule (every other key gets the send-only fallback). */
+export function listChannelRuleKeys(): string[] {
+  return Object.keys(CHANNEL_RULES);
+}
 
 export function describeChannelCapabilities(channelKey: string, config: Record<string, unknown>): ChannelCapabilities {
   const rule = CHANNEL_RULES[channelKey] ?? {

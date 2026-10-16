@@ -108,7 +108,7 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the draft",
           body: [
             paragraph(
-              "Guided test posts a sandbox send through the configured Signal JSON-RPC bridge path against the default recipient or group target. Manual confirmation still closes the loop because the bridge does not expose a safe cleanup path.",
+              "Guided test posts a sandbox send through the configured Signal JSON-RPC bridge path against the default recipient or group target. The sandbox probe does not remote-delete its test message (the bridge supports remoteDelete for channel.unsend, but the probe leaves the message for you to see), so manual confirmation still closes the loop.",
             ),
           ],
         },
@@ -118,7 +118,7 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "Finalize saves the bridge connection and, when enabled, the inbound event-stream subscription. After finalizing, confirm the sandbox message arrived on the default recipient's Signal device — manual confirmation closes the loop because the bridge exposes no safe cleanup path.",
+              "Finalize saves the bridge connection and, when enabled, the inbound event-stream subscription. After finalizing, confirm the sandbox message arrived on the default recipient's Signal device — the probe does not delete it, so manual confirmation closes the loop.",
             ),
           ],
           successCriteria: [

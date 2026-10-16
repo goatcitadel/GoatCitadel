@@ -20,6 +20,7 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { resolveChannelSendAttachments } from "./channel-attachment-payload.js";
+import { isDiscordGatewayMode } from "./channel-typing-adapters.js";
 import {
   buildExternalSideEffectReplayOutput,
   runIdempotentExternalSideEffect,
@@ -252,14 +253,16 @@ export async function commsTyping(host: CommsHost, input: ChannelTypingInput): P
     };
   }
 
-  if (connection.key === "discord") {
+  if (connection.key === "discord" && isDiscordGatewayMode(connection.config)) {
     return host.emitDiscordTyping(connection, input);
   }
   if (
+    connection.key === "discord" ||
     connection.key === "telegram" ||
     connection.key === "mattermost" ||
     connection.key === "signal" ||
-    connection.key === "whatsapp"
+    connection.key === "whatsapp" ||
+    connection.key === "imessage"
   ) {
     return host.emitProviderTyping(connection, input);
   }

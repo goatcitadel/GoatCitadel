@@ -1,6 +1,8 @@
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  emitBlueBubblesTyping,
+  emitDiscordRestTyping,
   emitMattermostTyping,
   emitProviderTyping,
   emitSignalTyping,
@@ -191,5 +193,107 @@ describe("emitProviderTyping dispatch", () => {
     expect((await emitProviderTyping(a)).channelKey).toBe("signal");
     const other = await emitProviderTyping(args(connection("slack", {}), {}));
     expect(other.status).toBe("unsupported");
+  });
+});
+
+describe("Discord REST typing (bridge mode)", () => {
+  const conn = connection("discord", { runtimeMode: "bridge", botToken: "bot-tok" });
+
+  it("posts the REST typing endpoint for a channel target", async () => {
+    const a = args(conn, { target: "channel:123456789012345678" });
+    a.fetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const result = await emitDiscordRestTyping(a);
+    expect(result).toMatchObject({ status: "sent", supported: true, channelKey: "discord" });
+    expect(result.expiresAt).toBeDefined();
+    const [url, init] = a.fetch.mock.calls[0];
+    expect(url).toBe("https://discord.com/api/v10/channels/123456789012345678/typing");
+    expect(init.method).toBe("POST");
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bot bot-tok");
+  });
+
+  it("opens the DM channel first for a user target", async () => {
+    const a = args(conn, { target: "user:223456789012345678" });
+    a.fetch
+      .mockResolvedValueOnce(json({ id: "323456789012345678" }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    expect((await emitDiscordRestTyping(a)).status).toBe("sent");
+    expect(a.fetch.mock.calls[0][0]).toBe("https://discord.com/api/v10/users/@me/channels");
+    expect(JSON.parse(a.fetch.mock.calls[0][1].body)).toEqual({ recipient_id: "223456789012345678" });
+    expect(a.fetch.mock.calls[1][0]).toBe("https://discord.com/api/v10/channels/323456789012345678/typing");
+  });
+
+  it("falls back to defaultChannelId and rejects non-snowflake targets", async () => {
+    const withDefault = args(connection("discord", { botToken: "t", defaultChannelId: "123456789012345678" }), {
+      target: "",
+    });
+    withDefault.fetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    expect((await emitDiscordRestTyping(withDefault)).status).toBe("sent");
+    const bad = args(conn, { target: "general" });
+    const result = await emitDiscordRestTyping(bad);
+    expect(result).toMatchObject({ status: "unsupported", supported: false });
+    expect(bad.fetch).not.toHaveBeenCalled();
+  });
+
+  it("reports webhook-only connections, allowlist denials and 4xx without throwing", async () => {
+    const webhook = await emitDiscordRestTyping(
+      args(connection("discord", { webhookUrl: "https://discord.com/api/webhooks/1/x" }), {
+        target: "123456789012345678",
+      }),
+    );
+    expect(webhook.reason).toMatch(/webhooks cannot send typing indicators/);
+    const denied = args(conn, { target: "123456789012345678" }, { isAllowlisted: () => false });
+    expect((await emitDiscordRestTyping(denied)).reason).toMatch(/not in the current outbound allowlist/);
+    expect(denied.fetch).not.toHaveBeenCalled();
+    const forbidden = args(conn, { target: "123456789012345678" });
+    forbidden.fetch.mockResolvedValueOnce(json({ message: "Missing Access" }, 403));
+    expect((await emitDiscordRestTyping(forbidden)).reason).toBe("Discord typing failed (403): Missing Access");
+  });
+});
+
+describe("BlueBubbles iMessage typing", () => {
+  const conn = connection("imessage", { bridgeUrl: "127.0.0.1:1234", password: "bb-secret" });
+
+  it("posts the chat typing endpoint with the password query", async () => {
+    const a = args(conn, { target: "chat_guid:iMessage;-;+15551234567" });
+    a.fetch.mockResolvedValueOnce(json({ status: 200, message: "Successfully started typing!" }));
+    const result = await emitBlueBubblesTyping(a);
+    expect(result).toMatchObject({ status: "sent", supported: true, channelKey: "imessage" });
+    const [url, init] = a.fetch.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:1234/api/v1/chat/iMessage%3B-%3B%2B15551234567/typing?password=bb-secret");
+    expect(init.method).toBe("POST");
+  });
+
+  it("accepts a raw group chat GUID", async () => {
+    const a = args(conn, { target: "iMessage;+;chat123456" });
+    a.fetch.mockResolvedValueOnce(json({}));
+    expect((await emitBlueBubblesTyping(a)).status).toBe("sent");
+  });
+
+  it("requires a chat GUID target and never leaks the password in reasons", async () => {
+    const handle = args(conn, { target: "imessage:+15551234567" });
+    expect((await emitBlueBubblesTyping(handle)).reason).toMatch(/needs a chat GUID target/);
+    expect(handle.fetch).not.toHaveBeenCalled();
+    const denied = args(conn, { target: "chat_guid:iMessage;-;+1555" }, { isAllowlisted: () => false });
+    const deniedResult = await emitBlueBubblesTyping(denied);
+    expect(deniedResult.reason).toMatch(/not in the current outbound allowlist: http:\/\/127\.0\.0\.1:1234$/);
+    expect(deniedResult.reason).not.toContain("bb-secret");
+    const privateApiOff = args(conn, { target: "chat_guid:iMessage;-;+1555" });
+    privateApiOff.fetch.mockResolvedValueOnce(json({ message: "iMessage Private API Helper is not connected!" }, 500));
+    const failed = await emitBlueBubblesTyping(privateApiOff);
+    expect(failed.reason).toMatch(/BlueBubbles typing failed \(500\).*Private API/);
+    expect(failed.reason).not.toContain("bb-secret");
+  });
+
+  it("refuses non-BlueBubbles providers and missing passwords", async () => {
+    const photon = await emitBlueBubblesTyping(
+      args(connection("imessage", { bridgeUrl: "http://h", password: "p", bridgeProvider: "photon" }), {
+        target: "chat_guid:iMessage;-;+1",
+      }),
+    );
+    expect(photon.reason).toMatch(/needs the BlueBubbles provider/);
+    const noPassword = await emitBlueBubblesTyping(
+      args(connection("imessage", { bridgeUrl: "http://h" }), { target: "chat_guid:iMessage;-;+1" }),
+    );
+    expect(noPassword.reason).toMatch(/missing a BlueBubbles password/);
   });
 });

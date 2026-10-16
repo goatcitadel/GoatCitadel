@@ -52,11 +52,19 @@ const MAX_RESPONSE_BYTES = 128 * 1024;
 const RESPONSE_TIMEOUT_MS = 5_000;
 const MATTERMOST_ID_PATTERN = /^[a-z0-9]{26}$/;
 const WHATSAPP_DEFAULT_API_VERSION = "v23.0";
+const DISCORD_API_BASE = "https://discord.com/api/v10";
+const DISCORD_TYPING_TTL_MS = 10_000;
+const DISCORD_SNOWFLAKE_PATTERN = /^[0-9]{5,25}$/;
 
 const mattermostUserIdCache = new Map<string, string>();
 
 export function resetMattermostTypingUserCache(): void {
   mattermostUserIdCache.clear();
+}
+
+/** Discord gateway-mode connections type through the persistent runtime; everything else uses REST. */
+export function isDiscordGatewayMode(config: Record<string, unknown> | undefined): boolean {
+  return readString(config?.runtimeMode) === "gateway";
 }
 
 export async function emitProviderTyping(args: ChannelTypingAdapterArgs): Promise<ChannelTypingResult> {
@@ -68,6 +76,10 @@ export async function emitProviderTyping(args: ChannelTypingAdapterArgs): Promis
         return await emitSignalTyping(args);
       case "whatsapp":
         return await emitWhatsAppTyping(args);
+      case "discord":
+        return await emitDiscordRestTyping(args);
+      case "imessage":
+        return await emitBlueBubblesTyping(args);
       default:
         return unsupported(args, `${args.connection.label} has not wired a typing adapter yet.`);
     }
@@ -206,7 +218,107 @@ export async function emitWhatsAppTyping(args: ChannelTypingAdapterArgs): Promis
           : undefined;
       return unsupported(
         args,
-        `WhatsApp typing failed (${response.status})${detail ? `: ${detail}` : body.trim() ? `: ${body.trim()}` : ""}`,
+        `WhatsApp typing failed (${response.status})${detail ? `: ${detail}` : body.trim() ? `: ${body.trim().slice(0, 200)}` : ""}`,
+      );
+    }
+    return sent(args);
+  } catch (error) {
+    return unsupported(args, errorMessage(error));
+  }
+}
+
+/**
+ * Discord typing over REST for bridge-mode connections (bot token, no gateway session):
+ * POST /channels/{channel.id}/typing. A user target first opens the DM channel with
+ * POST /users/@me/channels. Discord expires the indicator after 10 seconds.
+ */
+export async function emitDiscordRestTyping(args: ChannelTypingAdapterArgs): Promise<ChannelTypingResult> {
+  try {
+    const { connection, input } = args;
+    const token =
+      args.resolveSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId) ??
+      args.resolveSecret(connection.config, "token", "tokenEnv", connection.catalogId);
+    if (!token) {
+      return unsupported(
+        args,
+        `${connection.label} has no Discord bot token; Discord webhooks cannot send typing indicators.`,
+      );
+    }
+    const target = parseDiscordTypingTarget(
+      readString(input.target) ?? readString(connection.config.defaultChannelId) ?? "",
+    );
+    if (!target) {
+      return unsupported(args, "Discord typing needs a channel or user id target (channel:<id>, user:<id>, or an id).");
+    }
+    const authHeaders = { Authorization: `Bot ${token}` };
+    let channelId = target.id;
+    if (target.kind === "user") {
+      const dmUrl = `${DISCORD_API_BASE}/users/@me/channels`;
+      if (!args.isAllowlisted(dmUrl)) return unsupported(args, allowlistReason(dmUrl));
+      const dmResponse = await args.fetch(dmUrl, {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ recipient_id: target.id }),
+        signal: input.signal,
+      });
+      const dmBody = await readBody(dmResponse, "Discord typing");
+      if (!dmResponse.ok) return unsupported(args, httpReason("Discord", dmResponse.status, dmBody));
+      const dmChannelId = readString(parseJsonRecord(dmBody).id);
+      if (!dmChannelId) return unsupported(args, "Discord did not return a DM channel id.");
+      channelId = dmChannelId;
+    }
+    const url = `${DISCORD_API_BASE}/channels/${encodeURIComponent(channelId)}/typing`;
+    if (!args.isAllowlisted(url)) return unsupported(args, allowlistReason(url));
+    const response = await args.fetch(url, { method: "POST", headers: authHeaders, signal: input.signal });
+    const body = await readBody(response, "Discord typing");
+    if (!response.ok) return unsupported(args, httpReason("Discord", response.status, body));
+    return { ...sent(args), expiresAt: new Date(Date.now() + DISCORD_TYPING_TTL_MS).toISOString() };
+  } catch (error) {
+    return unsupported(args, errorMessage(error));
+  }
+}
+
+/**
+ * iMessage typing through the BlueBubbles server: POST /api/v1/chat/{chatGuid}/typing.
+ * The route needs the BlueBubbles Private API, and the target must already be a chat GUID.
+ */
+export async function emitBlueBubblesTyping(args: ChannelTypingAdapterArgs): Promise<ChannelTypingResult> {
+  try {
+    const { connection, input } = args;
+    const provider = (
+      readString(connection.config.bridgeProvider) ??
+      readString(connection.config.provider) ??
+      "bluebubbles"
+    ).toLowerCase();
+    if (provider !== "bluebubbles" && provider !== "blue_bubbles") {
+      return unsupported(args, `iMessage typing needs the BlueBubbles provider; ${provider} is not runnable here.`);
+    }
+    const configured =
+      readString(connection.config.bridgeUrl) ??
+      readString(connection.config.baseUrl) ??
+      readString(connection.config.serverUrl);
+    if (!configured) return unsupported(args, `${connection.label} is missing a BlueBubbles bridge URL.`);
+    const password =
+      args.resolveSecret(connection.config, "password", "passwordEnv", connection.catalogId) ??
+      args.resolveSecret(connection.config, "apiPassword", "apiPasswordEnv", connection.catalogId);
+    if (!password) return unsupported(args, `${connection.label} is missing a BlueBubbles password.`);
+    const chatGuid = parseBlueBubblesChatGuid(readString(input.target) ?? "");
+    if (!chatGuid) {
+      return unsupported(
+        args,
+        "BlueBubbles typing needs a chat GUID target (chat_guid:iMessage;-;+15551234567); handles and chat ids are not resolved for typing.",
+      );
+    }
+    const baseUrl = (/^https?:\/\//i.test(configured) ? configured : `http://${configured}`).replace(/\/+$/, "");
+    const endpoint = new URL(`api/v1/chat/${encodeURIComponent(chatGuid)}/typing`, `${baseUrl}/`);
+    if (!args.isAllowlisted(endpoint.toString())) return unsupported(args, allowlistReason(endpoint.toString()));
+    endpoint.searchParams.set("password", password);
+    const response = await args.fetch(endpoint.toString(), { method: "POST", signal: input.signal });
+    const body = await readBody(response, "BlueBubbles typing");
+    if (!response.ok) {
+      return unsupported(
+        args,
+        `${httpReason("BlueBubbles", response.status, body)} (typing needs the BlueBubbles Private API)`,
       );
     }
     return sent(args);
@@ -267,6 +379,31 @@ function buildSignalTypingTarget(target: string): Record<string, unknown> | unde
     return username ? { username: [username] } : undefined;
   }
   return { recipient: [target] };
+}
+
+function parseDiscordTypingTarget(target: string): { kind: "channel" | "user"; id: string } | undefined {
+  const trimmed = target.trim();
+  const mention = trimmed.match(/^<(#|@!?)(\d+)>$/);
+  let kind: "channel" | "user" = "channel";
+  let id = trimmed;
+  if (mention) {
+    kind = mention[1] === "#" ? "channel" : "user";
+    id = mention[2] ?? "";
+  } else if (/^channel:/i.test(trimmed)) {
+    id = trimmed.slice("channel:".length).trim();
+  } else if (/^(user|discord):/i.test(trimmed)) {
+    kind = "user";
+    id = trimmed.slice(trimmed.indexOf(":") + 1).trim();
+  }
+  return DISCORD_SNOWFLAKE_PATTERN.test(id) ? { kind, id } : undefined;
+}
+
+/** Accepts chat_guid:/chatguid:/guid: prefixed GUIDs or a raw `<service>;-;<address>` / `<service>;+;<id>` GUID. */
+function parseBlueBubblesChatGuid(target: string): string | undefined {
+  let candidate = target.trim().replace(/^(imessage|bluebubbles|sms|auto):/i, "");
+  const prefixed = candidate.match(/^(chat_guid|chatguid|guid):(.*)$/i);
+  if (prefixed) candidate = (prefixed[2] ?? "").trim();
+  return /^[^;\s]+;[+-];\S+$/u.test(candidate) ? candidate : undefined;
 }
 
 function sent(args: ChannelTypingAdapterArgs): ChannelTypingResult {

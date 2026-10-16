@@ -3,7 +3,11 @@ import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import type { IntegrationChannelPort } from "./integration-channel-service.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
-import { emitProviderTypingWithDeps, normalizeWhatsAppBaseUrl } from "./channel-typing-adapters.js";
+import {
+  emitProviderTypingWithDeps,
+  isDiscordGatewayMode,
+  normalizeWhatsAppBaseUrl,
+} from "./channel-typing-adapters.js";
 export async function emitChannelActivityImpl(
   deps: IntegrationChannelPort,
   connection: IntegrationConnection,
@@ -30,12 +34,16 @@ export async function emitChannelActivityImpl(
     effects.push(await sendActivityReaction(deps, connection, input, options.emoji));
   }
 
-  if (options.typing) {
+  if (options.typing && connection.key !== "whatsapp") {
     effects.push(await sendActivityTyping(deps, connection, input));
   }
 
   if (connection.key === "whatsapp" && (input.phase === "seen" || options.typing)) {
-    effects.push(await sendWhatsAppReadReceipt(deps, connection, input, { typing: options.typing }));
+    const receipt = await sendWhatsAppReadReceipt(deps, connection, input, { typing: options.typing });
+    if (options.typing) {
+      effects.push(whatsAppTypingEffectFromReceipt(receipt));
+    }
+    effects.push(receipt);
   }
 
   return effects;
@@ -157,7 +165,7 @@ async function sendActivityTyping(
   connection: IntegrationConnection,
   input: ChannelActivityInput,
 ): Promise<ChannelActivityEffectResult> {
-  if (connection.key === "discord") {
+  if (connection.key === "discord" && isDiscordGatewayMode(connection.config)) {
     const result = await deps.discordRuntimeService.sendTyping(
       connection.connectionId,
       input.target,
@@ -174,10 +182,12 @@ async function sendActivityTyping(
   if (connection.key === "telegram") {
     return sendTelegramActivityTyping(deps, connection, input);
   }
-  if (connection.key === "whatsapp") {
-    return { effect: "typing", supported: true, status: "sent", detail: "Sent with WhatsApp read receipt." };
-  }
-  if (connection.key === "mattermost" || connection.key === "signal") {
+  if (
+    connection.key === "discord" ||
+    connection.key === "mattermost" ||
+    connection.key === "signal" ||
+    connection.key === "imessage"
+  ) {
     const result = await emitProviderTypingWithDeps(deps, connection, {
       connectionId: connection.connectionId,
       target: input.target,
@@ -193,6 +203,19 @@ async function sendActivityTyping(
     };
   }
   return { effect: "typing", supported: false, status: "unsupported" };
+}
+
+/** WhatsApp carries the typing indicator inside the read receipt, so typing mirrors the receipt's outcome. */
+function whatsAppTypingEffectFromReceipt(receipt: ChannelActivityEffectResult): ChannelActivityEffectResult {
+  if (receipt.status === "sent") {
+    return { effect: "typing", supported: true, status: "sent", detail: "Sent with WhatsApp read receipt." };
+  }
+  return {
+    effect: "typing",
+    supported: receipt.supported,
+    status: receipt.status === "failed" ? "failed" : "unsupported",
+    detail: `The WhatsApp read receipt that carries the typing indicator did not send${receipt.detail ? `: ${receipt.detail}` : "."}`,
+  };
 }
 
 async function sendTelegramActivityTyping(

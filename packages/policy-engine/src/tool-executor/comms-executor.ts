@@ -79,7 +79,7 @@ async function executeCommsToolWithBoundaryTracking(
   const connectionId = required(args.connectionId, "connectionId");
   const connection = await storage.integrationConnections.get(connectionId);
   if (
-    toolName === "channel.send" &&
+    (toolName === "channel.send" || toolName === "channel.unsend") &&
     connection.key === "ntfy" &&
     (connection.kind !== "channel" ||
       (connection.workspaceId !== undefined && connection.workspaceId !== request.workspaceId))
@@ -571,6 +571,8 @@ async function commsUnsend(
       return imessageUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
     case "signal":
       return signalUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
+    case "ntfy":
+      return ntfyUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
     default:
       throw new Error(
         describeChannelPlatformUnsupported(channelKey, "channel.unsend") ??
@@ -1639,6 +1641,78 @@ async function ntfySend(
   return messageId ?? `ntfy-${Date.now()}`;
 }
 
+const NTFY_MESSAGE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const NTFY_RESPONSE_MAX_BYTES = 16 * 1024;
+
+/**
+ * Deletes a published ntfy notification: DELETE /<topic>/<sequence id>. GoatCitadel
+ * publishes without a sequence id, so the message id ntfy returned on publish is the
+ * sequence id (docs.ntfy.sh/publish, "Updating + deleting notifications").
+ */
+async function ntfyUnsend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  grantAllowlist?: string[],
+): Promise<string> {
+  const messageId = required(args.messageId, "ntfy messageId");
+  if (!NTFY_MESSAGE_ID_PATTERN.test(messageId)) {
+    throw new Error("ntfy messageId must be the message id ntfy returned on publish");
+  }
+  const baseUrl = asString(config.baseUrl) ?? "https://ntfy.sh";
+  const topic = asString(args.target) ?? normalizeChannelTarget(target, "ntfy") ?? asString(config.topic);
+  if (!topic) {
+    throw new Error("Missing ntfy topic");
+  }
+  if (isEnabledFlag(args.dryRun) || isEnabledFlag(config.dryRun)) {
+    return messageId;
+  }
+  const token = secretFrom(config, "token", "tokenEnv");
+  let res: { response: Response; finalUrl: string };
+  try {
+    res = await fetchAllowlisted(
+      `${buildNtfyPublishUrl(baseUrl, topic)}/${encodeURIComponent(messageId)}`,
+      { method: "DELETE", headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      allowlist,
+      undefined,
+      grantAllowlist,
+    );
+  } catch (error) {
+    throwChannelBoundaryError("ntfy.unsend", error);
+  }
+  const bodyText = await readCappedResponseText(res.response, NTFY_RESPONSE_MAX_BYTES);
+  if (!res.response.ok) {
+    throwChannelProviderFailure("ntfy.unsend", res.response, bodyText.trim().slice(0, 200));
+  }
+  return messageId;
+}
+
+/** Reads at most maxBytes of a response body, then cancels the rest of the stream. */
+async function readCappedResponseText(response: Response, maxBytes: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return "";
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done || !value) {
+        break;
+      }
+      const remaining = maxBytes - total;
+      const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      chunks.push(chunk);
+      total += chunk.byteLength;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 function buildNtfyPublishUrl(baseUrl: string, topic: string): string {
   const normalizedBase = baseUrl.replace(/\/+$/, "");
   return `${normalizedBase}/${encodeURIComponent(topic)}`;
@@ -2181,13 +2255,35 @@ function resolveSignalActionContext(
   return { baseUrl, targetParams: buildSignalTargetParams(resolvedTarget), resolvedTarget, account };
 }
 
-function parseSignalTargetTimestamp(messageId: unknown): number {
-  const raw = required(messageId, "Signal messageId");
-  const timestamp = Number(raw);
-  if (!/^[0-9]+$/.test(raw.trim()) || !Number.isSafeInteger(timestamp) || timestamp <= 0) {
-    throw new Error("Signal messageId must be the numeric message timestamp");
+interface SignalMessageRef {
+  timestamp: number;
+  /** Author carried by an inbound event id (`<source>:<timestamp>`), when present. */
+  author?: string;
+}
+
+/**
+ * Accepts the bare numeric message timestamp, or the inbound Signal event id form
+ * `<source>:<timestamp>`, whose source is the message author.
+ */
+function parseSignalMessageRef(messageId: unknown): SignalMessageRef {
+  const raw =
+    typeof messageId === "number" && Number.isSafeInteger(messageId)
+      ? String(messageId)
+      : required(messageId, "Signal messageId");
+  const trimmed = raw.trim();
+  const separator = trimmed.lastIndexOf(":");
+  const timestampPart = separator >= 0 ? trimmed.slice(separator + 1).trim() : trimmed;
+  const author = separator >= 0 ? normalizeSignalTarget(trimmed.slice(0, separator)) : undefined;
+  const timestamp = Number(timestampPart);
+  if (
+    !/^[0-9]+$/.test(timestampPart) ||
+    !Number.isSafeInteger(timestamp) ||
+    timestamp <= 0 ||
+    (separator >= 0 && !author)
+  ) {
+    throw new Error("Signal messageId must be the numeric message timestamp or an inbound <author>:<timestamp> id");
   }
-  return timestamp;
+  return author ? { timestamp, author } : { timestamp };
 }
 
 async function signalReact(
@@ -2198,12 +2294,17 @@ async function signalReact(
   grantAllowlist?: string[],
 ): Promise<string> {
   const ctx = resolveSignalActionContext(config, args, target);
-  const targetTimestamp = parseSignalTargetTimestamp(args.messageId);
+  const messageRef = parseSignalMessageRef(args.messageId);
+  const targetTimestamp = messageRef.timestamp;
   const emoji = required(args.emoji ?? args.reaction, "Signal reaction emoji");
-  const isGroup = typeof ctx.targetParams.groupId === "string";
-  const targetAuthor = asString(args.targetAuthor) ?? (isGroup ? undefined : ctx.resolvedTarget);
+  const directRecipient = Array.isArray(ctx.targetParams.recipient)
+    ? asString(ctx.targetParams.recipient[0])
+    : undefined;
+  const targetAuthor = asString(args.targetAuthor) ?? messageRef.author ?? directRecipient;
   if (!targetAuthor) {
-    throw new Error("Signal group reactions need targetAuthor");
+    throw new Error(
+      "Signal group and username reactions need targetAuthor (or a messageId in the inbound <author>:<timestamp> form)",
+    );
   }
   const params: Record<string, unknown> = {
     emoji,
@@ -2234,7 +2335,7 @@ async function signalUnsend(
 ): Promise<string> {
   const ctx = resolveSignalActionContext(config, args, target);
   const params: Record<string, unknown> = {
-    targetTimestamp: parseSignalTargetTimestamp(args.messageId),
+    targetTimestamp: parseSignalMessageRef(args.messageId).timestamp,
     ...ctx.targetParams,
   };
   if (ctx.account) {
