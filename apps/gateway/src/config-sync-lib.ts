@@ -106,12 +106,14 @@ export function buildUnifiedConfigPayloadFromRuntime(
     features,
     budgets: runtimeConfig.assistant.budgets,
   };
+  const serializeSandboxRoot = (root: string) =>
+    serializeSandboxRootForConfig(runtimeConfig.rootDir, root, serializeRootPath);
   const toolPolicyPayload = {
     ...runtimeConfig.toolPolicy,
     sandbox: {
       ...runtimeConfig.toolPolicy.sandbox,
-      writeJailRoots: runtimeConfig.toolPolicy.sandbox.writeJailRoots.map((root) => serializeRootPath(root)),
-      readOnlyRoots: runtimeConfig.toolPolicy.sandbox.readOnlyRoots.map((root) => serializeRootPath(root)),
+      writeJailRoots: runtimeConfig.toolPolicy.sandbox.writeJailRoots.map(serializeSandboxRoot),
+      readOnlyRoots: runtimeConfig.toolPolicy.sandbox.readOnlyRoots.map(serializeSandboxRoot),
     },
   };
   return buildUnifiedConfigPayload(
@@ -121,6 +123,25 @@ export function buildUnifiedConfigPayloadFromRuntime(
     llmConfig,
     cronJobs,
   ) as CompleteUnifiedConfigPayload;
+}
+
+/**
+ * Persist a sandbox root so it reloads to the same directory. Roots inside the
+ * runtime root keep their relative form; roots outside it are written as
+ * absolute paths. The display serializer redacts outside paths to a sentinel,
+ * which must never reach the local config file: it would reload as a
+ * different directory and silently drop the operator's root.
+ */
+export function serializeSandboxRootForConfig(
+  rootDir: string,
+  root: string,
+  serializeRootPath: (fullPath: string) => string,
+): string {
+  const absoluteRoot = path.resolve(rootDir, root);
+  const relative = path.relative(path.resolve(rootDir), absoluteRoot);
+  const insideRoot =
+    relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  return insideRoot ? serializeRootPath(absoluteRoot) : absoluteRoot;
 }
 
 /** Preserve live owner object/array references while applying or restoring configuration. */

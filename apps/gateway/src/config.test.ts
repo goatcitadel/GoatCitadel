@@ -81,6 +81,24 @@ afterEach(async () => {
 });
 
 describe("loadGatewayConfig", () => {
+  it("drops redacted sandbox root entries and keeps absolute roots outside the runtime root", async () => {
+    const { rootDir, configDir } = await createConfigFixture();
+    const outsideRoot = path.resolve(os.tmpdir(), "goat-operator-scratch");
+    await writeJson(path.join(configDir, "tool-policy.json"), {
+      profiles: {},
+      tools: { profile: "minimal", allow: [], deny: [] },
+      agents: {},
+      sandbox: {
+        writeJailRoots: ["./workspace", "[outside-root]", outsideRoot],
+        readOnlyRoots: ["[outside-root]"],
+      },
+    });
+
+    const config = await loadGatewayConfig(rootDir);
+    expect(config.toolPolicy.sandbox.writeJailRoots).toEqual([path.join(rootDir, "workspace"), outsideRoot]);
+    expect(config.toolPolicy.sandbox.readOnlyRoots).toEqual([]);
+  });
+
   it("defaults computer-use guardrails feature flag to true when omitted", async () => {
     const { rootDir } = await createConfigFixture();
 

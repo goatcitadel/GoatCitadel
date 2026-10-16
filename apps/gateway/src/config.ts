@@ -567,8 +567,8 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
   applyEnvironmentOverrides(assistant);
 
   toolPolicy.tools.approvalMode = assistant.toolApprovalMode ?? toolPolicy.tools.approvalMode;
-  toolPolicy.sandbox.writeJailRoots = toolPolicy.sandbox.writeJailRoots.map((root) => path.resolve(rootDir, root));
-  toolPolicy.sandbox.readOnlyRoots = toolPolicy.sandbox.readOnlyRoots.map((root) => path.resolve(rootDir, root));
+  toolPolicy.sandbox.writeJailRoots = resolveSandboxRoots(rootDir, toolPolicy.sandbox.writeJailRoots, "writeJailRoots");
+  toolPolicy.sandbox.readOnlyRoots = resolveSandboxRoots(rootDir, toolPolicy.sandbox.readOnlyRoots, "readOnlyRoots");
 
   const result: GatewayRuntimeConfig = {
     assistant,
@@ -590,6 +590,29 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
   };
 
   return result;
+}
+
+/** Display-redaction sentinel that older Settings saves wrote into sandbox roots. */
+const REDACTED_SANDBOX_ROOT = "[outside-root]";
+
+/**
+ * Resolve configured sandbox roots. Entries holding the redaction sentinel no
+ * longer name a real directory (the original path was lost when it was
+ * saved), so drop them instead of resolving them to `<rootDir>/[outside-root]`.
+ */
+export function resolveSandboxRoots(
+  rootDir: string,
+  roots: readonly string[],
+  field: "writeJailRoots" | "readOnlyRoots",
+): string[] {
+  const kept = roots.filter((root) => root.trim() !== REDACTED_SANDBOX_ROOT);
+  if (kept.length !== roots.length) {
+    configLog.warn(
+      `tool-policy sandbox.${field} contains a redacted "${REDACTED_SANDBOX_ROOT}" entry; it was ignored. Re-add the intended folder as an absolute path.`,
+      { field, droppedCount: roots.length - kept.length },
+    );
+  }
+  return kept.map((root) => path.resolve(rootDir, root));
 }
 
 function parseAndValidate<T>(raw: string, schema: ZodType<T>, filePath: string): T {
