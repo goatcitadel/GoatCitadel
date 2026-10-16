@@ -383,28 +383,57 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["baseUrl"], ["topic", "defaultTopic"]],
   },
   "google-chat": {
-    supportedActions: ["channel.send"],
+    resolveSupportedActions: (config) =>
+      isGoogleChatServiceAccountMode(config) ? ["channel.send", "channel.reply", "channel.unsend"] : ["channel.send"],
     supportedAttachmentSources: ["url"],
-    inboundModes: ["none"],
+    resolveInboundModes: (config) => (isGoogleChatAppInboundEnabled(config) ? ["webhook"] : ["none"]),
     threadCapabilities: {
       rooms: true,
       threads: true,
     },
+    resolveRuntimePolicy: (config) => ({ allowlist: isGoogleChatAppInboundEnabled(config) }),
     chunkingMode: "fallback",
     supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "webhook",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary:
-        "Google Chat is normalized as a stateless outbound webhook destination. Rich card sends work, but inbound routing is not available in the current runtime.",
-    },
-    supportNotes: [
-      "Google Chat webhook sends support URL-backed rich cards for image and link attachments.",
-      "Google Chat webhook mode is outbound only and does not provide inbound routing.",
-      "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
-    ],
-    requiredAnyOf: [["webhookUrl", "url"]],
+    resolveRuntimePosture: (config) =>
+      isGoogleChatAppInboundEnabled(config)
+        ? {
+            outboundTransport: "api",
+            inboundTransport: "webhook",
+            lifecycle: "stateless",
+            inboundReadiness: "ready",
+            operatorSummary:
+              "Google Chat runs as a Chat app: inbound events arrive on the app's HTTP endpoint with Google-signed bearer tokens verified against the configured audience, and replies, sends and deletes use the Chat API with the service account. App messages can be deleted, but only the app's own messages.",
+          }
+        : isGoogleChatServiceAccountMode(config)
+          ? {
+              outboundTransport: "api",
+              lifecycle: "stateless",
+              inboundReadiness: "unsupported",
+              operatorSummary:
+                "Google Chat sends through the Chat API as a Chat app (service account); only the app's own messages can be deleted. Inbound needs audienceType and audience so Google-signed requests can be verified.",
+            }
+          : {
+              outboundTransport: "webhook",
+              lifecycle: "stateless",
+              inboundReadiness: "unsupported",
+              operatorSummary:
+                "Google Chat is normalized as a stateless outbound webhook destination. Rich card sends work; inbound requires Chat app (service-account) mode.",
+            },
+    resolveSupportNotes: (config) =>
+      isGoogleChatServiceAccountMode(config)
+        ? [
+            isGoogleChatAppInboundEnabled(config)
+              ? "Google Chat app inbound verifies Google's bearer token (RS256, issuer, audience, expiry) before anything is accepted; allow the Google Chat user resource names (users/...) that may start turns, because inbound is default-deny."
+              : "Google Chat app inbound is off until audienceType (project_number or endpoint_url) and audience are configured.",
+            "Chat app sends, replies and deletes use the service-account key resolved at the tool host boundary; allow chat.googleapis.com and oauth2.googleapis.com in the network allowlist.",
+            "Google Chat unsend deletes only messages this app sent.",
+          ]
+        : [
+            "Google Chat webhook sends support URL-backed rich cards for image and link attachments.",
+            "Google Chat webhook mode is outbound; inbound requires Chat app (service-account) mode.",
+            "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
+          ],
+    requiredAnyOf: [["webhookUrl", "url", "serviceAccountKeyEnv", "serviceAccountKey"]],
   },
   teams: {
     supportedActions: ["channel.send"],
@@ -1197,6 +1226,21 @@ function isMattermostInboundEnabled(config: Record<string, unknown>): boolean {
     isExplicitTrue(config.inboundStreamEnabled) &&
     hasAnyConfigured(config, ["serverUrl"]) &&
     hasAnyConfigured(config, ["botToken", "botTokenEnv", "token", "tokenEnv"])
+  );
+}
+
+/** Google Chat app mode: a service-account key (env name or JSON key string) is configured. */
+function isGoogleChatServiceAccountMode(config: Record<string, unknown>): boolean {
+  return hasAnyConfigured(config, ["serviceAccountKeyEnv", "serviceAccountKey"]);
+}
+
+/** Mirrors the Google Chat webhook route: app mode plus a verifiable audience. */
+function isGoogleChatAppInboundEnabled(config: Record<string, unknown>): boolean {
+  const audienceType = readConfigString(config, "audienceType");
+  return (
+    isGoogleChatServiceAccountMode(config) &&
+    (audienceType === "project_number" || audienceType === "endpoint_url") &&
+    hasAnyConfigured(config, ["audience"])
   );
 }
 

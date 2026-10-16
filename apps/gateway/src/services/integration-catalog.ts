@@ -280,18 +280,36 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.google-chat": {
     catalogId: "channel.google-chat",
     title: "Google Chat Connection",
-    description: "Connect a Google Chat incoming webhook and optional thread key.",
+    description:
+      "Connect a Google Chat incoming webhook (outbound only), or a Chat app with a service-account key for inbound messages, replies, and deleting its own messages.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "Google Chat" }),
       url("webhookUrl", "Webhook URL", {
         placeholder: "https://chat.googleapis.com/v1/spaces/...",
-        required: true,
+        description: "Webhook mode. Leave empty when using Chat app (service-account) mode.",
       }),
       text("defaultThreadKey", "Default Thread Key", {
         placeholder: "goatcitadel-thread",
         advanced: true,
       }),
+      text("serviceAccountKeyEnv", "Service-Account Key ENV Var", {
+        placeholder: "GOOGLE_CHAT_SA_KEY",
+        description: "Chat app mode. Environment variable holding the service-account JSON key.",
+      }),
+      select("audienceType", "Chat App Audience Type", ["project_number", "endpoint_url"], "project_number", {
+        description: "Chat app mode. Must match the app's authentication audience in the Google Cloud console.",
+      }),
+      text("audience", "Chat App Audience", {
+        placeholder: "123456789012",
+        description: "Chat app mode. The project number, or this connection's public HTTPS webhook URL.",
+      }),
+      text("defaultSpace", "Default Space", {
+        placeholder: "spaces/AAAAxxxx",
+        advanced: true,
+        description: "Chat app mode. Space used when a send does not name one.",
+      }),
+      ...inboundAccessFields(),
       bool("enabled", "Enabled", true),
     ],
   },

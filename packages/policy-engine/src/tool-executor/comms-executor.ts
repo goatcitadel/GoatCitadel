@@ -18,6 +18,15 @@ import {
   markCommsProviderFailed,
   markCommsProviderSent,
 } from "./channel-delivery-part-execution.js";
+import {
+  GOOGLE_CHAT_MESSAGE_NAME_PATTERN,
+  GOOGLE_CHAT_SPACE_NAME_PATTERN,
+  GOOGLE_CHAT_THREAD_NAME_PATTERN,
+  assertGoogleChatMessageName,
+  deleteGoogleChatAppMessage,
+  readGoogleChatMessageThread,
+  sendGoogleChatAppMessage,
+} from "./google-chat-service-account.js";
 
 const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
@@ -550,6 +559,8 @@ async function commsUnsend(
       return telegramUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
     case "mattermost":
       return mattermostUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
+    case "google-chat":
+      return googleChatUnsend(connectionConfig, args, allowlist, grantAllowlist);
     case "imessage":
       return imessageUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
     default:
@@ -1679,6 +1690,18 @@ async function googleChatSend(
   grantAllowlist?: string[],
 ): Promise<string> {
   const resolvedTarget = normalizeChannelTarget(target, "google-chat");
+  const serviceAccountKey = resolveGoogleChatServiceAccountKey(config);
+  if (serviceAccountKey) {
+    return googleChatAppSend(
+      serviceAccountKey,
+      config,
+      args,
+      resolvedTarget,
+      message,
+      attachments,
+      googleChatFetchers(allowlist, grantAllowlist),
+    );
+  }
   const webhookUrl =
     asString(args.url) ?? secretFrom(config, "webhookUrl", "webhookUrlEnv") ?? secretFrom(config, "url", "urlEnv");
   if (!webhookUrl) {
@@ -1706,6 +1729,70 @@ async function googleChatSend(
   }
   const body = parseJsonRecord(bodyText);
   return asString(body.name) ?? `google-chat-${Date.now()}`;
+}
+
+function resolveGoogleChatServiceAccountKey(config: Record<string, unknown>): string | undefined {
+  return secretFrom(config, "serviceAccountKey", "serviceAccountKeyEnv");
+}
+
+function googleChatFetchers(allowlist: string[], grantAllowlist?: string[]) {
+  return {
+    // Token minting is not an external side effect; Chat API mutations are.
+    tokenFetch: async (url: string, init: RequestInit) =>
+      (await fetchAllowlisted(url, init, allowlist, undefined, grantAllowlist, { crossesExternalSideEffect: false }))
+        .response,
+    apiFetch: async (url: string, init: RequestInit) =>
+      (await fetchAllowlisted(url, init, allowlist, undefined, grantAllowlist)).response,
+  };
+}
+
+async function googleChatAppSend(
+  keyJson: string,
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  resolvedTarget: string | undefined,
+  message: string,
+  attachments: ChannelAttachment[],
+  fetchers: ReturnType<typeof googleChatFetchers>,
+): Promise<string> {
+  const space = [asString(args.target), resolvedTarget, asString(config.defaultSpace)].find(
+    (candidate): candidate is string => Boolean(candidate && GOOGLE_CHAT_SPACE_NAME_PATTERN.test(candidate)),
+  );
+  if (!space) {
+    throw new Error("Google Chat app sends require a space target (spaces/{space}); set config.defaultSpace");
+  }
+  const replyRef = [args.threadName, args.threadId, args.replyToMessageId, args.replyTo]
+    .map((value) => asString(value))
+    .find((value): value is string => Boolean(value));
+  let threadName: string | undefined;
+  if (replyRef && GOOGLE_CHAT_THREAD_NAME_PATTERN.test(replyRef)) {
+    threadName = replyRef;
+  } else if (replyRef && GOOGLE_CHAT_MESSAGE_NAME_PATTERN.test(replyRef)) {
+    threadName = await readGoogleChatMessageThread({ keyJson, messageName: replyRef, ...fetchers });
+  }
+  return sendGoogleChatAppMessage({
+    keyJson,
+    space,
+    threadName,
+    body: attachments.length > 0 ? buildGoogleChatWebhookPayload(message, attachments) : { text: message },
+    ...fetchers,
+  });
+}
+
+async function googleChatUnsend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  grantAllowlist?: string[],
+): Promise<string> {
+  const messageName = required(args.messageId, "Google Chat messageId");
+  // Validate before any token or API fetch.
+  assertGoogleChatMessageName(messageName);
+  const keyJson = resolveGoogleChatServiceAccountKey(config);
+  if (!keyJson) {
+    throw new Error("google-chat.unsend requires Chat app (service-account) mode; webhook messages cannot be deleted");
+  }
+  return deleteGoogleChatAppMessage({ keyJson, messageName, ...googleChatFetchers(allowlist, grantAllowlist) });
 }
 
 async function whatsappSend(
@@ -2484,7 +2571,7 @@ const CHANNEL_TARGET_KEYS: Record<string, string[]> = {
   discord: ["defaultChannelId", "defaultTarget", "target"],
   telegram: ["defaultChatId", "defaultTarget", "target"],
   ntfy: ["topic", "defaultTopic", "defaultTarget", "target"],
-  "google-chat": ["defaultThreadKey", "defaultTarget", "target"],
+  "google-chat": ["defaultSpace", "defaultThreadKey", "defaultTarget", "target"],
   whatsapp: ["defaultTarget", "defaultRecipient", "target"],
   signal: ["defaultRecipient", "defaultTarget", "target"],
   imessage: ["defaultHandle", "defaultTarget", "target"],

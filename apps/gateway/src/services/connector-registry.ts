@@ -185,7 +185,7 @@ function describeIntegrationApprovalDelivery(
     case "telegram":
       return "Set config.defaultChatId to enable approval delivery.";
     case "google-chat":
-      return "Set config.defaultThreadKey to enable approval delivery.";
+      return "Set config.defaultThreadKey (webhook mode) or config.defaultSpace (Chat app mode) to enable approval delivery.";
     case "whatsapp":
       return "Set config.defaultTarget or config.defaultRecipient to enable approval delivery.";
     case "signal":

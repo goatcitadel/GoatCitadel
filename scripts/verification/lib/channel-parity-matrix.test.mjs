@@ -12,7 +12,7 @@ const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
 test("advertised channel parity matrix is complete and internally consistent", () => {
   assert.deepEqual(validateAdvertisedChannelParityMatrix(), []);
-  assert.equal(new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.id)).size, 23);
+  assert.equal(new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.id)).size, 24);
   assert.deepEqual(
     [...new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.family))].sort(),
     [...REQUIRED_CHANNEL_FAMILIES].sort(),
@@ -44,6 +44,15 @@ test("hard quarantine and provider-callability truths cannot drift green", () =>
   assert.equal(signalStream?.expected.lifecycle, "persistent");
   assert.equal(signalStream?.durability.inboundCommitBeforeAck, true);
   assert.match(signalStream?.proof.inboundAdapter ?? "", /signal-stream-adapter\.test\.ts$/);
+
+  const googleChatWebhook = byId.get("google-chat.webhook");
+  assert.deepEqual(googleChatWebhook?.expected.inboundModes, ["none"]);
+  assert.equal(googleChatWebhook?.expected.outboundTransport, "webhook");
+  const googleChatApp = byId.get("google-chat.app-service-account");
+  assert.deepEqual(googleChatApp?.expected.inboundModes, ["webhook"]);
+  assert.equal(googleChatApp?.expected.outboundTransport, "api");
+  assert.equal(googleChatApp?.durability.inboundCommitBeforeAck, true);
+  assert.match(googleChatApp?.proof.inboundAdapter ?? "", /integrations\.google-chat-webhook\.test\.ts$/);
 
   const blueBubbles = byId.get("imessage.bluebubbles");
   const photon = byId.get("imessage.photon-diagnostics");

@@ -14,6 +14,7 @@ export const GUIDED_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   "ntfy",
   "mattermost",
   "signal",
+  "google-chat",
 ]);
 
 /** Keep sender policy in its shared owner rather than provider-specific normalizers. */

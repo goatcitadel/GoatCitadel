@@ -35,6 +35,7 @@ const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set([
   "ntfy",
   "mattermost",
   "signal",
+  "google-chat",
 ]);
 
 export interface IntegrationDiagnosticsPort {
@@ -242,6 +243,22 @@ export function buildIntegrationConnectionChecks(
         });
         break;
       case "google-chat":
+        if (isGoogleChatAppConfig(deps, config)) {
+          requireSecretRef("auth", "Google Chat service-account key", "serviceAccountKey", "serviceAccountKeyEnv");
+          requireText(
+            "audience",
+            "Google Chat app audience",
+            deps.readConnectionConfigValue(config, "audience"),
+            "warn",
+          );
+          requireText(
+            "target",
+            "Default Google Chat space",
+            deps.readConnectionConfigValue(config, "defaultSpace"),
+            "warn",
+          );
+          break;
+        }
         checkUrl("url", "Google Chat webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), true);
         requireText(
           "target",
@@ -483,6 +500,16 @@ export function buildIntegrationConnectionChecks(
   return checks;
 }
 
+function isGoogleChatAppConfig(
+  deps: Pick<IntegrationDiagnosticsPort, "readConnectionConfigValue">,
+  config: Record<string, unknown>,
+): boolean {
+  return Boolean(
+    deps.readConnectionConfigValue(config, "serviceAccountKeyEnv") ??
+    deps.readConnectionConfigValue(config, "serviceAccountKey"),
+  );
+}
+
 function buildChannelInboundAccessDiagnosticChecks(
   channelKey: string,
   config: Record<string, unknown>,
@@ -639,6 +666,18 @@ export async function runIntegrationConnectionLiveChecks(
       });
     }
     case "google-chat":
+      if (isGoogleChatAppConfig(deps, config)) {
+        return {
+          checks: [
+            {
+              key: "google_chat_app_live_send",
+              status: "warn",
+              message:
+                "Chat app (service-account) mode has no sandbox probe. Message the app from an allowed sender and confirm its reply in Google Chat.",
+            },
+          ],
+        };
+      }
       return runGovernedWebhookLiveChecks(deps, {
         channelKey: "google-chat",
         webhookUrl: resolveSecret("webhookUrl", "webhookUrlEnv"),

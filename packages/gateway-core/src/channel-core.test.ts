@@ -358,6 +358,55 @@ describe("describeChannelCapabilities", () => {
     expect(noToken.inboundModes).toEqual(["none"]);
   });
 
+  it("keeps Google Chat webhook mode outbound-only and points inbound at Chat app mode", () => {
+    const webhook = describeChannelCapabilities("google-chat", {
+      webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=k&token=t",
+    });
+    expect(webhook.setupReady).toBe(true);
+    expect(webhook.inboundModes).toEqual(["none"]);
+    expect(webhook.supportedActions).not.toContain("channel.unsend");
+    expect(webhook.runtimePosture).toMatchObject({ outboundTransport: "webhook", inboundReadiness: "unsupported" });
+    expect(webhook.runtimePosture.operatorSummary).not.toContain("inbound routing is not available");
+    expect(webhook.runtimePosture.operatorSummary).toContain("inbound requires Chat app (service-account) mode");
+    expect(webhook.supportNotes.join(" ")).not.toContain("does not provide inbound routing");
+  });
+
+  it("advertises Google Chat app inbound, replies and unsend in service-account mode with an audience", () => {
+    const app = describeChannelCapabilities("google-chat", {
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      audienceType: "project_number",
+      audience: "123456789012",
+    });
+    expect(app.setupReady).toBe(true);
+    expect(app.inboundModes).toEqual(["webhook"]);
+    expect(app.supportedActions).toEqual(expect.arrayContaining(["channel.send", "channel.reply", "channel.unsend"]));
+    expect(app.runtimePosture).toMatchObject({
+      outboundTransport: "api",
+      inboundTransport: "webhook",
+      lifecycle: "stateless",
+      inboundReadiness: "ready",
+    });
+    expect(app.runtimePosture.operatorSummary).toMatch(/only the app's own messages/i);
+    expect(app.runtimePolicy.allowlist).toBe(true);
+
+    const noAudience = describeChannelCapabilities("google-chat", { serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY" });
+    expect(noAudience.setupReady).toBe(true);
+    expect(noAudience.inboundModes).toEqual(["none"]);
+    expect(noAudience.runtimePosture.outboundTransport).toBe("api");
+    expect(noAudience.supportNotes.join(" ")).toContain("audience");
+
+    const badAudienceType = describeChannelCapabilities("google-chat", {
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      audienceType: "something_else",
+      audience: "123456789012",
+    });
+    expect(badAudienceType.inboundModes).toEqual(["none"]);
+
+    expect(describeChannelCapabilities("google-chat", {}).setupDiagnostics).toEqual([
+      "Missing one of: config.webhookUrl, config.url, config.serviceAccountKeyEnv, config.serviceAccountKey.",
+    ]);
+  });
+
   it("recognizes every already supported Zalo User credential alias without enabling inbound routing", () => {
     for (const key of [
       "authToken",

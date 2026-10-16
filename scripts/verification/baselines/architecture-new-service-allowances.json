@@ -2360,6 +2360,14 @@
       "maxDependencyMemberAccesses": 2,
       "reason": "WS5 channel-parity program: Signal inbound adapter over the signal-cli HTTP daemon Server-Sent Events stream on the generic channel stream runtime; reads its two injected dependencies (fetch, allowlist check) once per session and has no host callbacks. Replaces the retired outbound-only SignalInboundRuntimeService facade.",
       "evidence": "apps/gateway/src/services/channel-stream-adapters/signal-stream-adapter.test.ts covers the exact direct and group events, identity/timestamp fallbacks, syncMessage/receipt/typing/self-account drops, the account query parameter, 401/403 and allowlist auth errors, replay-deterministic idempotency keys and the real sender-allowlist gate; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/google-chat-webhook.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS5 channel-parity program: Google Chat app inbound helpers: Google-signed bearer JWT verification (RS256, kid certificate selection, issuer/audience/expiry/email checks), a per-registration certificate cache, the fixed-host certificate fetcher and event normalization for the classic and Workspace add-on shapes. Pure functions with no adapter host or injected dependency members; the route owns the HTTP boundary and GatewayService gains nothing.",
+      "evidence": "apps/gateway/src/services/google-chat-webhook.test.ts covers valid project-number and endpoint-url tokens, bad audience/issuer/email, expiry and future iat with 60 s skew, unknown kid, alg none and HS256, tampered payload, missing and malformed tokens, cache max-age and failure handling, and classic/add-on/bot/lifecycle normalization; apps/gateway/src/routes/integrations.google-chat-webhook.test.ts covers the route, replay idempotency and the forced default-deny sender gate; Gateway typecheck passes."
     }
   ]
 }

@@ -18,7 +18,7 @@ Discord, Slack, Telegram, Google Chat, Teams, Mattermost, WhatsApp, Signal, LINE
 | `channel.discord` | Bot token | token, channel, sandbox send/delete, runtime readiness in gateway mode | yes |
 | `channel.slack` | Bot User OAuth token | auth plus sandbox send/delete on bot-token path | yes, especially on webhook fallback |
 | `channel.telegram` | BotFather token | auth plus sandbox send/delete | yes |
-| `channel.google-chat` | Incoming webhook | sandbox webhook probe | yes |
+| `channel.google-chat` | Incoming webhook, or Chat app service-account key | sandbox webhook probe (webhook mode); Google-signed JWT webhook inbound plus API send/reply/unsend in Chat app mode | yes |
 | `channel.teams` | Incoming webhook | sandbox webhook probe | yes |
 | `channel.mattermost` | Bot token | auth, channel resolution, sandbox send/delete; opt-in bot WebSocket inbound (`inboundStreamEnabled`) | yes |
 | `channel.whatsapp` | Cloud API access token + phone-number id | sender auth plus sandbox send; signed inbound webhook runtime when app secret + verify token are configured | yes |
@@ -33,12 +33,12 @@ Discord, Slack, Telegram, Google Chat, Teams, Mattermost, WhatsApp, Signal, LINE
 
 Inbound capability is derived from the runtime capability rules (`packages/gateway-core/src/channel-core.ts`), not from this doc:
 
-- **Bidirectional (inbound available when configured):** Telegram, Slack, Discord, WhatsApp (app secret + verify token), LINE (channel secret), Nextcloud Talk (webhook), ntfy (opt-in persistent subscription to a token-protected topic's JSON stream; the topic is the sender, so allow `ntfy-topic:<topic>`, and GoatCitadel's own publishes are tagged and ignored on the way back in), Mattermost (opt-in persistent bot WebSocket for `posted` events; allow the Mattermost user ids that may start turns, and the bot's own and system posts are ignored; Mattermost has no replay, so posts sent while the socket is disconnected or that fail acceptance are not recovered), Signal (opt-in `receiveEvents` subscription to a `signal-cli daemon --http` event stream; see below).
-- **Outbound delivery today:** iMessage (bridge), Microsoft Teams, Google Chat, Zalo OA, Zalo Personal.
+- **Bidirectional (inbound available when configured):** Telegram, Slack, Discord, WhatsApp (app secret + verify token), LINE (channel secret), Nextcloud Talk (webhook), ntfy (opt-in persistent subscription to a token-protected topic's JSON stream; the topic is the sender, so allow `ntfy-topic:<topic>`, and GoatCitadel's own publishes are tagged and ignored on the way back in), Mattermost (opt-in persistent bot WebSocket for `posted` events; allow the Mattermost user ids that may start turns, and the bot's own and system posts are ignored; Mattermost has no replay, so posts sent while the socket is disconnected or that fail acceptance are not recovered), Signal (opt-in `receiveEvents` subscription to a `signal-cli daemon --http` event stream; see below), Google Chat (Chat app mode only: a service-account key plus `audienceType`/`audience`; see below).
+- **Outbound delivery today:** iMessage (bridge), Microsoft Teams, Google Chat webhook mode, Zalo OA, Zalo Personal.
 
 Signal inbound is opt-in through `receiveEvents` and needs a bridge running `signal-cli daemon --http`. GoatCitadel keeps a persistent subscription to the daemon's Server-Sent Events stream (`GET {baseUrl}/api/v1/events`, with `?account=` when an account is configured) and dispatches only data messages with text; its own sends (sync messages), receipts, typing events, and messages from the configured account are ignored. Inbound is default-deny: allow the sender UUIDs that may start turns (senders without a UUID are identified by number; a dropped message's `sender_not_allowlisted` diagnostic shows the id), and group messages bind to `group:<groupId>`. The sender plus message timestamp is the dedupe key, so a redelivered envelope is accepted once. signal-cli acknowledges messages to the Signal server itself and does not replay events to a subscriber that was not connected, so messages that arrive while the gateway's event stream is disconnected are not replayed and are lost upstream. The legacy `inboundEnabled` and `pollIntervalSeconds` settings were replaced by `receiveEvents`: they never enable inbound, guided setup strips them on edit, and the retired `signalInboundV1Enabled` flag is ignored.
 
-Webhook-ingress channels (Telegram, Slack, WhatsApp, LINE, Nextcloud Talk) start with an empty default-deny sender allowlist; unknown senders are rejected before any message reaches the runtime. Discord's gateway ingress is governed differently: guild allowlist policy plus per-guild channel/role/user rules and mention requirements (`apps/gateway/src/services/discord-runtime-service.ts`), so scope those pairing rules deliberately — a configured guild/channel without a user list accepts any member who mentions the bot. In every case, accepted messages still pass the standard policy gate.
+Webhook-ingress channels (Telegram, Slack, WhatsApp, LINE, Nextcloud Talk, Google Chat app mode) start with an empty default-deny sender allowlist; unknown senders are rejected before any message reaches the runtime. Discord's gateway ingress is governed differently: guild allowlist policy plus per-guild channel/role/user rules and mention requirements (`apps/gateway/src/services/discord-runtime-service.ts`), so scope those pairing rules deliberately — a configured guild/channel without a user list accepts any member who mentions the bot. In every case, accepted messages still pass the standard policy gate.
 
 Long-form walkthroughs below still focus on the current high-traffic channels. The additional guided definitions above exist so operators can draft, edit, repair, and retest those guided channels inside Mission Control without dropping back to raw JSON.
 
@@ -266,11 +266,15 @@ TELEGRAM_BOT_TOKEN=123456789:AA...
 
 ## Google Chat
 
-Official reference:
+Official references:
 
 - https://developers.google.com/workspace/chat/quickstart/webhooks
+- https://developers.google.com/workspace/chat/authenticate-authorize-chat-app
+- https://developers.google.com/workspace/chat/verify-requests-from-chat
 
-### Step-by-step
+Google Chat has two modes. Webhook mode posts into one space through an incoming webhook and cannot receive messages. Chat app mode runs GoatCitadel as a Chat app: it receives messages, replies through the Chat API with a service account, and can delete only the app's own messages.
+
+### Step-by-step (webhook mode)
 
 1. Open the target Google Chat space.
 2. Create an incoming webhook for that space.
@@ -281,12 +285,27 @@ Official reference:
 7. Run guided test or retest.
 8. Confirm manually that the sandbox post landed in the intended space or thread.
 
+### Step-by-step (Chat app mode)
+
+1. In Google Cloud, enable the Google Chat API and create a service account with a JSON key.
+2. Store the whole JSON key in an environment variable on the gateway host (for example `GOOGLE_CHAT_SA_KEY`); never paste it into a tracked file.
+3. Configure the Chat app: set its HTTP endpoint URL to this connection's `/api/v1/integrations/connections/<connectionId>/google-chat/webhook` URL, and note its authentication audience (project number or HTTP endpoint URL).
+4. In GoatCitadel `Connections`, add `channel.google-chat` with `serviceAccountKeyEnv`, `audienceType` (`project_number` or `endpoint_url`), `audience` (the project number, or this endpoint's public HTTPS URL), and optionally `defaultSpace` (`spaces/...`).
+5. Allow `chat.googleapis.com` and `oauth2.googleapis.com` in the network allowlist.
+6. Add the Google Chat user resource names (`users/...`) that may start conversations. Inbound is default-deny; a dropped message's `sender_not_allowlisted` diagnostic shows the id. Existing Google Chat connections never inherit a legacy-open posture.
+7. Message the app (or @mention it in a space) and confirm its threaded reply.
+
+Every inbound request must carry a Google-signed bearer token: GoatCitadel requires RS256, picks the signing certificate by `kid` from Google's published certificates (cached per their `Cache-Control` max-age), and checks the issuer (`chat@system.gserviceaccount.com` for project-number audiences; `accounts.google.com` plus the `chat@system.gserviceaccount.com` email for endpoint-URL audiences), the configured audience, and expiry before anything is accepted. The message resource name (`spaces/.../messages/...`) is the dedupe key, so a redelivered event is accepted once. Messages from bots, including the app's own messages, are ignored.
+
 ### Google Chat troubleshooting
 
 - validation fails immediately: the value is not a real Google Chat incoming webhook URL
 - sandbox probe fails with `404` or `403`: the webhook was deleted, rotated, or tied to a different space
 - post lands in an unexpected thread: remove or correct the default thread key
 - duplicated sandbox posts before this release: fixed for unchanged drafts in the same gateway process lifecycle
+- Chat app requests rejected with `401`: the audience type or audience does not match the Chat app configuration (check the gateway log reason, for example `bad_audience`)
+- Chat app requests rejected with `400`: the connection has no `audienceType`/`audience`
+- Chat app sends fail before reaching Google: allow `chat.googleapis.com` and `oauth2.googleapis.com`, and check that the key environment variable holds the full JSON key
 
 ## Teams
 

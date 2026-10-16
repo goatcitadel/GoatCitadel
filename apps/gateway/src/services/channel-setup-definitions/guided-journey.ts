@@ -48,13 +48,15 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Run a publish test and confirm receipt on the subscribed device. Dry-run validates configuration without publishing; it cannot establish delivery proof. For inbound, publish a message to the topic from another client and allow the sender ntfy-topic:<topic>.",
   },
   "google-chat": {
-    summary: "Send outbound cards and notifications into a Google Chat Space through its webhook.",
+    summary:
+      "Send cards and notifications into a Google Chat Space through its webhook, or run a Chat app (service account) that also receives messages, replies, and deletes its own messages.",
     prerequisites: [
-      "Permission to create an incoming webhook in the intended Google Chat Space.",
-      "The complete webhook URL, treated as a credential.",
+      "Webhook mode: permission to create an incoming webhook in the intended Google Chat Space, and the complete webhook URL treated as a credential.",
+      "Chat app mode: a Chat app whose HTTP endpoint is this connection's Google Chat webhook URL, its authentication audience (project number or endpoint URL), and the service-account JSON key in a gateway environment variable.",
+      "For inbound, the Google Chat user resource names (users/...) allowed to start conversations; a dropped message's sender_not_allowlisted diagnostic shows the id.",
     ],
     firstMessage:
-      "Confirm the test card appears in the selected Space and thread. This webhook adapter cannot accept an inbound conversation.",
+      "Webhook mode: confirm the test card appears in the selected Space and thread; webhook mode cannot receive messages. Chat app mode: allow your users/... id, message the app (or @mention it in a space), and confirm its threaded reply.",
   },
   teams: {
     summary: "Send outbound Adaptive Cards to a Microsoft Teams webhook destination.",
@@ -149,6 +151,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
 };
 const DESTINATION_KEYS = new Set([
   "targets",
+  "defaultSpace",
   "defaultChannel",
   "defaultChannelId",
   "defaultChatId",
@@ -276,7 +279,9 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
           explanation:
             key === "telegram"
               ? "Telegram pairing approval adds the approved user here. A destination chat ID is not permission to message the bot."
-              : "Add trusted platform actor IDs. Empty means every inbound sender is denied.",
+              : key === "google-chat"
+                ? "Chat app mode only: add Google Chat user resource names such as users/123456789. Webhook mode never receives messages. Empty means every inbound sender is denied."
+                : "Add trusted platform actor IDs. Empty means every inbound sender is denied.",
           visibleWhenFieldEquals: { fieldKey: "inboundAccessMode", value: "allowlist" },
         },
       ],
@@ -313,8 +318,10 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
         ...runtime.normalize(draft),
         ...normalizeGuidedChannelInboundAccess(key, draft, draft.hydration?.rawLegacyConfig ?? {}),
       };
-      // Stream inbound is new for a connection, so a hydrated open_legacy mode must not carry over.
-      return normalized.inboundStreamEnabled === true || normalized.receiveEvents === true
+      // Stream and Google Chat app inbound are new for a connection, so a hydrated open_legacy mode must not carry over.
+      return normalized.inboundStreamEnabled === true ||
+        normalized.receiveEvents === true ||
+        (key === "google-chat" && Boolean(normalized.serviceAccountKeyEnv ?? normalized.serviceAccountKey))
         ? { ...normalized, inboundAccessMode: "allowlist" }
         : normalized;
     },
@@ -339,6 +346,7 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
 function credentialAlternatives(key: string, alternatives: string[][]): string[][] | undefined {
   if (key === "slack") return [["slackInstallId", "botToken", "botTokenEnv", "webhookUrl", "webhookUrlEnv"]];
   if (key === "discord") return [["botToken", "botTokenEnv", "webhookUrl", "webhookUrlEnv"]];
+  if (key === "google-chat") return [["webhookUrl", "webhookUrlEnv", "serviceAccountKeyEnv"]];
   // Photon is inspectable metadata; its unavailable callable adapter must not
   // prompt for an unrelated BlueBubbles password. Backend validation owns it.
   if (key === "imessage") return undefined;

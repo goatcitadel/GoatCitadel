@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { cleanupRecoveredBackgroundProcess } from "./tool-executor/background-process-identity.js";
+import { resetGoogleChatAccessTokenCache } from "./tool-executor/google-chat-service-account.js";
 
 const mocked = vi.hoisted(() => ({
   isBrowserToolName: vi.fn<(name: string) => boolean>(),
@@ -3099,6 +3100,181 @@ describe("executeTool", () => {
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "spaces/AAAA/messages/123",
+    });
+  });
+
+  describe("Google Chat app (service-account) mode", () => {
+    const googleChatKey = generateKeyPairSync("rsa", { modulusLength: 2048 })
+      .privateKey.export({ type: "pkcs8", format: "pem" })
+      .toString();
+    const googleChatPolicy: ToolPolicyConfig = {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["chat.googleapis.com", "oauth2.googleapis.com"],
+      },
+    };
+
+    beforeEach(() => {
+      resetGoogleChatAccessTokenCache();
+      process.env.GOOGLE_CHAT_SA_KEY = JSON.stringify({
+        type: "service_account",
+        client_email: "goatcitadel-chat@example-project.iam.gserviceaccount.com",
+        private_key_id: "key-id-1",
+        private_key: googleChatKey,
+        token_uri: "https://oauth2.googleapis.com/token",
+      });
+    });
+
+    afterEach(() => {
+      resetGoogleChatAccessTokenCache();
+      delete process.env.GOOGLE_CHAT_SA_KEY;
+    });
+
+    function googleChatAppStorage(deliveryId: string) {
+      return {
+        integrationConnections: {
+          get: vi.fn(() => ({
+            connectionId: "conn-google-chat-app",
+            key: "google-chat",
+            config: {
+              serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+              audienceType: "project_number",
+              audience: "123456789012",
+              defaultSpace: "spaces/AAAA",
+            },
+          })),
+        },
+        commsDeliveries: {
+          createQueued: vi.fn((input: Record<string, unknown>) => ({
+            deliveryId,
+            status: "queued",
+            channelKey: input.channelKey,
+            target: input.target,
+            createdAt: "2026-10-16T00:00:00.000Z",
+            updatedAt: "2026-10-16T00:00:00.000Z",
+          })),
+          markSent: vi.fn(),
+          markFailed: vi.fn(),
+        },
+      } as unknown as Storage & AsyncStorage;
+    }
+
+    function googleChatApiFetchMock() {
+      let created = 0;
+      return vi.fn(async (input: string | URL, _init?: RequestInit) => {
+        const url = String(input);
+        if (url === "https://oauth2.googleapis.com/token") {
+          return new Response(JSON.stringify({ access_token: "ya29.app-token", expires_in: 3600 }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.startsWith("https://chat.googleapis.com/v1/spaces/AAAA/messages/")) {
+          return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        created += 1;
+        return new Response(JSON.stringify({ name: `spaces/AAAA/messages/m${created}` }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+    }
+
+    it("sends Google Chat app messages through the service-account API", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = googleChatApiFetchMock();
+      vi.stubGlobal("fetch", fetchMock);
+      const storage = googleChatAppStorage("delivery-google-chat-app");
+
+      const first = await executeTool(
+        {
+          toolName: "channel.send",
+          args: { connectionId: "conn-google-chat-app", target: "spaces/AAAA", message: "Deploy finished." },
+          agentId: "operator",
+          sessionId: "sess-google-chat-app",
+        },
+        googleChatPolicy,
+        storage,
+      );
+      const second = await executeTool(
+        {
+          toolName: "channel.send",
+          args: {
+            connectionId: "conn-google-chat-app",
+            target: "spaces/AAAA",
+            message: "Threaded follow-up.",
+            replyToMessageId: "spaces/AAAA/threads/TTT",
+          },
+          agentId: "operator",
+          sessionId: "sess-google-chat-app",
+        },
+        googleChatPolicy,
+        storage,
+      );
+
+      expect(first).toMatchObject({ status: "sent", providerMessageId: "spaces/AAAA/messages/m1" });
+      expect(second).toMatchObject({ status: "sent", providerMessageId: "spaces/AAAA/messages/m2" });
+      const calls = fetchMock.mock.calls as Array<[string, RequestInit]>;
+      expect(calls.filter(([url]) => url === "https://oauth2.googleapis.com/token")).toHaveLength(1);
+      const sends = calls.filter(([url]) => url.startsWith("https://chat.googleapis.com/"));
+      expect(sends).toHaveLength(2);
+      expect(sends[0]?.[0]).toBe("https://chat.googleapis.com/v1/spaces/AAAA/messages");
+      expect(sends[0]?.[1].method).toBe("POST");
+      expect(new Headers(sends[0]?.[1].headers).get("authorization")).toBe("Bearer ya29.app-token");
+      expect(JSON.parse(String(sends[0]?.[1].body))).toEqual({ text: "Deploy finished." });
+      expect(sends[1]?.[0]).toBe(
+        "https://chat.googleapis.com/v1/spaces/AAAA/messages?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",
+      );
+      expect(JSON.parse(String(sends[1]?.[1].body))).toEqual({
+        text: "Threaded follow-up.",
+        thread: { name: "spaces/AAAA/threads/TTT" },
+      });
+      expect(JSON.stringify(calls)).not.toContain("BEGIN PRIVATE KEY");
+    });
+
+    it("unsends Google Chat app messages through the service-account API", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = googleChatApiFetchMock();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await executeTool(
+        {
+          toolName: "channel.unsend",
+          args: { connectionId: "conn-google-chat-app", messageId: "spaces/AAAA/messages/m1" },
+          agentId: "operator",
+          sessionId: "sess-google-chat-app-unsend",
+        },
+        googleChatPolicy,
+        googleChatAppStorage("delivery-google-chat-app-unsend"),
+      );
+
+      expect(result).toMatchObject({ status: "sent", providerMessageId: "spaces/AAAA/messages/m1" });
+      const calls = fetchMock.mock.calls as Array<[string, RequestInit]>;
+      const deleteCall = calls.find(([url]) => url.startsWith("https://chat.googleapis.com/"));
+      expect(deleteCall?.[0]).toBe("https://chat.googleapis.com/v1/spaces/AAAA/messages/m1");
+      expect(deleteCall?.[1].method).toBe("DELETE");
+      expect(new Headers(deleteCall?.[1].headers).get("authorization")).toBe("Bearer ya29.app-token");
+    });
+
+    it("rejects an invalid Google Chat message name before any fetch", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = googleChatApiFetchMock();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const outcome = await executeTool(
+        {
+          toolName: "channel.unsend",
+          args: { connectionId: "conn-google-chat-app", messageId: "spaces/AAAA/messages/m1/../../other" },
+          agentId: "operator",
+          sessionId: "sess-google-chat-app-unsend-invalid",
+        },
+        googleChatPolicy,
+        googleChatAppStorage("delivery-google-chat-app-unsend-invalid"),
+      ).catch((error: unknown) => ({ status: "thrown", error }));
+
+      expect(outcome).not.toMatchObject({ status: "sent" });
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 

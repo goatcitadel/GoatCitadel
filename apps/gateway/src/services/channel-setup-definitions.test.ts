@@ -542,6 +542,83 @@ describe("channel setup definitions", () => {
     ]);
   });
 
+  it("collects Google Chat app (service-account) fields and forces a default-deny sender allowlist", () => {
+    const definition = requireChannelSetupDefinition("channel.google-chat");
+    expect(definition.definition.wizard.contentVersion).toBe("2026.10.google-chat.app.v2.guided-2026-10");
+    expect(definition.definition.adapter.adapterVersion).toBe("2026.10.google-chat.app.v2");
+    expect(definition.definition.validation.validationVersion).toBe("2026.10.google-chat.app.v2");
+    const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
+    expect(fieldKeys).toEqual(
+      expect.arrayContaining([
+        "webhookUrl",
+        "serviceAccountKeyEnv",
+        "audienceType",
+        "audience",
+        "defaultSpace",
+        "inboundAccessMode",
+        "allowedSenders",
+      ]),
+    );
+    expect(JSON.stringify(definition.definition)).not.toContain("cannot accept an inbound conversation");
+
+    const appDraft = createDraft("channel.google-chat", {
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      audienceType: "project_number",
+      audience: "123456789012",
+      defaultSpace: "spaces/AAAA",
+    });
+    expect(definition.validate(appDraft)).toEqual([]);
+    expect(definition.normalize(appDraft)).toEqual({
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      audienceType: "project_number",
+      audience: "123456789012",
+      defaultSpace: "spaces/AAAA",
+      inboundAccessMode: "allowlist",
+    });
+
+    // An edited legacy connection hydrated as open_legacy never carries that posture into app inbound.
+    const edited = {
+      ...createDraft("channel.google-chat", { ...appDraft.draft, inboundAccessMode: "open_legacy" }, "edit"),
+      connectionId: "11111111-1111-1111-1111-111111111111",
+    };
+    expect(definition.normalize(edited)).toMatchObject({ inboundAccessMode: "allowlist" });
+
+    expect(
+      definition.validate(createDraft("channel.google-chat", { serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY" })),
+    ).toEqual(
+      expect.arrayContaining([expect.objectContaining({ fieldKey: "audience", failureCategory: "missing_input" })]),
+    );
+    expect(
+      definition.validate(
+        createDraft("channel.google-chat", {
+          serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+          audienceType: "project_number",
+          audience: "not-a-number",
+          defaultSpace: "rooms/x",
+        }),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ fieldKey: "audience", failureCategory: "malformed_value" }),
+        expect.objectContaining({ fieldKey: "defaultSpace", failureCategory: "malformed_value" }),
+      ]),
+    );
+    expect(
+      definition.validate(
+        createDraft("channel.google-chat", {
+          serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+          audienceType: "endpoint_url",
+          audience: "http://insecure.example.test/hook",
+        }),
+      ),
+    ).toEqual(
+      expect.arrayContaining([expect.objectContaining({ fieldKey: "audience", failureCategory: "malformed_value" })]),
+    );
+    expect(definition.validate(createDraft("channel.google-chat", {}))).toEqual(
+      expect.arrayContaining([expect.objectContaining({ fieldKey: "webhookUrl", failureCategory: "missing_input" })]),
+    );
+  });
+
   it("rejects malformed Teams webhook URLs", () => {
     const definition = requireChannelSetupDefinition("channel.teams");
     const issues = definition.validate(
@@ -1015,7 +1092,8 @@ describe("channel setup definitions", () => {
     );
     expect(googleHydrated.hydration.status).toBe("opaque-secret");
     expect(googleHydrated.hydration.fieldState.webhookUrl).toBe("configured");
-    expect(googleHydrated.draft).toEqual({ defaultThreadKey: "ops-thread" });
+    // Webhook-only connections hydrate the shared sender-access posture; legacy rows show open_legacy.
+    expect(googleHydrated.draft).toEqual({ defaultThreadKey: "ops-thread", inboundAccessMode: "open_legacy" });
     expect(
       googleChat.normalize(
         createDraft("channel.google-chat", {
@@ -1026,6 +1104,7 @@ describe("channel setup definitions", () => {
     ).toEqual({
       webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=key&token=token",
       defaultThreadKey: "ops-thread",
+      inboundAccessMode: "allowlist",
     });
     expect(
       googleChat.validate(
