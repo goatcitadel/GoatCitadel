@@ -12,6 +12,7 @@ import type {
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { resolveSessionRoute, type SessionRouteResolution } from "./session-key.js";
+import { logger } from "./logger.js";
 import { TokenCostLedger } from "./token-cost-ledger.js";
 
 export interface EventIngestOptions {
@@ -440,7 +441,17 @@ async function flushTranscriptOutboxSession(
 
   for (const record of pending) {
     try {
-      const offset = await storage.transcripts.append(record.event);
+      let offset: number | undefined;
+      if (record.lastAttemptAt) {
+        // An earlier attempt began and may have appended before crashing.
+        offset = await storage.transcripts.findEventOffset(record.sessionId, record.eventId);
+      }
+      if (offset === undefined) {
+        await storage.transcriptOutbox.markAttemptStarted(record.eventId, {
+          attemptedAt: new Date().toISOString(),
+        });
+        offset = await storage.transcripts.append(record.event);
+      }
       await storage.transcriptOutbox.markDelivered(record.eventId, {
         deliveredAt: new Date().toISOString(),
         transcriptOffset: offset,
@@ -455,8 +466,7 @@ async function flushTranscriptOutboxSession(
         lastAttemptAt: new Date().toISOString(),
         lastError: message,
       });
-      // eslint-disable-next-line no-console -- outbox failures need local diagnostics until transcript persistence is fully absorbed by Postgres.
-      console.warn("[goatcitadel] transcript append failed after event commit", {
+      logger.child("event-ingest").warn("transcript append failed after event commit", {
         sessionId: record.sessionId,
         eventId: record.eventId,
         attemptCount: updated?.attemptCount ?? record.attemptCount + 1,

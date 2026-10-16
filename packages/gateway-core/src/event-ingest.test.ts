@@ -6,10 +6,18 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayEventInput, InboundEventIndexRow, SessionMeta, TranscriptEvent } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
 import { deriveCredentialDims, EventIngestService } from "./event-ingest.js";
+import { logger, type Logger } from "./logger.js";
 import { resolveSessionRoute } from "./session-key.js";
 
 function asAsyncStorage(storage: Storage): AsyncStorage {
   return storage instanceof Storage ? createSqliteAsyncStorage(storage) : (storage as unknown as AsyncStorage);
+}
+
+function spyOnStructuredWarn() {
+  const warn = vi.fn();
+  const scoped = { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn(), child: vi.fn() } as unknown as Logger;
+  const childSpy = vi.spyOn(logger, "child").mockReturnValue(scoped);
+  return { warn, childSpy };
 }
 
 function buildPayload(): GatewayEventInput {
@@ -243,6 +251,7 @@ describe("EventIngestService", () => {
             attemptCount: 0,
           },
         ]),
+        markAttemptStarted: vi.fn(() => undefined),
         markDelivered: vi.fn(() => undefined),
         markFailed: vi.fn(() => undefined),
       },
@@ -508,6 +517,7 @@ describe("EventIngestService", () => {
             attemptCount: 0,
           },
         ]),
+        markAttemptStarted: vi.fn(() => undefined),
         markDelivered: vi.fn(() => undefined),
         markFailed: vi.fn(() => ({
           eventId: transcriptEvent.eventId,
@@ -526,7 +536,7 @@ describe("EventIngestService", () => {
       },
     } as unknown as Storage;
 
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { warn, childSpy } = spyOnStructuredWarn();
     const service = new EventIngestService(asAsyncStorage(storage));
 
     const result = await service.ingest({
@@ -540,9 +550,14 @@ describe("EventIngestService", () => {
     expect(result.transcriptOffset).toBe(0);
     expect(storage.transcriptOutbox.enqueue).toHaveBeenCalledTimes(1);
     expect(storage.transcriptOutbox.markFailed).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(childSpy).toHaveBeenCalledWith("event-ingest");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "transcript append failed after event commit",
+      expect.objectContaining({ sessionId: "sess_123", eventId: "evt-1", error: "disk unavailable" }),
+    );
 
-    warnSpy.mockRestore();
+    childSpy.mockRestore();
   });
 
   it("flushes pending transcript outbox items on demand", async () => {
@@ -585,6 +600,7 @@ describe("EventIngestService", () => {
               attemptCount: 0,
             },
           ]),
+        markAttemptStarted: vi.fn(() => undefined),
         markDelivered: vi.fn(() => undefined),
       },
       transcripts: {
@@ -985,6 +1001,7 @@ describe("EventIngestService", () => {
               attemptCount: 0,
             },
           ]),
+        markAttemptStarted: vi.fn(() => undefined),
         markDelivered: vi.fn(),
       },
       transcripts: {
@@ -1025,6 +1042,7 @@ describe("EventIngestService", () => {
           .mockReturnValueOnce([
             { eventId: event.eventId, sessionId: event.sessionId, event, enqueuedAt: event.timestamp, attemptCount: 4 },
           ]),
+        markAttemptStarted: vi.fn(() => undefined),
         markFailed: vi.fn(() => undefined),
       },
       transcripts: {
@@ -1036,7 +1054,7 @@ describe("EventIngestService", () => {
         insert: vi.fn(),
       },
     } as unknown as Storage;
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { warn, childSpy } = spyOnStructuredWarn();
 
     const service = new EventIngestService(asAsyncStorage(storage));
     await expect(service.flushPendingTranscriptOutbox()).resolves.toBe(0);
@@ -1047,14 +1065,93 @@ describe("EventIngestService", () => {
         lastError: "string failure",
       }),
     );
-    expect(warnSpy).toHaveBeenCalledWith(
-      "[goatcitadel] transcript append failed after event commit",
+    expect(warn).toHaveBeenCalledWith(
+      "transcript append failed after event commit",
       expect.objectContaining({
         attemptCount: 5,
         error: "string failure",
       }),
     );
-    warnSpy.mockRestore();
+    childSpy.mockRestore();
+  });
+
+  describe("idempotent transcript outbox drain", () => {
+    function withStorage(run: (storage: Storage, sessionId: string) => Promise<void>): () => Promise<void> {
+      return async () => {
+        const unique = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const root = path.join(os.tmpdir(), `goatcitadel-event-outbox-idem-${unique}`);
+        const storage = new Storage({
+          dbPath: ":memory:",
+          transcriptsDir: path.join(root, "transcripts"),
+          auditDir: path.join(root, "audit"),
+        });
+        try {
+          await run(storage, resolveSessionRoute(buildPayload().route).sessionId);
+        } finally {
+          storage.close();
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      };
+    }
+
+    it(
+      "leaves one transcript row when markDelivered fails after append and the outbox re-drains",
+      withStorage(async (storage, sessionId) => {
+        const original = storage.transcriptOutbox.markDelivered.bind(storage.transcriptOutbox);
+        const failOnce = vi.spyOn(storage.transcriptOutbox, "markDelivered").mockImplementationOnce(() => {
+          throw new Error("crash before markDelivered");
+        });
+        failOnce.mockImplementation(original);
+        const { childSpy } = spyOnStructuredWarn();
+        const service = new EventIngestService(asAsyncStorage(storage));
+
+        await service.ingest({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey: "idem-outbox-1",
+          payload: buildPayload(),
+        });
+        expect(storage.transcriptOutbox.get("evt-1")?.deliveredAt).toBeUndefined();
+
+        await service.flushPendingTranscriptOutbox();
+
+        const transcript = await storage.transcripts.read(sessionId);
+        expect(transcript.filter((entry) => entry.eventId === "evt-1")).toHaveLength(1);
+        expect(storage.transcriptOutbox.get("evt-1")?.deliveredAt).toBeDefined();
+        childSpy.mockRestore();
+      }),
+      20_000,
+    );
+
+    it(
+      "does not duplicate a transcript row appended by an attempt that died before markDelivered",
+      withStorage(async (storage, sessionId) => {
+        const original = storage.transcriptOutbox.markDelivered.bind(storage.transcriptOutbox);
+        const hold = vi.spyOn(storage.transcriptOutbox, "markDelivered").mockImplementation(() => undefined);
+        const service = new EventIngestService(asAsyncStorage(storage));
+        await service.ingest({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey: "idem-outbox-2",
+          payload: buildPayload(),
+        });
+        hold.mockImplementation(original);
+
+        // Simulate process death: attempt started and append landed, delivery never recorded.
+        const pending = storage.transcriptOutbox.get("evt-1");
+        expect(pending?.deliveredAt).toBeUndefined();
+        storage.transcriptOutbox.markAttemptStarted("evt-1", { attemptedAt: new Date().toISOString() });
+        const transcriptsBefore = await storage.transcripts.read(sessionId);
+        if (!transcriptsBefore.some((entry) => entry.eventId === "evt-1")) {
+          await storage.transcripts.append(pending!.event);
+        }
+
+        await service.flushPendingTranscriptOutbox();
+
+        const transcript = await storage.transcripts.read(sessionId);
+        expect(transcript.filter((entry) => entry.eventId === "evt-1")).toHaveLength(1);
+        expect(storage.transcriptOutbox.get("evt-1")?.deliveredAt).toBeDefined();
+      }),
+      20_000,
+    );
   });
 });
 

@@ -36,6 +36,17 @@ test("PostgresTranscriptLog reuses the existing sequence when the same event is 
   assert.equal(stored[0]?.eventId, event.eventId);
 });
 
+test("PostgresTranscriptLog.findEventOffset returns the stored sequence or undefined", async () => {
+  const db = new InMemoryTranscriptDb();
+  const log = new PostgresTranscriptLog(db);
+  const event = buildEvent();
+
+  assert.equal(await log.findEventOffset(event.sessionId, event.eventId), undefined);
+  const sequence = await log.append(event);
+  assert.equal(await log.findEventOffset(event.sessionId, event.eventId), sequence);
+  assert.equal(await log.findEventOffset(event.sessionId, "other-event"), undefined);
+});
+
 test("PostgresTranscriptLog strips null bytes from payloads before JSONB persistence", async () => {
   const db = new InMemoryTranscriptDb();
   const log = new PostgresTranscriptLog(db);
