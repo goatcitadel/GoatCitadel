@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
-import type { ModelComparisonJudgeRequest } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, type ModelComparisonJudgeRequest } from "@goatcitadel/contracts";
 import { z } from "zod";
 import type { ModelComparisonService } from "../services/model-comparison-service.js";
 
@@ -99,7 +99,41 @@ export const modelComparisonRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: (error as Error).message });
     }
   });
+
+  fastify.post("/api/v1/model-comparisons/:comparisonId/run", async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.code(202).send(await getModelComparisonService(fastify).startComparison(params.data.comparisonId));
+    } catch (error) {
+      return reply.code(runControlErrorStatus(error)).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/model-comparisons/:comparisonId/cancel", async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await getModelComparisonService(fastify).cancelComparison(params.data.comparisonId));
+    } catch (error) {
+      return reply.code(runControlErrorStatus(error)).send({ error: (error as Error).message });
+    }
+  });
 };
+
+function runControlErrorStatus(error: unknown): number {
+  if (error instanceof NotFoundError) {
+    return 404;
+  }
+  if (error instanceof ConflictError) {
+    return 409;
+  }
+  return 400;
+}
 
 function getModelComparisonService(fastify: FastifyInstance): ModelComparisonService {
   const services = fastify.services as unknown as { modelComparisons?: ModelComparisonService };
