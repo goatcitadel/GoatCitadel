@@ -59,8 +59,8 @@ export function LibraryCommunications({ workspaceId }: { workspaceId: string }) 
         <h1 className="font-display text-xl font-semibold">{LIBRARY_SECTION_LABELS.communications}</h1>
         <p className="text-sm text-fg-secondary">
           Inbox, agenda and contacts read through governed integrations for{" "}
-          <span title={workspaceId}>{workspaceName ?? `workspace ${workspaceId}`}</span>. Sending is approval-gated and
-          this screen never delivers mail.
+          <span title={workspaceId}>{workspaceName ?? `workspace ${workspaceId}`}</span>. Sending is approval-gated:
+          approving sends the exact reviewed message once.
         </p>
         <div className="flex flex-wrap gap-2">
           <Button disabled={query.isFetching} onClick={() => void refresh()}>

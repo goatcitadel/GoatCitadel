@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { MailAccountRecord, MailDraftRecord } from "@goatcitadel/contracts";
-import { createMailDraft, sendMailDraft } from "@goatcitadel/mission-control-shared/api/personal-ops";
+import { createMailDraft, getMailDraft, sendMailDraft } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
@@ -11,7 +11,7 @@ import { Field } from "../../ui/Field";
 import { RiskBadge } from "../../ui/RiskBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { handleEvidenceScrollKeyDown } from "../../ui/evidence-scroll";
-import { LibraryApproval } from "./LibraryApproval";
+import { LibraryMailSendReceipt, type SendReceipt } from "./LibraryMailSendReceipt";
 import { useLibraryOperation } from "./use-library-operation";
 import {
   draftMatchesRequest,
@@ -34,8 +34,9 @@ type AccountView = { label: string; address?: string; syncStatus: MailAccountRec
 /** The exact Gateway draft under review, with the compose value and account it was prepared from. */
 type SendReview = { record: MailDraftRecord; compose: MailCompose; account: AccountView };
 type Outcome = { error: boolean; text: string };
-/** `replayed` marks a receipt for a request whose original response was lost. */
-type SendReceipt = { record: MailDraftRecord; replayed: boolean };
+const INTERRUPTED_SEND =
+  "This send request was interrupted before its approval was recorded. Nothing was sent; start a new draft to send this message.";
+
 const NO_ACCOUNTS: MailAccountRecord[] = [];
 
 const INPUT = "w-full min-w-0 rounded-md border border-line bg-raised p-2";
@@ -121,10 +122,8 @@ function LibraryMailComposeContent({
         },
         (value) => {
           if (value.draftId !== target.record.draftId) throw new Error("The send receipt names a different draft.");
-          if (
-            value.status === "approval_required" &&
-            (!value.approvalId || !draftMatchesRequest(value, target.record, workspaceId))
-          )
+          if (value.status === "approval_required" && !value.approvalId) throw new Error(INTERRUPTED_SEND);
+          if (value.status === "approval_required" && !draftMatchesRequest(value, target.record, workspaceId))
             throw new Error("The send approval receipt does not match the reviewed draft.");
           if (value.status !== "approval_required" && value.status !== "failed")
             throw new Error("The Gateway returned an unexpected draft status.");
@@ -150,6 +149,20 @@ function LibraryMailComposeContent({
     }
   }
 
+  /** Re-read the draft after a decision so the operator sees whether it was actually sent. */
+  async function refreshReceipt() {
+    const draftId = receipt?.record.draftId;
+    await onRefresh();
+    if (!draftId) return;
+    try {
+      const observed = await getMailDraft(draftId);
+      if (operation.current() && observed.draftId === draftId)
+        setReceipt((current) => (current && current.record.draftId === draftId ? { ...current, observed } : current));
+    } catch {
+      // The approval card stays authoritative; a failed re-read must not hide it.
+    }
+  }
+
   function close() {
     if (busy) return;
     const cancelled = !pending || pending.record.draftId !== review?.record.draftId;
@@ -169,9 +182,8 @@ function LibraryMailComposeContent({
     <section className="grid min-w-0 grid-cols-1 gap-3 rounded-lg border border-line p-3" aria-label="Compose email">
       <h2 className="font-display text-lg text-fg">Compose email</h2>
       <p className="text-sm text-fg-secondary">
-        What you type stays in this browser session. Review stores the draft, including Bcc, in Gateway memory until the
-        Gateway restarts. Only Request send approval asks for an approval, and approval records your intent only:
-        GoatCitadel does not send mail from here.
+        What you type stays in this browser session. Review saves the draft, including Bcc, on the Gateway. Only Request
+        send approval asks for an approval; approving sends this exact message once.
       </p>
       {!knownAccounts ? (
         <p role="status">
@@ -294,34 +306,12 @@ function LibraryMailComposeContent({
       </div>
       {outcome && !review ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
       {receipt ? (
-        <section className="grid min-w-0 grid-cols-1 gap-2" aria-label="Send approval receipt">
-          {receipt.record.status === "approval_required" && receipt.record.approvalId ? (
-            <>
-              <Callout>
-                Send approval requested. Nothing has been sent. Approving records operator intent only; this Gateway
-                route never delivers mail.
-              </Callout>
-              <p className="wrap-anywhere text-sm">
-                To {receipt.record.to.join(", ")} · {receipt.record.subject}
-              </p>
-              <LibraryApproval approvalId={receipt.record.approvalId} workspaceId={workspaceId} onRefresh={onRefresh} />
-            </>
-          ) : receipt.replayed ? (
-            <Callout tone="error">
-              The earlier send request&apos;s outcome is unknown: a send approval may already exist, and this draft can
-              no longer be sent. Nothing was sent. Check Inbox before preparing a new request.
-            </Callout>
-          ) : (
-            <Callout tone="error">
-              The Gateway cannot request an approval for this draft: it no longer holds it (drafts live in Gateway
-              memory until it restarts), or an earlier request for it ended without a confirmed outcome. Nothing was
-              sent. Check Inbox, then review the send request again to prepare a new draft.
-            </Callout>
-          )}
-          <Button variant="ghost" onClick={() => setReceipt(undefined)}>
-            Dismiss send receipt
-          </Button>
-        </section>
+        <LibraryMailSendReceipt
+          receipt={receipt}
+          workspaceId={workspaceId}
+          onRefresh={refreshReceipt}
+          onDismiss={() => setReceipt(undefined)}
+        />
       ) : null}
       <Dialog
         open={Boolean(reviewed)}
@@ -380,10 +370,7 @@ function LibraryMailComposeContent({
               <RiskBadge risk="danger" />
               <span>Requests one high-risk approval to send this exact draft.</span>
             </div>
-            <p>
-              Approving records operator intent only: GoatCitadel does not send this message. Delivery is never
-              confirmed here.
-            </p>
+            <p>Approving sends this exact message once through the connected account.</p>
             <TechnicalDetails label="Draft record">
               <p>Draft {reviewed.draftId}</p>
             </TechnicalDetails>

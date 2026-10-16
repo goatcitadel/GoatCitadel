@@ -4,20 +4,32 @@ import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { MailAccountRecord, MailDraftRecord } from "@goatcitadel/contracts";
-import { createMailDraft, sendMailDraft } from "@goatcitadel/mission-control-shared/api/personal-ops";
+import { createMailDraft, getMailDraft, sendMailDraft } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { LibraryMailCompose } from "./LibraryMailCompose";
 
 vi.mock("@goatcitadel/mission-control-shared/api/personal-ops", () => ({
   createMailDraft: vi.fn(),
+  getMailDraft: vi.fn(),
   sendMailDraft: vi.fn(),
 }));
 vi.mock("./LibraryApproval", () => ({
-  LibraryApproval: ({ approvalId, workspaceId }: { approvalId: string; workspaceId: string }) => (
-    <p>
-      Approval owner {approvalId} in {workspaceId}
-    </p>
+  LibraryApproval: ({
+    approvalId,
+    workspaceId,
+    onRefresh,
+  }: {
+    approvalId: string;
+    workspaceId: string;
+    onRefresh: () => Promise<unknown>;
+  }) => (
+    <div>
+      <p>
+        Approval owner {approvalId} in {workspaceId}
+      </p>
+      <button onClick={() => void onRefresh()}>Simulate decision</button>
+    </div>
   ),
 }));
 
@@ -116,8 +128,7 @@ it("shows the exact Gateway draft, its scope and consequences, and Cancel reques
     "Quarterly status",
     "This workspace",
     "No attachments",
-    "does not send this message",
-    "Delivery is never confirmed",
+    "Approving sends this exact message once through the connected account.",
   ])
     expect(review).toContain(text);
   expect(dialog()!.querySelector("[role=region][aria-label='Exact message text']")!.textContent).toBe(
@@ -137,7 +148,9 @@ it("requests exactly one approval, links the approval owner and clears the sent 
   await click("Review send request");
   await click("Request send approval");
   expect(sendMailDraft).toHaveBeenCalledExactlyOnceWith("draft-1");
-  expect(container.textContent).toContain("Send approval requested. Nothing has been sent.");
+  expect(container.textContent).toContain(
+    "Send approval requested. Nothing has been sent yet. Approving sends this exact message once.",
+  );
   expect(container.textContent).toContain("Approval owner approval-1 in one");
   expect((container.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
   expect(button("Request send approval")).toBeUndefined();
@@ -247,7 +260,58 @@ it("does not claim an empty account list while accounts are still unknown", asyn
 
 it("says the Gateway holds the reviewed draft, not only this browser", async () => {
   await render();
-  expect(container.textContent).toContain("Review stores the draft, including Bcc, in Gateway memory");
+  expect(container.textContent).toContain(
+    "What you type stays in this browser session. Review saves the draft, including Bcc, on the Gateway. Only Request send approval asks for an approval; approving sends this exact message once.",
+  );
+  expect(container.textContent).not.toContain("does not send mail from here");
+});
+
+async function requestApproval() {
+  vi.mocked(createMailDraft).mockResolvedValue(draft);
+  vi.mocked(sendMailDraft).mockResolvedValue(pending);
+  await render();
+  await compose();
+  await click("Review send request");
+  await click("Request send approval");
+}
+
+it("re-reads the draft after the approval is decided and shows that it was sent", async () => {
+  await requestApproval();
+  vi.mocked(getMailDraft).mockResolvedValue({ ...pending, status: "sent", sentAt: "later" });
+  await click("Simulate decision");
+  expect(getMailDraft).toHaveBeenCalledExactlyOnceWith("draft-1");
+  expect(container.querySelector("[aria-label='Send approval receipt']")!.textContent).toContain("Sent.");
+});
+
+it.each([
+  ["failed", "Send approval was rejected; nothing was sent."],
+  ["send_unavailable", "The account has no send transport."],
+] as const)("shows why a %s draft was not sent", async (status, failureReason) => {
+  await requestApproval();
+  vi.mocked(getMailDraft).mockResolvedValue({ ...pending, status, failureReason });
+  await click("Simulate decision");
+  expect(container.textContent).toContain(`Not sent: ${failureReason}`);
+});
+
+it("keeps the receipt readable when the draft re-read fails", async () => {
+  await requestApproval();
+  vi.mocked(getMailDraft).mockRejectedValue(new Error("offline"));
+  await click("Simulate decision");
+  expect(container.textContent).toContain("Approval owner approval-1 in one");
+  expect(container.textContent).not.toContain("Sent.");
+});
+
+it("explains an interrupted send request that has no approval, instead of a receipt mismatch", async () => {
+  vi.mocked(createMailDraft).mockResolvedValue(draft);
+  vi.mocked(sendMailDraft).mockResolvedValueOnce({ ...pending, approvalId: undefined });
+  await render();
+  await compose();
+  await click("Review send request");
+  await click("Request send approval");
+  expect(dialog()!.textContent).toContain(
+    "This send request was interrupted before its approval was recorded. Nothing was sent; start a new draft to send this message.",
+  );
+  expect(dialog()!.textContent).not.toContain("does not match the reviewed draft");
 });
 
 async function loseFirstSend() {
