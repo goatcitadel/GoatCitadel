@@ -221,7 +221,7 @@ describe("buildGatewayConnectorRecords", () => {
     expect(googleChat?.metadata?.channelSupportNotes).toEqual(
       expect.arrayContaining([
         "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
-        "Google Chat webhook mode is outbound only and does not provide inbound routing.",
+        "Google Chat webhook mode is outbound; inbound requires Chat app (service-account) mode.",
       ]),
     );
 

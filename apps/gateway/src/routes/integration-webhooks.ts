@@ -1,5 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { evaluateChannelInboundAccess } from "@goatcitadel/contracts";
+import type { GoogleChatCertFetcher } from "../services/google-chat-webhook.js";
+import { registerGoogleChatWebhookRoutes } from "./integration-webhooks-google-chat-routes.js";
 import { registerLineWebhookRoutes } from "./integration-webhooks-line-routes.js";
 import { registerNextcloudTalkWebhookRoutes } from "./integration-webhooks-nextcloud-talk-routes.js";
 import { registerSlackWebhookRoutes } from "./integration-webhooks-slack-routes.js";
@@ -20,7 +22,15 @@ import {
 } from "../services/generic-channel-webhook.js";
 import { createAcceptedWebhookRateLimit, enforceAcceptedWebhookRateLimit } from "../services/webhook-rate-limit.js";
 
-export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
+export type IntegrationWebhookRoutesOptions = {
+  /** Test seam: replaces the fixed-host Google certificate fetch (cached per registration either way). */
+  googleChatCertFetcher?: GoogleChatCertFetcher;
+};
+
+export const integrationWebhookRoutes: FastifyPluginAsync<IntegrationWebhookRoutesOptions> = async (
+  fastify,
+  options,
+) => {
   const genericChannelInboundOptions = createWebhookRouteOptions("genericChannelRawBody");
   const genericAcceptedRateLimit = createAcceptedWebhookRateLimit(fastify, "generic");
   fastify.post(
@@ -211,4 +221,5 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
   registerSlackWebhookRoutes(fastify);
   registerLineWebhookRoutes(fastify);
   registerNextcloudTalkWebhookRoutes(fastify);
+  registerGoogleChatWebhookRoutes(fastify, { fetchCerts: options?.googleChatCertFetcher });
 };

@@ -1,4 +1,5 @@
 import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/contracts";
+import { isExplicitTrue } from "@goatcitadel/gateway-core";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   requireCatalog,
@@ -19,14 +20,16 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "bridge_dependent",
-      contentVersion: "2026.08.signal.v4",
+      contentVersion: "2026.10.signal.stream.v5",
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
-      introSummary: "Configure an outbound-only Signal bridge endpoint and a default recipient for sends.",
+      introSummary:
+        "Configure a Signal bridge endpoint and a default recipient for sends, with optional inbound messages from the signal-cli HTTP daemon event stream.",
       prerequisites: [
         "A running Signal bridge endpoint that GoatCitadel can reach.",
         "A sandbox recipient or group for manual send confirmation.",
+        "For inbound, a signal-cli daemon --http bridge and the sender UUIDs (or numbers) allowed to start conversations.",
       ],
       steps: [
         {
@@ -37,9 +40,12 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "GoatCitadel uses the configured Signal bridge for outbound sends to individual recipients or groups.",
             ),
+            paragraph(
+              "Optionally, GoatCitadel subscribes to the event stream of a signal-cli daemon --http bridge (/api/v1/events) so direct and group messages can start conversations. Inbound is opt-in and default-deny: only the senders you allow can start turns.",
+            ),
             note(
               "warning",
-              "Signal is outbound-only. Guided setup runs a live sandbox send against the JSON-RPC send path. GoatCitadel does not call the bridge receive endpoint because the current bridge has no acknowledgement or replay contract; a crash between destructive receive and local commit could otherwise lose a message.",
+              "signal-cli acknowledges messages to the Signal server itself, so messages that arrive while GoatCitadel's event stream is disconnected are not replayed and are lost. Guided setup runs a live sandbox send against the JSON-RPC send path.",
             ),
           ],
         },
@@ -82,6 +88,18 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
               looksLike: "+15551234567 or group identifier",
               canChangeLater: true,
             },
+            {
+              key: "receiveEvents",
+              label: "Receive messages from the signal-cli event stream",
+              type: "boolean",
+              required: false,
+              defaultValue: false,
+              explanation:
+                "Keep a persistent subscription to the signal-cli daemon --http event stream so incoming direct and group messages can start conversations.",
+              whyNeeded:
+                "Inbound stays off unless you opt in, and only allowed senders can start turns. Messages that arrive while the stream is disconnected are not replayed.",
+              canChangeLater: true,
+            },
           ],
         },
         {
@@ -100,11 +118,11 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "Finalize saves the outbound-only bridge connection. After finalizing, confirm the sandbox message arrived on the default recipient's Signal device — manual confirmation closes the loop because the bridge exposes no safe cleanup path.",
+              "Finalize saves the bridge connection and, when enabled, the inbound event-stream subscription. After finalizing, confirm the sandbox message arrived on the default recipient's Signal device — manual confirmation closes the loop because the bridge exposes no safe cleanup path.",
             ),
           ],
           successCriteria: [
-            "The bridge URL points at the Signal bridge GoatCitadel should call for outbound sends.",
+            "The bridge URL points at the Signal bridge GoatCitadel should call for sends and, when enabled, inbound events.",
             "The sandbox send through the JSON-RPC path reached the default recipient or group target.",
             "You confirmed delivery manually on a Signal device.",
           ],
@@ -112,15 +130,15 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
       ],
     },
     adapter: {
-      adapterVersion: "2026.07.signal.v2",
+      adapterVersion: "2026.10.signal.stream.v3",
       secretFieldKeys: [],
     },
     validation: {
-      validationVersion: "2026.07.signal.v2",
+      validationVersion: "2026.10.signal.stream.v3",
       levels: ["structural", "semantic"],
     },
     testing: {
-      testVersion: "2026.07.signal.v2",
+      testVersion: "2026.10.signal.stream.v3",
       levels: ["structural", "semantic", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
@@ -160,6 +178,7 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
           baseUrl: readString(config, "baseUrl") ?? readString(config, "bridgeUrl"),
           accountId: readString(config, "accountId"),
           defaultRecipient: readString(config, "defaultRecipient"),
+          receiveEvents: isExplicitTrue(config.receiveEvents),
         },
         hydration: {
           status: "clean",
@@ -167,11 +186,12 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
             baseUrl: readString(config, "baseUrl") || readString(config, "bridgeUrl") ? "configured" : "missing",
             accountId: readString(config, "accountId") ? "configured" : "unknown",
             defaultRecipient: readString(config, "defaultRecipient") ? "configured" : "missing",
+            receiveEvents: config.receiveEvents === undefined ? "unknown" : "configured",
           },
           warnings:
             legacyInboundEnabled || legacyPollIntervalConfigured
               ? [
-                  "Deprecated Signal inbound polling settings were found. They are blocked and will be removed when this outbound-only draft is finalized because the bridge has no acknowledgement/replay contract.",
+                  "Deprecated Signal inbound polling settings (inboundEnabled, pollIntervalSeconds) were found. They were replaced by receiveEvents and will be removed when this draft is finalized; enable receiveEvents to receive messages from the signal-cli event stream.",
                 ]
               : [],
           rawLegacyConfig: config,
@@ -183,6 +203,9 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
         baseUrl: readString(draft.draft, "baseUrl") ?? readLegacyString(draft, "baseUrl", "bridgeUrl"),
         accountId: readString(draft.draft, "accountId"),
         defaultRecipient: readString(draft.draft, "defaultRecipient"),
+        receiveEvents: isExplicitTrue(draft.draft.receiveEvents) ? true : undefined,
+        // Inbound is default-deny: never inherit a legacy-open posture.
+        ...(isExplicitTrue(draft.draft.receiveEvents) ? { inboundAccessMode: "allowlist" } : {}),
       });
     },
     validate(draft) {
@@ -204,7 +227,7 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
         issues.push(
           malformedFieldIssue(
             "inboundEnabled",
-            "Signal inbound polling is blocked because the current bridge receive endpoint has no acknowledgement/replay contract.",
+            "Signal inbound polling was replaced by receiveEvents; remove inboundEnabled and enable receiveEvents instead.",
           ),
         );
       }
@@ -213,7 +236,7 @@ export function createSignalDefinition(): ChannelSetupRuntimeDefinition {
         issues.push(
           malformedFieldIssue(
             "pollIntervalSeconds",
-            "Signal polling is deprecated and unsupported; remove this legacy field.",
+            "Signal polling was replaced by the receiveEvents event stream; remove this legacy field.",
           ),
         );
       }

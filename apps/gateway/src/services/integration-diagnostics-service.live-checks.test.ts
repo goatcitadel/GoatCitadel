@@ -205,13 +205,32 @@ describe("integration diagnostics live-check routing", () => {
     ).toEqual({ checks: [] });
   });
 
+  it("does not webhook-probe Google Chat app (service-account) connections and asks for a manual reply check", async () => {
+    const port = createPort();
+
+    const result = await runIntegrationConnectionLiveChecks(
+      port,
+      createConnection("google-chat", {
+        serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+        audienceType: "project_number",
+        audience: "123456789012",
+      }),
+      { includeSandboxSend: true },
+    );
+
+    expect(webhookProbeMock).not.toHaveBeenCalled();
+    expect(result.checks).toEqual([expect.objectContaining({ key: "google_chat_app_live_send", status: "warn" })]);
+  });
+
   it("lets public HTTPS webhook destinations through governed live checks without a sandbox allowlist entry", async () => {
     const port = createPort();
     port.isConnectionUrlAllowlisted = vi.fn(() => false);
 
     const result = await runIntegrationConnectionLiveChecks(
       port,
-      createConnection("google-chat", { webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=k&token=t" }),
+      createConnection("google-chat", {
+        webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=k&token=t",
+      }),
       { includeSandboxSend: true },
     );
 
@@ -235,7 +254,11 @@ describe("integration diagnostics live-check routing", () => {
         includeSandboxSend: true,
       });
       expect(result.checks).toEqual([
-        expect.objectContaining({ key: "teams_sandbox_send", status: "fail", message: expect.stringContaining("public HTTPS") }),
+        expect.objectContaining({
+          key: "teams_sandbox_send",
+          status: "fail",
+          message: expect.stringContaining("public HTTPS"),
+        }),
       ]);
       expect(result.probe?.steps[0]).toMatchObject({ status: "fail", disposition: "blocking" });
       expect(JSON.stringify(result)).not.toContain(webhookUrl);

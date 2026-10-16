@@ -159,12 +159,6 @@ export interface FeatureFlagsConfig {
    */
   channelVoiceInboundV1Enabled?: boolean;
   /**
-   * Deprecated compatibility input. Signal is outbound-only because the
-   * current bridge receive endpoint has no acknowledgement/replay contract.
-   * A legacy true value emits a blocked-posture diagnostic and never polls.
-   */
-  signalInboundV1Enabled?: boolean;
-  /**
    * Weekly governed memory consolidation: mines completed run traces and
    * PROPOSES memory candidates into the operator review queue (never
    * auto-applied; also halted by autonomyV1Disabled). Absent/false (default)
@@ -846,7 +840,6 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["typedRunVariablesV1Enabled", process.env.GOATCITADEL_FEATURE_TYPED_RUN_VARIABLES_V1_ENABLED],
     ["documentEditingV1Enabled", process.env.GOATCITADEL_FEATURE_DOCUMENT_EDITING_V1_ENABLED],
     ["channelVoiceInboundV1Enabled", process.env.GOATCITADEL_FEATURE_CHANNEL_VOICE_INBOUND_V1_ENABLED],
-    ["signalInboundV1Enabled", process.env.GOATCITADEL_FEATURE_SIGNAL_INBOUND_V1_ENABLED],
     ["plannerFastPathV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FAST_PATH_V1_DISABLED],
     ["parallelToolExecutionV1Disabled", process.env.GOATCITADEL_FEATURE_PARALLEL_TOOL_EXECUTION_V1_DISABLED],
     ["streamIdleWatchdogV1Disabled", process.env.GOATCITADEL_FEATURE_STREAM_IDLE_WATCHDOG_V1_DISABLED],
@@ -1460,9 +1453,6 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // Channel voice inbound (B2a): default OFF. `?? false` keeps inbound
       // Telegram/WhatsApp voice handling byte-identical unless an operator opts in.
       channelVoiceInboundV1Enabled: featuresInput.channelVoiceInboundV1Enabled ?? false,
-      // Deprecated compatibility value. Even true never starts Signal receive;
-      // it is retained only so the runtime can report blocked legacy posture.
-      signalInboundV1Enabled: featuresInput.signalInboundV1Enabled ?? false,
       // Round-3 kill switches: planner triviality-skip + speed-model drafting,
       // all-read-only tool-batch parallelism, per-chunk stream idle watchdog,
       // and planner-declared fan-out. `*Disabled` + `?? false` ⇒ ON by default.

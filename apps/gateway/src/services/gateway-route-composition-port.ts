@@ -72,7 +72,9 @@ type RouteDependencyMethod<
 > = GatewayRouteServiceDependencies[TDomain][TMethod];
 
 export interface GatewayRouteCompositionPort {
-  revalidateChatRoutedContextSnapshot(snapshot: import("@goatcitadel/contracts").ChatRoutedContextSnapshotRecord): Promise<void>;
+  revalidateChatRoutedContextSnapshot(
+    snapshot: import("@goatcitadel/contracts").ChatRoutedContextSnapshotRecord,
+  ): Promise<void>;
   createRemoteWorkerExecutionOwners(): {
     readonly operatorNativeFiles: import("./remote-worker-native-file-operator.js").RemoteWorkerNativeFileOperator;
     readonly operatorNativeRuntime: import("./remote-worker-native-review-operator.js").RemoteWorkerNativeReviewOperator;
@@ -256,8 +258,7 @@ export interface GatewayRouteCompositionPort {
   setChatSessionBinding: RouteDependencyMethod<"chatSessions", "setChatSessionBinding">;
   setSkillState: RouteDependencyMethod<"skills", "setSkillState">;
   suggestChatDelegation: RouteDependencyMethod<"chatDelegate", "suggestChatDelegation">;
-  syncDiscordRuntime: IntegrationChannelServicePort["syncDiscordRuntime"];
-  syncSignalInboundRuntime: IntegrationChannelServicePort["syncSignalInboundRuntime"];
+  syncDiscordRuntime: IntegrationChannelServicePort["syncChannelRuntimes"];
   updateChatSessionPrefs: RouteDependencyMethod<"chatSupport", "prefs">["updateChatSessionPrefs"];
   updateFeatureFlags: settingsAuthService.SettingsRuntimeDependencies["updateFeatureFlags"];
   updateSettings(input: settingsAuthService.UpdateSettingsInput): Promise<RuntimeSettings>;
@@ -485,7 +486,6 @@ export function createGatewayRouteCompositionPort(
     setSkillState: gateway.setSkillState.bind(gateway),
     suggestChatDelegation: gateway.suggestChatDelegation.bind(gateway),
     syncDiscordRuntime: gateway.syncDiscordRuntime.bind(gateway),
-    syncSignalInboundRuntime: gateway.syncSignalInboundRuntime.bind(gateway),
     updateChatSessionPrefs: gateway.updateChatSessionPrefs.bind(gateway),
     updateFeatureFlags: gateway.updateFeatureFlags.bind(gateway),
     updateSettings: gateway.updateSettings.bind(gateway),

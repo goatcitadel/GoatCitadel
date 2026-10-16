@@ -159,7 +159,6 @@ describe("GatewayService orchestration worktree reaper scheduler", () => {
       approvalEffectsService: { stopWorker: () => void };
       inboundChannelEventService: { close: () => void };
       discordRuntimeService: { close: () => Promise<void> };
-      signalInboundRuntimeService: { stop: () => void };
       assemblyService: { close: () => Promise<void> };
       npuSidecar: { close: () => Promise<void> };
       llamaCppRuntime: { close: () => Promise<void> };
@@ -173,7 +172,6 @@ describe("GatewayService orchestration worktree reaper scheduler", () => {
     closable.approvalEffectsService = { stopWorker: vi.fn() };
     closable.inboundChannelEventService = { close: vi.fn() };
     closable.discordRuntimeService = { close: vi.fn(async () => undefined) };
-    closable.signalInboundRuntimeService = { stop: vi.fn() };
     closable.assemblyService = { close: vi.fn(async () => undefined) };
     closable.npuSidecar = { close: vi.fn(async () => undefined) };
     closable.llamaCppRuntime = { close: vi.fn(async () => undefined) };

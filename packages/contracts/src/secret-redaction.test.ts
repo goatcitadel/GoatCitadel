@@ -779,6 +779,32 @@ describe("redactStructuredSecrets", () => {
     expect(input.signingKey).toBe("0123456789abcdef");
   });
 
+  it("classifies inline service-account keys as credentials while keeping env names visible", () => {
+    const inlineKey = JSON.stringify({ client_email: "app@example.iam.gserviceaccount.com", private_key: "pk" });
+    const input = {
+      serviceAccountKey: inlineKey,
+      service_account_json: inlineKey,
+      serviceAccountKeyJson: inlineKey,
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      serviceAccountKeyRef: "keychain:google-chat",
+      serviceAccountKeyId: "key-id-1",
+      serviceAccountEmail: "app@example.iam.gserviceaccount.com",
+    };
+
+    expect(redactStructuredSecrets(input).value).toEqual({
+      serviceAccountKey: "[REDACTED]",
+      service_account_json: "[REDACTED]",
+      serviceAccountKeyJson: "[REDACTED]",
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      serviceAccountKeyRef: "keychain:google-chat",
+      serviceAccountKeyId: "key-id-1",
+      serviceAccountEmail: "app@example.iam.gserviceaccount.com",
+    });
+    expect(redactStructuredSecrets({ serviceAccountKey: { private_key: "pk" } }).value).toEqual({
+      serviceAccountKey: "[REDACTED]",
+    });
+  });
+
   it("reports and safely projects circular references", () => {
     const input: Record<string, unknown> = { visible: "ok" };
     input.self = input;

@@ -172,7 +172,8 @@ function isSensitiveStructuredKey(key: string): boolean {
     /(?:^|_)(?:AUTH|AUTHENTICATION|AUTHORIZATION|BEARER|COOKIE|COOKIES|CREDENTIAL|CREDENTIALS|PASSWORD|PASSWD|SECRET|SIGNATURE|TOKEN)(?:_|$)/.test(
       normalized,
     ) ||
-    /(?:^|_)(?:API|ACCESS|CLIENT|CONSUMER|PRIVATE|SECRET|SIGNING)_KEY(?:_|$)/.test(normalized)
+    /(?:^|_)(?:API|ACCESS|CLIENT|CONSUMER|PRIVATE|SECRET|SIGNING|SERVICE_ACCOUNT)_KEY(?:_|$)/.test(normalized) ||
+    /(?:^|_)SERVICE_ACCOUNT_(?:JSON|CREDENTIALS?)(?:_|$)/.test(normalized)
   );
 }
 
@@ -201,7 +202,7 @@ function isSafeStructuredKey(key: string): boolean {
       normalized,
     ) ||
     /(?:^|_)(?:TOKEN_ENV|SECRET_REF|TOKEN_BUDGET|TOKEN_ID|TOKEN_IDS|TOKEN_REFRESH_SKEW_SECONDS)$/.test(normalized) ||
-    /(?:^|_)(?:AUTH|AUTHENTICATION|AUTHORIZATION|BEARER|COOKIE|CREDENTIAL|CREDENTIALS|PASSWORD|PASSWD|SECRET|SIGNATURE|TOKEN|API_KEY|ACCESS_KEY|PRIVATE_KEY)_(?:ENV|ENVS|ENV_NAME|REF|REFS|REFERENCE|REFERENCES|HANDLE|HANDLES|ID|IDS)$/.test(
+    /(?:^|_)(?:AUTH|AUTHENTICATION|AUTHORIZATION|BEARER|COOKIE|CREDENTIAL|CREDENTIALS|PASSWORD|PASSWD|SECRET|SIGNATURE|TOKEN|API_KEY|ACCESS_KEY|PRIVATE_KEY|SERVICE_ACCOUNT_KEY|SERVICE_ACCOUNT_JSON)_(?:ENV|ENVS|ENV_NAME|REF|REFS|REFERENCE|REFERENCES|HANDLE|HANDLES|ID|IDS)$/.test(
       normalized,
     ) ||
     /(?:^|_)(?:TOKEN_(?:INPUT|OUTPUT|TOTAL|CACHED_INPUT|BUDGET|COUNT|COUNTS|USAGE|ESTIMATE|ESTIMATES|LIMIT|LIMITS)|(?:INPUT|OUTPUT|TOTAL|PROMPT|COMPLETION|CACHED|REASONING|MAX|MIN)_TOKENS)$/.test(
@@ -210,7 +211,7 @@ function isSafeStructuredKey(key: string): boolean {
     /(?:^|_)(?:TIME_TO_FIRST_TOKEN|TOKEN_(?:HARD_CAP|SOFT_CAP|CAP|HEADROOM|EXPIRES_AT|EXPIRATION|TTL|WINDOW|RATE|LATENCY|DURATION|AVAILABLE|REMAINING|CONSUMED|USED))$/.test(
       normalized,
     ) ||
-    /(?:^|_)(?:AUTH|AUTHENTICATION|AUTHORIZATION|BEARER|COOKIE|CREDENTIAL|CREDENTIALS|PASSWORD|PASSWD|SECRET|SIGNATURE|TOKEN|API_KEY|ACCESS_KEY|PRIVATE_KEY)_(?:BOUNDARY|CONTEXT|MODE|NAME|TYPE|KIND|STATUS|PRESENT|CONFIGURED|ENABLED|SUPPORTED|REQUIRED|METHOD|SCHEME)$/.test(
+    /(?:^|_)(?:AUTH|AUTHENTICATION|AUTHORIZATION|BEARER|COOKIE|CREDENTIAL|CREDENTIALS|PASSWORD|PASSWD|SECRET|SIGNATURE|TOKEN|API_KEY|ACCESS_KEY|PRIVATE_KEY|SERVICE_ACCOUNT_KEY)_(?:BOUNDARY|CONTEXT|MODE|NAME|TYPE|KIND|STATUS|PRESENT|CONFIGURED|ENABLED|SUPPORTED|REQUIRED|METHOD|SCHEME)$/.test(
       normalized,
     )
   );
@@ -1438,7 +1439,17 @@ function buildSecretPatterns(marker: string, options: SecretTextRedactionOptions
     {
       pattern:
         /(["']?)([A-Za-z_$][A-Za-z0-9_$-]{0,127})\1(\s*)(:=|(?<![=!<>])=(?!=|>))(\s*)((?:await\s+)?[A-Za-z_$][A-Za-z0-9_$]*(?:(?:\.|::)[A-Za-z_$][A-Za-z0-9_$]*)*!?\s*\((?:[rubf]{0,2}"(?:\\.|[^"\\])*"|[rubf]{0,2}'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[^()"'`;\r\n]|\([^()\r\n]*\))*\)\??)/gi,
-      shouldRedact: (_match, quote, label, _beforeSeparator, _separator, _afterSeparator, expression, offset, input) => {
+      shouldRedact: (
+        _match,
+        quote,
+        label,
+        _beforeSeparator,
+        _separator,
+        _afterSeparator,
+        expression,
+        offset,
+        input,
+      ) => {
         const fullLabel = expandBoundedCredentialLabel(input, Number(offset) + quote.length, label);
         return (
           isSensitiveCredentialLabel(fullLabel) &&

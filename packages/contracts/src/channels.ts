@@ -145,7 +145,14 @@ export type ChannelActionName =
 
 export type ChannelAttachmentSource = "url" | "inline";
 
-export type ChannelInboundMode = "none" | "webhook" | "gateway" | "poll" | "local_bridge";
+/**
+ * Tag the ntfy outbound publisher stamps on every message it sends. The ntfy
+ * inbound stream adapter drops messages carrying this tag so outbound
+ * notifications are never echoed back in as inbound turns.
+ */
+export const NTFY_OUTBOUND_MARKER_TAG = "goatcitadel-outbound";
+
+export type ChannelInboundMode = "none" | "webhook" | "gateway" | "poll" | "local_bridge" | "stream";
 
 export type ChannelChunkingMode = "unsupported" | "fallback" | "native";
 export type ChannelOutboundTransport = "webhook" | "api";

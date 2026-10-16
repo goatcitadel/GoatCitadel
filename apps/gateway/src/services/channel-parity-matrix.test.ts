@@ -62,13 +62,20 @@ describe("advertised channel parity runtime matrix", () => {
     expect(matrixCatalogIds).toEqual(setupCatalogIds);
   });
 
-  it("keeps stale Signal inbound flags non-callable and strips them from edit normalization", () => {
-    const signalRow = ADVERTISED_CHANNEL_PARITY_MATRIX.find((row) => row.id === "signal.bridge-outbound");
-    expect(signalRow).toBeDefined();
+  it("strips stale Signal polling flags on hydrate and drives inbound only from receiveEvents", () => {
+    const outboundRow = ADVERTISED_CHANNEL_PARITY_MATRIX.find((row) => row.id === "signal.bridge-outbound");
+    const streamRow = ADVERTISED_CHANNEL_PARITY_MATRIX.find((row) => row.id === "signal.daemon-events");
+    expect(outboundRow?.config).not.toHaveProperty("inboundEnabled");
+    expect(outboundRow?.config).not.toHaveProperty("pollIntervalSeconds");
+    expect(outboundRow?.expected.inboundModes).toEqual(["none"]);
+    expect(streamRow?.config).toMatchObject({ receiveEvents: true });
+    expect(streamRow?.expected).toMatchObject({ inboundModes: ["stream"], lifecycle: "persistent" });
+    expect(streamRow?.proof.inboundAdapter).toMatch(/signal-stream-adapter\.test\.ts$/);
+
     const signal = requireChannelSetupDefinition("channel.signal");
     const hydrated = signal.hydrate(
       createConnection("channel.signal", "signal", {
-        ...signalRow?.config,
+        ...outboundRow?.config,
         inboundEnabled: true,
         pollIntervalSeconds: 5,
       }),
@@ -76,7 +83,11 @@ describe("advertised channel parity runtime matrix", () => {
 
     expect(hydrated.draft).not.toHaveProperty("inboundEnabled");
     expect(hydrated.draft).not.toHaveProperty("pollIntervalSeconds");
-    expect(hydrated.hydration.warnings).toEqual([expect.stringContaining("blocked")]);
+    expect(hydrated.hydration.warnings).toEqual([expect.stringContaining("replaced by receiveEvents")]);
+    // A legacy inboundEnabled=true never turns inbound on by itself.
+    expect(
+      describeChannelCapabilities("signal", { ...outboundRow?.config, inboundEnabled: true }).inboundModes,
+    ).toEqual(["none"]);
     expect(
       signal.validate(
         createDraft("channel.signal", {
@@ -92,6 +103,29 @@ describe("advertised channel parity runtime matrix", () => {
         expect.objectContaining({ fieldKey: "pollIntervalSeconds", failureCategory: "malformed_value" }),
       ]),
     );
+    const streamDraft = createDraft("channel.signal", { ...streamRow?.config });
+    expect(signal.validate(streamDraft)).toEqual([]);
+    expect(signal.normalize(streamDraft)).toMatchObject({ receiveEvents: true, inboundAccessMode: "allowlist" });
+  });
+
+  it("keeps the Google Chat webhook row outbound-only and the Chat app row inbound with default-deny setup", () => {
+    const webhookRow = ADVERTISED_CHANNEL_PARITY_MATRIX.find((row) => row.id === "google-chat.webhook");
+    const appRow = ADVERTISED_CHANNEL_PARITY_MATRIX.find((row) => row.id === "google-chat.app-service-account");
+    const definition = requireChannelSetupDefinition("channel.google-chat");
+
+    expect(webhookRow?.expected).toMatchObject({ inboundModes: ["none"], outboundTransport: "webhook" });
+    expect(describeChannelCapabilities("google-chat", webhookRow?.config ?? {}).supportedActions).not.toContain(
+      "channel.unsend",
+    );
+    expect(definition.validate(createDraft("channel.google-chat", { ...webhookRow?.config }))).toEqual([]);
+
+    expect(appRow?.expected).toMatchObject({ inboundModes: ["webhook"], outboundTransport: "api" });
+    expect(describeChannelCapabilities("google-chat", appRow?.config ?? {}).supportedActions).toEqual(
+      expect.arrayContaining(["channel.send", "channel.reply", "channel.unsend"]),
+    );
+    const appDraft = createDraft("channel.google-chat", { ...appRow?.config });
+    expect(definition.validate(appDraft)).toEqual([]);
+    expect(definition.normalize(appDraft)).toMatchObject({ inboundAccessMode: "allowlist" });
   });
 
   it("keeps BlueBubbles callable setup distinct from Photon/Spectrum diagnostic metadata", () => {

@@ -3,6 +3,7 @@ import type { CompanionPrincipalPurpose, DatabaseCutoverRequest, LlmRuntimeConfi
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import { GatewayService } from "./gateway-service.js";
+import { getChannelStreamRuntime } from "./channel-stream-runtime-registry.js";
 import type { McpRequesterResolverRegistryInput } from "./mcp-requester-resolution.js";
 import type { CronRunSnapshot } from "./gateway/cron-automation-service.js";
 import type { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
@@ -124,6 +125,8 @@ export function createGatewayAdminRuntime(config: GatewayRuntimeConfig): Gateway
 }
 
 function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInstance {
+  // Resolved at call time so admin/cron runtimes that only init() never construct the stream runtime.
+  const channelStreams = () => getChannelStreamRuntime(gateway);
   return {
     get browserSessionRuntimeService() {
       return gateway.browserSessionRuntimeService;
@@ -148,14 +151,24 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
     },
     createRemoteWorkerAdmissionNativeRequestHandler: (config) => composeGatewayNativeWorkerHandler(gateway, config),
     attachDevDiagnosticsLogger: (logger) => gateway.attachDevDiagnosticsLogger(logger),
-    close: () => gateway.close(),
+    close: async () => {
+      await channelStreams().close();
+      await gateway.close();
+    },
     getOnboardingStartupState: () => gateway.getOnboardingStartupState(),
     init: () => gateway.init(),
     initCritical: () => gateway.initCritical(),
     recordDevDiagnostic: (input) =>
       gateway.recordDevDiagnostic(input as Parameters<GatewayService["recordDevDiagnostic"]>[0]),
-    stopExternalAdmission: () => gateway.stopExternalAdmission(),
-    startDeferredInit: (signal) => gateway.startDeferredInit(signal),
+    stopExternalAdmission: async () => {
+      await channelStreams().close();
+      await gateway.stopExternalAdmission();
+    },
+    startDeferredInit: async (signal) => {
+      await gateway.startDeferredInit(signal);
+      // Persistent channel streams start only on the serving path, never for admin/cron CLIs that call init().
+      if (!signal?.aborted) await channelStreams().sync();
+    },
     validateCompanionAccessToken: (token) => gateway.validateCompanionAccessToken(token),
     validateDeviceAccessToken: (token) => gateway.validateDeviceAccessToken(token),
     verifyCompanionRequestSignature: (input) =>

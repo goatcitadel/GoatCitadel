@@ -556,7 +556,6 @@ import {
 } from "./orchestration-worktree-service.js";
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import { DiscordRuntimeService } from "./discord-runtime-service.js";
-import { SignalInboundRuntimeService } from "./signal-inbound-runtime-service.js";
 import { resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner } from "./gateway/auth-credential-planner.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import {
@@ -1068,7 +1067,6 @@ export class GatewayService {
   private readonly devDiagnostics: GatewayDevDiagnosticsService;
   private readonly postgresStorageWaitMonitor: PostgresStorageWaitMonitor;
   public readonly discordRuntimeService: DiscordRuntimeService;
-  public readonly signalInboundRuntimeService: SignalInboundRuntimeService;
   private readonly chatProjectService: ChatProjectService;
   public readonly durableRunService: DurableRunService;
   private readonly durableOperatorService: DurableOperatorService;
@@ -1923,14 +1921,6 @@ export class GatewayService {
         });
       },
       sharedHostLifecycle: this.sharedHostLifecycle,
-    });
-    // Signal is outbound-only. This compatibility facade never receives from
-    // the bridge; it converts legacy inbound=true settings into operator-visible
-    // blocked/deprecated evidence.
-    this.signalInboundRuntimeService = new SignalInboundRuntimeService({
-      isEnabled: async () => await this.isFeatureEnabled("signalInboundV1Enabled"),
-      listConnections: async () => await this.storage.integrationConnections.list(undefined, 1000),
-      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
     this.cronAutomationService = new CronAutomationService({
       storage: this.storage,
@@ -4284,8 +4274,6 @@ export class GatewayService {
       });
     }
     await Promise.all([this.discordRuntimeService.sync(), this.cronConfigGenerationOwner.reconcileStartupGeneration()]);
-    // Emits blocked/deprecated evidence for legacy Signal inbound settings.
-    await this.syncSignalInboundRuntime();
     await Promise.all([
       this.improvementService.ensureWeeklyImprovementCronJob(),
       this.curatorService.ensureCuratorWeeklyCronJob(),
@@ -11799,9 +11787,6 @@ export class GatewayService {
     // this is the sole writer, so no invalidation race with the TTL path.
     this.featureFlagsCache = next;
     this.featureFlagsCacheAtMs = Date.now();
-    if (patch.signalInboundV1Enabled !== undefined) {
-      await this.signalInboundRuntimeService?.sync();
-    }
     if (autonomyKillSwitchDisengaged && options.resumeParkedRuns !== false) {
       // Runs parked while the kill switch was engaged wait on a per-run event that
       // nothing else emits; without an explicit resume they stay "waiting" forever.
@@ -11902,22 +11887,6 @@ export class GatewayService {
         category: "channels",
         event: "discord.runtime.sync_failed",
         message: "Discord runtime sync failed.",
-        context: {
-          error: (error as Error).message,
-        },
-      });
-    }
-  }
-
-  public async syncSignalInboundRuntime(): Promise<void> {
-    try {
-      await this.signalInboundRuntimeService.sync();
-    } catch (error) {
-      this.recordDevDiagnostic({
-        level: "warn",
-        category: "channels",
-        event: "signal.legacy_inbound_settings.reconcile_failed",
-        message: "Signal outbound-only legacy-setting reconciliation failed.",
         context: {
           error: (error as Error).message,
         },
@@ -12184,7 +12153,6 @@ export class GatewayService {
       this.backgroundTasks.clear();
       await Promise.allSettled(tasks);
     }
-    this.signalInboundRuntimeService.stop();
     await this.discordRuntimeService.close();
     await this.assemblyService.close();
     await this.npuSidecar.close();
@@ -12216,7 +12184,6 @@ export class GatewayService {
     this.approvalEffectsService.stopAdmission();
     this.inboundChannelEventService.close();
     this.stopIntervalSchedulers();
-    this.signalInboundRuntimeService.stop();
     await this.discordRuntimeService.close();
   }
 
