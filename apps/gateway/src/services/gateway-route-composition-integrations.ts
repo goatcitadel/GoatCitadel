@@ -676,7 +676,7 @@ export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompos
     mutationStore: gateway.mutationIdempotencyStore,
     sideEffectRunStore: storage.externalSideEffectRuns,
     replayRecords: createExternalSideEffectReplayRecords({
-      resolveKey: sharedExternalSideEffectReplayKeyResolver(secretStore),
+      resolveKey: sharedExternalSideEffectReplayKeyResolver(secretStore, storage.externalSideEffectRuns),
       runs: storage.externalSideEffectRuns,
     }),
     createApproval: (input) => gateway.createApproval(input),

@@ -62,6 +62,7 @@ export class ExternalSideEffectRunRepository {
   private readonly markCompletedIfStatusStmt;
   private readonly attachReplayRecordStmt;
   private readonly getReplayRecordStmt;
+  private readonly hasReplayRecordsStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     const databaseNowInstant = db.dialect === "postgres" ? "statement_timestamp()" : "julianday('now')";
@@ -182,6 +183,9 @@ export class ExternalSideEffectRunRepository {
         AND replay_record_json IS NULL
     `);
     this.getReplayRecordStmt = db.prepare("SELECT replay_record_json FROM external_side_effect_runs WHERE run_id = ?");
+    this.hasReplayRecordsStmt = db.prepare(
+      "SELECT run_id FROM external_side_effect_runs WHERE replay_record_json IS NOT NULL LIMIT 1",
+    );
     this.markFailureStmt = db.prepare(`
       UPDATE external_side_effect_runs
       SET status = @status,
@@ -423,6 +427,11 @@ export class ExternalSideEffectRunRepository {
   public getReplayRecord(runId: string): string | undefined {
     const row = this.getReplayRecordStmt.get(runId) as { replay_record_json?: unknown } | undefined;
     return typeof row?.replay_record_json === "string" ? row.replay_record_json : undefined;
+  }
+
+  /** True while any run still holds a sealed replay record (records are cleared on completion). */
+  public hasReplayRecords(): boolean {
+    return this.hasReplayRecordsStmt.get() !== undefined;
   }
 
   public markFailure(

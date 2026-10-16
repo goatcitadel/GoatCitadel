@@ -17,7 +17,7 @@ export interface ExternalSideEffectReplayRecords {
 }
 
 export interface ExternalSideEffectReplayRecordDeps {
-  resolveKey(): Buffer | undefined;
+  resolveKey(): Buffer | undefined | Promise<Buffer | undefined>;
   runs: {
     attachReplayRecord(runId: string, json: string): boolean | Promise<boolean>;
     getReplayRecord(runId: string): string | undefined | Promise<string | undefined>;
@@ -31,13 +31,22 @@ function buildAad(runId: string, payloadHash: string): Buffer {
 type ReplayKeySecretStore = Pick<SecretStoreService, "isAvailable" | "getSecret" | "setSecret"> &
   Partial<Pick<SecretStoreService, "isWriteCustodySafe">>;
 
+/** Reports whether any run still holds a sealed record that the stored key must keep opening. */
+export interface ReplayKeyGenerationGuard {
+  hasReplayRecords(): boolean | Promise<boolean>;
+}
+
 /**
  * One keychain lookup per call. A fresh key is generated and stored only when none
- * exists AND the store can write without exposing the value; where it cannot (the
- * macOS `security(1)` adapter puts it on argv) this returns undefined and nothing
- * is sealed.
+ * exists, the store can write without exposing the value (the macOS `security(1)`
+ * adapter puts it on argv), AND the guard proves no sealed record exists yet. A
+ * lookup miss while sealed records exist is treated as a transient keychain failure:
+ * replacing the key would orphan every record, so this returns undefined instead.
  */
-export function resolveExternalSideEffectReplayKey(secretStore: ReplayKeySecretStore | undefined): Buffer | undefined {
+export async function resolveExternalSideEffectReplayKey(
+  secretStore: ReplayKeySecretStore | undefined,
+  guard?: ReplayKeyGenerationGuard,
+): Promise<Buffer | undefined> {
   try {
     if (!secretStore || !secretStore.isAvailable()) {
       return undefined;
@@ -45,6 +54,12 @@ export function resolveExternalSideEffectReplayKey(secretStore: ReplayKeySecretS
     let keyBase64 = secretStore.getSecret(REPLAY_KEY_ACCOUNT);
     if (!keyBase64) {
       if (secretStore.isWriteCustodySafe?.() === false) {
+        return undefined;
+      }
+      if (!guard || (await guard.hasReplayRecords())) {
+        log.warn(
+          "External side-effect replay key lookup missed while sealed records may exist; no replacement key generated",
+        );
         return undefined;
       }
       keyBase64 = randomBytes(KEY_BYTES).toString("base64");
@@ -64,28 +79,30 @@ export function resolveExternalSideEffectReplayKey(secretStore: ReplayKeySecretS
  */
 export function createExternalSideEffectReplayKeyResolver(
   secretStore: ReplayKeySecretStore | undefined,
-): () => Buffer | undefined {
+  guard?: ReplayKeyGenerationGuard,
+): () => Promise<Buffer | undefined> {
   let resolved: Buffer | undefined;
-  return () => {
+  return async () => {
     if (!resolved) {
-      resolved = resolveExternalSideEffectReplayKey(secretStore);
+      resolved = await resolveExternalSideEffectReplayKey(secretStore, guard);
     }
     return resolved;
   };
 }
 
-const sharedResolvers = new WeakMap<object, () => Buffer | undefined>();
+const sharedResolvers = new WeakMap<object, () => Promise<Buffer | undefined>>();
 
 /** Process-wide memoized resolver per secret store, shared by every action host built on it. */
 export function sharedExternalSideEffectReplayKeyResolver(
   secretStore: ReplayKeySecretStore | undefined,
-): () => Buffer | undefined {
+  guard: ReplayKeyGenerationGuard,
+): () => Promise<Buffer | undefined> {
   if (!secretStore) {
-    return () => undefined;
+    return async () => undefined;
   }
   let resolver = sharedResolvers.get(secretStore);
   if (!resolver) {
-    resolver = createExternalSideEffectReplayKeyResolver(secretStore);
+    resolver = createExternalSideEffectReplayKeyResolver(secretStore, guard);
     sharedResolvers.set(secretStore, resolver);
   }
   return resolver;
@@ -97,7 +114,7 @@ export function createExternalSideEffectReplayRecords(
   return {
     async seal(input) {
       try {
-        const key = deps.resolveKey();
+        const key = await deps.resolveKey();
         if (!key) {
           return false;
         }
@@ -126,7 +143,7 @@ export function createExternalSideEffectReplayRecords(
     },
     async open(run) {
       try {
-        const key = deps.resolveKey();
+        const key = await deps.resolveKey();
         if (!key) {
           return undefined;
         }
@@ -156,8 +173,11 @@ export function createExternalSideEffectReplayRecords(
           decipher.update(Buffer.from(record.ciphertext, "base64")),
           decipher.final(),
         ]).toString("utf8");
-        const parsed = JSON.parse(plaintext) as { payload?: unknown };
-        return { payload: parsed.payload };
+        const parsed: unknown = JSON.parse(plaintext);
+        if (typeof parsed !== "object" || parsed === null || !Object.hasOwn(parsed, "payload")) {
+          return undefined;
+        }
+        return { payload: (parsed as { payload: unknown }).payload };
       } catch {
         return undefined;
       }

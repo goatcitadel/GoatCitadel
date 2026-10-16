@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createCipheriv, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   createExternalSideEffectReplayKeyResolver,
@@ -106,7 +106,9 @@ describe("external-side-effect replay records", () => {
     expect(await records.seal({ runId: "r", payloadHash: "h", payload: {} })).toBe(false);
   });
 
-  it("resolveExternalSideEffectReplayKey generates once and reuses the stored key", () => {
+  const noRecords = { hasReplayRecords: () => false };
+
+  it("resolveExternalSideEffectReplayKey generates once and reuses the stored key", async () => {
     const stored = new Map<string, string>();
     let sets = 0;
     const store = {
@@ -117,31 +119,54 @@ describe("external-side-effect replay records", () => {
         stored.set(account, value);
       },
     };
-    const first = resolveExternalSideEffectReplayKey(store);
-    const second = resolveExternalSideEffectReplayKey(store);
+    const first = await resolveExternalSideEffectReplayKey(store, noRecords);
+    const second = await resolveExternalSideEffectReplayKey(store, noRecords);
     expect(first?.length).toBe(32);
     expect(second?.equals(first as Buffer)).toBe(true);
     expect(sets).toBe(1);
     expect([...stored.keys()]).toEqual(["external-side-effect-replay:master_key"]);
   });
 
-  it("resolveExternalSideEffectReplayKey returns undefined when the store is unavailable", () => {
-    expect(resolveExternalSideEffectReplayKey(undefined)).toBeUndefined();
+  it("does not replace a missing key while sealed records exist", async () => {
+    let sets = 0;
+    const store = {
+      isAvailable: () => true,
+      getSecret: () => undefined,
+      setSecret: () => {
+        sets += 1;
+      },
+    };
+    expect(await resolveExternalSideEffectReplayKey(store, { hasReplayRecords: async () => true })).toBeUndefined();
+    expect(await resolveExternalSideEffectReplayKey(store)).toBeUndefined();
     expect(
-      resolveExternalSideEffectReplayKey({
-        isAvailable: () => false,
-        getSecret: () => undefined,
-        setSecret: () => undefined,
+      await resolveExternalSideEffectReplayKey(store, {
+        hasReplayRecords: () => {
+          throw new Error("storage unavailable");
+        },
       }),
     ).toBeUndefined();
+    expect(sets).toBe(0);
+  });
+
+  it("resolveExternalSideEffectReplayKey returns undefined when the store is unavailable", async () => {
+    expect(await resolveExternalSideEffectReplayKey(undefined, noRecords)).toBeUndefined();
     expect(
-      resolveExternalSideEffectReplayKey({
-        isAvailable: () => true,
-        getSecret: () => {
-          throw new Error("boom");
+      await resolveExternalSideEffectReplayKey(
+        { isAvailable: () => false, getSecret: () => undefined, setSecret: () => undefined },
+        noRecords,
+      ),
+    ).toBeUndefined();
+    expect(
+      await resolveExternalSideEffectReplayKey(
+        {
+          isAvailable: () => true,
+          getSecret: () => {
+            throw new Error("boom");
+          },
+          setSecret: () => undefined,
         },
-        setSecret: () => undefined,
-      }),
+        noRecords,
+      ),
     ).toBeUndefined();
   });
 
@@ -160,7 +185,7 @@ describe("external-side-effect replay records", () => {
     };
     const runs = createRuns();
     const records = createExternalSideEffectReplayRecords({
-      resolveKey: createExternalSideEffectReplayKeyResolver(store),
+      resolveKey: createExternalSideEffectReplayKeyResolver(store, noRecords),
       runs,
     });
     expect(await records.seal({ runId: "r1", payloadHash: "h1", payload: { a: 1 } })).toBe(true);
@@ -168,7 +193,7 @@ describe("external-side-effect replay records", () => {
     expect(gets).toBe(1);
   });
 
-  it("never regenerates the key after an initial success even if later lookups miss", () => {
+  it("never regenerates the key after an initial success even if later lookups miss", async () => {
     const stored = new Map<string, string>();
     let sets = 0;
     let lookupsMiss = false;
@@ -180,16 +205,16 @@ describe("external-side-effect replay records", () => {
         stored.set(account, value);
       },
     };
-    const resolve = createExternalSideEffectReplayKeyResolver(store);
-    const first = resolve();
+    const resolve = createExternalSideEffectReplayKeyResolver(store, noRecords);
+    const first = await resolve();
     lookupsMiss = true;
-    const second = resolve();
+    const second = await resolve();
     expect(first?.length).toBe(32);
     expect(second?.equals(first as Buffer)).toBe(true);
     expect(sets).toBe(1);
   });
 
-  it("shares one memoized resolver per secret store across hosts", () => {
+  it("shares one memoized resolver per secret store across hosts", async () => {
     let gets = 0;
     const store = {
       isAvailable: () => true,
@@ -199,13 +224,13 @@ describe("external-side-effect replay records", () => {
       },
       setSecret: () => undefined,
     };
-    sharedExternalSideEffectReplayKeyResolver(store)();
-    sharedExternalSideEffectReplayKeyResolver(store)();
+    await sharedExternalSideEffectReplayKeyResolver(store, noRecords)();
+    await sharedExternalSideEffectReplayKeyResolver(store, noRecords)();
     expect(gets).toBe(1);
-    expect(sharedExternalSideEffectReplayKeyResolver(undefined)()).toBeUndefined();
+    expect(await sharedExternalSideEffectReplayKeyResolver(undefined, noRecords)()).toBeUndefined();
   });
 
-  it("does not generate a key when secret-store write custody is unsafe", () => {
+  it("does not generate a key when secret-store write custody is unsafe", async () => {
     let sets = 0;
     const store = {
       isAvailable: () => true,
@@ -215,10 +240,30 @@ describe("external-side-effect replay records", () => {
         sets += 1;
       },
     };
-    expect(resolveExternalSideEffectReplayKey(store)).toBeUndefined();
-    expect(createExternalSideEffectReplayKeyResolver(store)()).toBeUndefined();
+    expect(await resolveExternalSideEffectReplayKey(store, noRecords)).toBeUndefined();
+    expect(await createExternalSideEffectReplayKeyResolver(store, noRecords)()).toBeUndefined();
     expect(sets).toBe(0);
     const existing = { ...store, getSecret: () => key.toString("base64") };
-    expect(resolveExternalSideEffectReplayKey(existing)?.equals(key)).toBe(true);
+    expect((await resolveExternalSideEffectReplayKey(existing, noRecords))?.equals(key)).toBe(true);
+  });
+
+  it("refuses a decrypted envelope without a payload field", async () => {
+    const runs = createRuns();
+    const records = createExternalSideEffectReplayRecords({ resolveKey: () => key, runs });
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", key, iv, { authTagLength: 16 });
+    cipher.setAAD(Buffer.from("goatcitadel:external-side-effect-replay:v1\0r-legacy\0h-legacy", "utf8"));
+    const ciphertext = Buffer.concat([cipher.update(JSON.stringify({ other: 1 }), "utf8"), cipher.final()]);
+    await runs.attachReplayRecord(
+      "r-legacy",
+      JSON.stringify({
+        v: 1,
+        alg: "aes-256-gcm",
+        iv: iv.toString("base64"),
+        ciphertext: ciphertext.toString("base64"),
+        tag: cipher.getAuthTag().toString("base64"),
+      }),
+    );
+    expect(await records.open({ runId: "r-legacy", payloadHash: "h-legacy" })).toBeUndefined();
   });
 });

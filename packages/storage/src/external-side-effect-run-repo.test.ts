@@ -323,6 +323,16 @@ describe("ExternalSideEffectRunRepository", () => {
     assert.equal(repo.getReplayRecord(run.runId), undefined);
   });
 
+  it("hasReplayRecords reports whether any run still holds a sealed record", () => {
+    const repo = createRepo();
+    const run = seedRun(repo, "replay-presence");
+    assert.equal(repo.hasReplayRecords(), false);
+    repo.attachReplayRecord(run.runId, "sealed");
+    assert.equal(repo.hasReplayRecords(), true);
+    repo.markCompleted(run.runId, { externalReferenceId: "ref-1" });
+    assert.equal(repo.hasReplayRecords(), false);
+  });
+
   it("markCompletedIfStatus settles only from the expected status", () => {
     const repo = createRepo();
     const run = seedRun(repo, "replay-cas");
