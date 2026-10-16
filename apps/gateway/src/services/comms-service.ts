@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import { sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
 import type {
@@ -116,7 +117,7 @@ async function invokeCommsTool(
   host: CommsHost,
   request: ToolInvokeRequest,
   realtimeType: string,
-  preApproval?: CommsPreApproval,
+  preApproved?: { preApproval: CommsPreApproval; claim: ExternalSideEffectExecutionContext },
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
   // Native optional fields (including normalized attachments) must have the same
   // shape before admission and after approval storage's JSON round trip.
@@ -124,13 +125,19 @@ async function invokeCommsTool(
     ...request,
     args: omitAbsentCommsFields(request.args) as ToolInvokeRequest["args"],
   };
-  if (!preApproval) {
+  if (!preApproved) {
     return host.invokeAndUnwrap(normalized, realtimeType);
   }
+  const { preApproval, claim } = preApproved;
   // The approval bypass ignores consentContext when matching, so the recorded request
   // is the presented one without it.
   const { consentContext: _callerConsent, ...recorded } = normalized;
+  // A settled approval throws here, before the boundary: nothing was sent.
   await preApproval.recordPendingAction(recorded);
+  // Past this point the approved invoke may reach the provider. Marking the boundary
+  // first turns a crash or failure during the call into an unknown external outcome
+  // (manual reconciliation) instead of a retryable claim that could send twice.
+  await claim.markExternalCallStarted();
   return host.invokeAndUnwrap(
     { ...recorded, consentContext: { source: "ui", reason: `approval:${preApproval.approvalId}` } },
     realtimeType,
@@ -464,7 +471,8 @@ class CommsPreBoundaryResultError extends Error {
  * Classifies a ledgered comms tool result inside the runner's `execute`: returns the
  * record when the provider call completed, otherwise throws a
  * `CommsPreBoundaryResultError`, marking the boundary crossed first whenever the
- * provider call may have fired.
+ * provider call may have fired. A pre-approved invoke has already marked the boundary
+ * before calling the provider, so it is never marked twice.
  */
 async function classifyCommsSideEffectResult(
   result: ToolInvokeResult | Record<string, unknown>,
@@ -488,11 +496,11 @@ async function classifyCommsSideEffectResult(
     // Any other failed deliveryStatus (degraded, retrying, manual_reconciliation_required,
     // or unclassified) means the provider call may have fired — the boundary must be
     // marked crossed before the ledger records this as an unknown external outcome.
-    await claim.markExternalCallStarted();
+    if (!claim.externalCallStarted) await claim.markExternalCallStarted();
     throw new CommsPreBoundaryResultError(record);
   }
 
-  await claim.markExternalCallStarted();
+  if (!claim.externalCallStarted) await claim.markExternalCallStarted();
   return record;
 }
 
@@ -587,7 +595,7 @@ export async function commsGmailSend(
           taskId: input.taskId,
         },
         "comms_gmail_send",
-        preApproval,
+        preApproval ? { preApproval, claim } : undefined,
       );
       return classifyCommsSideEffectResult(result, claim);
     },
@@ -642,7 +650,9 @@ export async function commsCalendarCreate(
     connectionId: input.connectionId,
     actionId: "calendar.create_event",
     checkedAt: new Date().toISOString(),
-    idempotencyKey: input.idempotencyKey,
+    // A keyless create gets a fresh per-call key: it is still ledgered, but two identical
+    // creates stay distinct (an operator may have deleted the first event upstream).
+    idempotencyKey: input.idempotencyKey ?? `calendar:${randomUUID()}`,
     payload: eventFields,
     label: "Calendar create event (comms)",
     execute: async (claim) => {
@@ -656,7 +666,7 @@ export async function commsCalendarCreate(
           taskId: input.taskId,
         },
         "comms_calendar_create",
-        preApproval,
+        preApproval ? { preApproval, claim } : undefined,
       );
       return classifyCommsSideEffectResult(result, claim);
     },

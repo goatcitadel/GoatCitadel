@@ -721,6 +721,20 @@ describe("comms calendar create external side-effect ledger", () => {
     });
   });
 
+  it("keeps two keyless identical calendar creates distinct", async () => {
+    const { host, sideEffectRunStore } = createCalendarHost();
+
+    const first = await commsCalendarCreate(host, calendarInput());
+    const second = await commsCalendarCreate(host, calendarInput());
+
+    expect(host.invokeAndUnwrap).toHaveBeenCalledTimes(2);
+    expect(first).toMatchObject({ status: "created", replayOutcome: "claimed" });
+    expect(second).toMatchObject({ status: "created", replayOutcome: "claimed" });
+    const runs = [...sideEffectRunStore.runs.values()];
+    expect(runs).toHaveLength(2);
+    expect(runs.every((run) => run.boundary === "comms_calendar_create" && run.status === "completed")).toBe(true);
+  });
+
   it("records calendar policy refusals as failed before the boundary", async () => {
     const refusal: ToolInvokeResult = {
       outcome: "approval_required",
@@ -770,6 +784,41 @@ describe("comms pre-approved invocation", () => {
     });
     expect(preApproval.recordPendingAction.mock.calls[0]?.[0]).toMatchObject({ toolName: "calendar.create_event" });
     expect(preApproval.recordPendingAction.mock.calls[0]?.[0]).not.toHaveProperty("consentContext");
+  });
+
+  it("marks the external boundary started after recording and before a pre-approved invoke", async () => {
+    const { host, sideEffectRunStore } = createGmailHost();
+    const order: string[] = [];
+    const preApproval = createRecordingPreApproval("ap-1", async () => {
+      order.push(`record:${[...sideEffectRunStore.runs.values()][0]?.status}`);
+    });
+    host.invokeAndUnwrap.mockImplementation(async () => {
+      order.push(`invoke:${[...sideEffectRunStore.runs.values()][0]?.status}`);
+      return { status: "sent", deliveryStatus: "sent", providerMessageId: "gmail-1" };
+    });
+
+    const result = await commsGmailSend(host, gmailInput(), preApproval);
+
+    expect(result).toMatchObject({ status: "sent" });
+    expect(order).toEqual(["record:claimed_not_sent", "invoke:external_call_started"]);
+    expect([...sideEffectRunStore.runs.values()][0]).toMatchObject({ status: "completed" });
+  });
+
+  it("treats a pre-approved invoke that crashes as an unknown external outcome, not a retryable claim", async () => {
+    const { host, sideEffectRunStore } = createCalendarHost();
+    host.invokeAndUnwrap.mockImplementation(async () => {
+      throw new Error("provider connection reset");
+    });
+    const preApproval = createRecordingPreApproval("ap-cal");
+
+    await expect(
+      commsCalendarCreate(host, calendarInput({ idempotencyKey: "cal-crash" }), preApproval),
+    ).rejects.toThrow("provider connection reset");
+    expect([...sideEffectRunStore.runs.values()][0]).toMatchObject({ status: "unknown_external_outcome" });
+
+    const retry = await commsCalendarCreate(host, calendarInput({ idempotencyKey: "cal-crash" }), preApproval);
+    expect(host.invokeAndUnwrap).toHaveBeenCalledTimes(1);
+    expect(retry).toMatchObject({ status: "failed", deliveryStatus: "blocked" });
   });
 
   it("a settled pending action stops the invoke", async () => {

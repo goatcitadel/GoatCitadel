@@ -164,6 +164,7 @@ const calendarCreateSchema = z.object({
   sessionId: z.string().min(1).optional(),
   agentId: z.string().min(1).optional(),
   taskId: z.string().min(1).optional(),
+  idempotencyKey: z.string().min(1).max(256).optional(),
 });
 
 export const commsRoutes: FastifyPluginAsync = async (fastify) => {
