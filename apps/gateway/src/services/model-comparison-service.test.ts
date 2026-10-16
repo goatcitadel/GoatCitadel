@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { ModelComparisonRun, PromptPackRunRecord, PromptPackTestRecord } from "@goatcitadel/contracts";
-import { ModelComparisonService, type ModelComparisonRepositoryPort } from "./model-comparison-service.js";
+import type {
+  ModelComparisonPromptResult,
+  ModelComparisonRun,
+  PromptPackRunRecord,
+  PromptPackTestRecord,
+} from "@goatcitadel/contracts";
+import { ConflictError } from "@goatcitadel/contracts";
+import {
+  ModelComparisonService,
+  type ModelComparisonRepositoryPort,
+  type ModelComparisonServiceDependencies,
+} from "./model-comparison-service.js";
 
 describe("ModelComparisonService", () => {
   it("creates blind comparisons from prompt-pack tests with stable labels and queued placeholders", async () => {
@@ -133,6 +143,224 @@ describe("ModelComparisonService", () => {
   });
 });
 
+describe("ModelComparisonService execution", () => {
+  function promptRun(overrides: Partial<PromptPackRunRecord>): PromptPackRunRecord {
+    return {
+      runId: "run",
+      packId: "pack-1",
+      testId: "test-a",
+      sessionId: "s",
+      status: "completed",
+      providerId: "p",
+      model: "m",
+      startedAt: "2026-10-15T00:00:00.000Z",
+      finishedAt: "2026-10-15T00:00:01.500Z",
+      responseText: "answer",
+      ...overrides,
+    } as PromptPackRunRecord;
+  }
+
+  async function setup(runPromptPackTest: NonNullable<ModelComparisonServiceDependencies["runPromptPackTest"]>) {
+    const repository = new InMemoryModelComparisonRepository();
+    const service = new ModelComparisonService({
+      repository,
+      clock: () => new Date("2026-10-15T00:00:00.000Z"),
+      idFactory: idSequence("cmp-1"),
+      listPromptPackTests: async () => [testRecord("test-a"), testRecord("test-b")],
+      runPromptPackTest,
+    });
+    const created = await service.createComparison({
+      packId: "pack-1",
+      allTests: true,
+      candidates: [
+        { providerId: "openai", model: "gpt-5" },
+        { providerId: "anthropic", model: "claude" },
+      ],
+    });
+    return { service, repository, created };
+  }
+
+  it("moves queued → running → completed and stores every response with at most 2 in flight", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const { service, created } = await setup(async (_packId, testId, input) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return promptRun({ testId, runId: `${testId}-${input.model}`, responseText: `${input.model} says hi` });
+    });
+    const started = await service.startComparison(created.comparisonId);
+    expect(started.status).toBe("running");
+    await service.whenSettled(created.comparisonId);
+    const done = await service.getComparison(created.comparisonId);
+    expect(done.status).toBe("completed");
+    expect(done.completedAt).toBeDefined();
+    expect(done.results.every((result) => Boolean(result.responseText))).toBe(true);
+    expect(done.results[0]?.latencyMs).toBe(1500);
+    expect(maxInFlight).toBe(2);
+    expect(JSON.stringify(done.results)).not.toContain("anthropic");
+    expect(done.advisory?.safetyNotes.join(" ")).not.toContain("does not start live provider execution");
+  });
+
+  it("ends failed but keeps completed results when one candidate fails", async () => {
+    const { service, created } = await setup(async (_packId, testId, input) => {
+      if (input.model === "claude") throw new Error("provider down");
+      return promptRun({ testId, responseText: "ok" });
+    });
+    await service.startComparison(created.comparisonId);
+    await service.whenSettled(created.comparisonId);
+    const done = await service.getComparison(created.comparisonId);
+    expect(done.status).toBe("failed");
+    expect(done.error).toBe("2 of 4 results failed.");
+    expect(done.results.filter((result) => result.responseText === "ok")).toHaveLength(2);
+    expect(done.results.filter((result) => result.error === "provider down")).toHaveLength(2);
+  });
+
+  it("records a failed prompt-pack run as a result error and retries it on restart", async () => {
+    const calls: string[] = [];
+    let fail = true;
+    const { service, created } = await setup(async (_packId, testId, input) => {
+      calls.push(`${testId}:${input.model}`);
+      return fail && input.model === "claude"
+        ? promptRun({ testId, status: "failed", responseText: "", error: "tool blocked" })
+        : promptRun({ testId, responseText: "  ok  " });
+    });
+    await service.startComparison(created.comparisonId);
+    await service.whenSettled(created.comparisonId);
+    const done = await service.getComparison(created.comparisonId);
+    expect(done.status).toBe("failed");
+    expect(done.results.filter((result) => result.responseText === "ok")).toHaveLength(2);
+    const failed = done.results.filter((result) => result.error === "tool blocked");
+    expect(failed).toHaveLength(2);
+    expect(failed.every((result) => result.responseText === "tool blocked")).toBe(true);
+
+    fail = false;
+    calls.length = 0;
+    await service.startComparison(created.comparisonId);
+    await service.whenSettled(created.comparisonId);
+    expect(calls.sort()).toEqual(["test-a:claude", "test-b:claude"]);
+    expect((await service.getComparison(created.comparisonId)).status).toBe("completed");
+  });
+
+  it("restarting a failed comparison only re-runs missing or errored results", async () => {
+    const calls: string[] = [];
+    let fail = true;
+    const { service, created } = await setup(async (_packId, testId, input) => {
+      calls.push(`${testId}:${input.model}`);
+      if (fail && input.model === "claude") throw new Error("provider down");
+      return promptRun({ testId, responseText: "ok" });
+    });
+    await service.startComparison(created.comparisonId);
+    await service.whenSettled(created.comparisonId);
+    fail = false;
+    calls.length = 0;
+    await service.startComparison(created.comparisonId);
+    await service.whenSettled(created.comparisonId);
+    expect(calls.sort()).toEqual(["test-a:claude", "test-b:claude"]);
+    const done = await service.getComparison(created.comparisonId);
+    expect(done.status).toBe("completed");
+    expect(done.error).toBeUndefined();
+    expect(done.results.every((result) => result.error === undefined)).toBe(true);
+  });
+
+  it("rejects a second start while running and a start after completion", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { service, created } = await setup(async (_packId, testId) => {
+      await gate;
+      return promptRun({ testId });
+    });
+    await service.startComparison(created.comparisonId);
+    await expect(service.startComparison(created.comparisonId)).rejects.toBeInstanceOf(ConflictError);
+    release();
+    await service.whenSettled(created.comparisonId);
+    await expect(service.startComparison(created.comparisonId)).rejects.toThrow(/already completed/i);
+    await expect(service.startComparison(created.comparisonId)).rejects.toBeInstanceOf(ConflictError);
+    await expect(service.cancelComparison(created.comparisonId)).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it("cancel aborts the in-flight signal and ends cancelled", async () => {
+    const signals: AbortSignal[] = [];
+    const { service, created } = await setup(
+      (_packId, _testId, input) =>
+        new Promise((_resolve, reject) => {
+          signals.push(input.signal);
+          input.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        }),
+    );
+    await service.startComparison(created.comparisonId);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const cancelled = await service.cancelComparison(created.comparisonId);
+    expect(signals.length).toBeGreaterThan(0);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.completedAt).toBeDefined();
+    expect(cancelled.results.some((result) => result.error === "aborted")).toBe(false);
+  });
+
+  it("a stale running comparison (no live executor) can be cancelled or restarted", async () => {
+    const { service, repository, created } = await setup(async (_packId, testId) => promptRun({ testId }));
+    await repository.updateStatus(created.comparisonId, { status: "running", updatedAt: "2026-10-15T00:00:00.000Z" });
+    const restarted = await service.startComparison(created.comparisonId);
+    expect(restarted.status).toBe("running");
+    await service.whenSettled(created.comparisonId);
+    expect((await service.getComparison(created.comparisonId)).status).toBe("completed");
+
+    const second = await setup(async (_packId, testId) => promptRun({ testId }));
+    await second.repository.updateStatus(second.created.comparisonId, {
+      status: "running",
+      updatedAt: "2026-10-15T00:00:00.000Z",
+    });
+    const cancelled = await second.service.cancelComparison(second.created.comparisonId);
+    expect(cancelled.status).toBe("cancelled");
+  });
+
+  it("marks the run failed instead of leaking a rejection when persistence breaks mid-run", async () => {
+    const { service, repository, created } = await setup(async (_packId, testId) => promptRun({ testId }));
+    repository.failUpsert = true;
+    await service.startComparison(created.comparisonId);
+    await service.whenSettled(created.comparisonId);
+    const done = await service.getComparison(created.comparisonId);
+    expect(done.status).toBe("failed");
+    expect(done.error).toBe("upsert broke");
+  });
+
+  it("whenSettled resolves immediately when nothing is running", async () => {
+    const { service, created } = await setup(async (_packId, testId) => promptRun({ testId }));
+    await expect(service.whenSettled(created.comparisonId)).resolves.toBeUndefined();
+  });
+
+  it("refuses to start without a live runner", async () => {
+    const service = new ModelComparisonService({
+      repository: new InMemoryModelComparisonRepository(),
+      idFactory: idSequence("cmp-1"),
+      listPromptPackTests: async () => [testRecord("test-a")],
+    });
+    const created = await service.createComparison({
+      packId: "pack-1",
+      allTests: true,
+      candidates: [
+        { providerId: "a", model: "a" },
+        { providerId: "b", model: "b" },
+      ],
+    });
+    await expect(service.startComparison(created.comparisonId)).rejects.toThrow(/not available/i);
+  });
+
+  it("judging is unchanged after a run", async () => {
+    const { service, created } = await setup(async (_packId, testId) => promptRun({ testId }));
+    await service.startComparison(created.comparisonId);
+    await service.whenSettled(created.comparisonId);
+    const judgment = await service.addJudgment(created.comparisonId, {
+      testId: "test-a",
+      winnerCandidateId: created.candidates[0]!.candidateId,
+      scores: [{ candidateId: created.candidates[0]!.candidateId, quality: 4 }],
+    });
+    expect(judgment.testId).toBe("test-a");
+  });
+});
+
 const runsByTestId: Record<string, PromptPackRunRecord[]> = {
   "test-b": [
     {
@@ -151,6 +379,7 @@ const runsByTestId: Record<string, PromptPackRunRecord[]> = {
 
 class InMemoryModelComparisonRepository implements ModelComparisonRepositoryPort {
   private readonly runs = new Map<string, ModelComparisonRun>();
+  public failUpsert = false;
 
   async create(run: ModelComparisonRun): Promise<ModelComparisonRun> {
     this.runs.set(run.comparisonId, cloneRun(run));
@@ -175,6 +404,50 @@ class InMemoryModelComparisonRepository implements ModelComparisonRepositoryPort
     run.updatedAt = judgment.createdAt;
     this.runs.set(comparisonId, cloneRun(run));
     return judgment;
+  }
+
+  async updateStatus(
+    comparisonId: string,
+    update: {
+      status: ModelComparisonRun["status"];
+      updatedAt: string;
+      completedAt?: string | null;
+      error?: string | null;
+    },
+  ): Promise<ModelComparisonRun> {
+    const run = this.runs.get(comparisonId);
+    if (!run) {
+      throw new Error("not found");
+    }
+    const next: ModelComparisonRun = {
+      ...run,
+      status: update.status,
+      updatedAt: update.updatedAt,
+      completedAt: update.completedAt === undefined ? run.completedAt : (update.completedAt ?? undefined),
+      error: update.error === undefined ? run.error : (update.error ?? undefined),
+    };
+    this.runs.set(comparisonId, cloneRun(next));
+    return await this.get(comparisonId);
+  }
+
+  async upsertResult(
+    comparisonId: string,
+    result: ModelComparisonPromptResult,
+    updatedAt: string,
+  ): Promise<ModelComparisonRun> {
+    if (this.failUpsert) {
+      throw new Error("upsert broke");
+    }
+    const run = this.runs.get(comparisonId);
+    if (!run) {
+      throw new Error("not found");
+    }
+    const exists = run.results.some((item) => item.resultId === result.resultId);
+    const results = exists
+      ? run.results.map((item) => (item.resultId === result.resultId ? result : item))
+      : [...run.results, result];
+    this.runs.set(comparisonId, cloneRun({ ...run, results, updatedAt }));
+    return await this.get(comparisonId);
   }
 }
 

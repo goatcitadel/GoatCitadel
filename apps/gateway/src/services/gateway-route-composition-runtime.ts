@@ -375,6 +375,7 @@ export function composeRuntimeAdminRouteDependencies(
       repository: new ModelComparisonRunRepository(gateway.storage.gatewaySql),
       listPromptPackTests: (packId, limit) => gateway.promptPackService.listPromptPackTests(packId, limit),
       listPromptPackRunsByTest: (testId, limit) => gateway.storage.promptPackRuns.listByTest(testId, limit),
+      runPromptPackTest: (packId, testId, input) => gateway.promptPackService.runPromptPackTest(packId, testId, input),
     }),
     npu: createNpuRoutePort({
       npuSidecar: gateway.npuSidecar,

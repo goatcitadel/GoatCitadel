@@ -9,25 +9,112 @@ import type {
   PromptPackRunRecord,
   PromptPackTestRecord,
 } from "@goatcitadel/contracts";
-import { ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 
 export interface ModelComparisonRepositoryPort {
   create(run: ModelComparisonRun): Promise<ModelComparisonRun>;
   get(comparisonId: string): Promise<ModelComparisonRun>;
   list(limit?: number): Promise<ModelComparisonRun[]>;
   addJudgment(comparisonId: string, judgment: ModelComparisonJudgment): Promise<ModelComparisonJudgment>;
+  updateStatus(
+    comparisonId: string,
+    update: {
+      status: ModelComparisonRun["status"];
+      updatedAt: string;
+      completedAt?: string | null;
+      error?: string | null;
+    },
+  ): Promise<ModelComparisonRun>;
+  upsertResult(
+    comparisonId: string,
+    result: ModelComparisonPromptResult,
+    updatedAt: string,
+  ): Promise<ModelComparisonRun>;
 }
+
+export type ModelComparisonPromptPackRunner = (
+  packId: string,
+  testId: string,
+  input: { providerId: string; model: string; signal: AbortSignal },
+) => Promise<PromptPackRunRecord>;
 
 export interface ModelComparisonServiceDependencies {
   repository: ModelComparisonRepositoryPort;
   listPromptPackTests: (packId: string, limit?: number) => Promise<PromptPackTestRecord[]>;
   listPromptPackRunsByTest?: (testId: string, limit?: number) => Promise<PromptPackRunRecord[]>;
+  runPromptPackTest?: ModelComparisonPromptPackRunner;
   clock?: () => Date;
   idFactory?: () => string;
 }
 
+const COMPARISON_CONCURRENCY = 2;
+
+interface ComparisonWorkItem {
+  result: ModelComparisonPromptResult;
+  providerId: string;
+  model: string;
+}
+
+interface ActiveComparison {
+  controller: AbortController;
+  settled: Promise<void>;
+}
+
 export class ModelComparisonService {
+  private readonly active = new Map<string, ActiveComparison>();
+
   public constructor(private readonly deps: ModelComparisonServiceDependencies) {}
+
+  public async startComparison(comparisonId: string): Promise<ModelComparisonRun> {
+    const runner = this.deps.runPromptPackTest;
+    if (!runner) {
+      throw new ValidationError({
+        field: "comparisonId",
+        message: "Live comparison execution is not available in this runtime.",
+      });
+    }
+    if (this.active.has(comparisonId)) {
+      throw new ConflictError({ message: "Comparison is already running." });
+    }
+    const controller = new AbortController();
+    let markSettled!: () => void;
+    const settled = new Promise<void>((resolve) => (markSettled = resolve));
+    this.active.set(comparisonId, { controller, settled });
+    const release = () => {
+      this.active.delete(comparisonId);
+      markSettled();
+    };
+    let running: ModelComparisonRun;
+    try {
+      running = await this.markRunning(comparisonId);
+    } catch (error) {
+      release();
+      throw error;
+    }
+    void this.runInBackground(running, runner, controller.signal).finally(release);
+    return this.withAdvisory(running);
+  }
+
+  public async cancelComparison(comparisonId: string): Promise<ModelComparisonRun> {
+    const entry = this.active.get(comparisonId);
+    if (entry) {
+      entry.controller.abort();
+      await entry.settled;
+      return await this.getComparison(comparisonId);
+    }
+    const run = await this.deps.repository.get(comparisonId);
+    if (run.status !== "running") {
+      throw new ConflictError({ message: `Comparison is ${run.status}; only a running comparison can be cancelled.` });
+    }
+    const now = this.nowIso();
+    return this.withAdvisory(
+      await this.deps.repository.updateStatus(comparisonId, { status: "cancelled", updatedAt: now, completedAt: now }),
+    );
+  }
+
+  public async whenSettled(comparisonId: string): Promise<void> {
+    await this.active.get(comparisonId)?.settled;
+  }
 
   public async createComparison(input: ModelComparisonCreateRequest): Promise<ModelComparisonRun> {
     if (input.candidates.length < 2) {
@@ -158,6 +245,105 @@ export class ModelComparisonService {
     return resultGroups.flat();
   }
 
+  private async markRunning(comparisonId: string): Promise<ModelComparisonRun> {
+    const run = await this.deps.repository.get(comparisonId);
+    if (run.status === "completed") {
+      throw new ConflictError({ message: "Comparison already completed." });
+    }
+    return await this.deps.repository.updateStatus(comparisonId, {
+      status: "running",
+      updatedAt: this.nowIso(),
+      completedAt: null,
+      error: null,
+    });
+  }
+
+  private async runInBackground(
+    run: ModelComparisonRun,
+    runner: ModelComparisonPromptPackRunner,
+    signal: AbortSignal,
+  ): Promise<void> {
+    try {
+      await this.executeComparison(run, runner, signal);
+    } catch (error) {
+      const now = this.nowIso();
+      await this.deps.repository
+        .updateStatus(run.comparisonId, {
+          status: "failed",
+          updatedAt: now,
+          completedAt: now,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  private async executeComparison(
+    run: ModelComparisonRun,
+    runner: ModelComparisonPromptPackRunner,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const queue = buildComparisonWorkItems(run);
+    let failure: { error: unknown } | undefined;
+    const worker = async () => {
+      while (!signal.aborted && !failure) {
+        const item = queue.shift();
+        if (!item) {
+          return;
+        }
+        await this.runWorkItem(run, item, runner, signal).catch((error: unknown) => {
+          failure ??= { error };
+        });
+      }
+    };
+    await Promise.all(Array.from({ length: COMPARISON_CONCURRENCY }, worker));
+    if (failure) {
+      throw failure.error;
+    }
+    await this.finishComparison(run.comparisonId, signal.aborted);
+  }
+
+  private async runWorkItem(
+    run: ModelComparisonRun,
+    item: ComparisonWorkItem,
+    runner: ModelComparisonPromptPackRunner,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const pending: ModelComparisonPromptResult = { ...item.result, error: undefined };
+    await this.deps.repository.upsertResult(run.comparisonId, pending, this.nowIso());
+    let next: ModelComparisonPromptResult;
+    try {
+      const promptRun = await runner(run.packId, item.result.testId, {
+        providerId: item.providerId,
+        model: item.model,
+        signal,
+      });
+      next = applyPromptPackRun(pending, promptRun);
+    } catch (error) {
+      if (signal.aborted) {
+        return;
+      }
+      next = { ...pending, error: error instanceof Error ? error.message : String(error) };
+    }
+    await this.deps.repository.upsertResult(run.comparisonId, next, this.nowIso());
+  }
+
+  private async finishComparison(comparisonId: string, aborted: boolean): Promise<void> {
+    const now = this.nowIso();
+    if (aborted) {
+      await this.deps.repository.updateStatus(comparisonId, { status: "cancelled", updatedAt: now, completedAt: now });
+      return;
+    }
+    const latest = await this.deps.repository.get(comparisonId);
+    const failedCount = latest.results.filter((result) => Boolean(result.error?.trim())).length;
+    await this.deps.repository.updateStatus(comparisonId, {
+      status: failedCount > 0 ? "failed" : "completed",
+      updatedAt: now,
+      completedAt: now,
+      error: failedCount > 0 ? `${failedCount} of ${latest.results.length} results failed.` : null,
+    });
+  }
+
   private nowIso(): string {
     return (this.deps.clock?.() ?? new Date()).toISOString();
   }
@@ -194,6 +380,30 @@ function buildResultPlaceholder(
   };
 }
 
+function buildComparisonWorkItems(run: ModelComparisonRun): ComparisonWorkItem[] {
+  const candidates = new Map(run.candidates.map((candidate) => [candidate.candidateId, candidate]));
+  return run.results.flatMap((result) => {
+    const candidate = candidates.get(result.candidateId);
+    if (!candidate || (result.responseText?.trim() && !result.error?.trim())) {
+      return [];
+    }
+    return [{ result, providerId: candidate.providerId, model: candidate.model }];
+  });
+}
+
+function applyPromptPackRun(
+  pending: ModelComparisonPromptResult,
+  promptRun: PromptPackRunRecord,
+): ModelComparisonPromptResult {
+  return {
+    ...pending,
+    runId: promptRun.runId,
+    responseText: promptRun.responseText?.trim() || promptRun.error || undefined,
+    latencyMs: computeRunLatencyMs(promptRun),
+    error: promptRun.status === "failed" ? (promptRun.error ?? "Prompt-pack run failed.") : undefined,
+  };
+}
+
 function computeRunLatencyMs(run?: PromptPackRunRecord): number | undefined {
   if (!run?.finishedAt) {
     return undefined;
@@ -227,8 +437,8 @@ function buildModelComparisonAdvisory(run: ModelComparisonRun): ModelComparisonR
     recommendedNextAction,
     safetyNotes: [
       "This record compares existing prompt-pack outputs and operator judgments.",
-      "It does not start live provider execution or change routing by itself.",
-      "Use governed Assembly or Cowork runs for live multi-model execution with approvals and budgets.",
+      "Start the comparison to run each prompt-pack test once per candidate through the governed prompt-pack runner.",
+      "Comparing does not change routing by itself.",
     ],
   };
 }
