@@ -1098,10 +1098,14 @@ describe("EventIngestService", () => {
       "leaves one transcript row when markDelivered fails after append and the outbox re-drains",
       withStorage(async (storage, sessionId) => {
         const original = storage.transcriptOutbox.markDelivered.bind(storage.transcriptOutbox);
-        const failOnce = vi.spyOn(storage.transcriptOutbox, "markDelivered").mockImplementationOnce(() => {
-          throw new Error("crash before markDelivered");
+        let failed = false;
+        vi.spyOn(storage.transcriptOutbox, "markDelivered").mockImplementation((...args) => {
+          if (!failed) {
+            failed = true;
+            throw new Error("crash before markDelivered");
+          }
+          return original(...args);
         });
-        failOnce.mockImplementation(original);
         const { childSpy } = spyOnStructuredWarn();
         const service = new EventIngestService(asAsyncStorage(storage));
 
@@ -1136,15 +1140,34 @@ describe("EventIngestService", () => {
         hold.mockImplementation(original);
 
         // Simulate process death: attempt started and append landed, delivery never recorded.
+        storage.transcriptOutbox.markAttemptStarted("evt-1", { attemptedAt: new Date().toISOString() });
         const pending = storage.transcriptOutbox.get("evt-1");
         expect(pending?.deliveredAt).toBeUndefined();
-        storage.transcriptOutbox.markAttemptStarted("evt-1", { attemptedAt: new Date().toISOString() });
-        const transcriptsBefore = await storage.transcripts.read(sessionId);
-        if (!transcriptsBefore.some((entry) => entry.eventId === "evt-1")) {
-          await storage.transcripts.append(pending!.event);
-        }
+        expect(pending?.lastAttemptAt).toBeDefined();
+        expect((await storage.transcripts.read(sessionId)).some((entry) => entry.eventId === "evt-1")).toBe(true);
 
         await service.flushPendingTranscriptOutbox();
+
+        const transcript = await storage.transcripts.read(sessionId);
+        expect(transcript.filter((entry) => entry.eventId === "evt-1")).toHaveLength(1);
+        expect(storage.transcriptOutbox.get("evt-1")?.deliveredAt).toBeDefined();
+      }),
+      20_000,
+    );
+
+    it(
+      "serializes concurrent drains of the same session into one transcript line",
+      withStorage(async (storage, sessionId) => {
+        const hold = vi.spyOn(storage.transcriptOutbox, "markDelivered").mockImplementation(() => undefined);
+        const service = new EventIngestService(asAsyncStorage(storage));
+        await service.ingest({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey: "idem-outbox-3",
+          payload: buildPayload(),
+        });
+        hold.mockRestore();
+        // Row is appended but still pending; two drainers race over it.
+        await Promise.all([service.flushPendingTranscriptOutbox(), service.flushPendingTranscriptOutbox()]);
 
         const transcript = await storage.transcripts.read(sessionId);
         expect(transcript.filter((entry) => entry.eventId === "evt-1")).toHaveLength(1);

@@ -53,6 +53,24 @@ export function deriveCredentialDims(usage: GatewayEventInput["usage"]): {
 export class EventIngestService {
   private readonly tokenCostLedger: TokenCostLedger;
   private subscriptionUsageWarned = false;
+  private readonly drainChains = new Map<string, Promise<unknown>>();
+
+  /** Serializes outbox drains per session so two drainers cannot double-append. */
+  private drainSerialized(
+    storage: AsyncStorage,
+    input: { sessionId: string; targetEventId?: string; limit?: number },
+  ): Promise<{ deliveredCount: number; targetOffset: number }> {
+    const prior = this.drainChains.get(input.sessionId) ?? Promise.resolve();
+    const next = prior.catch(() => undefined).then(() => flushTranscriptOutboxSession(storage, input));
+    this.drainChains.set(input.sessionId, next);
+    const cleanup = () => {
+      if (this.drainChains.get(input.sessionId) === next) {
+        this.drainChains.delete(input.sessionId);
+      }
+    };
+    next.then(cleanup, cleanup);
+    return next;
+  }
 
   public constructor(private readonly storage: AsyncStorage) {
     this.tokenCostLedger = new TokenCostLedger(storage.costLedger);
@@ -176,7 +194,7 @@ export class EventIngestService {
     }
     await options.afterCommit?.();
 
-    const { targetOffset: transcriptOffset } = await flushTranscriptOutboxSession(this.storage, {
+    const { targetOffset: transcriptOffset } = await this.drainSerialized(this.storage, {
       sessionId: route.sessionId,
       targetEventId: transcriptEvent.eventId,
     });
@@ -259,7 +277,7 @@ export class EventIngestService {
     const sessionIds = new Set(pending.map((record) => record.sessionId));
     let deliveredCount = 0;
     for (const sessionId of sessionIds) {
-      const result = await flushTranscriptOutboxSession(this.storage, {
+      const result = await this.drainSerialized(this.storage, {
         sessionId,
         limit,
       });

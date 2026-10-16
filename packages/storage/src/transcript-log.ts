@@ -64,7 +64,10 @@ export class TranscriptLog {
    * eventId matches, or undefined when the file or event does not exist.
    */
   public async findEventOffset(sessionId: string, eventId: string): Promise<number | undefined> {
+    // Wait for any in-flight append so a half-written line is never mistaken for absence.
+    await this.writeQueues.get(sessionId)?.catch(() => 0);
     const filePath = this.filePathForSession(sessionId);
+    const needle = JSON.stringify(eventId).slice(1, -1);
     const stream = createReadStream(filePath, { encoding: "utf8" });
     const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
     let offset = 0;
@@ -73,7 +76,7 @@ export class TranscriptLog {
         const lineOffset = offset;
         offset += Buffer.byteLength(line, "utf8") + 1;
         const trimmed = line.trim();
-        if (!trimmed || !trimmed.includes(eventId)) {
+        if (!trimmed || !trimmed.includes(needle)) {
           continue;
         }
         try {

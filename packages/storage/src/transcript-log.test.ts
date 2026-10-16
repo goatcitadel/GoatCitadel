@@ -137,6 +137,21 @@ describe("TranscriptLog sanitization", () => {
     assert.equal(await log.findEventOffset(sessionId, "unknown"), undefined);
   });
 
+  it("findEventOffset returns byte offsets for non-ASCII content", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-transcripts-${randomUUID()}`);
+    createdDirs.push(root);
+    const log = new TranscriptLog(root);
+    const sessionId = "session-find-utf8";
+    const first = { ...buildEvent(sessionId, 0), payload: { text: "café 😀" } };
+    const second = buildEvent(sessionId, 1);
+
+    const firstOffset = await log.append(first);
+    const secondOffset = await log.append(second);
+
+    assert.equal(await log.findEventOffset(sessionId, first.eventId), firstOffset);
+    assert.equal(await log.findEventOffset(sessionId, second.eventId), secondOffset);
+  });
+
   it("skips and quarantines a malformed JSONL row instead of crashing", async () => {
     const transcriptsDir = fs.mkdtempSync(path.join(os.tmpdir(), "gc-transcript-sanitize-"));
     createdDirs.push(transcriptsDir);
