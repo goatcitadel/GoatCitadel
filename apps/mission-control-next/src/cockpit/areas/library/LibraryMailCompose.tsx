@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { MailAccountRecord, MailDraftRecord } from "@goatcitadel/contracts";
 import { createMailDraft, getMailDraft, sendMailDraft } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -62,6 +62,7 @@ function LibraryMailComposeContent({
   const [pending, setPending] = useSessionViewState<SendReview | undefined>(operation.key + ":pending-send", undefined);
   const [receipt, setReceipt] = useSessionViewState<SendReceipt | undefined>(operation.key + ":receipt", undefined);
   const [outcome, setOutcome] = useSessionViewState<Outcome | undefined>(operation.key + ":outcome", undefined);
+  const readSequence = useRef(0);
   const [errors, setErrors] = useState<MailComposeErrors>({});
   const [busy, setBusy] = useState(false);
   const accountId = draft.value.accountId || (accounts.length === 1 ? accounts[0]!.accountId : "");
@@ -122,8 +123,12 @@ function LibraryMailComposeContent({
         },
         (value) => {
           if (value.draftId !== target.record.draftId) throw new Error("The send receipt names a different draft.");
-          if (value.status === "approval_required" && !value.approvalId) throw new Error(INTERRUPTED_SEND);
-          if (value.status === "approval_required" && !draftMatchesRequest(value, target.record, workspaceId))
+          // An interrupted request (no approval id) is a definite, fenced outcome handled after the run.
+          if (
+            value.status === "approval_required" &&
+            value.approvalId &&
+            !draftMatchesRequest(value, target.record, workspaceId)
+          )
             throw new Error("The send approval receipt does not match the reviewed draft.");
           if (value.status !== "approval_required" && value.status !== "failed")
             throw new Error("The Gateway returned an unexpected draft status.");
@@ -133,6 +138,10 @@ function LibraryMailComposeContent({
       if (!result || !operation.current()) return;
       setPending(undefined);
       setReview(undefined);
+      if (result.status === "approval_required" && !result.approvalId) {
+        setOutcome({ error: true, text: INTERRUPTED_SEND });
+        return;
+      }
       setReceipt({ record: result, replayed: replay });
       if (result.status === "approval_required") draft.acceptSaved(EMPTY_MAIL_COMPOSE, undefined, target.compose);
       await onRefresh();
@@ -152,11 +161,16 @@ function LibraryMailComposeContent({
   /** Re-read the draft after a decision so the operator sees whether it was actually sent. */
   async function refreshReceipt() {
     const draftId = receipt?.record.draftId;
-    await onRefresh();
+    const sequence = ++readSequence.current;
+    try {
+      await onRefresh();
+    } catch {
+      // A failed record refresh must not stop the draft re-read below.
+    }
     if (!draftId) return;
     try {
       const observed = await getMailDraft(draftId);
-      if (operation.current() && observed.draftId === draftId)
+      if (operation.current() && sequence === readSequence.current && observed.draftId === draftId)
         setReceipt((current) => (current && current.record.draftId === draftId ? { ...current, observed } : current));
     } catch {
       // The approval card stays authoritative; a failed re-read must not hide it.
@@ -170,7 +184,7 @@ function LibraryMailComposeContent({
     if (cancelled)
       setOutcome({
         error: false,
-        text: "Cancelled. No send approval was requested. The prepared draft stays inert in Gateway memory.",
+        text: "Cancelled. No send approval was requested. The prepared draft stays saved on the Gateway and is never sent.",
       });
   }
 

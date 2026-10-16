@@ -28,9 +28,15 @@ export function LibraryMailSendReceipt({ receipt, workspaceId, onRefresh, onDism
     <section className="grid min-w-0 grid-cols-1 gap-2" aria-label="Send approval receipt">
       {receipt.record.status === "approval_required" && receipt.record.approvalId ? (
         <>
-          <Callout>
-            Send approval requested. Nothing has been sent yet. Approving sends this exact message once.
-          </Callout>
+          {receipt.observed?.status === "sent" ? (
+            <Callout>The approval was decided and the message was sent.</Callout>
+          ) : receipt.observed?.status === "failed" || receipt.observed?.status === "send_unavailable" ? (
+            <Callout tone="error">The approval was decided, but the message was not sent.</Callout>
+          ) : (
+            <Callout>
+              Send approval requested. Nothing has been sent yet. Approving sends this exact message once.
+            </Callout>
+          )}
           {outcome ? (
             <p role="status" className="wrap-anywhere text-sm font-medium">
               {outcome}

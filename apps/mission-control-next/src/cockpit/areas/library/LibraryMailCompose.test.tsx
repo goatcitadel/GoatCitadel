@@ -301,17 +301,73 @@ it("keeps the receipt readable when the draft re-read fails", async () => {
   expect(container.textContent).not.toContain("Sent.");
 });
 
-it("explains an interrupted send request that has no approval, instead of a receipt mismatch", async () => {
+it("explains an interrupted send request exactly, without a lock, suffix or replay", async () => {
   vi.mocked(createMailDraft).mockResolvedValue(draft);
   vi.mocked(sendMailDraft).mockResolvedValueOnce({ ...pending, approvalId: undefined });
   await render();
   await compose();
   await click("Review send request");
   await click("Request send approval");
-  expect(dialog()!.textContent).toContain(
-    "This send request was interrupted before its approval was recorded. Nothing was sent; start a new draft to send this message.",
+  const message =
+    "This send request was interrupted before its approval was recorded. Nothing was sent; start a new draft to send this message.";
+  const alert = [...container.querySelectorAll("[role=alert], [role=status]")].find((n) => n.textContent === message);
+  expect(alert, "exact message").toBeDefined();
+  expect(container.textContent).not.toContain("not confirmed");
+  expect(container.textContent).not.toContain("remains locked");
+  expect(container.textContent).not.toContain("does not match the reviewed draft");
+  expect(button("Replay exact send request")).toBeUndefined();
+  expect(button("Review pending send request")).toBeUndefined();
+  expect(button("Review send request")?.disabled).toBe(false);
+});
+
+it("replaces the not-sent-yet callout once the re-read shows the decided outcome", async () => {
+  await requestApproval();
+  vi.mocked(getMailDraft).mockResolvedValue({ ...pending, status: "sent" });
+  await click("Simulate decision");
+  const text = container.querySelector("[aria-label='Send approval receipt']")!.textContent!;
+  expect(text).not.toContain("Nothing has been sent yet");
+  expect(text).toContain("Sent.");
+  vi.mocked(getMailDraft).mockResolvedValue({ ...pending, status: "failed", failureReason: "Rejected." });
+  await click("Simulate decision");
+  const failed = container.querySelector("[aria-label='Send approval receipt']")!.textContent!;
+  expect(failed).not.toContain("Nothing has been sent yet");
+  expect(failed).toContain("Not sent: Rejected.");
+});
+
+it("ignores an older draft re-read that resolves after a newer one", async () => {
+  await requestApproval();
+  let older!: (v: MailDraftRecord) => void;
+  vi.mocked(getMailDraft)
+    .mockReturnValueOnce(new Promise((r) => (older = r)))
+    .mockResolvedValueOnce({ ...pending, status: "sent" });
+  await click("Simulate decision");
+  await click("Simulate decision");
+  await act(async () => older(pending));
+  expect(container.querySelector("[aria-label='Send approval receipt']")!.textContent).toContain("Sent.");
+});
+
+it("still re-reads the draft when the record refresh fails", async () => {
+  vi.mocked(createMailDraft).mockResolvedValue(draft);
+  vi.mocked(sendMailDraft).mockResolvedValue(pending);
+  let calls = 0;
+  await act(async () =>
+    root.render(
+      <LibraryMailCompose
+        workspaceId="one"
+        accounts={[account]}
+        available
+        onRefresh={async () => {
+          if (++calls > 1) throw new Error("refresh failed");
+        }}
+      />,
+    ),
   );
-  expect(dialog()!.textContent).not.toContain("does not match the reviewed draft");
+  await compose();
+  await click("Review send request");
+  await click("Request send approval");
+  vi.mocked(getMailDraft).mockResolvedValue({ ...pending, status: "sent" });
+  await click("Simulate decision");
+  expect(container.textContent).toContain("Sent.");
 });
 
 async function loseFirstSend() {
