@@ -6,6 +6,14 @@ export interface ToolPathResolutionContext {
   workspaceRoot: string;
   projectRoot?: string;
   projectWorkspacePath?: string;
+  /**
+   * Extra roots that absolute write paths may target besides the workspace and
+   * project: the runtime write jail plus admitted operator write roots. The
+   * policy engine and executor stay the authority (deny-wins, approvals,
+   * hard-forbidden paths); this only stops the gateway from rejecting a path
+   * the policy would admit. Never applies to reads or cwd.
+   */
+  writeRoots?: readonly string[];
 }
 
 const PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH = "__prompt_pack_repo__";
@@ -19,7 +27,7 @@ interface ToolPathSpec {
   when?: (request: ToolPathRequest) => boolean;
 }
 
-type ToolPathRequest = ToolInvokeRequest | ToolAccessEvaluateRequest;
+export type ToolPathRequest = ToolInvokeRequest | ToolAccessEvaluateRequest;
 
 const TOOL_PATH_SPECS: Record<string, ToolPathSpec[]> = {
   "fs.read": [{ key: "path", kind: "read" }],
@@ -184,6 +192,9 @@ function resolveAbsoluteToolPath(
   if (kind === "read") {
     return resolvedTarget;
   }
+  if (kind === "write" && isWithinWriteRoots(resolvedTarget, context)) {
+    return absoluteTarget;
+  }
 
   throw new ValidationError({
     message: `Path "${rawPath}" is outside the workspace boundary and is not allowed.`,
@@ -217,6 +228,11 @@ function isWithinWorkspaceBounds(resolvedPath: string, context: ToolPathResoluti
     isWithinAnyRootVariant(context.workspaceRoot, normalizedPath) ||
     (context.projectRoot ? isWithinAnyRootVariant(context.projectRoot, normalizedPath) : false)
   );
+}
+
+function isWithinWriteRoots(resolvedPath: string, context: ToolPathResolutionContext): boolean {
+  const normalizedPath = path.resolve(resolvedPath);
+  return (context.writeRoots ?? []).some((root) => isWithinAnyRootVariant(root, normalizedPath));
 }
 
 function shouldPreferWorkspaceRoot(rawPath: string, projectWorkspacePath?: string): boolean {
@@ -320,6 +336,9 @@ function finalizeResolvedToolPath(
   if (!isWithinWorkspaceBounds(resolvedCandidate, context)) {
     if (kind === "read") {
       return resolvedCandidate;
+    }
+    if (kind === "write" && isWithinWriteRoots(resolvedCandidate, context)) {
+      return candidate;
     }
     throw new ValidationError({
       message: `Path "${rawPath}" is outside the workspace boundary and is not allowed for ${kind} operations.`,
