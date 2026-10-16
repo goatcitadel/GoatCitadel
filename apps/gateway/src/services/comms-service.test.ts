@@ -878,6 +878,37 @@ describe("comms pre-approved invocation", () => {
     );
   });
 
+  it("records the Gateway-normalized request in the approval's workspace and invokes exactly that", async () => {
+    const { host } = createGmailHost();
+    const normalizeToolInvokeRequest = vi.fn(
+      async (request: ToolInvokeRequest): Promise<ToolInvokeRequest> =>
+        ({
+          ...request,
+          citadelId: "citadel-1",
+          policyContext: { workspaceId: request.workspaceId, permissionProfileId: "safe", surface: "chat" },
+          consentContext: { source: "ui", reason: "must not be recorded" },
+        }) as unknown as ToolInvokeRequest,
+    );
+    const normalizingHost = Object.assign(host, { normalizeToolInvokeRequest });
+    const preApproval = { ...createRecordingPreApproval("ap-ws"), workspaceId: "workspace-ops" };
+
+    await commsGmailSend(normalizingHost, gmailInput({ idempotencyKey: "mail-key-ws" }), preApproval);
+
+    expect(normalizeToolInvokeRequest).toHaveBeenCalledTimes(1);
+    expect(normalizeToolInvokeRequest.mock.calls[0]?.[0]).toMatchObject({ workspaceId: "workspace-ops" });
+    expect(normalizeToolInvokeRequest.mock.calls[0]?.[0]).not.toHaveProperty("consentContext");
+    const recorded = preApproval.recordPendingAction.mock.calls[0]?.[0] as ToolInvokeRequest;
+    expect(recorded).toMatchObject({
+      toolName: "gmail.send",
+      workspaceId: "workspace-ops",
+      citadelId: "citadel-1",
+      policyContext: { permissionProfileId: "safe", surface: "chat" },
+    });
+    expect(recorded).not.toHaveProperty("consentContext");
+    const invoked = host.invokeAndUnwrap.mock.calls[0]?.[0] as ToolInvokeRequest;
+    expect(invoked).toEqual({ ...recorded, consentContext: { source: "ui", reason: "approval:ap-ws" } });
+  });
+
   it("pre-approval carries approval consent into calendar create", async () => {
     const { host } = createCalendarHost();
     const preApproval = createRecordingPreApproval("ap-cal");

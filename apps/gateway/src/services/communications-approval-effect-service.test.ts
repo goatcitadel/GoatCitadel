@@ -157,6 +157,36 @@ describe("CommunicationsApprovalEffectService mail send", () => {
     expect(await storage.approvals.list()).toHaveLength(1);
   });
 
+  it("clears a stale failure reason when a failed draft's approved send succeeds", async () => {
+    const { storage, service } = createHarness();
+    const { draftId, approvalId } = await seedApprovedMailSend(storage);
+    await storage.mailDrafts.transition(draftId, ["approval_required"], {
+      status: "failed",
+      failureReason: "Delivery outcome is unknown; check the mailbox before retrying.",
+      updatedAt: new Date().toISOString(),
+    });
+
+    await expect(service.executeApprovedMailSend({ approvalId })).resolves.toMatchObject({ disposition: "sent" });
+
+    const draft = await storage.mailDrafts.get(draftId);
+    expect(draft.status).toBe("sent");
+    expect(draft.failureReason).toBeUndefined();
+  });
+
+  it("runs the approved send in the approval's linked workspace", async () => {
+    const { raw, storage, invokes, service } = createHarness();
+    const { approvalId } = await seedApprovedMailSend(storage);
+    raw.db
+      .prepare("UPDATE approvals SET linkage_json = ? WHERE approval_id = ?")
+      .run(JSON.stringify({ actionType: "communications.mail.send", workspaceId: "workspace-ops" }), approvalId);
+
+    await service.executeApprovedMailSend({ approvalId });
+
+    expect(invokes[0]).toMatchObject({ toolName: "gmail.send", workspaceId: "workspace-ops" });
+    const pending = await storage.pendingApprovalActions.find(approvalId);
+    expect(pending?.request).toMatchObject({ workspaceId: "workspace-ops" });
+  });
+
   it("replays a completed send on a second run without invoking the provider again", async () => {
     const { storage, invokes, service } = createHarness();
     const { draftId, approvalId } = await seedApprovedMailSend(storage);

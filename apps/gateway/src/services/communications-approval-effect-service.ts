@@ -110,7 +110,7 @@ export class CommunicationsApprovalEffectService {
     try {
       const connection = await this.readConnection(mail.accountId);
       const send = this.selectMailSender(connection);
-      const result = await this.invokeApproved(approvalId, (preApproval) =>
+      const result = await this.invokeApproved(approval, (preApproval) =>
         send(
           {
             connectionId: mail.accountId,
@@ -127,6 +127,7 @@ export class CommunicationsApprovalEffectService {
       const outcome = await this.classify(result, "Mail send", MAIL_OUTCOME_UNKNOWN_REASON);
       await this.deps.storage.mailDrafts.transition(mail.draftId, ["approval_required", "failed"], {
         status: "sent",
+        clearFailureReason: true,
         sentAt: this.nowIso(),
         updatedAt: this.nowIso(),
       });
@@ -162,7 +163,7 @@ export class CommunicationsApprovalEffectService {
       );
     }
     this.assertCalendarCanCreate(await this.readConnection(event.accountId));
-    const result = await this.invokeApproved(approvalId, (preApproval) =>
+    const result = await this.invokeApproved(approval, (preApproval) =>
       this.deps.commsCalendarCreate(
         {
           connectionId: event.accountId,
@@ -255,13 +256,17 @@ export class CommunicationsApprovalEffectService {
     }
   }
 
-  /** Runs one approved invoke; a settled pending action fails closed instead of retrying. */
+  /**
+   * Runs one approved invoke in the approval's workspace; a settled pending action fails
+   * closed instead of retrying.
+   */
   private async invokeApproved(
-    approvalId: string,
+    approval: ApprovalRequest,
     invoke: (preApproval: CommsPreApproval) => Promise<CommsResult>,
   ): Promise<CommsResult> {
     try {
-      return await invoke(buildCommsPreApproval(this.deps.storage, approvalId, () => this.now()));
+      const workspaceId = approval.linkage?.workspaceId;
+      return await invoke(buildCommsPreApproval(this.deps.storage, approval.approvalId, () => this.now(), workspaceId));
     } catch (error) {
       if (error instanceof Error && error.message === PRE_APPROVAL_SETTLED_MESSAGE) {
         throw new CommunicationsApprovalEffectError(

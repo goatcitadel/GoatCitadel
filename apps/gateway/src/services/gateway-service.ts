@@ -3822,7 +3822,10 @@ export class GatewayService {
   }
 
   private buildCommsHost(integrationChannel = this.buildIntegrationChannelService()): CommsHost {
-    return createCommsHostForGateway(this.getRouteCompositionPort(), integrationChannel);
+    return {
+      ...createCommsHostForGateway(this.getRouteCompositionPort(), integrationChannel),
+      normalizeToolInvokeRequest: (request) => this.toolInvocationCoordinator.normalizeToolInvokeRequest(request),
+    };
   }
 
   private buildDurableChatTurnWorkflowHost(): durableExecutionService.DurableChatTurnWorkflowHost &
@@ -11477,7 +11480,7 @@ export class GatewayService {
   }
 
   public async commsCalendarCreate(
-    input: CalendarCreateEventInput,
+    input: CalendarCreateEventInput & { idempotencyKey?: string },
   ): Promise<ToolInvokeResult | Record<string, unknown>> {
     return commsCalendarCreateImpl(this.buildCommsHost(), input);
   }

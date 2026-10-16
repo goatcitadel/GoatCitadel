@@ -59,6 +59,12 @@ export interface CommsHost {
    */
   mutationStore?: MutationIdempotencyStore;
   sideEffectRunStore?: ExternalSideEffectRunStore;
+  /**
+   * The Gateway's own tool-request normalization (workspace, Citadel, policy context), the
+   * same one `invokeTool` applies before policy. A pre-approved invoke records the
+   * normalized request so the policy engine's approval bypass compares exactly that row.
+   */
+  normalizeToolInvokeRequest?(request: ToolInvokeRequest): Promise<ToolInvokeRequest>;
 }
 
 const COMMS_SESSION = "session:operator:comms";
@@ -80,6 +86,8 @@ const CHANNEL_ACTIVITY_TYPING_PHASES = new Set<ChannelActivityInput["phase"]>(["
  */
 export interface CommsPreApproval {
   approvalId: string;
+  /** The approval's workspace; the approved invoke runs there unless the request already names one. */
+  workspaceId?: string;
   /** Persist the exact normalized tool request as the approval's pending action; must throw if that row is not still `pending`. */
   recordPendingAction(request: ToolInvokeRequest): Promise<void>;
 }
@@ -91,10 +99,12 @@ export function buildCommsPreApproval(
   storage: Pick<AsyncStorage, "pendingApprovalActions">,
   approvalId: string,
   now: () => Date = () => new Date(),
+  workspaceId?: string,
 ): CommsPreApproval {
   const pendingActions = storage.pendingApprovalActions;
   return {
     approvalId,
+    ...(workspaceId ? { workspaceId } : {}),
     async recordPendingAction(request) {
       const recordedAt = now();
       // The upsert only rewrites a row that is still pending, so a settled approval
@@ -131,9 +141,10 @@ async function invokeCommsTool(
     return invoke(normalized);
   }
   const { preApproval, claim } = preApproved;
-  // The approval bypass ignores consentContext when matching, so the recorded request
-  // is the presented one without it.
-  const { consentContext: _callerConsent, ...recorded } = normalized;
+  const recorded = await normalizePreApprovedRequest(host, {
+    ...normalized,
+    workspaceId: normalized.workspaceId ?? preApproval.workspaceId,
+  });
   // A settled approval throws here, before the boundary: nothing was sent.
   await preApproval.recordPendingAction(recorded);
   // Past this point the approved invoke may reach the provider. Marking the boundary
@@ -141,6 +152,21 @@ async function invokeCommsTool(
   // (manual reconciliation) instead of a retryable claim that could send twice.
   await claim.markExternalCallStarted();
   return invoke({ ...recorded, consentContext: { source: "ui", reason: `approval:${preApproval.approvalId}` } });
+}
+
+/**
+ * The request the policy engine will see: Gateway-normalized when the host can, and
+ * without consentContext, which the approval bypass ignores when matching. The
+ * normalization is idempotent on its own output, so `invokeTool` normalizing it again
+ * changes none of the fields the bypass compares.
+ */
+async function normalizePreApprovedRequest(host: CommsHost, request: ToolInvokeRequest): Promise<ToolInvokeRequest> {
+  const { consentContext: _callerConsent, ...unconsented } = request;
+  const normalized: ToolInvokeRequest = host.normalizeToolInvokeRequest
+    ? await host.normalizeToolInvokeRequest(unconsented)
+    : unconsented;
+  const { consentContext: _normalizedConsent, ...recorded } = normalized;
+  return recorded;
 }
 
 function omitAbsentCommsFields(value: unknown): unknown {
