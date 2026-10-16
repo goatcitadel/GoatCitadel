@@ -77,6 +77,8 @@ export interface DiscordRuntimeBridgeHost {
   getPersonalityCatalog?(): Promise<PersonalityCatalogResponse>;
   getChatSessionPrefs(sessionId: string): Promise<ChatSessionPrefsRecord>;
   hasRunningTurn(sessionId: string): Promise<boolean>;
+  /** Feature-flag read (channelVoiceInboundV1Enabled gates Discord voice turns). */
+  isFeatureEnabled(flag: "channelVoiceInboundV1Enabled"): Promise<boolean>;
   ingestChannelMessage(
     channel: string,
     dedupeKey: string,
@@ -221,14 +223,15 @@ export async function ensureDiscordChatSession(
     threadId: route.threadId,
   });
   const now = new Date().toISOString();
-  await host.storage.runImmediateTransaction(async () => {
-    const connection = await host.storage.integrationConnections.get(input.connectionId);
+  const storage = host.storage;
+  await storage.runImmediateTransaction(async () => {
+    const connection = await storage.integrationConnections.get(input.connectionId);
     const workspaceId = connection.workspaceId?.trim() || "default";
-    const lockedMeta = await host.storage.chatSessionMeta.get(resolution.sessionId);
+    const lockedMeta = await storage.chatSessionMeta.get(resolution.sessionId);
     if (lockedMeta?.workspaceId && lockedMeta.workspaceId !== workspaceId) {
       throw new Error("stable Discord session key already belongs to another workspace");
     }
-    await host.storage.sessions.upsert({
+    await storage.sessions.upsert({
       sessionId: resolution.sessionId,
       sessionKey: resolution.sessionKey,
       kind: resolution.kind,
@@ -237,9 +240,9 @@ export async function ensureDiscordChatSession(
       displayName: input.displayName?.trim() || undefined,
       timestamp: now,
     });
-    await host.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
-    await host.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
-    await host.storage.chatSessionBindings.upsert(
+    await storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
+    await storage.chatSessionPrefs.ensure(resolution.sessionId, now);
+    await storage.chatSessionBindings.upsert(
       {
         sessionId: resolution.sessionId,
         workspaceId,
@@ -741,6 +744,20 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+/** Fallback/marker content for an inbound Discord voice message. */
+export const DISCORD_VOICE_MESSAGE_PLACEHOLDER = "[voice message]";
+
+/**
+ * Commits a gated Discord gateway message (pairing / guild allowlist already
+ * passed in DiscordRuntimeService) to the durable inbound owner.
+ *
+ * An audio attachment becomes a voice_agent_turn only while
+ * channelVoiceInboundV1Enabled is on: the secret-free attachment reference is
+ * persisted and the durable worker downloads/transcribes it. With the flag off,
+ * typed text routes as before and a voice-only message is declined (resolves
+ * false, so the runtime emits no "seen" reaction). Voice and text share the
+ * provider message-id idempotency key, so replays dedupe either way.
+ */
 export async function handleDiscordRuntimeInbound(
   host: DiscordRuntimeBridgeHost,
   input: {
@@ -755,9 +772,23 @@ export async function handleDiscordRuntimeInbound(
     room?: string;
     threadId?: string;
     metadata?: Record<string, unknown>;
+    voiceAttachment?: { attachmentId: string; url: string; mimeType?: string };
   },
-): Promise<void> {
+): Promise<boolean> {
+  const text = input.content.trim();
+  const voiceAttachment =
+    input.voiceAttachment && (await host.isFeatureEnabled("channelVoiceInboundV1Enabled"))
+      ? input.voiceAttachment
+      : undefined;
+  if (!voiceAttachment && !text) {
+    return false;
+  }
   const route = await resolveDiscordInboundRoute(host, input);
+  const content = voiceAttachment
+    ? text
+      ? `${DISCORD_VOICE_MESSAGE_PLACEHOLDER} ${text}`
+      : DISCORD_VOICE_MESSAGE_PLACEHOLDER
+    : input.content;
   await host.acceptInboundChannelEvent({
     channel: "discord",
     acceptedConnectionRevision: input.acceptedConnectionRevision,
@@ -765,7 +796,6 @@ export async function handleDiscordRuntimeInbound(
     idempotencyKey: `discord:${input.connectionId}:${input.sourceMessageId}`,
     eventType: "discord-gateway-message",
     bindingTarget: input.target,
-    dispatchKind: "agent_turn",
     message: {
       eventId: input.sourceMessageId,
       account: input.connectionId,
@@ -774,11 +804,25 @@ export async function handleDiscordRuntimeInbound(
       threadId: route.threadId,
       actorId: input.actorId,
       actorType: "user",
-      content: input.content,
+      content,
       displayName: input.displayName,
       metadata: input.metadata,
     },
+    ...(voiceAttachment
+      ? {
+          dispatchKind: "voice_agent_turn" as const,
+          voiceRequest: {
+            channel: "discord" as const,
+            connectionConfig: {},
+            attachmentId: voiceAttachment.attachmentId,
+            url: voiceAttachment.url,
+            mimeType: voiceAttachment.mimeType,
+          },
+          voiceFallbackContent: content,
+        }
+      : { dispatchKind: "agent_turn" as const }),
   });
+  return true;
 }
 
 export async function cloneChatSessionContext(

@@ -535,6 +535,69 @@ describe("InboundChannelEventService", () => {
     expect(persisted).toContain("voice-file-1");
   });
 
+  it("persists Slack and Discord voice references without connection config and transcribes them in the worker", async () => {
+    const transcribe = vi.fn(async () => ({ ok: true as const, transcript: "voice transcript" }));
+    const harness = await createHarness({ transcribeChannelVoice: transcribe });
+    const slack = await harness.service.accept(
+      buildInput({
+        channel: "slack",
+        idempotencyKey: "slack:conn:EvVoice1",
+        dispatchKind: "voice_agent_turn",
+        voiceRequest: {
+          channel: "slack",
+          connectionConfig: { botToken: "must-not-persist" },
+          fileId: "F0VOICE01",
+          downloadUrl: "https://files.slack.com/files-pri/T1-F0VOICE01/download/a.webm",
+          mimeType: "audio/webm",
+        },
+        voiceFallbackContent: "[voice message]",
+        message: { ...buildInput().message, eventId: "slack-voice-1" },
+      }),
+    );
+    const discord = await harness.service.accept(
+      buildInput({
+        channel: "discord",
+        idempotencyKey: "discord:conn:msg-voice-1",
+        dispatchKind: "voice_agent_turn",
+        voiceRequest: {
+          channel: "discord",
+          connectionConfig: { botToken: "must-not-persist" },
+          attachmentId: "222333444555",
+          url: "https://cdn.discordapp.com/attachments/1/222333444555/voice-message.ogg",
+          mimeType: "audio/ogg",
+        },
+        voiceFallbackContent: "[voice message]",
+        message: { ...buildInput().message, eventId: "discord-voice-1" },
+      }),
+    );
+    await waitFor(
+      () =>
+        harness.storage.inboundChannelEvents.get(slack.inboundEventId)?.status === "completed" &&
+        harness.storage.inboundChannelEvents.get(discord.inboundEventId)?.status === "completed",
+    );
+
+    expect(transcribe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        fileId: "F0VOICE01",
+        downloadUrl: "https://files.slack.com/files-pri/T1-F0VOICE01/download/a.webm",
+        mimeType: "audio/webm",
+      }),
+    );
+    expect(transcribe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        attachmentId: "222333444555",
+        url: "https://cdn.discordapp.com/attachments/1/222333444555/voice-message.ogg",
+      }),
+    );
+    for (const accepted of [slack, discord]) {
+      const persisted = JSON.stringify(harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.payload);
+      expect(persisted).not.toContain("must-not-persist");
+      expect(persisted).not.toContain("connectionConfig");
+    }
+  });
+
   it("terminalizes post-send ambiguity for manual reconciliation without replay", async () => {
     const emitChannelActivity = vi.fn(async () => undefined);
     const respond = vi.fn(async (_sessionId, _eventId, options) => {

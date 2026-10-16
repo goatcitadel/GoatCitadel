@@ -130,9 +130,12 @@ interface StoredInboundPayload {
   voiceFallbackContent?: string;
 }
 
+/** Secret-free voice media reference: every variant minus connectionConfig. */
 type PersistedVoiceRequest =
   | { channel: "telegram"; fileId: string; mimeType?: string }
-  | { channel: "whatsapp"; mediaId: string; mimeType?: string };
+  | { channel: "whatsapp"; mediaId: string; mimeType?: string }
+  | { channel: "slack"; fileId: string; downloadUrl: string; mimeType?: string }
+  | { channel: "discord"; attachmentId: string; url: string; mimeType?: string };
 
 class InboundChannelClaimLostError extends Error {
   public constructor(eventId: string) {
@@ -872,7 +875,8 @@ function buildStoredPayload(input: DurableInboundChannelAcceptInput): Record<str
   assignDefined(payload, "voiceRequest", input.voiceRequest ? persistVoiceRequest(input.voiceRequest) : undefined);
   assignDefined(payload, "voiceFallbackContent", normalizeOptionalString(input.voiceFallbackContent));
   if (input.acceptedConnectionRevision && /^[a-f0-9]{64}$/.test(input.acceptedConnectionRevision)) {
-    (payload as unknown as Record<string, unknown>)[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY] = input.acceptedConnectionRevision;
+    (payload as unknown as Record<string, unknown>)[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY] =
+      input.acceptedConnectionRevision;
   }
   return payload as unknown as Record<string, unknown>;
 }
@@ -922,42 +926,46 @@ function parseStoredPayload(event: InboundChannelEventRecord): StoredInboundPayl
   return payload;
 }
 
+/**
+ * The media-reference fields each voice channel persists. connectionConfig is
+ * deliberately absent: the worker re-reads current connection config at
+ * transcription time, so credentials never cross the durable boundary.
+ */
+const PERSISTED_VOICE_REFERENCE_FIELDS = {
+  telegram: ["fileId"],
+  whatsapp: ["mediaId"],
+  slack: ["fileId", "downloadUrl"],
+  discord: ["attachmentId", "url"],
+} as const satisfies Record<ChannelVoiceInboundRequest["channel"], readonly string[]>;
+
+function isPersistedVoiceChannel(value: unknown): value is ChannelVoiceInboundRequest["channel"] {
+  return typeof value === "string" && Object.hasOwn(PERSISTED_VOICE_REFERENCE_FIELDS, value);
+}
+
 function persistVoiceRequest(request: ChannelVoiceInboundRequest): PersistedVoiceRequest {
-  if (request.channel === "telegram") {
-    const persisted: PersistedVoiceRequest = {
-      channel: "telegram",
-      fileId: normalizeRequiredString(request.fileId, "voiceRequest.fileId"),
-    };
-    assignDefined(persisted, "mimeType", normalizeOptionalString(request.mimeType));
-    return persisted;
+  const source = request as unknown as Record<string, unknown>;
+  const persisted: Record<string, unknown> = { channel: request.channel };
+  for (const field of PERSISTED_VOICE_REFERENCE_FIELDS[request.channel]) {
+    const raw = source[field];
+    persisted[field] = normalizeRequiredString(typeof raw === "string" ? raw : "", `voiceRequest.${field}`);
   }
-  const persisted: PersistedVoiceRequest = {
-    channel: "whatsapp",
-    mediaId: normalizeRequiredString(request.mediaId, "voiceRequest.mediaId"),
-  };
   assignDefined(persisted, "mimeType", normalizeOptionalString(request.mimeType));
-  return persisted;
+  return persisted as PersistedVoiceRequest;
 }
 
 function parsePersistedVoiceRequest(value: unknown): PersistedVoiceRequest | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  if (value.channel === "telegram") {
-    return {
-      channel: "telegram",
-      fileId: readRequiredString(value.fileId, "voiceRequest.fileId"),
-      mimeType: readOptionalString(value.mimeType),
-    };
+  if (!isPersistedVoiceChannel(value.channel)) {
+    throw new Error("Inbound voice payload has an unsupported channel.");
   }
-  if (value.channel === "whatsapp") {
-    return {
-      channel: "whatsapp",
-      mediaId: readRequiredString(value.mediaId, "voiceRequest.mediaId"),
-      mimeType: readOptionalString(value.mimeType),
-    };
+  const parsed: Record<string, unknown> = { channel: value.channel };
+  for (const field of PERSISTED_VOICE_REFERENCE_FIELDS[value.channel]) {
+    parsed[field] = readRequiredString(value[field], `voiceRequest.${field}`);
   }
-  throw new Error("Inbound voice payload has an unsupported channel.");
+  parsed.mimeType = readOptionalString(value.mimeType);
+  return parsed as PersistedVoiceRequest;
 }
 
 function buildLaneKey(input: DurableInboundChannelAcceptInput): string {

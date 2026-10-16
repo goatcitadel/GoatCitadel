@@ -802,3 +802,24 @@ describe("provider typing support", () => {
     },
   );
 });
+
+describe("inbound voice support notes", () => {
+  it("tells operators how Slack and Discord voice messages are transcribed", () => {
+    const slack = describeChannelCapabilities("slack", { botToken: "token", signingSecret: "secret" });
+    expect(slack.supportNotes.join(" ")).toContain("Slack audio file shares are transcribed");
+    const slackNoIngress = describeChannelCapabilities("slack", { botToken: "token" });
+    expect(slackNoIngress.supportNotes.join(" ")).not.toContain("audio file shares are transcribed");
+
+    const discord = describeChannelCapabilities("discord", { runtimeMode: "gateway", botToken: "token" });
+    expect(discord.supportNotes.join(" ")).toContain("Discord voice messages");
+  });
+
+  it("says plainly that Nextcloud Talk voice messages are not transcribed", () => {
+    const nextcloud = describeChannelCapabilities("nextcloud-talk", { baseUrl: "https://cloud.test", token: "t" });
+    expect(nextcloud.supportNotes).toEqual(
+      expect.arrayContaining([
+        "Nextcloud Talk bots cannot download shared media, so inbound voice messages are not transcribed: the agent receives a notice that a voice message arrived instead.",
+      ]),
+    );
+  });
+});

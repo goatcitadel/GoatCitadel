@@ -365,3 +365,208 @@ describe("isAllowedWhatsAppMediaUrl", () => {
     expect(isAllowedWhatsAppMediaUrl("not-a-url")).toBe(false);
   });
 });
+
+describe("ChannelVoiceInboundService — slack", () => {
+  const SLACK_URL = "https://files.slack.com/files-pri/T0001-F0VOICE01/download/audio_message.webm";
+
+  it("downloads the private file with the bot token as Bearer (happy path)", async () => {
+    const { service, fetchWithTimeout, transcribeVoice } = createService();
+    fetchWithTimeout.mockResolvedValueOnce(bytesResponse(OGG_BYTES));
+
+    const result = await service.transcribe({
+      channel: "slack",
+      connectionConfig: { botToken: "xoxb-slack-secret" },
+      fileId: "F0VOICE01",
+      downloadUrl: SLACK_URL,
+      mimeType: "audio/webm",
+    });
+
+    expect(result).toEqual({ ok: true, transcript: "hello from voice" });
+    expect(fetchWithTimeout).toHaveBeenCalledTimes(1);
+    expect(fetchWithTimeout).toHaveBeenCalledWith(
+      SLACK_URL,
+      expect.objectContaining({ redirect: "error", headers: { Authorization: "Bearer xoxb-slack-secret" } }),
+    );
+    expect(transcribeVoice).toHaveBeenCalledWith(expect.objectContaining({ mimeType: "audio/webm" }));
+  });
+
+  it("refuses a non-Slack download host without sending the token anywhere", async () => {
+    const { service, fetchWithTimeout } = createService();
+    for (const downloadUrl of [
+      "https://attacker.example.com/files-pri/T0001-F0VOICE01/download/a.webm",
+      "https://files.slack.com.evil.io/files-pri/a.webm",
+      "http://files.slack.com/files-pri/T0001-F0VOICE01/download/a.webm",
+    ]) {
+      const result = await service.transcribe({
+        channel: "slack",
+        connectionConfig: { botToken: "xoxb-slack-secret" },
+        fileId: "F0VOICE01",
+        downloadUrl,
+      });
+      expect(result).toEqual(expect.objectContaining({ ok: false, reason: "url_not_allowlisted" }));
+    }
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed Slack file ids before any network call", async () => {
+    const { service, fetchWithTimeout } = createService();
+    const result = await service.transcribe({
+      channel: "slack",
+      connectionConfig: { botToken: "xoxb-slack-secret" },
+      fileId: "../F0VOICE01",
+      downloadUrl: SLACK_URL,
+    });
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "invalid_media_reference" }));
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("fails typed without a bot token", async () => {
+    const { service, fetchWithTimeout } = createService();
+    const result = await service.transcribe({
+      channel: "slack",
+      connectionConfig: {},
+      fileId: "F0VOICE01",
+      downloadUrl: SLACK_URL,
+    });
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "missing_credentials" }));
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("fails typed when the outbound allowlist rejects files.slack.com", async () => {
+    const { service, fetchWithTimeout } = createService({ isConnectionUrlAllowlisted: () => false });
+    const result = await service.transcribe({
+      channel: "slack",
+      connectionConfig: { botToken: "xoxb-slack-secret" },
+      fileId: "F0VOICE01",
+      downloadUrl: SLACK_URL,
+    });
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "url_not_allowlisted" }));
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("refuses redirects (fetch rejects under redirect: error) as a typed download failure", async () => {
+    const { service, fetchWithTimeout, transcribeVoice } = createService();
+    fetchWithTimeout.mockRejectedValueOnce(new TypeError("fetch failed: unexpected redirect"));
+    const result = await service.transcribe({
+      channel: "slack",
+      connectionConfig: { botToken: "xoxb-slack-secret" },
+      fileId: "F0VOICE01",
+      downloadUrl: SLACK_URL,
+    });
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "download_failed" }));
+    expect(fetchWithTimeout).toHaveBeenCalledWith(SLACK_URL, expect.objectContaining({ redirect: "error" }));
+    expect(transcribeVoice).not.toHaveBeenCalled();
+  });
+
+  it("caps the Slack download at the shared 8MB limit", async () => {
+    const { service, fetchWithTimeout, transcribeVoice } = createService();
+    fetchWithTimeout.mockResolvedValueOnce(bytesResponse(Buffer.alloc(MAX_CHANNEL_VOICE_MEDIA_BYTES + 1)));
+    const result = await service.transcribe({
+      channel: "slack",
+      connectionConfig: { botToken: "xoxb-slack-secret" },
+      fileId: "F0VOICE01",
+      downloadUrl: SLACK_URL,
+    });
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "media_too_large" }));
+    expect(transcribeVoice).not.toHaveBeenCalled();
+  });
+});
+
+describe("ChannelVoiceInboundService — discord", () => {
+  const DISCORD_URL = "https://cdn.discordapp.com/attachments/111/222333444555/voice-message.ogg?ex=1&is=2&hm=3";
+
+  it("downloads the attachment without credentials (happy path)", async () => {
+    const { service, fetchWithTimeout, transcribeVoice } = createService();
+    fetchWithTimeout.mockResolvedValueOnce(bytesResponse(OGG_BYTES));
+
+    const result = await service.transcribe({
+      channel: "discord",
+      connectionConfig: { botToken: "discord-bot-secret" },
+      attachmentId: "222333444555",
+      url: DISCORD_URL,
+      mimeType: "audio/ogg",
+    });
+
+    expect(result).toEqual({ ok: true, transcript: "hello from voice" });
+    const init = fetchWithTimeout.mock.calls[0]?.[1];
+    expect(fetchWithTimeout.mock.calls[0]?.[0]).toBe(DISCORD_URL);
+    expect(init).toEqual(expect.objectContaining({ redirect: "error" }));
+    expect(init?.headers).toBeUndefined();
+    expect(transcribeVoice).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts the media.discordapp.net host", async () => {
+    const { service, fetchWithTimeout } = createService();
+    fetchWithTimeout.mockResolvedValueOnce(bytesResponse(OGG_BYTES));
+    const result = await service.transcribe({
+      channel: "discord",
+      connectionConfig: {},
+      attachmentId: "222333444555",
+      url: "https://media.discordapp.net/attachments/111/222333444555/voice-message.ogg",
+    });
+    expect(result).toEqual({ ok: true, transcript: "hello from voice" });
+  });
+
+  it("refuses non-Discord hosts before any network call", async () => {
+    const { service, fetchWithTimeout } = createService();
+    for (const url of [
+      "https://attacker.example.com/attachments/1/2/voice.ogg",
+      "https://cdn.discordapp.com.evil.io/attachments/1/2/voice.ogg",
+      "http://cdn.discordapp.com/attachments/1/2/voice.ogg",
+      "https://discordapp.com/attachments/1/2/voice.ogg",
+    ]) {
+      const result = await service.transcribe({
+        channel: "discord",
+        connectionConfig: {},
+        attachmentId: "222333444555",
+        url,
+      });
+      expect(result).toEqual(expect.objectContaining({ ok: false, reason: "url_not_allowlisted" }));
+    }
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed attachment ids", async () => {
+    const { service, fetchWithTimeout } = createService();
+    const result = await service.transcribe({
+      channel: "discord",
+      connectionConfig: {},
+      attachmentId: "abc/../def",
+      url: DISCORD_URL,
+    });
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "invalid_media_reference" }));
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("refuses redirects and caps size", async () => {
+    const { service, fetchWithTimeout, transcribeVoice } = createService();
+    fetchWithTimeout
+      .mockRejectedValueOnce(new TypeError("fetch failed: unexpected redirect"))
+      .mockResolvedValueOnce(bytesResponse(Buffer.alloc(MAX_CHANNEL_VOICE_MEDIA_BYTES + 1)));
+    const request = {
+      channel: "discord" as const,
+      connectionConfig: {},
+      attachmentId: "222333444555",
+      url: DISCORD_URL,
+    };
+    expect(await service.transcribe(request)).toEqual(
+      expect.objectContaining({ ok: false, reason: "download_failed" }),
+    );
+    expect(await service.transcribe(request)).toEqual(
+      expect.objectContaining({ ok: false, reason: "media_too_large" }),
+    );
+    expect(transcribeVoice).not.toHaveBeenCalled();
+  });
+
+  it("fails typed when the outbound allowlist rejects the Discord CDN", async () => {
+    const { service, fetchWithTimeout } = createService({ isConnectionUrlAllowlisted: () => false });
+    const result = await service.transcribe({
+      channel: "discord",
+      connectionConfig: {},
+      attachmentId: "222333444555",
+      url: DISCORD_URL,
+    });
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: "url_not_allowlisted" }));
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+  });
+});

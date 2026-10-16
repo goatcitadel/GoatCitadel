@@ -211,6 +211,11 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
             hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
               ? "Slack inbound event routing is enabled through the signed Events API webhook path."
               : "Slack inbound routing remains disabled until a signing secret is configured.",
+            ...(hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
+              ? [
+                  "When inbound channel voice is enabled, Slack audio file shares are transcribed: the gateway downloads the file from files.slack.com with the bot token (needs the files:read scope, 8 MB cap) and routes the transcript as an untrusted voice turn.",
+                ]
+              : []),
             "Guided setup can run a sandbox send/delete probe on the bot-token path before finalize.",
           ]
         : [
@@ -289,6 +294,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       (readConfigString(config, "runtimeMode") ?? "bridge") === "gateway"
         ? [
             "Gateway-mode Discord connections keep a persistent Discord gateway session, so the bot can appear online and route inbound DMs or allowlisted guild messages.",
+            "When inbound channel voice is enabled, Discord voice messages and audio attachments that pass the same pairing and guild allowlist gates as text are downloaded from the Discord CDN (8 MB cap) and transcribed into an untrusted voice turn. Voice messages cannot mention the bot, so in mention-gated guild channels they are not routed.",
             "Outbound replies still use the shared Discord send bridge, so reactions and unsend follow the same REST constraints as bridge mode.",
             "Guided setup can run token, channel, sandbox send/delete, and runtime-readiness probes before finalize.",
           ]
@@ -665,6 +671,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     supportNotes: [
       "Nextcloud Talk bot connections support inbound webhooks, outbound replies, and bot reactions through the documented bot API.",
       "Attachments are unsupported in this adapter, and Nextcloud Talk bots cannot delete messages through the bot API.",
+      "Nextcloud Talk bots cannot download shared media, so inbound voice messages are not transcribed: the agent receives a notice that a voice message arrived instead.",
     ],
     requiredAnyOf: [["baseUrl"], ["tokenEnv", "token", "botSecretEnv", "botSecret", "secretEnv", "secret"]],
   },

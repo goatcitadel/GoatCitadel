@@ -151,11 +151,12 @@ export interface FeatureFlagsConfig {
   channelVoiceReplyV1Enabled?: boolean;
   /**
    * Inbound channel voice ingestion (competitive-gap phase B2a): Telegram voice
-   * notes and WhatsApp audio messages are downloaded, transcribed via the local
-   * voice runtime, and ingested as governed turns. Absent/false (default) ⇒
-   * byte-identical behavior to today: the WhatsApp parser keeps emitting the
-   * "[whatsapp audio]" placeholder and the Telegram parser keeps dropping
-   * voice/audio updates with no content.
+   * notes, WhatsApp audio messages, Slack audio file shares and Discord voice
+   * messages are downloaded, transcribed via the local voice runtime, and
+   * ingested as governed turns. Absent/false (default) ⇒ byte-identical
+   * behavior to today: the WhatsApp parser keeps emitting the "[whatsapp audio]"
+   * placeholder and Telegram/Slack/Discord voice-only messages are dropped.
+   * Nextcloud Talk voice is never transcribed (bots cannot download media).
    */
   channelVoiceInboundV1Enabled?: boolean;
   /**
@@ -1451,7 +1452,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       typedRunVariablesV1Enabled: featuresInput.typedRunVariablesV1Enabled ?? true,
       documentEditingV1Enabled: featuresInput.documentEditingV1Enabled ?? true,
       // Channel voice inbound (B2a): default OFF. `?? false` keeps inbound
-      // Telegram/WhatsApp voice handling byte-identical unless an operator opts in.
+      // Telegram/WhatsApp/Slack/Discord voice handling unchanged unless an operator opts in.
       channelVoiceInboundV1Enabled: featuresInput.channelVoiceInboundV1Enabled ?? false,
       // Round-3 kill switches: planner triviality-skip + speed-model drafting,
       // all-read-only tool-batch parallelism, per-chunk stream idle watchdog,

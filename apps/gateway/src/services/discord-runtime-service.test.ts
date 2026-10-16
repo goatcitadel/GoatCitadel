@@ -869,6 +869,153 @@ describe("DiscordRuntimeService", () => {
     expect(interaction.editReply).not.toHaveBeenCalled();
   });
 
+  function createVoiceAttachments(overrides: Record<string, unknown> = {}) {
+    const attachment = {
+      id: "222333444555",
+      url: "https://cdn.discordapp.com/attachments/dm_1/222333444555/voice-message.ogg?ex=1",
+      contentType: "audio/ogg",
+      size: 2048,
+      ...overrides,
+    };
+    return new Map([[attachment.id, attachment]]);
+  }
+
+  it("routes an approved Discord DM voice message with its audio attachment reference", async () => {
+    const onInboundMessage = vi.fn(async () => undefined);
+    const service = createService({
+      findApprovedPairing: () => createPairingRecord({ status: "approved" }),
+      touchPairing: vi.fn(),
+      onInboundMessage,
+    });
+    const message = {
+      channel: { isDMBased: () => true, send: vi.fn() },
+      channelId: "dm_1",
+      author: { id: "user_1", username: "goat-user" },
+      content: "",
+      attachments: createVoiceAttachments(),
+      flags: { has: () => true },
+      id: "msg_dm_voice",
+      react: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const handled = await (service as any).handleDirectMessage({} as any, createConnection(), message);
+
+    expect(handled).toBe(true);
+    expect(onInboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: "user_1",
+        content: "",
+        sourceMessageId: "msg_dm_voice",
+        voiceAttachment: {
+          attachmentId: "222333444555",
+          url: "https://cdn.discordapp.com/attachments/dm_1/222333444555/voice-message.ogg?ex=1",
+          mimeType: "audio/ogg",
+        },
+      }),
+    );
+  });
+
+  it("keeps the pairing gate for Discord DM voice messages from unpaired users", async () => {
+    const onInboundMessage = vi.fn(async () => undefined);
+    const ensurePendingPairing = vi.fn(() => createPairingRecord());
+    const service = createService({ ensurePendingPairing, onInboundMessage });
+    const send = vi.fn().mockResolvedValue(undefined);
+    const message = {
+      channel: { isDMBased: () => true, send },
+      channelId: "dm_1",
+      author: { id: "user_1", username: "goat-user" },
+      content: "",
+      attachments: createVoiceAttachments(),
+      id: "msg_dm_voice_unpaired",
+      react: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const handled = await (service as any).handleDirectMessage({} as any, createConnection(), message);
+
+    expect(handled).toBe(true);
+    expect(onInboundMessage).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(expect.stringContaining("pairing required"));
+  });
+
+  it("routes allowlisted guild voice messages and keeps the guild allowlist gate", async () => {
+    const onInboundMessage = vi.fn(async () => undefined);
+    const service = createService({ onInboundMessage });
+    const connection = createConnection({ guilds: { guild_1: { channels: ["channel_1"], requireMention: false } } });
+    const buildMessage = (channelId: string, id: string) =>
+      ({
+        inGuild: () => true,
+        channel: { isDMBased: () => false, isThread: () => false },
+        channelId,
+        guildId: "guild_1",
+        author: { id: "user_1", bot: false, username: "goat-user" },
+        content: "",
+        attachments: createVoiceAttachments({
+          url: "https://cdn.discordapp.com/attachments/channel_1/222333444555/voice-message.ogg",
+        }),
+        mentions: { users: { has: () => false } },
+        id,
+        react: vi.fn().mockResolvedValue(undefined),
+      }) as any;
+
+    const blocked = await (service as any).tryHandleMessageForConnection(
+      { connectedBotId: "1234567890" },
+      connection,
+      buildMessage("channel_other", "msg_guild_voice_blocked"),
+    );
+    expect(blocked).toBe(false);
+    expect(onInboundMessage).not.toHaveBeenCalled();
+
+    const handled = await (service as any).tryHandleMessageForConnection(
+      { connectedBotId: "1234567890" },
+      connection,
+      buildMessage("channel_1", "msg_guild_voice"),
+    );
+    expect(handled).toBe(true);
+    expect(onInboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceMessageId: "msg_guild_voice",
+        content: "",
+        voiceAttachment: expect.objectContaining({ attachmentId: "222333444555", mimeType: "audio/ogg" }),
+      }),
+    );
+  });
+
+  it("does not react to a voice message the inbound owner declined to accept", async () => {
+    const onInboundMessage = vi.fn(async () => false);
+    const service = createService({
+      findApprovedPairing: () => createPairingRecord({ status: "approved" }),
+      touchPairing: vi.fn(),
+      onInboundMessage,
+    });
+    const react = vi.fn().mockResolvedValue(undefined);
+    const message = {
+      channel: { isDMBased: () => true, send: vi.fn() },
+      channelId: "dm_1",
+      author: { id: "user_1", username: "goat-user" },
+      content: "",
+      attachments: createVoiceAttachments(),
+      id: "msg_dm_voice_declined",
+      react,
+    } as any;
+
+    await (service as any).handleDirectMessage({} as any, createConnection(), message);
+
+    expect(onInboundMessage).toHaveBeenCalledTimes(1);
+    expect(react).not.toHaveBeenCalled();
+  });
+
+  it("only treats audio attachments as voice and still drops empty non-audio messages", () => {
+    const { readDiscordVoiceAttachment } = __discordRuntimeServiceInternals;
+    expect(readDiscordVoiceAttachment({ attachments: createVoiceAttachments() } as any)).toEqual(
+      expect.objectContaining({ attachmentId: "222333444555" }),
+    );
+    expect(
+      readDiscordVoiceAttachment({ attachments: createVoiceAttachments({ contentType: "image/png" }) } as any),
+    ).toBeUndefined();
+    expect(readDiscordVoiceAttachment({ attachments: new Map() } as any)).toBeUndefined();
+    expect(readDiscordVoiceAttachment({} as any)).toBeUndefined();
+  });
+
   it("returns unsupported typing when the Discord runtime is not ready", async () => {
     const service = createService();
 
