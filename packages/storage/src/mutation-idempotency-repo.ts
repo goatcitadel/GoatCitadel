@@ -389,9 +389,10 @@ export class MutationIdempotencyRepository {
   }
 
   /**
-   * Settles the caller's own dispatched generation when the external outcome
-   * cannot be proven either way. Terminal: later claims report
-   * `unknown_after_send` instead of redispatching.
+   * Settles the caller's own still-pending generation (dispatched or not)
+   * whose external outcome cannot be proven either way, e.g. a callback that
+   * returned without recording its dispatch boundary. Terminal: later claims
+   * report `unknown_after_send` instead of redispatching.
    */
   public markUnknownAfterSend(
     input: MutationIdempotencyIdentityInput & { claimToken: string; updatedAt?: string },
