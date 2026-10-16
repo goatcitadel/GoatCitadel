@@ -109,7 +109,7 @@ describe("communications routes", () => {
     const sent = await app.inject({
       method: "POST",
       url: `/api/v1/mail/drafts/${created.json().draftId}/send`,
-      payload: {},
+      payload: { workspaceId: "default" },
     });
 
     expect(sent.statusCode).toBe(200);
@@ -190,7 +190,7 @@ describe("communications routes", () => {
     const sent = await app.inject({
       method: "POST",
       url: `/api/v1/mail/drafts/${created.json().draftId}/send`,
-      payload: {},
+      payload: { workspaceId: "workspace-mail" },
     });
 
     expect(sent.json()).toMatchObject({ status: "approval_required", workspaceId: "workspace-mail" });
@@ -282,7 +282,11 @@ describe("communications routes", () => {
       payload: { accountId: "acct-a", to: ["operator@example.test"], subject: "Status", bodyText: "Ready." },
     });
     const draftId = created.json().draftId as string;
-    await app.inject({ method: "POST", url: `/api/v1/mail/drafts/${draftId}/send`, payload: {} });
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/mail/drafts/${draftId}/send`,
+      payload: { workspaceId: "default" },
+    });
 
     const read = await app.inject({
       method: "GET",
@@ -351,6 +355,12 @@ describe("communications routes", () => {
       expect(response.statusCode).toBe(404);
       expect(response.json()).toEqual({ error: "Mail draft not found." });
     }
+    const sendUnscoped = await app.inject({
+      method: "POST",
+      url: `/api/v1/mail/drafts/${draftId}/send`,
+      payload: {},
+    });
+    expect(sendUnscoped.statusCode).toBe(400);
     expect(createApproval).not.toHaveBeenCalled();
 
     const sent = await app.inject({
@@ -377,7 +387,11 @@ describe("communications routes", () => {
       payload: { accountId: "acct-a", to: ["operator@example.test"], subject: "Status", bodyText: "Ready." },
     });
     const read = await app.inject({ method: "GET", url: "/api/v1/mail/drafts/mail_draft_x?workspaceId=default" });
-    const sent = await app.inject({ method: "POST", url: "/api/v1/mail/drafts/mail_draft_x/send", payload: {} });
+    const sent = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts/mail_draft_x/send",
+      payload: { workspaceId: "default" },
+    });
 
     for (const response of [created, read, sent]) {
       expect(response.statusCode).toBe(503);

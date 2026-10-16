@@ -15,16 +15,14 @@ describe("mail draft read-back client", () => {
     );
   });
 
-  it("names the workspace on a send only when one is given", async () => {
+  it("always names the owning workspace on a send", async () => {
     api.request.mockReset();
     api.request.mockResolvedValue({ draftId: "d1", status: "approval_required" });
 
     await sendMailDraft("d1", "workspace-1");
-    await sendMailDraft("d1");
 
     expect(api.request.mock.calls).toEqual([
       ["/api/v1/mail/drafts/d1/send", { method: "POST", body: JSON.stringify({ workspaceId: "workspace-1" }) }],
-      ["/api/v1/mail/drafts/d1/send", { method: "POST", body: "{}" }],
     ]);
   });
 });

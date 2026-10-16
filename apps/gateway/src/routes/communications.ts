@@ -27,14 +27,9 @@ const draftParamsSchema = z.object({
   draftId: z.string().min(1),
 });
 
-/** A draft is read only inside the workspace that owns it. */
-const draftReadQuerySchema = z.object({
+/** A draft is read or sent only inside the workspace that owns it; a mismatch answers 404 like a missing draft. */
+const draftScopeSchema = z.object({
   workspaceId: z.string().trim().min(1).max(256),
-});
-
-/** A send may name its workspace (query or body); a mismatch answers 404 like a missing draft. */
-const draftSendScopeSchema = z.object({
-  workspaceId: z.string().trim().min(1).max(256).optional(),
 });
 
 const MAIL_DRAFT_NOT_FOUND = { error: "Mail draft not found." } as const;
@@ -126,7 +121,7 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
-    const query = draftReadQuerySchema.safeParse(request.query);
+    const query = draftScopeSchema.safeParse(request.query);
     if (!query.success) {
       return reply.code(400).send({ error: query.error.flatten() });
     }
@@ -144,7 +139,7 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
-    const scope = draftSendScopeSchema.safeParse({
+    const scope = draftScopeSchema.safeParse({
       workspaceId:
         readOptionalRecordString(request.query, "workspaceId") ?? readOptionalRecordString(request.body, "workspaceId"),
     });
@@ -152,12 +147,9 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: scope.error.flatten() });
     }
     return await withDraftStore(reply, async () => {
-      const workspaceId = scope.data.workspaceId;
-      if (workspaceId) {
-        const draft = await service.getDraft(params.data.draftId);
-        if (!draft || draft.workspaceId !== workspaceId) {
-          return reply.code(404).send(MAIL_DRAFT_NOT_FOUND);
-        }
+      const draft = await service.getDraft(params.data.draftId);
+      if (!draft || draft.workspaceId !== scope.data.workspaceId) {
+        return reply.code(404).send(MAIL_DRAFT_NOT_FOUND);
       }
       return reply.send(await service.sendDraft(params.data.draftId));
     });

@@ -78,8 +78,7 @@ export async function createMailDraft(input: {
   });
 }
 
-/** Re-reads one persisted draft so the operator sees its current send outcome. */
-/** Reads a draft inside the workspace that owns it; another workspace's draft answers 404. */
+/** Re-reads a draft inside the workspace that owns it; another workspace's draft answers 404. */
 export async function getMailDraft(draftId: string, workspaceId: string): Promise<MailDraftRecord> {
   const query = new URLSearchParams({ workspaceId });
   return request<MailDraftRecord>(`/api/v1/mail/drafts/${encodeURIComponent(draftId)}?${query.toString()}`, {
@@ -87,11 +86,11 @@ export async function getMailDraft(draftId: string, workspaceId: string): Promis
   });
 }
 
-/** Requests send approval; a named workspace must own the draft. */
-export async function sendMailDraft(draftId: string, workspaceId?: string): Promise<MailDraftRecord> {
+/** Requests send approval for a draft inside the workspace that owns it; another workspace's draft answers 404. */
+export async function sendMailDraft(draftId: string, workspaceId: string): Promise<MailDraftRecord> {
   return request<MailDraftRecord>(`/api/v1/mail/drafts/${encodeURIComponent(draftId)}/send`, {
     method: "POST",
-    body: JSON.stringify(workspaceId ? { workspaceId } : {}),
+    body: JSON.stringify({ workspaceId }),
   });
 }
 
