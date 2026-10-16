@@ -421,8 +421,10 @@ export async function claimIdempotentExternalSideEffect(
     input.connectionId ?? "unknown_connection",
     input.actionId ?? "unknown_action",
   ].join(":");
+  const { checkedAt } = input;
+  const mutationStore = input.mutationStore;
 
-  if (!input.mutationStore) {
+  if (!mutationStore) {
     return recordExternalSideEffectRun(input, {
       replayPolicy: "idempotent_external",
       replayOutcome: "idempotency_unavailable",
@@ -454,7 +456,7 @@ export async function claimIdempotentExternalSideEffect(
             replayAttempt: "new",
             requestPayload: summarizeExternalSideEffectRequest(input.payload, externalDestinationFingerprint),
           },
-          input.checkedAt,
+          checkedAt,
         )
       : undefined;
     if (currentReplayRun && currentReplayRun.runId !== input.replayRunId) {
@@ -466,15 +468,14 @@ export async function claimIdempotentExternalSideEffect(
     if (currentReplayBlock) {
       return currentReplayBlock;
     }
-    const claim = await input.mutationStore!.claim({
+    const leaseDurationMs = input.claimLeaseDurationMs;
+    const claim = await mutationStore.claim({
       method: "POST",
       routePath,
       idempotencyKey,
       actorScope,
       payloadHash,
-      ...(input.claimLeaseDurationMs !== undefined
-        ? { leaseDurationMs: input.claimLeaseDurationMs }
-        : { now: input.checkedAt }),
+      ...(leaseDurationMs !== undefined ? { leaseDurationMs } : { now: checkedAt }),
       ...(input.providerIdempotencyKeyEnforced === true ? { providerIdempotencyKeyEnforced: true } : {}),
     });
     const replayOutcome: IntegrationExternalWritebackReplayOutcome = claim.outcome;
@@ -509,9 +510,9 @@ export async function claimIdempotentExternalSideEffect(
       }
       if (
         claimed.replayAttempt !== "new" ||
-        !(await discardIdempotentExternalSideEffectPending(input.mutationStore, claimed))
+        !(await discardIdempotentExternalSideEffectPending(mutationStore, claimed))
       ) {
-        await markIdempotentExternalSideEffectFailed(input.mutationStore, claimed, input.checkedAt);
+        await markIdempotentExternalSideEffectFailed(mutationStore, claimed, checkedAt);
       }
     }
     return recorded;
@@ -897,8 +898,9 @@ class ExternalSideEffectMutationClaimLostError extends Error {
 }
 
 function resolveExternalSideEffectClaimLeaseMs(input: ExternalSideEffectClaimInput): number | undefined {
-  if (input.claimLeaseDurationMs !== undefined) {
-    return input.claimLeaseDurationMs;
+  const explicitLeaseDurationMs = input.claimLeaseDurationMs;
+  if (explicitLeaseDurationMs !== undefined) {
+    return explicitLeaseDurationMs;
   }
   if (input.disableDefaultClaimLease === true) {
     return undefined;
