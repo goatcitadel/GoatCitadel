@@ -43,6 +43,7 @@ const connectionParamsSchema = z.object({
 
 export type WebhookRawBodyRequest = {
   nextcloudTalkRawBody?: Buffer;
+  googleChatRawBody?: Buffer;
   slackRawBody?: Buffer;
   telegramRawBody?: Buffer;
   whatsappRawBody?: Buffer;
@@ -99,7 +100,7 @@ export function createWebhookPreParsing(rawBodyKey: RawBodyKey) {
 export function createWebhookHandler<TParsed>(
   fastify: FastifyWithGateway,
   options: {
-    source: "telegram" | "whatsapp" | "slack" | "line" | "nextcloud-talk";
+    source: "telegram" | "whatsapp" | "slack" | "line" | "nextcloud-talk" | "google-chat";
     connectorKey: string;
     connectorLabel: string;
     rawBodyKey: RawBodyKey;
@@ -259,7 +260,7 @@ async function readPayloadBuffer(payload: NodeJS.ReadableStream): Promise<Buffer
 
 function logWebhookVerificationFailure(
   request: { log: { warn: (...args: unknown[]) => void } },
-  channel: "whatsapp" | "slack" | "line" | "nextcloud-talk" | "telegram",
+  channel: "whatsapp" | "slack" | "line" | "nextcloud-talk" | "telegram" | "google-chat",
   connectionId: string,
   reason: string,
 ): void {

@@ -50,7 +50,8 @@ export function Dialog({
             })
           }
           className={cn(
-            "cockpit-dialog fixed top-24 left-1/2 z-50 w-full max-w-xl -translate-x-1/2 rounded-lg border border-line bg-overlay p-4 shadow-overlay",
+            // SH-07: a 1rem gutter and a short top offset on phones; centred by auto margins between the insets.
+            "cockpit-dialog fixed inset-x-4 top-4 z-50 mx-auto max-w-xl rounded-lg border border-line bg-overlay p-4 shadow-overlay sm:top-24",
             contentClassName,
           )}
         >

@@ -10,6 +10,7 @@ import {
 import { assertProjectReadRequests } from "./cockpit-chat-project-proof.mjs";
 import { assertCitadelPresenceHeartbeat } from "./cockpit-citadel-directory-proof.mjs";
 import { recordCockpitObserverRequest, assertCockpitObserverRequests } from "./cockpit-observer-requests.mjs";
+import { closeConversationList, openConversationList } from "./cockpit-conversation-list.mjs";
 import { inboxOwnerHref } from "./classic-owner-navigation.mjs";
 
 export function assertWindowedRecords({ total, rendered, keys, expectedKeys }) {
@@ -184,8 +185,17 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
 
             stage = "window task cards without creating or running work";
             await open("/work?shell=cockpit");
+            if (variant === "mobile") {
+              // Below the four-column width the board shows one column at a time; Needs attention is the default.
+              const column = page
+                .getByRole("group", { name: "Board column", exact: true })
+                .getByRole("button", { name: /^Needs attention \d+$/u });
+              await column.waitFor();
+              if ((await column.getAttribute("aria-pressed")) !== "true") await column.click();
+              assert.equal(await column.getAttribute("aria-pressed"), "true");
+            }
             await verifyWindow(
-              page.getByRole("list", { name: "Waiting records", exact: true }),
+              page.getByRole("list", { name: "Needs attention records", exact: true }),
               fixture.tasks.map((item) => "task:" + item.taskId),
             );
             await capture("tasks");
@@ -215,18 +225,25 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
             statusIds.length = 0;
             await open("/chat?sessionId=" + encodeURIComponent(sessionId) + "&shell=cockpit");
             if (variant === "mobile") {
-              const picker = page.getByRole("combobox", { name: "Choose conversation", exact: true });
-              await picker.selectOption("history:load-more");
-              await page.waitForFunction(
-                (ids) => {
-                  const values = [...document.querySelectorAll('[aria-label="Choose conversation"] option')].map(
-                    (option) => option.value,
-                  );
-                  return ids.every((id) => values.includes(id));
-                },
+              // Phones list conversations in the Conversations sheet, with the same Load more and window.
+              const sheet = await openConversationList(page);
+              await sheet.getByRole("button", { name: "Load more", exact: true }).click();
+              const threads = sheet.getByRole("list", { name: "Recent conversations", exact: true });
+              await threads.locator('li[aria-setsize="105"]').first().waitFor();
+              await verifyWindow(
+                threads,
                 fixture.sessions.map((item) => item.sessionId),
               );
-              assert.equal(await picker.inputValue(), sessionId);
+              const current = threads.locator('button[aria-current="page"]');
+              if (await current.count())
+                assert.equal(
+                  await current.evaluate((element) =>
+                    element.closest("[data-record-key]")?.getAttribute("data-record-key"),
+                  ),
+                  sessionId,
+                );
+              await closeConversationList(page);
+              assert.equal(new URL(page.url()).searchParams.get("sessionId"), sessionId);
               await page
                 .getByLabel("Selected conversation activity")
                 .getByText("Last response completed", { exact: true })
@@ -349,14 +366,12 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
           }
           async function verifyWindow(list, expectedKeys) {
             await list.locator("li[aria-setsize]").first().waitFor();
-            const rows = await list
-              .locator("li[aria-setsize]")
-              .evaluateAll((items) =>
-                items.map((item) => ({
-                  total: Number(item.getAttribute("aria-setsize")),
-                  key: item.querySelector("[data-record-key]")?.getAttribute("data-record-key"),
-                })),
-              );
+            const rows = await list.locator("li[aria-setsize]").evaluateAll((items) =>
+              items.map((item) => ({
+                total: Number(item.getAttribute("aria-setsize")),
+                key: item.querySelector("[data-record-key]")?.getAttribute("data-record-key"),
+              })),
+            );
             assertWindowedRecords({
               total: rows[0].total,
               rendered: rows.length,

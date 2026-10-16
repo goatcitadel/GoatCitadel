@@ -37,11 +37,12 @@ afterEach(() => {
 });
 
 describe("MobileStatusStrip", () => {
-  it("names both dots in text and titles, never by colour alone", async () => {
+  it("shows health and live updates as text lines with shaped icons, never by colour alone (SH-01)", async () => {
+    const onOpenHealth = vi.fn();
     await act(async () =>
       root.render(
         <QueryClientProvider client={client}>
-          <MobileStatusStrip workspaceId="w" streamState="retrying" />
+          <MobileStatusStrip workspaceId="w" streamState="retrying" onOpenHealth={onOpenHealth} />
         </QueryClientProvider>,
       ),
     );
@@ -53,10 +54,15 @@ describe("MobileStatusStrip", () => {
     expect(healthDot.title).toContain(
       "Managed local runtimes, integrations, channels and workers are checked on System › Health.",
     );
-    expect(healthDot.querySelector(".sr-only")?.textContent).toMatch(/^\d+ checks? unverified$/);
+    expect(healthDot.textContent).toMatch(/^\d+ checks? unverified$/);
+    expect(healthDot.querySelector("svg")).not.toBeNull();
     const stream = strip.querySelector<HTMLElement>("[data-stream-state]")!;
     expect(stream.title).toBe("Reconnecting to updates");
-    expect(stream.querySelector(".sr-only")?.textContent).toBe("Reconnecting to updates");
+    expect(stream.textContent).toBe("Reconnecting to updates");
+    expect(stream.querySelector("svg")?.classList.contains("lucide-refresh-cw")).toBe(true);
+    const open = [...strip.querySelectorAll("button")].find((b) => b.textContent === "Open System health")!;
+    await act(async () => open.click());
+    expect(onOpenHealth).toHaveBeenCalledOnce();
     expect(health.digest).toHaveBeenCalledTimes(1);
   });
 });

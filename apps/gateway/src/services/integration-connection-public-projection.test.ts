@@ -90,6 +90,38 @@ describe("integration connection public projection", () => {
     });
   });
 
+  it("redacts an inline Google Chat service-account key and restores it on an unchanged update", () => {
+    const inlineKey = JSON.stringify({
+      client_email: "app@example.iam.gserviceaccount.com",
+      private_key: "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
+    });
+    const connection: IntegrationConnection = {
+      ...createConnection(),
+      catalogId: "channel.google-chat",
+      key: "google-chat",
+      config: {
+        serviceAccountKey: inlineKey,
+        serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+        audienceType: "project_number",
+        audience: "123456789012",
+      },
+    };
+
+    const projected = projectIntegrationConnectionForPublicResponse(connection);
+
+    expect(projected.config).toEqual({
+      serviceAccountKey: "[REDACTED]",
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      audienceType: "project_number",
+      audience: "123456789012",
+    });
+    expect(JSON.stringify(projected)).not.toContain("PRIVATE KEY");
+    const update = preserveIntegrationConnectionSecretsForPublicUpdate(connection, {
+      config: { ...projected.config, audience: "999999999999" },
+    });
+    expect(update.config).toMatchObject({ serviceAccountKey: inlineKey, audience: "999999999999" });
+  });
+
   it("restores unchanged redacted and omitted secrets for guided and advanced updates", () => {
     const connection = createConnection();
     const publicConfig = projectIntegrationConnectionForPublicResponse(connection).config;

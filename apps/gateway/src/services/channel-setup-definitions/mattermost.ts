@@ -1,4 +1,5 @@
 import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/contracts";
+import { isExplicitTrue as isTruthyFlag } from "@goatcitadel/gateway-core";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
@@ -21,11 +22,12 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "workspace_server_token",
-      contentVersion: "2026.08.mattermost.v2",
+      contentVersion: "2026.10.mattermost.stream.v3",
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
-      introSummary: "Connect Mattermost using a reachable server URL, a bot token, and a default channel target.",
+      introSummary:
+        "Connect Mattermost using a reachable server URL, a bot token, and a default channel target, with optional inbound posts over the bot WebSocket.",
       prerequisites: [
         "A Mattermost workspace with a bot account or bot token.",
         "A sandbox channel where the bot can post.",
@@ -37,6 +39,9 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph("GoatCitadel uses Mattermost bot-token auth for outbound sends, replies, reactions, and unsend."),
+            paragraph(
+              "Optionally, GoatCitadel keeps the bot's WebSocket open so posts in channels the bot has joined can start conversations. Inbound is opt-in and default-deny: only the Mattermost user ids you allow can start turns.",
+            ),
             note(
               "warning",
               "Mattermost is a guided beta lane. Guided setup now runs live auth, channel access, and sandbox send/delete probes before finalize.",
@@ -87,6 +92,18 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
               canChangeLater: true,
             },
             {
+              key: "inboundStreamEnabled",
+              label: "Receive posts over the bot WebSocket",
+              type: "boolean",
+              required: false,
+              defaultValue: false,
+              explanation:
+                "Keep a persistent WebSocket open so posts in channels the bot belongs to can start conversations.",
+              whyNeeded:
+                "Mattermost has no inbound webhook path here; the bot WebSocket is how new posts reach GoatCitadel. Inbound stays off unless you opt in, and only allowed Mattermost user ids can start turns. Posts sent while the socket is disconnected are not recovered.",
+              canChangeLater: true,
+            },
+            {
               key: "defaultTeam",
               label: "Default team",
               type: "text",
@@ -113,7 +130,7 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "Finalize saves the connection for runtime sends. After finalizing, post a sandbox message to the default channel and confirm the bot delivers before relying on this connection.",
+              "Finalize saves the connection for runtime sends and, when enabled, the inbound WebSocket. After finalizing, post a sandbox message to the default channel and confirm the bot delivers before relying on this connection.",
             ),
           ],
           successCriteria: [
@@ -125,15 +142,15 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
       ],
     },
     adapter: {
-      adapterVersion: "2026.04.mattermost.v1",
+      adapterVersion: "2026.10.mattermost.stream.v2",
       secretFieldKeys: ["botToken"],
     },
     validation: {
-      validationVersion: "2026.04.mattermost.v1",
+      validationVersion: "2026.10.mattermost.stream.v2",
       levels: ["structural", "semantic", "live-auth"],
     },
     testing: {
-      testVersion: "2026.04.mattermost.v1",
+      testVersion: "2026.10.mattermost.stream.v2",
       levels: ["structural", "semantic", "live-auth", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
@@ -173,6 +190,7 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
           botTokenEnv: readString(config, "botTokenEnv") ?? readString(config, "tokenEnv"),
           defaultChannel: readString(config, "defaultChannel"),
           defaultTeam: readString(config, "defaultTeam"),
+          inboundStreamEnabled: isTruthyFlag(config.inboundStreamEnabled),
         },
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
@@ -188,6 +206,7 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
             botTokenEnv: readString(config, "botTokenEnv") || readString(config, "tokenEnv") ? "configured" : "unknown",
             defaultChannel: readString(config, "defaultChannel") ? "configured" : "missing",
             defaultTeam: readString(config, "defaultTeam") ? "configured" : "unknown",
+            inboundStreamEnabled: config.inboundStreamEnabled === undefined ? "unknown" : "configured",
           },
           warnings: hasConfiguredSecret
             ? [
@@ -207,6 +226,9 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
         botToken: readString(draft.draft, "botToken") ?? preservedBotToken,
         defaultChannel: readString(draft.draft, "defaultChannel"),
         defaultTeam: readString(draft.draft, "defaultTeam"),
+        inboundStreamEnabled: isTruthyFlag(draft.draft.inboundStreamEnabled) ? true : undefined,
+        // Inbound is default-deny: never inherit a legacy-open posture.
+        ...(isTruthyFlag(draft.draft.inboundStreamEnabled) ? { inboundAccessMode: "allowlist" } : {}),
       });
     },
     validate(draft) {

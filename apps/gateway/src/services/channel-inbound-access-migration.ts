@@ -15,7 +15,7 @@ import { OPEN_INBOUND_CHANNELS } from "./integration-channel-service.js";
  * allowlist stays a deliberate operator act. The ambiguous class itself dies.
  *
  * Deliberately NOT stamped:
- * - non-channel kinds, and open-by-design channels (tui/ntfy);
+ * - non-channel kinds, and open-by-design channels (tui; ntfy now defaults to allowlist);
  * - configs with an explicit mode (operator already chose);
  * - unset-mode configs WITH allowedSenders — those already evaluate with
  *   allowlist semantics, and stamping them open would LOOSEN security.

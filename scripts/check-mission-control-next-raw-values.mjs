@@ -51,8 +51,8 @@ export const RULES = [
     id: "jsx-raw-id",
     // Only rendered text counts: attribute values such as key={run.runId} are never shown.
     pattern: /(?<!=)\{\s*[\w?.!]+\.(?:workspaceId|providerId|actorId|runId|taskId|sessionId|approvalId)\s*\}/g,
-    // 56 includes the two "Run <id>" run-detail headers (Sessions, classic Kanban): a run has no other name there.
-    budget: 56,
+    // 55 includes the two "Run <id>" run-detail headers (Sessions, classic Kanban): a run has no other name there.
+    budget: 55,
     help: "show a name or plain label; put the ID in TechnicalDetails",
   },
 ];

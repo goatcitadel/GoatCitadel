@@ -275,7 +275,170 @@ describe("describeChannelCapabilities", () => {
     );
   });
 
-  it("recognizes every already supported Zalo User credential alias without enabling inbound routing", () => { for (const key of ["authToken", "authTokenEnv", "authorization", "authorizationEnv", "accessToken", "accessTokenEnv", "basicAuth", "basicAuthEnv"]) { const capabilities = describeChannelCapabilities("zalouser", { baseUrl: "https://zca.example.test", [key]: "configured" }); expect(capabilities.setupReady, key).toBe(true); expect(capabilities.inboundModes).toEqual(["none"]); } expect(describeChannelCapabilities("zalouser", { baseUrl: "https://zca.example.test" }).setupReady).toBe(false); });
+  it("enables ntfy stream inbound only for an opted-in topic with a token", () => {
+    const enabled = describeChannelCapabilities("ntfy", {
+      baseUrl: "https://ntfy.example.com",
+      topic: "goatcitadel-ops",
+      tokenEnv: "NTFY_TOKEN",
+      inboundStreamEnabled: true,
+    });
+    expect(enabled.inboundModes).toEqual(["stream"]);
+    expect(enabled.runtimePosture).toMatchObject({
+      lifecycle: "persistent",
+      inboundTransport: "stream",
+      inboundReadiness: "ready",
+    });
+    expect(enabled.setupReady).toBe(true);
+    expect(enabled.runtimePosture.operatorSummary).toContain("JSON stream");
+    // The token only gates reading: the copy must name the publish side and the restart gap.
+    expect(enabled.runtimePosture.operatorSummary).toContain("anyone able to publish to the subscribed topic");
+    expect(enabled.runtimePosture.operatorSummary).not.toContain("token-protected topic");
+    expect(enabled.supportNotes).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("write access (ACL) is limited to trusted publishers"),
+        expect.stringContaining("no history is fetched after a gateway restart"),
+      ]),
+    );
+
+    const subscribeOnly = describeChannelCapabilities("ntfy", {
+      baseUrl: "https://ntfy.example.com",
+      subscribeTopic: "inbox",
+      token: "keychain:goatcitadel:channel-x",
+      inboundStreamEnabled: "true",
+    });
+    expect(subscribeOnly.inboundModes).toEqual(["stream"]);
+
+    const noToken = describeChannelCapabilities("ntfy", {
+      baseUrl: "https://ntfy.example.com",
+      topic: "goatcitadel-ops",
+      inboundStreamEnabled: true,
+    });
+    expect(noToken.inboundModes).toEqual(["none"]);
+    expect(noToken.runtimePosture.lifecycle).toBe("stateless");
+    expect(noToken.setupDiagnostics).toContain("ntfy inbound requires a token to read the topic (tokenEnv)");
+    expect(noToken.setupReady).toBe(false);
+
+    const notOptedIn = describeChannelCapabilities("ntfy", {
+      baseUrl: "https://ntfy.example.com",
+      topic: "goatcitadel-ops",
+      tokenEnv: "NTFY_TOKEN",
+    });
+    expect(notOptedIn.inboundModes).toEqual(["none"]);
+    expect(notOptedIn.setupDiagnostics).toEqual([]);
+  });
+
+  it("enables Mattermost stream inbound only for an opted-in, token-backed server", () => {
+    const outbound = describeChannelCapabilities("mattermost", {
+      serverUrl: "https://chat.example.test",
+      botTokenEnv: "MATTERMOST_TOKEN",
+    });
+    expect(outbound.inboundModes).toEqual(["none"]);
+    expect(outbound.runtimePosture).toMatchObject({ lifecycle: "stateless", inboundReadiness: "unsupported" });
+    expect(outbound.runtimePosture.operatorSummary).not.toContain("not yet wired");
+
+    const enabled = describeChannelCapabilities("mattermost", {
+      serverUrl: "https://chat.example.test",
+      botTokenEnv: "MATTERMOST_TOKEN",
+      inboundStreamEnabled: true,
+    });
+    expect(enabled.inboundModes).toEqual(["stream"]);
+    expect(enabled.runtimePosture).toMatchObject({
+      lifecycle: "persistent",
+      inboundTransport: "stream",
+      inboundReadiness: "ready",
+    });
+    expect(enabled.runtimePosture.operatorSummary).toContain("WebSocket");
+    expect(enabled.supportNotes).toEqual(
+      expect.arrayContaining([expect.stringContaining("pings the WebSocket every 30 seconds")]),
+    );
+    expect(enabled.supportedActions).toEqual(
+      expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend"]),
+    );
+    expect(enabled.supportNotes.join(" ")).not.toContain("not yet wired");
+
+    const viaString = describeChannelCapabilities("mattermost", {
+      serverUrl: "https://chat.example.test",
+      botToken: "keychain:goatcitadel:channel-x",
+      inboundStreamEnabled: "true",
+    });
+    expect(viaString.inboundModes).toEqual(["stream"]);
+
+    const noToken = describeChannelCapabilities("mattermost", {
+      serverUrl: "https://chat.example.test",
+      inboundStreamEnabled: true,
+    });
+    expect(noToken.inboundModes).toEqual(["none"]);
+  });
+
+  it("keeps Google Chat webhook mode outbound-only and points inbound at Chat app mode", () => {
+    const webhook = describeChannelCapabilities("google-chat", {
+      webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=k&token=t",
+    });
+    expect(webhook.setupReady).toBe(true);
+    expect(webhook.inboundModes).toEqual(["none"]);
+    expect(webhook.supportedActions).not.toContain("channel.unsend");
+    expect(webhook.runtimePosture).toMatchObject({ outboundTransport: "webhook", inboundReadiness: "unsupported" });
+    expect(webhook.runtimePosture.operatorSummary).not.toContain("inbound routing is not available");
+    expect(webhook.runtimePosture.operatorSummary).toContain("inbound requires Chat app (service-account) mode");
+    expect(webhook.supportNotes.join(" ")).not.toContain("does not provide inbound routing");
+  });
+
+  it("advertises Google Chat app inbound, replies and unsend in service-account mode with an audience", () => {
+    const app = describeChannelCapabilities("google-chat", {
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      audienceType: "project_number",
+      audience: "123456789012",
+    });
+    expect(app.setupReady).toBe(true);
+    expect(app.inboundModes).toEqual(["webhook"]);
+    expect(app.supportedActions).toEqual(expect.arrayContaining(["channel.send", "channel.reply", "channel.unsend"]));
+    expect(app.runtimePosture).toMatchObject({
+      outboundTransport: "api",
+      inboundTransport: "webhook",
+      lifecycle: "stateless",
+      inboundReadiness: "ready",
+    });
+    expect(app.runtimePosture.operatorSummary).toMatch(/only the app's own messages/i);
+    expect(app.runtimePolicy.allowlist).toBe(true);
+
+    const noAudience = describeChannelCapabilities("google-chat", { serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY" });
+    expect(noAudience.setupReady).toBe(true);
+    expect(noAudience.inboundModes).toEqual(["none"]);
+    expect(noAudience.runtimePosture.outboundTransport).toBe("api");
+    expect(noAudience.supportNotes.join(" ")).toContain("audience");
+
+    const badAudienceType = describeChannelCapabilities("google-chat", {
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      audienceType: "something_else",
+      audience: "123456789012",
+    });
+    expect(badAudienceType.inboundModes).toEqual(["none"]);
+
+    expect(describeChannelCapabilities("google-chat", {}).setupDiagnostics).toEqual([
+      "Missing one of: config.webhookUrl, config.url, config.serviceAccountKeyEnv, config.serviceAccountKey.",
+    ]);
+  });
+
+  it("recognizes every already supported Zalo User credential alias without enabling inbound routing", () => {
+    for (const key of [
+      "authToken",
+      "authTokenEnv",
+      "authorization",
+      "authorizationEnv",
+      "accessToken",
+      "accessTokenEnv",
+      "basicAuth",
+      "basicAuthEnv",
+    ]) {
+      const capabilities = describeChannelCapabilities("zalouser", {
+        baseUrl: "https://zca.example.test",
+        [key]: "configured",
+      });
+      expect(capabilities.setupReady, key).toBe(true);
+      expect(capabilities.inboundModes).toEqual(["none"]);
+    }
+    expect(describeChannelCapabilities("zalouser", { baseUrl: "https://zca.example.test" }).setupReady).toBe(false);
+  });
 
   it("describes static channel rules and setup diagnostics", () => {
     const staticChannels = [
@@ -306,7 +469,7 @@ describe("describeChannelCapabilities", () => {
     ]);
   });
 
-  it("keeps Signal outbound-only even when stale inbound settings remain", () => {
+  it("keeps Signal outbound-only unless receiveEvents is set, ignoring legacy inbound settings", () => {
     const capabilities = describeChannelCapabilities("signal", {
       baseUrl: "http://127.0.0.1:8080",
       inboundEnabled: " TRUE ",
@@ -324,13 +487,36 @@ describe("describeChannelCapabilities", () => {
       }),
     );
     expect(capabilities.runtimePosture).not.toHaveProperty("inboundTransport");
-    expect(capabilities.runtimePosture.operatorSummary).toContain("no acknowledgement or replay contract");
-    expect(capabilities.supportNotes).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Outbound Signal sends remain available"),
-        expect.stringContaining("deprecated inboundEnabled=true"),
-      ]),
-    );
+    expect(capabilities.runtimePosture.operatorSummary).toContain("receiveEvents");
+    const text = JSON.stringify([capabilities.runtimePosture, capabilities.supportNotes]);
+    expect(text).not.toMatch(/outbound-only|destructive receive|deprecated inboundEnabled/i);
+  });
+
+  it("describes Signal daemon-event inbound as a persistent stream with honest no-replay notes", () => {
+    for (const config of [
+      { baseUrl: "http://127.0.0.1:8080", receiveEvents: true },
+      { bridgeUrl: "http://127.0.0.1:8080", receiveEvents: "true" },
+    ]) {
+      const capabilities = describeChannelCapabilities("signal", config);
+      expect(capabilities.inboundModes).toEqual(["stream"]);
+      expect(capabilities.runtimePosture).toMatchObject({
+        outboundTransport: "api",
+        inboundTransport: "stream",
+        lifecycle: "persistent",
+        inboundReadiness: "ready",
+      });
+      expect(capabilities.supportNotes).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("/api/v1/events"),
+          expect.stringContaining("not replayed"),
+          expect.stringContaining("silent for 90 seconds"),
+        ]),
+      );
+    }
+    expect(describeChannelCapabilities("signal", { receiveEvents: true }).inboundModes).toEqual(["none"]);
+    expect(
+      describeChannelCapabilities("signal", { baseUrl: "http://127.0.0.1:8080", receiveEvents: false }).inboundModes,
+    ).toEqual(["none"]);
   });
 
   it("falls back to default channel capabilities for unknown adapters", () => {

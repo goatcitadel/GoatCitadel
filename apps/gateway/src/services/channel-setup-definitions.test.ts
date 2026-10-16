@@ -317,7 +317,7 @@ describe("channel setup definitions", () => {
     );
   });
 
-  it("keeps ntfy setup outbound-only with env-backed token hydration and dry-run defaults", () => {
+  it("keeps ntfy setup outbound-first with env-backed token hydration and dry-run defaults", () => {
     const definition = requireChannelSetupDefinition("channel.ntfy");
     const hydrated = definition.hydrate(
       createConnection({
@@ -355,6 +355,42 @@ describe("channel setup definitions", () => {
     );
   });
 
+  it("collects optional ntfy inbound fields, requires a token for them and seeds the topic sender", () => {
+    const definition = requireChannelSetupDefinition("channel.ntfy");
+    const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
+    expect(fieldKeys).toEqual(expect.arrayContaining(["inboundStreamEnabled", "subscribeTopic"]));
+
+    const noToken = createDraft("channel.ntfy", {
+      baseUrl: "https://ntfy.example.com",
+      topic: "ops",
+      inboundStreamEnabled: true,
+    });
+    expect(definition.validate(noToken)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ fieldKey: "tokenEnv", failureCategory: "missing_input" })]),
+    );
+
+    const withToken = createDraft("channel.ntfy", {
+      baseUrl: "https://ntfy.example.com",
+      topic: "ops",
+      tokenEnv: "NTFY_TOKEN",
+      inboundStreamEnabled: true,
+      subscribeTopic: "inbox",
+    });
+    expect(definition.validate(withToken)).toEqual([]);
+    expect(definition.normalize(withToken)).toMatchObject({
+      inboundStreamEnabled: true,
+      subscribeTopic: "inbox",
+      inboundAccessMode: "allowlist",
+      allowedSenders: ["ntfy-topic:inbox"],
+    });
+
+    const outboundOnly = definition.normalize(
+      createDraft("channel.ntfy", { baseUrl: "https://ntfy.example.com", topic: "ops" }),
+    );
+    expect(outboundOnly).not.toHaveProperty("inboundStreamEnabled");
+    expect(outboundOnly).not.toHaveProperty("allowedSenders");
+  });
+
   it("rejects malformed ntfy topic and priority values", () => {
     const definition = requireChannelSetupDefinition("channel.ntfy");
     const issues = definition.validate(
@@ -382,6 +418,7 @@ describe("channel setup definitions", () => {
       "instruction",
       "field-collection",
       "field-collection",
+      "field-collection",
       "test",
       "confirm",
       "instruction",
@@ -389,13 +426,21 @@ describe("channel setup definitions", () => {
     const testStep = definition.wizard.steps.find((step) => step.kind === "test");
     expect(testStep?.title).toBe("Validate the draft");
     expect(JSON.stringify(testStep)).toMatch(/dry-run/i);
-    expect(definition.wizard.contentVersion).toBe("2026.08.ntfy.outbound.v2.guided-2026-10");
+    expect(definition.wizard.contentVersion).toBe("2026.10.ntfy.stream.v3.guided-2026-10");
   });
 
   it("gives guided Nextcloud Talk setup a test step and a finalize confirmation step", () => {
     const definition = requireChannelSetupDefinition("channel.nextcloud-talk").definition;
 
-    expect(definition.wizard.steps.map((step) => step.kind)).toEqual(["intro", "field-collection", "field-collection", "field-collection", "test", "confirm", "instruction"]);
+    expect(definition.wizard.steps.map((step) => step.kind)).toEqual([
+      "intro",
+      "field-collection",
+      "field-collection",
+      "field-collection",
+      "test",
+      "confirm",
+      "instruction",
+    ]);
     const testStep = definition.wizard.steps.find((step) => step.kind === "test");
     expect(testStep?.title).toBe("Validate the draft");
     expect(JSON.stringify(testStep)).toMatch(/room/i);
@@ -407,8 +452,8 @@ describe("channel setup definitions", () => {
     const expectations = [
       { catalogId: "channel.imessage", contentVersion: "2026.08.imessage.v2" },
       { catalogId: "channel.line", contentVersion: "2026.08.line.v2" },
-      { catalogId: "channel.mattermost", contentVersion: "2026.08.mattermost.v2" },
-      { catalogId: "channel.signal", contentVersion: "2026.08.signal.v4" },
+      { catalogId: "channel.mattermost", contentVersion: "2026.10.mattermost.stream.v3" },
+      { catalogId: "channel.signal", contentVersion: "2026.10.signal.stream.v5" },
       { catalogId: "channel.whatsapp", contentVersion: "2026.08.whatsapp.v3" },
       { catalogId: "channel.zalo", contentVersion: "2026.08.zalo.v2" },
       { catalogId: "channel.zalouser", contentVersion: "2026.08.zalouser.v2" },
@@ -426,7 +471,9 @@ describe("channel setup definitions", () => {
         finishStep?.successCriteria?.length ?? 0,
         `${catalogId} confirm step needs success criteria`,
       ).toBeGreaterThan(0);
-      expect(definition.wizard.contentVersion, `${catalogId} contentVersion must be bumped`).toBe(contentVersion + ".guided-2026-10");
+      expect(definition.wizard.contentVersion, `${catalogId} contentVersion must be bumped`).toBe(
+        contentVersion + ".guided-2026-10",
+      );
     }
   });
 
@@ -493,6 +540,83 @@ describe("channel setup definitions", () => {
         failureCategory: "malformed_value",
       }),
     ]);
+  });
+
+  it("collects Google Chat app (service-account) fields and forces a default-deny sender allowlist", () => {
+    const definition = requireChannelSetupDefinition("channel.google-chat");
+    expect(definition.definition.wizard.contentVersion).toBe("2026.10.google-chat.app.v2.guided-2026-10");
+    expect(definition.definition.adapter.adapterVersion).toBe("2026.10.google-chat.app.v2");
+    expect(definition.definition.validation.validationVersion).toBe("2026.10.google-chat.app.v2");
+    const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
+    expect(fieldKeys).toEqual(
+      expect.arrayContaining([
+        "webhookUrl",
+        "serviceAccountKeyEnv",
+        "audienceType",
+        "audience",
+        "defaultSpace",
+        "inboundAccessMode",
+        "allowedSenders",
+      ]),
+    );
+    expect(JSON.stringify(definition.definition)).not.toContain("cannot accept an inbound conversation");
+
+    const appDraft = createDraft("channel.google-chat", {
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      audienceType: "project_number",
+      audience: "123456789012",
+      defaultSpace: "spaces/AAAA",
+    });
+    expect(definition.validate(appDraft)).toEqual([]);
+    expect(definition.normalize(appDraft)).toEqual({
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      audienceType: "project_number",
+      audience: "123456789012",
+      defaultSpace: "spaces/AAAA",
+      inboundAccessMode: "allowlist",
+    });
+
+    // An edited legacy connection hydrated as open_legacy never carries that posture into app inbound.
+    const edited = {
+      ...createDraft("channel.google-chat", { ...appDraft.draft, inboundAccessMode: "open_legacy" }, "edit"),
+      connectionId: "11111111-1111-1111-1111-111111111111",
+    };
+    expect(definition.normalize(edited)).toMatchObject({ inboundAccessMode: "allowlist" });
+
+    expect(
+      definition.validate(createDraft("channel.google-chat", { serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY" })),
+    ).toEqual(
+      expect.arrayContaining([expect.objectContaining({ fieldKey: "audience", failureCategory: "missing_input" })]),
+    );
+    expect(
+      definition.validate(
+        createDraft("channel.google-chat", {
+          serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+          audienceType: "project_number",
+          audience: "not-a-number",
+          defaultSpace: "rooms/x",
+        }),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ fieldKey: "audience", failureCategory: "malformed_value" }),
+        expect.objectContaining({ fieldKey: "defaultSpace", failureCategory: "malformed_value" }),
+      ]),
+    );
+    expect(
+      definition.validate(
+        createDraft("channel.google-chat", {
+          serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+          audienceType: "endpoint_url",
+          audience: "http://insecure.example.test/hook",
+        }),
+      ),
+    ).toEqual(
+      expect.arrayContaining([expect.objectContaining({ fieldKey: "audience", failureCategory: "malformed_value" })]),
+    );
+    expect(definition.validate(createDraft("channel.google-chat", {}))).toEqual(
+      expect.arrayContaining([expect.objectContaining({ fieldKey: "webhookUrl", failureCategory: "missing_input" })]),
+    );
   });
 
   it("rejects malformed Teams webhook URLs", () => {
@@ -615,13 +739,16 @@ describe("channel setup definitions", () => {
     );
   });
 
-  it("advertises Signal as outbound-only and strips blocked legacy inbound settings", () => {
+  it("advertises Signal daemon-event inbound with no-replay honesty and strips legacy polling settings", () => {
     const signal = requireChannelSetupDefinition("channel.signal");
     const wizardText = JSON.stringify(signal.definition.wizard);
 
-    expect(signal.definition.wizard.contentVersion).toBe("2026.08.signal.v4.guided-2026-10");
-    expect(signal.definition.wizard.introSummary).toContain("outbound-only");
-    expect(wizardText).toContain("no acknowledgement or replay contract");
+    expect(signal.definition.wizard.contentVersion).toBe("2026.10.signal.stream.v5.guided-2026-10");
+    expect(signal.definition.wizard.introSummary).not.toContain("outbound-only");
+    expect(wizardText).not.toMatch(/outbound-only|destructive receive/i);
+    expect(wizardText).toContain("signal-cli daemon --http");
+    expect(wizardText).toMatch(/not replayed/);
+    expect(wizardText).toContain('"key":"receiveEvents"');
     expect(wizardText).not.toContain('"key":"inboundEnabled"');
     expect(wizardText).not.toContain('"key":"pollIntervalSeconds"');
 
@@ -639,24 +766,24 @@ describe("channel setup definitions", () => {
       }),
     );
 
-    expect(hydrated.draft).toEqual({
+    expect(hydrated.draft).not.toHaveProperty("inboundEnabled");
+    expect(hydrated.draft).not.toHaveProperty("pollIntervalSeconds");
+    expect(hydrated.draft).toMatchObject({
       baseUrl: "http://127.0.0.1:8080",
       accountId: "+15551234567",
       defaultRecipient: "+15557654321",
+      receiveEvents: false,
     });
-    expect(hydrated.hydration.warnings).toEqual([expect.stringContaining("blocked")]);
-    expect(
-      signal.normalize({
-        ...createDraft("channel.signal", hydrated.draft, "edit"),
-        hydration: hydrated.hydration,
-      }),
-    ).toEqual({
-      baseUrl: "http://127.0.0.1:8080",
-      accountId: "+15551234567",
-      defaultRecipient: "+15557654321",
+    expect(hydrated.hydration.warnings).toEqual([expect.stringContaining("replaced by receiveEvents")]);
+    const normalized = signal.normalize({
+      ...createDraft("channel.signal", hydrated.draft, "edit"),
+      hydration: hydrated.hydration,
     });
+    expect(normalized).not.toHaveProperty("inboundEnabled");
+    expect(normalized).not.toHaveProperty("pollIntervalSeconds");
+    expect(normalized).not.toHaveProperty("receiveEvents");
 
-    const blockedIssues = signal.validate(
+    const legacyIssues = signal.validate(
       createDraft("channel.signal", {
         baseUrl: "http://127.0.0.1:8080",
         defaultRecipient: "+15557654321",
@@ -664,9 +791,13 @@ describe("channel setup definitions", () => {
         pollIntervalSeconds: 5,
       }),
     );
-    expect(blockedIssues).toEqual(
+    expect(legacyIssues).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ fieldKey: "inboundEnabled", failureCategory: "malformed_value" }),
+        expect.objectContaining({
+          fieldKey: "inboundEnabled",
+          failureCategory: "malformed_value",
+          message: expect.stringContaining("receiveEvents"),
+        }),
         expect.objectContaining({ fieldKey: "pollIntervalSeconds", failureCategory: "malformed_value" }),
       ]),
     );
@@ -678,6 +809,37 @@ describe("channel setup definitions", () => {
         }),
       ),
     ).toEqual([]);
+  });
+
+  it("collects the Signal receiveEvents opt-in and forces a default-deny allowlist when it is on", () => {
+    const signal = requireChannelSetupDefinition("channel.signal");
+    const fieldKeys = signal.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
+    expect(fieldKeys).toEqual(expect.arrayContaining(["receiveEvents", "allowedSenders"]));
+
+    for (const legacy of [{ inboundAccessMode: "open_legacy" }, {}]) {
+      const hydrated = signal.hydrate(
+        createConnection({
+          catalogId: "channel.signal",
+          key: "signal",
+          config: { baseUrl: "http://127.0.0.1:8080", defaultRecipient: "+15557654321", ...legacy },
+        }),
+      );
+      const draft = {
+        ...createDraft("channel.signal", { ...hydrated.draft, receiveEvents: true }, "edit"),
+        hydration: hydrated.hydration,
+      };
+      expect(signal.validate(draft)).toEqual([]);
+      expect(signal.normalize(draft)).toMatchObject({ receiveEvents: true, inboundAccessMode: "allowlist" });
+    }
+    const created = signal.normalize(
+      createDraft("channel.signal", {
+        baseUrl: "http://127.0.0.1:8080",
+        defaultRecipient: "+15557654321",
+        receiveEvents: true,
+      }),
+    );
+    expect(created).toMatchObject({ receiveEvents: true, inboundAccessMode: "allowlist" });
+    expect(created.allowedSenders ?? []).toEqual([]);
   });
 
   it("preserves env-backed Mattermost auth during edit flows", () => {
@@ -709,6 +871,60 @@ describe("channel setup definitions", () => {
         defaultTeam: "goatcitadel",
       }),
     );
+  });
+
+  it("collects the Mattermost inbound opt-in and defaults new guided setups to a default-deny allowlist", () => {
+    const definition = requireChannelSetupDefinition("channel.mattermost");
+    const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
+    expect(fieldKeys).toEqual(expect.arrayContaining(["inboundStreamEnabled", "allowedSenders"]));
+
+    const draft = createDraft("channel.mattermost", {
+      serverUrl: "https://chat.example.com",
+      botTokenEnv: "MATTERMOST_BOT_TOKEN",
+      defaultChannel: "town-square",
+      inboundStreamEnabled: true,
+    });
+    expect(definition.validate(draft)).toEqual([]);
+    const normalized = definition.normalize(draft);
+    expect(normalized).toMatchObject({ inboundStreamEnabled: true, inboundAccessMode: "allowlist" });
+    expect(normalized.allowedSenders ?? []).toEqual([]);
+
+    const outboundOnly = definition.normalize(
+      createDraft("channel.mattermost", {
+        serverUrl: "https://chat.example.com",
+        botTokenEnv: "MATTERMOST_BOT_TOKEN",
+        defaultChannel: "town-square",
+      }),
+    );
+    expect(outboundOnly).not.toHaveProperty("inboundStreamEnabled");
+  });
+
+  it("ends in allowlist when inbound is enabled on a migration-stamped open_legacy Mattermost connection", () => {
+    const definition = requireChannelSetupDefinition("channel.mattermost");
+    for (const legacy of [{ inboundAccessMode: "open_legacy" }, {}]) {
+      const hydrated = definition.hydrate(
+        createConnection({
+          catalogId: "channel.mattermost",
+          key: "mattermost",
+          label: "Mattermost Primary",
+          config: {
+            serverUrl: "https://chat.example.com",
+            botTokenEnv: "MATTERMOST_BOT_TOKEN",
+            defaultChannel: "town-square",
+            ...legacy,
+          },
+        }),
+      );
+      const draft = {
+        ...createDraft("channel.mattermost", { ...hydrated.draft, inboundStreamEnabled: true }, "edit"),
+        hydration: hydrated.hydration,
+      };
+      expect(definition.validate(draft)).toEqual([]);
+      expect(definition.normalize(draft)).toMatchObject({
+        inboundStreamEnabled: true,
+        inboundAccessMode: "allowlist",
+      });
+    }
   });
 
   it("preserves env-backed iMessage bridge auth during edit flows", () => {
@@ -876,7 +1092,8 @@ describe("channel setup definitions", () => {
     );
     expect(googleHydrated.hydration.status).toBe("opaque-secret");
     expect(googleHydrated.hydration.fieldState.webhookUrl).toBe("configured");
-    expect(googleHydrated.draft).toEqual({ defaultThreadKey: "ops-thread" });
+    // Google Chat inbound is always forced allowlist, so even a legacy webhook row never hydrates as open_legacy.
+    expect(googleHydrated.draft).toMatchObject({ defaultThreadKey: "ops-thread", inboundAccessMode: "allowlist" });
     expect(
       googleChat.normalize(
         createDraft("channel.google-chat", {
@@ -887,6 +1104,7 @@ describe("channel setup definitions", () => {
     ).toEqual({
       webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=key&token=token",
       defaultThreadKey: "ops-thread",
+      inboundAccessMode: "allowlist",
     });
     expect(
       googleChat.validate(
@@ -918,6 +1136,8 @@ describe("channel setup definitions", () => {
     ).toEqual({
       baseUrl: "http://127.0.0.1:8080",
       defaultRecipient: "+15557654321",
+      // Signal is a guided inbound channel; a draft with no saved mode defaults to the allowlist.
+      inboundAccessMode: "allowlist",
     });
     expect(
       signal.validate({

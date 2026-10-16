@@ -20,6 +20,9 @@ import { recordView } from "../../data/record-view";
 import { workColumnStatus } from "./work-column-status";
 import { WorkTaskBulkActions } from "./WorkTaskBulkActions";
 import { WorkBoardColumn } from "./WorkBoardColumn";
+import { WorkBoardColumnPicker } from "./WorkBoardColumnPicker";
+import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
+import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 
 const COLUMNS: readonly { id: WorkBoardGroup; title: string; description: string }[] = [
   { id: "running", title: "Active", description: "Tasks being prepared or worked; runs queued or executing" },
@@ -42,6 +45,9 @@ export function WorkBoard() {
   const [selecting, setSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
   const [bulkNotice, setBulkNotice] = useState<string>();
+  // Below the four-column width one column shows at a time, starting with the work that needs the operator.
+  const stacked = useMediaQuery(RESPONSIVE_QUERIES.belowDesktop);
+  const [shownColumn, setShownColumn] = useState<WorkBoardGroup>("waiting");
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
   const runs = useWorkspaceDurableRuns(workspaceId);
@@ -221,8 +227,19 @@ export function WorkBoard() {
       ) : null}
       {board || taskBoard ? (
         <>
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-            {COLUMNS.map((column) => (
+          {stacked ? (
+            <WorkBoardColumnPicker
+              columns={COLUMNS.map((column) => ({
+                id: column.id,
+                title: column.title,
+                shown: visibleTasks(column.id).length + visibleRuns(column.id).length,
+              }))}
+              current={shownColumn}
+              onChange={setShownColumn}
+            />
+          ) : null}
+          <div className="grid gap-6 lg:grid-cols-4">
+            {COLUMNS.filter((column) => !stacked || column.id === shownColumn).map((column) => (
               <WorkBoardColumn
                 key={column.id}
                 title={column.title}

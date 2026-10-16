@@ -67,6 +67,7 @@ import {
 } from "./external-side-effect-replay-record.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { readChatAttachmentContentForGateway } from "./gateway-route-composition-shared.js";
+import { getChannelStreamRuntime } from "./channel-stream-runtime-registry.js";
 
 export function composeIntegrationChannelRouteDependencies(
   gateway: GatewayRouteCompositionPort,
@@ -576,8 +577,11 @@ function createIntegrationChannelPortForGateway(
   gateway: GatewayRouteCompositionPort,
   integrationDiagnostics: IntegrationDiagnosticsService,
 ): IntegrationChannelServicePort {
+  const storage = gateway.storage;
+  const discordRuntimeService = gateway.discordRuntimeService;
+  const streams = getChannelStreamRuntime(gateway);
   return {
-    storage: gateway.storage,
+    storage,
     publishRealtime: async (eventType, source, payload, options) => {
       await gateway.publishRealtime(eventType, source, payload, options);
     },
@@ -591,30 +595,41 @@ function createIntegrationChannelPortForGateway(
       integrationDiagnostics.runIntegrationConnectionLiveChecks(connection, options),
     pickConnectorDiagnosticAction: (checks) => connectorDiagnosticsHelpers.pickConnectorDiagnosticAction(checks),
     recordConnectorHealthRun: async (report) => {
-      await connectorDiagnosticsHelpers.recordConnectorHealthRun({ gatewaySql: gateway.storage.gatewaySql }, report);
+      await connectorDiagnosticsHelpers.recordConnectorHealthRun({ gatewaySql: storage.gatewaySql }, report);
     },
-    syncDiscordRuntime: () => gateway.syncDiscordRuntime(),
-    syncSignalInboundRuntime: async () => {
-      await gateway.syncSignalInboundRuntime();
+    syncChannelRuntimes: async () => {
+      await gateway.syncDiscordRuntime();
+      try {
+        await streams.sync();
+      } catch (error) {
+        gateway.recordDevDiagnostic({
+          level: "warn",
+          category: "channels",
+          event: "channel.stream.sync_failed",
+          message: "Channel stream runtime sync failed.",
+          context: { error: (error as Error).message },
+        });
+      }
     },
-    getDiscordRuntimeStatus: (connectionId) => gateway.discordRuntimeService.getConnectionStatus(connectionId),
+    getChannelStreamRuntimeStatus: (connectionId) => streams.getStatus(connectionId),
+    getDiscordRuntimeStatus: (connectionId) => discordRuntimeService.getConnectionStatus(connectionId),
     latestAcceptedInboundAt: (channelKey, connectionId) =>
-      gateway.storage.inboundChannelEvents.latestAcceptedAt(channelKey, connectionId),
-    getIntegrationConnection: (connectionId) => gateway.storage.integrationConnections.get(connectionId),
+      storage.inboundChannelEvents.latestAcceptedAt(channelKey, connectionId),
+    getIntegrationConnection: (connectionId) => storage.integrationConnections.get(connectionId),
     assertDiscordConnection,
     readDiscordPairings: async () => gateway.readDiscordPairings(),
     writeDiscordPairings: async (records) => {
       await gateway.writeDiscordPairings(records);
     },
-    discordRuntimeService: gateway.discordRuntimeService,
+    discordRuntimeService,
     resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
       gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
     readConnectionConfigValue: (config, key) => gateway.readConnectionConfigValue(config, key),
     isConnectionUrlAllowlisted: (urlValue) => gateway.isConnectionUrlAllowlisted(urlValue),
     fetchWithDiagnosticsTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
-    readIntegrationPlugins: async () => await readIntegrationPlugins(gateway.storage),
+    readIntegrationPlugins: async () => await readIntegrationPlugins(storage),
     writeIntegrationPlugins: async (plugins) => {
-      await writeIntegrationPlugins(gateway.storage, plugins);
+      await writeIntegrationPlugins(storage, plugins);
     },
   };
 }

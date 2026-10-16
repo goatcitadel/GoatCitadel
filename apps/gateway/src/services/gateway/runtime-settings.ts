@@ -132,8 +132,6 @@ export interface RuntimeSettings {
     documentEditingV1Enabled?: boolean;
     /** Inbound channel voice ingestion (B2a). Absent/false (default) ⇒ Telegram/WhatsApp voice keeps today's placeholder/drop behavior. */
     channelVoiceInboundV1Enabled?: boolean;
-    /** Deprecated compatibility value; true emits a blocked-setting diagnostic but never enables Signal receive. */
-    signalInboundV1Enabled?: boolean;
     /** Round-3 kill switch: planner triviality-skip + speed-model drafting. Absent/false ⇒ feature ON. */
     plannerFastPathV1Disabled?: boolean;
     /** Round-3 kill switch: all-read-only tool-batch parallel execution. Absent/false ⇒ feature ON. */

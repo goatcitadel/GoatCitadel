@@ -94,9 +94,21 @@ export function WorkScheduleNotice({ message, runHref }: { message: string; runH
   );
 }
 
-export function WorkScheduleListItem({ job, onReview }: { job: CronJobRecordResponse; onReview: () => void }) {
+export function WorkScheduleListItem({
+  job,
+  selected = false,
+  onReview,
+}: {
+  job: CronJobRecordResponse;
+  /** The schedule shown in the detail pane: marked in words and by a stronger border, never by colour alone. */
+  selected?: boolean;
+  onReview: () => void;
+}) {
   return (
-    <li className="rounded-lg border border-line bg-raised p-4">
+    <li
+      aria-current={selected ? "true" : undefined}
+      className="rounded-lg border border-line bg-raised p-4 aria-[current=true]:border-accent"
+    >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h2 className="text-sm font-semibold text-fg">{job.name}</h2>
@@ -121,9 +133,12 @@ export function WorkScheduleListItem({ job, onReview }: { job: CronJobRecordResp
           </>
         ) : null}
       </p>
-      <Button size="sm" className="mt-2" aria-label={"Review schedule: " + job.name} onClick={onReview}>
-        Review schedule
-      </Button>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button size="sm" aria-label={"Review schedule: " + job.name} onClick={onReview}>
+          Review schedule
+        </Button>
+        {selected ? <span className="text-xs font-medium text-fg-secondary">Shown in detail</span> : null}
+      </div>
     </li>
   );
 }

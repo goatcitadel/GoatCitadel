@@ -68,6 +68,7 @@ function renderHeader(build = false) {
   const view = input();
   const onOpenProjects = vi.fn();
   const onToggle = vi.fn();
+  const onOpenConversations = vi.fn();
   act(() =>
     root.render(
       <ChatSessionHeader
@@ -77,19 +78,20 @@ function renderHeader(build = false) {
         selectedSessionId="session-1"
         buildEditor={build ? { open: false, onToggle } : null}
         onOpenProjects={onOpenProjects}
-        onOpenFilters={vi.fn()}
+        onOpenConversations={onOpenConversations}
         onInspect={vi.fn()}
       />,
     ),
   );
   const header = container.querySelector("header") as HTMLElement;
-  return { header, onOpenProjects, onToggle, rail: view.sessionRail };
+  return { header, onOpenProjects, onOpenConversations, onToggle, rail: view.sessionRail };
 }
 
 describe("ChatSessionHeader", () => {
   it("keeps the way back from an open build editor as a visible header button", () => {
     const view = input();
     const onToggle = vi.fn();
+    const onOpenConversations = vi.fn();
     act(() =>
       root.render(
         <ChatSessionHeader
@@ -99,7 +101,7 @@ describe("ChatSessionHeader", () => {
           selectedSessionId="session-1"
           buildEditor={{ open: true, onToggle }}
           onOpenProjects={vi.fn()}
-          onOpenFilters={vi.fn()}
+          onOpenConversations={onOpenConversations}
           onInspect={vi.fn()}
         />,
       ),
@@ -109,53 +111,71 @@ describe("ChatSessionHeader", () => {
     expect(onToggle).toHaveBeenCalledOnce();
   });
 
-  it("keeps the single-row header above phone width", () => {
-    const { header } = renderHeader(true);
-    const select = header.querySelector('select[aria-label="Choose conversation"]');
-    expect(select?.closest("label")?.parentElement).toBe(header);
+  it("keeps the single-row header above phone width with a Conversations button below the rail", async () => {
+    const { header, onOpenConversations } = renderHeader(true);
+    const conversations = [...header.querySelectorAll("button")].find(
+      (button) => button.textContent === "Conversations",
+    )!;
+    expect(conversations.parentElement).toBe(header);
+    expect(conversations.className).toContain("md:hidden");
+    expect(conversations.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(header.querySelector("select")).toBeNull();
     expect(header.querySelector('button[aria-label="New conversation"]')?.parentElement).toBe(header);
     // A closed build editor lives in the overflow menu, so the header carries no "Build editor" button.
     expect(header.querySelector('button[aria-label="Build editor"]')).toBeNull();
     expect(header.querySelector('button[aria-label="Conversation actions"]')).not.toBeNull();
-    expect(header.children.length).toBeGreaterThan(2);
+    await act(async () => conversations.click());
+    expect(onOpenConversations).toHaveBeenCalledOnce();
   });
 
-  it("splits the phone header into a title row and a full-width conversation row", async () => {
+  it("keeps the phone header to one row: title, Conversations and the actions menu", async () => {
     media.phone = true;
-    const { header, onOpenProjects, onToggle, rail } = renderHeader(true);
-    expect(header.children).toHaveLength(2);
-    const [titleRow, conversationRow] = [...header.children] as [HTMLElement, HTMLElement];
-    expect(titleRow.querySelector("h1")?.textContent).toBe("Chat");
-    expect(titleRow.textContent).toContain("No messages yet");
-    expect(titleRow.querySelector('[aria-label="Selected conversation activity"]')?.parentElement?.className).toContain(
-      "truncate",
-    );
-    expect(titleRow.querySelector("h1")?.closest(".min-w-0.flex-1")).not.toBeNull();
+    const { header, onOpenProjects, onOpenConversations, onToggle } = renderHeader(true);
+    expect(header.querySelector("h1")?.textContent).toBe("Chat");
+    expect(header.textContent).toContain("No messages yet");
+    expect(header.querySelector("h1")?.closest(".min-w-0.flex-1")?.parentElement).toBe(header);
+    const buttons = [...header.querySelectorAll(":scope > button")];
+    expect(buttons.map((button) => button.textContent || button.getAttribute("aria-label"))).toEqual([
+      "Conversations",
+      "Conversation actions",
+    ]);
+    expect(header.querySelector("select")).toBeNull();
+    expect(header.querySelector('button[aria-label="New conversation"]')).toBeNull();
+    expect([...header.querySelectorAll("button")].some((button) => button.textContent === "Projects")).toBe(false);
+    await act(async () => (buttons[0] as HTMLButtonElement).click());
+    expect(onOpenConversations).toHaveBeenCalledOnce();
 
-    const select = conversationRow.querySelector('select[aria-label="Choose conversation"]') as HTMLSelectElement;
-    expect(select).not.toBeNull();
-    expect(select.className).toContain("w-full");
-    const wrapper = select.closest("label")?.parentElement as HTMLElement;
-    expect(wrapper.className).toContain("flex-1");
-    expect(wrapper.className).toContain("min-w-0");
-    expect(wrapper.className).toContain("max-w-none");
-    expect(conversationRow.querySelector('button[aria-label="New conversation"]')).not.toBeNull();
-    expect(conversationRow.querySelector('button[aria-label="Build editor"]')).toBeNull();
-    expect(titleRow.querySelector('button[aria-label="Conversation actions"]')).not.toBeNull();
-    expect(conversationRow.querySelector('button[aria-label="Choose conversation"]')).toBeNull();
-
-    const projects = [...titleRow.querySelectorAll("button")].find(
-      (button) => button.textContent?.trim() === "Projects",
-    );
-    await act(async () => projects!.click());
+    const items = await openPhoneMenu(buttons[1] as HTMLButtonElement);
+    expect(items.map((item) => item.textContent)).toEqual(["New conversation", "Projects", "Build editor"]);
+    await act(async () => items[1]!.click());
     expect(onOpenProjects).toHaveBeenCalledOnce();
     expect(onToggle).not.toHaveBeenCalled();
-    await act(async () =>
-      (conversationRow.querySelector('button[aria-label="New conversation"]') as HTMLButtonElement).click(),
+  });
+
+  it("starts a new conversation from the phone actions menu", async () => {
+    media.phone = true;
+    const { header, rail } = renderHeader(false);
+    const items = await openPhoneMenu(
+      header.querySelector<HTMLButtonElement>('button[aria-label="Conversation actions"]')!,
     );
+    expect(items.map((item) => item.textContent)).toEqual(["New conversation", "Projects"]);
+    await act(async () => items[0]!.click());
     expect(rail.onCreateSession).toHaveBeenCalledOnce();
   });
 });
+
+async function openPhoneMenu(trigger: HTMLButtonElement) {
+  await act(async () => {
+    trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+    trigger.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0 }));
+    trigger.click();
+  });
+  return vi.waitFor(() => {
+    const items = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(items.length).toBeGreaterThan(0);
+    return items;
+  });
+}
 
 it("names the model and run status in plain words, never their wire values", () => {
   const active = {

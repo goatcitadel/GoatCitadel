@@ -4,7 +4,14 @@ const DEFAULT_WEBHOOK_INGRESS_MAX = 500;
 const DEFAULT_WEBHOOK_ACCEPTED_MAX = 180;
 const WEBHOOK_RATE_LIMIT_WINDOW = "1 minute";
 
-export type AcceptedWebhookSource = "generic" | "telegram" | "whatsapp" | "slack" | "line" | "nextcloud-talk";
+export type AcceptedWebhookSource =
+  | "generic"
+  | "telegram"
+  | "whatsapp"
+  | "slack"
+  | "line"
+  | "nextcloud-talk"
+  | "google-chat";
 
 export type AcceptedWebhookRateLimit = ReturnType<FastifyInstance["createRateLimit"]>;
 

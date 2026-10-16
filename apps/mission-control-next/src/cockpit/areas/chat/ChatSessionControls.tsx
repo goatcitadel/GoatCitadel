@@ -75,15 +75,18 @@ export function ChatSessionOverflow({
   onFork,
   onInspect,
   onOpenBuildEditor,
+  phoneActions,
 }: {
   dock: MissionThreadedContextDockProps | null;
   onFork?: () => void;
   onInspect?: () => void;
   /** Present while the build editor is available and closed; the way back stays a visible header button. */
   onOpenBuildEditor?: () => void;
+  /** On a phone the header keeps one row, so Projects and New conversation move into this menu. */
+  phoneActions?: { onOpenProjects: () => void; onNewConversation: () => void; newConversationDisabled?: boolean };
 }) {
   const [archiveOpen, setArchiveOpen] = useState(false);
-  if (!dock && !onOpenBuildEditor) return null;
+  if (!dock && !onOpenBuildEditor && !phoneActions) return null;
   const archived = Boolean(dock?.selectedSession.archivedAt);
   const archivePending = dock?.sessionControlPending === "archive";
   // Radix gives the menu Escape, arrow keys and focus return; the bare <details> it replaces had none.
@@ -97,6 +100,20 @@ export function ChatSessionOverflow({
           <MoreHorizontal aria-hidden="true" className="size-4" />
         </MenuTrigger>
         <MenuContent align="end">
+          {phoneActions ? (
+            <>
+              <MenuItem
+                className="max-sm:min-h-11"
+                disabled={phoneActions.newConversationDisabled}
+                onSelect={phoneActions.onNewConversation}
+              >
+                New conversation
+              </MenuItem>
+              <MenuItem className="max-sm:min-h-11" onSelect={phoneActions.onOpenProjects}>
+                Projects
+              </MenuItem>
+            </>
+          ) : null}
           {onOpenBuildEditor ? (
             <MenuItem className="max-sm:min-h-11" onSelect={onOpenBuildEditor}>
               Build editor

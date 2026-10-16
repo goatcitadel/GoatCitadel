@@ -7,6 +7,7 @@ import {
   providerSnapshot,
 } from "./cockpit-chat-thread-actions-assertions.mjs";
 import { clickTurnAction, waitForTurnAction } from "./cockpit-turn-actions.mjs";
+import { readCurrentConversation } from "./cockpit-conversation-list.mjs";
 
 const prefix = "/api/v1/chat/sessions/";
 const pathOf = (url) => new URL(url).pathname;
@@ -106,14 +107,15 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   assert.deepEqual(await api(threadRoute), initial, "Fork modified the source transcript.");
   assert.deepEqual(providerSnapshot(providerStub), providersBefore, "Fork replayed a provider request.");
   if (scope.variant === "mobile") {
-    const chooser = page.getByRole("combobox", { name: "Choose conversation", exact: true });
+    // Phones list conversations in the Conversations sheet; its current row is the controlled selection.
     await waitUntil(
-      () => chooser.inputValue(),
+      () => new URL(page.url()).searchParams.get("sessionId"),
       (value) => value === forkId,
       page,
       "selected fork conversation",
     );
-    assert.equal(await chooser.locator("option:checked").innerText(), response.session.title);
+    const current = await readCurrentConversation(page, { expectedTitle: response.session.title });
+    assert.ok(current?.startsWith(response.session.title), `Current conversation row is ${current}, not the fork.`);
   } else {
     await page.getByRole("heading", { name: response.session.title, level: 1, exact: true }).waitFor();
   }

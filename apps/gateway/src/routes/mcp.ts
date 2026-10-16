@@ -349,14 +349,12 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     const params = serverParamsSchema.safeParse(request.params);
     const body = revisionSchema.safeParse(request.body);
     if (!params.success || !body.success) {
-      return reply
-        .code(400)
-        .send({
-          error: {
-            params: params.success ? undefined : params.error.flatten(),
-            body: body.success ? undefined : body.error.flatten(),
-          },
-        });
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
     }
     try {
       const saved = await fastify.services.mcp.deleteMcpServer(params.data.serverId, body.data.expectedRevision, () =>

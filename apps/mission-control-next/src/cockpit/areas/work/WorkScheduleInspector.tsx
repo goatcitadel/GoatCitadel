@@ -72,7 +72,9 @@ export function WorkScheduleInspector({
         </p>
       ) : null}
       <div>
-        <h2 className="text-base font-semibold text-fg">{selected.name}</h2>
+        <h2 tabIndex={-1} className="scroll-mt-4 text-base font-semibold text-fg">
+          {selected.name}
+        </h2>
         <p className="text-xs text-fg-muted">
           {selected.enabled ? "Enabled" : "Paused"} · {presentScheduleAction(selected.action)}
         </p>
