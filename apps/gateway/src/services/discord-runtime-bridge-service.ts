@@ -819,6 +819,7 @@ export async function handleDiscordRuntimeInbound(
             mimeType: voiceAttachment.mimeType,
           },
           voiceFallbackContent: content,
+          ...(text ? { voiceCaption: text } : {}),
         }
       : { dispatchKind: "agent_turn" as const }),
   });

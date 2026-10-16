@@ -77,6 +77,31 @@ describe("inbound voice webhooks (Slack, Nextcloud Talk)", () => {
     };
   }
 
+  function slackImageSharePayload(text?: string) {
+    return JSON.stringify({
+      type: "event_callback",
+      event_id: "EvImage1",
+      team_id: "T111",
+      api_app_id: "A111",
+      event: {
+        type: "message",
+        subtype: "file_share",
+        user: "U111",
+        text: text ?? "",
+        channel: "D111",
+        channel_type: "im",
+        ts: "1712109984.400000",
+        files: [
+          {
+            id: "F0IMAGE01",
+            mimetype: "image/png",
+            url_private_download: "https://files.slack.com/files-pri/T111-F0IMAGE01/download/shot.png",
+          },
+        ],
+      },
+    });
+  }
+
   function slackVoicePayload(text?: string) {
     return JSON.stringify({
       type: "event_callback",
@@ -170,11 +195,12 @@ describe("inbound voice webhooks (Slack, Nextcloud Talk)", () => {
       expect.objectContaining({
         dispatchKind: "voice_agent_turn",
         voiceFallbackContent: "[voice message] listen to this",
+        voiceCaption: "listen to this",
       }),
     );
   });
 
-  it("Slack: with voice disabled an audio share with text dispatches a plain text turn", async () => {
+  it("Slack: with voice disabled every file_share (audio or image, captioned or not) stays ignored", async () => {
     const acceptInboundChannelEvent = createDurableAcceptanceMock();
     const built = await buildApp({
       getIntegrationConnection: vi.fn(() => slackConnection()),
@@ -182,19 +208,27 @@ describe("inbound voice webhooks (Slack, Nextcloud Talk)", () => {
       acceptInboundChannelEvent,
     });
 
-    const response = await postSlack(built, slackVoicePayload("listen to this"));
+    for (const payload of [slackVoicePayload("listen to this"), slackImageSharePayload("look at this")]) {
+      const response = await postSlack(built, payload);
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ accepted: true, ignored: true });
+    }
+    expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
+  });
+
+  it("Slack: with voice enabled a non-audio file_share is still ignored", async () => {
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
+    const built = await buildApp({
+      getIntegrationConnection: vi.fn(() => slackConnection()),
+      isVoiceInboundEnabled: () => true,
+      acceptInboundChannelEvent,
+    });
+
+    const response = await postSlack(built, slackImageSharePayload("look at this"));
 
     expect(response.statusCode).toBe(200);
-    expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
-    const input = acceptInboundChannelEvent.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
-    expect(input).toEqual(
-      expect.objectContaining({
-        dispatchKind: "agent_turn",
-        idempotencyKey: `slack:${CONNECTION_ID}:EvVoice1`,
-        message: expect.objectContaining({ content: "listen to this" }),
-      }),
-    );
-    expect(input.voiceRequest).toBeUndefined();
+    expect(response.json()).toMatchObject({ accepted: true, ignored: true });
+    expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
   });
 
   it("Slack: with voice disabled a voice-only share is still ignored (default behavior unchanged)", async () => {

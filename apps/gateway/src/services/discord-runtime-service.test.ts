@@ -980,6 +980,59 @@ describe("DiscordRuntimeService", () => {
     );
   });
 
+  it("drops voice-only messages before any pairing side effect unless the voice gate is on", async () => {
+    const connection = createConnection();
+    const listConnections = vi.fn(async () => [connection]);
+    const findApprovedPairing = vi.fn(() => createPairingRecord({ status: "approved" }));
+    const touchPairing = vi.fn();
+    const ensurePendingPairing = vi.fn(() => createPairingRecord());
+    const onInboundMessage = vi.fn(async () => true);
+    const service = createService({
+      listConnections,
+      findApprovedPairing,
+      touchPairing,
+      ensurePendingPairing,
+      onInboundMessage,
+    });
+    vi.spyOn(service as any, "updateStatusSnapshot").mockImplementation(() => undefined);
+    const runtime = { connectionIds: new Set([connection.connectionId]) } as any;
+    const buildMessage = (id: string) =>
+      ({
+        inGuild: () => false,
+        channel: { isDMBased: () => true, send: vi.fn() },
+        channelId: "dm_1",
+        author: { id: "user_1", bot: false, username: "goat-user" },
+        content: "",
+        attachments: createVoiceAttachments(),
+        id,
+        react: vi.fn().mockResolvedValue(undefined),
+      }) as any;
+
+    // Gate unset (flag off by default): dropped exactly like any empty message.
+    const offMessage = buildMessage("msg_voice_flag_off");
+    await (service as any).handleMessage(runtime, offMessage);
+    service.setVoiceInboundGate(async () => false);
+    await (service as any).handleMessage(runtime, offMessage);
+    service.setVoiceInboundGate(async () => {
+      throw new Error("settings unavailable");
+    });
+    await (service as any).handleMessage(runtime, offMessage);
+    expect(listConnections).not.toHaveBeenCalled();
+    expect(findApprovedPairing).not.toHaveBeenCalled();
+    expect(touchPairing).not.toHaveBeenCalled();
+    expect(ensurePendingPairing).not.toHaveBeenCalled();
+    expect(offMessage.react).not.toHaveBeenCalled();
+    expect(onInboundMessage).not.toHaveBeenCalled();
+
+    service.setVoiceInboundGate(async () => true);
+    const onMessage = buildMessage("msg_voice_flag_on");
+    await (service as any).handleMessage(runtime, onMessage);
+    expect(touchPairing).toHaveBeenCalledWith("pairing_1");
+    expect(onInboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceMessageId: "msg_voice_flag_on", voiceAttachment: expect.any(Object) }),
+    );
+  });
+
   it("does not react to a voice message the inbound owner declined to accept", async () => {
     const onInboundMessage = vi.fn(async () => false);
     const service = createService({

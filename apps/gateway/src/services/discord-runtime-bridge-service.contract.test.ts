@@ -589,7 +589,11 @@ describe("discord-runtime-bridge-service contract behavior", () => {
       voiceAttachment,
     });
     expect(enabledHost.acceptMock).toHaveBeenCalledWith(
-      expect.objectContaining({ dispatchKind: "voice_agent_turn", voiceFallbackContent: "[voice message] listen" }),
+      expect.objectContaining({
+        dispatchKind: "voice_agent_turn",
+        voiceFallbackContent: "[voice message] listen",
+        voiceCaption: "listen",
+      }),
     );
 
     const disabledHost = createHost();

@@ -116,8 +116,26 @@ export class DiscordRuntimeService {
   private readonly lifecycleTasks = new Set<Promise<void>>();
   private closeState: "open" | "closing" | "closed" = "open";
   private closePromise?: Promise<void>;
+  /**
+   * channelVoiceInboundV1Enabled read, installed by the runtime composition.
+   * Unset (or failing) means off: voice-only messages are dropped before any
+   * pairing or allowlist side effect, exactly as before voice inbound existed.
+   */
+  private voiceInboundGate: () => Promise<boolean> = async () => false;
 
   public constructor(private readonly callbacks: DiscordRuntimeCallbacks) {}
+
+  public setVoiceInboundGate(gate: () => Promise<boolean>): void {
+    this.voiceInboundGate = gate;
+  }
+
+  private async isVoiceInboundEnabled(): Promise<boolean> {
+    try {
+      return (await this.voiceInboundGate()) === true;
+    } catch {
+      return false;
+    }
+  }
 
   public async sync(): Promise<void> {
     if (this.closeState !== "open") return;
@@ -625,7 +643,7 @@ export class DiscordRuntimeService {
     if (message.author.bot) {
       return;
     }
-    if (!message.content.trim() && !readDiscordVoiceAttachment(message)) {
+    if (!message.content.trim() && !(readDiscordVoiceAttachment(message) && (await this.isVoiceInboundEnabled()))) {
       return;
     }
     const connections = (await this.callbacks.listConnections()).filter((connection) =>

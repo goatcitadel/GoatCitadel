@@ -146,6 +146,7 @@ export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
                 mimeType: voiceMedia.mimeType,
               },
               fallbackContent: parsed.content,
+              caption: parsed.voiceCaption,
             },
           });
         }

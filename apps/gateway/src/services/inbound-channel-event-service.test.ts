@@ -13,7 +13,7 @@ import {
   type InboundChannelDeterministicIdentity,
   type InboundChannelEventServiceDeps,
 } from "./inbound-channel-event-service.js";
-import type { DurableInboundChannelAcceptInput } from "./channel-inbound-dispatch.js";
+import { VOICE_TRANSCRIPT_CONTENT_PREFIX, type DurableInboundChannelAcceptInput } from "./channel-inbound-dispatch.js";
 import { ensureInboundIntegrationChatSession, type ChatSessionDependencies } from "./chat-session-service.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 import { buildNewAdapterCases } from "./inbound-channel-event-service.new-adapters.fixtures.js";
@@ -595,6 +595,54 @@ describe("InboundChannelEventService", () => {
       const persisted = JSON.stringify(harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.payload);
       expect(persisted).not.toContain("must-not-persist");
       expect(persisted).not.toContain("connectionConfig");
+    }
+  });
+
+  it("keeps the typed caption alongside a successful Slack or Discord transcript", async () => {
+    const transcribe = vi.fn(async () => ({ ok: true as const, transcript: "remember the rent" }));
+    const harness = await createHarness({ transcribeChannelVoice: transcribe });
+    const voiceRequests = {
+      slack: {
+        channel: "slack" as const,
+        connectionConfig: {},
+        fileId: "F0VOICE02",
+        downloadUrl: "https://files.slack.com/files-pri/T1-F0VOICE02/download/a.webm",
+      },
+      discord: {
+        channel: "discord" as const,
+        connectionConfig: {},
+        attachmentId: "222333444556",
+        url: "https://cdn.discordapp.com/attachments/1/222333444556/voice-message.ogg",
+      },
+    };
+    const accepted = [];
+    for (const channel of ["slack", "discord"] as const) {
+      accepted.push(
+        await harness.service.accept(
+          buildInput({
+            channel,
+            idempotencyKey: `${channel}:conn:caption-1`,
+            dispatchKind: "voice_agent_turn",
+            voiceRequest: voiceRequests[channel],
+            voiceFallbackContent: "[voice message] please file this",
+            voiceCaption: "please file this",
+            message: { ...buildInput().message, eventId: `${channel}-caption-1` },
+          }),
+        ),
+      );
+    }
+    await waitFor(() =>
+      accepted.every((item) => harness.storage.inboundChannelEvents.get(item.inboundEventId)?.status === "completed"),
+    );
+
+    for (const channel of ["slack", "discord"]) {
+      expect(harness.ingestChannelMessage).toHaveBeenCalledWith(
+        channel,
+        expect.any(String),
+        expect.objectContaining({
+          content: `${VOICE_TRANSCRIPT_CONTENT_PREFIX} remember the rent\nplease file this`,
+        }),
+      );
     }
   });
 

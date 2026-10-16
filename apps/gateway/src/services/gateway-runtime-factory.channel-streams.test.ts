@@ -17,7 +17,16 @@ const streams = {
   }),
 };
 
+const voiceGates: Array<() => Promise<boolean>> = [];
+const isFeatureEnabled = vi.fn(async (flag: string) => flag === "channelVoiceInboundV1Enabled");
+
 class FakeGatewayService {
+  readonly discordRuntimeService = {
+    setVoiceInboundGate: (gate: () => Promise<boolean>) => {
+      voiceGates.push(gate);
+    },
+  };
+  readonly isFeatureEnabled = isFeatureEnabled;
   constructor(..._args: unknown[]) {
     calls.push("gateway.construct");
   }
@@ -52,6 +61,8 @@ const config = {} as Parameters<typeof createGatewayRuntime>[0];
 describe("gateway runtime facade channel-stream lifecycle", () => {
   beforeEach(() => {
     calls.length = 0;
+    voiceGates.length = 0;
+    isFeatureEnabled.mockClear();
     streams.sync.mockClear();
     streams.close.mockClear();
     getChannelStreamRuntime.mockClear();
@@ -89,5 +100,18 @@ describe("gateway runtime facade channel-stream lifecycle", () => {
     expect(getChannelStreamRuntime).not.toHaveBeenCalled();
     await admin.close();
     expect(streams.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires the Discord voice-inbound gate before serving deferred init, never from admin/cron init", async () => {
+    const admin = createGatewayAdminRuntime(config);
+    await admin.init();
+    expect(voiceGates).toHaveLength(0);
+
+    const runtime = createGatewayRuntime(config);
+    expect(voiceGates).toHaveLength(0);
+    await runtime.startDeferredInit();
+    expect(voiceGates).toHaveLength(1);
+    await expect(voiceGates[0]!()).resolves.toBe(true);
+    expect(isFeatureEnabled).toHaveBeenCalledWith("channelVoiceInboundV1Enabled");
   });
 });

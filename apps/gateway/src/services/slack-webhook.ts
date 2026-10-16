@@ -38,6 +38,8 @@ export type SlackWebhookNormalization =
       metadata: Record<string, unknown>;
       /** Present only when channelVoiceInboundV1Enabled and the message shares an audio file. */
       voiceMedia?: SlackVoiceMediaRef;
+      /** The typed text sent with the audio, kept so a successful transcript does not drop it. */
+      voiceCaption?: string;
     }
   | {
       kind: "ignore";
@@ -123,8 +125,8 @@ export function normalizeSlackWebhookPayload(input: {
   botUserId?: string;
   appId?: string;
   /**
-   * channelVoiceInboundV1Enabled gate. Absent/false (default) ⇒ audio file
-   * shares are routed by their typed text only (voice-only shares are ignored).
+   * channelVoiceInboundV1Enabled gate. Absent/false (default) ⇒ every
+   * file_share message stays ignored, exactly as before voice inbound existed.
    */
   voiceInboundEnabled?: boolean;
 }): SlackWebhookNormalization {
@@ -164,9 +166,10 @@ export function normalizeSlackWebhookPayload(input: {
 
   const subtype = asString(event.subtype);
   // `file_share` is the subtype Slack uses for a message carrying uploaded
-  // files (including audio clips). Its typed text is routed like any message;
-  // the audio itself is only picked up when voice inbound is enabled.
-  if (subtype && subtype !== SLACK_FILE_SHARE_SUBTYPE) {
+  // files. It stays ignored exactly as before unless voice inbound is enabled
+  // AND the share carries an audio file; image/PDF shares are never routed.
+  const voiceMedia = input.voiceInboundEnabled === true ? readSlackVoiceMedia(event) : undefined;
+  if (subtype && !(subtype === SLACK_FILE_SHARE_SUBTYPE && voiceMedia)) {
     return {
       kind: "ignore",
       eventType,
@@ -205,7 +208,6 @@ export function normalizeSlackWebhookPayload(input: {
   }
 
   const text = asString(event.text);
-  const voiceMedia = input.voiceInboundEnabled === true ? readSlackVoiceMedia(event) : undefined;
   const content = voiceMedia ? buildSlackVoiceFallbackContent(text) : text;
   const channel = asString(event.channel);
   const channelType = asString(event.channel_type);
@@ -234,7 +236,7 @@ export function normalizeSlackWebhookPayload(input: {
     peer: isDirectMessage ? channel : undefined,
     threadId: threadTs,
     deliveryReplyToMessageId: threadTs ?? messageTs,
-    ...(voiceMedia ? { voiceMedia } : {}),
+    ...(voiceMedia ? { voiceMedia, ...(text ? { voiceCaption: text } : {}) } : {}),
     metadata: {
       teamId,
       channel,

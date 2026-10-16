@@ -128,6 +128,7 @@ interface StoredInboundPayload {
   };
   voiceRequest?: PersistedVoiceRequest;
   voiceFallbackContent?: string;
+  voiceCaption?: string;
 }
 
 /** Secret-free voice media reference: every variant minus connectionConfig. */
@@ -737,7 +738,10 @@ export class InboundChannelEventService {
     try {
       const result = await this.deps.transcribeChannelVoice(request);
       if (result.ok) {
-        return `${VOICE_TRANSCRIPT_CONTENT_PREFIX} ${result.transcript}`;
+        // The transcript keeps its untrusted framing; the typed caption (the
+        // user's own text) follows on its own line so it is not lost.
+        const transcript = `${VOICE_TRANSCRIPT_CONTENT_PREFIX} ${result.transcript}`;
+        return payload.voiceCaption ? `${transcript}\n${payload.voiceCaption}` : transcript;
       }
       this.diagnostic("warn", "channel.voice_transcription_failed", "Voice transcription failed after acceptance.", {
         channel: request.channel,
@@ -874,6 +878,9 @@ function buildStoredPayload(input: DurableInboundChannelAcceptInput): Record<str
   }
   assignDefined(payload, "voiceRequest", input.voiceRequest ? persistVoiceRequest(input.voiceRequest) : undefined);
   assignDefined(payload, "voiceFallbackContent", normalizeOptionalString(input.voiceFallbackContent));
+  if (input.voiceRequest) {
+    assignDefined(payload, "voiceCaption", normalizeOptionalString(input.voiceCaption));
+  }
   if (input.acceptedConnectionRevision && /^[a-f0-9]{64}$/.test(input.acceptedConnectionRevision)) {
     (payload as unknown as Record<string, unknown>)[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY] =
       input.acceptedConnectionRevision;
@@ -922,6 +929,7 @@ function parseStoredPayload(event: InboundChannelEventRecord): StoredInboundPayl
       : undefined,
     voiceRequest: parsePersistedVoiceRequest(value.voiceRequest),
     voiceFallbackContent: readOptionalString(value.voiceFallbackContent),
+    voiceCaption: readOptionalString(value.voiceCaption),
   };
   return payload;
 }
