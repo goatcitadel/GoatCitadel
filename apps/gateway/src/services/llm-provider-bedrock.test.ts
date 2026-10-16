@@ -9,6 +9,11 @@ import {
   parseBedrockRegion,
 } from "./llm-provider-bedrock.js";
 import { decodeBedrockEventStream } from "./llm-provider-bedrock-stream.js";
+import {
+  bedrockEventFrame as frame,
+  bedrockEventStreamResponse as eventStreamResponse,
+  concatBytes as concat,
+} from "./llm-provider-bedrock.test-support.js";
 
 const SIGV4_SECRET = "test-secret";
 const PNG_BASE64 = "iVBORw0KGgo=";
@@ -92,18 +97,6 @@ const streamCodec = new EventStreamCodec(
   (text) => new TextEncoder().encode(text),
 );
 
-function frame(eventType: string, payload: unknown, messageType = "event"): Uint8Array {
-  return streamCodec.encode({
-    headers: {
-      ":event-type": { type: "string", value: eventType },
-      ":message-type": { type: "string", value: messageType },
-      ":content-type": { type: "string", value: "application/json" },
-      ...(messageType === "exception" ? { ":exception-type": { type: "string", value: eventType } } : {}),
-    },
-    body: new TextEncoder().encode(JSON.stringify(payload)),
-  });
-}
-
 function streamOf(bytes: Uint8Array, splitEvery: number): ReadableStream<Uint8Array> {
   return new ReadableStream({
     start(controller) {
@@ -112,23 +105,6 @@ function streamOf(bytes: Uint8Array, splitEvery: number): ReadableStream<Uint8Ar
       }
       controller.close();
     },
-  });
-}
-
-function concat(parts: Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
-}
-
-function eventStreamResponse(bytes: Uint8Array, splitEvery = 100000): Response {
-  return new Response(streamOf(bytes, splitEvery), {
-    status: 200,
-    headers: { "content-type": "application/vnd.amazon.eventstream" },
   });
 }
 

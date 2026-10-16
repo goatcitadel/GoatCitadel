@@ -5,7 +5,13 @@ import {
   type ProviderEditorDraft,
 } from "../../../features/native-routes/settings/helpers/provider-drafts";
 import { ProviderTransportFields } from "./ProviderTransportFields";
-import { LLM_API_STYLE_LABELS, LLM_API_STYLES } from "./settings-vocabulary";
+import {
+  AWS_SIGV4_CREDENTIAL_HELP,
+  BEDROCK_CREDENTIAL_MODE_OPTIONS,
+  isBedrockCredentialMode,
+  LLM_API_STYLE_LABELS,
+  LLM_API_STYLES,
+} from "./settings-vocabulary";
 
 export const providerFieldClass =
   "mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 py-1 text-sm text-fg disabled:opacity-60";
@@ -21,6 +27,7 @@ export function ProviderProfileFields(
   const draft = props.providerDraft;
   const codex = draft.providerId.trim().toLowerCase() === "openai-codex" || draft.authMode === "codex-oauth";
   const google = draft.authMode === "google-adc" || draft.authMode === "google-service-account";
+  const bedrock = draft.apiStyle === "bedrock-messages" || isBedrockCredentialMode(draft.authMode);
   const patch = <K extends keyof ProviderEditorDraft>(key: K, value: ProviderEditorDraft[K]) =>
     props.setProviderDraft((current) => ({ ...current, [key]: value }));
   const field = (key: keyof ProviderEditorDraft, label: string, disabled = false) => (
@@ -73,6 +80,13 @@ export function ProviderProfileFields(
             <option value="google-service-account">Google service account</option>
             <option value="claude-code-oauth">Claude Code OAuth token</option>
             <option value="codex-oauth">ChatGPT/Codex OAuth</option>
+            {bedrock
+              ? BEDROCK_CREDENTIAL_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))
+              : null}
           </select>
         </label>
         {!codex && draft.authMode !== "google-adc"
@@ -80,9 +94,14 @@ export function ProviderProfileFields(
               "apiKeyEnv",
               draft.authMode === "google-service-account"
                 ? "Service-account JSON environment variable"
-                : "API key environment variable",
+                : draft.authMode === "aws-sigv4"
+                  ? "AWS credentials JSON environment variable"
+                  : "API key environment variable",
             )
           : null}
+        {draft.authMode === "aws-sigv4" ? (
+          <p className="text-xs text-fg-muted sm:col-span-2">{AWS_SIGV4_CREDENTIAL_HELP}</p>
+        ) : null}
         {google ? (
           <>
             {field("googleProjectId", "Google Cloud project")}

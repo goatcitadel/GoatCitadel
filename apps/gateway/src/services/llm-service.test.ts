@@ -9,6 +9,7 @@ import {
   buildCompletionFromAggregate,
   createCompletionStreamAggregate,
 } from "./chat-agent-completion-adapters.js";
+import { bedrockEventFrame, bedrockEventStreamResponse, concatBytes } from "./llm-provider-bedrock.test-support.js";
 import { LlmService } from "./llm-service.js";
 import { projectLlmConfigPublicValue } from "./provider-settings-public-projection.js";
 import { SecretStoreService, SecretStoreUnavailableError } from "./secret-store-service.js";
@@ -1395,6 +1396,136 @@ describe("LlmService", () => {
     });
 
     expect(bedrock.providers.find((provider) => provider.providerId === "bedrock")?.apiStyle).toBe("bedrock-messages");
+  });
+
+  describe("Amazon Bedrock dispatch", () => {
+    const bedrockModel = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    const bedrockProvider = (authMode: "aws-bedrock-api-key" | "aws-sigv4"): LlmProviderConfig => ({
+      providerId: "bedrock",
+      label: "Amazon Bedrock",
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      apiStyle: "bedrock-messages",
+      defaultModel: bedrockModel,
+      authMode,
+      ...(authMode === "aws-bedrock-api-key" ? { apiKeyEnv: "BEDROCK_API_KEY" } : {}),
+    });
+    const createBedrockService = (
+      authMode: "aws-bedrock-api-key" | "aws-sigv4",
+      env: Record<string, string | undefined>,
+    ) =>
+      new LlmService(
+        { activeProviderId: "bedrock", providers: [bedrockProvider(authMode)] },
+        env as NodeJS.ProcessEnv,
+        {
+          secretStore: createNoopSecretStore(),
+        },
+      );
+    const converseResponse = () =>
+      new Response(
+        JSON.stringify({
+          output: { message: { role: "assistant", content: [{ text: "hi there" }] } },
+          stopReason: "end_turn",
+          usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+
+    async function captureBedrockCompletion(
+      authMode: "aws-bedrock-api-key" | "aws-sigv4",
+      env: Record<string, string | undefined>,
+    ): Promise<{ content: unknown; url: string; headers: Headers }> {
+      const service = createBedrockService(authMode, env);
+      const originalFetch = globalThis.fetch;
+      let url = "";
+      let headers = new Headers();
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        url = String(input);
+        headers = new Headers(init?.headers);
+        return converseResponse();
+      }) as unknown as typeof fetch;
+      try {
+        const completion = await service.chatCompletions({
+          providerId: "bedrock",
+          model: bedrockModel,
+          messages: [{ role: "user", content: "hi" }],
+        });
+        return { content: (completion.choices?.[0]?.message as { content?: unknown })?.content, url, headers };
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    }
+
+    it("dispatches Converse with a Bedrock API key from the environment", async () => {
+      const result = await captureBedrockCompletion("aws-bedrock-api-key", { BEDROCK_API_KEY: "bedrock-env-key" });
+      expect(result.content).toBe("hi there");
+      expect(result.url.endsWith("/converse")).toBe(true);
+      expect(result.headers.get("authorization")).toBe("Bearer bedrock-env-key");
+    });
+
+    it("signs Converse with SigV4 credentials from AWS_* environment variables", async () => {
+      const result = await captureBedrockCompletion("aws-sigv4", {
+        AWS_ACCESS_KEY_ID: "AKIATESTTESTTESTTEST",
+        AWS_SECRET_ACCESS_KEY: "test-secret",
+      });
+      expect(result.content).toBe("hi there");
+      expect(result.url.endsWith("/converse")).toBe(true);
+      expect(result.headers.get("authorization")).toMatch(/^AWS4-HMAC-SHA256 /);
+      expect(result.headers.get("authorization")).not.toContain("test-secret");
+    });
+
+    it("streams ConverseStream text deltas", async () => {
+      const service = createBedrockService("aws-bedrock-api-key", { BEDROCK_API_KEY: "bedrock-env-key" });
+      const originalFetch = globalThis.fetch;
+      let url = "";
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+        url = String(input);
+        return bedrockEventStreamResponse(
+          concatBytes([
+            bedrockEventFrame("messageStart", { role: "assistant" }),
+            bedrockEventFrame("contentBlockDelta", { contentBlockIndex: 0, delta: { text: "hi " } }),
+            bedrockEventFrame("contentBlockDelta", { contentBlockIndex: 0, delta: { text: "there" } }),
+            bedrockEventFrame("contentBlockStop", { contentBlockIndex: 0 }),
+            bedrockEventFrame("messageStop", { stopReason: "end_turn" }),
+            bedrockEventFrame("metadata", { usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 } }),
+          ]),
+          9,
+        );
+      }) as unknown as typeof fetch;
+      const deltas: string[] = [];
+      try {
+        for await (const chunk of service.chatCompletionsStream({
+          providerId: "bedrock",
+          model: bedrockModel,
+          messages: [{ role: "user", content: "hi" }],
+        })) {
+          const content = (chunk as { choices?: Array<{ delta?: { content?: string } }> }).choices?.[0]?.delta?.content;
+          if (typeof content === "string") {
+            deltas.push(content);
+          }
+        }
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+      expect(url.endsWith("/converse-stream")).toBe(true);
+      expect(deltas.join("")).toBe("hi there");
+    });
+
+    it("lists Bedrock models offline from the configured default and template", async () => {
+      const service = createBedrockService("aws-bedrock-api-key", { BEDROCK_API_KEY: "bedrock-env-key" });
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => new Response("{}", { status: 500 }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      try {
+        const result = await service.listModelsWithSource("bedrock");
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(result.source).toBe("template_fallback");
+        expect(result.items.map((item) => item.id)).toEqual(
+          expect.arrayContaining([bedrockModel, "us.amazon.nova-pro-v1:0"]),
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
   });
 
   it("rejects raw API-key storage for the OpenAI Codex OAuth provider", () => {

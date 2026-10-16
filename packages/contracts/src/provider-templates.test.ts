@@ -68,6 +68,20 @@ describe("provider templates", () => {
     });
   });
 
+  it("ships an Amazon Bedrock template keyed to Converse inference profiles", () => {
+    expect(findProviderTemplate("bedrock")).toMatchObject({
+      label: "Amazon Bedrock",
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      apiStyle: "bedrock-messages",
+      authMode: "aws-bedrock-api-key",
+      defaultModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    });
+    expect(findProviderTemplate("bedrock")?.knownModels).toEqual(
+      expect.arrayContaining(["us.anthropic.claude-sonnet-4-5-20250929-v1:0", "us.amazon.nova-pro-v1:0"]),
+    );
+    expect(inferProviderForModelId("us.amazon.nova-pro-v1:0")).toBe("bedrock");
+  });
+
   it("marks Anthropic as a native messages provider", () => {
     expect(findProviderTemplate("anthropic")?.apiStyle).toBe("anthropic-messages");
     const anthropicModels = findProviderTemplate("anthropic")?.knownModels ?? [];

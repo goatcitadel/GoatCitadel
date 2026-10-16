@@ -144,6 +144,16 @@ export const PROVIDER_AUTH_MODE_LABELS: Record<LlmProviderAuthMode, string> = {
   "aws-sigv4": "AWS access keys (SigV4)",
   "aws-bedrock-api-key": "a Bedrock API key",
 };
+export type BedrockCredentialMode = Extract<LlmProviderAuthMode, "aws-bedrock-api-key" | "aws-sigv4">;
+export const BEDROCK_CREDENTIAL_MODE_OPTIONS: ReadonlyArray<{ value: BedrockCredentialMode; label: string }> = [
+  { value: "aws-bedrock-api-key", label: "Bedrock API key" },
+  { value: "aws-sigv4", label: "AWS access key (SigV4)" },
+];
+export const AWS_SIGV4_CREDENTIAL_HELP =
+  '{"accessKeyId":"…","secretAccessKey":"…","sessionToken":"…"} — or leave empty to use AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the gateway environment.';
+export function isBedrockCredentialMode(value: string | null | undefined): value is BedrockCredentialMode {
+  return value === "aws-bedrock-api-key" || value === "aws-sigv4";
+}
 export const RUNTIME_PROCESS_STATE_LABELS: Record<LlamaCppRuntimeStatus["processState"], string> = {
   stopped: "Stopped",
   starting: "Starting",

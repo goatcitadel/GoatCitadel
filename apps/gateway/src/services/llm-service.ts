@@ -78,6 +78,7 @@ import {
 } from "./google-cloud-auth-service.js";
 import { resolveLlmReasoningProfile } from "./llm-reasoning-profile.js";
 import { anthropicProviderAdapter } from "./llm-provider-anthropic.js";
+import { bedrockProviderAdapter } from "./llm-provider-bedrock.js";
 import {
   createLlmProviderAdapterRegistry,
   type LlmProviderAdapterHost,
@@ -315,6 +316,7 @@ export class LlmService {
   private readonly requestDispatcherCache = new Map<string, Dispatcher>();
   private readonly providerAdapters: LlmProviderAdapterRegistry = createLlmProviderAdapterRegistry([
     anthropicProviderAdapter,
+    bedrockProviderAdapter,
   ]);
   private readonly providerAdapterHost: LlmProviderAdapterHost = {
     buildRequestTarget: (resolved, purpose, endpointUrl) => this.buildRequestTarget(resolved, purpose, endpointUrl),
@@ -1809,8 +1811,6 @@ export class LlmService {
           case "openai-responses":
             completion = await this.executeOpenAiResponses(reasoning.request, resolved, model, reasoning.attribution);
             break;
-          case "bedrock-messages":
-            throw new Error("AWS Bedrock messages API style is not yet supported in this version");
           default:
             completion = await this.executeChatCompletions(reasoning.request, resolved, model, reasoning.attribution);
         }
@@ -1978,8 +1978,6 @@ export class LlmService {
           case "openai-responses":
             stream = this.executeOpenAiResponsesStream(reasoning.request, resolved, model, reasoning.attribution);
             break;
-          case "bedrock-messages":
-            throw new Error("AWS Bedrock messages API style is not yet supported in this version");
           default:
             stream = this.executeChatCompletionsStream(reasoning.request, resolved, model, reasoning.attribution);
         }
@@ -3275,6 +3273,15 @@ export class LlmService {
     resolved: ResolvedProvider,
     options: { skipLocalLease?: boolean } = {},
   ): Promise<ModelDiscoveryResult> {
+    if (resolved.provider.apiStyle === "bedrock-messages") {
+      // The Bedrock runtime host has no model listing endpoint; the catalog is configuration only.
+      return {
+        items: buildBedrockModelCatalog(resolved.provider),
+        source: "template_fallback",
+        warning:
+          "Amazon Bedrock does not list models on its runtime endpoint. Showing the configured and template models.",
+      };
+    }
     const fallback = buildFallbackModelCatalog(resolved.provider.providerId, resolved.provider.defaultModel);
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
     const discoverySignal = AbortSignal.timeout(15_000);
@@ -3928,6 +3935,13 @@ function buildFallbackModelCatalog(providerId: string, defaultModel: string | un
   }
 
   return Array.from(ids, (id) => ({ id }));
+}
+
+function buildBedrockModelCatalog(provider: LlmProviderConfig): LlmModelRecord[] {
+  return mergeModelCatalogs(
+    buildFallbackModelCatalog(provider.providerId, provider.defaultModel),
+    buildFallbackModelCatalog("bedrock", undefined),
+  );
 }
 
 function defaultModelMetadataPath(configFilePath: string | undefined): string {
