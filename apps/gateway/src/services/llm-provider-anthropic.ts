@@ -316,6 +316,21 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
               continue;
             }
 
+            if (event.delta.type === "thinking_delta") {
+              const thinkingText = String(event.delta.thinking ?? "");
+              if (thinkingText) {
+                yield withUsageEvent(
+                  {
+                    id: messageId ?? "message",
+                    model: messageModel,
+                    choices: [{ index: 0, delta: { reasoning_content: thinkingText } }],
+                  },
+                  accounting,
+                  priorModelUsageEventIds,
+                );
+              }
+            }
+
             if (event.delta.type === "input_json_delta" && typeof event.index === "number") {
               const existing = toolUseBuffers.get(event.index);
               if (existing) {
