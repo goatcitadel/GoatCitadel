@@ -2,13 +2,51 @@ import { randomUUID } from "node:crypto";
 import { canonicalJsonString, type McpNormalizedRequesterDiscoveryCatalog } from "@goatcitadel/contracts";
 import { resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
 import type { McpInvokeRequest, McpServerRecord } from "@goatcitadel/contracts";
-import type { ChatTurnCapabilityProfileRecord, McpRequesterResolutionBinding, McpRequesterScopeAuthActorSource } from "@goatcitadel/contracts";
+import type {
+  ChatTurnCapabilityProfileRecord,
+  McpRequesterResolutionBinding,
+  McpRequesterScopeAuthActorSource,
+} from "@goatcitadel/contracts";
 import { discoverRequesterScopedMcpTools, invokeRequesterScopedMcpToolCall } from "./mcp-runtime.js";
-import { McpRequesterResolverRegistry, McpRequesterResolutionError, assertMcpRequesterResolutionBindingIntegrity, assertMcpRequesterBindingServerCurrent, snapshotMcpRequesterScopedServerSnapshot, type McpRequesterResolverRegistryInput, type McpRequesterScopedServerSnapshot, type McpRequesterResolutionReasonCode } from "./mcp-requester-resolution.js";
-import { MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS, McpProfileDiscoveryOutcomeRegistry, McpRequesterResolutionService, McpRequesterScopeLastOutcomeRecorder, buildRequesterScopedPreDispatchFailure, buildMcpRequesterScopedTurnContextFromCapabilityProfile, deriveMcpRequesterScopeOutcomeClassFromInvocationResult, discoverRequesterScopedCatalogForProfile, dispatchRequesterScopedToolCall, readMcpRequesterScopedTurnContext, resolveRequesterScopedBindingForProfileFreeze, resolveRequesterScopedCatalogBindingsForProfileFreeze, type McpRequesterScopeLastOutcomeClass, type McpRequesterScopedFreezeCurrentState, type McpRequesterScopedProfileFreezeHookInput, type McpRequesterScopedCatalogDiscoveryHookInput, type McpRequesterScopedCatalogFreezeHookInput, type McpRequesterScopedToolCallCurrentState } from "./mcp-requester-resolution-service.js";
+import {
+  McpRequesterResolverRegistry,
+  McpRequesterResolutionError,
+  assertMcpRequesterResolutionBindingIntegrity,
+  assertMcpRequesterBindingServerCurrent,
+  snapshotMcpRequesterScopedServerSnapshot,
+  type McpRequesterResolverRegistryInput,
+  type McpRequesterScopedServerSnapshot,
+  type McpRequesterResolutionReasonCode,
+} from "./mcp-requester-resolution.js";
+import {
+  MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS,
+  McpProfileDiscoveryOutcomeRegistry,
+  McpRequesterResolutionService,
+  McpRequesterScopeLastOutcomeRecorder,
+  buildRequesterScopedPreDispatchFailure,
+  buildMcpRequesterScopedTurnContextFromCapabilityProfile,
+  deriveMcpRequesterScopeOutcomeClassFromInvocationResult,
+  discoverRequesterScopedCatalogForProfile,
+  dispatchRequesterScopedToolCall,
+  readMcpRequesterScopedTurnContext,
+  resolveRequesterScopedBindingForProfileFreeze,
+  resolveRequesterScopedCatalogBindingsForProfileFreeze,
+  type McpRequesterScopeLastOutcomeClass,
+  type McpRequesterScopedFreezeCurrentState,
+  type McpRequesterScopedProfileFreezeHookInput,
+  type McpRequesterScopedCatalogDiscoveryHookInput,
+  type McpRequesterScopedCatalogFreezeHookInput,
+  type McpRequesterScopedToolCallCurrentState,
+} from "./mcp-requester-resolution-service.js";
 import { createMcpRequesterDiscoverySecretScanner } from "./mcp-resolution-secret-guard.js";
-import type { McpRequesterScopeDiagnosticsReadPort, McpRequesterScopeResolverRegistrationRef } from "./mcp-diagnostics-service.js";
-import { type RequesterScopedMcpDispatchInput, type RequesterScopedMcpDispatchPort } from "./tool-invocation-coordinator-service.js";
+import type {
+  McpRequesterScopeDiagnosticsReadPort,
+  McpRequesterScopeResolverRegistrationRef,
+} from "./mcp-diagnostics-service.js";
+import {
+  type RequesterScopedMcpDispatchInput,
+  type RequesterScopedMcpDispatchPort,
+} from "./tool-invocation-coordinator-service.js";
 
 /**
  * HX-415 slice 7d composition host. Every port reads LIVE server-owned state on
@@ -101,8 +139,12 @@ export async function readLiveRequesterScopedServerSnapshot(
     if (resolveMcpServerConnectionMode(record) !== "requester_scoped") {
       return undefined;
     }
+    // Requester-scoped connections speak Streamable HTTP only: the per-attempt
+    // isolated transport has no legacy HTTP+SSE handshake, so an sse record is
+    // not callable here (fail-closed as server_not_callable) rather than being
+    // sent Streamable HTTP POSTs it does not understand.
     if (
-      (record.transport !== "http" && record.transport !== "sse") ||
+      record.transport !== "http" ||
       typeof record.configurationRevision !== "number" ||
       !record.requesterResolution
     ) {
@@ -630,4 +672,3 @@ export function composeMcpRequesterScopedRuntime(
     requesterScopeDiagnostics,
   };
 }
-

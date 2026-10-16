@@ -287,7 +287,10 @@ class LegacySseSession {
       // Non-JSON stream events are not replies to a pending request.
       return;
     }
-    if (typeof envelope.id === "number") {
+    // Only replies (an id and no method) settle a pending request. Server-to-client
+    // requests and notifications on the stream are ignored in v1: sampling,
+    // roots, and elicitation are not offered over the legacy transport.
+    if (typeof envelope.id === "number" && envelope.method === undefined) {
       this.pending.get(envelope.id)?.resolve(envelope);
     }
   }
@@ -303,6 +306,10 @@ class LegacySseSession {
       endpoint = new URL(data.trim(), streamUrl);
     } catch {
       this.fail(new Error(`MCP SSE server ${server.label} announced an invalid message endpoint.`));
+      return;
+    }
+    if (endpoint.username || endpoint.password) {
+      this.fail(new Error(`MCP SSE server ${server.label} announced a message endpoint carrying credentials.`));
       return;
     }
     if (endpoint.origin !== new URL(streamUrl).origin) {
@@ -338,11 +345,16 @@ class LegacySseSession {
   }
 }
 
+const SSE_LINE_END = /\r\n|\n|\r/;
+
 // Incremental text/event-stream parser. Each event (its buffered lines plus any
 // unterminated tail) is capped at `maxEventBytes`.
 class SseEventParser {
-  private readonly decoder = new TextDecoder();
+  // ignoreBOM: false (the default, spelled out) strips a leading U+FEFF on the
+  // first decode, as the event-stream format requires.
+  private readonly decoder = new TextDecoder("utf-8", { ignoreBOM: false });
   private buffered = "";
+  private pendingCarriageReturn = false;
   private eventName = "";
   private dataLines: string[] = [];
   private eventBytes = 0;
@@ -350,18 +362,27 @@ class SseEventParser {
   public constructor(private readonly maxEventBytes: number) {}
 
   public push(chunk: Uint8Array): SseEvent[] {
-    this.buffered += this.decoder.decode(chunk, { stream: true });
+    let text = this.decoder.decode(chunk, { stream: true });
+    if (this.pendingCarriageReturn && text.length > 0) {
+      // The previous chunk ended in a bare "\r" that was already taken as a
+      // line end; a "\n" opening this chunk completes that CRLF, not a new line.
+      if (text.startsWith("\n")) {
+        text = text.slice(1);
+      }
+      this.pendingCarriageReturn = false;
+    }
+    this.buffered += text;
     const events: SseEvent[] = [];
-    let newlineIndex = this.buffered.search(/\r?\n|\r/);
-    while (newlineIndex >= 0) {
-      const line = this.buffered.slice(0, newlineIndex);
-      const newlineLength = this.buffered.startsWith("\r\n", newlineIndex) ? 2 : 1;
-      this.buffered = this.buffered.slice(newlineIndex + newlineLength);
+    let lineEnd = SSE_LINE_END.exec(this.buffered);
+    while (lineEnd) {
+      const line = this.buffered.slice(0, lineEnd.index);
+      this.buffered = this.buffered.slice(lineEnd.index + lineEnd[0].length);
+      this.pendingCarriageReturn = lineEnd[0] === "\r" && this.buffered.length === 0;
       const event = this.consumeLine(line);
       if (event) {
         events.push(event);
       }
-      newlineIndex = this.buffered.search(/\r?\n|\r/);
+      lineEnd = SSE_LINE_END.exec(this.buffered);
     }
     if (this.eventBytes + Buffer.byteLength(this.buffered) > this.maxEventBytes) {
       throw createMcpHttpBodyLimitError(this.maxEventBytes);

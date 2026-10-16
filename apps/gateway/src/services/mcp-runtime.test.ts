@@ -1665,6 +1665,8 @@ interface LegacySseTestSession {
   sessionId: string;
   connection: number;
   stream: http.ServerResponse;
+  eol: string;
+  host: string;
 }
 
 interface LegacySseTestServer {
@@ -1679,6 +1681,9 @@ type LegacySseTestOutcome = { status?: number; reply?: Record<string, unknown> }
 async function withLegacySseMcpServer<T>(
   input: {
     endpointFor?: (session: LegacySseTestSession) => string;
+    lineEnding?: "\n" | "\r\n";
+    streamPrefix?: string;
+    splitEndpointAfterCarriageReturn?: boolean;
     onMessage: (input: { message: Record<string, unknown>; session: LegacySseTestSession }) => LegacySseTestOutcome;
   },
   run: (server: LegacySseTestServer) => Promise<T>,
@@ -1689,15 +1694,25 @@ async function withLegacySseMcpServer<T>(
     const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
     if (request.method === "GET" && requestUrl.pathname === "/sse") {
       state.getCount += 1;
+      const eol = input.lineEnding ?? "\n";
       const session: LegacySseTestSession = {
         sessionId: `s${state.getCount}`,
         connection: state.getCount,
         stream: response,
+        eol,
+        host: request.headers.host ?? "",
       };
       sessions.set(session.sessionId, session);
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       const endpoint = input.endpointFor?.(session) ?? `/messages?sessionId=${session.sessionId}`;
-      response.write(`event: endpoint\ndata: ${endpoint}\n\n`);
+      const prefix = input.streamPrefix ?? "";
+      if (input.splitEndpointAfterCarriageReturn) {
+        // The CRLF after the event name straddles two network chunks.
+        response.write(`${prefix}event: endpoint\r`);
+        setTimeout(() => response.write(`\ndata: ${endpoint}\r\n\r\n`), 30);
+        return;
+      }
+      response.write(`${prefix}event: endpoint${eol}data: ${endpoint}${eol}${eol}`);
       return;
     }
     const chunks: Buffer[] = [];
@@ -1717,7 +1732,8 @@ async function withLegacySseMcpServer<T>(
       const outcome = input.onMessage({ message, session }) ?? {};
       response.writeHead(outcome.status ?? 202).end("Accepted");
       if (outcome.reply !== undefined) {
-        session.stream.write(`event: message\ndata: ${JSON.stringify(outcome.reply)}\n\n`);
+        const eol = session.eol;
+        session.stream.write(`event: message${eol}data: ${JSON.stringify(outcome.reply)}${eol}${eol}`);
       }
     });
   });
@@ -1811,6 +1827,40 @@ describe("legacy HTTP+SSE transport", () => {
         },
       );
     });
+  });
+
+  it.each([
+    { name: "a CRLF stream", options: { lineEnding: "\r\n" as const } },
+    { name: "a CRLF split across chunks after the event name", options: { splitEndpointAfterCarriageReturn: true } },
+    { name: "a stream opening with a UTF-8 BOM", options: { streamPrefix: "\uFEFF" } },
+  ])("parses the endpoint handshake from $name", async ({ options }) => {
+    await withLegacySseMcpServer(
+      { ...options, onMessage: ({ message }) => replyToLegacyHandshake(message) },
+      async (sse) => {
+        const tools = await discoverMcpTools({ ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" }, 1000, {
+          networkAllowlist: [sse.host],
+        });
+        expect(tools.map((tool) => tool.toolName)).toEqual(["legacy.search"]);
+        expect(new Set(sse.postPaths)).toEqual(new Set(["/messages"]));
+      },
+    );
+  });
+
+  it("refuses a message endpoint carrying userinfo credentials before posting anything", async () => {
+    await withLegacySseMcpServer(
+      {
+        endpointFor: (session) => `http://user:secret@${session.host}/messages?sessionId=${session.sessionId}`,
+        onMessage: ({ message }) => replyToLegacyHandshake(message),
+      },
+      async (sse) => {
+        await expect(
+          discoverMcpTools({ ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" }, 1000, {
+            networkAllowlist: [sse.host],
+          }),
+        ).rejects.toThrow(/carrying credentials/);
+        expect(sse.postPaths).toEqual([]);
+      },
+    );
   });
 
   it("rejects an oversized stream message event", async () => {
