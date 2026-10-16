@@ -1,5 +1,6 @@
 import path from "node:path";
 import os from "node:os";
+import { realpathSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConfigValidationError } from "@goatcitadel/contracts";
@@ -97,6 +98,48 @@ describe("loadGatewayConfig", () => {
     const config = await loadGatewayConfig(rootDir);
     expect(config.toolPolicy.sandbox.writeJailRoots).toEqual([path.join(rootDir, "workspace"), outsideRoot]);
     expect(config.toolPolicy.sandbox.readOnlyRoots).toEqual([]);
+  });
+
+  it("resolves operator write roots, drops unsafe entries, and derives runtime write protection", async () => {
+    const { rootDir, configDir } = await createConfigFixture();
+    const operatorRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-operator-root-"));
+    TEMP_ROOTS.push(operatorRoot);
+    await mkdir(path.join(rootDir, "workspace", "exports"), { recursive: true });
+    await writeJson(path.join(configDir, "tool-policy.json"), {
+      profiles: {},
+      tools: { profile: "minimal", allow: [], deny: [] },
+      agents: {},
+      sandbox: {
+        writeJailRoots: ["./workspace"],
+        readOnlyRoots: [],
+        operatorWriteRoots: [
+          { path: operatorRoot, allowDelete: true, label: "Scratch" },
+          { path: operatorRoot, allowDelete: false },
+          { path: "./workspace/exports", allowDelete: false },
+          { path: "./config", allowDelete: true },
+          { path: rootDir, allowDelete: true },
+          { path: path.join(rootDir, "missing-folder"), allowDelete: false },
+        ],
+        runtimeWriteProtection: { rootDir: "C:/forged", protectedPaths: [] },
+      },
+    });
+
+    const config = await loadGatewayConfig(rootDir);
+    const realOperatorRoot = realpathSync.native(operatorRoot);
+    const realExports = realpathSync.native(path.join(rootDir, "workspace", "exports"));
+    expect(config.toolPolicy.sandbox.operatorWriteRoots).toEqual([
+      { path: realOperatorRoot, allowDelete: true, label: "Scratch" },
+      { path: realExports, allowDelete: false },
+    ]);
+    expect(config.toolPolicy.sandbox.runtimeWriteProtection).toEqual({
+      rootDir: path.resolve(rootDir),
+      protectedPaths: [
+        path.join(path.resolve(rootDir), "config"),
+        path.join(path.resolve(rootDir), "data", "secrets"),
+        path.join(path.resolve(rootDir), "data", "postgres"),
+        path.join(path.resolve(rootDir), "data", "audit"),
+      ],
+    });
   });
 
   it("defaults computer-use guardrails feature flag to true when omitted", async () => {

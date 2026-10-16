@@ -122,6 +122,29 @@ describe("sandbox root persistence", () => {
     expect(sandbox.writeJailRoots).toEqual(["./workspace", outsideRoot]);
     expect(sandbox.readOnlyRoots).toEqual([outsideRoot]);
   });
+
+  it("persists operator write roots but never the runtime-derived write protection", () => {
+    const operatorWriteRoots = [{ path: outsideRoot, allowDelete: true, preset: "os_temp" as const }];
+    const runtimeConfig = {
+      rootDir,
+      assistant: { auth: { token: {} } },
+      budgets: {},
+      toolPolicy: {
+        tools: {},
+        sandbox: {
+          writeJailRoots: [],
+          readOnlyRoots: [],
+          operatorWriteRoots,
+          runtimeWriteProtection: { rootDir, protectedPaths: [path.join(rootDir, "config")] },
+        },
+      },
+    } as unknown as GatewayRuntimeConfig;
+    const payload = buildUnifiedConfigPayloadFromRuntime(runtimeConfig, {} as never, {} as never, { jobs: [] }, relativeSerializer);
+    const sandbox = (payload.toolPolicy as { sandbox: Record<string, unknown> }).sandbox;
+    expect(sandbox.operatorWriteRoots).toEqual(operatorWriteRoots);
+    expect(sandbox).not.toHaveProperty("runtimeWriteProtection");
+    expect(runtimeConfig.toolPolicy.sandbox.runtimeWriteProtection).toBeDefined();
+  });
 });
 
 describe("syncUnifiedConfig", () => {

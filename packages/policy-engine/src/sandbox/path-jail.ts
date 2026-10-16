@@ -6,12 +6,14 @@ export interface ReadPathAccessDecision {
   withinRoots: boolean;
 }
 
-export function assertWritePathInJail(targetPath: string, writeJailRoots: string[]): void {
+/** Assert the target is inside the jail; returns the target resolved through its closest existing ancestor. */
+export function assertWritePathInJail(targetPath: string, writeJailRoots: string[]): string {
   const resolvedTarget = resolvePathViaExistingAncestor(targetPath, {
     roots: writeJailRoots,
     scope: "write jail",
   });
   assertWithinRoots(resolvedTarget, writeJailRoots, "write jail");
+  return resolvedTarget;
 }
 
 export function assertReadPathAllowed(targetPath: string, writeJailRoots: string[], readOnlyRoots: string[]): void {

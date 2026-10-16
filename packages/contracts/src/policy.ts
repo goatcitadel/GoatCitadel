@@ -355,6 +355,29 @@ export interface ToolRiskyArgumentPattern {
   valuePatterns: string[];
 }
 
+/**
+ * A folder outside the runtime write jail that an operator opened to tool
+ * writes. It widens only model-driven filesystem tools (never Workbench,
+ * worktrees, or memory exports), and deny-wins, approvals, and the
+ * hard-forbidden write paths still apply inside it.
+ */
+export interface OperatorWriteRoot {
+  /** Canonical absolute folder path (re-resolved from `preset` at load when set). */
+  path: string;
+  /** Allow delete-shaped operations (fs.delete, the source of fs.move) inside this folder. */
+  allowDelete: boolean;
+  label?: string;
+  /** Built-in folder resolved on the server; the stored path is informational. */
+  preset?: "os_temp";
+  addedAt?: string;
+}
+
+/** Runtime-derived write protection set at config load; never persisted. */
+export interface RuntimeWriteProtection {
+  rootDir: string;
+  protectedPaths: string[];
+}
+
 export interface ToolPolicyConfig {
   /** Deprecated config field; named profiles no longer affect tool access. */
   profiles?: Record<string, string[]>;
@@ -382,6 +405,10 @@ export interface ToolPolicyConfig {
      * workflows that intentionally hand a credential to shell/test commands).
      */
     spawnEnvPassthrough?: string[];
+    /** Operator-opened folders outside the write jail, for filesystem tools only. */
+    operatorWriteRoots?: OperatorWriteRoot[];
+    /** Set by the gateway at config load from the runtime root; stripped before config is persisted. */
+    runtimeWriteProtection?: RuntimeWriteProtection;
   };
   /**
    * Hooks-scoped webhook egress, distinct from tool-sandbox egress. Non-empty
@@ -494,6 +521,8 @@ export interface SandboxAccessPolicy {
   networkAllowlist: string[];
   writeJailRoots: string[];
   readOnlyRoots: string[];
+  /** Present only when an operator opened folders outside the jail to filesystem tools. */
+  operatorWriteRoots?: Array<Pick<OperatorWriteRoot, "path" | "allowDelete">>;
   riskyShellPatterns: string[];
   riskyArgumentPatterns: ToolRiskyArgumentPattern[];
 }

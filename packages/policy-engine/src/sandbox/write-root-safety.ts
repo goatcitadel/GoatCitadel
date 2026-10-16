@@ -10,11 +10,10 @@ import path from "node:path";
  * The module only classifies paths; it never widens access by itself. Callers
  * stay responsible for deny-wins, approvals, and the path-jail checks.
  *
- * Enforcement status: nothing calls this module yet, so it does not protect
- * any write today. The policy engine and tool executor adopt
- * `classifyHardForbiddenWritePath` for every write and delete target when
- * operator write roots land; until then `assertWritePathInJail` and the
- * configured `writeJailRoots` remain the only write boundary.
+ * Enforcement: `sandbox/tool-write-gate.ts` applies these rules to every
+ * filesystem, artifact, and browser-output write in the policy engine and the
+ * tool executor. Git tools and html render outputs keep the plain write-jail
+ * check.
  */
 export type WriteRootRejection =
   | "control_characters"
@@ -34,8 +33,11 @@ export type WriteRootRejection =
 export type WriteRootPreset = "os_temp";
 
 export interface WriteRootSafetyContext {
-  /** GoatCitadel runtime root (absolute). */
-  rootDir: string;
+  /**
+   * GoatCitadel runtime root (absolute). When omitted, only the system,
+   * credential, and profile rules apply (plus any `protectedRuntimePaths`).
+   */
+  rootDir?: string;
   /** Absolute runtime paths that are never writable. Defaults to config/ and the sensitive data/ subtrees. */
   protectedRuntimePaths?: readonly string[];
   env?: Readonly<Record<string, string | undefined>>;
@@ -116,9 +118,8 @@ export function canonicalizeOperatorWriteRoot(input: string, ctx: WriteRootSafet
 
 /**
  * Classify a resolved runtime write or delete target. Returns a rejection when
- * the target is one that write enforcement should refuse even inside an
- * allowed root or grant. This is a classifier only: it blocks nothing until a
- * write gate calls it (see the enforcement status note above).
+ * the target must be refused even inside an allowed root or grant; the tool
+ * write gate enforces it (see the enforcement note above).
  * Pass a path already resolved through links (for example via the closest
  * existing ancestor), since this check is lexical.
  */
@@ -218,12 +219,13 @@ function classifyUserLocation(target: string, ctx: WriteRootSafetyContext): Writ
 
 function classifyRuntimeLocation(target: string, ctx: WriteRootSafetyContext): WriteRootRejection | undefined {
   const p = pathApi(ctx);
-  const rootDir = p.resolve(ctx.rootDir);
-  if (isSamePathOrDescendant(target, rootDir, platformOf(ctx))) {
+  const rootDir = ctx.rootDir ? p.resolve(ctx.rootDir) : undefined;
+  if (rootDir && isSamePathOrDescendant(target, rootDir, platformOf(ctx))) {
     return "contains_runtime_root";
   }
   const protectedPaths =
-    ctx.protectedRuntimePaths ?? DEFAULT_PROTECTED_RUNTIME_SUBPATHS.map((segments) => p.join(rootDir, ...segments));
+    ctx.protectedRuntimePaths ??
+    (rootDir ? DEFAULT_PROTECTED_RUNTIME_SUBPATHS.map((segments) => p.join(rootDir, ...segments)) : []);
   if (protectedPaths.some((dir) => isSamePathOrDescendant(dir, target, platformOf(ctx)))) {
     return "runtime_protected_path";
   }

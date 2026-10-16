@@ -45,6 +45,7 @@
   "sandbox": {
     "writeJailRoots": ["./workspace", "./data", "./.worktrees"],
     "readOnlyRoots": ["./skills"],
+    "operatorWriteRoots": [],
     "readAccessMode": "approval_required",
     "networkAllowlist": [
       "discord.com",

@@ -22,6 +22,7 @@ import { logger } from "@goatcitadel/gateway-core";
 import { normalizeFirecrawlApiKeyEnvName } from "@goatcitadel/policy-engine";
 import { ZodError, type ZodType } from "zod";
 import { materializeConfigFilesFromExamples } from "./config-files.js";
+import { buildRuntimeWriteProtection, resolveOperatorWriteRoots } from "./config-operator-write-roots.js";
 import { syncUnifiedConfig } from "./config-sync-lib.js";
 import { AUTO_NATIVE_BIN_DIR } from "./postgres-runtime-config.js";
 import { isVerboseLoggingEnabled } from "./runtime-ux.js";
@@ -569,6 +570,12 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
   toolPolicy.tools.approvalMode = assistant.toolApprovalMode ?? toolPolicy.tools.approvalMode;
   toolPolicy.sandbox.writeJailRoots = resolveSandboxRoots(rootDir, toolPolicy.sandbox.writeJailRoots, "writeJailRoots");
   toolPolicy.sandbox.readOnlyRoots = resolveSandboxRoots(rootDir, toolPolicy.sandbox.readOnlyRoots, "readOnlyRoots");
+  const runtimeWriteProtection = buildRuntimeWriteProtection(rootDir, assistant);
+  toolPolicy.sandbox.runtimeWriteProtection = runtimeWriteProtection;
+  toolPolicy.sandbox.operatorWriteRoots = resolveOperatorWriteRoots(
+    toolPolicy.sandbox.operatorWriteRoots ?? [],
+    runtimeWriteProtection,
+  );
 
   const result: GatewayRuntimeConfig = {
     assistant,

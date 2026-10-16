@@ -128,6 +128,25 @@ export const ToolPolicyConfigSchema = z
          * model-driven child processes (shell/tests/lint/build spawns).
          */
         spawnEnvPassthrough: z.array(z.string().min(1).max(256)).max(64).default([]),
+        /**
+         * Operator-opened folders outside the write jail, for model-driven
+         * filesystem tools only. Validated against the write-root safety rules
+         * at load; invalid entries are dropped with a warning.
+         */
+        operatorWriteRoots: z
+          .array(
+            z
+              .object({
+                path: SandboxJailRootSchema,
+                allowDelete: z.boolean().default(false),
+                label: z.string().max(120).optional(),
+                preset: z.enum(["os_temp"]).optional(),
+                addedAt: z.string().max(64).optional(),
+              })
+              .strict(),
+          )
+          .max(32)
+          .default([]),
       })
       .passthrough(),
     /**
