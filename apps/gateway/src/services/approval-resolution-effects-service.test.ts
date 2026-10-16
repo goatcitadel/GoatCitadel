@@ -7772,6 +7772,48 @@ describe("communications approval effects", () => {
     }
   });
 
+  it("never enqueues pending_action_execute for a calendar create approval with a pending tool.invoke row", async () => {
+    const harness = createCommsEffectHarness();
+    try {
+      const hashed: CalendarCreateApprovalInput = {
+        eventId: `calendar_event_${randomUUID()}`,
+        accountId: "conn-calendar",
+        title: "Planning",
+        startIso: "2026-10-20T15:00:00.000Z",
+        endIso: "2026-10-20T15:30:00.000Z",
+        attendees: [],
+      };
+      const created = await harness.storage.approvals.create({
+        kind: "communications.calendar.create",
+        riskLevel: "caution",
+        payload: { action: "calendar_event_create", ...hashed, payloadHash: computeCommunicationsPayloadHash(hashed) },
+        preview: {},
+      });
+      const approval = await harness.storage.approvals.resolve(created.approvalId, {
+        decision: "approve",
+        resolvedBy: "operator",
+      });
+      // A mid-create crash leaves the comms pre-approval row pending.
+      await harness.storage.pendingApprovalActions.upsertPending({
+        approvalId: approval.approvalId,
+        actionType: "tool.invoke",
+        request: { toolName: "calendar.create_event", args: {} },
+      });
+      const { service } = harness.createEffects();
+
+      const enqueued = await service.enqueueResolutionEffects(
+        approval,
+        { decision: "approve", resolvedBy: "operator" },
+        { deferProcessing: true },
+      );
+
+      expect(enqueued.map((effect) => effect.effectKind)).not.toContain("pending_action_execute");
+      expect(enqueued.map((effect) => effect.effectKind)).toContain("communications_calendar_create_apply");
+    } finally {
+      harness.raw.close();
+    }
+  });
+
   it("records an expired mail send approval with the expiry wording", async () => {
     const harness = createCommsEffectHarness();
     try {
