@@ -122,7 +122,15 @@ const updateConfigSchema = z.object({
       baseUrl: z.string().url().optional(),
       apiStyle: llmApiStyleSchema.optional(),
       authMode: z
-        .enum(["api-key", "codex-oauth", "claude-code-oauth", "google-service-account", "google-adc"])
+        .enum([
+          "api-key",
+          "codex-oauth",
+          "claude-code-oauth",
+          "google-service-account",
+          "google-adc",
+          "aws-sigv4",
+          "aws-bedrock-api-key",
+        ])
         .optional(),
       defaultModel: z.string().min(1).optional(),
       apiKey: z.string().min(1).optional(),

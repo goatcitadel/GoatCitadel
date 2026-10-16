@@ -218,7 +218,15 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
                     },
                     authMode: {
                       type: "string",
-                      enum: ["api-key", "codex-oauth", "claude-code-oauth", "google-service-account", "google-adc"],
+                      enum: [
+                        "api-key",
+                        "codex-oauth",
+                        "claude-code-oauth",
+                        "google-service-account",
+                        "google-adc",
+                        "aws-sigv4",
+                        "aws-bedrock-api-key",
+                      ],
                     },
                     defaultModel: { type: "string", minLength: 1, maxLength: 256 },
                   },

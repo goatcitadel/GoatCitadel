@@ -2778,6 +2778,19 @@ export class LlmService {
       };
     }
 
+    if (authMode === "aws-sigv4") {
+      const secretStatus = this.getProviderSecretStatus(provider.providerId, {
+        includeKeychain: true,
+        useCache: false,
+      });
+      if (secretStatus.apiKeySource === "inline") {
+        throw new Error(
+          "AWS SigV4 credentials must be stored in the Gateway keychain or provided through AWS_* environment variables.",
+        );
+      }
+      return { provider, apiKey: this.resolveApiKey(provider) ?? this.resolveAwsEnvCredentials() };
+    }
+
     const apiKey = isOpenAICodexProvider(provider)
       ? options.requireAuth
         ? await this.openAICodexOAuth.resolveAccessToken()
@@ -2851,6 +2864,16 @@ export class LlmService {
     return undefined;
   }
 
+  private resolveAwsEnvCredentials(): string | undefined {
+    const accessKeyId = this.env.AWS_ACCESS_KEY_ID?.trim();
+    const secretAccessKey = this.env.AWS_SECRET_ACCESS_KEY?.trim();
+    if (!accessKeyId || !secretAccessKey) {
+      return undefined;
+    }
+    const sessionToken = this.env.AWS_SESSION_TOKEN?.trim();
+    return JSON.stringify({ accessKeyId, secretAccessKey, ...(sessionToken ? { sessionToken } : {}) });
+  }
+
   private readKeychainApiKey(providerId: string): string | undefined {
     try {
       return this.secretStore.getProviderApiKey(providerId);
@@ -2893,9 +2916,12 @@ export class LlmService {
     const useClaudeCodeOAuthHeaders =
       isClaudeCodeOAuthProvider(resolved.provider) && (purpose === "models" || purpose === "messages");
 
+    const isSigV4 = resolveProviderAuthMode(resolved.provider) === "aws-sigv4";
+    const bearerSecret = isSigV4 ? undefined : resolved.apiKey;
+
     delete headers.Authorization;
     delete headers["x-api-key"];
-    applyRequestAuthHeaders(headers, explicitAuth, this.env, resolved.apiKey);
+    applyRequestAuthHeaders(headers, explicitAuth, this.env, bearerSecret);
     if (useClaudeCodeOAuthHeaders && !explicitAuth && resolved.apiKey) {
       headers.Authorization = `Bearer ${resolved.apiKey}`;
       headers["anthropic-beta"] = "oauth-2025-04-20";
@@ -2903,8 +2929,8 @@ export class LlmService {
     } else if (useAnthropicNativeHeaders && !explicitAuth && resolved.apiKey) {
       headers["x-api-key"] = resolved.apiKey;
       delete headers.Authorization;
-    } else if (!explicitAuth && resolved.apiKey) {
-      headers.Authorization = `Bearer ${resolved.apiKey}`;
+    } else if (!explicitAuth && bearerSecret) {
+      headers.Authorization = `Bearer ${bearerSecret}`;
     }
     if (useAnthropicNativeHeaders || useClaudeCodeOAuthHeaders) {
       headers["anthropic-version"] = "2023-06-01";

@@ -25,7 +25,15 @@ const providerProfileSchema = z
       ])
       .optional(),
     authMode: z
-      .enum(["api-key", "codex-oauth", "claude-code-oauth", "google-service-account", "google-adc"])
+      .enum([
+        "api-key",
+        "codex-oauth",
+        "claude-code-oauth",
+        "google-service-account",
+        "google-adc",
+        "aws-sigv4",
+        "aws-bedrock-api-key",
+      ])
       .optional(),
     defaultModel: identifier.optional(),
     apiKeyEnv: z

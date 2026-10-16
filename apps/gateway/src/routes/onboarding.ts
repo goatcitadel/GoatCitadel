@@ -2,7 +2,11 @@ import { projectGatewayCurrentAccess } from "./auth-current-access.js";
 import { hasOperatorControlPlaneAccess } from "../plugins/auth.js";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { LlmProviderCapabilitiesSchema, LlmProviderGoogleCloudConfigSchema } from "@goatcitadel/contracts";
+import {
+  LlmProviderAuthModeSchema,
+  LlmProviderCapabilitiesSchema,
+  LlmProviderGoogleCloudConfigSchema,
+} from "@goatcitadel/contracts";
 import { sendRouteError } from "./_error-handler.js";
 
 const onboardingTimingEnabled = process.env.GOATCITADEL_DEBUG_ONBOARDING_TIMING === "1";
@@ -116,9 +120,7 @@ const bootstrapSchema = z.object({
           label: z.string().min(1).optional(),
           baseUrl: z.string().url().optional(),
           apiStyle: llmApiStyleSchema.optional(),
-          authMode: z
-            .enum(["api-key", "codex-oauth", "claude-code-oauth", "google-service-account", "google-adc"])
-            .optional(),
+          authMode: LlmProviderAuthModeSchema.optional(),
           defaultModel: z.string().min(1).optional(),
           apiKey: z.string().min(1).optional(),
           apiKeyEnv: z.string().min(1).optional(),
@@ -154,9 +156,13 @@ export const onboardingRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/onboarding/startup", async (request, reply) => {
     try {
       const state = fastify.services.onboarding.getOnboardingStartupState();
-      const currentAccess = request.authActorSource !== undefined
-        ? projectGatewayCurrentAccess(request, hasOperatorControlPlaneAccess(fastify, request.authActorSource)) : undefined;
-      return reply.header("Cache-Control", "private, no-store").send({ ...state, ...(currentAccess ? { currentAccess } : {}) });
+      const currentAccess =
+        request.authActorSource !== undefined
+          ? projectGatewayCurrentAccess(request, hasOperatorControlPlaneAccess(fastify, request.authActorSource))
+          : undefined;
+      return reply
+        .header("Cache-Control", "private, no-store")
+        .send({ ...state, ...(currentAccess ? { currentAccess } : {}) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

@@ -5020,6 +5020,85 @@ describe("LlmService", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  describe("Bedrock SigV4 auth", () => {
+    const sigV4Provider: LlmProviderConfig = {
+      providerId: "bedrock",
+      label: "Bedrock",
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      apiStyle: "bedrock-messages",
+      defaultModel: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      authMode: "aws-sigv4",
+    };
+    const createSigV4Service = (
+      provider: LlmProviderConfig,
+      env: Record<string, string | undefined>,
+      secretStore: SecretStoreService = createNoopSecretStore(),
+    ) =>
+      new LlmService({ activeProviderId: "bedrock", providers: [provider] }, env as NodeJS.ProcessEnv, {
+        secretStore,
+      }) as unknown as {
+        buildHeaders(
+          resolved: { provider: LlmProviderConfig; apiKey?: string },
+          purpose: string,
+        ): Record<string, string>;
+        resolveProvider(providerId?: string): Promise<{ apiKey?: string }>;
+      };
+
+    it("never builds a bearer header from SigV4 credential JSON", () => {
+      const service = createSigV4Service(sigV4Provider, {});
+      const headers = service.buildHeaders(
+        { provider: sigV4Provider, apiKey: '{"accessKeyId":"A","secretAccessKey":"S"}' },
+        "chat",
+      );
+      expect(headers.Authorization).toBeUndefined();
+      expect(JSON.stringify(headers)).not.toContain("secretAccessKey");
+    });
+
+    it("keeps the bearer header for aws-bedrock-api-key", () => {
+      const provider = { ...sigV4Provider, authMode: "aws-bedrock-api-key" as const };
+      const service = createSigV4Service(provider, {});
+      expect(service.buildHeaders({ provider, apiKey: "bedrock-test-key" }, "chat").Authorization).toBe(
+        "Bearer bedrock-test-key",
+      );
+    });
+
+    it("resolves SigV4 credentials from AWS_* environment variables as JSON", async () => {
+      const service = createSigV4Service(sigV4Provider, {
+        AWS_ACCESS_KEY_ID: "AKIATESTTESTTESTTEST",
+        AWS_SECRET_ACCESS_KEY: "test-secret",
+        AWS_SESSION_TOKEN: "test-session",
+      });
+      const resolved = await service.resolveProvider("bedrock");
+      expect(JSON.parse(resolved.apiKey ?? "")).toEqual({
+        accessKeyId: "AKIATESTTESTTESTTEST",
+        secretAccessKey: "test-secret",
+        sessionToken: "test-session",
+      });
+    });
+
+    it("prefers keychain SigV4 JSON over AWS_* environment variables", async () => {
+      const blob = '{"accessKeyId":"AKIAKEYCHAINTEST","secretAccessKey":"kc-secret"}';
+      const service = createSigV4Service(
+        sigV4Provider,
+        { AWS_ACCESS_KEY_ID: "AKIATESTTESTTESTTEST", AWS_SECRET_ACCESS_KEY: "test-secret" },
+        createTrackedSecretStore({ bedrock: blob }),
+      );
+      expect((await service.resolveProvider("bedrock")).apiKey).toBe(blob);
+    });
+
+    it("leaves apiKey undefined when no SigV4 credentials exist", async () => {
+      const service = createSigV4Service(sigV4Provider, {});
+      expect((await service.resolveProvider("bedrock")).apiKey).toBeUndefined();
+    });
+
+    it("rejects inline SigV4 credentials", async () => {
+      const service = createSigV4Service({ ...sigV4Provider, apiKey: '{"accessKeyId":"A","secretAccessKey":"S"}' }, {});
+      await expect(service.resolveProvider("bedrock")).rejects.toThrow(
+        "AWS SigV4 credentials must be stored in the Gateway keychain or provided through AWS_* environment variables.",
+      );
+    });
+  });
 });
 
 function createCodexConfig(): LlmConfigFile {

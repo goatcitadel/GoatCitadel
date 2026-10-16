@@ -268,6 +268,16 @@ export const LlmProviderRequestConfigSchema = z.object({
   tls: LlmProviderRequestTlsSchema.optional(),
 });
 
+export const LlmProviderAuthModeSchema = z.enum([
+  "api-key",
+  "codex-oauth",
+  "claude-code-oauth",
+  "google-service-account",
+  "google-adc",
+  "aws-sigv4",
+  "aws-bedrock-api-key",
+]);
+
 export const LlmProviderConfigSchema = z
   .object({
     providerId: z.string(),
@@ -281,9 +291,7 @@ export const LlmProviderConfigSchema = z
       "bedrock-messages",
     ]),
     defaultModel: z.string(),
-    authMode: z
-      .enum(["api-key", "codex-oauth", "claude-code-oauth", "google-service-account", "google-adc"])
-      .optional(),
+    authMode: LlmProviderAuthModeSchema.optional(),
     apiKey: z.string().optional(),
     apiKeyEnv: z.string().optional(),
     googleCloud: LlmProviderGoogleCloudConfigSchema.optional(),

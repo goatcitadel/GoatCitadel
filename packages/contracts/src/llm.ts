@@ -7,12 +7,32 @@ export type LlmApiStyle =
   | "anthropic-messages"
   | "bedrock-messages";
 
+export const LLM_API_STYLES: readonly LlmApiStyle[] = [
+  "openai-chat-completions",
+  "openai-responses",
+  "openai-codex-responses",
+  "anthropic-messages",
+  "bedrock-messages",
+];
+
 export type LlmProviderAuthMode =
   | "api-key"
   | "codex-oauth"
   | "claude-code-oauth"
   | "google-service-account"
-  | "google-adc";
+  | "google-adc"
+  | "aws-sigv4"
+  | "aws-bedrock-api-key";
+
+export const LLM_PROVIDER_AUTH_MODES: readonly LlmProviderAuthMode[] = [
+  "api-key",
+  "codex-oauth",
+  "claude-code-oauth",
+  "google-service-account",
+  "google-adc",
+  "aws-sigv4",
+  "aws-bedrock-api-key",
+];
 
 export type ChatCompletionReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
