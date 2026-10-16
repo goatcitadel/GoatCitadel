@@ -7,6 +7,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { ConflictError } from "@goatcitadel/contracts";
 import {
+  createModelComparisonRoutePort,
   ModelComparisonExecutionService,
   type ModelComparisonExecutionServiceDependencies,
   type ModelComparisonRunStatePort,
@@ -258,6 +259,21 @@ describe("ModelComparisonExecutionService", () => {
   it("whenSettled resolves immediately when nothing is running", async () => {
     const { executor, created } = await setup(async (_packId, testId) => promptRun({ testId }));
     await expect(executor.whenSettled(created.comparisonId)).resolves.toBeUndefined();
+  });
+
+  it("serves records and run control through one route port", async () => {
+    const { service, executor, created } = await setup(async (_packId, testId) => promptRun({ testId }));
+    const port = createModelComparisonRoutePort(service, executor);
+    expect((await port.listComparisons(10)).items.map((run) => run.comparisonId)).toEqual([created.comparisonId]);
+    expect((await port.startComparison(created.comparisonId)).status).toBe("running");
+    await executor.whenSettled(created.comparisonId);
+    expect((await port.getComparison(created.comparisonId)).status).toBe("completed");
+    await expect(port.cancelComparison(created.comparisonId)).rejects.toBeInstanceOf(ConflictError);
+    const judgment = await port.addJudgment(created.comparisonId, {
+      testId: "test-a",
+      scores: [{ candidateId: created.candidates[0]!.candidateId, quality: 3 }],
+    });
+    expect(judgment.testId).toBe("test-a");
   });
 
   it("judging is unchanged after a run", async () => {

@@ -1,6 +1,11 @@
 import type { ModelComparisonPromptResult, ModelComparisonRun, PromptPackRunRecord } from "@goatcitadel/contracts";
 import { ConflictError } from "@goatcitadel/contracts";
-import { buildModelComparisonAdvisory, computeRunLatencyMs } from "./model-comparison-service.js";
+import type { ModelComparisonRoutePort } from "./model-comparison-route-service.js";
+import {
+  buildModelComparisonAdvisory,
+  computeRunLatencyMs,
+  type ModelComparisonService,
+} from "./model-comparison-service.js";
 
 export interface ModelComparisonRunStatePort {
   get(comparisonId: string): Promise<ModelComparisonRun>;
@@ -200,6 +205,21 @@ export class ModelComparisonExecutionService {
   private nowIso(): string {
     return (this.deps.clock?.() ?? new Date()).toISOString();
   }
+}
+
+/** One route-facing port: record ownership stays with the comparison service, run control with the executor. */
+export function createModelComparisonRoutePort(
+  comparisons: ModelComparisonService,
+  execution: ModelComparisonExecutionService,
+): ModelComparisonRoutePort {
+  return {
+    createComparison: (input) => comparisons.createComparison(input),
+    listComparisons: (limit) => comparisons.listComparisons(limit),
+    getComparison: (comparisonId) => comparisons.getComparison(comparisonId),
+    addJudgment: (comparisonId, input) => comparisons.addJudgment(comparisonId, input),
+    startComparison: (comparisonId) => execution.startComparison(comparisonId),
+    cancelComparison: (comparisonId) => execution.cancelComparison(comparisonId),
+  };
 }
 
 function withAdvisory(run: ModelComparisonRun): ModelComparisonRun {

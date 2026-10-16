@@ -139,8 +139,7 @@ import { createLlmRouteService, type LlmRoutePort, type LlmRouteService } from "
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { MemoryRouteService } from "./memory-route-service.js";
 import { McpRouteService, type McpRoutePort } from "./mcp-route-service.js";
-import type { ModelComparisonExecutionService } from "./model-comparison-execution-service.js";
-import type { ModelComparisonService } from "./model-comparison-service.js";
+import type { ModelComparisonRoutePort } from "./model-comparison-route-service.js";
 import { createMediaRouteService, type MediaRoutePort, type MediaRouteService } from "./media-route-service.js";
 import { createMeshRouteService, type MeshRoutePort, type MeshRouteService } from "./mesh-route-service.js";
 import { createMobileRouteService, type MobileRoutePort, type MobileRouteService } from "./mobile-route-service.js";
@@ -331,8 +330,7 @@ export interface GatewayRouteServices {
   llm: LlmRouteService;
   memory: MemoryRouteService;
   mcp: McpRouteService;
-  modelComparisons: ModelComparisonService;
-  modelComparisonRuns: ModelComparisonExecutionService;
+  modelComparisons: ModelComparisonRoutePort;
   media: MediaRouteService;
   mesh: MeshRouteService;
   /**
@@ -429,8 +427,7 @@ export interface GatewayRouteServiceDependencies {
   llm: LlmRoutePort;
   memory: MemoryLifecycleService;
   mcp: McpRoutePort;
-  modelComparisons: ModelComparisonService;
-  modelComparisonRuns: ModelComparisonExecutionService;
+  modelComparisons: ModelComparisonRoutePort;
   media: MediaRoutePort;
   mesh: MeshRoutePort;
   mobile: MobileRoutePort;
@@ -515,7 +512,6 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     memory: new MemoryRouteService(deps.memory),
     mcp: new McpRouteService(deps.mcp),
     modelComparisons: deps.modelComparisons,
-    modelComparisonRuns: deps.modelComparisonRuns,
     media: createMediaRouteService(deps.media),
     mesh: createMeshRouteService(deps.mesh),
     mobile: createMobileRouteService(deps.mobile),

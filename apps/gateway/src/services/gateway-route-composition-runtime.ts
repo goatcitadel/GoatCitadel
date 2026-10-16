@@ -16,7 +16,10 @@ import { MobileApprovalKeyService } from "./mobile-approval-key-service.js";
 import { createMobileRoutePort } from "./mobile-route-service.js";
 import { createConfiguredMobilePushProvider } from "./mobile-push-provider.js";
 import { MobilePushService } from "./mobile-push-service.js";
-import { ModelComparisonExecutionService } from "./model-comparison-execution-service.js";
+import {
+  createModelComparisonRoutePort,
+  ModelComparisonExecutionService,
+} from "./model-comparison-execution-service.js";
 import { ModelComparisonService } from "./model-comparison-service.js";
 import { createNpuRoutePort } from "./npu-route-service.js";
 import { ResearchSearchBrokerService } from "./research-search-broker-service.js";
@@ -84,7 +87,6 @@ export function composeRuntimeAdminRouteDependencies(
   | "mesh"
   | "mobile"
   | "modelComparisons"
-  | "modelComparisonRuns"
   | "npu"
   | "onboarding"
   | "orchestration"
@@ -153,7 +155,7 @@ export function composeRuntimeAdminRouteDependencies(
       Boolean(await settingsAuthService.getActiveAuthDeviceGrantById(settingsAuthDeps, grantId)),
   });
   const warnedOutsideRootPathFingerprints = new Set<string>();
-  const modelComparisonRuns = new ModelComparisonRunRepository(gateway.storage.gatewaySql);
+  const modelComparisonRepository = new ModelComparisonRunRepository(gateway.storage.gatewaySql);
 
   return {
     authAdmin: {
@@ -376,20 +378,23 @@ export function composeRuntimeAdminRouteDependencies(
       mobileApprovalKeys,
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     }),
-    modelComparisons: new ModelComparisonService({
-      repository: modelComparisonRuns,
-      listPromptPackTests: (packId, limit) => gateway.promptPackService.listPromptPackTests(packId, limit),
-      listPromptPackRunsByTest: (testId, limit) => gateway.storage.promptPackRuns.listByTest(testId, limit),
-    }),
-    modelComparisonRuns: new ModelComparisonExecutionService({
-      repository: modelComparisonRuns,
-      runPromptPackTest: (packId, testId, input) => gateway.promptPackService.runPromptPackTest(packId, testId, input),
-      onBackgroundError: (comparisonId, error) =>
-        modelComparisonLog.error("Model comparison could not record its failed status", {
-          comparisonId,
-          error: error instanceof Error ? error.message : String(error),
-        }),
-    }),
+    modelComparisons: createModelComparisonRoutePort(
+      new ModelComparisonService({
+        repository: modelComparisonRepository,
+        listPromptPackTests: (packId, limit) => gateway.promptPackService.listPromptPackTests(packId, limit),
+        listPromptPackRunsByTest: (testId, limit) => gateway.storage.promptPackRuns.listByTest(testId, limit),
+      }),
+      new ModelComparisonExecutionService({
+        repository: modelComparisonRepository,
+        runPromptPackTest: (packId, testId, input) =>
+          gateway.promptPackService.runPromptPackTest(packId, testId, input),
+        onBackgroundError: (comparisonId, error) =>
+          modelComparisonLog.error("Model comparison could not record its failed status", {
+            comparisonId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      }),
+    ),
     npu: createNpuRoutePort({
       npuSidecar: gateway.npuSidecar,
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),

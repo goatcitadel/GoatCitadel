@@ -71,7 +71,7 @@ describe("model comparison routes", () => {
     const run = { comparisonId: "cmp-1", status: "running" } as Record<string, unknown>;
     app = Fastify();
     app.decorate("services", {
-      modelComparisonRuns: {
+      modelComparisons: {
         startComparison: async (id: string) => {
           if (id === "missing") throw new NotFoundError({ entity: "Model comparison", id });
           if (id === "busy") throw new ConflictError({ message: "Comparison is already running." });
@@ -103,9 +103,9 @@ describe("model comparison routes", () => {
     expect(idle.statusCode).toBe(409);
   });
 
-  it("refuses run control when no live comparison runner is registered", async () => {
+  it("refuses run control when the comparison route port is not registered", async () => {
     app = Fastify();
-    app.decorate("services", { modelComparisons: {} } as never);
+    app.decorate("services", {} as never);
     await app.register(modelComparisonRoutes);
 
     const started = await app.inject({ method: "POST", url: "/api/v1/model-comparisons/cmp-1/run", payload: {} });

@@ -2313,9 +2313,9 @@
       "planStep": "C0",
       "path": "apps/gateway/src/services/model-comparison-execution-service.ts",
       "maxHostCallbacks": 0,
-      "maxDependencyMemberAccesses": 6,
+      "maxDependencyMemberAccesses": 12,
       "reason": "WS4 gap-closure program (operator-approved 2026-10-15): live blind model comparison execution split out of the baseline-era comparison owner.",
-      "evidence": "apps/gateway/src/services/model-comparison-execution-service.test.ts covers concurrency 2, status transitions, partial failure, restart of missing/errored results, conflict rejection, cancel abort, stale running recovery, empty/approval-paused responses and background-error reporting; routes/model-comparisons.test.ts covers run/cancel status mapping; Gateway typecheck passes."
+      "evidence": "apps/gateway/src/services/model-comparison-execution-service.test.ts covers concurrency 2, status transitions, partial failure, restart of missing/errored results, conflict rejection, cancel abort, stale running recovery, empty/approval-paused responses and background-error reporting; the route-port factory test covers delegation of records and run control; routes/model-comparisons.test.ts covers run/cancel status mapping; Gateway typecheck passes."
     }
   ]
 }

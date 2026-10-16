@@ -1,4 +1,5 @@
 import type { ModelComparisonCreateRequest, ModelComparisonJudgeRequest } from "@goatcitadel/contracts";
+import type { ModelComparisonExecutionService } from "./model-comparison-execution-service.js";
 import type { ModelComparisonService } from "./model-comparison-service.js";
 
 export interface ModelComparisonRoutePort {
@@ -6,6 +7,8 @@ export interface ModelComparisonRoutePort {
   listComparisons: ModelComparisonService["listComparisons"];
   getComparison: ModelComparisonService["getComparison"];
   addJudgment: ModelComparisonService["addJudgment"];
+  startComparison: ModelComparisonExecutionService["startComparison"];
+  cancelComparison: ModelComparisonExecutionService["cancelComparison"];
 }
 
 export class ModelComparisonRouteService {

@@ -1,8 +1,7 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { ConflictError, NotFoundError, type ModelComparisonJudgeRequest } from "@goatcitadel/contracts";
 import { z } from "zod";
-import type { ModelComparisonExecutionService } from "../services/model-comparison-execution-service.js";
-import type { ModelComparisonService } from "../services/model-comparison-service.js";
+import type { ModelComparisonRoutePort } from "../services/model-comparison-route-service.js";
 
 const candidateSchema = z.object({
   providerId: z.string().trim().min(1),
@@ -107,9 +106,7 @@ export const modelComparisonRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply
-        .code(202)
-        .send(await getModelComparisonRunService(fastify).startComparison(params.data.comparisonId));
+      return reply.code(202).send(await getModelComparisonService(fastify).startComparison(params.data.comparisonId));
     } catch (error) {
       return reply.code(runControlErrorStatus(error)).send({ error: (error as Error).message });
     }
@@ -121,7 +118,7 @@ export const modelComparisonRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await getModelComparisonRunService(fastify).cancelComparison(params.data.comparisonId));
+      return reply.send(await getModelComparisonService(fastify).cancelComparison(params.data.comparisonId));
     } catch (error) {
       return reply.code(runControlErrorStatus(error)).send({ error: (error as Error).message });
     }
@@ -138,20 +135,12 @@ function runControlErrorStatus(error: unknown): number {
   return 400;
 }
 
-function getModelComparisonService(fastify: FastifyInstance): ModelComparisonService {
-  const services = fastify.services as unknown as { modelComparisons?: ModelComparisonService };
+function getModelComparisonService(fastify: FastifyInstance): ModelComparisonRoutePort {
+  const services = fastify.services as unknown as { modelComparisons?: ModelComparisonRoutePort };
   if (!services.modelComparisons) {
     throw new Error("Model comparison route service is not registered.");
   }
   return services.modelComparisons;
-}
-
-function getModelComparisonRunService(fastify: FastifyInstance): ModelComparisonExecutionService {
-  const services = fastify.services as unknown as { modelComparisonRuns?: ModelComparisonExecutionService };
-  if (!services.modelComparisonRuns) {
-    throw new Error("Model comparison run service is not registered.");
-  }
-  return services.modelComparisonRuns;
 }
 
 function toJudgeRequest(input: z.infer<typeof judgmentSchema>): ModelComparisonJudgeRequest {
