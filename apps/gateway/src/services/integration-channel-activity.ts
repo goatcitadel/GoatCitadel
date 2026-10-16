@@ -3,6 +3,7 @@ import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import type { IntegrationChannelPort } from "./integration-channel-service.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
+import { emitProviderTypingWithDeps, normalizeWhatsAppBaseUrl } from "./channel-typing-adapters.js";
 export async function emitChannelActivityImpl(
   deps: IntegrationChannelPort,
   connection: IntegrationConnection,
@@ -175,6 +176,21 @@ async function sendActivityTyping(
   }
   if (connection.key === "whatsapp") {
     return { effect: "typing", supported: true, status: "sent", detail: "Sent with WhatsApp read receipt." };
+  }
+  if (connection.key === "mattermost" || connection.key === "signal") {
+    const result = await emitProviderTypingWithDeps(deps, connection, {
+      connectionId: connection.connectionId,
+      target: input.target,
+      threadId: input.threadId,
+      messageId: input.messageId,
+      signal: input.signal,
+    });
+    return {
+      effect: "typing",
+      supported: result.supported,
+      status: result.status === "sent" ? "sent" : "unsupported",
+      detail: result.reason,
+    };
   }
   return { effect: "typing", supported: false, status: "unsupported" };
 }
@@ -568,42 +584,6 @@ function normalizeSlackActivityReaction(emoji: string): string {
     default:
       return emoji.trim().replace(/^:/, "").replace(/:$/, "");
   }
-}
-
-function validateWhatsAppBaseUrl(url: string): void {
-  try {
-    const parsed = new URL(url);
-    const hostname = parsed.hostname.toLowerCase();
-    const isAllowedMetaHost =
-      hostname === "graph.facebook.com" ||
-      hostname.endsWith(".facebook.com") ||
-      hostname === "facebook.com" ||
-      hostname.endsWith(".meta.com") ||
-      hostname === "meta.com";
-
-    const isLoopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
-
-    if (!isAllowedMetaHost && !isLoopback) {
-      throw new Error(`WhatsApp outbound URL host "${parsed.hostname}" is not an allowed Meta or localhost domain.`);
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("is not an allowed Meta or localhost domain")) {
-      throw error;
-    }
-    throw new Error(`Invalid WhatsApp baseUrl: ${url}`, { cause: error });
-  }
-}
-
-function normalizeWhatsAppBaseUrl(baseUrl: string | undefined, apiVersion: string | undefined): string {
-  let result: string;
-  if (baseUrl?.trim()) {
-    result = baseUrl.trim().replace(/\/+$/, "");
-  } else {
-    const version = apiVersion?.trim() || "v23.0";
-    result = `https://graph.facebook.com/${version.replace(/^\/+/, "").replace(/\/+$/, "")}`;
-  }
-  validateWhatsAppBaseUrl(result);
-  return result;
 }
 
 function readConfigString(config: Record<string, unknown>, key: string): string | undefined {

@@ -89,6 +89,7 @@ const channelTypingSchema = z.object({
   connectionId: z.string().uuid(),
   target: z.string().min(1),
   threadId: z.string().min(1).optional(),
+  messageId: z.string().min(1).optional(),
   durationMs: z.number().int().positive().max(60_000).optional(),
   sessionId: z.string().min(1).optional(),
   agentId: z.string().min(1).optional(),

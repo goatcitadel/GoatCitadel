@@ -483,7 +483,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   },
   whatsapp: {
     platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS.whatsapp,
-    supportedActions: ["channel.send", "channel.reply", "channel.react"],
+    supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.typing"],
     supportedAttachmentSources: ["url", "inline"],
     resolveInboundModes: (config) =>
       hasAnyConfigured(config, ["appSecret", "appSecretEnv"]) &&
@@ -515,6 +515,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       "WhatsApp Cloud API rich sends support public URL media and uploaded inline files for supported image, video, audio, and document types.",
       "WhatsApp rich-message preflight labels native media, text fallbacks, pending attachment hydration, and Cloud API provider evidence before send.",
       "WhatsApp reactions are sent through the Cloud API. Unsend is not offered because the Cloud API has no endpoint for deleting a sent message.",
+      "WhatsApp typing indicators are tied to an inbound message: they are sent with a read receipt for that message id and last up to 25 seconds, so a typing request without an inbound message id is reported as unsupported.",
       hasAnyConfigured(config, ["appSecret", "appSecretEnv"]) &&
       hasAnyConfigured(config, ["webhookVerifyToken", "webhookVerifyTokenEnv", "verifyToken", "verifyTokenEnv"])
         ? "WhatsApp inbound routing is enabled through the signed Cloud API webhook path when both the app secret and webhook verify token are configured."
@@ -523,7 +524,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["phoneNumberId"], ["accessTokenEnv", "accessToken", "tokenEnv", "token"]],
   },
   signal: {
-    supportedActions: ["channel.send"],
+    supportedActions: ["channel.send", "channel.typing"],
     resolveInboundModes: (config) => (isSignalInboundEnabled(config) ? ["stream"] : ["none"]),
     threadCapabilities: {
       direct: true,
@@ -550,6 +551,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
           },
     resolveSupportNotes: (config) => [
       "Outbound Signal sends use the configured bridge JSON-RPC send path.",
+      "Signal typing indicators use the bridge JSON-RPC sendTyping method for a recipient or a group: target.",
       isSignalInboundEnabled(config)
         ? "Signal inbound subscribes to the signal-cli daemon --http event stream (/api/v1/events); allow the sender UUIDs (or numbers for senders without a UUID) that may start turns, because inbound is default-deny."
         : "Signal inbound is off; set receiveEvents on a signal-cli daemon --http bridge to receive messages from its event stream (/api/v1/events).",
@@ -563,7 +565,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["baseUrl", "bridgeUrl"]],
   },
   mattermost: {
-    supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend"],
+    supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
     supportedAttachmentSources: ["url", "inline"],
     resolveInboundModes: (config) => (isMattermostInboundEnabled(config) ? ["stream"] : ["none"]),
     threadCapabilities: {
@@ -601,6 +603,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
           ]
         : []),
       "Mattermost unsend deletes the original post and typically applies only to posts the bot can remove.",
+      "Mattermost typing posts the bot typing event to a channel id (optionally within a thread root); channel names and user targets are not resolved for typing.",
       "Mattermost rich sends upload files to the resolved channel before creating the post.",
     ],
     requiredAnyOf: [["serverUrl"], ["botTokenEnv", "botToken"]],

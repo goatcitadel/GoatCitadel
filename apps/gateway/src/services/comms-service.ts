@@ -38,7 +38,8 @@ export interface CommsHost {
   }>;
   getIntegrationConnection(connectionId: string): Promise<IntegrationConnection>;
   emitDiscordTyping(connection: IntegrationConnection, input: ChannelTypingInput): Promise<ChannelTypingResult>;
-  emitTelegramTyping(connection: IntegrationConnection, input: ChannelTypingInput): Promise<ChannelTypingResult>;
+  /** Typing for channels without a dedicated runtime service: Telegram, Mattermost, Signal and WhatsApp. */
+  emitProviderTyping(connection: IntegrationConnection, input: ChannelTypingInput): Promise<ChannelTypingResult>;
   emitChannelActivity(
     connection: IntegrationConnection,
     input: ChannelActivityInput,
@@ -254,8 +255,13 @@ export async function commsTyping(host: CommsHost, input: ChannelTypingInput): P
   if (connection.key === "discord") {
     return host.emitDiscordTyping(connection, input);
   }
-  if (connection.key === "telegram") {
-    return host.emitTelegramTyping(connection, input);
+  if (
+    connection.key === "telegram" ||
+    connection.key === "mattermost" ||
+    connection.key === "signal" ||
+    connection.key === "whatsapp"
+  ) {
+    return host.emitProviderTyping(connection, input);
   }
 
   return {

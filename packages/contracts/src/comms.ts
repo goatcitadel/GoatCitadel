@@ -80,6 +80,8 @@ export interface ChannelTypingInput extends ChannelGovernanceInput {
   connectionId: string;
   target: string;
   threadId?: string;
+  /** Inbound provider message being answered; WhatsApp typing indicators are tied to it. */
+  messageId?: string;
   durationMs?: number;
   signal?: AbortSignal;
 }

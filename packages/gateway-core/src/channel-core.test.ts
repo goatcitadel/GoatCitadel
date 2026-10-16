@@ -790,3 +790,15 @@ describe("platform-unsupported channel actions", () => {
     }
   });
 });
+
+describe("provider typing support", () => {
+  it.each(["mattermost", "signal", "whatsapp"])(
+    "advertises channel.typing and a native typing effect for %s",
+    (key) => {
+      const capabilities = describeChannelCapabilities(key, {});
+      expect(capabilities.supportedActions).toContain("channel.typing");
+      expect(capabilities.activityCapabilities.nativeEffects).toContain("typing");
+      expect(capabilities.platformUnsupportedActions?.["channel.typing"]).toBeUndefined();
+    },
+  );
+});

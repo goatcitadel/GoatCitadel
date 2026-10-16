@@ -1871,7 +1871,7 @@
       "maxHostCallbacks": 29,
       "maxDependencyMemberAccesses": 29,
       "reason": "Reviewed new explicit-context admission and dispatch guard owner. Verifies canonical durable identity, immutable admitted bytes and source visibility under the existing live write fence. Current source revalidation and admission-bound replay validation move verbatim from the source resolver and durable executor into this same owner. Historical frozen-profile replay remains in the durable executor; no new storage, transaction or execution owner is introduced. Original baseline and existing-owner limits remain unchanged.",
-      "evidence": "architecture-guard-tests.log passes175 tests with13 skips; durable-context-guard-tests.log passes147 tests. Context composition also moves here through a typed internal preparation port, keeping historical callback hosts compatible. context-preparation-tests.log passes89 with13 skips, and the actual owned-port path passes within9 current cases/13 historical skips in context-preparation-port-tests.log. Gateway typecheck passes; owner measures29/29, preparation returns to55/58 and two Gateway fa\u00e7ade methods become private. No original cap changes."
+      "evidence": "architecture-guard-tests.log passes175 tests with13 skips; durable-context-guard-tests.log passes147 tests. Context composition also moves here through a typed internal preparation port, keeping historical callback hosts compatible. context-preparation-tests.log passes89 with13 skips, and the actual owned-port path passes within9 current cases/13 historical skips in context-preparation-port-tests.log. Gateway typecheck passes; owner measures29/29, preparation returns to55/58 and two Gateway façade methods become private. No original cap changes."
     },
     {
       "planStep": "C1",
@@ -2368,6 +2368,14 @@
       "maxDependencyMemberAccesses": 0,
       "reason": "WS5 channel-parity program: Google Chat app inbound helpers: Google-signed bearer JWT verification (RS256, kid certificate selection, issuer/audience/expiry/email checks), a per-registration certificate cache, the fixed-host certificate fetcher and event normalization for the classic and Workspace add-on shapes. Pure functions with no adapter host or injected dependency members; the route owns the HTTP boundary and GatewayService gains nothing.",
       "evidence": "apps/gateway/src/services/google-chat-webhook.test.ts covers valid project-number and endpoint-url tokens, bad audience/issuer/email, expiry and future iat with 60 s skew, unknown kid, alg none and HS256, tampered payload, missing and malformed tokens, cache max-age and failure handling, and classic/add-on/bot/lifecycle normalization; apps/gateway/src/routes/integrations.google-chat-webhook.test.ts covers the route, replay idempotency and the forced default-deny sender gate; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/channel-typing-adapters.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 3,
+      "reason": "WS5 channel-parity program: provider typing indicators for Mattermost, Signal and WhatsApp. The adapters take explicit secret, allowlist and fetch functions; the single deps adapter reads the three gateway-owned ports (resolveConnectionSecret, isConnectionUrlAllowlisted, fetchWithDiagnosticsTimeout) once each and has no host callbacks. GatewayService gains nothing.",
+      "evidence": "apps/gateway/src/services/channel-typing-adapters.test.ts covers the Mattermost user-id lookup and cache, typing request shape, Signal sendTyping recipient and group params, WhatsApp read receipt with typing indicator and its missing-message-id refusal, allowlist denial, 4xx statuses and non-Meta WhatsApp base URLs; apps/gateway/src/services/comms-service.test.ts covers host routing; Gateway typecheck passes."
     }
   ]
 }

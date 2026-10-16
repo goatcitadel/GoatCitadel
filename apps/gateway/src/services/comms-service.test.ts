@@ -45,7 +45,7 @@ function createHost(): CommsHost & { invokeAndUnwrap: ReturnType<typeof vi.fn> }
         }) as IntegrationConnection,
     ),
     emitDiscordTyping: vi.fn(),
-    emitTelegramTyping: vi.fn(),
+    emitProviderTyping: vi.fn(),
     emitChannelActivity: vi.fn(async () => [{ effect: "mission_control", supported: true, status: "sent" }]),
   };
 }
@@ -517,7 +517,7 @@ function createGmailHost(overrides: Partial<CommsHost & { invokeAndUnwrap: Retur
         }) as IntegrationConnection,
     ),
     emitDiscordTyping: vi.fn(),
-    emitTelegramTyping: vi.fn(),
+    emitProviderTyping: vi.fn(),
     emitChannelActivity: vi.fn(),
     mutationStore,
     sideEffectRunStore,
@@ -663,6 +663,29 @@ describe("comms typing platform limits", () => {
     expect(result.status).toBe("unsupported");
     expect(result.reason).toMatch(/^Platform does not support this: Slack has no typing indicator for bot messages/);
   });
+
+  it.each(["telegram", "mattermost", "signal", "whatsapp"])(
+    "routes %s typing to the provider host method",
+    async (key) => {
+      const host = createHost();
+      host.getIntegrationConnection = vi.fn(
+        () =>
+          ({ connectionId: "p-1", kind: "channel", key, label: key, config: {} }) as unknown as IntegrationConnection,
+      );
+      host.emitProviderTyping = vi.fn(async () => ({
+        channelKey: key,
+        connectionId: "p-1",
+        target: "t",
+        supported: true,
+        status: "sent" as const,
+      }));
+      const input = { connectionId: "p-1", target: "t", messageId: "m-1" } as never;
+      const result = await commsTyping(host, input);
+      expect(result.status).toBe("sent");
+      expect(host.emitProviderTyping).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(host.emitProviderTyping).mock.calls[0][1]).toMatchObject({ messageId: "m-1" });
+    },
+  );
 
   it("keeps the generic text for actions that are merely not configured", async () => {
     const host = createHost();
