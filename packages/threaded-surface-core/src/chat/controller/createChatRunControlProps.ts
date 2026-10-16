@@ -7,7 +7,6 @@ import { type ActiveChatStreamState } from "../useChatOutboundExecution";
 import type { useChatRunPresentation } from "../useChatRunPresentation";
 import type { useChatSurfaceOrchestration } from "../useChatSurfaceOrchestration";
 import { useMissionControlSurfaceState } from "../useMissionControlSurfaceState";
-import { useSurfaceClassifyPreview } from "../useSurfaceClassifyPreview";
 
 type Input = {
   activeGeneratedArtifact: ChatGeneratedArtifactRecord | null;
@@ -23,8 +22,6 @@ type Input = {
   pinnedGoal: string | undefined;
   activeStreamRef: React.RefObject<ActiveChatStreamState | null>;
   draft: string;
-  surfacePreview: ReturnType<typeof useSurfaceClassifyPreview>;
-  autoRouteActive: false;
   orchestration: Pick<ReturnType<typeof useChatSurfaceOrchestration>, "handleStopActiveTurn" | "isStopPending">;
   runPresentation: Pick<ReturnType<typeof useChatRunPresentation>, "visibleDelegationRun" | "coworkViewModel">;
   goalActions: Pick<
@@ -46,8 +43,6 @@ export function createChatRunControlProps({
   pinnedGoal,
   activeStreamRef,
   draft,
-  surfacePreview,
-  autoRouteActive,
   orchestration,
   runPresentation,
   goalActions,
@@ -67,8 +62,6 @@ export function createChatRunControlProps({
   | "onSetGoal"
   | "onClearGoal"
   | "onGoalStatus"
-  | "surfaceRoutePreview"
-  | "autoRouteActive"
 > {
   const { handleStopActiveTurn } = orchestration;
   const { handleSteerMidTurn } = goalActions;
@@ -109,7 +102,5 @@ export function createChatRunControlProps({
       if (!blockHistoricalMutation()) await handleClearGoal();
     },
     onGoalStatus: goalActions.handleGoalStatus,
-    surfaceRoutePreview: surfacePreview,
-    autoRouteActive,
   };
 }

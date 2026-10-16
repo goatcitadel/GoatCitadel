@@ -40,7 +40,7 @@ import type {
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { buildAutonomousTurnContext } from "./gateway/autonomous-turn-policy.js";
 import { trackBackgroundTask } from "./background-scheduler.js";
-import { isWithinActiveHours } from "./gateway/commitment-sweep-service.js";
+import { type ActiveHoursWindow, isWithinActiveHours } from "./gateway/commitment-sweep-service.js";
 import {
   type DeNovoPlanContext,
   type DeNovoPlannerModelDeps,
@@ -2928,8 +2928,9 @@ function getDeNovoCadenceRemainingSeconds(prefs: Pick<SessionAutonomyPrefs, "las
 }
 
 /** Adapt the persisted `{start,end}` active-hours window to the sweep's shape. */
-function toActiveHoursWindow(activeHours: SessionActiveHoursWindow): { startHour: number; endHour: number } {
-  return { startHour: activeHours.start, endHour: activeHours.end };
+function toActiveHoursWindow(activeHours: SessionActiveHoursWindow): ActiveHoursWindow {
+  const { start, end, tz } = activeHours;
+  return tz ? { startHour: start, endHour: end, tz } : { startHour: start, endHour: end };
 }
 
 function throwIfProactiveDurableRunAborted(signal?: AbortSignal): void {

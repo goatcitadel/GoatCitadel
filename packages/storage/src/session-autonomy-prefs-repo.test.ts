@@ -1,7 +1,7 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
-import { SessionAutonomyPrefsRepository } from "./session-autonomy-prefs-repo.js";
+import { resolveHourInTimeZone, SessionAutonomyPrefsRepository } from "./session-autonomy-prefs-repo.js";
 import type { DbStatement } from "./db.js";
 import { createDatabase } from "./sqlite.js";
 import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
@@ -211,5 +211,22 @@ describe("SessionAutonomyPrefsRepository", () => {
         }),
       /expectedPriorCadence/iu,
     );
+  });
+});
+
+describe("resolveHourInTimeZone", () => {
+  const noonUtc = new Date("2026-06-22T12:00:00.000Z");
+
+  it("reads the hour of the instant in the given IANA zone", () => {
+    assert.equal(resolveHourInTimeZone(noonUtc, "Asia/Tokyo"), 21);
+    assert.equal(resolveHourInTimeZone(noonUtc, "America/Los_Angeles"), 5);
+  });
+
+  it("falls back to host-local hour for an unknown zone", () => {
+    assert.equal(resolveHourInTimeZone(noonUtc, "Mars/Base"), noonUtc.getHours());
+  });
+
+  it("uses host-local hour when no zone is set", () => {
+    assert.equal(resolveHourInTimeZone(noonUtc, undefined), noonUtc.getHours());
   });
 });

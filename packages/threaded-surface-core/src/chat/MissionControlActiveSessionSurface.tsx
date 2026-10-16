@@ -19,7 +19,6 @@ import type {
   ExternalSessionAttachmentRecord,
   ExternalSourceAttachmentCandidateRecord,
   RoutingPreflightResult,
-  SurfaceClassifyResponse,
   ThreadKnowledgeAttachmentRecord,
   ThreadKnowledgeRetrievalMode,
 } from "@goatcitadel/contracts";
@@ -401,10 +400,6 @@ export interface MissionControlActiveSessionSurfaceProps {
   onSetGoal?: (goal: string, turnBudget?: number) => Promise<void>;
   onClearGoal?: () => Promise<void>;
   onGoalStatus?: () => Promise<void>;
-  /** Full classify preview hook result (only set when autoRouteActive is true). */
-  surfaceRoutePreview?: SurfaceClassifyResponse;
-  /** True when auto-routing is active for the current thread (unlocked surface, no override, empty thread). */
-  autoRouteActive?: boolean;
   /**
    * Active delegation run cancel control, surfaced beside the composer so an
    * operator can stop a running delegation from the chat window without opening

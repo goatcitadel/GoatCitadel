@@ -78,7 +78,6 @@ import {
   shouldShowSuggestionsPanel,
   shouldShowTracePanel,
 } from "./chat/useMissionControlSurfaceState";
-import { useSurfaceClassifyPreview } from "./chat/useSurfaceClassifyPreview";
 import type {
   MissionThreadedEmptyStateProps,
   MissionThreadedRenderSurfaceInput,
@@ -506,13 +505,6 @@ export function MissionThreadedControllerHost({
     selection,
   });
 
-  const autoRouteActive = false;
-  const surfacePreview = useSurfaceClassifyPreview({
-    draft,
-    enabled: autoRouteActive,
-    workspaceId,
-    hasBoundProject: !surfaceRuntime.surfaceState.codeModeNeedsProjectBinding,
-  });
   const activePresentation = createChatActiveSessionPresentation({
     session,
     chatSessionRailPresentation,
@@ -567,8 +559,6 @@ export function MissionThreadedControllerHost({
     activeGeneratedArtifact,
     agenticControlPending,
     pinnedGoal,
-    surfacePreview,
-    autoRouteActive,
   });
 
   const emptyStateProps: MissionThreadedEmptyStateProps = {

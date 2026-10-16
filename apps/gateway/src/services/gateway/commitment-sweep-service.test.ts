@@ -131,6 +131,24 @@ describe("runCommitmentSweep", () => {
     expect(deliverCommitment).not.toHaveBeenCalled();
   });
 
+  it("uses the session's persisted active hours and timezone when no resolver is wired", async () => {
+    const noonUtc = "2026-06-22T12:00:00.000Z";
+    const losAngeles = createHarness({
+      due: [commitment()],
+      prefsBySession: { "session-1": prefs({ activeHours: { start: 8, end: 22, tz: "America/Los_Angeles" } }) },
+      now: noonUtc, // 05:00 in Los Angeles — outside 08–22
+    });
+    expect((await runCommitmentSweep(losAngeles.deps)).skippedActiveHours).toBe(1);
+    expect(losAngeles.deliverCommitment).not.toHaveBeenCalled();
+
+    const tokyo = createHarness({
+      due: [commitment()],
+      prefsBySession: { "session-1": prefs({ activeHours: { start: 8, end: 22, tz: "Asia/Tokyo" } }) },
+      now: noonUtc, // 21:00 in Tokyo — inside 08–22
+    });
+    expect((await runCommitmentSweep(tokyo.deps)).delivered).toBe(1);
+  });
+
   it("delivers at most one check-in per session per sweep (backlog respects cooldown)", async () => {
     const { deps, deliverCommitment, markDeliveryPending } = createHarness({
       due: [
@@ -195,6 +213,26 @@ describe("isWithinActiveHours", () => {
 
   it("treats a zero-width window as always active", () => {
     expect(isWithinActiveHours(pinDate(3), { startHour: 9, endHour: 9 })).toBe(true);
+  });
+
+  it("evaluates the window in the session timezone when tz is set", () => {
+    const noonUtc = new Date("2026-06-22T12:00:00.000Z");
+    // 21:00 in Tokyo (UTC+9) -> inside 8-22.
+    expect(isWithinActiveHours(noonUtc, { startHour: 8, endHour: 22, tz: "Asia/Tokyo" })).toBe(true);
+    // 05:00 in Los Angeles (UTC-7 in June) -> outside 8-22.
+    expect(isWithinActiveHours(noonUtc, { startHour: 8, endHour: 22, tz: "America/Los_Angeles" })).toBe(false);
+  });
+
+  it("handles midnight in the session timezone", () => {
+    const midnightTokyo = new Date("2026-06-22T15:00:00.000Z");
+    expect(isWithinActiveHours(midnightTokyo, { startHour: 0, endHour: 1, tz: "Asia/Tokyo" })).toBe(true);
+  });
+
+  it("falls back to host time for an unknown timezone", () => {
+    const now = pinDate(10);
+    expect(isWithinActiveHours(now, { startHour: 8, endHour: 22, tz: "Mars/Base" })).toBe(
+      isWithinActiveHours(now, { startHour: 8, endHour: 22 }),
+    );
   });
 });
 

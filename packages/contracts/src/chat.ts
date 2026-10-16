@@ -2044,11 +2044,7 @@ export interface ChatSendMessageRequest {
   useMemory?: boolean;
   attachments?: string[];
   mode?: ChatMode;
-  /**
-   * When true, the gateway classifies this turn's prompt via the heuristic surface
-   * router and pins the resulting mode. Takes effect only when no explicit `mode`
-   * is present in the same request. Transient (request-only); never persisted.
-   */
+  /** @deprecated Ignored; Chat is the only surface. Kept so stored durable turn payloads stay readable. */
   autoRoute?: boolean;
   webMode?: ChatWebMode;
   memoryMode?: ChatMemoryMode;
@@ -2161,21 +2157,6 @@ export interface RoutingPreflightResult {
   degradedReason?: string;
   capabilityProfile?: import("./chat-capability-profile.js").ChatTurnCapabilityProfilePreview;
   decision: RoutingDecisionSnapshot;
-}
-
-export interface SurfaceClassifyRequest {
-  prompt: string;
-  workspaceId?: string;
-  citadelId?: string;
-  hasBoundProject?: boolean;
-}
-
-export interface SurfaceClassifyResponse {
-  mode: ChatMode;
-  confidence: number; // 0..1
-  source: "heuristic" | "judge";
-  rationale: string;
-  alternatives: ChatMode[];
 }
 
 export interface ChatSendMessageResponse {

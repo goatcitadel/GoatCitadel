@@ -423,6 +423,30 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
     db.close();
   });
 
+  it("applies the session timezone to active-hours admission", () => {
+    const db = tempDbs.open({ dbPath: ":memory:" });
+    const laHour = currentHourIn("America/Los_Angeles");
+    // Window excludes the current Los Angeles hour and one hour either side, so the
+    // DB clock cannot drift it back inside by a single-hour boundary race.
+    const window = { start: (laHour + 2) % 24, end: (laHour + 22) % 24 };
+    const occurrences = new HeartbeatOccurrenceRepository(db);
+    const outside = seedHeartbeatSession(db, "tz-la-outside", { ...window, tz: "America/Los_Angeles" });
+    const skipped = occurrences.claim(outside.claimInput, () => {
+      throw new Error("heartbeat must not be admitted outside its session-timezone window");
+    });
+    assert.equal(skipped.disposition, "not_due");
+    assert.equal(skipped.reason, "outside_active_hours");
+
+    // Same numeric window read in Tokyo lands ~16-17 hours ahead of Los Angeles, inside it.
+    const inside = seedHeartbeatSession(db, "tz-tokyo-inside", { ...window, tz: "Asia/Tokyo" });
+    const admissions = new SessionMutationAdmissionRepository(db);
+    const admitted = occurrences.claim(inside.claimInput, (request) => {
+      const admission = admissions.admit(request.admissionInput).admission;
+      return { admission, child: request.child };
+    });
+    assert.equal(admitted.disposition, "created");
+  });
+
   it("atomically admits an operator turn when no heartbeat is active", () => {
     const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = seedHeartbeatSession(db, "operator-no-heartbeat");
@@ -938,7 +962,18 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 });
 
-function seedHeartbeatSession(db: DatabaseClient, seed: string) {
+function currentHourIn(tz: string): number {
+  const formatted = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hourCycle: "h23" }).format(
+    new Date(),
+  );
+  return Number.parseInt(formatted, 10) % 24;
+}
+
+function seedHeartbeatSession(
+  db: DatabaseClient,
+  seed: string,
+  activeHours: { start: number; end: number; tz?: string } = { start: 0, end: 0 },
+) {
   const workspaceId = `workspace-hb-${seed}`;
   const sessionId = `session-hb-${seed}`;
   const lifecycle = new ChatSessionLifecycleRepository(db).initialize({
@@ -963,7 +998,7 @@ function seedHeartbeatSession(db: DatabaseClient, seed: string) {
     heartbeatEnabled: true,
     heartbeatIntervalSeconds: 900,
     cooldownSeconds: 0,
-    activeHours: { start: 0, end: 0 },
+    activeHours,
   });
   const request = { content: `Read-only heartbeat ${seed}` };
   const frozenRequestSha256 = sha256(canonicalJsonString({ version: 2, request }));

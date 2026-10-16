@@ -57,9 +57,6 @@ import { shouldRegisterSubagentFanoutExecutor, type SubagentFanoutRuntime } from
 import type { ChatDurableFanoutService } from "./chat-durable-fanout-service.js";
 import { createTurnSubagentFanoutExecutor } from "./chat-turn-stream-service.js";
 import { applySurfaceRoutingPreflight } from "./surface-router-entry.js";
-import type { SurfaceClassification } from "./surface-router-heuristics.js";
-import type { SurfaceRouteRequest } from "./surface-router-service.js";
-import type { SurfaceRouteOverrideSignalInput } from "./improvement-service.js";
 import {
   assertExternalCompanionAdmissionContext,
   ActiveTurnNotPreemptibleError,
@@ -201,11 +198,9 @@ export interface ChatTurnEntryHost
   }): Promise<ChatSpecialistCandidateSuggestionRecord[]>;
   isReplayScratchSession(sessionId: string): Promise<boolean>;
   triggerChatSessionProactive(sessionId: string, input?: ChatTurnProactiveTriggerInput): Promise<ProactiveRunRecord>;
-  // Optional surface-router hooks — provided by the composition root when the auto-router is wired up.
-  surfaceRouter?: { route(req: SurfaceRouteRequest): Promise<SurfaceClassification> };
+  // Optional legacy-mode normalization hooks (Chat is the only surface).
   readChatSessionMode?(sessionId: string): Promise<ChatMode | undefined>;
   persistChatSessionMode?(sessionId: string, mode: ChatMode): Promise<void>;
-  recordSurfaceRouteOverrideSignal?(input: SurfaceRouteOverrideSignalInput): Promise<void>;
   readonly subagentFanout?: Pick<SubagentFanoutRuntime, "register">;
   readonly durableFanout?: Pick<ChatDurableFanoutService, "execute">;
 }
@@ -646,7 +641,6 @@ function createAdmissionGuardedSurfaceHost(
   heartbeat: import("./session-control-runtime-owner.js").TurnAdmissionHeartbeatHandle,
 ) {
   return {
-    surfaceRouter: host.surfaceRouter,
     readChatSessionMode: host.readChatSessionMode,
     persistChatSessionMode: host.persistChatSessionMode
       ? async (sessionId: string, mode: ChatMode) => {
@@ -658,34 +652,6 @@ function createAdmissionGuardedSurfaceHost(
           });
         }
       : undefined,
-    recordSurfaceRouteOverrideSignal: host.recordSurfaceRouteOverrideSignal
-      ? async (input: SurfaceRouteOverrideSignalInput) => {
-          heartbeat.assertHealthy();
-          await host.storage.runImmediateTransaction(async () => {
-            await assertEntryAdmissionActive(host, admission, heartbeat);
-            await host.recordSurfaceRouteOverrideSignal?.(input);
-            await assertEntryAdmissionActive(host, admission, heartbeat);
-          });
-        }
-      : undefined,
-    normalizeWorkspaceId: (workspaceId?: string) => host.normalizeWorkspaceId(workspaceId),
-    storage: {
-      ...host.storage,
-      chatSessionMeta: {
-        ensure: async (targetSessionId: string) => {
-          heartbeat.assertHealthy();
-          return await host.storage.runImmediateTransaction(async () => {
-            await assertEntryAdmissionActive(host, admission, heartbeat);
-            const meta = await host.storage.chatSessionMeta.get(targetSessionId);
-            if (!meta) {
-              throw new Error(`Chat session not found: ${targetSessionId}`);
-            }
-            await assertEntryAdmissionActive(host, admission, heartbeat);
-            return meta;
-          });
-        },
-      },
-    },
   };
 }
 

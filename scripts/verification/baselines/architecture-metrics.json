@@ -159,7 +159,7 @@
     "apps/gateway/src/services/workflow-recipe-service.ts": 4,
     "apps/gateway/src/services/gateway/chat-stream-runtime.ts": 24
   },
-  "totalDependencyMemberAccesses": 10013,
+  "totalDependencyMemberAccesses": 10005,
   "dependencyMemberAccessesByFile": {
     "apps/gateway/src/services/a2a-grpc-client.ts": 2,
     "apps/gateway/src/services/a2a-grpc-outbound-service.ts": 10,
@@ -480,8 +480,6 @@
     "apps/gateway/src/services/skill-state-service.ts": 67,
     "apps/gateway/src/services/skills-route-service.ts": 25,
     "apps/gateway/src/services/surface-router-entry.ts": 14,
-    "apps/gateway/src/services/surface-router-judge.ts": 2,
-    "apps/gateway/src/services/surface-router-service.ts": 6,
     "apps/gateway/src/services/task-lifecycle-service.ts": 96,
     "apps/gateway/src/services/telegram-inbound-command-service.ts": 7,
     "apps/gateway/src/services/tool-invocation-coordinator-service.ts": 63,

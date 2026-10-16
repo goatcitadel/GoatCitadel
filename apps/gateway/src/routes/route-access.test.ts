@@ -142,7 +142,6 @@ describe("route access manifest", () => {
     app.get("/api/v1/ops/quality", async () => ({ ok: true }));
     app.get("/api/v1/trust/policy-snapshot", async () => ({ ok: true }));
     app.post("/api/v1/code-mode/runs", async () => ({ ok: true }));
-    app.post("/api/v1/surface/classify", async () => ({ ok: true }));
     app.post("/api/v1/integrations/connections/:connectionId/:channel/inbound", async () => ({ ok: true }));
     app.post("/api/v1/integrations/connections/:connectionId/telegram/webhook", async () => ({ ok: true }));
     app.get("/api/v1/mutation-attempts/:idempotencyKey", async () => ({ ok: true }));
@@ -167,7 +166,6 @@ describe("route access manifest", () => {
       "/api/v1/ops/quality",
       "/api/v1/trust/policy-snapshot",
       "/api/v1/code-mode/runs",
-      "/api/v1/surface/classify",
       "/api/v1/mutation-attempts/:idempotencyKey",
     ]) {
       expect(app.routeAccessManifest.find((entry) => entry.url === url)).toMatchObject({
