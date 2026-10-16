@@ -42,7 +42,7 @@ afterEach(() => {
 });
 it("distinguishes known running work, partial unknown, complete empty and foreign/malformed owner records", () => {
   expect(summarizeRecentRunningWork({ items: [run()] }, "a")).toMatchObject({ state: "running", count: 1 });
-  expect(summarizeRecentRunningWork({ items: [run()], nextCursor: "more" }, "a").label).toContain("At least 1");
+  expect(summarizeRecentRunningWork({ items: [run()], nextCursor: "more" }, "a").label).toBe("At least 1 running");
   expect(summarizeRecentRunningWork({ items: [], nextCursor: "more" }, "a").state).toBe("unknown");
   expect(summarizeRecentRunningWork({ items: [] }, "a")).toMatchObject({ state: "none", count: 0 });
   expect(summarizeRecentRunningWork({ items: [run("foreign")] }, "a").state).toBe("unknown");
@@ -51,7 +51,7 @@ it("distinguishes known running work, partial unknown, complete empty and foreig
   expect(summarizeRecentRunningWork({ items: [{ ...run(), status: "invented" }] }, "a").state).toBe("unknown");
   expect(summarizeRecentRunningWork({ items: [{ ...run(), workflowKey: "memory.maintenance" }] }, "a")).toMatchObject({
     state: "none",
-    label: "No queued or running interactive Chat/plan work recorded",
+    label: "Nothing running",
   });
 });
 it("never publishes a prior workspace response into the new scope, and shares no mutation owner", async () => {
@@ -76,11 +76,12 @@ it("never publishes a prior workspace response into the new scope, and shares no
     await act(async () => {
       root.render(render("a"));
     });
-    expect(container.textContent).toContain("unavailable");
+    expect(container.textContent).toContain("Running work unknown");
     await act(async () => {
       root.render(render("b"));
     });
-    await vi.waitFor(() => expect(container.textContent).toContain("outside the recent history window"));
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(container.textContent).toContain("Running work unknown"));
     await act(async () => {
       finish({ items: [run("a")] });
     });
@@ -167,7 +168,7 @@ it("reads whenever it is rendered, at any width, and shows the running count on 
     );
     expect(read).toHaveBeenCalledTimes(1);
     expect(view.container.querySelector('[data-work-running] [aria-hidden="true"]')?.textContent).toBe("1");
-    expect(view.container.textContent).toContain("1 queued or running interactive Chat/plan record");
+    expect(view.container.textContent).toContain("1 running");
   } finally {
     await view.unmount();
   }
@@ -238,7 +239,7 @@ it("keeps the last summary while it is read again and dates it after a failed re
     await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(3));
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
     expect(node().dataset.workRunning).toBe("running");
-    expect(node().title).toMatch(/1 queued or running .* · as of /);
+    expect(node().title).toMatch(/^1 running · as of /);
   } finally {
     await view.unmount();
   }

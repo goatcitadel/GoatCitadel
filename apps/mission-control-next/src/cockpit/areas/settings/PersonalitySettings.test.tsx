@@ -130,7 +130,7 @@ describe("native Work personality", () => {
   it("rejects a catalog without the owner revision or its declared default", async () => {
     owner = { ...owner, revision: "", defaultPersonalityId: "absent" };
     await render();
-    expect(container.textContent).toContain("did not provide a reviewable personality catalog");
+    expect(container.textContent).toContain("The personality list and its saved version could not load");
     expect(container.querySelector("select")).toBeNull();
   });
 });

@@ -198,10 +198,16 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
             <p className="text-xs text-fg-muted">Background work coverage is incomplete; more records may exist.</p>
           ) : null}
           {rail.snapshot.unknowns.length ? (
-            <p className="text-xs text-fg-muted">
-              {plural(rail.snapshot.unknowns.length, "runtime unknown")} remain. Open the classic view for full
-              diagnostics.
-            </p>
+            <details className="text-xs text-fg-muted">
+              <summary className="cursor-pointer font-medium text-accent">
+                {plural(rail.snapshot.unknowns.length, "detail")} could not be checked
+              </summary>
+              <ul className="mt-1 list-disc space-y-1 pl-4 break-words">
+                {rail.snapshot.unknowns.map((unknown, index) => (
+                  <li key={`${index}-${unknown}`}>{unknown}</li>
+                ))}
+              </ul>
+            </details>
           ) : null}
         </>
       ) : null}

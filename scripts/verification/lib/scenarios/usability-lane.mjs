@@ -5,10 +5,7 @@ import { requestJson, startVerificationStack, stopVerificationStack } from "../r
 import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 import { formatArtifactIssue, validateRequiredScenarioArtifacts } from "../scenario-artifact-evidence.mjs";
 import { runAccessibilitySmokeLane } from "./accessibility-smoke-lane.mjs";
-import {
-  DETERMINISTIC_LLM_KEY_ENV,
-  startDeterministicLlmStub,
-} from "./deterministic-llm-stub.mjs";
+import { DETERMINISTIC_LLM_KEY_ENV, startDeterministicLlmStub } from "./deterministic-llm-stub.mjs";
 import { runExternalSourcesBrowserFlow } from "./external-sources-browser-flow.mjs";
 import {
   GATEWAY_CHAT_FAULT_ARTIFACT_NAME,
@@ -35,7 +32,7 @@ const FOUNDATION_PROMPT = "Reply with exactly: CHAT_OK";
 const FOUNDATION_REPLY = "CHAT_OK";
 const FOUNDATION_OPERATOR_TOKEN = "verification-usability-operator-token";
 // Fresh profiles open the default Cockpit shell; each transcript turn is one article.
-const COCKPIT_TURN_SELECTOR = 'article[aria-label="Conversation messages"]';
+const COCKPIT_TURN_SELECTOR = "article[data-turn-id]";
 const COMPLETED_ASSISTANT_CONTENT_SELECTOR = `${COCKPIT_TURN_SELECTOR} .mc-assistant-markdown-assistant`;
 const GATEWAY_CHAT_FAULT_DEFECT_ID = "GC-USAB-002";
 const GATEWAY_CHAT_FAULT_STEP_IDS = Object.freeze([
@@ -761,7 +758,8 @@ async function runChatBrowserLeg(context, input) {
     // Completed transcript text alone does not prove that the streaming UI has
     // released the composer for the next task. Capture the settled control.
     await page.getByRole("button", { name: "Send", exact: true }).waitFor({
-      state: "visible", timeout: 30_000,
+      state: "visible",
+      timeout: 30_000,
     });
     const activeWorkspaceId = await page.evaluate(() => window.localStorage.getItem("goatcitadel.ui.workspace_id.v1"));
     if (activeWorkspaceId !== input.workspaceId) {

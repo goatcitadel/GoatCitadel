@@ -65,12 +65,12 @@ export function TrustPolicySettings() {
         <div>
           <h3 className="font-display text-base font-semibold text-fg">Trust and policy</h3>
           <p className="mt-1 text-sm text-fg-secondary">
-            Read-only Gateway snapshot across recorded scopes. Profiles, grants, sources and retained usage evidence may
-            have different scopes.
+            Read-only snapshot of recorded trust. Profiles, grants, sources and usage records may cover different
+            scopes.
           </p>
           <p className="mt-1 text-xs text-fg-muted">
-            Recorded posture does not authorize a specific invocation. Policy, approvals and grants are enforced by
-            their runtime owners.
+            A recorded trust state does not allow any specific action. Policy, approvals and grants are still checked
+            every time.
           </p>
         </div>
         <Button size="sm" disabled={loading} onClick={() => void reload()}>
@@ -79,7 +79,7 @@ export function TrustPolicySettings() {
       </header>
       {loading ? (
         <p role="status" className="text-sm text-fg-muted">
-          {data ? "Refreshing trust evidence; previous observation remains visible." : "Loading trust snapshot…"}
+          {data ? "Refreshing trust records; the previous snapshot stays visible." : "Loading trust snapshot…"}
         </p>
       ) : null}
       {error ? (
@@ -118,7 +118,7 @@ export function TrustPolicySettings() {
           </details>
           <div className="grid gap-3 sm:grid-cols-3">
             <label className="text-sm text-fg-secondary">
-              Search trust evidence
+              Search trust records
               <input
                 type="search"
                 className={fieldClass}
@@ -130,7 +130,7 @@ export function TrustPolicySettings() {
               />
             </label>
             <label className="text-sm text-fg-secondary">
-              Recorded posture
+              Recorded state
               <select
                 className={fieldClass}
                 value={statusFilter}
@@ -139,7 +139,7 @@ export function TrustPolicySettings() {
                   setLimit(PAGE_SIZE);
                 }}
               >
-                <option value="all">All postures</option>
+                <option value="all">All states</option>
                 <option value="needs_review">Needs review</option>
                 {STATUS_ORDER.map((status) => (
                   <option key={status} value={status}>
@@ -149,7 +149,7 @@ export function TrustPolicySettings() {
               </select>
             </label>
             <label className="text-sm text-fg-secondary">
-              Evidence type
+              Type
               <select
                 className={fieldClass}
                 value={kindFilter}
@@ -169,17 +169,13 @@ export function TrustPolicySettings() {
             {filtered.length} matching rows · {rows.length} rows returned by available sources
           </p>
           {filtered.length ? (
-            <ul
-              aria-label="Trust evidence rows"
-              className="divide-y divide-line-subtle rounded-md border border-line-subtle"
-            >
+            <ul aria-label="Trust records" className="divide-y divide-line-subtle rounded-md border border-line-subtle">
               {filtered.slice(0, limit).map((row) => (
                 <li key={row.id}>
                   <button
                     type="button"
                     className="w-full rounded-md p-3 text-left hover:bg-sunken focus-visible:outline-2 focus-visible:outline-accent"
                     onClick={() => setSelectedId(row.id)}
-                    aria-label={`Inspect trust evidence ${row.label}`}
                   >
                     <span className="block break-words text-sm font-medium text-fg">{row.label}</span>
                     <span className="mt-1 block text-xs text-fg-secondary">
@@ -195,13 +191,13 @@ export function TrustPolicySettings() {
           ) : (
             <p className="text-sm text-fg-muted">
               {rows.length
-                ? "No trust evidence matches these filters."
+                ? "No trust records match these filters."
                 : "No rows were returned by the available snapshot sources."}
             </p>
           )}
           {filtered.length > limit ? (
             <Button size="sm" onClick={() => setLimit((value) => value + PAGE_SIZE)}>
-              Show more trust evidence
+              Show more trust records
             </Button>
           ) : null}
         </>
@@ -211,8 +207,8 @@ export function TrustPolicySettings() {
         onOpenChange={(open) => {
           if (!open) setSelectedId(null);
         }}
-        title={selected ? `Trust evidence: ${selected.label}` : "Trust evidence unavailable"}
-        description="Recorded evidence from the Gateway snapshot. Open the responsible owner to review or change runtime state."
+        title={selected ? `Trust record: ${selected.label}` : "Trust record unavailable"}
+        description="Recorded in the latest trust snapshot. To change it, open the page that manages it."
       >
         {selected && data ? (
           <>
@@ -234,7 +230,7 @@ export function TrustPolicySettings() {
           </>
         ) : (
           <p role="status" className="text-sm text-fg-secondary">
-            This row is unavailable in the latest snapshot. Refresh or inspect the responsible owner.
+            This row is not in the latest snapshot. Refresh the snapshot and try again.
           </p>
         )}
       </Dialog>
@@ -245,15 +241,15 @@ export function TrustPolicySettings() {
 function TrustEvidenceDetail({ row }: { row: TrustPolicyMatrixRow }) {
   const governance = normalizeDeclaredGovernance(row.declaredMetadata);
   const facts = [
-    ["Evidence ID", row.id],
-    ["Recorded posture", labelForTrustPolicyStatus(row.status)],
+    ["Record ID", row.id],
+    ["Recorded state", labelForTrustPolicyStatus(row.status)],
     ["Recorded callability", labelForCallableState(row)],
     ["Source", row.source ?? "Unavailable"],
     ["Trust state", row.trustState ?? "Unknown"],
     ["Recorded grants and declarations", formatList(row.grants, "None recorded")],
     ["Blockers", formatList(row.blockers, "None reported")],
-    ["Owner action", row.actionNeeded ?? "Inspect the owner"],
-    ["Last-use evidence", formatLastUse(row)],
+    ["Action needed", row.actionNeeded ?? "None reported"],
+    ["Last used", formatLastUse(row)],
   ];
   return (
     <div className="space-y-3 text-sm text-fg-secondary">

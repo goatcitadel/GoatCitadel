@@ -79,7 +79,7 @@ export function useInboxChangePlan(item: OperatorInboxItem, workspaceId: string,
   const canConfirm = canReviewInboxConfirmation(plan) && !locked && !scopeChanged;
   const error =
     attempt?.state === "uncertain"
-      ? "Confirmation outcome is uncertain. Further confirmations are locked in this app session. Inspect the current plan in its owner."
+      ? "Confirmation outcome is uncertain. Further confirmations are locked in this app session. Refresh to check the plan's current status."
       : notice?.identity === identity
         ? notice.message
         : "";

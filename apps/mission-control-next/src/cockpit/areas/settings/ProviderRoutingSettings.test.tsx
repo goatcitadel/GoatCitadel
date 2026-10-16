@@ -48,10 +48,10 @@ vi.mock("./ProviderChangeStatus", () => ({ ProviderChangeStatus: () => null }));
 describe("installation default routing", () => {
   it("names the Gateway default by model and provider label, and the catalog evidence in plain words", () => {
     const markup = renderToStaticMarkup(<ProviderRoutingSettings />);
-    expect(markup).toContain("Gateway default: Claude Sonnet · Anthropic.");
+    expect(markup).toContain("Default model: Claude Sonnet · Anthropic.");
     expect(markup).toContain("Suggested list");
     expect(markup).toContain("needs a refresh");
-    for (const raw of ["Gateway default: anthropic-main", "template_fallback", ">stale", "revision 42"])
+    for (const raw of ["Default model: anthropic-main", "template_fallback", ">stale", "revision 42"])
       expect(markup).not.toContain(raw);
   });
 });

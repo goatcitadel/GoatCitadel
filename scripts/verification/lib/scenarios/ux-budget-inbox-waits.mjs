@@ -47,7 +47,9 @@ export async function runUxBudgetInboxWaits(environment) {
           const page = await browserContext.newPage();
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/inbox"), { waitUntil: "domcontentloaded" });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
-          const row = page.locator("li[data-inbox-item]").filter({ has: page.locator(`a[href="${inboxOwnerHref(item.href)}"]`) });
+          const row = page
+            .locator("li[data-inbox-item]")
+            .filter({ has: page.locator(`a[href="${inboxOwnerHref(item.href)}"]`) });
           await row.getByRole("button", { name: "Details" }).click();
           const review = page.getByRole("region", { name: "Current Chat question" });
           await review.getByText("Which path should the verification run take from here?").waitFor();
@@ -86,7 +88,7 @@ export async function runUxBudgetInboxWaits(environment) {
             throw new Error("Reviewing the Inbox answer changed the canonical Chat wait.");
           }
           await page.getByRole("button", { name: "Confirm answer" }).click();
-          await review.getByText("Gateway accepted the answer", { exact: false }).waitFor();
+          await review.getByText("Answer sent", { exact: false }).waitFor();
           const after = await requestJson(stack.gatewayUrl, inboxUrl);
           assertOk(after, `read ${variant} answered Inbox question`);
           if (after.body?.items?.some((entry) => entry.id === item.id)) {
@@ -138,7 +140,9 @@ export async function runUxBudgetInboxWaits(environment) {
           const page = await browserContext.newPage();
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/inbox"), { waitUntil: "domcontentloaded" });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
-          const row = page.locator("li[data-inbox-item]").filter({ has: page.locator(`a[href="${inboxOwnerHref(item.href)}"]`) });
+          const row = page
+            .locator("li[data-inbox-item]")
+            .filter({ has: page.locator(`a[href="${inboxOwnerHref(item.href)}"]`) });
           await row.getByText("Background run completed").waitFor();
           await row.getByRole("button", { name: "Details" }).click();
           const inspector = page.locator('[aria-label="Inspector: Background run completed"]');

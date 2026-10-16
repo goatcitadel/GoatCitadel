@@ -24,7 +24,7 @@ export function LibraryImportProvenance({
         {plural(detail.items.length, "immutable item record")}.
       </p>
       <p>
-        <TimeText prefix="Admitted" value={detail.intent.admittedAt} absolute />
+        <TimeText prefix="Accepted" value={detail.intent.admittedAt} absolute />
         {detail.settlement ? (
           <>
             {" "}
@@ -55,8 +55,8 @@ export function LibraryImportProvenance({
         ))}
       </ul>
       <p>
-        Attach an eligible item read-only from Chat. Context admission is checked separately for the current
-        conversation and caller. A durable Knowledge copy requires its own approval and settled effect.
+        Attach an eligible item read-only from Chat. Chat checks separately whether this conversation and you may use
+        it. Saving a lasting Knowledge copy needs its own approval.
       </p>
       <NativeOwnerLink scope={workspaceId} href="/chat?shell=cockpit">
         Open Chat to attach imported source

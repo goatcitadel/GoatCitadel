@@ -132,7 +132,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
           const composer = page.getByRole("combobox", { name: "Message", exact: true });
           const send = page.getByRole("button", { name: "Send", exact: true });
           const messages = page.getByLabel("Messages", { exact: true });
-          const scroller = messages.locator('[data-transcript-scroller]');
+          const scroller = messages.locator("[data-transcript-scroller]");
           const returnToLatest = async () => {
             const jump = page.getByRole("button", { name: "Jump to latest", exact: true });
             if (await jump.count()) await jump.click();
@@ -256,7 +256,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
             });
             await page.getByRole("button", { name: "Jump to latest", exact: true }).waitFor({ state: "hidden" });
             assert.equal(stub.advanceControlledStream(), true);
-            await page.locator('article[aria-label="Conversation messages"] pre').waitFor();
+            await page.locator("article[data-turn-id] pre").waitFor();
             await page.waitForFunction(() => {
               const node = document.querySelector('[aria-label="Messages"] [data-transcript-scroller]');
               return node && node.scrollHeight - node.scrollTop - node.clientHeight < 5;
@@ -307,8 +307,8 @@ export async function runChatStreamingDisplayProof(context, deps) {
             await navigate(session.sessionId);
             await answerHeading().waitFor();
             assert.equal(await answerHeading().count(), 1);
-            assert.equal(await page.locator('article[aria-label="Conversation messages"] table').count(), 1);
-            assert.equal(await page.locator('article[aria-label="Conversation messages"] pre').count(), 1);
+            assert.equal(await page.locator("article[data-turn-id] table").count(), 1);
+            assert.equal(await page.locator("article[data-turn-id] pre").count(), 1);
             assert.equal(await page.locator(".mc-assistant-streaming-tail").count(), 0);
             await assertLayout();
             await capture("refreshed");
@@ -357,17 +357,14 @@ export async function runChatStreamingDisplayProof(context, deps) {
             const failure = (await thread()).turns.at(-1);
             assert.equal(failure.toolRuns.at(-1).status, "failed");
             const failedActivity = messages
-              .locator('article[aria-label="Conversation messages"]')
+              .locator("article[data-turn-id]")
               .filter({ hasText: "SF6_FAILURE:" })
               .getByLabel("Tool activity for this turn", { exact: true });
             // The Stop control follows execution state; canonical tool evidence
             // hydrates separately. Require the failed summary before inspecting it.
             await failedActivity.locator("summary").filter({ hasText: "1 failed" }).waitFor();
             assert.match(
-              await messages
-                .locator('article[aria-label="Conversation messages"]')
-                .filter({ hasText: "SF6_FAILURE:" })
-                .textContent(),
+              await messages.locator("article[data-turn-id]").filter({ hasText: "SF6_FAILURE:" }).textContent(),
               /1 failed/,
             );
             await capture("approved-failure");

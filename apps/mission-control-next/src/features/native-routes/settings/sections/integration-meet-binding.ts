@@ -9,7 +9,7 @@ import {
 
 export const MEET_OWNER_LIMIT = 100;
 export const MEET_OWNER_BOUNDARY =
-  "These controls prepare Gateway session records and optional OpenAI credentials. They do not join Google Meet or establish live audio. The owner has no atomic revision precondition; current records are checked before each action.";
+  "These controls prepare Gateway session records and optional OpenAI credentials. They do not join Google Meet or establish live audio. Current saved records are checked before each action, but a change made elsewhere at the same moment is not blocked.";
 export type MeetForm = { meetingUrl: string; displayName: string; accountRef: string };
 export type MeetReview = { current: () => boolean; title: string; description: string } & (
   | { kind: "prepare"; form: MeetForm }

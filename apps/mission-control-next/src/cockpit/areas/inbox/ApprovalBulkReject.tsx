@@ -98,7 +98,7 @@ function BulkReject({ onResolved }: { onResolved: () => void }) {
           if (!open && !busy) setReview(undefined);
         }}
         title="Reject all pending approvals"
-        description="This existing Gateway operation applies across the installation, including other workspaces. It rejects every pending request visible to the authorized operator."
+        description="This applies across the whole installation, including other workspaces. It rejects every pending request you are allowed to see."
       >
         <div className="grid gap-3">
           {pending.isFetching ? (

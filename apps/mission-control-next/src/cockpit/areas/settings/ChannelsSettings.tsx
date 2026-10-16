@@ -1,5 +1,8 @@
 import { useState } from "react";
-import { createChannelPlanReviewHandoff, channelPlanReviewHref } from "@goatcitadel/mission-control-shared/api/channel-plan-handoff";
+import {
+  createChannelPlanReviewHandoff,
+  channelPlanReviewHref,
+} from "@goatcitadel/mission-control-shared/api/channel-plan-handoff";
 import { ChannelEntryControls } from "../../../features/native-routes/settings/channel-setup/ChannelEntryControls";
 import { useChannelReturnNavigation } from "../../../features/native-routes/settings/sections/use-channel-return-navigation";
 import { useChannelSettings } from "../../../features/native-routes/settings/sections/use-channel-settings";
@@ -14,7 +17,9 @@ import { channelInputClass } from "./ChannelWizardFields";
 
 export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
   const { navigate, search } = useCockpitRoute();
-  const owner = useChannelSettings(workspaceId, (plan) => navigate(channelPlanReviewHref(createChannelPlanReviewHandoff(plan))));
+  const owner = useChannelSettings(workspaceId, (plan) =>
+    navigate(channelPlanReviewHref(createChannelPlanReviewHandoff(plan))),
+  );
   useChannelReturnNavigation(owner, search);
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(20);
@@ -39,7 +44,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
         </Button>
         {owner.panel ? <Button onClick={owner.closePanel}>Back to channels</Button> : null}
       </div>
-      {owner.loading && !data ? <p role="status">Loading channel owners…</p> : null}
+      {owner.loading && !data ? <p role="status">Loading channels…</p> : null}
       {owner.error ? (
         <p role="alert" className="text-status-failed">
           {owner.error}
@@ -103,7 +108,6 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
             >
               Start guided setup
             </Button>
-
           </div>
         </section>
       ) : owner.panel === "editor" ? (
@@ -124,7 +128,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                   <dd>
                     {owner.draftConnection.label} · {owner.draftConnection.connectionId}
                   </dd>
-                  <dt>Current revision</dt>
+                  <dt>Current version</dt>
                   <dd className="break-all">{owner.draftConnection.revision}</dd>
                 </dl>
               ) : (
@@ -147,7 +151,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                   }
                   onClick={() => void owner.handleAcceptConnectionReview()}
                 >
-                  Use current connection revision
+                  Use latest connection version
                 </Button>
               </div>
             </section>
@@ -155,7 +159,10 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
           {channelDraft.hasRemoteChanges ? (
             <section className="space-y-2 rounded-md border border-line p-3 text-sm">
               <h3 className="font-semibold">Channel draft changed</h3>
-              <p>Your input is retained. Saved revision {selectedDraft?.revision} must be reviewed before retrying.</p>
+              <p>
+                Your input is kept. It started from an older version; review saved version {selectedDraft?.revision}{" "}
+                before retrying.
+              </p>
               <details>
                 <summary className="cursor-pointer">Current saved public fields</summary>
                 <dl className="space-y-1">
@@ -164,7 +171,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                       <dt>{key}</dt>
                       <dd className="break-words">
                         {typeof value === "object"
-                          ? "Structured value; inspect in advanced editor after discarding or rebasing"
+                          ? "Structured value; open the advanced editor after discarding your input or applying it to the latest version"
                           : String(value)}
                       </dd>
                     </div>
@@ -172,7 +179,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                 </dl>
               </details>
               <Button disabled={disabled} onClick={channelDraft.rebaseToCurrent}>
-                Apply retained input to current revision
+                Apply my input to latest version
               </Button>
             </section>
           ) : null}
@@ -281,7 +288,11 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                     <Button onClick={() => owner.draftSelectionGuard.requestTransition(item.draftId)}>
                       Edit {item.label || item.catalogId}
                     </Button>
-                    <ChannelLifecycleControls workspaceId={workspaceId} selection={{ draft: item }} reload={owner.reload} />
+                    <ChannelLifecycleControls
+                      workspaceId={workspaceId}
+                      selection={{ draft: item }}
+                      reload={owner.reload}
+                    />
                   </li>
                 ))}
             </ul>
@@ -298,8 +309,18 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
               <Button disabled={disabled} onClick={() => void owner.editConnection()}>
                 Edit channel setup
               </Button>
-              <ChannelOperations key={selectedConnection.connectionId} connection={selectedConnection} onUpdated={owner.reload} connectorDiagnosticsEnabled={data?.connectorDiagnosticsEnabled} />
-              <ChannelLifecycleControls key={`lifecycle:${selectedConnection.connectionId}`} workspaceId={workspaceId} selection={{ connection: selectedConnection }} reload={owner.reload} />
+              <ChannelOperations
+                key={selectedConnection.connectionId}
+                connection={selectedConnection}
+                onUpdated={owner.reload}
+                connectorDiagnosticsEnabled={data?.connectorDiagnosticsEnabled}
+              />
+              <ChannelLifecycleControls
+                key={`lifecycle:${selectedConnection.connectionId}`}
+                workspaceId={workspaceId}
+                selection={{ connection: selectedConnection }}
+                reload={owner.reload}
+              />
               <details className="text-sm">
                 <summary className="cursor-pointer">Connection identity</summary>
                 <p className="break-all">

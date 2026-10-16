@@ -109,6 +109,19 @@ export interface RouteReleaseScope {
   note: string;
 }
 
+/**
+ * Citadel page names, plain name first. One map for the Settings tabs, the nav rail, page headings and document
+ * titles. Slugs and URLs keep their Citadel names.
+ */
+export const CITADEL_PAGE_LABELS = {
+  "citadel-overview": "Citadel overview",
+  citadel: "Guided setup · Mason",
+  "citadel-wards": "Rules · Wards",
+  "citadel-council": "Agents · Council",
+  "citadel-vault": "Secrets · Vault",
+  "citadel-blueprint": "Export/import · Blueprint",
+} as const satisfies Partial<Record<LibrarySection, string>>;
+
 export const AREA_META: Record<PrimaryArea, AreaMeta> = {
   chat: {
     id: "chat",
@@ -265,7 +278,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "projects-citadels",
       label: "Citadels",
-      description: "Govern personal, company, and project context with Charter, Chambers, and Gatehouse posture.",
+      description: "Govern personal, company, and project context with a Charter, Chambers, and Gatehouse rules.",
       area: "library",
       section: "citadel-overview",
     },
@@ -294,42 +307,42 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
   library: [
     {
       id: "library-citadel-overview",
-      label: "Citadel overview",
-      description: "See the active Citadel Charter, Chambers, and Gatehouse posture.",
+      label: CITADEL_PAGE_LABELS["citadel-overview"],
+      description: "See the active Citadel's Charter, Chambers, and Gatehouse settings.",
       area: "library",
       section: "citadel-overview",
     },
     {
       id: "library-citadel",
-      label: "Citadel setup",
+      label: CITADEL_PAGE_LABELS.citadel,
       description: "Stage Personal or Company Citadels before connecting accounts or opening Gates.",
       area: "library",
       section: "citadel",
     },
     {
       id: "library-citadel-wards",
-      label: "Wards",
-      description: "List, add, and test deny-wins Gatehouse Wards.",
+      label: CITADEL_PAGE_LABELS["citadel-wards"],
+      description: "List, add, and test the Gatehouse rules (Wards). A deny rule always wins.",
       area: "library",
       section: "citadel-wards",
     },
     {
       id: "library-citadel-council",
-      label: "Council",
-      description: "Inspect agents seated in the Citadel from the agents catalog.",
+      label: CITADEL_PAGE_LABELS["citadel-council"],
+      description: "Choose which agents from the catalog sit on this Citadel's Council.",
       area: "library",
       section: "citadel-council",
     },
     {
       id: "library-citadel-vault",
-      label: "Vault",
+      label: CITADEL_PAGE_LABELS["citadel-vault"],
       description: "Store, reveal, and delete sealed Citadel secrets.",
       area: "library",
       section: "citadel-vault",
     },
     {
       id: "library-citadel-blueprint",
-      label: "Blueprint",
+      label: CITADEL_PAGE_LABELS["citadel-blueprint"],
       description: "Export a secret-free Blueprint, or validate and import one.",
       area: "library",
       section: "citadel-blueprint",
@@ -544,28 +557,28 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "settings-access",
       label: "Access & devices",
-      description: "Auth posture, secrets, and access boundaries.",
+      description: "Gateway sign-in, approved devices, and desktop and mobile access checks.",
       area: "settings",
       section: "access",
     },
     {
       id: "settings-permissions",
       label: "Permissions",
-      description: "Permission profiles, active defaults, and local operator override evidence.",
+      description: "Permission profiles, active defaults, and local overrides.",
       area: "settings",
       section: "permissions",
     },
     {
       id: "settings-trust-policy",
       label: "Trust & policy",
-      description: "Unified dashboard for capability, tool, and source trust posture.",
+      description: "Read-only view of trust for capabilities, tools, and sources.",
       area: "settings",
       section: "trust-policy",
     },
     {
       id: "settings-runtime",
       label: "Runtime configuration",
-      description: "Mesh, local runtimes, backups, and serving posture.",
+      description: "Managed local runtime, Gateway process, local voice, and llama.cpp setup.",
       area: "settings",
       section: "runtime",
     },
@@ -579,7 +592,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "settings-workspaces",
       label: "Workspaces",
-      description: "Workspace context, guidance, and extension posture.",
+      description: "Citadel and workspace directory, workspace details, and design context.",
       area: "settings",
       section: "workspaces",
     },
@@ -600,7 +613,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "settings-mcp",
       label: "MCP servers",
-      description: "MCP server posture, templates, and transport configuration.",
+      description: "MCP server status, templates, and transport configuration.",
       area: "settings",
       section: "mcp",
     },
@@ -614,21 +627,21 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "settings-hooks",
       label: "Hooks",
-      description: "Governed lifecycle hooks, delivery posture, and evidence.",
+      description: "Governed lifecycle hooks, delivery status, and history.",
       area: "settings",
       section: "hooks",
     },
     {
       id: "settings-addons",
       label: "Add-ons & packs",
-      description: "Installed extensions and workspace add-on posture.",
+      description: "Installed extensions and workspace add-ons.",
       area: "settings",
       section: "addons",
     },
     {
       id: "settings-budget",
       label: "Budgets",
-      description: "Set budget mode and review cost evidence.",
+      description: "Choose a budget preference: Saver, Balanced, or Power. It is not a dollar limit.",
       area: "settings",
       section: "budget",
     },

@@ -120,7 +120,7 @@ function CandidatePlan({
       );
       if (!receipt || !operation.current()) return;
       setMessage(
-        `Change plan action recorded: ${presentChangePlanStatus(receipt.status).label}. Inspect the canonical result before relying on callability.`,
+        `Change plan action recorded: ${presentChangePlanStatus(receipt.status).label}. Check the plan's result before relying on the capability.`,
       );
       setReview(null);
       await refresh();
@@ -135,7 +135,7 @@ function CandidatePlan({
     <section className="grid gap-3 rounded-md border border-line p-3" aria-label="Candidate change plan">
       <h3 className="font-semibold">{plan?.title ?? seed.title}</h3>
       <p>Applies to this workspace.</p>
-      {query.isFetching ? <p role="status">Reading canonical change plan…</p> : null}
+      {query.isFetching ? <p role="status">Reading change plan…</p> : null}
       {query.error ? <Callout tone="error">{describeApiError(query.error).summary}</Callout> : null}
       {plan ? (
         <>

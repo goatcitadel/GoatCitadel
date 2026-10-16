@@ -715,9 +715,13 @@ describe("ChatTranscript", () => {
     );
     expect(container.textContent).toContain("Assistant visible");
     expect(container.textContent).not.toContain("Assistant hidden");
-    await act(async () =>
-      (container.querySelector('[aria-label="Inspect message details"]') as HTMLButtonElement).click(),
+    const receipt = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.endsWith(" · Open message details"),
     );
+    // The receipt's accessible name starts with its visible model, cost and timing text.
+    expect(receipt?.hasAttribute("aria-label")).toBe(false);
+    expect(receipt?.textContent).toMatch(/^.+ · Cost .+ · Open message details$/);
+    await act(async () => receipt?.click());
     expect(document.body.textContent).toContain("Cost: $0.01");
   });
 
@@ -806,7 +810,21 @@ describe("ChatTranscript", () => {
       ),
     );
     expect(container.querySelector('[aria-label="Conversation starters"]')).not.toBeNull();
-    expect(container.querySelectorAll('[aria-label="Conversation messages"]')).toHaveLength(0);
+    expect(container.querySelectorAll("article[data-turn-id]")).toHaveLength(0);
+  });
+
+  it("names each turn by its position and the start of its prompt", async () => {
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript props={sessionProps([turn("one", true), turn("two", true)])} />
+        </InspectorProvider>,
+      ),
+    );
+    const names = [...container.querySelectorAll("article[data-turn-id]")].map((node) =>
+      node.getAttribute("aria-label"),
+    );
+    expect(names).toEqual(["Message 1: User one", "Message 2: User two"]);
   });
 
   it("reviews an owned change plan through the controller callback", async () => {

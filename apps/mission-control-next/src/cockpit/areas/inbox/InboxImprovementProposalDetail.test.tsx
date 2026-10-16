@@ -213,7 +213,7 @@ describe("Inbox improvement proposal review", () => {
     expect(api.approveImprovementCandidate).toHaveBeenCalledWith("candidate-a", {
       reviewPrecondition: review.reviewPrecondition,
     });
-    expect(container.textContent).toContain("Activation is a separate governed action");
+    expect(container.textContent).toContain("Proposal kept. It is not active yet; turning it on is a separate step.");
   });
 
   it("withholds a decision if the reviewed candidate changed", async () => {
@@ -255,14 +255,16 @@ describe("Inbox improvement proposal review", () => {
     await act(async () => button("Confirm discard").click());
     await settle();
     expect(api.rejectImprovementCandidate).toHaveBeenCalledTimes(2);
-    expect(container.textContent).toContain("Gateway rejected the reviewed candidate");
+    expect(container.textContent).toContain("Proposal discarded.");
+    const curatorLink = [...container.querySelectorAll("a")].find((link) => link.textContent === "Open Curator");
+    expect(curatorLink?.getAttribute("href")).toContain("/library/curator");
   });
 
   it("keeps older Gateway records inspectable without offering unbound decisions", async () => {
     api.fetchCuratorReviewItem.mockResolvedValue({ ...review, reviewPrecondition: undefined });
     await render();
     expect(container.textContent).toContain("Improve routing");
-    expect(container.textContent).toContain("Update the Gateway");
+    expect(container.textContent).toContain("Update GoatCitadel");
     expect([...container.querySelectorAll("button")].map((entry) => entry.textContent)).not.toContain("Keep proposal");
     expect([...container.querySelectorAll("button")].map((entry) => entry.textContent)).not.toContain(
       "Discard proposal",
@@ -304,6 +306,6 @@ describe("Inbox improvement proposal review", () => {
     await act(async () => button("Confirm keep").click());
     await settle();
     expect(container.textContent).toContain("Decision outcome is uncertain");
-    expect(container.textContent).not.toContain("Gateway approved the reviewed candidate");
+    expect(container.textContent).not.toContain("Proposal kept.");
   });
 });

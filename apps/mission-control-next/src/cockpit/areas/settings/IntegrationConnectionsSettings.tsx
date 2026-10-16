@@ -84,7 +84,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
       ) : null}
       {!connections.isLoading && !connections.isError && !ready ? (
         <p role="alert" className="text-sm text-status-failed">
-          Integration evidence is unavailable. Refresh before changing a connection.
+          Integrations could not load. Refresh before changing a connection.
         </p>
       ) : null}
       {control.notice ? (
@@ -94,7 +94,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
       ) : null}
       {control.checking ? (
         <p role="status" className="text-sm text-fg-muted">
-          Reading current connection evidence…
+          Loading connections…
         </p>
       ) : null}
       {ready ? (
@@ -113,7 +113,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
           </label>
           <p className="text-xs text-fg-muted">
             Showing {Math.min(limit, filtered.length)} of {filtered.length} loaded integrations
-            {connections.data!.items.length === 300 ? " · Owner directory limited to 300 records" : ""}.
+            {connections.data!.items.length === 300 ? " · Showing the first 300 records" : ""}.
           </p>
           <ul className="space-y-2">
             {filtered.slice(0, limit).map((connection) => (
@@ -208,7 +208,7 @@ function IntegrationRow({
           <dl className="grid min-w-0 gap-1">
             <dt>Connection ID</dt>
             <dd className="break-all font-mono">{connection.connectionId}</dd>
-            <dt>Revision</dt>
+            <dt>Version</dt>
             <dd className="break-all font-mono">{connection.revision}</dd>
             {connection.workspaceId ? (
               <>
@@ -221,7 +221,7 @@ function IntegrationRow({
       </div>
       {attempt.pending ? (
         <p role="status" className="mt-2 text-sm text-fg-muted">
-          Waiting for the Gateway connection owner…
+          Waiting for the Gateway to confirm…
         </p>
       ) : null}
       {attempt.phase === "uncertain" ? (

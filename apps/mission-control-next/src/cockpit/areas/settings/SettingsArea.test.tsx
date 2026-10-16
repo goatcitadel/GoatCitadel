@@ -135,8 +135,10 @@ describe("Settings section tabs", () => {
     const tools = container.querySelector<HTMLAnchorElement>('a[href="/library?shell=cockpit&type=tool"]')!;
     const panel = tools.closest('[role="tabpanel"]')!;
     expect(panel.hasAttribute("hidden")).toBe(false);
-    expect(tools.textContent).toBe("Inspect tools");
-    expect(panel.querySelector('a[href="/library?shell=cockpit&type=skill"]')?.textContent).toBe("Inspect skills");
+    expect(tools.textContent).toBe("Open tools in Library");
+    expect(panel.querySelector('a[href="/library?shell=cockpit&type=skill"]')?.textContent).toBe(
+      "Open skills in Library",
+    );
     expect(panel.textContent).toContain("Callability unknown");
     expect(panel.textContent).not.toContain("in the current callable catalog");
     expect(panel.textContent).toContain("does not bypass approvals or grant permission");
@@ -265,5 +267,10 @@ it.each(["/settings/unknown?shell=cockpit", "/settings/general?shell=cockpit#unk
     await render(href);
     expect(container.textContent).toContain("Settings destination unavailable");
     expect(container.querySelector('[aria-label="Appearance owner retained draft"]')).toBeNull();
+    const home = [...container.querySelectorAll("a")].find((item) => item.textContent === "Open Settings");
+    expect(home?.getAttribute("href")).toBe("/settings/general");
+    await act(async () => home!.click());
+    await vi.waitFor(() => expect(window.location.pathname).toBe("/settings/general"));
+    expect(container.textContent).not.toContain("Settings destination unavailable");
   },
 );

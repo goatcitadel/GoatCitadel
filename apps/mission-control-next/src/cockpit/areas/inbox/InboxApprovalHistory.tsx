@@ -3,6 +3,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { fetchApprovals } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { formatAbsoluteTime } from "@goatcitadel/mission-control-shared/content/format";
 import { hasRecoveryLinkage } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 // Approval kinds are open strings (tool ids, "code_mode.run"), so they keep the generic humanizer.
 import { humanizeToken, presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
@@ -102,7 +103,7 @@ function ScopedHistory({ workspaceId, identity }: { workspaceId: string; identit
     return (
       <section className="space-y-3" aria-label="Approval history">
         <Button onClick={() => setOpen(!open)} aria-expanded={open}>
-          Approval history and replay
+          Approval history
         </Button>
         {open ? (
           <>
@@ -132,13 +133,15 @@ function ScopedHistory({ workspaceId, identity }: { workspaceId: string; identit
   return (
     <section className="space-y-3" aria-label="Approval history">
       <Button onClick={() => setOpen(!open)} aria-expanded={open}>
-        Approval history and replay
+        Approval history
       </Button>
       {open ? (
         <>
           <p className="text-sm text-fg-muted">
-            {runId ? "Approval audit for the linked run, newest first." : "Workspace approval audit, newest first."}
-            {" Load older pages to inspect the full retained history. Recovery shows linked work from loaded pages."}
+            {runId ? "Approvals for the linked run, newest first." : "Approvals in this workspace, newest first."}
+            {
+              " Load more to see older approvals. Recovery shows approvals linked to recoverable work in what is loaded."
+            }
           </p>
           <label className="grid gap-1 text-sm">
             Approval history view
@@ -187,7 +190,8 @@ function ScopedHistory({ workspaceId, identity }: { workspaceId: string; identit
                 ) : null}
                 <Button
                   className="justify-self-start"
-                  aria-label={`Inspect decision: ${record.explanation?.summary || humanizeToken(record.kind)}`}
+                  // Starts with the visible text; the summary and time keep each row's name distinct (IN-13).
+                  aria-label={`Inspect decision: ${record.explanation?.summary || humanizeToken(record.kind)}, ${formatAbsoluteTime(record.createdAt)}`}
                   onClick={() => inspect(record.approvalId)}
                 >
                   Inspect decision
@@ -207,7 +211,7 @@ function ScopedHistory({ workspaceId, identity }: { workspaceId: string; identit
           ) : history.data && !history.isError ? (
             <p role="status">
               {"End of retained approval history for this view. "}
-              {runId ? "Only records canonically linked to this run are included." : ""}
+              {runId ? "Only approvals linked to this run are included." : ""}
             </p>
           ) : null}
         </>

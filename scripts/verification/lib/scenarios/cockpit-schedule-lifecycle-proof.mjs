@@ -153,7 +153,7 @@ export async function runCockpitScheduleLifecycleProof({
           const initialSelection = await selection();
           const detail = page.locator('[aria-label="Schedule detail"]');
           const select = async (name) => {
-            await page.getByRole("button", { name: `Review ${name}`, exact: true }).click();
+            await page.getByRole("button", { name: `Review schedule: ${name}`, exact: true }).click();
             await detail.getByRole("heading", { name, exact: true }).waitFor();
           };
           const responseFor = async (method, pathname, action) => {
@@ -230,7 +230,7 @@ export async function runCockpitScheduleLifecycleProof({
           stage = "cancel review without a write";
           await detail.getByRole("button", { name: "Pause", exact: true }).click();
           const cancelledWrites = writes.length;
-          await detail.getByRole("button", { name: "Keep schedule", exact: true }).click();
+          await detail.getByRole("button", { name: "Don't pause", exact: true }).click();
           assert.equal(writes.length, cancelledWrites);
           assert.deepEqual(await read(seed.jobId), seed);
           stage = "reject a stale actual owner revision before dispatch";
@@ -355,7 +355,14 @@ export async function runCockpitScheduleLifecycleProof({
             window.__scheduleRealm = {};
             window.__scheduleRoot = document.getElementById("root");
           });
-          await detail.getByRole("link", { name: "Open full schedule controls in Ops", exact: true }).click();
+          // Schedule detail no longer links to Classic; switch layouts where the shell offers it (lands on /ops/schedules).
+          if (variant === "mobile") {
+            await page.getByRole("button", { name: "More areas and settings", exact: true }).click();
+            await page.getByRole("button", { name: "Switch to classic Mission Control", exact: true }).click();
+          } else {
+            await page.getByRole("button", { name: "Settings and account", exact: true }).click();
+            await page.getByRole("menuitem", { name: "Switch to classic Mission Control", exact: true }).click();
+          }
           await page.waitForSelector('html[data-shell="classic"] .mc-next-shell .mc-next-topbar', { timeout: 30_000 });
           await page.getByRole("button", { name: `Inspect schedule ${seed.name}`, exact: true }).click();
           await page

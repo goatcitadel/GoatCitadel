@@ -4,11 +4,14 @@ const GatewayAccessGate = lazy(async () => ({
 }));
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import type { GatewayAccessViewState } from "../../app/use-gateway-access";
-import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
 import { Button } from "../ui/Button";
 import { EmptyState } from "../ui/EmptyState";
 import { currentGatewayHost, gatewayStartHint } from "./gateway-host-hint";
 
+/**
+ * Sign-in and blocked access use the shared credential form with cockpit wording; the drafts note sits inside its
+ * card. The classic view shows the same gate for every state here, so there is no Classic action (SH-23).
+ */
 export function CockpitAccessGate({
   access,
   busy,
@@ -18,39 +21,39 @@ export function CockpitAccessGate({
   busy: boolean;
   onRetry: () => void;
 }) {
-  const shellSwitch = useCockpitShellSwitch();
-  const needsSignIn = access.status === "needs-auth";
-  const blocked = access.status === "access-blocked";
   const checking = access.status === "checking";
   const misconfigured = access.status === "misconfigured";
-  const title = checking
-    ? "Connecting to GoatCitadel"
-    : blocked
-      ? "Access blocked for this caller"
-      : needsSignIn
-        ? "Sign in to continue"
-        : misconfigured
-          ? "Gateway setup needs attention"
-          : "Can't reach the GoatCitadel gateway";
-  const description = blocked
-    ? access.message
-    : misconfigured
-      ? access.message
-      : needsSignIn
-        ? "Restore gateway access with the form below. Unsaved drafts remain in this app session."
-        : checking
-          ? "Checking gateway access."
-          : `It may not be running. ${gatewayStartHint(currentGatewayHost())} This page retries automatically.`;
-  if (needsSignIn || blocked)
+  if (access.status === "needs-auth" || access.status === "access-blocked")
     return (
-      <main className="cockpit-access min-h-dvh overflow-auto bg-canvas p-4">
-        <Suspense fallback={<p role="status">Loading access recovery…</p>}>
-          <GatewayAccessGate gatewayBaseUrl={getGatewayApiBaseUrl()} access={access} busy={busy} onRetry={onRetry} />
+      // The shared shell fills the viewport by default; here it shrinks so the note sits directly under its card.
+      <main className="cockpit-access flex min-h-dvh flex-col items-center justify-center overflow-auto bg-canvas p-4">
+        <Suspense fallback={<p role="status">Loading sign-in…</p>}>
+          <GatewayAccessGate
+            gatewayBaseUrl={getGatewayApiBaseUrl()}
+            access={access}
+            busy={busy}
+            onRetry={onRetry}
+            title={
+              access.status === "access-blocked" ? "This browser can't open the cockpit yet" : "Sign in to continue"
+            }
+            subtitle="Connect to your GoatCitadel gateway to load your workspace."
+            footer={
+              <p className="text-sm text-fg-secondary">Unsaved drafts stay in this app session while you sign in.</p>
+            }
+          />
         </Suspense>
-        <p className="text-sm text-fg-secondary">Unsaved drafts stay in this app session while access is restored.</p>
-        {shellSwitch.feedback}
       </main>
     );
+  const title = checking
+    ? "Connecting to GoatCitadel"
+    : misconfigured
+      ? "Gateway setup needs attention"
+      : "Can't reach the GoatCitadel gateway";
+  const description = misconfigured
+    ? access.message
+    : checking
+      ? "Checking gateway access."
+      : `It may not be running. ${gatewayStartHint(currentGatewayHost())} This page retries automatically.`;
   return (
     <main className="flex h-dvh items-center justify-center bg-canvas">
       <EmptyState
@@ -59,21 +62,11 @@ export function CockpitAccessGate({
         title={title}
         description={description}
         action={
-          misconfigured ? (
-            <div className="flex flex-wrap gap-2">
-              <Button disabled={busy} onClick={onRetry}>
-                {busy ? "Checking…" : "Try again"}
-              </Button>
-              <Button onClick={shellSwitch.visit}>Open classic view</Button>
-            </div>
-          ) : (
-            <Button disabled={busy || checking} onClick={onRetry}>
-              {busy || checking ? "Checking…" : "Try again"}
-            </Button>
-          )
+          <Button disabled={busy || checking} onClick={onRetry}>
+            {busy || checking ? "Checking…" : "Try again"}
+          </Button>
         }
       />
-      {shellSwitch.feedback}
     </main>
   );
 }

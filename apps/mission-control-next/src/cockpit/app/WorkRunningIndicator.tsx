@@ -16,7 +16,7 @@ const STATUSES = new Set([
   "failed",
   "dead_lettered",
 ]);
-const unavailable = { state: "unknown", label: "Interactive Chat/plan work unavailable", count: null } as const;
+const unavailable = { state: "unknown", label: "Running work unknown", count: null } as const;
 function displayRun(value: unknown): value is DurableRunRecord {
   if (!value || typeof value !== "object") return false;
   const row = value as Record<string, unknown>;
@@ -59,15 +59,15 @@ export function summarizeRecentRunningWork(page: unknown, workspaceId: string) {
     return {
       state: "running",
       count: running,
-      label: `${partial ? "At least " : ""}${running} queued or running interactive Chat/plan ${running === 1 ? "record" : "records"}${partial ? " in recent history" : ""}`,
+      label: `${partial ? "At least " : ""}${running} running`,
     };
   if (partial)
     return {
       state: "unknown",
       count: null,
-      label: "Interactive Chat/plan work outside the recent history window is unknown",
+      label: "Running work unknown",
     };
-  return { state: "none", count: 0, label: "No queued or running interactive Chat/plan work recorded" };
+  return { state: "none", count: 0, label: "Nothing running" };
 }
 
 const DOT_CLASS = {

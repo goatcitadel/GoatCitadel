@@ -32,7 +32,7 @@ export function WorkKanban() {
     <section className="min-w-0">
       <p className="p-4 text-sm text-fg-secondary">
         {
-          "Advanced operator task actions. Runtime runs retain their recorded state; task edits do not prove execution. "
+          "The full task Kanban from the classic view, with advanced task actions. Runs keep their saved state; editing a task does not start or prove a run. "
         }
         <NativeOwnerLink href="/work/archive" scope={workspaceId}>
           Archived tasks

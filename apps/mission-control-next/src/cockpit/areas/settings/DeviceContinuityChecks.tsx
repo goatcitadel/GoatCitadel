@@ -20,7 +20,7 @@ function Checks() {
   if (!settings.data || !grants.data || daemon.isLoading)
     return (
       <p role="status" className="text-sm text-fg-muted">
-        Reading continuity evidence…
+        Checking desktop and mobile access…
       </p>
     );
   const items = deriveDesktopMobileContinuityItems({

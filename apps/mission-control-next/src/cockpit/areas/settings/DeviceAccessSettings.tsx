@@ -26,6 +26,7 @@ export function DeviceAccessSettings() {
   const ready = !devices.isError && Array.isArray(devices.data?.items);
   const grants = ready ? devices.data!.items : [];
   const review = control.reviewed;
+  const reviewingThisDevice = Boolean(review && review.grantId === caller.data?.grantId);
   return (
     <>
       <GatewayAuthSettings />
@@ -59,7 +60,7 @@ export function DeviceAccessSettings() {
         ) : null}
         {devices.data && !devices.isError && !ready ? (
           <p role="alert" className="mt-3 text-sm text-status-failed">
-            Device grant evidence is unavailable. Refresh before deciding.
+            Approved devices could not load. Refresh before deciding.
           </p>
         ) : null}
         {control.notice ? (
@@ -143,7 +144,7 @@ export function DeviceAccessSettings() {
           title="Revoke device access?"
           confirmLabel="Revoke device access"
           cancelLabel="Keep access"
-          message={`Revoke access for ${review?.deviceLabel || "this device"} (grant ${review?.grantId ?? "unavailable"})${review?.grantId === caller.data?.grantId ? ", this device" : ""} on this Gateway? Its companion sessions and session controls will also be revoked. This can disconnect the current device. A new approval is needed to regain access.`}
+          message={`Revoke access for ${review?.deviceLabel || "this device"}${reviewingThisDevice ? " (this device)" : ""} on this Gateway? Its companion sessions and session controls will also be revoked. This can disconnect the current device. A new approval is needed to regain access.`}
           pending={control.pending}
           confirmDisabled={!review || !deviceGrantCanBeRevoked(review)}
           onCancel={control.cancel}

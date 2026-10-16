@@ -4,7 +4,25 @@ import { listNotes } from "@goatcitadel/mission-control-shared/api/personal-ops"
 import { fetchChatGeneratedArtifact } from "@goatcitadel/mission-control-shared/api/chat";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+
+/** The Library page that holds a proposal's target document. */
+export function documentLibraryLabel(targetKind: DocumentPatchProposalRecord["targetKind"]): string {
+  return targetKind === "personal_note" ? "Open notes" : "Open artifacts";
+}
+
+export function DocumentLibraryLink({ proposal }: { proposal: DocumentPatchProposalRecord }) {
+  return (
+    <NativeOwnerLink
+      href={proposal.targetKind === "personal_note" ? "/library/notes" : "/library/artifacts"}
+      scope={[proposal.workspaceId, proposal.proposalId]}
+      className="w-fit text-sm font-medium text-accent hover:underline"
+    >
+      {documentLibraryLabel(proposal.targetKind)}
+    </NativeOwnerLink>
+  );
+}
 
 export function DocumentProposalTarget({ proposal }: { proposal: DocumentPatchProposalRecord }) {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();

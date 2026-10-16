@@ -34,7 +34,7 @@ export function LibraryMemoryEditor({ itemId, workspaceId }: { itemId: string; w
   });
   return (
     <section className="grid gap-3 rounded-lg border border-line p-3" aria-label="Memory editor">
-      {item.isPending ? <p role="status">Reading canonical memory item…</p> : null}
+      {item.isPending ? <p role="status">Reading memory item…</p> : null}
       {item.error ? <Callout tone="error">{describeApiError(item.error).summary} Changes are locked.</Callout> : null}
       {item.data ? (
         <MemoryEditor
@@ -114,7 +114,7 @@ function MemoryEditor({
           const fresh = await readLibraryMemoryItem(item.itemId, workspaceId);
           if (!fresh || !sameMemoryItem(fresh, review.item))
             throw new Error(
-              "Memory changed during review. Close this review and refresh the canonical item before trying again.",
+              "Memory changed during review. Close this review and refresh the item before trying again.",
             );
           const ttl = review.draft.ttl.trim() ? Number(review.draft.ttl) : null;
           if (ttl !== null && (!Number.isInteger(ttl) || ttl < 1 || ttl > 31536000))
@@ -145,7 +145,7 @@ function MemoryEditor({
       const approval = result.pendingApproval;
       setOutcome({
         error: false,
-        text: "The owner reports this item was already forgotten. No mutation was required.",
+        text: "This item was already forgotten. Nothing changed.",
         request: approval ?? undefined,
       });
     } catch (cause) {
@@ -180,8 +180,8 @@ function MemoryEditor({
       {!enabled ? <Callout tone="warning">{administrationMessage} Changes remain locked.</Callout> : null}
       {stale ? (
         <Callout tone="warning">
-          The canonical memory changed. Your draft is retained; discard it to load current content before making another
-          request.
+          The saved memory changed, so your draft started from an older version. Your draft is kept; discard it to load
+          current content before making another request.
         </Callout>
       ) : null}
       <Field label="Memory title">

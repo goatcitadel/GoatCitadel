@@ -3,6 +3,16 @@ import { ArrowUpRight } from "lucide-react";
 import { resolveCockpitContinuation } from "../../app/cockpit-compatibility";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 
+/** The cockpit area a resolved destination belongs to, named the way the navigation names it (IN-19). */
+const AREA_NAMES: Readonly<Record<string, string>> = {
+  chat: "Chat",
+  inbox: "Inbox",
+  work: "Work",
+  library: "Library",
+  system: "System",
+  settings: "Settings",
+};
+
 export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem; workspaceId: string }) {
   const className = "inline-flex min-h-9 items-center gap-1 text-sm font-medium text-accent hover:underline";
   if (!item.href.startsWith("/") || item.href.startsWith("//")) return null;
@@ -19,13 +29,15 @@ export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem;
     return null;
   }
   const carried = new URLSearchParams(window.location.search);
-  let area = "Ops";
+  let area: string | undefined;
+  let label: string | undefined;
   if (item.kind === "approval" && item.source.approvalId) {
     destination.pathname = "/inbox/approvals/" + encodeURIComponent(item.source.approvalId);
     destination.searchParams.set("approvalId", item.source.approvalId);
     destination.searchParams.delete("item");
     carried.delete("item");
-    area = "Approvals";
+    // The Inbox itself owns approvals; this link focuses the exact record.
+    label = "Open approval";
   } else if (item.kind === "task_deliverable" && item.source.taskId) {
     destination.pathname = "/work/tasks/" + encodeURIComponent(item.source.taskId);
     destination.searchParams.set("taskId", item.source.taskId);
@@ -51,7 +63,7 @@ export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem;
     destination.searchParams.delete("approvalId");
     carried.delete("approvalId");
     area = "Inbox";
-  } else if (destination.pathname === "/work" || destination.pathname.startsWith("/work/")) area = "Work";
+  }
   for (const key of ["sessionId", "turnId", "runId", "taskId"] as const) {
     const value = item.source[key];
     if (value !== undefined) destination.searchParams.set(key, value);
@@ -64,9 +76,10 @@ export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem;
   if (owner.kind !== "native")
     return (
       <span role="status" className="text-xs text-fg-muted">
-        Source owner unavailable
+        No page for this item&apos;s source yet
       </span>
     );
+  const resolvedArea = area ?? AREA_NAMES[new URL(owner.href, "http://cockpit.invalid").pathname.split("/")[1] ?? ""];
   return (
     <NativeOwnerLink
       href={owner.href}
@@ -74,7 +87,7 @@ export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem;
       className={className}
       data-inbox-owner
     >
-      Open in {area}
+      {label ?? (resolvedArea ? `Open in ${resolvedArea}` : "Open source")}
       <ArrowUpRight aria-hidden="true" className="size-4" />
     </NativeOwnerLink>
   );

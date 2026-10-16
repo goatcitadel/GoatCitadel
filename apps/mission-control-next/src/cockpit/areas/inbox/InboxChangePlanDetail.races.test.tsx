@@ -227,9 +227,9 @@ describe("Inbox confirmation lifecycle", () => {
     await click("Confirm change");
     await render({ ...data.item, id: "change_plan:other", source: { ...data.item.source, planId: "other" } });
     await act(async () => write.resolve(data.receipt));
-    expect(host.textContent).not.toContain("Gateway recorded the request");
+    expect(host.textContent).not.toContain("Confirmation recorded");
     await render();
-    expect(host.textContent).toContain("Gateway recorded the request");
+    expect(host.textContent).toContain("Confirmation recorded");
     expect(host.textContent).not.toContain("Review confirmation");
   });
 
@@ -245,7 +245,7 @@ describe("Inbox confirmation lifecycle", () => {
     await click("Review confirmation");
     await click("Confirm change");
     expect(host.textContent).toContain("Confirmation outcome is uncertain");
-    expect(host.textContent).not.toContain("Gateway recorded the request");
+    expect(host.textContent).not.toContain("Confirmation recorded");
   });
 
   it("supports StrictMode and accepts reordered canonical receipt fields", async () => {
@@ -257,7 +257,7 @@ describe("Inbox confirmation lifecycle", () => {
     await click("Review confirmation");
     await click("Confirm change");
     expect(api.confirmChangePlan).toHaveBeenCalledOnce();
-    expect(host.textContent).toContain("Gateway recorded the request");
+    expect(host.textContent).toContain("Confirmation recorded");
   });
 });
 

@@ -6,9 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { McpServerInspection } from "./McpServerInspection";
 
 type ButtonRender = (label: string, click: () => void, disabled: boolean) => ReactNode;
-const api = vi.hoisted(() => ({ inspectMcpServer: vi.fn(), fetchSettings: vi.fn(), fetchMcpServerTestEvidence: vi.fn() }));
+const api = vi.hoisted(() => ({
+  inspectMcpServer: vi.fn(),
+  fetchSettings: vi.fn(),
+  fetchMcpServerTestEvidence: vi.fn(),
+}));
 vi.mock("../../../features/native-routes/settings/mcp-server-inspection", () => api);
-vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ fetchSettings: api.fetchSettings, fetchMcpServerTestEvidence: api.fetchMcpServerTestEvidence }));
+vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  fetchSettings: api.fetchSettings,
+  fetchMcpServerTestEvidence: api.fetchMcpServerTestEvidence,
+}));
 vi.mock("../../ui/Sheet", () => ({
   Sheet: ({ open, children }: { open: boolean; children: ReactNode }) =>
     open ? <div role="dialog">{children}</div> : null,
@@ -46,7 +53,15 @@ const button = (label: string) =>
 beforeEach(() => {
   api.inspectMcpServer.mockReset().mockResolvedValue(inspection);
   api.fetchSettings.mockReset().mockResolvedValue({ chatFeatureAvailability: { staticMcp: false } });
-  api.fetchMcpServerTestEvidence.mockReset().mockResolvedValue({ serverId: "server-a", workspaceId: "w", state: "unverified", historyLimit: 32, toolLimitPerTurn: 32 });
+  api.fetchMcpServerTestEvidence
+    .mockReset()
+    .mockResolvedValue({
+      serverId: "server-a",
+      workspaceId: "w",
+      state: "unverified",
+      historyLimit: 32,
+      toolLimitPerTurn: 32,
+    });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.append(container);
@@ -99,9 +114,13 @@ describe("MCP server inspection", () => {
   });
 
   it("keeps the last availability beside a failed refresh without treating setup as current", async () => {
-    await act(async () => root.render(<QueryClientProvider client={client}>
-      <McpServerInspection serverId="server-a" workspaceId="w" onClose={() => undefined} />
-    </QueryClientProvider>));
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <McpServerInspection serverId="server-a" workspaceId="w" onClose={() => undefined} />
+        </QueryClientProvider>,
+      ),
+    );
     await vi.waitFor(() => expect(container.textContent).toContain("Static MCP in Chat is disabled"));
     api.fetchSettings.mockRejectedValueOnce(new Error("Settings unavailable"));
     await act(async () => button("Refresh Chat availability").click());
@@ -115,34 +134,58 @@ describe("MCP server inspection", () => {
 
   it("retains test receipts and runtime availability during a background read and restores current setup only after success", async () => {
     const receipt = {
-      serverId: "server-a", workspaceId: "w", state: "verified", serverRevision: "rev-1",
-      historyLimit: 32, toolLimitPerTurn: 32, receiptCandidateLimit: 64,
-      receipt: { sessionId: "session", turnId: "turn", durableRunId: "run", toolRunId: "tool", toolName: "mcp.server-a.read",
-        approvalId: "approval", effectRunId: "effect", finishedAt: "2026-10-13T03:00:00Z", chatHref: "/chat?sessionId=session&turnId=turn" },
+      serverId: "server-a",
+      workspaceId: "w",
+      state: "verified",
+      serverRevision: "rev-1",
+      historyLimit: 32,
+      toolLimitPerTurn: 32,
+      receiptCandidateLimit: 64,
+      receipt: {
+        sessionId: "session",
+        turnId: "turn",
+        durableRunId: "run",
+        toolRunId: "tool",
+        toolName: "mcp.server-a.read",
+        approvalId: "approval",
+        effectRunId: "effect",
+        finishedAt: "2026-10-13T03:00:00Z",
+        chatHref: "/chat?sessionId=session&turnId=turn",
+      },
     };
     api.fetchSettings.mockResolvedValue({ chatFeatureAvailability: { staticMcp: true } });
     api.fetchMcpServerTestEvidence.mockResolvedValue(receipt);
-    await act(async () => root.render(<QueryClientProvider client={client}>
-      <McpServerInspection serverId="server-a" workspaceId="w" onClose={() => undefined} />
-    </QueryClientProvider>));
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <McpServerInspection serverId="server-a" workspaceId="w" onClose={() => undefined} />
+        </QueryClientProvider>,
+      ),
+    );
     await vi.waitFor(() => expect(button("View tested Chat turn")).toBeDefined());
     expect(button("Copy sample task").disabled).toBe(false);
     let releaseEvidence!: () => void;
     let releaseAvailability!: () => void;
-    api.fetchMcpServerTestEvidence.mockImplementationOnce(() => new Promise((resolve) => {
-      releaseEvidence = () => resolve(receipt);
-    }));
-    api.fetchSettings.mockImplementationOnce(() => new Promise((resolve) => {
-      releaseAvailability = () => resolve({ chatFeatureAvailability: { staticMcp: true } });
-    }));
+    api.fetchMcpServerTestEvidence.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseEvidence = () => resolve(receipt);
+        }),
+    );
+    api.fetchSettings.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseAvailability = () => resolve({ chatFeatureAvailability: { staticMcp: true } });
+        }),
+    );
     await act(async () => {
       void client.invalidateQueries({ queryKey: ["settings", "mcp-test-evidence"] });
       void client.invalidateQueries({ queryKey: ["system", "managed-runtime-settings"] });
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(container.textContent).toContain("Checking test evidence and Chat availability for changes");
+    expect(container.textContent).toContain("Checking test results and Chat availability for changes");
     expect(container.textContent).toContain("Static MCP in Chat is enabled");
-    expect(container.textContent).toContain("Retained test evidence is stale for this inspection");
+    expect(container.textContent).toContain("The last test result is out of date");
     expect(container.textContent).toContain("64 approved receipt candidates");
     expect(container.textContent).not.toContain("No task result is verified");
     expect(button("View tested Chat turn")).toBeUndefined();
@@ -158,7 +201,7 @@ describe("MCP server inspection", () => {
       void client.invalidateQueries({ queryKey: ["settings", "mcp-test-evidence"] });
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    await vi.waitFor(() => expect(container.textContent).toContain("Could not refresh retained test evidence"));
+    await vi.waitFor(() => expect(container.textContent).toContain("Could not refresh test results"));
     expect(container.textContent).toContain("64 approved receipt candidates");
     expect(container.textContent).not.toContain("No task result is verified");
     expect(button("Copy sample task").disabled).toBe(true);
@@ -172,15 +215,21 @@ describe("MCP server inspection", () => {
     const observer = new QueryObserver(client, { queryKey: key, queryFn: readServers, staleTime: Infinity });
     const unsubscribe = observer.subscribe(() => undefined);
     try {
-      await act(async () => root.render(<QueryClientProvider client={client}>
-        <McpServerInspection serverId="server-a" workspaceId="w" onClose={() => undefined} />
-      </QueryClientProvider>));
+      await act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <McpServerInspection serverId="server-a" workspaceId="w" onClose={() => undefined} />
+          </QueryClientProvider>,
+        ),
+      );
       await vi.waitFor(() => expect(container.textContent).toContain("Files server"));
       expect(readServers).not.toHaveBeenCalled();
       await act(async () => button("Test connection").click());
       await vi.waitFor(() => expect(readServers).toHaveBeenCalledOnce());
       expect(client.getQueryData(key)).toEqual({ items: [inspection.server] });
       expect(api.inspectMcpServer).toHaveBeenCalledTimes(2);
-    } finally { unsubscribe(); }
+    } finally {
+      unsubscribe();
+    }
   });
 });

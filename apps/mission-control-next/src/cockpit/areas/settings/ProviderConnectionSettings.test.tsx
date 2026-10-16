@@ -225,7 +225,7 @@ describe("cockpit provider connection editing", () => {
       expect.objectContaining({ workspaceId: "default" }),
       { expectedRevision: 1, actionNonce: "confirm-nonce" },
     );
-    expect(container.textContent).toContain("Current provider evidence confirms the saved change");
+    expect(container.textContent).toContain("Change complete. The saved provider settings match it.");
     expect(container.textContent).not.toContain("Unsaved endpoint draft");
   });
 
@@ -255,7 +255,7 @@ describe("cockpit provider connection editing", () => {
     api.fetchLlmConfig.mockResolvedValue(config(5, "https://new.example.test/v1"));
     await act(async () => dialog.onConfirm(dialog.plan!));
     expect(api.confirmChangePlan).toHaveBeenCalledOnce();
-    expect(container.textContent).toContain("Current provider evidence confirms");
+    expect(container.textContent).toContain("The saved provider settings match it");
   });
 
   it("refuses credential-bearing public endpoint URLs", async () => {
@@ -371,7 +371,7 @@ describe("cockpit provider connection editing", () => {
       source: "env",
     });
     await act(async () => dialog.onConfirm(dialog.plan!));
-    expect(container.textContent).toContain("Current provider evidence confirms the saved change");
+    expect(container.textContent).toContain("Change complete. The saved provider settings match it.");
     expect(JSON.stringify(readProviderConnectionAttempt("provider-a"))).not.toContain("synthetic-test-credential");
   });
 
@@ -420,7 +420,7 @@ describe("cockpit provider connection editing", () => {
     expect(container.textContent).toContain("Owner result: Registered environment owner is reserved");
     expect(container.textContent).toContain("Caution risk");
     expect(container.textContent).not.toContain("Risk: ");
-    expect(container.textContent).not.toContain("Current provider evidence confirms");
+    expect(container.textContent).not.toContain("The saved provider settings match it");
   });
 
   it("blocks a current plan whose credential storage target changed", async () => {
@@ -494,7 +494,7 @@ describe("cockpit provider connection editing", () => {
       source: "env",
     });
     await act(async () => dialog.onSubmitSecureInput(dialog.plan!, { credential: "synthetic-test-credential" }));
-    expect(container.textContent).not.toContain("Current provider evidence confirms");
+    expect(container.textContent).not.toContain("The saved provider settings match it");
     expect(container.textContent).toContain("outcome is uncertain");
   });
 
@@ -520,7 +520,7 @@ describe("cockpit provider connection editing", () => {
       await act(async () => dialog.onConfirm(dialog.plan!));
       const retained = readProviderConnectionAttempt("provider-a");
       const link = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
-        (item) => item.textContent === "Inspect current connection plan in Inbox",
+        (item) => item.textContent === "Open connection change in Inbox",
       )!;
       const target = new URL(link.href);
       expect(target.pathname).toBe("/inbox");
@@ -577,7 +577,7 @@ describe("cockpit provider connection editing", () => {
       "/api/v1/change-plans/:planId/confirmations",
     );
     expect(container.textContent).not.toContain("outcome is uncertain");
-    expect(container.textContent).toContain("Current provider evidence confirms the saved change");
+    expect(container.textContent).toContain("Change complete. The saved provider settings match it.");
     expect(api.confirmChangePlan).toHaveBeenCalledTimes(1);
   });
 
@@ -736,7 +736,7 @@ describe("cockpit provider connection editing", () => {
       expect(attempt?.uncertain).toBe(true);
       expect(attempt?.transport).toBeDefined();
       expect(container.textContent).toContain("different Gateway");
-      expect(container.textContent).not.toContain("Current provider evidence confirms the saved change");
+      expect(container.textContent).not.toContain("Change complete. The saved provider settings match it.");
     },
   );
   it("re-reads the plan fresh when settling a lost confirmation", async () => {
@@ -777,7 +777,7 @@ describe("cockpit provider connection editing", () => {
     });
     await act(async () => dialog.onConfirm(dialog.plan!));
     expect(container.textContent).toContain("outcome is uncertain");
-    expect(container.textContent).not.toContain("Current provider evidence confirms");
+    expect(container.textContent).not.toContain("The saved provider settings match it");
   });
 
   it("accepts an owner revision advance after saving an endpoint that still needs a credential", async () => {
@@ -916,7 +916,7 @@ describe("cockpit provider connection editing", () => {
       expect(retained?.uncertain).toBe(true);
       expect(retained?.plan).toBeUndefined();
       const link = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
-        (item) => item.textContent === "Inspect recent Gateway activity",
+        (item) => item.textContent === "Open recent activity in System",
       )!;
       const target = new URL(link.href);
       expect(target.pathname).toBe("/system/activity");
@@ -977,7 +977,7 @@ describe("cockpit provider connection editing", () => {
       expect(retained?.uncertain).toBe(false);
       expect(currentPlan.origin).toEqual({ surface: "settings", workspaceId: "default", actorId: "operator" });
       const link = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
-        (item) => item.textContent === "Inspect current connection plan in Inbox",
+        (item) => item.textContent === "Open connection change in Inbox",
       )!;
       const target = new URL(link.href);
       expect(target.pathname).toBe("/inbox");

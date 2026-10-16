@@ -185,7 +185,7 @@ export function SourceOperations({ detail, workspaceId, available }: SourceOpera
       if (operation.current())
         setOutcome({
           error: true,
-          text: `${describeApiError(cause).summary} The action is not confirmed. Inspect the canonical source/import before retrying.`,
+          text: `${describeApiError(cause).summary} The action is not confirmed. Refresh the source and its imports before retrying.`,
         });
     } finally {
       if (operation.current()) setBusy(false);
@@ -340,7 +340,7 @@ export function SourceOperations({ detail, workspaceId, available }: SourceOpera
           }
         }}
         title="Review external source action"
-        description="Gateway validates source identity, revisions, hashes and admission."
+        description="The Gateway checks the source's identity, versions and hashes, and whether it is allowed."
       >
         <div className="grid min-w-0 grid-cols-1 gap-3 wrap-anywhere">
           <p>

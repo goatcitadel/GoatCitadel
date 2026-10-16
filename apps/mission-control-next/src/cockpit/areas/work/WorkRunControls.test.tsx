@@ -197,6 +197,11 @@ describe("Work run controls", () => {
     await renderControls();
     expect(container.textContent).toContain("No single unresolved failed delivery");
     expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Recover")).toBe(false);
+    const recovery = [...container.querySelectorAll("a")].find(
+      (entry) => entry.textContent === "Open recovery in System",
+    );
+    expect(recovery?.getAttribute("href")).toContain("/system/diagnostics");
+    expect(container.textContent).not.toContain("in Ops");
   });
 
   it("refuses recovery when the dead letter resolves between review and request", async () => {

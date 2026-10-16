@@ -3,6 +3,7 @@ import type { ReactNode, Ref } from "react";
 import { CommandPaletteCoverage, CommandPaletteResults, PALETTE_ITEM_CLASS } from "./CommandPaletteResults";
 import type { PaletteObject } from "./command-palette-search";
 import type { useCommandPaletteSearch } from "./use-command-palette-search";
+import { TechnicalDetails } from "../ui/TechnicalDetails";
 export { PaletteResourcePreview } from "./CommandPaletteResults";
 export interface CommandPaletteViewProps {
   query: string;
@@ -71,7 +72,7 @@ export function CommandPaletteView({
       />
       <p className="px-3 py-2 text-xs text-fg-muted">
         {activeWorkspaceId ? `Workspace: ${workspaceName ?? "current workspace"}.` : "No workspace selected."} Type at
-        least two characters to search records. Installation shared results are labeled.
+        least two characters to search.
       </p>
       {creationNotice}
       <div className="max-h-80 overflow-y-auto p-1">
@@ -160,13 +161,14 @@ export function CommandPaletteView({
         ) : null}
         {search.loading ? (
           <p role="status" className="px-3 py-2 text-sm text-fg-secondary">
-            Searching current owners…
+            Searching…
           </p>
         ) : null}
         {search.error ? (
-          <p role="alert" className="px-3 py-2 text-sm text-fg-secondary">
-            Search unavailable: {search.error}
-          </p>
+          <div role="alert" className="space-y-1 px-3 py-2 text-sm text-fg-secondary">
+            <p>Search didn't respond. Try again.</p>
+            <TechnicalDetails>{search.error}</TechnicalDetails>
+          </div>
         ) : null}
         <CommandPaletteCoverage groups={search.groups} />
       </div>

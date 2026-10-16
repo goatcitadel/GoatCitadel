@@ -7,6 +7,7 @@ import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { Button } from "../../ui/Button";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import {
   CHECKING_FOR_CHANGES,
   keepRecordForSameItem,
@@ -117,7 +118,7 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {recordAnswered(view) && !proposal && !scopeChanged ? (
         <p className="text-fg-muted">
-          This proposal is no longer in the selected workspace Inbox. Open Library for its current status.
+          This proposal is no longer in this workspace&apos;s Inbox. Use Open capabilities to check its current status.
         </p>
       ) : null}
       {proposal ? (
@@ -128,7 +129,7 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
           </p>
           {proposal.candidateId ? (
             <p>
-              A candidate is linked to this proposal. Review its current version and lifecycle in Library before
+              A candidate is linked to this proposal. Use Open capabilities to review its current version before
               requesting promotion.
             </p>
           ) : null}
@@ -136,10 +137,17 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
             {plural(current.events.length, "recorded event")}. Proposal review here does not activate a capability.
           </p>
           <p className="text-xs text-fg-muted">
-            Decisions for this proposal are unavailable in Inbox. Candidate promotion uses the governed Library flow.
+            Decisions for this proposal are unavailable in Inbox. Candidates are promoted from Library › Capabilities.
           </p>
         </div>
       ) : null}
+      <NativeOwnerLink
+        href="/library/capabilities"
+        scope={[workspaceId, item.id]}
+        className="w-fit text-sm font-medium text-accent hover:underline"
+      >
+        Open capabilities
+      </NativeOwnerLink>
     </section>
   );
 }

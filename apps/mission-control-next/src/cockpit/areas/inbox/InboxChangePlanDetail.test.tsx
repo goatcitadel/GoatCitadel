@@ -209,7 +209,10 @@ describe("Inbox change-plan confirmation", () => {
       },
       { expectedRevision: 2, actionNonce: "nonce-long-enough-for-owner" },
     );
-    expect(container.textContent).toContain("A separate canonical approval is required");
+    expect(container.textContent).toContain("Confirmation recorded. Plan status:");
+    expect(container.textContent).toContain("It needs a separate approval before the change can apply.");
+    const approvalLink = [...container.querySelectorAll("a")].find((link) => link.textContent === "Open approval");
+    expect(approvalLink?.getAttribute("href")).toContain("/inbox?approvalId=approval-a");
     expect(container.textContent).not.toContain("change was applied");
   });
 
@@ -264,7 +267,7 @@ describe("Inbox change-plan confirmation", () => {
       },
     });
     await renderDetail({ ...item, source: { ...item.source, planStatus: "awaiting_input" } });
-    expect(container.textContent).toContain("protected input in its existing secure owner flow");
+    expect(container.textContent).toContain("protected input in the secure flow that started it");
     expect(container.querySelector('input[type="password"]')).toBeNull();
     expect(api.confirmChangePlan).not.toHaveBeenCalled();
   });

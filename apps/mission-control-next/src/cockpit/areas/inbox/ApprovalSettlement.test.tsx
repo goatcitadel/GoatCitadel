@@ -109,7 +109,7 @@ it("shows background checking as quiet text instead of a live region", async () 
   });
   await waitForRefresh(true);
   const checking = [...container.querySelectorAll("p")].find((node) =>
-    node.textContent?.includes("Checking canonical follow-on work"),
+    node.textContent?.includes("Checking follow-on work"),
   );
   expect(checking).toBeDefined();
   expect(checking?.closest('[role="status"], [role="alert"], [aria-live]')).toBeNull();

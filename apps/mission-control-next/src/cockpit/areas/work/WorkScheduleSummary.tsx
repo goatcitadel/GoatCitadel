@@ -2,6 +2,7 @@ import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { ScheduleAction } from "../../../features/native-routes/ops/schedule-operation";
 import type { CronJobRecordResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { Button } from "../../ui/Button";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { scheduleCadence, scheduleTimezoneSummary } from "./schedule-cadence";
@@ -76,6 +77,23 @@ export function lastRunFailureReason(job: CronJobRecordResponse): string {
   return text && !looksLikeJson(text) ? text : FAILED_FALLBACK;
 }
 
+/** The page notice; a run request links to its run page when the Gateway names one. */
+export function WorkScheduleNotice({ message, runHref }: { message: string; runHref?: string }) {
+  return (
+    <p role="status" className="rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
+      {message}
+      {runHref ? (
+        <>
+          {" "}
+          <NativeOwnerLink href={runHref} scope={runHref} className="font-medium text-accent">
+            Open run
+          </NativeOwnerLink>
+        </>
+      ) : null}
+    </p>
+  );
+}
+
 export function WorkScheduleListItem({ job, onReview }: { job: CronJobRecordResponse; onReview: () => void }) {
   return (
     <li className="rounded-lg border border-line bg-raised p-4">
@@ -89,7 +107,7 @@ export function WorkScheduleListItem({ job, onReview }: { job: CronJobRecordResp
         </span>
       </div>
       <p className="mt-2 text-sm text-fg-secondary">
-        {scheduleCadence(job.schedule)} · {scheduleTimezoneSummary(job.schedule)}
+        <span title={job.schedule}>{scheduleCadence(job.schedule)}</span> · {scheduleTimezoneSummary(job.schedule)}
         <br />
         Next run: {job.enabled ? <ScheduleTime value={job.nextRunAt} /> : "Paused"}
       </p>
@@ -103,7 +121,7 @@ export function WorkScheduleListItem({ job, onReview }: { job: CronJobRecordResp
           </>
         ) : null}
       </p>
-      <Button size="sm" className="mt-2" aria-label={"Review " + job.name} onClick={onReview}>
+      <Button size="sm" className="mt-2" aria-label={"Review schedule: " + job.name} onClick={onReview}>
         Review schedule
       </Button>
     </li>

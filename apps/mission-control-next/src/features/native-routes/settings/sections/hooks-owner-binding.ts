@@ -13,7 +13,7 @@ import {
 export { HOOK_TRIGGER_VALUES };
 export const HOOK_OWNER_LIMIT = 500;
 export const HOOK_OWNER_BOUNDARY =
-  "The Gateway enforces policy and egress rules. These APIs have no atomic revision precondition; current public records are checked before each action. Endpoint and signing-secret values remain hidden by the owner.";
+  "The Gateway enforces policy and egress rules. Current saved records are checked before each action, but a change made elsewhere at the same moment is not blocked. Endpoint and signing-secret values remain hidden by the owner.";
 export const HOOK_MODES: HookMode[] = ["observe", "mutate", "intercept"];
 export type HookPublicForm = { label: string; trigger: HookTrigger; mode: HookMode };
 export type HookPrivateForm = { url: string; secret: string };

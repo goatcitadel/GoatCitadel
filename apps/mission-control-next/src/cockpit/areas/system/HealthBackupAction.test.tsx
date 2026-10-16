@@ -99,5 +99,5 @@ it("withholds creation while the current health-owner read is unavailable", asyn
   await click("Back up now");
   expect(api.access).not.toHaveBeenCalled();
   expect(api.create).not.toHaveBeenCalled();
-  expect(container.textContent).toContain("Creation requires a current read");
+  expect(container.textContent).toContain("Back up now needs a current status check");
 });

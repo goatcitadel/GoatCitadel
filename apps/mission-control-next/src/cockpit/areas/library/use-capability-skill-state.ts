@@ -217,7 +217,7 @@ export function useCapabilitySkillState({
           ...base,
           phase: "uncertain",
           message:
-            "Request outcome is uncertain. Further requests are locked in this app session. Check Approvals and the skill record in the classic view.",
+            "Request outcome is uncertain. Further requests are locked in this app session. Check Inbox and this skill's record before trying again.",
         });
       } else if (current()) {
         setError({ identity, message: `Could not check the current skill state. ${describeApiError(cause).summary}` });

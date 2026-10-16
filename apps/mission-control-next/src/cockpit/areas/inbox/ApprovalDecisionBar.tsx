@@ -6,6 +6,7 @@ import {
   type SpecialistEvidence,
 } from "./specialist-approval-evidence";
 import { SpecialistApprovalReview } from "./SpecialistApprovalReview";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { canonicalJsonString, type ApprovalRequest, type OperatorInboxItem } from "@goatcitadel/contracts";
@@ -282,15 +283,21 @@ function ApprovalDecisionReview({
       <>
         <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} />
         <p className="text-fg-muted">
-          This request needs its specialist review in Approvals before a decision. Use Inspect persisted approval for
-          the governed review.
+          This request carries an MCP server question, which can&apos;t be decided here. Pending MCP server requests are
+          listed in Settings.{" "}
+          <NativeOwnerLink
+            href="/settings/mcp"
+            scope={[workspaceId, approval.approvalId]}
+            className="font-medium text-accent hover:underline"
+          >
+            Open MCP servers
+          </NativeOwnerLink>
         </p>
       </>
     );
   if (!hasPreview && !specializedReview)
-    return <p role="alert">The exact action preview is unavailable. Open the persisted approval before deciding.</p>;
-  if (expired)
-    return <p className="text-fg-muted">This approval has expired. Open Approvals to check its current outcome.</p>;
+    return <p role="alert">The exact action preview is unavailable, so this approval can&apos;t be decided yet.</p>;
+  if (expired) return <p className="text-fg-muted">This approval has expired and can no longer be decided.</p>;
 
   return (
     <div className="space-y-2 border-t border-line-subtle pt-3">

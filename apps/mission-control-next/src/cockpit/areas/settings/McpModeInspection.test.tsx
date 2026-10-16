@@ -92,7 +92,7 @@ it("hides the previous snapshot during refresh and renders partial failure witho
     resolve(manifestFixture());
   });
   expect(container.textContent).toContain("Fixture descriptor 0");
-  expect(container.textContent).toContain("Remote MCP evidence is unavailable.");
+  expect(container.textContent).toContain("Remote MCP preview could not load.");
   expect(container.textContent).not.toContain("0 catalog templates");
 });
 

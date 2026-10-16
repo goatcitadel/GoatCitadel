@@ -26,7 +26,7 @@ import { WorkTaskBulkActions } from "./WorkTaskBulkActions";
 const COLUMNS: readonly { id: WorkBoardGroup; title: string; description: string }[] = [
   { id: "running", title: "Active", description: "Tasks being prepared or worked; runs queued or executing" },
   { id: "waiting", title: "Needs attention", description: "Tasks in inbox, blocked or review; runs waiting or paused" },
-  { id: "failed", title: "Failed runs", description: "Runtime failures and recovery" },
+  { id: "failed", title: "Failed runs", description: "Run failures and recovery" },
   { id: "done", title: "Done", description: "Completed or cancelled" },
 ];
 
@@ -152,9 +152,9 @@ export function WorkBoard() {
               onChange={(event) => setKind(event.target.value)}
               className="rounded-md border border-line bg-sunken p-2 text-fg"
             >
-              <option value="all">Tasks and runtime runs</option>
+              <option value="all">Tasks and runs</option>
               <option value="task">Operator tasks</option>
-              <option value="run">Runtime runs</option>
+              <option value="run">Runs</option>
             </select>
           )}
         </Field>
@@ -237,9 +237,9 @@ export function WorkBoard() {
               {(["task", "run"] as const)
                 .filter((recordKind) => kind === "all" || kind === recordKind)
                 .map((recordKind) => (
-                  <section key={recordKind} aria-label={recordKind === "task" ? "Operator tasks" : "Runtime runs"}>
+                  <section key={recordKind} aria-label={recordKind === "task" ? "Operator tasks" : "Runs"}>
                     <h3 className="mb-2 text-xs font-semibold text-fg-secondary">
-                      {recordKind === "task" ? "Operator tasks" : "Runtime runs"}
+                      {recordKind === "task" ? "Operator tasks" : "Runs"}
                     </h3>
                     <WindowedRecordList
                       label={column.title + " records"}
@@ -311,7 +311,7 @@ export function WorkBoard() {
                         const path = `/work/runs/${encodeURIComponent(run.runId)}`;
                         return (
                           <a key={`run:${run.runId}`} href={path} onClick={open(path)} className={CARD}>
-                            <span className="text-xs font-semibold text-accent">Runtime run</span>
+                            <span className="text-xs font-semibold text-accent">Run</span>
                             <span className="line-clamp-3 text-sm font-medium text-fg">{workRunTitle(run)}</span>
                             <span className="mt-2 flex flex-wrap items-center justify-between gap-2">
                               <StatusBadge status={presentRunStatus(run.status)} />
@@ -336,7 +336,7 @@ export function WorkBoard() {
                   </NativeOwnerLink>
                   {" or "}
                   <NativeOwnerLink href="/work/kanban" scope={workspaceId}>
-                    all loaded task actions
+                    the Kanban
                   </NativeOwnerLink>
                   {" for older records."}
                 </p>

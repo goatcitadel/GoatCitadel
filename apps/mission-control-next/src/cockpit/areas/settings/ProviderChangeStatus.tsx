@@ -37,12 +37,11 @@ export function ProviderChangeStatus({
       <p role="status">
         <strong>{presentChangeStatusLabel(change.receipt.status)}</strong> · {change.message}
       </p>
-      {change.blocking ? <p>This action has not settled. Inspect the Gateway step before another save.</p> : null}
+      {change.blocking ? (
+        <p>This change is not finished. Refresh its status or review the required step before saving again.</p>
+      ) : null}
       {change.blocking && committedProfile ? (
-        <p>
-          Public profile saved. Credential setup is not confirmed. Inspect the Gateway's current required action and
-          evidence before continuing.
-        </p>
+        <p>Profile saved. Credential setup is not confirmed yet. Review the required step before continuing.</p>
       ) : null}
       {change.error ? (
         <p role="alert" className="text-status-failed">
@@ -70,7 +69,7 @@ export function ProviderChangeStatus({
       </div>
       {committedProfile ? (
         <TechnicalDetails>
-          <p className="break-all font-mono text-xs">Saved at settings revision {checkpoint!.appliedRevision}</p>
+          <p className="break-all font-mono text-xs">Saved at settings version {checkpoint!.appliedRevision}</p>
         </TechnicalDetails>
       ) : null}
       <ApprovedSettingsContinuation plan={change.plan} onSettled={onRefresh} />

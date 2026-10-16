@@ -101,7 +101,7 @@ export function McpServersSettings({ workspaceId }: { workspaceId: string }) {
       ) : null}
       {!query.isPending && !query.isError && !ready ? (
         <p role="alert" className="text-sm text-status-failed">
-          MCP server directory evidence is incomplete. Refresh before editing.
+          The MCP server list is incomplete. Refresh before editing.
         </p>
       ) : null}
       {action.notice ? (
@@ -251,7 +251,7 @@ function McpServerRow({
       {blocked ? <p className="mt-2 text-xs text-fg-muted">{blocked}</p> : null}
       {attempt.locked ? (
         <p role="status" className="mt-2 text-sm text-status-waiting">
-          {attempt.message ?? "Waiting for the Gateway server owner…"}
+          {attempt.message ?? "Waiting for the Gateway to confirm…"}
         </p>
       ) : null}
       <McpOutcomeCheck target={{ kind: "server", serverId: server.serverId }} buttonComponent={Button} />
@@ -260,7 +260,7 @@ function McpServerRow({
         <dl className="mt-2 space-y-1">
           <dt>Server ID</dt>
           <dd className="break-all font-mono">{server.serverId}</dd>
-          <dt>Configuration revision</dt>
+          <dt>Configuration version</dt>
           <dd className="break-all font-mono">
             {server.revision || "Not provided; configuration editing is unavailable"}
           </dd>

@@ -401,14 +401,14 @@ describe("CockpitShell", () => {
       );
     });
     const sidebar = () => container.querySelector('[aria-label="Cockpit sidebar"]')!;
-    expect(sidebar().textContent).toContain("Checking system…");
-    expect(sidebar().textContent).not.toContain("System checks unavailable");
+    expect(sidebar().textContent).toContain("Checking…");
+    expect(sidebar().textContent).not.toContain("Checks unavailable");
     const calls = health.digest.mock.calls.length;
     await act(async () => {
       fail();
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    await vi.waitFor(() => expect(sidebar().textContent).toContain("System checks unavailable"));
+    await vi.waitFor(() => expect(sidebar().textContent).toContain("Checks unavailable"));
     const retry = [...sidebar().querySelectorAll("button")].find((node) => node.textContent === "Retry")!;
     expect(retry).toBeDefined();
     await act(async () => retry.click());

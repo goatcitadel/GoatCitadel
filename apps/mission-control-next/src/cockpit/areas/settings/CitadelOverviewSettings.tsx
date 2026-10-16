@@ -14,6 +14,7 @@ import { Dialog } from "../../ui/Dialog";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { CitadelBrief } from "./CitadelBrief";
+import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
 import { TemplateCard, TemplateContents } from "./CitadelTemplateCard";
 
 export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
@@ -31,12 +32,12 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
   return (
     <section
       id="citadel-overview"
-      aria-label="Citadel Overview"
+      aria-label={CITADEL_PAGE_LABELS["citadel-overview"]}
       className="mt-4 space-y-4 border-t border-line-subtle pt-4"
     >
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="font-display text-md font-semibold text-fg">Citadel Overview</h3>
+          <h3 className="font-display text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-overview"]}</h3>
           <p className="mt-1 text-sm text-fg-secondary">
             Review this operating space's Charter, Chambers and Gatehouse posture.
           </p>
@@ -148,11 +149,11 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
               state.gatehouse ? (
                 <dl className="grid gap-3 text-sm sm:grid-cols-2">
                   {[
-                    ["Risk posture", presentRiskPosture(state.gatehouse.riskPosture)],
+                    ["Risk setting", presentRiskPosture(state.gatehouse.riskPosture)],
                     ["Model policy", presentModelPolicy(state.gatehouse.modelPolicyDefault)],
                     ["Sharing", presentGatehouseSharing(state.gatehouse.sharingDefault)],
                     ["External writes", presentGatehouseExternalWrites(state.gatehouse.externalWritesDefault)],
-                    ["Wards", String(state.gatehouse.wardCount)],
+                    [CITADEL_PAGE_LABELS["citadel-wards"], String(state.gatehouse.wardCount)],
                     ["Sealed Chambers", String(state.gatehouse.sealedChamberCount)],
                   ].map(([label, value]) => (
                     <div key={label} className="rounded-md border border-line-subtle bg-sunken p-3">
@@ -162,7 +163,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
                   ))}
                 </dl>
               ) : (
-                <p className="text-sm text-fg-muted">Gatehouse evidence is unavailable.</p>
+                <p className="text-sm text-fg-muted">Gatehouse settings could not load.</p>
               )
             ) : null}
             <p className="text-xs text-fg-muted">
@@ -193,7 +194,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
         ) : (
           <div className="space-y-3">
             <p className="text-sm text-fg-secondary">
-              This Citadel needs a Charter. Review a default template, or use Setup for a custom Blueprint.
+              This Citadel needs a Charter. Review a default template, or use Guided setup for a custom Blueprint.
             </p>
             {templateState.loading ? (
               <p role="status" className="text-sm text-fg-muted">
@@ -282,7 +283,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
           <div className="mt-3 space-y-2 text-sm text-fg-secondary">
             <p className="break-words">Reviewed purpose: {review.input.purpose}</p>
             <p>Other Charter fields and Chambers keep their reviewed values.</p>
-            <p className="break-all text-xs">Structure revision: {review.before.revision}</p>
+            <p className="break-all text-xs">Structure version: {review.before.revision}</p>
             <div className="flex flex-wrap gap-2">
               <Button disabled={control.locked} onClick={() => void control.confirm()}>
                 Confirm Charter save
@@ -326,9 +327,9 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
             <p className="break-all text-xs">
               Citadel: {citadelId}
               <br />
-              Structure revision: {review.before.revision}
+              Structure version: {review.before.revision}
               <br />
-              Template revision: {review.template.revision}
+              Template version: {review.template.revision}
             </p>
           </div>
         ) : null}
@@ -353,7 +354,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
         <p className="mt-2 break-all text-xs text-fg-muted">
           Citadel: {citadelId}
           <br />
-          Profile revision: {lifecycle.review?.record.revision}
+          Profile version: {lifecycle.review?.record.revision}
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <Button variant="primary" disabled={lifecycle.pending} onClick={() => void lifecycle.confirm()}>

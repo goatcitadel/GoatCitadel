@@ -144,7 +144,7 @@ export function SpecialistApprovalReview({
           {evidence.source.content}
         </pre>
         {evidence.source.publicProjection?.contentRedacted ? (
-          <p>Gateway redacted sensitive source content. The hash identifies the stored artifact.</p>
+          <p>Sensitive source content is hidden. The hash identifies the stored artifact.</p>
         ) : null}
         <TechnicalDetails label="Code artifact and policy identity">
           <dl>

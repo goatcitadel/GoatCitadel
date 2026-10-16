@@ -129,25 +129,25 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
         result.turnId !== item.source.turnId ||
         result.promptId !== item.source.promptId
       ) {
-        throw new Error("Gateway returned an unexpected answer receipt.");
+        throw new Error("The saved answer did not match the question you answered.");
       }
       setReview(null);
       setCompleted(true);
       setNotice(
         result.resumed
-          ? "Gateway accepted the answer and reports that the turn resumed. Open Chat to inspect its progress."
-          : "Gateway accepted the answer. Open Chat to inspect the current wait and continuation.",
+          ? "Answer sent, and the conversation resumed. Use Open source conversation to follow it."
+          : "Answer sent. Use Open source conversation to see whether it continues.",
       );
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
     } catch (cause) {
       setReview(null);
       if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
         // Gateway answered and recorded nothing: the answer form stays available.
-        setError(`Gateway did not accept the answer. ${describeApiError(cause).summary}`);
+        setError(`The answer was not accepted. ${describeApiError(cause).summary}`);
       } else if (mutationAttempted) {
         setOutcomeUncertain(true);
         setError(
-          `Answer outcome is uncertain. Inspect the current question in Chat before trying again. ${describeApiError(cause).summary}`,
+          `Answer outcome is uncertain. Use Open source conversation to check the question before trying again. ${describeApiError(cause).summary}`,
         );
       } else {
         setError(`Could not check the current question. ${describeApiError(cause).summary}`);
@@ -178,7 +178,7 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
       </div>
       {!item.source.sessionId || !item.source.turnId || !item.source.promptId ? (
         <p role="alert" className="text-status-failed">
-          This Inbox item has no complete question owner. Open Chat to review it.
+          This Inbox item is missing its conversation details, so it can&apos;t be answered here.
         </p>
       ) : null}
       {view.phase === "loading" ? (
@@ -198,7 +198,8 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {recordAnswered(view) && !prompt ? (
         <p className="text-fg-muted">
-          This question is no longer waiting in the selected workspace. Open Chat to inspect its current state.
+          This question is no longer waiting in the selected workspace. Use Open source conversation to see its current
+          state.
         </p>
       ) : null}
       {scopeChanged ? (
@@ -212,7 +213,8 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
           <p className="text-fg-secondary">{prompt.question}</p>
           {prompt.secureConfiguration ? (
             <p className="text-fg-secondary">
-              This question needs protected configuration. Open Chat to enter it through the existing secure flow.
+              This question needs protected configuration, which can&apos;t be entered in Inbox. Use Open source
+              conversation to enter it securely.
             </p>
           ) : null}
           {canAnswer && prompt.kind === "single_select" ? (
@@ -291,7 +293,7 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
           if (!open && !pending) setReview(null);
         }}
         title="Submit this answer"
-        description="The Gateway will record this answer for the current Chat turn and may resume its run."
+        description="Your answer is saved to this conversation turn and may let its run continue."
       >
         <p className="mb-3 max-h-32 overflow-auto whitespace-pre-wrap break-words text-sm text-fg-secondary">
           {answerPreview}

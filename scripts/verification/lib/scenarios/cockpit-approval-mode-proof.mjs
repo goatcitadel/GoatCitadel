@@ -13,7 +13,7 @@ export function assertApprovedDecisionReceipt({ approvalId, decision, rendered, 
   assert.equal(decision.approval?.status, "approved");
   const followOnMessages = [
     "Follow-on action is blocked by policy.",
-    "Follow-on work failed. Inspect the persisted outcome before retrying.",
+    "Follow-on work failed. Check its saved outcome before retrying.",
     "Follow-on settlement is pending.",
     "Approval effects settled. Linked work has its own execution outcome.",
     "Follow-on execution needs separate verification.",
@@ -44,8 +44,8 @@ export function assertApprovedDecisionReceipt({ approvalId, decision, rendered, 
 }
 export function assertApprovalModeBypassReview(rendered) {
   assert.ok(
-    !/settings revision/i.test(rendered),
-    "The settings revision belongs in technical details, not the review copy.",
+    !/settings (?:revision|version)/i.test(rendered),
+    "The settings version belongs in technical details, not the review copy.",
   );
   for (const consequence of [
     "Allowed tools may run without normal prompts.",

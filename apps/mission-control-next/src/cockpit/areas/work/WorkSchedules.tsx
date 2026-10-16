@@ -26,7 +26,7 @@ import { EmptyState } from "../../ui/EmptyState";
 import { cockpitHref, readCockpitHistory, subscribeCockpitHistory } from "../../app/cockpit-history";
 import { readCockpitLocation } from "../../app/cockpit-back-guard";
 import { CockpitNavigationContext } from "../../app/cockpit-navigation-context";
-import { WorkScheduleListItem } from "./WorkScheduleSummary";
+import { WorkScheduleListItem, WorkScheduleNotice } from "./WorkScheduleSummary";
 
 export function WorkSchedules() {
   const client = useQueryClient();
@@ -86,6 +86,7 @@ export function WorkSchedules() {
     null,
   );
   const [notice, setNotice] = useState<string | null>(null);
+  const [runLink, setRunLink] = useState<{ notice: string; href: string } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const empty = { ...EMPTY_SCHEDULE_SETTINGS, name: "", schedule: "0 9 * * *", action: "task" as CreateScheduleAction };
   const editor = useSessionDraft(scheduleCreateDraftKey(getGatewayApiBaseUrl()), empty, undefined, {
@@ -225,7 +226,12 @@ export function WorkSchedules() {
         setSelectedId(null, "Schedule deleted.");
         setNotice("Schedule deleted.");
       } else if (receipt.kind === "run") {
-        setNotice("Run request acknowledged. Check Work for its outcome.");
+        const runId = receipt.run.childDurableRunId;
+        const runNotice = runId
+          ? "Run requested."
+          : "Run requested. Its result appears under Last outcome when it finishes.";
+        setRunLink(runId ? { notice: runNotice, href: `/work/runs/${encodeURIComponent(runId)}` } : null);
+        setNotice(runNotice);
       } else {
         setNotice(receipt.kind === "pause" ? "Schedule paused." : "Schedule resumed.");
       }
@@ -261,9 +267,7 @@ export function WorkSchedules() {
         </div>
       </header>
       {message ? (
-        <p role="status" className="rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
-          {message}
-        </p>
+        <WorkScheduleNotice message={message} runHref={runLink?.notice === message ? runLink.href : undefined} />
       ) : null}
       {createOpen ? (
         <WorkScheduleCreateForm

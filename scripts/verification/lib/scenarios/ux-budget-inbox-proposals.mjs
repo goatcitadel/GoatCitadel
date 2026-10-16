@@ -164,7 +164,7 @@ export async function runUxBudgetInboxProposals(environment) {
             throw new Error("Opening the Inbox confirmation changed the canonical proposal.");
           }
           await page.getByRole("button", { name: "Confirm rejection" }).click();
-          await page.getByText("Gateway rejected the proposal.", { exact: false }).waitFor();
+          await page.getByText("Proposal rejected.", { exact: false }).waitFor();
           const resolved = await requestJson(
             stack.gatewayUrl,
             `/api/v1/memory/trace-candidates?workspaceId=${encodeURIComponent(fixture.workspaceId)}&status=all&limit=500`,

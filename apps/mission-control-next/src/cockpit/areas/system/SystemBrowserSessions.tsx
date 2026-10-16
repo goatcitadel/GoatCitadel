@@ -212,7 +212,7 @@ function BrowserSessionsWorkspace({ workspaceId }: { workspaceId: string }) {
             />
           ) : (
             <p className="rounded-lg border border-line p-3 text-sm text-fg-secondary">
-              Select a session to review its grants, state projection and events.
+              Select a session to review its grants, saved state and events.
             </p>
           )}
         </div>

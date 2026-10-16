@@ -1,5 +1,5 @@
 import { isApiRequestError } from "../api/http-internal";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   clearGatewayAuthState,
   createGatewayDeviceAccessRequest,
@@ -29,6 +29,11 @@ interface GatewayAccessGateProps {
   busy: boolean;
   autoRetryPending?: boolean;
   onRetry: () => void | Promise<void>;
+  /** Heading once connected; the classic view keeps its own wording when omitted. */
+  title?: string;
+  subtitle?: string;
+  /** Rendered inside the card, after the actions (for example a note about drafts). */
+  footer?: ReactNode;
 }
 
 interface PendingDeviceApprovalRequest {
@@ -67,6 +72,9 @@ export function GatewayAccessGate({
   busy,
   autoRetryPending = false,
   onRetry,
+  title,
+  subtitle,
+  footer,
 }: GatewayAccessGateProps) {
   const shellState = deriveShellGatewayAccessState(access);
   const isChecking = access.status === "checking";
@@ -176,11 +184,12 @@ export function GatewayAccessGate({
 
   const storedAuthPresent = Boolean(readStoredGatewayAuthState());
   const needsAuth = access.status === "needs-auth" || access.status === "access-blocked";
-  const headerTitle = isChecking ? "Starting Mission Control" : "Mission Control access gate";
+  const headerTitle = isChecking ? "Starting Mission Control" : (title ?? "Mission Control access gate");
   const themeClass = resolveGatewayAccessThemeClass();
   const headerSubtitle = isChecking
     ? "Connecting to the gateway, validating access, and warming up live control surfaces."
-    : "Mission Control is waiting for a verified gateway session before it starts live data and control surfaces.";
+    : (subtitle ??
+      "Mission Control is waiting for a verified gateway session before it starts live data and control surfaces.");
 
   const handleConnect = async () => {
     setFormError(null);
@@ -468,6 +477,7 @@ export function GatewayAccessGate({
             </button>
           ) : null}
         </div>
+        {footer ? <div className="gateway-access-footer">{footer}</div> : null}
       </div>
     </section>
   );

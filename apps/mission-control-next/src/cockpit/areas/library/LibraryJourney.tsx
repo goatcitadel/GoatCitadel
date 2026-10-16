@@ -17,6 +17,7 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useLibraryOperation } from "./use-library-operation";
+import { LIBRARY_SECTION_LABELS } from "./library-sections";
 import {
   JOURNEY_ACTOR,
   JOURNEY_CATEGORY,
@@ -34,7 +35,7 @@ const CATEGORIES = [
   ["provenance", "Provenance"],
 ] as const;
 const POSTURES = [
-  ["all", "All postures"],
+  ["all", "All states"],
   ["clean", "Clean"],
   ["blocked", "Poisoned / blocked"],
   ["quarantined", "Quarantined"],
@@ -105,10 +106,10 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
   return (
     <div className="grid min-w-0 grid-cols-1 gap-4 overflow-y-auto p-4">
       <header className="grid min-w-0 gap-2">
-        <h1 className="font-display text-xl font-semibold">Journey timeline</h1>
+        <h1 className="font-display text-xl font-semibold">{LIBRARY_SECTION_LABELS.journey}</h1>
         <p className="text-sm text-fg-secondary">
-          Experimental, read-only governance history for this workspace. Journey explains evidence from the canonical
-          producers currently wired; it never activates skills or promotes memory. Blocked, quarantined, conflicting,
+          Experimental, read-only governance history for this workspace. Journey explains records from the sources
+          connected so far; it never activates skills or promotes memory. Blocked, quarantined, conflicting,
           foreign-scope and incomplete evidence stays visible and marked.
         </p>
         <p className="text-sm text-fg-secondary">
@@ -135,7 +136,7 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
               </select>
             )}
           </Field>
-          <Field label="Evidence posture">
+          <Field label="Evidence state">
             {(props) => (
               <select
                 {...props}

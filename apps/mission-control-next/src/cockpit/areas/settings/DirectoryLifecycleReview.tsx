@@ -17,7 +17,7 @@ export function DirectoryLifecycleReview({ lifecycle }: { lifecycle: ReturnType<
         if (!open) lifecycle.cancel();
       }}
       title={`${action} ${kind}?`}
-      description="Review the exact saved record and revision before changing its lifecycle."
+      description="Review the saved record and version before archiving or restoring it."
     >
       {review ? (
         <div className="space-y-3 text-sm text-fg-secondary">
@@ -26,7 +26,7 @@ export function DirectoryLifecycleReview({ lifecycle }: { lifecycle: ReturnType<
             <dd className="break-words text-fg">{review.record.name}</dd>
             <dt>Record ID</dt>
             <dd className="break-all font-mono">{directoryRecordId(review)}</dd>
-            <dt>Revision</dt>
+            <dt>Version</dt>
             <dd className="break-all font-mono">{review.record.revision}</dd>
             {review.kind === "workspace" ? (
               <>
@@ -44,7 +44,7 @@ export function DirectoryLifecycleReview({ lifecycle }: { lifecycle: ReturnType<
               ? "The record stays in the archived directory. Stored work is retained; any retained edit draft for this record will be discarded after the Gateway confirms the change."
               : "Restore the record to the active directory. Your active Citadel and workspace selection will stay as saved."}
           </p>
-          {lifecycle.pending ? <p role="status">Waiting for the Gateway lifecycle owner…</p> : null}
+          {lifecycle.pending ? <p role="status">Waiting for the Gateway to confirm…</p> : null}
           <div className="flex flex-wrap gap-2">
             <Button
               variant="primary"

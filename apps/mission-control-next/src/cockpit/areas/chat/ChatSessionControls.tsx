@@ -50,15 +50,21 @@ export function ChatSessionTitle({ title, dock }: { title: string; dock: Mission
     <h1 className="truncate font-display text-base font-semibold text-fg">
       <button
         type="button"
-        title="Rename conversation"
         onClick={() => {
           dock.onRenameTitleChange(title);
           setRenaming(true);
         }}
-        className="inline-flex max-w-full items-center gap-1 text-left hover:text-accent"
+        className="group inline-flex min-h-6 max-w-full items-center gap-1 rounded-md text-left hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       >
         <span className="truncate">{title}</span>
-        <Pencil aria-hidden="true" className="size-3 shrink-0" />
+        {/* The name starts with the visible title, then says what the button does. */}
+        <span className="sr-only"> · Rename conversation</span>
+        <span
+          aria-hidden="true"
+          className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-fg-muted group-hover:bg-sunken group-hover:text-accent group-focus-visible:bg-sunken group-focus-visible:text-accent"
+        >
+          <Pencil className="size-3.5" />
+        </span>
       </button>
     </h1>
   );

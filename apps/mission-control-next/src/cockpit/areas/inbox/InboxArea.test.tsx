@@ -192,7 +192,7 @@ describe("viewed Updates presentation", () => {
     await renderUpdates(client);
     const link = container.querySelector<HTMLAnchorElement>("a[data-inbox-owner]")!;
     expect(link.getAttribute("href")).toBe("/inbox?approvalId=test&shell=cockpit&workspaceId=default");
-    expect(link.textContent).toContain("Open in Approvals");
+    expect(link.textContent).toContain("Open approval");
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true })));
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true })));
     expect(document.activeElement).toBe(link);
@@ -221,7 +221,7 @@ describe("viewed Updates presentation", () => {
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "o", bubbles: true })));
     expect(container.querySelector('[aria-label="Inspector: Viewed report"]')).not.toBeNull();
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(0);
-    expect(container.querySelector('[aria-label="Updates Gateway count"]')?.textContent).toBe("4+");
+    expect(container.querySelector('[data-inbox-count="updates"]')?.textContent).toBe("At least 4");
     expect(container.textContent).toContain("4 known items; more may be outside this view.");
     expect(container.textContent).toContain("0 unread · 1 read from shown updates");
     await clickButton("Show read updates (1)");
@@ -360,11 +360,11 @@ describe("InboxArea", () => {
     );
     expect(container.textContent).toContain("Nothing needs your attention in the checked sources.");
     expect(container.textContent).toContain("What this Inbox covers");
-    expect(container.textContent).not.toContain("Coverage is incomplete");
+    expect(container.textContent).not.toContain("Couldn't fully check");
     expect(container.textContent).not.toContain("Count unknown");
     // A declared scope is not a read gap, so the per-group counts read exactly.
-    expect(container.querySelector('[aria-label="Needs attention Gateway count"]')?.textContent).toBe("0 known");
-    expect(container.textContent).toContain("No known items returned in this group.");
+    expect(container.querySelector('[data-inbox-count="needs_attention"]')?.textContent).toBe("Not fully checked");
+    expect(container.textContent).toContain("Nothing found here, but not every source could be checked.");
   });
 
   it("says when sources could not be read instead of claiming an all-clear", async () => {
@@ -399,16 +399,16 @@ describe("InboxArea", () => {
         </QueryClientProvider>,
       ),
     );
-    expect(container.textContent).toContain("No known items, but some sources could not be read completely.");
+    expect(container.textContent).toContain("Nothing found, but some sources couldn't be checked completely.");
     expect(container.textContent).not.toContain("Nothing needs your attention");
-    expect(container.textContent).toContain("Coverage is incomplete for 1 source");
+    expect(container.textContent).toContain("Couldn't fully check 1 source");
     // The coverage summary is static polled context, not a live region.
     expect(
       [...container.querySelectorAll('[role="status"]')].some((node) =>
-        node.textContent?.includes("No known items, but some sources"),
+        node.textContent?.includes("Nothing found, but some sources"),
       ),
     ).toBe(false);
-    expect(container.querySelector('[aria-label="Needs attention Gateway count"]')?.textContent).toBe("0 known");
+    expect(container.querySelector('[data-inbox-count="needs_attention"]')?.textContent).toBe("Not fully checked");
   });
 
   it("opens the exact scoped deep link without deciding or reopening a dismissed inspector", async () => {
@@ -488,7 +488,7 @@ describe("InboxArea", () => {
         </QueryClientProvider>,
       ),
     );
-    expect(container.textContent).toContain("Inbox scope mismatch");
+    expect(container.textContent).toContain("Some items couldn't be checked");
     expect(container.textContent).not.toContain("Review file write");
     expect(container.textContent).not.toContain("1 known item");
   });
@@ -537,11 +537,11 @@ describe("InboxArea", () => {
       ),
     );
     expect(container.textContent).toContain("1 known item; more may be outside this view");
-    expect(container.textContent).toContain("Coverage is incomplete for 1 source");
+    expect(container.textContent).toContain("Couldn't fully check 1 source");
     expect(container.textContent).toContain("Review file write");
-    expect(container.textContent).toContain("No known items returned in this group.");
+    expect(container.textContent).toContain("Nothing found here, but not every source could be checked.");
     const link = container.querySelector('a[href="/inbox?approvalId=test&shell=cockpit&workspaceId=default"]');
-    expect(link?.textContent).toContain("Open in Approvals");
+    expect(link?.textContent).toContain("Open approval");
     const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Details");
     if (!details) throw new Error("Missing details control");
     const input = document.createElement("input");
@@ -741,7 +741,7 @@ it("keeps triage selection and owner focus beyond the window without resolving a
   const client = new QueryClient();
   await renderUpdates(client);
   expect(container.querySelectorAll("[data-inbox-item]").length).toBeLessThan(100);
-  expect(container.querySelector('[aria-label="Needs decision Gateway count"]')?.textContent).toBe("125");
+  expect(container.querySelector('[data-inbox-count="needs_decision"]')?.textContent).toBe("125");
   const scroller = container.querySelector<HTMLElement>('[data-virtuoso-scroller="true"]')!;
   Object.defineProperties(scroller, { offsetHeight: { value: 350 }, scrollHeight: { value: 17500 } });
   vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue({ height: 350 } as DOMRect);
@@ -789,12 +789,12 @@ it("shows server-scoped approval history with an older-page continuation", async
     nextCursor: "more",
   });
   await renderUpdates(new QueryClient());
-  await clickButton("Approval history and replay");
+  await clickButton("Approval history");
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
   expect(apiMocks.fetchApprovals).toHaveBeenCalledWith({ workspaceId: "default", limit: 100 });
-  expect(container.textContent).toContain("Load older pages to inspect the full retained history");
+  expect(container.textContent).toContain("Load more to see older approvals");
   expect(container.textContent).toContain("Denied");
   expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
 });
@@ -871,7 +871,7 @@ it.each([0, 1])(
     try {
       await clickButton("Mark all shown updates read");
       expect(container.textContent).toContain("Read storage unavailable");
-      expect(container.textContent).not.toContain("Read status is browser-local");
+      expect(container.textContent).not.toContain("Read status is saved in this browser");
       expect(container.textContent).toContain(String(savedBeforeDenial) + " read from shown updates");
       const action = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
         (b) => b.textContent === "Mark all shown updates read",

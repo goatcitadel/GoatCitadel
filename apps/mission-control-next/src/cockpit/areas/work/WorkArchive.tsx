@@ -76,7 +76,7 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
       <h1 className="font-display text-xl font-semibold text-fg">Task archive and restore</h1>
       <p className="text-sm text-fg-secondary">
         Workspace operator tasks. Archive removes a task from active lists and can be reversed. It does not cancel a
-        runtime run.
+        run.
       </p>
       <Field label="Task list">
         {(props) => (
@@ -150,10 +150,11 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
                 }}
               >
                 {view === "trash" ? "Review restore" : "Review archive"}
+                <span className="sr-only">: {task.title}</span>
               </Button>
               {task.agenticContext || task.proactiveContext ? (
                 <p className="text-sm text-fg-secondary">
-                  A runtime owns this task. Review its execution before changing lifecycle.
+                  A run or background job manages this task, so it can't be archived or restored here.
                 </p>
               ) : null}
             </article>

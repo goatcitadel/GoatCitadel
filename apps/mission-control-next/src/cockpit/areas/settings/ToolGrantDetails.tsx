@@ -9,7 +9,7 @@ export function ToolGrantDetails({ grant, onClose }: { grant: ToolGrantRecord | 
         if (!open) onClose();
       }}
       title="Recorded tool grant"
-      description="Recorded owner evidence. Effective permission is evaluated by the Gateway for each action."
+      description="The saved grant. The Gateway still checks permission for each action."
     >
       {grant ? (
         <div className="space-y-3 break-words text-sm text-fg">

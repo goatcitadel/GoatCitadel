@@ -23,7 +23,7 @@ export function AddonCommands({ addon }: { addon: AddonCatalogEntry }) {
           </li>
         ))}
       </ol>
-      {!addon.installCommands.length ? <p>No commands advertised by this owner.</p> : null}
+      {!addon.installCommands.length ? <p>This add-on lists no commands.</p> : null}
     </section>
   );
 }
@@ -47,7 +47,7 @@ export function AddonEvidence({ status }: { status: AddonStatusRecord }) {
             <dd>{record.enabled === false || status.status === "disabled" ? "No" : "Yes"}</dd>
             <dt>Installed path</dt>
             <dd className="break-all">{record.installedPath}</dd>
-            <dt>Installed revision</dt>
+            <dt>Installed version</dt>
             <dd className="break-all">{record.installRef ?? "Not reported"}</dd>
             <dt>Installed</dt>
             <dd className="break-words">{record.installedAt}</dd>
@@ -72,7 +72,7 @@ export function AddonEvidence({ status }: { status: AddonStatusRecord }) {
         </p>
       ) : null}
       <section aria-label="Add-on health checks" className="space-y-2">
-        <h4 className="text-sm font-semibold">Owner health checks</h4>
+        <h4 className="text-sm font-semibold">Health checks</h4>
         <ul className="space-y-2 text-sm">
           {status.healthChecks.map((check, index) => (
             <li key={`${check.key}:${index}`} className="break-words">

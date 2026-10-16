@@ -107,11 +107,11 @@ function Body({ provider, request }: { provider: ProviderModelCatalogOption; req
           {executed !== provider.apiStyle ? " (differs from the configured API)" : ""}
         </li>
         <li>
-          Runtime posture: {local ? "Local runtime" : "Remote provider"} ·{" "}
+          Runtime: {local ? "Local runtime" : "Remote provider"} ·{" "}
           {local ? "Local endpoint detected" : "Network endpoint detected"}
         </li>
         <li>Credential: {credential.meta}</li>
-        <li>Default model: {provider.defaultModel || "Not set"}</li>
+        <li>Provider's suggested model: {provider.defaultModel || "Not set"}</li>
       </ul>
       <div>
         <p className="font-medium text-fg">Capabilities</p>

@@ -25,14 +25,34 @@ const gmail: IntegrationFormSchema = {
   allowAdvancedJson: true,
   fields: [
     { key: "label", label: "Connection Label", type: "text", defaultValue: "Gmail" },
-    { key: "clientIdEnv", label: "Client ID ENV Var", type: "text", placeholder: "GMAIL_CLIENT_ID", secretRef: true, advanced: true },
-    { key: "clientSecretEnv", label: "Client Secret ENV Var", type: "text", placeholder: "GMAIL_CLIENT_SECRET", secretRef: true, advanced: true },
-    { key: "refreshTokenHandle", label: "Refresh Token Handle", type: "text", placeholder: "gmail-primary", required: true },
+    {
+      key: "clientIdEnv",
+      label: "Client ID ENV Var",
+      type: "text",
+      placeholder: "GMAIL_CLIENT_ID",
+      secretRef: true,
+      advanced: true,
+    },
+    {
+      key: "clientSecretEnv",
+      label: "Client Secret ENV Var",
+      type: "text",
+      placeholder: "GMAIL_CLIENT_SECRET",
+      secretRef: true,
+      advanced: true,
+    },
+    {
+      key: "refreshTokenHandle",
+      label: "Refresh Token Handle",
+      type: "text",
+      placeholder: "gmail-primary",
+      required: true,
+    },
     { key: "enabled", label: "Enabled", type: "boolean", defaultValue: true },
   ],
 } as IntegrationFormSchema;
 
-const LOCK_NOTICE = "Use the supported secure setup owner for this credential.";
+const LOCK_NOTICE = "Use this connector’s secure setup for this credential.";
 const input = (label: string) => {
   const node = [...container.querySelectorAll("label")].find((item) => item.textContent?.startsWith(label));
   return container.querySelector<HTMLInputElement>(`#${CSS.escape(node?.getAttribute("for") ?? "")}`);

@@ -138,7 +138,7 @@ describe("native workspace directory", () => {
   it("withholds foreign records and controls when scope evidence conflicts", async () => {
     items = [record("one"), { ...record("foreign"), citadelId: "company" }];
     await mount();
-    expect(text(view.root)).toContain("scope evidence is unavailable");
+    expect(text(view.root)).toContain("Workspaces could not load");
     expect(text(view.root)).not.toContain("Workspace foreign");
     expect(button("New workspace").props.disabled).toBe(true);
   });

@@ -11,98 +11,317 @@ import { healthQueryScope } from "../data/health-query-scope";
 import { queryKeys } from "../data/query-keys";
 import { deriveSystemHealthChecks } from "../areas/system/system-health";
 import type { OperatorInboxResponse } from "@goatcitadel/contracts";
-const inboxState = vi.hoisted(() => ({ isError: false, data: { workspaceId: "workspace-a", items: [], coverage: [{ source: "backup_trust", state: "not_enabled" }] } as unknown as OperatorInboxResponse }));
-const api = vi.hoisted(() => ({ fetchHealthSummary: vi.fn(), fetchLlamaCppStatus: vi.fn(), fetchNpuStatus: vi.fn(), fetchIntegrationConnections: vi.fn(), fetchChannelRuntimeStatus: vi.fn() }));
+const inboxState = vi.hoisted(() => ({
+  isError: false,
+  data: {
+    workspaceId: "workspace-a",
+    items: [],
+    coverage: [{ source: "backup_trust", state: "not_enabled" }],
+  } as unknown as OperatorInboxResponse,
+}));
+const api = vi.hoisted(() => ({
+  fetchHealthSummary: vi.fn(),
+  fetchLlamaCppStatus: vi.fn(),
+  fetchNpuStatus: vi.fn(),
+  fetchIntegrationConnections: vi.fn(),
+  fetchChannelRuntimeStatus: vi.fn(),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
 vi.mock("../../features/desktop-updates/desktop-update-bridge", () => ({ useDesktopUpdates: () => null }));
 vi.mock("../data/use-operator-inbox", () => ({ useOperatorInbox: () => inboxState }));
-const summary = { database: { reachable: true, issues: [] }, daemonStatus: { supported: true, running: true, diagnostics: [] }, backups: { latest: null } };
+const summary = {
+  database: { reachable: true, issues: [] },
+  daemonStatus: { supported: true, running: true, diagnostics: [] },
+  backups: { latest: null },
+};
 let status: HealthDigestStatus;
 let container: HTMLDivElement, root: Root, client: QueryClient;
-function Probe({ workspaceId }: { workspaceId: string }) { status = useHealthDigestStatus(workspaceId, true); return <p data-phase={status.phase} data-tone={status.tone} title={status.title}>{status.label}</p>; }
-beforeEach(() => { Object.values(api).forEach(mock => mock.mockReset()); api.fetchHealthSummary.mockResolvedValue(summary); api.fetchLlamaCppStatus.mockResolvedValue({ enabled: false }); api.fetchNpuStatus.mockResolvedValue({ enabled: false }); api.fetchIntegrationConnections.mockResolvedValue({ items: [] }); container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container); client = new QueryClient({ defaultOptions: { queries: { retry: false } } }); });
-beforeEach(() => { inboxState.isError = false; inboxState.data.coverage = [{ source: "backup_trust", state: "not_enabled" }]; });
-afterEach(() => { act(() => root.unmount()); container.remove(); client.clear(); vi.useRealTimers(); });
-const render = (workspaceId = "workspace-a", consumers = 1) => act(async () => root.render(<QueryClientProvider client={client}>{Array.from({ length: consumers }, (_, index) => <Probe key={index} workspaceId={workspaceId} />)}</QueryClientProvider>));
-const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
-const data = () => { const scope = healthQueryScope(client, "workspace-a", getGatewayAccessRevision()); return client.getQueryData<SystemHealthSources>(healthDigestKey("workspace-a", scope[1], scope[2]))!; };
-it.each(["verified", "failed", "stale"] as const)("digest cannot reuse backup A's %s proof for current B", async state => {
-  api.fetchHealthSummary.mockResolvedValue({ ...summary, backups: { latest: { backupId: "B", createdAt: "2026-10-06T12:00:00Z" } } });
-  inboxState.data.coverage = [{ source: "backup_trust", state: "limited", backupTrust: { state, backupId: "A", createdAt: "2026-10-06T12:00:00Z", observedAt: "now" } }];
-  await render(); await settle();
-  expect(status.tone).toBe("neutral"); expect(status.label).toContain("lack live proof");
-  inboxState.isError = true; await render(); await settle();
-  expect(status.tone).toBe("neutral"); expect(status.label).toContain("lack live proof");
-  await act(async () => persistGatewayAuthState({ mode: "none" })); await settle();
-  expect(status.tone).toBe("neutral"); expect(status.label).toContain("lack live proof");
+function Probe({ workspaceId }: { workspaceId: string }) {
+  status = useHealthDigestStatus(workspaceId, true);
+  return (
+    <p data-phase={status.phase} data-tone={status.tone} title={status.title}>
+      {status.label}
+    </p>
+  );
+}
+beforeEach(() => {
+  Object.values(api).forEach((mock) => mock.mockReset());
+  api.fetchHealthSummary.mockResolvedValue(summary);
+  api.fetchLlamaCppStatus.mockResolvedValue({ enabled: false });
+  api.fetchNpuStatus.mockResolvedValue({ enabled: false });
+  api.fetchIntegrationConnections.mockResolvedValue({ items: [] });
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
+beforeEach(() => {
+  inboxState.isError = false;
+  inboxState.data.coverage = [{ source: "backup_trust", state: "not_enabled" }];
+});
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+  client.clear();
+  vi.useRealTimers();
+});
+const render = (workspaceId = "workspace-a", consumers = 1) =>
+  act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        {Array.from({ length: consumers }, (_, index) => (
+          <Probe key={index} workspaceId={workspaceId} />
+        ))}
+      </QueryClientProvider>,
+    ),
+  );
+const settle = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
+const data = () => {
+  const scope = healthQueryScope(client, "workspace-a", getGatewayAccessRevision());
+  return client.getQueryData<SystemHealthSources>(healthDigestKey("workspace-a", scope[1], scope[2]))!;
+};
+it.each(["verified", "failed", "stale"] as const)(
+  "digest cannot reuse backup A's %s proof for current B",
+  async (state) => {
+    api.fetchHealthSummary.mockResolvedValue({
+      ...summary,
+      backups: { latest: { backupId: "B", createdAt: "2026-10-06T12:00:00Z" } },
+    });
+    inboxState.data.coverage = [
+      {
+        source: "backup_trust",
+        state: "limited",
+        backupTrust: { state, backupId: "A", createdAt: "2026-10-06T12:00:00Z", observedAt: "now" },
+      },
+    ];
+    await render();
+    await settle();
+    expect(status.tone).toBe("neutral");
+    expect(status.label).toMatch(/^\d+ checks? unverified$/);
+    inboxState.isError = true;
+    await render();
+    await settle();
+    expect(status.tone).toBe("neutral");
+    expect(status.label).toMatch(/^\d+ checks? unverified$/);
+    await act(async () => persistGatewayAuthState({ mode: "none" }));
+    await settle();
+    expect(status.tone).toBe("neutral");
+    expect(status.label).toMatch(/^\d+ checks? unverified$/);
+  },
+);
 it("digest retains existence and missing proof when Inbox cached absence precedes creation", async () => {
-  api.fetchHealthSummary.mockResolvedValue({ ...summary, backups: { latest: { backupId: "B", createdAt: "2026-10-06T12:00:00Z" } } });
-  await render(); await settle(); expect(status.label).toContain("lack live proof");
+  api.fetchHealthSummary.mockResolvedValue({
+    ...summary,
+    backups: { latest: { backupId: "B", createdAt: "2026-10-06T12:00:00Z" } },
+  });
+  await render();
+  await settle();
+  expect(status.label).toMatch(/^\d+ checks? unverified$/);
 });
 it("uses the real loader to retain source observation time across transport failure and recover independently", async () => {
-  await render(); await settle(); expect(status.phase).toBe("ready"); expect(status.tone).toBe("done");
-  const initial = data(); const observedAt = initial.summary.state === "current" ? initial.summary.observedAt : undefined;
+  await render();
+  await settle();
+  expect(status.phase).toBe("ready");
+  expect(status.tone).toBe("done");
+  const initial = data();
+  const observedAt = initial.summary.state === "current" ? initial.summary.observedAt : undefined;
   let fail!: (cause: Error) => void;
-  api.fetchHealthSummary.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+  api.fetchHealthSummary.mockImplementationOnce(
+    () =>
+      new Promise((_resolve, reject) => {
+        fail = reject;
+      }),
+  );
   api.fetchNpuStatus.mockResolvedValue({ enabled: true, healthy: true, processState: "running" });
-  await act(async () => status.retry()); await settle(); expect(status.phase).toBe("checking"); expect(status.label).toContain("Checking for changes");
-  await act(async () => { fail(new TypeError("Failed to fetch")); }); await settle();
-  expect(status.phase).toBe("stale"); expect(status.tone).toBe("neutral"); expect(status.label).toContain("Stale"); expect(status.title).toContain("summary: last observed");
-  expect(data().summary).toMatchObject({ state: "unavailable", retryable: true, lastKnown: { value: summary, observedAt } });
+  await act(async () => status.retry());
+  await settle();
+  expect(status.phase).toBe("checking");
+  expect(status.label).toBe("Checking…");
+  await act(async () => {
+    fail(new TypeError("Failed to fetch"));
+  });
+  await settle();
+  expect(status.phase).toBe("stale");
+  expect(status.tone).toBe("neutral");
+  expect(status.label).toBe("Checks out of date");
+  expect(status.title).toContain("Health summary: last checked");
+  expect(data().summary).toMatchObject({
+    state: "unavailable",
+    retryable: true,
+    lastKnown: { value: summary, observedAt },
+  });
   expect(data().npu).toMatchObject({ state: "current", value: { enabled: true } });
-  const gateway = deriveSystemHealthChecks(data(), null, "none").find(check => check.id === "gateway")!;
-  expect(gateway.status).toEqual({ label: "Stale", tone: "neutral" }); expect(gateway.detail).toContain("The health summary is responding"); expect(gateway.detail).toContain("Retained observation is stale");
-  api.fetchHealthSummary.mockResolvedValueOnce(summary); await act(async () => status.retry()); await settle();
-  expect(status.phase).toBe("ready"); expect(status.tone).toBe("done"); expect(data().summary).not.toHaveProperty("lastKnown");
+  const gateway = deriveSystemHealthChecks(data(), null, "none").find((check) => check.id === "gateway")!;
+  expect(gateway.status).toEqual({ label: "Stale", tone: "neutral" });
+  expect(gateway.detail).toBe("The health summary could not be read.");
+  expect(gateway.lastKnown).toMatch(/^Last known \(Health summary, checked .+\): The health summary is responding/);
+  api.fetchHealthSummary.mockResolvedValueOnce(summary);
+  await act(async () => status.retry());
+  await settle();
+  expect(status.phase).toBe("ready");
+  expect(status.tone).toBe("done");
+  expect(data().summary).not.toHaveProperty("lastKnown");
 });
-it.each([401, 403])("does not poll denied NPU %s and resets its query record on workspace/access changes", async (httpStatus) => {
-  vi.useFakeTimers(); api.fetchNpuStatus.mockRejectedValue(new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/npu/status", status: httpStatus }));
-  await render(); await act(async () => { await vi.advanceTimersByTimeAsync(10); });
-  expect(api.fetchNpuStatus).toHaveBeenCalledTimes(1);
-  await act(async () => { await vi.advanceTimersByTimeAsync(310_000); });
-  expect(api.fetchNpuStatus).toHaveBeenCalledTimes(1); expect(api.fetchHealthSummary.mock.calls.length).toBeGreaterThan(1);
-  expect(data().npu).toMatchObject({ state: "unavailable", retryable: false, category: httpStatus === 401 ? "authentication" : "permission" });
-  await render("workspace-b"); await act(async () => { await vi.advanceTimersByTimeAsync(10); }); expect(api.fetchNpuStatus).toHaveBeenCalledTimes(2);
-  await act(async () => persistGatewayAuthState({ mode: "none" })); await act(async () => { await vi.advanceTimersByTimeAsync(10); }); expect(api.fetchNpuStatus).toHaveBeenCalledTimes(3);
-});
+it.each([401, 403])(
+  "does not poll denied NPU %s and resets its query record on workspace/access changes",
+  async (httpStatus) => {
+    vi.useFakeTimers();
+    api.fetchNpuStatus.mockRejectedValue(
+      new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/npu/status", status: httpStatus }),
+    );
+    await render();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(api.fetchNpuStatus).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(310_000);
+    });
+    expect(api.fetchNpuStatus).toHaveBeenCalledTimes(1);
+    expect(api.fetchHealthSummary.mock.calls.length).toBeGreaterThan(1);
+    expect(data().npu).toMatchObject({
+      state: "unavailable",
+      retryable: false,
+      category: httpStatus === 401 ? "authentication" : "permission",
+    });
+    await render("workspace-b");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(api.fetchNpuStatus).toHaveBeenCalledTimes(2);
+    await act(async () => persistGatewayAuthState({ mode: "none" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(api.fetchNpuStatus).toHaveBeenCalledTimes(3);
+  },
+);
 
 it("shares the four-read digest between consumers and freshly revalidates a scope ABA once", async () => {
   vi.useFakeTimers();
-  api.fetchNpuStatus.mockRejectedValue(new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/npu/status", status: 403 }));
-  const tick = () => act(async () => { await vi.advanceTimersByTimeAsync(10); });
-  await render("workspace-a", 2); await tick();
+  api.fetchNpuStatus.mockRejectedValue(
+    new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/npu/status", status: 403 }),
+  );
+  const tick = () =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+  await render("workspace-a", 2);
+  await tick();
   expect(Object.values(api).reduce((total, mock) => total + mock.mock.calls.length, 0)).toBe(4);
-  await render("workspace-b", 2); await tick(); expect(api.fetchNpuStatus).toHaveBeenCalledTimes(2);
-  await render("workspace-a", 2); await tick(); expect(api.fetchNpuStatus).toHaveBeenCalledTimes(3);
+  await render("workspace-b", 2);
+  await tick();
+  expect(api.fetchNpuStatus).toHaveBeenCalledTimes(2);
+  await render("workspace-a", 2);
+  await tick();
+  expect(api.fetchNpuStatus).toHaveBeenCalledTimes(3);
   expect(api.fetchHealthSummary).toHaveBeenCalledTimes(3);
-  await act(async () => { await vi.advanceTimersByTimeAsync(310_000); });
-  expect(api.fetchNpuStatus).toHaveBeenCalledTimes(3); expect(api.fetchHealthSummary).toHaveBeenCalledTimes(4);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(310_000);
+  });
+  expect(api.fetchNpuStatus).toHaveBeenCalledTimes(3);
+  expect(api.fetchHealthSummary).toHaveBeenCalledTimes(4);
 });
 
 it("shares one core health read across shell consumers and explicitly defers optional diagnostics", async () => {
- function CoreProbe() { status = useHealthDigestStatus("workspace-a", true, true); return <p title={status.title}>{status.label}</p>; }
- await act(async () => root.render(<QueryClientProvider client={client}><CoreProbe /><CoreProbe /></QueryClientProvider>)); await settle();
- expect(api.fetchHealthSummary).toHaveBeenCalledTimes(1);
- for (const read of [api.fetchLlamaCppStatus, api.fetchNpuStatus, api.fetchIntegrationConnections, api.fetchChannelRuntimeStatus]) expect(read).not.toHaveBeenCalled();
- expect(status.label).toContain("Core checks"); expect(status.title).toContain("Managed local runtimes, integrations, channels and workers are checked on System");
- const scope = healthQueryScope(client, "workspace-a", getGatewayAccessRevision());
- const sources = client.getQueryData<SystemHealthSources>(healthDigestKey("workspace-a", scope[1], scope[2], true))!;
- expect(sources.npu.state).toBe("deferred"); expect(sources.connections.state).toBe("deferred");
- const checks = deriveSystemHealthChecks(sources, null, "none"); expect(checks.some(check => ["models", "integrations", "channels", "remote_workers"].includes(check.id))).toBe(false);
+  function CoreProbe() {
+    status = useHealthDigestStatus("workspace-a", true, true);
+    return <p title={status.title}>{status.label}</p>;
+  }
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <CoreProbe />
+        <CoreProbe />
+      </QueryClientProvider>,
+    ),
+  );
+  await settle();
+  expect(api.fetchHealthSummary).toHaveBeenCalledTimes(1);
+  for (const read of [
+    api.fetchLlamaCppStatus,
+    api.fetchNpuStatus,
+    api.fetchIntegrationConnections,
+    api.fetchChannelRuntimeStatus,
+  ])
+    expect(read).not.toHaveBeenCalled();
+  expect(status.label).not.toContain("·");
+  expect(status.title).toContain("Managed local runtimes, integrations, channels and workers are checked on System");
+  const scope = healthQueryScope(client, "workspace-a", getGatewayAccessRevision());
+  const sources = client.getQueryData<SystemHealthSources>(healthDigestKey("workspace-a", scope[1], scope[2], true))!;
+  expect(sources.npu.state).toBe("deferred");
+  expect(sources.connections.state).toBe("deferred");
+  const checks = deriveSystemHealthChecks(sources, null, "none");
+  expect(checks.some((check) => ["models", "integrations", "channels", "remote_workers"].includes(check.id))).toBe(
+    false,
+  );
 });
 
 it("retains inspected runtime failures without extra reads and fences them on workspace changes", async () => {
- const scope = healthQueryScope(client, "workspace-a", getGatewayAccessRevision());
- client.setQueryData([...queryKeys.health("workspace-a"), ...scope], {
- summary: { state: "unavailable", detail: "Not read in this retained runtime fixture" },
- llama: { state: "current", value: { enabled: false, desiredState: "stopped", processState: "stopped", baseUrl: "http://127.0.0.1:8080", healthy: false, updatedAt: "2026-10-12T00:00:00Z" } },
- npu: { state: "current", value: { enabled: true, healthy: false, processState: "error", desiredState: "running", sidecarUrl: "http://127.0.0.1:8788", backend: "cpu", updatedAt: "2026-10-12T00:00:00Z", capability: { platform: "win32", arch: "x64", isWindowsArm64: false, onnxRuntimeAvailable: false, onnxRuntimeGenAiAvailable: false, qnnExecutionProviderAvailable: false, supported: false, details: [] } } },
- connections: { state: "current", value: [] }, channels: { state: "deferred" }, workers: { state: "deferred" },
- } satisfies SystemHealthSources);
- function CoreProbe({ workspace }: { workspace: string }) { status = useHealthDigestStatus(workspace, true, true); return <p>{status.label}</p>; }
- const show = (workspace: string) => act(async () => root.render(<QueryClientProvider client={client}><CoreProbe workspace={workspace} /></QueryClientProvider>));
- await show("workspace-a"); await settle(); expect(status.label).toContain("Earlier system check needs review"); expect(status.tone).toBe("failed"); expect(status.title).toContain("retained evidence");
- await show("workspace-b"); await settle(); expect(status.label).toContain("Core checks"); expect(status.label).not.toContain("Earlier system check");
- expect(api.fetchNpuStatus).not.toHaveBeenCalled(); expect(api.fetchLlamaCppStatus).not.toHaveBeenCalled();
+  const scope = healthQueryScope(client, "workspace-a", getGatewayAccessRevision());
+  client.setQueryData([...queryKeys.health("workspace-a"), ...scope], {
+    summary: { state: "unavailable", detail: "Not read in this retained runtime fixture" },
+    llama: {
+      state: "current",
+      value: {
+        enabled: false,
+        desiredState: "stopped",
+        processState: "stopped",
+        baseUrl: "http://127.0.0.1:8080",
+        healthy: false,
+        updatedAt: "2026-10-12T00:00:00Z",
+      },
+    },
+    npu: {
+      state: "current",
+      value: {
+        enabled: true,
+        healthy: false,
+        processState: "error",
+        desiredState: "running",
+        sidecarUrl: "http://127.0.0.1:8788",
+        backend: "cpu",
+        updatedAt: "2026-10-12T00:00:00Z",
+        capability: {
+          platform: "win32",
+          arch: "x64",
+          isWindowsArm64: false,
+          onnxRuntimeAvailable: false,
+          onnxRuntimeGenAiAvailable: false,
+          qnnExecutionProviderAvailable: false,
+          supported: false,
+          details: [],
+        },
+      },
+    },
+    connections: { state: "current", value: [] },
+    channels: { state: "deferred" },
+    workers: { state: "deferred" },
+  } satisfies SystemHealthSources);
+  function CoreProbe({ workspace }: { workspace: string }) {
+    status = useHealthDigestStatus(workspace, true, true);
+    return <p>{status.label}</p>;
+  }
+  const show = (workspace: string) =>
+    act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <CoreProbe workspace={workspace} />
+        </QueryClientProvider>,
+      ),
+    );
+  await show("workspace-a");
+  await settle();
+  expect(status.label).toBe("Earlier check needs review");
+  expect(status.tone).toBe("failed");
+  expect(status.title).toContain("This is an earlier result");
+  await show("workspace-b");
+  await settle();
+  expect(status.label).not.toContain("·");
+  expect(status.label).not.toContain("Earlier");
+  expect(api.fetchNpuStatus).not.toHaveBeenCalled();
+  expect(api.fetchLlamaCppStatus).not.toHaveBeenCalled();
 });

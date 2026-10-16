@@ -111,14 +111,14 @@ it("ranks skills by the chosen sort and names the sort truthfully", async () => 
   const names = () =>
     [...container.querySelectorAll("[data-curator-skill]")].map((row) => row.getAttribute("data-curator-skill"));
   expect(names()).toEqual(["skill-gamma", "skill-alpha", "skill-delta"]);
-  expect(container.textContent).toContain("Skills, sorted by usage");
+  expect(container.textContent).toContain("Skills, most used first");
   const select = container.querySelector<HTMLSelectElement>("select")!;
   await act(async () => {
     select.value = "name";
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
   expect(names()).toEqual(["skill-alpha", "skill-delta", "skill-gamma"]);
-  expect(container.textContent).toContain("Skills, sorted by name");
+  expect(container.textContent).toContain("Skills, A to Z");
 });
 
 it("generates a proposal-only report and says nothing was archived", async () => {

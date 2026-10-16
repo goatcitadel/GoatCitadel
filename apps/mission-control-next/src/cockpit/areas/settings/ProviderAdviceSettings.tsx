@@ -49,7 +49,7 @@ export function ProviderAdviceSettings() {
               ))}
             </ul>
           ) : (
-            <p>Candidate evidence unavailable.</p>
+            <p>Suggestions could not load.</p>
           )}
         </div>
       ) : null}

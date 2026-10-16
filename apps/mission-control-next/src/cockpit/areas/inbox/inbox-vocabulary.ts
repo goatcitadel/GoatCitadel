@@ -30,7 +30,7 @@ export const approvalEventLabels: Readonly<Record<ApprovalReplayEvent["eventType
   pending_action_refused: "Action refused",
   approved_action_executed: "Approved action ran",
   code_mode_execution_claim_lost: "Code run handed off",
-  replayed: "Decision replayed",
+  replayed: "Decision applied again",
   explanation_requested: "Explanation requested",
   explanation_generated: "Explanation ready",
   explanation_failed: "Explanation failed",
@@ -173,7 +173,7 @@ const workflowLabels: Readonly<Record<DurableSupportedWorkflowKey, string>> = {
   "hook.delivery": "Hook delivery",
   "memory.maintenance": "Memory upkeep",
   "orchestration.plan.execute": "Agent plan",
-  "external_side_effect.replay": "Outside change replay",
+  "external_side_effect.replay": "Outside change, run again",
   "curator.tick": "Library curation",
 };
 

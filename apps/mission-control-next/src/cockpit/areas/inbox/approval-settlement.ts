@@ -43,7 +43,7 @@ export function approvalDecisionMessage(approval: ApprovalRequest, effects: Appr
     approval.followUp?.status === "failed" ||
     effects.some((effect) => effect.status === "failed")
   )
-    return decision + "Follow-on work failed. Inspect the persisted outcome before retrying.";
+    return decision + "Follow-on work failed. Check its saved outcome before retrying.";
   if (
     approval.followUp?.status === "pending" ||
     approval.followUp?.status === "queued" ||

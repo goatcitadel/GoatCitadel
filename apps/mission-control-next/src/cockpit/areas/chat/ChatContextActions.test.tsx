@@ -124,7 +124,7 @@ it("invokes the original action once and never treats Promise<void> as a receipt
   await act(async () => confirm());
   expect(actions.draft).toHaveBeenCalledTimes(1);
   expect(actions.draft).toHaveBeenCalledWith(dock.specialistSuggestions[0]);
-  expect(JSON.stringify(root!.toJSON())).not.toContain("Canonical receipt identifiers");
+  expect(JSON.stringify(root!.toJSON())).not.toContain("Saved record IDs");
 });
 it.each(["caller", "record"] as const)("rejects the connected old review after %s changes", async (change) => {
   const dock = fixture();
@@ -241,7 +241,7 @@ it("acknowledges the submitted whitespace draft only after its canonical binding
   expect(button("Discard draft").props.disabled).toBe(true);
   await act(async () => root!.root.findAllByType("input")[1]!.props.onChange({ target: { value: "next-target" } }));
   expect(button("Save binding").props.disabled).toBe(false);
-  expect(JSON.stringify(root!.toJSON())).not.toContain("canonical binding changed while this draft");
+  expect(JSON.stringify(root!.toJSON())).not.toContain("binding changed somewhere else");
   expect(actions.binding).toHaveBeenCalledTimes(1);
 });
 it("preserves edits made after submission when the original binding receipt arrives", async () => {

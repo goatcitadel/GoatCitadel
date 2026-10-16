@@ -96,7 +96,7 @@ describe("native integration management", () => {
     await change("Integration connection label", saved.label);
     await click("Review new connection");
     expect(api.createIntegrationConnection).not.toHaveBeenCalled();
-    expect(text(view.root)).toContain("Creation has no resource revision precondition");
+    expect(text(view.root)).toContain(`Catalog: ${saved.catalogId}.`);
     await click("Keep current connection");
     expect(api.createIntegrationConnection).not.toHaveBeenCalled();
     await click("Review new connection");
@@ -119,7 +119,7 @@ describe("native integration management", () => {
     });
     await click("Reviewed fixture · Disabled");
     await click("Delete integration connection");
-    expect(text(view.root)).toContain("Reviewed revision:");
+    expect(text(view.root)).toContain("Reviewed version:");
     await click("Keep integration");
     expect(api.deleteIntegrationConnection).not.toHaveBeenCalled();
   });

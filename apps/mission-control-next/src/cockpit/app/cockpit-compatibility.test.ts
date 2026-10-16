@@ -58,8 +58,9 @@ describe("Cockpit compatibility coverage", () => {
     ["/ops/costs", "/system/spend/details"],
     ["/ops/sessions?view=browser-sessions&sessionId=s1#grants", "/system/browser-sessions?sessionId=s1#grants"],
     ["/ops/improvement?reportId=rep-1", "/system/improvement?reportId=rep-1"],
-    // Runtime controls and worker-status inspection retain their separate native owners.
-    ["/ops/runtime?runId=r", "/system/runtime?runId=r"],
+    // A run link opens the run in Work; runtime controls and worker-status inspection keep their native owners.
+    ["/ops/runtime?runId=r", "/work/runs/r"],
+    ["/ops/runtime?runId=r&workspaceId=w", "/work/runs/r?workspaceId=w"],
     ["/ops/workers?workspaceId=w", "/system/runtime/workers?workspaceId=w"],
     ["/ops/notifications?workspaceId=w#latest", "/inbox?workspaceId=w#latest"],
     // Legacy Cowork board and task inputs normalize to the Work board.

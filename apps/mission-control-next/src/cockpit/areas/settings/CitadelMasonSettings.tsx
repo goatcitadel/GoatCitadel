@@ -6,6 +6,7 @@ import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
 
 export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
   const control = useMasonEditor(citadelId),
@@ -21,14 +22,15 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
   return (
     <section id="citadel-mason" aria-label="Citadel Mason" className="space-y-4">
       <header>
-        <h3 className="font-display text-md font-semibold text-fg">Mason setup</h3>
+        <h3 className="font-display text-md font-semibold text-fg">{CITADEL_PAGE_LABELS.citadel}</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Collect the purpose, priorities and boundaries, then review a Blueprint before staging its Charter and
           Chambers.
         </p>
         <p className="mt-1 text-xs text-fg-muted">
           Mason sessions are global setup records. This editor associates a session with your selected Citadel in this
-          app only. Session writes have no atomic revision guard; staging uses the Citadel structure revision.
+          app only. Saving a session does not block a change made elsewhere at the same moment; staging checks the
+          Citadel structure version.
         </p>
       </header>
       {control.loading ? <p role="status">Loading Mason session…</p> : null}
@@ -150,7 +152,7 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
           <h4 className="text-sm font-semibold text-fg">{control.review.summary.name}</h4>
           <p className="text-sm text-fg-secondary">{control.review.blueprint.charter.purpose}</p>
           <p className="text-sm text-fg-secondary">
-            Risk posture: {control.review.blueprint.charter.riskPosture}. Model policy:{" "}
+            Risk setting: {control.review.blueprint.charter.riskPosture}. Model policy:{" "}
             {control.review.blueprint.charter.modelPolicyDefault}.
           </p>
           <dl className="space-y-2 text-sm text-fg-secondary">
@@ -240,7 +242,7 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
           <dd>{stage.review?.candidate.blueprint.chambers.length}</dd>
         </dl>
         <details className="mt-3 text-xs text-fg-muted">
-          <summary>Revision evidence</summary>
+          <summary>Version details</summary>
           <p className="break-all font-mono">{stage.review?.target.revision}</p>
         </details>
         <div className="mt-4 flex flex-wrap gap-2">

@@ -4,6 +4,21 @@ import { buildSettingsIndex, searchSettingsPages } from "./settings-index";
 import { buildSettingsDestinations } from "./settings-destinations";
 
 describe("cockpit settings index", () => {
+  it("names Citadel pages plain name first, with unchanged slugs", () => {
+    const citadel = buildSettingsIndex().find((page) => page.id === "citadel")!;
+    const labels = Object.fromEntries(citadel.entries.map((entry) => [entry.section, entry.label]));
+    expect(labels).toMatchObject({
+      "citadel-overview": "Citadel overview",
+      citadel: "Guided setup · Mason",
+      "citadel-wards": "Rules · Wards",
+      "citadel-council": "Agents · Council",
+      "citadel-vault": "Secrets · Vault",
+      "citadel-blueprint": "Export/import · Blueprint",
+    });
+    expect(citadel.entries.find((entry) => entry.section === "citadel-wards")?.href).toBe(
+      "/settings/citadel#citadel-wards",
+    );
+  });
   it("keeps the seven route groups and every grouped setting reachable", () => {
     const pages = buildSettingsIndex({ discovery: true });
     expect(pages.map((page) => page.label)).toEqual([

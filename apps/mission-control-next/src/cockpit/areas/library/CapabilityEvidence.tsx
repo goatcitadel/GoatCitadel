@@ -99,7 +99,7 @@ export function CapabilityPolicyEvidence({
         <div className="rounded-md border border-line-subtle bg-sunken p-2">
           <p>Current workspace tools profile: {workspacePolicy.profileLabel}</p>
           <p>
-            Approval posture: {approvalModeLabel(workspacePolicy.approvalMode)}
+            Approval setting: {approvalModeLabel(workspacePolicy.approvalMode)}
             {workspacePolicy.localOverride ? " · Local operator override active" : ""}
           </p>
         </div>

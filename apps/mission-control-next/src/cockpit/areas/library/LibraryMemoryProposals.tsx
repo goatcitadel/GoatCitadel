@@ -74,7 +74,7 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
               result.candidateId !== fresh.candidateId ||
               result.status !== "rejected"
             )
-              throw new Error("Rejection is not confirmed by the owner.");
+              throw new Error("Rejection is not confirmed.");
           }
           return true;
         },
@@ -92,7 +92,7 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
       if (operation.current())
         setOutcome({
           error: true,
-          text: `${describeApiError(cause).summary} The decision is not confirmed. Refresh the canonical proposal before retrying.`,
+          text: `${describeApiError(cause).summary} The decision is not confirmed. Refresh the proposal before retrying.`,
         });
     } finally {
       setBusy(false);
@@ -102,7 +102,7 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
     <section className="grid gap-3 rounded-lg border border-line p-3" aria-label="Memory proposals">
       <h2 className="font-display text-lg text-fg">Memory proposals</h2>
       <p className="text-sm text-fg-secondary">
-        Proposals are not trusted memory. Promotion is an explicit operator decision governed by the memory owner.
+        Proposals are not trusted memory. Promotion is a decision you make explicitly.
       </p>
       {query.isFetching ? <p role="status">Reading memory proposals…</p> : null}
       {query.error ? <Callout tone="error">{describeApiError(query.error).summary}</Callout> : null}
@@ -154,14 +154,14 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
           if (!open && !busy) setReview(undefined);
         }}
         title="Review memory proposal"
-        description="Review the insight, workspace and durable-memory consequence."
+        description="Review the insight, workspace and what it adds to long-term memory."
       >
         <div className="grid gap-3">
           <p>Applies to this workspace.</p>
           <p className="whitespace-pre-wrap break-words">{review?.item.proposedInsight}</p>
           <Callout tone="warning">
             {review?.action === "promote"
-              ? "Promotion writes this proposed insight into trusted durable memory."
+              ? "Promotion writes this proposed insight into trusted long-term memory."
               : "Rejection leaves this proposal unpromoted."}
           </Callout>
           {outcome ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}

@@ -152,7 +152,7 @@ describe("native add-on owner presentation", () => {
       root = create(<AddonsSettings />);
     });
     expect(button("Review install").props.disabled).toBe(true);
-    await act(async () => button("Refresh add-on evidence").props.onClick());
+    await act(async () => button("Refresh add-ons").props.onClick());
     expect(button("Review install").props.disabled).toBe(true);
     expect(api.installAddon).toHaveBeenCalledOnce();
   });
@@ -164,7 +164,7 @@ describe("native add-on owner presentation", () => {
     for (const action of ["install", "disable", "launch", "stop"])
       expect(button(`Review ${action}`).props.disabled).toBe(true);
     current = record("running");
-    await act(async () => button("Refresh add-on evidence").props.onClick());
+    await act(async () => button("Refresh add-ons").props.onClick());
     for (const action of ["disable", "stop", "uninstall"])
       expect(button(`Review ${action}`).props.disabled).toBe(false);
     for (const action of ["install", "enable", "launch", "update"])

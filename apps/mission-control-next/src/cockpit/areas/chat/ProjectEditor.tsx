@@ -87,9 +87,7 @@ export function ProjectEditor({
       if (access.current() && clean) onSaved(result);
     } catch (cause) {
       if (!access.current()) return;
-      setError(
-        `${describeApiError(cause).summary} Your draft is preserved. Refresh the canonical project before retrying.`,
-      );
+      setError(`${describeApiError(cause).summary} Your draft is preserved. Check the saved project before retrying.`);
       await refresh();
     } finally {
       if (access.current()) {

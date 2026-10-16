@@ -47,7 +47,7 @@ export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSe
           >
             Use current connection review
           </Button>
-          <p className="break-all">Current revision: {s.selectedConnection?.revision ?? "Unavailable"}</p>
+          <p className="break-all">Current version: {s.selectedConnection?.revision ?? "Unavailable"}</p>
         </section>
       ) : null}
       {creating ? (
@@ -127,7 +127,9 @@ export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSe
             disabled={s.saving}
             value={creating ? s.createConfig : s.detailForm.configText}
           />
-          <span className="text-xs text-fg-muted">Inspection only. Use the supported typed fields; credential input belongs to its secure setup owner.</span>
+          <span className="text-xs text-fg-muted">
+            Inspection only. Use the supported typed fields; credentials are entered in its secure setup.
+          </span>
         </label>
       ) : (
         <IntegrationFormFields
@@ -164,8 +166,8 @@ export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSe
         </p>
         <p className="mt-2 break-all text-xs text-fg-muted">
           {creating
-            ? `Catalog: ${s.createCatalogId}. Creation has no resource revision precondition.`
-            : `Reviewed saved revision: ${s.detailDraft.baseRevision}. The Gateway enforces this exact revision.`}
+            ? `Catalog: ${s.createCatalogId}.`
+            : `Reviewed version: ${s.detailDraft.baseRevision}. Saving stops if the connection changed since then.`}
         </p>
         {review !== signature ? <p role="alert">The reviewed input changed. Close and review again.</p> : null}
         <div className="mt-4 flex flex-wrap gap-2">

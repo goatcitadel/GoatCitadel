@@ -17,7 +17,7 @@ export function ChatContextActionOutcome({
       {owner.inspectionError ? <p role="alert">{owner.inspectionError}</p> : null}
       {owner.receipt ? (
         <details>
-          <summary>Canonical receipt identifiers</summary>
+          <summary>Saved record IDs</summary>
           <p className="break-all text-sm text-fg-muted">
             {owner.receipt.kind}: {owner.receipt.subjectIds.join(" · ")}
           </p>

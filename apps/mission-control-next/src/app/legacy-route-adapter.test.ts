@@ -216,7 +216,7 @@ describe("mission-control-next route model", () => {
     expect(getRouteLabel({ area: "cowork" })).toBe("Chat");
     expect(getRouteDescription({ area: "cowork", section: "board" })).toContain("Multi-agent board");
     expect(getRouteDescription({ area: "cowork" })).toContain("One chat workspace");
-    expect(getRouteDescription({ area: "settings", section: "budget" })).toContain("Set budget mode");
+    expect(getRouteDescription({ area: "settings", section: "budget" })).toContain("Choose a budget preference");
 
     expect(
       buildNavigationTarget(
@@ -413,6 +413,8 @@ describe("mission-control-next route model", () => {
 
 it("keeps native approval notifications usable with Classic rollback and preserves link state", () => {
   const href = "http://goatcitadel.local/inbox?approvalId=a%2Fb&workspaceId=w&shell=classic&extra=yes#review";
-  expect(resolveRouteFromLocation(href)).toMatchObject({area: "ops", section: "approvals", approvalId: "a/b"});
-  expect(coerceCompatibilityHrefToNext(href)).toBe("/ops/approvals?approvalId=a%2Fb&workspaceId=w&shell=classic&extra=yes#review");
+  expect(resolveRouteFromLocation(href)).toMatchObject({ area: "ops", section: "approvals", approvalId: "a/b" });
+  expect(coerceCompatibilityHrefToNext(href)).toBe(
+    "/ops/approvals?approvalId=a%2Fb&workspaceId=w&shell=classic&extra=yes#review",
+  );
 });

@@ -16,12 +16,6 @@ vi.mock("../../data/use-model-label", () => ({
 }));
 vi.mock("./use-chat-model-labels", () => ({ useChatModelLabels: () => (modelId: string) => modelId }));
 
-const shell = vi.hoisted(() => ({ switchShell: vi.fn<typeof import("../../../shell-preference").switchShell>() }));
-vi.mock("../../../shell-preference", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../shell-preference")>()),
-  switchShell: shell.switchShell,
-}));
-
 let root: Root;
 let container: HTMLDivElement;
 
@@ -153,14 +147,14 @@ describe("cockpit text composer", () => {
     try {
       const props = composerProps({ canSend: false, routePreflightLoading: true });
       await act(async () => root.render(<ChatTextComposer props={props} />));
-      expect(container.textContent).not.toContain("Send will wait for the Gateway check");
+      expect(container.textContent).not.toContain("Checking the selected model");
       expect(container.querySelector("textarea")?.getAttribute("aria-describedby")).toBeNull();
       await act(async () => vi.advanceTimersByTimeAsync(ROUTE_CHECK_HINT_DELAY_MS));
-      expect(container.textContent).toContain("Send will wait for the Gateway check");
+      expect(container.textContent).toContain("Checking the selected model");
       await act(async () =>
         root.render(<ChatTextComposer props={{ ...props, canSend: true, routePreflightLoading: false }} />),
       );
-      expect(container.textContent).not.toContain("Send will wait for the Gateway check");
+      expect(container.textContent).not.toContain("Checking the selected model");
     } finally {
       vi.useRealTimers();
     }
@@ -201,26 +195,13 @@ describe("cockpit text composer", () => {
     expect(pending).not.toMatch(/current Chat|classic/i);
   });
 
-  it("labels the shell switch as the classic view", async () => {
+  it("leaves the layout switch to the sidebar instead of a generic classic link under the composer", async () => {
     await act(async () => root.render(<ChatTextComposer props={composerProps()} />));
     const labels = [...container.querySelectorAll("button")].map((b) => b.textContent?.trim());
-    expect(labels).toContain("Open classic view");
+    expect(labels).toContain("Commands and context");
+    expect(labels).not.toContain("Open classic view");
     expect(labels).not.toContain("More controls");
-  });
-
-  it("opens the classic view as a visit with this conversation, so the saved layout stays the cockpit", async () => {
-    shell.switchShell.mockReset();
-    shell.switchShell.mockResolvedValue("opened");
-    window.history.replaceState(null, "", "/chat?shell=cockpit");
-    await act(async () => root.render(<ChatTextComposer props={composerProps()} />));
-    const open = [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Open classic view");
-    await act(async () => open!.click());
-    await vi.waitFor(() => expect(shell.switchShell).toHaveBeenCalledOnce());
-    const [name, options] = shell.switchShell.mock.calls[0]!;
-    expect(name).toBe("classic");
-    const target = new URL(options.href!);
-    expect(target.searchParams.get("shellScope")).toBe("visit");
-    expect(target.searchParams.get("sessionId")).toBe("session-1");
+    expect(cockpitSendBlockReason(composerProps({ canSend: false })) ?? "").not.toMatch(/classic/i);
   });
 
   it("does not send through a pending decision while the route is checking", async () => {
@@ -398,7 +379,9 @@ describe("cockpit text composer", () => {
     ) as HTMLButtonElement;
     expect(button.disabled).toBe(false);
     expect(container.textContent).toContain(
-      command === "/timer" ? "Open a reminder that stays with this conversation." : "Read the current session state",
+      command === "/timer"
+        ? "Open a reminder that stays with this conversation."
+        : "Show the current status of this conversation",
     );
     expect(container.textContent).toContain("Nothing is sent to the model.");
     await act(async () => button.click());

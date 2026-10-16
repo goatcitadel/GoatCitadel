@@ -54,10 +54,14 @@ it("opens the advanced expression for a custom schedule without changing it", as
   await choose("custom");
   expect(onChange).not.toHaveBeenCalled();
   expect(container.querySelector("details")?.open).toBe(true);
+  // The Gateway parser has no minute steps, so a minute step reads as a custom schedule rather than a recognized one.
   await render("*/5 * * * *");
   expect(select().value).toBe("custom");
   expect(container.querySelector('input[type="time"]')).toBeNull();
-  expect(container.textContent).toContain("Custom schedule: */5 * * * *");
+  expect(container.textContent).toContain("Custom schedule");
+  expect(container.textContent).not.toContain("Every 5 minutes");
+  await render("30 */4 * * *");
+  expect(container.textContent).toContain("Every 4 hours at :30");
 });
 
 it("keeps Custom expression selected after choosing it, until a guided option is chosen", async () => {

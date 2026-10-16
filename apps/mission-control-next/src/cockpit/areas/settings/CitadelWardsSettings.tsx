@@ -5,6 +5,7 @@ import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { CitadelAccessReview } from "./CitadelAccessReview";
+import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
 
 export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
   const c = useCitadelWards(citadelId),
@@ -29,7 +30,7 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
   return (
     <section id="citadel-wards" aria-label="Citadel Wards" className="mt-4 space-y-4 border-t border-line-subtle pt-4">
       <header>
-        <h3 className="font-display text-md font-semibold text-fg">Wards</h3>
+        <h3 className="font-display text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-wards"]}</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Access policy for this Citadel. Deny wins when several Wards match. Testing evaluates policy without executing
           the action.
@@ -85,7 +86,7 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
         ))}
       </ul>
       {!c.wards.items.length && !c.access.loading ? (
-        <p className="text-sm text-fg-muted">No Wards. The Gatehouse default posture applies.</p>
+        <p className="text-sm text-fg-muted">No rules yet. The Gatehouse default settings apply.</p>
       ) : null}
       <Dialog
         open={c.view === "new"}
@@ -158,7 +159,7 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
       <Dialog
         open={Boolean(review)}
         title="Add this Ward?"
-        description="The Gateway checks the reviewed revision before saving. Deny-wins policy remains authoritative."
+        description="Saving stops if the rules changed since your review. A deny rule always wins."
         onOpenChange={(open) => {
           if (!open && !c.access.busy) c.cancelAddReview();
         }}
@@ -172,7 +173,7 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
           <dd>{review ? WARD_EFFECT_META[review.input.effect].label : ""}</dd>
           <dt>Citadel</dt>
           <dd>{citadelId}</dd>
-          <dt>Reviewed revision</dt>
+          <dt>Reviewed version</dt>
           <dd className="break-all font-mono text-xs">{review?.before.revision}</dd>
         </dl>
         <div className="mt-4 flex flex-wrap gap-2">
@@ -220,7 +221,7 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
           <p className="break-words">
             {c.pendingDeleteWard?.ward.name} · {c.pendingDeleteWard?.ward.actionPattern}
           </p>
-          <p className="break-all font-mono text-xs">Reviewed revision: {c.pendingDeleteWard?.revision}</p>
+          <p className="break-all font-mono text-xs">Reviewed version: {c.pendingDeleteWard?.revision}</p>
           <div className="flex flex-wrap gap-2">
             <Button variant="danger" disabled={c.access.locked} onClick={() => void c.deleteWard()}>
               Confirm delete Ward

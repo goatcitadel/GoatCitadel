@@ -180,7 +180,7 @@ describe("Inbox Chat question", () => {
     expect(api.answerChatUserInputPrompt).toHaveBeenCalledWith("session-a", "turn-a", "prompt-a", {
       response: { kind: "single_select", optionId: "safe" },
     });
-    expect(container.textContent).toContain("Gateway accepted the answer");
+    expect(container.textContent).toContain("Answer sent");
   });
 
   it("submits trimmed free text through the same guarded owner endpoint", async () => {
@@ -252,7 +252,7 @@ describe("Inbox Chat question", () => {
       }),
     );
     await renderDetail();
-    expect(container.textContent).toContain("Open Chat to enter it through the existing secure flow");
+    expect(container.textContent).toContain("Use Open source conversation to enter it securely");
     expect(container.querySelector('input[type="password"]')).toBeNull();
     expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Review answer")).toBe(
       false,
@@ -276,7 +276,13 @@ describe("Inbox Chat question", () => {
 
   it("keeps the answer form available after the owner refuses an answer", async () => {
     api.answerChatUserInputPrompt.mockRejectedValueOnce(
-      new ApiRequestError("API error 400", { kind: "http", method: "POST", path: "/x", status: 400, body: { message: "Choose one of the offered options." } }),
+      new ApiRequestError("API error 400", {
+        kind: "http",
+        method: "POST",
+        path: "/x",
+        status: 400,
+        body: { message: "Choose one of the offered options." },
+      }),
     );
     await renderDetail();
     const radio = container.querySelector<HTMLInputElement>('input[type="radio"]');
@@ -290,7 +296,7 @@ describe("Inbox Chat question", () => {
     await act(async () => button("Review answer").click());
     await act(async () => button("Confirm answer").click());
     expect(api.answerChatUserInputPrompt).toHaveBeenCalledTimes(2);
-    expect(container.textContent).toContain("Gateway accepted the answer");
+    expect(container.textContent).toContain("Answer sent");
   });
 
   it("keeps the answer form while the question is rechecked", async () => {

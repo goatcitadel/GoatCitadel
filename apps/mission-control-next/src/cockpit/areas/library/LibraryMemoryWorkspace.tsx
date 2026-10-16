@@ -12,6 +12,7 @@ import { LibraryMemoryEditor } from "./LibraryMemoryEditor";
 import { LibraryMemoryProposals } from "./LibraryMemoryProposals";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { memoryNamespaceLabel, memoryScopeLabel, presentMemoryLifecycle } from "./library-vocabulary";
+import { LIBRARY_SECTION_LABELS } from "./library-sections";
 
 const Diagnostics = lazy(() =>
   import("./LibraryMemoryDiagnostics").then((module) => ({ default: module.LibraryMemoryDiagnostics })),
@@ -64,10 +65,10 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
       aria-label="Library Memory"
     >
       <header>
-        <h1 className="font-display text-xl font-semibold text-fg">Memory</h1>
+        <h1 className="font-display text-xl font-semibold text-fg">{LIBRARY_SECTION_LABELS.memory}</h1>
         <p className="text-sm text-fg-secondary">
-          Canonical workspace and global memory. Editing and forgetting request approval; follow-on settlement is
-          separate.
+          Workspace and global memory. Editing and forgetting ask for approval first; the change is confirmed separately
+          after approval.
         </p>
       </header>
       <form

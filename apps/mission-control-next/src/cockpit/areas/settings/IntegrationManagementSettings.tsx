@@ -27,13 +27,13 @@ export function IntegrationManagementSettings({ workspaceId }: { workspaceId: st
       <header>
         <h3 className="font-display text-md font-semibold">Connection management</h3>
         <p className="mt-1 text-sm text-fg-secondary">
-          Create and edit installation-wide connections through their Gateway owner. These controls use the same
-          retained drafts and mutation checks as detailed Settings.
+          Create and edit installation-wide connections. Unsaved drafts are kept, and saving stops if a connection
+          changed since you opened it.
         </p>
       </header>
       {s.loading ? (
         <p role="status" className="text-sm text-fg-muted">
-          Loading integration owners…
+          Loading integrations…
         </p>
       ) : null}
       {s.error ? (
@@ -72,7 +72,7 @@ export function IntegrationManagementSettings({ workspaceId }: { workspaceId: st
           Plugin trust
         </Button>
         <Button disabled={s.loading} onClick={() => s.openPanel("history")}>
-          Delivery evidence
+          Delivery records
         </Button>
         <Button disabled={s.loading} onClick={() => s.openPanel("routing")}>
           Notification routing
@@ -136,7 +136,7 @@ export function IntegrationManagementSettings({ workspaceId }: { workspaceId: st
           if (!open && !s.deletePending) s.setPendingDeleteConnection(null);
         }}
       >
-        <p className="break-all text-xs text-fg-muted">Reviewed revision: {s.pendingDeleteConnection?.revision}</p>
+        <p className="break-all text-xs text-fg-muted">Reviewed version: {s.pendingDeleteConnection?.revision}</p>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button
             variant="danger"

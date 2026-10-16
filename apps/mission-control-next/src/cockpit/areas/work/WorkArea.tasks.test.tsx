@@ -59,9 +59,9 @@ describe("Work view tabs", () => {
       "Board",
       "History",
       "Schedules",
-      "Task actions",
+      "Classic Kanban",
       "Archived tasks",
-      "Automation Designer",
+      "Automation designer",
     ]);
     expect(nav.querySelector('a[aria-current="page"]')?.textContent).toBe("Board");
   });
@@ -175,7 +175,7 @@ describe("Work task board", () => {
       ).toBe(source === "tasks");
     },
   );
-  it("keeps operator tasks and runtime runs distinct and filters loaded canonical fixtures", async () => {
+  it("keeps operator tasks and runs distinct and filters loaded canonical fixtures", async () => {
     vi.mocked(fetchTasks).mockResolvedValue({
       items: [
         {
@@ -216,7 +216,7 @@ describe("Work task board", () => {
     );
     await vi.waitFor(() => expect(container.textContent).toContain("Outline release"));
     expect(container.textContent).toContain("Operator task Planning");
-    expect(container.textContent).toContain("Runtime run");
+    expect(container.querySelector('a[href="/work/runs/failed"]')?.textContent).toMatch(/^Run(?!time)/);
     expect(container.textContent).toContain("Provider unavailable");
     const select = container.querySelector<HTMLSelectElement>("select")!;
     await act(async () => {
@@ -232,7 +232,7 @@ describe("Work task board", () => {
     });
     expect(container.querySelector('a[href="/work/tasks/planning"]')).toBeNull();
   });
-  it("selects operator tasks for reviewed task actions while runtime runs stay links", async () => {
+  it("selects operator tasks for reviewed task actions while runs stay links", async () => {
     vi.mocked(fetchTasks).mockResolvedValue({
       items: [
         {

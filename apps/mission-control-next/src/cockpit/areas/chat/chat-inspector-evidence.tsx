@@ -89,7 +89,7 @@ export function renderInspectorRunEvidence(
           className="text-sm font-medium text-accent hover:underline"
           href={`/work/runs/${encodeURIComponent(selectedTurn.trace.durable.runId)}`}
         >
-          Open durable evidence
+          Open run in Work
         </NativeOwnerLink>
       ) : (
         <p className="text-xs text-fg-muted">No background run is recorded for this response.</p>
@@ -104,7 +104,7 @@ export function renderInspectorRunEvidence(
           className="font-medium text-accent hover:underline"
           href={`/work/runs/${encodeURIComponent(selectedTurn.trace.durable.runId)}`}
         >
-          Open durable evidence
+          Open run in Work
         </NativeOwnerLink>
       ) : null}
     </div>

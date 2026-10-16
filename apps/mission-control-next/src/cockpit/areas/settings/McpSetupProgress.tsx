@@ -57,7 +57,7 @@ export function McpSetupProgress({
       ) : null}
       <ol className="list-inside list-decimal space-y-2">
         <li>
-          <strong>Saved:</strong> {stale ? "Last read" : "Read"} revision{" "}
+          <strong>Saved:</strong> {stale ? "Last read" : "Read"} version{" "}
           <code className="break-all">{server.revision}</code>.{" "}
           {server.enabled ? "Enabled in saved configuration." : "Disabled in saved configuration."}
         </li>
@@ -95,13 +95,13 @@ export function McpSetupProgress({
               </div>
             </>
           ) : testEvidence?.state === "stale" || testEvidence?.state === "verified" ? (
-            "Retained test evidence is stale for this inspection. Refresh and run a reviewed sample with the current bindings."
+            "The last test result is out of date. Refresh and run a reviewed sample with the current settings."
           ) : testEvidence?.state === "unavailable" ? (
-            "Retained test evidence is unavailable. Refresh inspection before relying on it."
+            "No test result is available. Refresh before relying on it."
           ) : testEvidence ? (
             `No matching approved result was found in the latest ${testEvidence.historyLimit} workspace runs (up to ${testEvidence.toolLimitPerTurn} tools per turn). Older or other kinds of tests may exist.`
           ) : (
-            "No task result is verified in this view. A completed Chat tool result supplies execution evidence."
+            "No task result is verified in this view. A completed Chat tool result shows that it ran."
           )}
           {testEvidence ? (
             <p className="mt-1 text-xs text-fg-muted">
@@ -121,14 +121,14 @@ export function McpSetupProgress({
         <div className="space-y-2">
           {staticMcpAvailable === false ? (
             <p>
-              Ask the runtime operator to enable static MCP in Chat through a reviewed settings change, with durable
-              execution enabled. Then refresh this status, review the server connection controls below, and start a new
-              Chat turn.
+              Ask the runtime operator to enable static MCP in Chat through a reviewed settings change, with resumable
+              runs enabled. Then refresh this status, review the server connection controls below, and start a new Chat
+              turn.
             </p>
           ) : staticMcpAvailable === undefined ? (
             <p>
-              Refresh runtime availability before preparing a Chat test. Missing or stale availability is not evidence
-              that this feature is enabled.
+              Refresh runtime availability before preparing a Chat test. Missing or stale availability does not mean
+              this feature is enabled.
             </p>
           ) : (
             <p>

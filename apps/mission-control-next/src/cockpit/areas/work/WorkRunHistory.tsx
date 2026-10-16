@@ -20,7 +20,7 @@ export function WorkRunHistory({ workspaceId }: { workspaceId: string }) {
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 id="durable-history-heading" className="font-display text-md font-semibold text-fg">
-            Durable runs
+            Runs
           </h2>
           <p className="text-sm text-fg-secondary">Saved run records for this workspace, newest created first.</p>
         </div>
@@ -30,13 +30,13 @@ export function WorkRunHistory({ workspaceId }: { workspaceId: string }) {
       </header>
       {query.isPending ? (
         <p role="status" className="text-sm text-fg-muted">
-          Loading durable history…
+          Loading runs…
         </p>
       ) : null}
       {query.isError ? (
         <div role="alert" className="grid gap-2 text-sm text-status-failed">
           <p>
-            {query.isFetchNextPageError ? "Older runs could not be loaded." : "Durable history could not be refreshed."}{" "}
+            {query.isFetchNextPageError ? "Older runs could not be loaded." : "Runs could not be refreshed."}{" "}
             {describeApiError(query.error).summary}
           </p>
           {runs.length > 0 ? <p>Previously loaded records remain visible; their status may have changed.</p> : null}
@@ -61,7 +61,7 @@ export function WorkRunHistory({ workspaceId }: { workspaceId: string }) {
             {plural(runs.length, "saved run")} loaded.{" "}
             {query.hasNextPage ? "Older runs are available." : "End of saved run history."}
           </p>
-          <WindowedRecordList items={runs} itemKey={(run) => run.runId} label="Durable run history" ordered>
+          <WindowedRecordList items={runs} itemKey={(run) => run.runId} label="Run history" ordered>
             {(run) => (
               <article className="rounded-lg border border-line bg-raised p-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -78,6 +78,7 @@ export function WorkRunHistory({ workspaceId }: { workspaceId: string }) {
                   className="mt-2 inline-block text-sm font-medium text-accent hover:underline"
                 >
                   Open run record
+                  <span className="sr-only">: {workRunTitle(run)}</span>
                 </NativeOwnerLink>
               </article>
             )}

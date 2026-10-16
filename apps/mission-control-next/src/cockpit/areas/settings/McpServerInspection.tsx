@@ -91,11 +91,11 @@ export function McpServerInspection({
           </p>
         ) : null}
         {evidenceView.phase === "checking" || availabilityView.phase === "checking" ? (
-          <p role="status">Checking test evidence and Chat availability for changes…</p>
+          <p role="status">Checking test results and Chat availability for changes…</p>
         ) : null}
         {testEvidence.isError ? (
           <p role="alert" className="text-status-failed">
-            Could not refresh retained test evidence. Refresh before relying on the last recorded result.
+            Could not refresh test results. Refresh before relying on the last recorded result.
           </p>
         ) : null}
         {settings.isError ? (
@@ -121,7 +121,7 @@ export function McpServerInspection({
               <dd>
                 <code className="break-all font-mono">{data.server.serverId}</code>
               </dd>
-              <dt>Saved revision</dt>
+              <dt>Saved version</dt>
               <dd>
                 <code className="break-all font-mono">{data.server.revision}</code>
               </dd>
@@ -143,7 +143,7 @@ export function McpServerInspection({
             ))}
             {data.remote ? (
               <section className="space-y-2" aria-label="Saved remote transport evidence">
-                <h5 className="font-semibold text-fg">Remote transport evidence</h5>
+                <h5 className="font-semibold text-fg">Remote transport details</h5>
                 <p>
                   {readable(data.remote.posture)} · {readable(data.remote.invocationState)}
                 </p>

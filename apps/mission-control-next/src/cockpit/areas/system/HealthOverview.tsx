@@ -71,6 +71,7 @@ function HealthCard({
         <StatusBadge status={check.status} />
       </div>
       <p className="mt-2 text-sm leading-relaxed text-fg-secondary">{check.detail}</p>
+      {check.lastKnown ? <p className="mt-1 text-xs text-fg-muted">{check.lastKnown}</p> : null}
       <SystemOwnerLink
         href={check.id === "remote_workers" ? "/system/runtime/workers" : check.inspectPath}
         scope={[workspaceId, check.id]}
@@ -79,8 +80,8 @@ function HealthCard({
       </SystemOwnerLink>
       {check.id === "remote_workers" ? (
         <p className="mt-2 text-xs text-fg-muted">
-          Inspect worker records, assignment evidence and spending budgets. Enrollment and containment recovery remain
-          under their existing runtime authority.
+          The workers page shows worker records, assignments and spending budgets. Enrollment and containment recovery
+          keep their existing runtime controls.
         </p>
       ) : null}
       {check.id === "backups" ? <HealthBackupAction readAvailable={backupReadAvailable} onRefresh={onRefresh} /> : null}
@@ -122,7 +123,7 @@ export function HealthOverview() {
         <div>
           <h1 className="font-display text-xl font-semibold text-fg">System</h1>
           <p className="text-sm text-fg-secondary">
-            Owner-reported service status and the evidence each check can support.
+            Service status as each part of the system reports it, and what each check can confirm.
           </p>
           {Number.isFinite(generatedAt) ? (
             <p className="mt-1 text-xs text-fg-muted">
@@ -135,7 +136,7 @@ export function HealthOverview() {
           onClick={() => void health.refetch()}
           disabled={health.isFetching || (health.isError && error.retryable === false)}
         >
-          <RefreshCw aria-hidden="true" className="size-4" /> Refresh
+          <RefreshCw aria-hidden="true" className="size-4" /> Refresh<span className="sr-only"> system health</span>
         </Button>
       </header>
 
@@ -163,9 +164,15 @@ export function HealthOverview() {
                   <li key={name}>
                     {HEALTH_SOURCE_LABELS[name as keyof typeof HEALTH_SOURCE_LABELS] ?? "Health source"}:{" "}
                     {source.state === "unavailable" ? source.detail : "Unknown"}
-                    {source.state === "unavailable" && source.lastKnown
-                      ? ` Retained observation is stale; last observed ${source.lastKnown.observedAt ? formatAbsoluteTime(source.lastKnown.observedAt) : "at an unavailable time"}.`
-                      : ""}
+                    {source.state === "unavailable" && source.lastKnown ? (
+                      <span className="block text-xs text-fg-muted">
+                        Last known: checked{" "}
+                        {source.lastKnown.observedAt
+                          ? formatAbsoluteTime(source.lastKnown.observedAt)
+                          : "at an unknown time"}
+                        .
+                      </span>
+                    ) : null}
                     {source.state === "unavailable" && source.retryable === false
                       ? " This source will be checked again after Gateway access or workspace scope changes; other sources continue refreshing."
                       : ""}
@@ -187,6 +194,7 @@ export function HealthOverview() {
                   >
                     <span className="text-sm text-fg">
                       <strong>{check.title}:</strong> {check.detail}
+                      {check.lastKnown ? <span className="block text-xs text-fg-muted">{check.lastKnown}</span> : null}
                     </span>
                     <SystemOwnerLink
                       href={check.id === "remote_workers" ? "/system/runtime/workers" : check.inspectPath}
@@ -201,7 +209,7 @@ export function HealthOverview() {
               <p className="mt-2 text-sm text-fg-secondary">
                 No problem was reported by the available checks
                 {unknown.length
-                  ? `; ${unknown.length} ${unknown.length === 1 ? "check lacks" : "checks lack"} live proof`
+                  ? `; ${unknown.length} ${unknown.length === 1 ? "check" : "checks"} could not be confirmed`
                   : ""}
                 .
               </p>
@@ -209,12 +217,13 @@ export function HealthOverview() {
           </section>
 
           {unknown.length ? (
-            <section aria-label="Checks awaiting evidence" className="rounded-lg border border-line bg-sunken p-4">
-              <h2 className="font-display text-lg font-semibold text-fg">Checks awaiting evidence</h2>
+            <section aria-label="Checks not yet confirmed" className="rounded-lg border border-line bg-sunken p-4">
+              <h2 className="font-display text-lg font-semibold text-fg">Checks not yet confirmed</h2>
               <ul className="mt-3 space-y-2">
                 {unknown.map((check) => (
                   <li key={check.id} className="text-sm text-fg-secondary">
                     <strong>{check.title}:</strong> {check.detail}
+                    {check.lastKnown ? <span className="block text-xs text-fg-muted">{check.lastKnown}</span> : null}
                   </li>
                 ))}
               </ul>

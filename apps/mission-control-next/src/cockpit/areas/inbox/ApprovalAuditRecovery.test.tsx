@@ -89,7 +89,7 @@ it("rechecks the original canonical checkpoint, Cancel has no effect, and resume
   await click("Confirm resume");
   expect(api.resume).toHaveBeenCalledExactlyOnceWith("original", "operator");
   expect(host.textContent).toContain("Original linked work: Paused");
-  expect(host.textContent).toContain("Resume request recorded");
+  expect(host.textContent).toContain("Resume requested");
 });
 it("blocks stale checkpoint and current scope changes", async () => {
   await render();
@@ -135,7 +135,7 @@ it("does not lock after the owner refuses the resume request", async () => {
   await click("Resume paused run");
   await click("Confirm resume");
   expect(api.resume).toHaveBeenCalledTimes(2);
-  expect(host.textContent).toContain("Resume request recorded");
+  expect(host.textContent).toContain("Resume requested");
 });
 
 it.each(["changed", "unavailable"])(
@@ -151,7 +151,7 @@ it.each(["changed", "unavailable"])(
     await click("Resume paused run");
     await click("Confirm resume");
     expect(api.resume).toHaveBeenCalledOnce();
-    expect(host.textContent).toContain("Resume request recorded");
+    expect(host.textContent).toContain("Resume requested");
   },
 );
 

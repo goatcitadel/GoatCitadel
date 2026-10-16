@@ -87,7 +87,7 @@ describe("native Local AI settings", () => {
     expect(container.textContent).toContain("No model download or server start was performed");
     await click("Jobs and endpoints");
     expect(container.textContent).toContain("requires approval");
-    expect(container.textContent).toContain("not a durable execution history");
+    expect(container.textContent).toContain("They are not a run history");
     const link = [...container.querySelectorAll("a")].find((item) => item.textContent === "Review required approval")!;
     expect(link).toBeDefined();
     const target = new URL(link.href);
@@ -193,9 +193,9 @@ describe("native Local AI settings", () => {
     const panel = container.querySelector('[aria-label="Local hardware"]')!;
     expect(panel.querySelectorAll("ul")[0]!.children).toHaveLength(40);
     expect(panel.querySelectorAll("ul")[1]!.children).toHaveLength(40);
-    const nextGpu = button("Next GPU evidence");
+    const nextGpu = button("Next GPU details");
     nextGpu.focus();
-    for (let page = 0; page < 24; page++) await click("Next GPU evidence");
+    for (let page = 0; page < 24; page++) await click("Next GPU details");
     expect(document.activeElement).toBe(nextGpu);
     expect(panel.textContent).toContain("GPU records 961–1000 of 1000");
     expect(panel.textContent).toContain("Driver 999");

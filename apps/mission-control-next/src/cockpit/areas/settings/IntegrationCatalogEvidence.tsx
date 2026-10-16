@@ -43,11 +43,11 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
         (!s.selectedConnectionId || item.connectionId === s.selectedConnectionId),
     ) ?? [];
   return (
-    <section aria-label="Integration catalog and delivery evidence" className="space-y-4">
-      <Button onClick={s.closePanel}>Close integration evidence</Button>
+    <section aria-label="Integration catalog and delivery records" className="space-y-4">
+      <Button onClick={s.closePanel}>Close integration records</Button>
       {s.loading ? (
         <p role="status" className="text-sm text-fg-muted">
-          Refreshing owner evidence…
+          Refreshing integration records…
         </p>
       ) : null}
       {issue ? (
@@ -74,9 +74,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
               }}
             />
           </label>
-          {!services.length ? (
-            <p className="text-sm text-fg-muted">No imported connectors match this owner window.</p>
-          ) : null}
+          {!services.length ? <p className="text-sm text-fg-muted">No imported connectors match this view.</p> : null}
           {services.slice(0, limit).map((service) => (
             <details
               key={`${service.sourceId}:${service.serviceId}`}
@@ -157,10 +155,10 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
         <>
           <h4 className="font-display text-md font-semibold">Installed plugin trust</h4>
           <p className="text-sm text-fg-secondary">
-            Installation-wide source and integrity evidence reported by the Gateway. Review does not enable plugins.
+            Installation-wide source and integrity records. Review does not enable plugins.
           </p>
           {!s.data?.plugins.length ? (
-            <p className="text-sm text-fg-muted">The owner reports no installed integration plugins.</p>
+            <p className="text-sm text-fg-muted">No integration plugins are installed.</p>
           ) : null}
           {s.data?.plugins.slice(0, 50).map((plugin) => (
             <article key={plugin.pluginId} className="space-y-2 rounded-md border border-line-subtle p-3">
@@ -193,11 +191,11 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
         </>
       ) : (
         <>
-          <h4 className="font-display text-md font-semibold">External delivery evidence</h4>
+          <h4 className="font-display text-md font-semibold">External delivery records</h4>
           <p className="text-sm text-fg-secondary">
             Workspace {workspaceLabel}
-            {s.selectedConnectionId ? ` · connection ${s.selectedConnectionId}` : " · all connections"}. This bounded
-            owner window records side effects; it does not infer missing deliveries or clean health.
+            {s.selectedConnectionId ? ` · connection ${s.selectedConnectionId}` : " · all connections"}. This list shows
+            recorded side effects only; it does not detect missing deliveries or confirm health.
           </p>
           {!runs.length ? (
             <p className="text-sm text-fg-muted">No side-effect records are present in this exact view.</p>
@@ -221,7 +219,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
                 disabled={s.replayMutation.locked || s.loading || !isReplayAuditCandidate(run)}
                 onClick={() => s.handleStartReplayAudit(run)}
               >
-                Review replay eligibility audit
+                Check whether it can run again
               </Button>
             </article>
           ))}
@@ -230,7 +228,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
               href={`/work/runs/${encodeURIComponent(s.lastReplayAuditRunId)}?${auditParameters}${hash}`}
               scope={[s.activeWorkspaceId, s.lastReplayAuditRunId]}
             >
-              Inspect durable replay audit {s.lastReplayAuditRunId}
+              Open run for the run-again check
             </NativeOwnerLink>
           ) : null}
         </>
@@ -245,7 +243,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
       <Dialog
         open={Boolean(s.externalReview)}
         title="Confirm external connector review"
-        description={`${s.externalReview?.action?.label ?? s.externalReview?.service.label ?? "Connector"}: mark ${s.externalReview?.status ?? "reviewed"} in workspace ${workspaceLabel}. The connector remains non-callable. Current owner evidence is re-read before dispatch; this API has no atomic revision precondition.`}
+        description={`${s.externalReview?.action?.label ?? s.externalReview?.service.label ?? "Connector"}: mark ${s.externalReview?.status ?? "reviewed"} in workspace ${workspaceLabel}. The connector stays unavailable to Chat. The latest record is read again before saving, but changes made in the meantime are not blocked.`}
         onOpenChange={(open) => {
           if (!open && !s.externalMutation.pending) s.cancelExternalReview();
         }}
@@ -261,18 +259,18 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
       </Dialog>
       <Dialog
         open={Boolean(s.replayReview)}
-        title="Create replay eligibility audit?"
-        description={`Inspect side-effect run ${s.replayReview?.run.runId ?? ""} in workspace ${workspaceLabel}. This creates a durable eligibility audit only. Unknown external outcomes require manual reconciliation. The snapshot is re-read; this creation API has no atomic revision precondition.`}
+        title="Check whether this can run again?"
+        description={`Check this side-effect record in workspace ${workspaceLabel}. This only records whether running it again is allowed; nothing runs. Unknown external outcomes need a manual check. The record is read again first, but changes made in the meantime are not blocked.`}
         onOpenChange={(open) => {
           if (!open && !s.replayMutation.pending) s.cancelReplayAudit();
         }}
       >
         <div className="flex flex-wrap gap-2">
           <Button disabled={s.replayMutation.locked} onClick={() => void s.confirmReplayAudit()}>
-            Create reviewed replay audit
+            Record run-again check
           </Button>
           <Button disabled={s.replayMutation.pending} onClick={s.cancelReplayAudit}>
-            Cancel replay audit
+            Cancel run-again check
           </Button>
         </div>
       </Dialog>

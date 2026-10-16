@@ -114,7 +114,7 @@ const dialog = () => document.body.querySelector<HTMLElement>("[role=dialog]");
 
 it("lists only this workspace's sessions and opens a deep-linked session with its posture", async () => {
   await open("/system/browser-sessions?sessionId=s-1");
-  await vi.waitFor(() => expect(container.textContent).toContain("Session posture"));
+  await vi.waitFor(() => expect(container.textContent).toContain("Session overview"));
   expect(fetchBrowserSessions).toHaveBeenCalledWith({ workspaceId: "one", status: "active", limit: 200 });
   expect(container.textContent).not.toContain("Foreign");
   expect(container.textContent).toContain("does not show that a browser is open, bound or active");
@@ -186,7 +186,7 @@ it("does not claim revocation when an active grant is still recorded after close
     },
   ]);
   await click("Review closing this session");
-  expect(dialog()!.textContent).toContain("calls already admitted are not interrupted");
+  expect(dialog()!.textContent).toContain("calls already allowed to start are not interrupted");
   await click("Close session and revoke grants");
   await vi.waitFor(() => expect(container.textContent).toContain("but an active grant is still recorded"));
   expect(container.textContent).not.toContain("No active grant remains");
@@ -194,7 +194,7 @@ it("does not claim revocation when an active grant is still recorded after close
 
 it("still refreshes and says grants are unverified when the post-close check fails", async () => {
   await open("/system/browser-sessions?sessionId=s-1");
-  await vi.waitFor(() => expect(container.textContent).toContain("Session posture"));
+  await vi.waitFor(() => expect(container.textContent).toContain("Session overview"));
   vi.mocked(closeBrowserSession).mockResolvedValue({
     ...session,
     status: "closed",

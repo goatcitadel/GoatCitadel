@@ -23,7 +23,7 @@ export function resolveLinkedInboxItem(
     summary: "Review the current approval record.",
     createdAt: "",
     source: { workspaceId, approvalId },
-    href: `/ops/approvals?approvalId=${encodeURIComponent(approvalId)}&workspaceId=${encodeURIComponent(workspaceId)}&shell=classic`,
+    href: `/inbox?approvalId=${encodeURIComponent(approvalId)}&workspaceId=${encodeURIComponent(workspaceId)}`,
   };
 }
 

@@ -238,6 +238,19 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
     url.searchParams.delete("cockpitReturnView");
     return native("/system/spend");
   }
+  // A run link (Inbox run recovery, delegated runs) opens that run in Work; a runtime section anchor stays in System.
+  const runId = url.searchParams.get("runId");
+  if (
+    area === "ops" &&
+    section === "runtime" &&
+    parts.length === 2 &&
+    runId &&
+    !url.hash &&
+    validApprovalRecordId(runId)
+  ) {
+    url.searchParams.delete("runId");
+    return native(`/work/runs/${encodeURIComponent(runId)}`);
+  }
   if (area === "ops" && parts.length === 2 && section && opsNative[section]) {
     return native(opsNative[section]);
   }

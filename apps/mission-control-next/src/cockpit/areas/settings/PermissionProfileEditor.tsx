@@ -145,10 +145,13 @@ export function PermissionProfileEditor({
           </p>
           {editor.hasRemoteChanges ? (
             <div role="alert">
-              <p>The profile changed. The original draft is retained. Compare the current record before rebasing.</p>
+              <p>
+                The profile changed. Your draft started from an older version and is kept. Compare it with the saved
+                profile first.
+              </p>
               {selected ? (
                 <details>
-                  <summary>Current Gateway profile</summary>
+                  <summary>Saved profile</summary>
                   <dl className="space-y-2 text-sm">
                     {[
                       ["Name", selected.label],
@@ -164,7 +167,7 @@ export function PermissionProfileEditor({
                       ["Tool patterns", selected.toolPatterns.join(", ") || "None"],
                       ["Allow rules", selected.allow.join(", ") || "None"],
                       ["Deny rules", selected.deny.join(", ") || "None"],
-                      ["Read access", selected.readAccessMode ?? "Gateway default"],
+                      ["Read access", selected.readAccessMode ?? "Default"],
                       ["Default policy contexts", selected.defaultForSurfaces?.join(", ") || "None"],
                     ].map(([label, value]) => (
                       <div key={label}>
@@ -173,7 +176,7 @@ export function PermissionProfileEditor({
                       </div>
                     ))}
                   </dl>
-                  <p className="break-all font-mono text-xs">Revision {selected.revision}</p>
+                  <p className="break-all font-mono text-xs">Version {selected.revision}</p>
                 </details>
               ) : null}
               <Button
@@ -183,7 +186,7 @@ export function PermissionProfileEditor({
                   editor.rebaseToCurrent();
                 }}
               >
-                Rebase permission draft to current profile
+                Apply draft to latest version
               </Button>
             </div>
           ) : null}
@@ -221,7 +224,7 @@ export function PermissionProfileEditor({
               Close profile editor
             </Button>
           </div>
-          {control.checking ? <p role="status">Reading the permission owner…</p> : null}
+          {control.checking ? <p role="status">Checking saved permissions…</p> : null}
           <PermissionManagementReview
             control={control}
             renderButton={({ label, secondary, ...props }) => (

@@ -139,7 +139,7 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
         latest.deploymentProfile !== intent.profile
       ) {
         setNotice(
-          "Approval settings changed. Review the current rule and revision before applying your preserved draft.",
+          "Approval settings changed. Your draft started from an older version and is kept. Review the current rule first.",
         );
         await settings.refetch();
         return false;
@@ -160,7 +160,7 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     } catch (error) {
       if (isApprovalRevisionConflict(error, intent.revision)) {
         if (!isCurrent(intent.generation)) return false;
-        setNotice("The Gateway rejected the stale settings revision. Your draft is preserved for review.");
+        setNotice("Not saved: the settings changed since your draft started. Your draft is kept for review.");
         await settings.refetch();
       } else if (mutationAttempted) {
         retainApprovalModeUncertainty(

@@ -33,7 +33,7 @@ export function TemplateContents({ template }: { template: CitadelTemplateSnapsh
         ["Goals", template.goals.join(" · ")],
         ["Boundaries", template.boundaries.join(" · ")],
         ["Success", template.successDefinition.join(" · ")],
-        ["Risk posture", presentRiskPosture(template.riskPosture ?? "balanced")],
+        ["Risk setting", presentRiskPosture(template.riskPosture ?? "balanced")],
         ["Model policy", presentModelPolicy(template.modelPolicyDefault ?? "hybrid_guarded")],
         [
           "Chambers",

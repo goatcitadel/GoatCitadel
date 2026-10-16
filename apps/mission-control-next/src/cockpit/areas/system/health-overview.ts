@@ -21,6 +21,8 @@ export interface HealthCheck {
   detail: string;
   status: { label: string; tone: StatusTone };
   inspectPath: string;
+  /** The earlier result, shown on its own line after the current state when a source could not refresh. */
+  lastKnown?: string;
   /** Something the operator has not set up. It is shown, but never counted as missing proof. */
   notSetUp?: boolean;
 }
@@ -138,7 +140,7 @@ export function summarizeHealthChecks(checks: readonly HealthCheck[]): { label: 
       tone: problems.some((check) => check.status.tone === "failed") ? "failed" : "waiting",
     };
   if (!checks.length || checks.some((check) => check.status.tone === "neutral" && !check.notSetUp)) {
-    return { label: "Some system checks lack live proof", tone: "neutral" };
+    return { label: "Some system checks could not be confirmed", tone: "neutral" };
   }
   return { label: "Reported system checks clear", tone: "done" };
 }

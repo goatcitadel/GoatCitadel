@@ -150,7 +150,9 @@ describe("Inbox memory proposal review", () => {
     // Open, the decision's re-read, then the decided record is reset and read once more.
     expect(api.fetchTraceMemoryCandidate).toHaveBeenCalledTimes(3);
     expect(api.promoteTraceMemoryCandidate).toHaveBeenCalledWith("candidate-a");
-    expect(container.textContent).toContain("Gateway promoted the proposal");
+    expect(container.textContent).toContain("Promoted to workspace memory");
+    const memoryLink = [...container.querySelectorAll("a")].find((link) => link.textContent === "Open Memory");
+    expect(memoryLink?.getAttribute("href")).toContain("/library/memory");
     expect(container.textContent).not.toContain("Promote to memory");
   });
 
@@ -215,7 +217,7 @@ describe("Inbox memory proposal review", () => {
     await act(async () => button("Confirm rejection").click());
     await settle();
     expect(api.rejectTraceMemoryCandidate).toHaveBeenCalledWith("candidate-a");
-    expect(container.textContent).toContain("Gateway rejected the proposal");
+    expect(container.textContent).toContain("Proposal rejected.");
   });
 
   it("treats a mismatched mutation response as uncertain", async () => {
@@ -231,7 +233,7 @@ describe("Inbox memory proposal review", () => {
     await act(async () => button("Confirm promotion").click());
     await settle();
     expect(container.textContent).toContain("Decision outcome is uncertain");
-    expect(container.textContent).not.toContain("Gateway promoted the proposal");
+    expect(container.textContent).not.toContain("Promoted to workspace memory");
   });
 
   it("locks decisions after an uncertain mutation result", async () => {
@@ -266,7 +268,7 @@ describe("Inbox memory proposal review", () => {
     await act(async () => button("Confirm promotion").click());
     await settle();
     expect(api.promoteTraceMemoryCandidate).toHaveBeenCalledTimes(2);
-    expect(container.textContent).toContain("Gateway promoted the proposal");
+    expect(container.textContent).toContain("Promoted to workspace memory");
   });
 
   it("withholds actions for a foreign workspace owner record", async () => {

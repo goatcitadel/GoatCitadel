@@ -29,13 +29,12 @@ export function ProviderTransportFields({
     <details className="rounded-md border border-line-subtle p-3">
       <summary className="cursor-pointer text-sm font-medium text-fg">Advanced request transport</summary>
       <p className="my-3 text-xs text-fg-muted">
-        These settings use the dedicated Gateway settings owner and its revision check. Transport auth accepts
-        environment references; inline tokens and credentials are rejected. File paths refer to the Gateway host.
+        Transport sign-in accepts environment variable names only; inline tokens and credentials are rejected. File
+        paths refer to the Gateway host. Saving stops if someone else changed these settings since you opened them.
       </p>
       <p className="my-3 text-xs text-fg-muted">
-        Header values are write-only: the Gateway acknowledges accepted names and keeps saved values hidden. Save public
-        profile edits first, then review transport separately. The owner merges transport fields; clearing an existing
-        field is not a supported removal.
+        Header values are write-only: after saving you see header names, never their values. Save profile edits first,
+        then review transport separately. Saving adds or updates fields; clearing an existing field does not remove it.
       </p>
       <div className="space-y-3">
         <label className="block text-sm text-fg-secondary">

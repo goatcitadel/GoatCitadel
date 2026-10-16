@@ -36,10 +36,10 @@ export function ChatConversationStarters({ props }: { props: Props }) {
       </div>
       <p className="text-fg-muted">Choose a starting prompt, then review it before sending.</p>
       <div className="flex flex-wrap gap-4 text-accent">
-        <NativeOwnerLink scope="conversation-starters" href="/settings/models?shell=cockpit">
+        <NativeOwnerLink scope="conversation-starters" href="/settings/models">
           Configure models
         </NativeOwnerLink>
-        <NativeOwnerLink scope="conversation-starters" href="/library/knowledge?shell=cockpit">
+        <NativeOwnerLink scope="conversation-starters" href="/library/knowledge">
           Import knowledge
         </NativeOwnerLink>
       </div>

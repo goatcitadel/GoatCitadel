@@ -32,10 +32,21 @@ afterEach(() => {
 describe("cockpit access gate", () => {
   it("shows Gateway setup diagnosis and retries it natively", async () => {
     const onRetry = vi.fn();
-    await act(async () => root.render(<CockpitAccessGate access={{ status: "misconfigured", message: "Configured auth owner is unavailable" } as never} busy={false} onRetry={onRetry} />));
+    await act(async () =>
+      root.render(
+        <CockpitAccessGate
+          access={{ status: "misconfigured", message: "Configured auth owner is unavailable" } as never}
+          busy={false}
+          onRetry={onRetry}
+        />,
+      ),
+    );
     expect(container.textContent).toContain("Configured auth owner is unavailable");
-    await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Try again")!.click());
-    expect(onRetry).toHaveBeenCalledOnce(); expect(shell.switchShell).not.toHaveBeenCalled();
+    await act(async () =>
+      [...container.querySelectorAll("button")].find((button) => button.textContent === "Try again")!.click(),
+    );
+    expect(onRetry).toHaveBeenCalledOnce();
+    expect(shell.switchShell).not.toHaveBeenCalled();
   });
   it("tells the operator how to start an unreachable Gateway", async () => {
     const onRetry = vi.fn();
@@ -49,20 +60,39 @@ describe("cockpit access gate", () => {
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
-  it.each(["misconfigured"])(
-    "opens the classic view as a visit when access is %s, so the saved layout stays the cockpit",
-    async (status) => {
-      await act(async () =>
-        root.render(<CockpitAccessGate access={{ status } as never} busy={false} onRetry={vi.fn()} />),
-      );
-      const open = [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Open classic view");
-      await act(async () => open!.click());
-      await vi.waitFor(() => expect(shell.switchShell).toHaveBeenCalledOnce());
-      const [name, options] = shell.switchShell.mock.calls[0]!;
-      expect(name).toBe("classic");
-      expect(options.href).toContain("shellScope=visit");
-    },
-  );
+  it("offers no classic action when Gateway setup needs attention, because Classic shows the same gate", async () => {
+    await act(async () =>
+      root.render(
+        <CockpitAccessGate
+          access={{ status: "misconfigured", message: "Setup" } as never}
+          busy={false}
+          onRetry={vi.fn()}
+        />,
+      ),
+    );
+    expect([...container.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual(["Try again"]);
+    expect(shell.switchShell).not.toHaveBeenCalled();
+  });
+
+  it("puts the drafts note inside the shared sign-in card under a plain heading", async () => {
+    await act(async () =>
+      root.render(
+        <CockpitAccessGate
+          access={{ status: "access-blocked", authMode: "token", message: "Blocked" } as never}
+          busy={false}
+          onRetry={vi.fn()}
+        />,
+      ),
+    );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    const card = container.querySelector(".gateway-access-card");
+    expect(card?.textContent).toContain("Unsaved drafts stay in this app session while you sign in.");
+    expect(container.querySelector("h1")?.textContent).toBe("This browser can't open the cockpit yet");
+    expect(container.textContent).not.toContain("caller");
+    expect(container.textContent).not.toContain("access gate");
+  });
 
   it("applies the saved theme to the document before the shell mounts", () => {
     applyCockpitAppearance("dark", "compact");
@@ -73,8 +103,20 @@ describe("cockpit access gate", () => {
 });
 
 it("restores authentication through the shared native form without requiring a Classic handoff", async () => {
-  await act(async () => root.render(<CockpitAccessGate access={{status:"needs-auth",authMode:"token",message:"Authentication required"} as never} busy={false} onRetry={vi.fn()} />));
-  await act(async () => { await vi.dynamicImportSettled(); });
-  expect(container.querySelector('input#gateway-access-token')).not.toBeNull();
-  expect([...container.querySelectorAll("button")].some(button=>button.textContent?.trim()==="Open classic view")).toBe(false);
+  await act(async () =>
+    root.render(
+      <CockpitAccessGate
+        access={{ status: "needs-auth", authMode: "token", message: "Authentication required" } as never}
+        busy={false}
+        onRetry={vi.fn()}
+      />,
+    ),
+  );
+  await act(async () => {
+    await vi.dynamicImportSettled();
+  });
+  expect(container.querySelector("input#gateway-access-token")).not.toBeNull();
+  expect(
+    [...container.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Open classic view"),
+  ).toBe(false);
 });

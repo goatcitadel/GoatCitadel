@@ -22,6 +22,8 @@ vi.mock("../../ui/Dialog", () => ({
 let root: Root, container: HTMLDivElement, snapshot: TrustPolicySnapshot;
 const buttons = () => [...container.querySelectorAll<HTMLButtonElement>("button")];
 const button = (label: string) => buttons().find((item) => item.textContent === label)!;
+const recordedSkillButton = () =>
+  buttons().find((item) => item.querySelector("span")?.textContent === "Recorded skill")!;
 async function render() {
   await act(async () => root.render(<TrustPolicySettings />));
   await vi.waitFor(() => expect(button("Refresh trust snapshot").disabled).toBe(false));
@@ -112,14 +114,14 @@ afterEach(() => {
 describe("native Trust evidence", () => {
   it("filters shared owner evidence by declarations, status and kind without asserting workspace authority", async () => {
     await render();
-    expect(container.textContent).toContain("across recorded scopes");
+    expect(container.textContent).toContain("Read-only snapshot of recorded trust");
     expect(container.textContent).not.toContain("current workspace");
     expect(container.textContent).toContain("2 matching rows");
     await search("SYNTHETIC_KEY");
     expect(container.textContent).toContain("1 matching rows");
     await select(0, "needs_review");
     await select(1, "source");
-    const inspect = container.querySelector<HTMLButtonElement>('[aria-label="Inspect trust evidence Recorded skill"]')!;
+    const inspect = recordedSkillButton();
     await act(async () => inspect.click());
     const detail = container.querySelector('[role="dialog"]')!;
     for (const value of [
@@ -147,9 +149,7 @@ describe("native Trust evidence", () => {
       "/settings/safety?citadelId=citadel-a&workspaceId=workspace-a&runId=run-a&sessionId=session-a&keep=one&keep=two&shell=cockpit#old-evidence",
     );
     await render();
-    await act(async () =>
-      container.querySelector<HTMLButtonElement>('[aria-label="Inspect trust evidence Recorded skill"]')!.click(),
-    );
+    await act(async () => recordedSkillButton().click());
     const link = container.querySelector<HTMLAnchorElement>('[role="dialog"] a')!;
     const target = new URL(link.href);
     expect(target.pathname).toBe("/library");
@@ -178,14 +178,12 @@ describe("native Trust evidence", () => {
     await render();
     expect(container.textContent).toContain("Partial snapshot");
     expect(container.textContent).toContain("Catalog not reachable");
-    await act(async () =>
-      container.querySelector<HTMLButtonElement>('[aria-label="Inspect trust evidence Recorded skill"]')!.click(),
-    );
+    await act(async () => recordedSkillButton().click());
     api.fetchTrustPolicySnapshot.mockRejectedValue(new Error("Gateway offline"));
     await act(async () => button("Refresh trust snapshot").click());
     await vi.waitFor(() => expect(container.textContent).toContain("Trust snapshot unavailable"));
-    expect(container.querySelector('[aria-label="Trust evidence rows"]')).toBeNull();
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("unavailable in the latest snapshot");
+    expect(container.querySelector('[aria-label="Trust records"]')).toBeNull();
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("not in the latest snapshot");
     expect(container.querySelector('[role="dialog"] a')).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -198,16 +196,14 @@ describe("native Trust evidence", () => {
       source: "tools.grants",
     }));
     await render();
-    expect(container.querySelectorAll('[aria-label="Trust evidence rows"] > li')).toHaveLength(48);
-    await act(async () => button("Show more trust evidence").click());
-    expect(container.querySelectorAll('[aria-label="Trust evidence rows"] > li')).toHaveLength(61);
-    await act(async () =>
-      container.querySelector<HTMLButtonElement>('[aria-label="Inspect trust evidence Recorded skill"]')!.click(),
-    );
+    expect(container.querySelectorAll('[aria-label="Trust records"] > li')).toHaveLength(48);
+    await act(async () => button("Show more trust records").click());
+    expect(container.querySelectorAll('[aria-label="Trust records"] > li')).toHaveLength(61);
+    await act(async () => recordedSkillButton().click());
     snapshot = { ...snapshot, skills: [], lastUseEvidence: [], generatedAt: "2026-09-30T13:00:00.000Z" };
     await act(async () => button("Refresh trust snapshot").click());
     await vi.waitFor(() =>
-      expect(container.querySelector('[role="dialog"]')?.textContent).toContain("unavailable in the latest snapshot"),
+      expect(container.querySelector('[role="dialog"]')?.textContent).toContain("not in the latest snapshot"),
     );
     expect(container.querySelector('[role="dialog"]')?.textContent).not.toContain("evidence-exact");
   });
@@ -215,6 +211,6 @@ describe("native Trust evidence", () => {
     api.fetchTrustPolicySnapshot.mockResolvedValue({ ...snapshot, mutationSemantics: "write" });
     await render();
     expect(container.textContent).toContain("did not provide the read-only Trust snapshot contract");
-    expect(container.querySelector('[aria-label="Trust evidence rows"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Trust records"]')).toBeNull();
   });
 });

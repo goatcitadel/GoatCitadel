@@ -126,7 +126,7 @@ describe("cockpit Diagnostics", () => {
           </QueryClientProvider>,
         ),
       );
-      await vi.waitFor(() => expect(container.textContent).toContain("Recovery projection contains records outside"));
+      await vi.waitFor(() => expect(container.textContent).toContain("The recovery list contains records outside"));
       expect(container.textContent).not.toContain("Other workspace");
       expect(container.querySelector('a[href="/work/runs/run-2?shell=cockpit"]')).toBeNull();
     } finally {

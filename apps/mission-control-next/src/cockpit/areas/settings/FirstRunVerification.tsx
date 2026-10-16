@@ -61,18 +61,15 @@ export function FirstRunVerification() {
   const firstTaskVerified = Boolean(verifiedTask);
   const firstTaskModel = useModelLabel(verifiedTask?.providerId, verifiedTask?.model, firstTaskVerified);
   return (
-    <section
-      aria-label="First-run verification evidence"
-      className="grid gap-4 rounded-lg border border-line bg-raised p-4"
-    >
+    <section aria-label="First-run checks" className="grid gap-4 rounded-lg border border-line bg-raised p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-display text-lg font-semibold text-fg">Verification evidence</h2>
+        <h2 className="font-display text-lg font-semibold text-fg">Setup checks</h2>
         <Button disabled={query.isFetching} onClick={() => void query.refetch()}>
-          Refresh evidence
+          Refresh checks
         </Button>
       </div>
-      {query.isLoading ? <p role="status">Reading Gateway evidence…</p> : null}
-      {query.isError ? <p role="alert">Verification evidence is unavailable. No readiness is inferred.</p> : null}
+      {query.isLoading ? <p role="status">Running setup checks…</p> : null}
+      {query.isError ? <p role="alert">Setup checks could not load. Nothing is assumed ready.</p> : null}
       {state ? (
         <>
           <p className="text-sm text-fg-secondary">
@@ -82,7 +79,7 @@ export function FirstRunVerification() {
           </p>
           <EvidenceList title="Setup Center" items={deriveSetupCenterItems(state)} />
           <details className="rounded-md border border-line p-3">
-            <summary className="cursor-pointer font-medium text-fg">Provider smoke evidence</summary>
+            <summary className="cursor-pointer font-medium text-fg">Provider test results</summary>
             <EvidenceList title="Provider checks" items={deriveOnboardingProviderSmokeEvidenceItems(state)} />
             <p className="mt-3 text-sm text-fg-secondary">
               Live provider release proof requires the named install lane with real credentials; this page does not run
@@ -114,7 +111,7 @@ export function FirstRunVerification() {
                 </ul>
               </div>
             ) : (
-              <p className="mt-3 text-sm text-fg-muted">Remote readiness evidence is unavailable.</p>
+              <p className="mt-3 text-sm text-fg-muted">Remote readiness could not load.</p>
             )}
           </details>
           <details className="rounded-md border border-line p-3">
@@ -141,13 +138,13 @@ export function FirstRunVerification() {
             ) : null}
           </details>
           <details className="rounded-md border border-line p-3">
-            <summary className="cursor-pointer font-medium text-fg">Recent installation evidence</summary>
+            <summary className="cursor-pointer font-medium text-fg">Recent installation records</summary>
             <p className="mt-3 text-sm text-fg-secondary">
-              Up to ten recent installation records from each owner. These are not bound to this workspace or to your
+              Up to ten recent installation records from each source. These are not bound to this workspace or to your
               first-run journey.
             </p>
             {data?.runs.error ? (
-              <p role="status">Recent run evidence is unavailable.</p>
+              <p role="status">Recent runs could not load.</p>
             ) : (
               <ul className="mt-3 grid gap-2 text-sm text-fg-secondary">
                 {data?.runs.value?.items.map((run) => (
@@ -162,7 +159,7 @@ export function FirstRunVerification() {
               </ul>
             )}
             {data?.envelopes.error ? (
-              <p role="status">Evidence envelopes are unavailable.</p>
+              <p role="status">Installation records could not load.</p>
             ) : (
               <ul className="mt-3 grid gap-2 text-sm text-fg-secondary">
                 {data?.envelopes.value?.items.map((item) => (

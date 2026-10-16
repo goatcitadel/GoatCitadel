@@ -162,7 +162,7 @@ export function SpendOverview() {
 
           <section aria-labelledby="spend-budget-title" className="rounded-lg border border-line bg-raised p-4">
             <h2 id="spend-budget-title" className="font-display text-lg font-semibold text-fg">
-              Budget posture
+              Budget setting
             </h2>
             <p className="mt-1 text-sm text-fg-secondary">
               {"Gateway budget preference: "}
@@ -190,16 +190,16 @@ export function SpendOverview() {
           </section>
 
           <section className="rounded-lg border border-line p-4">
-            <h2 className="text-sm font-semibold text-fg">More cost evidence</h2>
+            <h2 className="text-sm font-semibold text-fg">More cost detail</h2>
             <p className="mt-1 text-sm text-fg-secondary">
-              Review detailed coverage and provider evidence in the current Costs view.
+              Detailed coverage and per-provider records are on the spend details page.
             </p>
             <NativeOwnerLink
               className="mt-2 inline-block text-sm font-medium text-accent underline-offset-2 hover:underline"
               href={detailsHref}
               scope="installation-costs"
             >
-              Inspect detailed costs
+              Open spend details
             </NativeOwnerLink>
           </section>
         </>

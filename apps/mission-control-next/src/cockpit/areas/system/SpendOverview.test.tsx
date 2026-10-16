@@ -54,7 +54,7 @@ describe("cockpit Spend", () => {
       );
       await vi.waitFor(() => expect(container.textContent).toContain("Gateway budget preference: Balanced"));
       const continuation = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
-        (link) => link.textContent === "Inspect detailed costs",
+        (link) => link.textContent === "Open spend details",
       );
       expect(continuation).toBeDefined();
       const destination = new URL(continuation!.href);

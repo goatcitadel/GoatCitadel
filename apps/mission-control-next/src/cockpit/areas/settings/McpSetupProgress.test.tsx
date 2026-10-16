@@ -61,7 +61,7 @@ it("links only current verified approved receipts and labels changed generations
       <McpSetupProgress server={{ ...server, connectionRevision: "changed" }} stale={false} testEvidence={tested} />,
     ),
   );
-  expect(container.textContent).toContain("test evidence is stale");
+  expect(container.textContent).toContain("The last test result is out of date");
   expect(button("View tested Chat turn")).toBeUndefined();
   await act(async () =>
     root.render(
@@ -83,7 +83,7 @@ it("links only current verified approved receipts and labels changed generations
       />,
     ),
   );
-  expect(container.textContent).toContain("test evidence is unavailable");
+  expect(container.textContent).toContain("No test result is available");
 });
 
 it("separates retained setup evidence from callability and tested outcomes without running a tool", async () => {
