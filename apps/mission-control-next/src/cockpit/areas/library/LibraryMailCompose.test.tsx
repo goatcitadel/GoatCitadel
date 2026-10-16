@@ -28,7 +28,9 @@ vi.mock("./LibraryApproval", () => ({
       <p>
         Approval owner {approvalId} in {workspaceId}
       </p>
-      <button onClick={() => void onRefresh()}>Simulate decision</button>
+      <button type="button" onClick={() => void onRefresh()}>
+        Simulate decision
+      </button>
     </div>
   ),
 }));
