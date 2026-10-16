@@ -368,7 +368,7 @@ export function createCompletionStreamAggregate(): CompletionStreamAggregate {
 export function absorbCompletionStreamChunk(
   aggregate: CompletionStreamAggregate,
   rawChunk: Record<string, unknown>,
-): { delta?: string; sawToolCall: boolean } {
+): { delta?: string; reasoningDelta?: string; sawToolCall: boolean } {
   if (typeof rawChunk.id === "string") {
     aggregate.id = rawChunk.id;
   }
@@ -390,6 +390,7 @@ export function absorbCompletionStreamChunk(
 
   const choices = Array.isArray(rawChunk.choices) ? (rawChunk.choices as Array<Record<string, unknown>>) : [];
   let textDelta = "";
+  let reasoningDelta = "";
   let sawToolCall = false;
   for (const choice of choices) {
     if (typeof choice.finish_reason === "string" && choice.finish_reason.trim()) {
@@ -421,6 +422,15 @@ export function absorbCompletionStreamChunk(
     if (!delta || typeof delta !== "object") {
       continue;
     }
+    const reasoningText =
+      typeof delta.reasoning_content === "string"
+        ? delta.reasoning_content
+        : typeof delta.reasoning === "string"
+          ? delta.reasoning
+          : "";
+    if (reasoningText) {
+      reasoningDelta += reasoningText;
+    }
     if (Array.isArray(delta.provider_native_content)) {
       aggregate.providerNativeContent.push(
         ...delta.provider_native_content
@@ -445,6 +455,7 @@ export function absorbCompletionStreamChunk(
   }
   return {
     delta: textDelta || undefined,
+    reasoningDelta: reasoningDelta || undefined,
     sawToolCall,
   };
 }

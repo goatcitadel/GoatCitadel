@@ -16,15 +16,24 @@ import {
 describe("chat-agent-completion-adapters edge cases", () => {
   it("retains canonical terminal fallback routing without accepting provider-forged metadata", () => {
     const aggregate = createCompletionStreamAggregate();
-    const routing = { primaryProviderId: "primary", primaryModel: "first", effectiveProviderId: "backup",
-      effectiveModel: "second", fallbackUsed: true, fallbackReason: "primary unavailable" };
+    const routing = {
+      primaryProviderId: "primary",
+      primaryModel: "first",
+      effectiveProviderId: "backup",
+      effectiveModel: "second",
+      fallbackUsed: true,
+      fallbackReason: "primary unavailable",
+    };
     absorbCompletionStreamChunk(aggregate, { routing });
     expect(buildCompletionFromAggregate(aggregate).routing).toBeUndefined();
     const terminal = bindCanonicalStreamRouting({ routing }, routing);
     routing.effectiveProviderId = "mutated";
     absorbCompletionStreamChunk(aggregate, terminal);
     expect(buildCompletionFromAggregate(aggregate).routing).toMatchObject({
-      effectiveProviderId: "backup", effectiveModel: "second", fallbackUsed: true, fallbackReason: "primary unavailable",
+      effectiveProviderId: "backup",
+      effectiveModel: "second",
+      fallbackUsed: true,
+      fallbackReason: "primary unavailable",
     });
     const copiedAggregate = createCompletionStreamAggregate();
     absorbCompletionStreamChunk(copiedAggregate, JSON.parse(JSON.stringify(terminal)));
@@ -453,5 +462,36 @@ describe("chat-agent-completion-adapters edge cases", () => {
       },
       { type: "thinking", thinking: "private", signature: "sig-ok" },
     ]);
+  });
+});
+
+describe("absorbCompletionStreamChunk reasoning deltas", () => {
+  it("returns reasoning_content and reasoning deltas without touching visible content", () => {
+    const aggregate = createCompletionStreamAggregate();
+    const first = absorbCompletionStreamChunk(aggregate, {
+      choices: [{ index: 0, delta: { reasoning_content: "Plan: " } }],
+    });
+    const second = absorbCompletionStreamChunk(aggregate, {
+      choices: [{ index: 0, delta: { reasoning: "check units." } }],
+    });
+    const third = absorbCompletionStreamChunk(aggregate, {
+      choices: [{ index: 0, delta: { content: "42", reasoning_content: "" } }],
+    });
+    expect(first).toEqual({ delta: undefined, reasoningDelta: "Plan: ", sawToolCall: false });
+    expect(second.reasoningDelta).toBe("check units.");
+    expect(third).toEqual({ delta: "42", reasoningDelta: undefined, sawToolCall: false });
+    expect(aggregate.content).toBe("42");
+  });
+
+  it("prefers reasoning_content over reasoning and ignores non-string reasoning payloads", () => {
+    const aggregate = createCompletionStreamAggregate();
+    const both = absorbCompletionStreamChunk(aggregate, {
+      choices: [{ index: 0, delta: { reasoning_content: "A", reasoning: "A-dup" } }],
+    });
+    const structured = absorbCompletionStreamChunk(aggregate, {
+      choices: [{ index: 0, delta: { reasoning: { summary: "x" }, reasoning_details: [{ text: "y" }] } }],
+    });
+    expect(both.reasoningDelta).toBe("A");
+    expect(structured.reasoningDelta).toBeUndefined();
   });
 });
