@@ -536,6 +536,8 @@ async function commsReact(
       return whatsappReact(connectionConfig, args, allowlist, target, grantAllowlist);
     case "imessage":
       return imessageReact(connectionConfig, args, allowlist, target, grantAllowlist);
+    case "signal":
+      return signalReact(connectionConfig, args, allowlist, target, grantAllowlist);
     default:
       throw new Error(
         describeChannelPlatformUnsupported(channelKey, "channel.react") ??
@@ -567,6 +569,8 @@ async function commsUnsend(
       return googleChatUnsend(connectionConfig, args, allowlist, grantAllowlist);
     case "imessage":
       return imessageUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
+    case "signal":
+      return signalUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
     default:
       throw new Error(
         describeChannelPlatformUnsupported(channelKey, "channel.unsend") ??
@@ -2148,6 +2152,102 @@ async function signalSend(
     grantAllowlist,
   );
   return result?.timestamp != null ? String(result.timestamp) : `signal-${Date.now()}`;
+}
+
+interface SignalActionContext {
+  baseUrl: string;
+  targetParams: Record<string, unknown>;
+  resolvedTarget: string;
+  account: string | undefined;
+}
+
+function resolveSignalActionContext(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  target: string,
+): SignalActionContext {
+  const baseUrl = normalizeSignalBaseUrl(asString(config.baseUrl) ?? asString(config.bridgeUrl));
+  const account =
+    asString(args.account) ?? asString(args.accountId) ?? asString(config.account) ?? asString(config.accountId);
+  const resolvedTarget = normalizeSignalTarget(
+    asString(args.target) ?? normalizeChannelTarget(target, "signal") ?? resolveDefaultChannelTarget("signal", config),
+  );
+  if (!baseUrl) {
+    throw new Error("Missing Signal base URL");
+  }
+  if (!resolvedTarget) {
+    throw new Error("Missing Signal target");
+  }
+  return { baseUrl, targetParams: buildSignalTargetParams(resolvedTarget), resolvedTarget, account };
+}
+
+function parseSignalTargetTimestamp(messageId: unknown): number {
+  const raw = required(messageId, "Signal messageId");
+  const timestamp = Number(raw);
+  if (!/^[0-9]+$/.test(raw.trim()) || !Number.isSafeInteger(timestamp) || timestamp <= 0) {
+    throw new Error("Signal messageId must be the numeric message timestamp");
+  }
+  return timestamp;
+}
+
+async function signalReact(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  grantAllowlist?: string[],
+): Promise<string> {
+  const ctx = resolveSignalActionContext(config, args, target);
+  const targetTimestamp = parseSignalTargetTimestamp(args.messageId);
+  const emoji = required(args.emoji ?? args.reaction, "Signal reaction emoji");
+  const isGroup = typeof ctx.targetParams.groupId === "string";
+  const targetAuthor = asString(args.targetAuthor) ?? (isGroup ? undefined : ctx.resolvedTarget);
+  if (!targetAuthor) {
+    throw new Error("Signal group reactions need targetAuthor");
+  }
+  const params: Record<string, unknown> = {
+    emoji,
+    targetAuthor,
+    targetTimestamp,
+    remove: args.remove === true,
+    ...ctx.targetParams,
+  };
+  if (ctx.account) {
+    params.account = ctx.account;
+  }
+  const result = await signalRpcRequest<Record<string, unknown> | undefined>(
+    ctx.baseUrl,
+    "sendReaction",
+    params,
+    allowlist,
+    grantAllowlist,
+  );
+  return result?.timestamp != null ? String(result.timestamp) : `signal-react-${Date.now()}`;
+}
+
+async function signalUnsend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  grantAllowlist?: string[],
+): Promise<string> {
+  const ctx = resolveSignalActionContext(config, args, target);
+  const params: Record<string, unknown> = {
+    targetTimestamp: parseSignalTargetTimestamp(args.messageId),
+    ...ctx.targetParams,
+  };
+  if (ctx.account) {
+    params.account = ctx.account;
+  }
+  const result = await signalRpcRequest<Record<string, unknown> | undefined>(
+    ctx.baseUrl,
+    "remoteDelete",
+    params,
+    allowlist,
+    grantAllowlist,
+  );
+  return result?.timestamp != null ? String(result.timestamp) : `signal-unsend-${Date.now()}`;
 }
 
 async function imessageSend(

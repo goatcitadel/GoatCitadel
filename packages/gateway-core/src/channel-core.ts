@@ -524,7 +524,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["phoneNumberId"], ["accessTokenEnv", "accessToken", "tokenEnv", "token"]],
   },
   signal: {
-    supportedActions: ["channel.send", "channel.typing"],
+    supportedActions: ["channel.send", "channel.react", "channel.unsend", "channel.typing"],
     resolveInboundModes: (config) => (isSignalInboundEnabled(config) ? ["stream"] : ["none"]),
     threadCapabilities: {
       direct: true,
@@ -552,6 +552,8 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     resolveSupportNotes: (config) => [
       "Outbound Signal sends use the configured bridge JSON-RPC send path.",
       "Signal typing indicators use the bridge JSON-RPC sendTyping method for a recipient or a group: target.",
+      "Signal reactions use sendReaction with the target message timestamp as messageId; group reactions also need targetAuthor.",
+      "Signal remote delete (unsend) uses remoteDelete and works only on messages this account sent.",
       isSignalInboundEnabled(config)
         ? "Signal inbound subscribes to the signal-cli daemon --http event stream (/api/v1/events); allow the sender UUIDs (or numbers for senders without a UUID) that may start turns, because inbound is default-deny."
         : "Signal inbound is off; set receiveEvents on a signal-cli daemon --http bridge to receive messages from its event stream (/api/v1/events).",

@@ -3984,6 +3984,165 @@ describe("executeTool", () => {
     });
   });
 
+  describe("Signal react and remote delete", () => {
+    function signalActionStorage(defaultRecipient: string) {
+      return {
+        integrationConnections: {
+          get: vi.fn(() => ({
+            connectionId: "conn-signal",
+            key: "signal",
+            config: { baseUrl: "https://signal.example.com", accountId: "+15557654321", defaultRecipient },
+          })),
+        },
+        commsDeliveries: {
+          createQueued: vi.fn((input: Record<string, unknown>) => ({
+            deliveryId: "delivery-signal-action",
+            status: "queued",
+            channelKey: input.channelKey,
+            target: input.target,
+            createdAt: "2026-03-18T00:00:00.000Z",
+            updatedAt: "2026-03-18T00:00:00.000Z",
+          })),
+          markSent: vi.fn(),
+          markFailed: vi.fn(),
+        },
+      } as unknown as Storage & AsyncStorage;
+    }
+    const signalPolicy = {
+      ...policyConfig,
+      sandbox: { ...policyConfig.sandbox, networkAllowlist: ["signal.example.com"] },
+    };
+    function signalFetch() {
+      return vi.fn(
+        async (..._args: unknown[]) =>
+          new Response(JSON.stringify({ jsonrpc: "2.0", result: { timestamp: 1712345679999 }, id: "rpc-1" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      );
+    }
+    function rpcBody(fetchMock: ReturnType<typeof signalFetch>): Record<string, unknown> {
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      return JSON.parse(String(init.body)) as Record<string, unknown>;
+    }
+
+    it("reacts to a direct message with the target defaulting to the author", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.react",
+          args: { connectionId: "conn-signal", target: "signal:+15551234567", messageId: "1712345678901", emoji: "👍" },
+          agentId: "operator",
+          sessionId: "sess-signal-react",
+        },
+        signalPolicy,
+        signalActionStorage("signal:+15551234567"),
+      );
+      const body = rpcBody(fetchMock);
+      expect(body.method).toBe("sendReaction");
+      expect(body.params).toEqual({
+        account: "+15557654321",
+        emoji: "👍",
+        targetAuthor: "+15551234567",
+        targetTimestamp: 1712345678901,
+        remove: false,
+        recipient: ["+15551234567"],
+      });
+      expect(result).toMatchObject({ status: "sent", providerMessageId: "1712345679999" });
+    });
+
+    it("reacts in a group with an explicit targetAuthor and supports remove", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      await executeTool(
+        {
+          toolName: "channel.react",
+          args: {
+            connectionId: "conn-signal",
+            messageId: "1712345678901",
+            reaction: "🎉",
+            targetAuthor: "uuid-author",
+            remove: true,
+          },
+          agentId: "operator",
+          sessionId: "sess-signal-react-group",
+        },
+        signalPolicy,
+        signalActionStorage("signal:group:group-123"),
+      );
+      expect(rpcBody(fetchMock).params).toMatchObject({
+        groupId: "group-123",
+        targetAuthor: "uuid-author",
+        emoji: "🎉",
+        remove: true,
+      });
+    });
+
+    it("rejects a group reaction without targetAuthor before any fetch", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.react",
+          args: { connectionId: "conn-signal", messageId: "1712345678901", emoji: "👍" },
+          agentId: "operator",
+          sessionId: "sess-signal-react-noauthor",
+        },
+        signalPolicy,
+        signalActionStorage("signal:group:group-123"),
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        error: expect.stringMatching(/Signal group reactions need targetAuthor/),
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("unsends through remoteDelete with the target timestamp", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.unsend",
+          args: { connectionId: "conn-signal", messageId: "1712345678901" },
+          agentId: "operator",
+          sessionId: "sess-signal-unsend",
+        },
+        signalPolicy,
+        signalActionStorage("signal:group:group-123"),
+      );
+      const body = rpcBody(fetchMock);
+      expect(body.method).toBe("remoteDelete");
+      expect(body.params).toEqual({ account: "+15557654321", targetTimestamp: 1712345678901, groupId: "group-123" });
+      expect(result).toMatchObject({ status: "sent", providerMessageId: "1712345679999" });
+    });
+
+    it("rejects a non-numeric messageId without calling the bridge", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      for (const toolName of ["channel.react", "channel.unsend"]) {
+        const result = await executeTool(
+          {
+            toolName,
+            args: { connectionId: "conn-signal", messageId: "not-a-ts", emoji: "👍", targetAuthor: "+1555" },
+            agentId: "operator",
+            sessionId: "sess-signal-badid",
+          },
+          signalPolicy,
+          signalActionStorage("signal:+15551234567"),
+        );
+        expect(result).toMatchObject({ status: "failed", error: expect.stringMatching(/numeric/) });
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("sends channel messages through iMessage BlueBubbles adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.IMESSAGE_PASSWORD = "bb-password";
