@@ -64,6 +64,20 @@ function assertRoundTripAndCas(scoped: string): void {
     assert.deepEqual(updated, { ...draft, ...patch });
     assert.equal(repo.transition(draft.draftId, ["draft"], patch), undefined);
     assert.deepEqual(repo.get(draft.draftId), { ...draft, ...patch });
+    const failed = repo.transition(draft.draftId, ["approval_required"], {
+      status: "failed",
+      failureReason: "unknown outcome",
+      updatedAt: "2026-10-16T09:02:00.000Z",
+    });
+    assert.equal(failed?.failureReason, "unknown outcome");
+    const sent = repo.transition(draft.draftId, ["failed"], {
+      status: "sent",
+      clearFailureReason: true,
+      sentAt: "2026-10-16T09:03:00.000Z",
+      updatedAt: "2026-10-16T09:03:00.000Z",
+    });
+    assert.equal(sent?.status, "sent");
+    assert.equal(sent?.failureReason, undefined);
     assert.throws(
       () => db.prepare("UPDATE mail_drafts SET status = 'bogus' WHERE draft_id = ?").run(draft.draftId),
       /check constraint|mail_drafts_status_check/i,

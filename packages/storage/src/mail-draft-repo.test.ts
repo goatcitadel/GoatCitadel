@@ -86,6 +86,40 @@ describe("MailDraftRepository", () => {
     assert.equal(sent?.sentAt, "2026-10-16T09:02:00.000Z");
   });
 
+  it("clears a stale failure reason only when the transition asks to", () => {
+    const repo = new MailDraftRepository(tempDbs.open({ dbPath: tempDbs.path("goatcitadel-mail-drafts") }));
+    repo.create(draft({ status: "approval_required", approvalId: "ap-1" }));
+    const failed = repo.transition("draft-1", ["approval_required"], {
+      status: "failed",
+      failureReason: "Delivery outcome is unknown; check the mailbox before retrying.",
+      updatedAt: "2026-10-16T09:01:00.000Z",
+    });
+    assert.equal(failed?.failureReason, "Delivery outcome is unknown; check the mailbox before retrying.");
+    const kept = repo.transition("draft-1", ["failed"], { status: "failed", updatedAt: "2026-10-16T09:01:30.000Z" });
+    assert.equal(kept?.failureReason, failed?.failureReason, "an omitted failureReason keeps the stored one");
+
+    const sent = repo.transition("draft-1", ["approval_required", "failed"], {
+      status: "sent",
+      clearFailureReason: true,
+      sentAt: "2026-10-16T09:02:00.000Z",
+      updatedAt: "2026-10-16T09:02:00.000Z",
+    });
+    assert.equal(sent?.status, "sent");
+    assert.equal(sent?.failureReason, undefined);
+    assert.equal(repo.get("draft-1").failureReason, undefined);
+    assert.equal(sent?.approvalId, "ap-1");
+    assert.throws(
+      () =>
+        repo.transition("draft-1", ["sent"], {
+          status: "sent",
+          failureReason: "x",
+          clearFailureReason: true,
+          updatedAt: "later",
+        }),
+      /cannot both set and clear/,
+    );
+  });
+
   it("finds a draft after reopening the same database file", () => {
     const dbPath = tempDbs.path("goatcitadel-mail-drafts");
     const first = tempDbs.open({ dbPath });

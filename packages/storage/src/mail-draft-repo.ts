@@ -9,6 +9,8 @@ export interface MailDraftTransition {
   status: MailDraftStatus;
   approvalId?: string;
   failureReason?: string;
+  /** Clears any stored failure reason (for example on a `failed` -> `sent` transition); excludes `failureReason`. */
+  clearFailureReason?: boolean;
   sentAt?: string;
   updatedAt: string;
 }
@@ -95,7 +97,8 @@ export class MailDraftRepository {
 
   /**
    * Compare-and-set: applies only while the current status is in `from`; returns undefined otherwise.
-   * Omitted optional patch fields keep their stored values.
+   * Omitted optional patch fields keep their stored values; `clearFailureReason` is the
+   * only way to remove a stored failure reason.
    */
   public transition(
     draftId: string,
@@ -107,13 +110,17 @@ export class MailDraftRepository {
     }
     for (const status of from) assertStatus(status);
     assertStatus(patch.status);
+    const clearFailureReason = patch.clearFailureReason === true;
+    if (clearFailureReason && patch.failureReason !== undefined) {
+      throw new ValidationError({ message: "A mail draft transition cannot both set and clear its failure reason." });
+    }
     const allowed = [...new Set(from)].sort();
-    const statement = this.transitionStatement(allowed.length);
+    const statement = this.transitionStatement(allowed.length, clearFailureReason);
     const params: Record<string, unknown> = {
       draftId,
       status: patch.status,
       approvalId: patch.approvalId ?? null,
-      failureReason: patch.failureReason ?? null,
+      ...(clearFailureReason ? {} : { failureReason: patch.failureReason ?? null }),
       sentAt: patch.sentAt ?? null,
       updatedAt: patch.updatedAt,
     };
@@ -126,8 +133,8 @@ export class MailDraftRepository {
     });
   }
 
-  private transitionStatement(fromCount: number): PreparedStatement {
-    const key = String(fromCount);
+  private transitionStatement(fromCount: number, clearFailureReason: boolean): PreparedStatement {
+    const key = `${fromCount}:${clearFailureReason ? "clear" : "keep"}`;
     const cached = this.transitionStmts.get(key);
     if (cached) return cached;
     const placeholders = Array.from({ length: fromCount }, (_, index) => `@from${index}`).join(", ");
@@ -136,7 +143,7 @@ export class MailDraftRepository {
       SET
         status = @status,
         approval_id = COALESCE(@approvalId, approval_id),
-        failure_reason = COALESCE(@failureReason, failure_reason),
+        failure_reason = ${clearFailureReason ? "NULL" : "COALESCE(@failureReason, failure_reason)"},
         sent_at = COALESCE(@sentAt, sent_at),
         updated_at = @updatedAt
       WHERE draft_id = @draftId AND status IN (${placeholders})
