@@ -295,6 +295,16 @@ it.each([
   expect(container.textContent).toContain(`Not sent: ${failureReason}`);
 });
 
+it("announces the decided outcome through the decision callout, not a second live region", async () => {
+  await requestApproval();
+  vi.mocked(getMailDraft).mockResolvedValue({ ...pending, status: "failed", failureReason: "Rejected." });
+  await click("Simulate decision");
+  const receipt = container.querySelector("[aria-label='Send approval receipt']")!;
+  const regions = [...receipt.querySelectorAll("[role=alert], [role=status]")];
+  expect(regions).toHaveLength(1);
+  expect(regions[0]!.textContent).toContain("Not sent: Rejected.");
+});
+
 it("keeps the receipt readable when the draft re-read fails", async () => {
   await requestApproval();
   vi.mocked(getMailDraft).mockRejectedValue(new Error("offline"));
