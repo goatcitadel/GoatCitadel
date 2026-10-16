@@ -101,6 +101,9 @@ class LegacySseSession {
     const response = await fetchAllowlisted(streamUrl, {
       allowlist: this.input.allowlist,
       timeoutMs: this.input.timeoutMs,
+      // The announced endpoint is resolved and origin-checked against streamUrl,
+      // so the stream must be served from exactly that URL: refuse redirects.
+      maxRedirects: 0,
       init: {
         method: "GET",
         headers: { Accept: "text/event-stream", "Cache-Control": "no-cache", ...this.input.authHeaders },
@@ -122,7 +125,11 @@ class LegacySseSession {
         this.endpointWaiter = undefined;
       });
     });
-    void this.pump(this.reader);
+    // pump() settles its own failures through fail(); the handler only keeps the
+    // background read loop from ever surfacing as an unhandled rejection.
+    void this.pump(this.reader).catch((error: unknown) => {
+      this.fail(error instanceof Error ? error : new Error(String(error)));
+    });
     await endpointAnnounced;
   }
 
@@ -143,7 +150,7 @@ class LegacySseSession {
     this.fail(new Error(`MCP SSE session for ${this.input.server.label} was closed.`));
     this.streamAbort.abort();
     if (this.reader) {
-      void cancelBodyReader(this.reader);
+      void cancelBodyReader(this.reader).catch(() => undefined);
     }
   }
 

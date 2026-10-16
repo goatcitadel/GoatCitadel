@@ -1101,7 +1101,7 @@ describe("EventIngestService", () => {
       withStorage(async (storage, sessionId) => {
         const original = storage.transcriptOutbox.markDelivered.bind(storage.transcriptOutbox);
         let failed = false;
-        vi.spyOn(storage.transcriptOutbox, "markDelivered").mockImplementation((...args) => {
+        const markDeliveredSpy = vi.spyOn(storage.transcriptOutbox, "markDelivered").mockImplementation((...args) => {
           if (!failed) {
             failed = true;
             throw new Error("crash before markDelivered");
@@ -1109,21 +1109,25 @@ describe("EventIngestService", () => {
           return original(...args);
         });
         const { childSpy } = spyOnStructuredWarn();
-        const service = new EventIngestService(asAsyncStorage(storage));
+        try {
+          const service = new EventIngestService(asAsyncStorage(storage));
 
-        await service.ingest({
-          endpoint: "/api/v1/gateway/events",
-          idempotencyKey: "idem-outbox-1",
-          payload: buildPayload(),
-        });
-        expect(storage.transcriptOutbox.get("evt-1")?.deliveredAt).toBeUndefined();
+          await service.ingest({
+            endpoint: "/api/v1/gateway/events",
+            idempotencyKey: "idem-outbox-1",
+            payload: buildPayload(),
+          });
+          expect(storage.transcriptOutbox.get("evt-1")?.deliveredAt).toBeUndefined();
 
-        await service.flushPendingTranscriptOutbox();
+          await service.flushPendingTranscriptOutbox();
 
-        const transcript = await storage.transcripts.read(sessionId);
-        expect(transcript.filter((entry) => entry.eventId === "evt-1")).toHaveLength(1);
-        expect(storage.transcriptOutbox.get("evt-1")?.deliveredAt).toBeDefined();
-        childSpy.mockRestore();
+          const transcript = await storage.transcripts.read(sessionId);
+          expect(transcript.filter((entry) => entry.eventId === "evt-1")).toHaveLength(1);
+          expect(storage.transcriptOutbox.get("evt-1")?.deliveredAt).toBeDefined();
+        } finally {
+          childSpy.mockRestore();
+          markDeliveredSpy.mockRestore();
+        }
       }),
       20_000,
     );

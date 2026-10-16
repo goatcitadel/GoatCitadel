@@ -1690,6 +1690,8 @@ async function withLegacySseMcpServer<T>(
     lineEnding?: "\n" | "\r\n";
     streamPrefix?: string;
     splitEndpointAfterCarriageReturn?: boolean;
+    /** When set, GET /sse answers 307 to this location instead of opening the stream. */
+    streamRedirect?: string;
     onMessage: (input: { message: Record<string, unknown>; session: LegacySseTestSession }) => LegacySseTestOutcome;
   },
   run: (server: LegacySseTestServer) => Promise<T>,
@@ -1709,6 +1711,10 @@ async function withLegacySseMcpServer<T>(
     if (request.method === "GET" && requestUrl.pathname === "/sse") {
       state.getCount += 1;
       state.getAuthorizations.push(request.headers.authorization);
+      if (input.streamRedirect) {
+        response.writeHead(307, { location: input.streamRedirect }).end();
+        return;
+      }
       response.on("close", () => {
         state.closedStreams += 1;
       });
@@ -1976,6 +1982,21 @@ describe("legacy HTTP+SSE transport", () => {
         },
       );
     });
+  });
+
+  it("refuses a redirected event-stream GET so the endpoint is resolved against the URL that served it", async () => {
+    await withLegacySseMcpServer(
+      { streamRedirect: "/sse/", onMessage: ({ message }) => replyToLegacyHandshake(message) },
+      async (sse) => {
+        await expect(
+          discoverMcpTools({ ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" }, 1000, {
+            networkAllowlist: [sse.host],
+          }),
+        ).rejects.toThrow(/redirect/i);
+        expect(sse.getCount).toBe(1);
+        expect(sse.postPaths).toEqual([]);
+      },
+    );
   });
 
   it("rejects a request aborted by the caller mid-flight and closes the event stream", async () => {
