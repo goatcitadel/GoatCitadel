@@ -2292,6 +2292,22 @@
       "maxDependencyMemberAccesses": 5,
       "reason": "Canonical focused prompt-pack run/test and indexed assessment reads extracted from the existing service; default reads, generation policy and missing/foreign rejection remain unchanged.",
       "evidence": "Prepared owner-specific proposal .tmp/architecture-six-owner-repair-proposal-20261014/revision-5; focused canonical artifact/route/report tests, Gateway typecheck and named architecture gate are required before acceptance."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/llm-provider-bedrock.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 4,
+      "reason": "New Amazon Bedrock Converse provider adapter owns request mapping, SigV4/bearer auth and response adaptation behind the existing LlmProviderAdapterHost port, mirroring the Anthropic adapter; it measures three host accesses (request target and tracked JSON dispatch) with one reserved for the streaming dispatch.",
+      "evidence": "apps/gateway/src/services/llm-provider-bedrock.test.ts covers payload mapping, SigV4 and bearer headers, response/tool-use mapping, error mapping, region parsing and malformed credentials; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/llm-provider-bedrock-stream.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 2,
+      "reason": "Amazon Bedrock ConverseStream event-stream decoding and chunk adaptation kept in its own helper beside the Bedrock adapter so the adapter stays focused; at most the tracked JSON dispatch and request target reach the adapter host.",
+      "evidence": "Added with the Bedrock adapter for the follow-up ConverseStream task in the same branch; focused stream tests and Gateway typecheck are required before acceptance."
     }
   ]
 }
