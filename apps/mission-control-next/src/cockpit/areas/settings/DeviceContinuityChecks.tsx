@@ -48,10 +48,10 @@ export function DeviceContinuityChecks() {
   const [open, setOpen] = useState(false);
   return (
     <details
-      className="mt-4 rounded-lg border border-line bg-sunken p-4"
+      className="mt-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary className="min-h-11 cursor-pointer font-display text-base font-semibold text-fg">
+      <summary className="min-h-11 cursor-pointer text-base font-semibold text-fg">
         Desktop and mobile continuity
       </summary>
       {open ? (

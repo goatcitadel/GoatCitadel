@@ -70,7 +70,7 @@ export function ApprovalSettlement({
   const settled = state?.replay.approval ?? approval;
   const resolution = approvalResolutionLine(settled);
   return (
-    <section aria-label="Decision and follow-on work" className="space-y-2 rounded border border-line p-3">
+    <section aria-label="Decision and follow-on work" className="space-y-2 border-t border-line-subtle pt-3">
       <p role="status">{approvalDecisionMessage(settled, state?.replay.effects)}</p>
       {resolution ? <p className="text-fg-secondary">{resolution}</p> : null}
       {state ? (

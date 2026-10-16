@@ -95,8 +95,8 @@ function LibraryRemindersContent({ workspaceId, note }: { workspaceId: string; n
       (item) => item.workspaceId === workspaceId && (status === "all" || item.status === status),
     ) ?? [];
   return (
-    <section className="grid gap-3 rounded-lg border border-line p-3" aria-label="Reminders">
-      <h2 className="font-display text-lg text-fg">Reminders</h2>
+    <section className="grid gap-3 border-t border-line-subtle pt-4" aria-label="Reminders">
+      <h2 className="text-base font-semibold text-fg">Reminders</h2>
       {query.isPending ? <p role="status">Loading reminders…</p> : null}
       {query.error ? <Callout tone="error">{describeApiError(query.error).summary}</Callout> : null}
       {notice ? <Callout tone={notice.error ? "error" : "info"}>{notice.text}</Callout> : null}

@@ -61,6 +61,7 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   canonicalJsonString,
+  describeAwsAuthModeApiStyleMismatch,
   ExternalServiceError,
   findProviderTemplate,
   inferProviderForModelId,
@@ -569,6 +570,19 @@ export class LlmService {
       const submittedApiKeyValue = input.upsertProvider.apiKey?.trim();
       const submittedApiKey =
         isCodexOAuthProvider || submittedApiKeyValue === SECRET_REDACTION_MARKER ? undefined : submittedApiKeyValue;
+      // Validate the resulting apiStyle/authMode pairing before any credential is written.
+      const resolvedApiStyle = normalizeProviderApiStyle(
+        input.upsertProvider.providerId,
+        input.upsertProvider.apiStyle ?? existing?.apiStyle,
+      );
+      const resolvedAuthMode =
+        input.upsertProvider.authMode ??
+        existing?.authMode ??
+        defaultAuthModeForProvider(input.upsertProvider.providerId);
+      const authModeMismatch = describeAwsAuthModeApiStyleMismatch(resolvedApiStyle, resolvedAuthMode);
+      if (authModeMismatch) {
+        throw new Error(`Provider "${input.upsertProvider.providerId}": ${authModeMismatch}`);
+      }
       if (submittedApiKey) {
         this.setProviderApiKey(input.upsertProvider.providerId, submittedApiKey);
       }
@@ -580,18 +594,12 @@ export class LlmService {
           preserveProjectedProviderString(existing?.baseUrl, input.upsertProvider.baseUrl) ??
           existing?.baseUrl ??
           "http://127.0.0.1:1234/v1",
-        apiStyle: normalizeProviderApiStyle(
-          input.upsertProvider.providerId,
-          input.upsertProvider.apiStyle ?? existing?.apiStyle,
-        ),
+        apiStyle: resolvedApiStyle,
         defaultModel:
           input.upsertProvider.defaultModel ??
           existing?.defaultModel ??
           defaultModelForProvider(input.upsertProvider.providerId),
-        authMode:
-          input.upsertProvider.authMode ??
-          existing?.authMode ??
-          defaultAuthModeForProvider(input.upsertProvider.providerId),
+        authMode: resolvedAuthMode,
         apiKey: isCodexOAuthProvider
           ? undefined
           : submittedApiKey

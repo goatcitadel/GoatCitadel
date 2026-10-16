@@ -4,11 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { ConflictError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, PolicyViolationError } from "@goatcitadel/contracts";
 import { createDatabase, CronJobRepository, type DatabaseClient, type Storage } from "@goatcitadel/storage";
 import { CronAutomationService } from "../services/gateway/cron-automation-service.js";
 import { createTestCronSpecOwner } from "../services/gateway/cron-spec-owner.test-utils.js";
 import { dashboardRoutes } from "./dashboard.js";
+import { replyWithCronJobs } from "./dashboard-cron-citadel.js";
 
 describe("dashboard cron routes", () => {
   let app: FastifyInstance | null = null;
@@ -96,17 +97,40 @@ describe("dashboard cron routes", () => {
     const createCronJob = vi.fn(async (input: unknown) => input);
     const updateCronJob = vi.fn(async (_jobId: string, input: unknown) => input);
     app = Fastify();
-    app.addHook("preHandler", async request => { request.authActorId = "operator-real"; });
+    app.addHook("preHandler", async (request) => {
+      request.authActorId = "operator-real";
+    });
     app.decorate("services", { cron: { createCronJob, updateCronJob } } as never);
     await app.register(dashboardRoutes);
     const agentTurn = { prompt: "Read a work item", createdBy: { permissionProfileId: "operator-profile" } };
-    const good = await app.inject({ method: "POST", url: "/api/v1/cron/jobs", payload: {
-      jobId: "governed-read", name: "Governed read", action: "agent_turn", schedule: "0 12 * * * UTC", actionConfig: { agentTurn },
-    } });
+    const good = await app.inject({
+      method: "POST",
+      url: "/api/v1/cron/jobs",
+      payload: {
+        jobId: "governed-read",
+        name: "Governed read",
+        action: "agent_turn",
+        schedule: "0 12 * * * UTC",
+        actionConfig: { agentTurn },
+      },
+    });
     expect(good.statusCode, good.body).toBe(201);
-    expect(createCronJob).toHaveBeenCalledWith(expect.objectContaining({ actionConfig: { agentTurn: {
-      prompt: agentTurn.prompt, createdBy: { operatorId: "operator-real", authActorId: "operator-real", depth: 0, permissionProfileId: "operator-profile" },
-    } } }), { actorId: "operator-real", source: "authenticated_operator" });
+    expect(createCronJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionConfig: {
+          agentTurn: {
+            prompt: agentTurn.prompt,
+            createdBy: {
+              operatorId: "operator-real",
+              authActorId: "operator-real",
+              depth: 0,
+              permissionProfileId: "operator-profile",
+            },
+          },
+        },
+      }),
+      { actorId: "operator-real", source: "authenticated_operator" },
+    );
     for (const forged of [
       { ...agentTurn, createdBy: { ...agentTurn.createdBy, operatorId: "foreign" } },
       { ...agentTurn, createdBy: { ...agentTurn.createdBy, authActorId: "foreign" } },
@@ -114,21 +138,37 @@ describe("dashboard cron routes", () => {
       { ...agentTurn, commitment: { commitmentId: "foreign", revision: 1, materialSha256: "a".repeat(64) } },
       { ...agentTurn, creatorAuthority: { version: "cron.creator-authority.v1", actorId: "operator-real" } },
     ]) {
-      const response = await app.inject({ method: "PATCH", url: "/api/v1/cron/jobs/governed-read",
-        payload: { expectedRevision: 1, actionConfig: { agentTurn: forged } } });
+      const response = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/cron/jobs/governed-read",
+        payload: { expectedRevision: 1, actionConfig: { agentTurn: forged } },
+      });
       expect(response.statusCode, response.body).toBeGreaterThanOrEqual(400);
-      const creation = await app.inject({ method: "POST", url: "/api/v1/cron/jobs", payload: {
-        jobId: "forged-read", name: "Forged read", action: "agent_turn", schedule: "0 12 * * * UTC", actionConfig: { agentTurn: forged },
-      } });
+      const creation = await app.inject({
+        method: "POST",
+        url: "/api/v1/cron/jobs",
+        payload: {
+          jobId: "forged-read",
+          name: "Forged read",
+          action: "agent_turn",
+          schedule: "0 12 * * * UTC",
+          actionConfig: { agentTurn: forged },
+        },
+      });
       expect(creation.statusCode, creation.body).toBeGreaterThanOrEqual(400);
     }
     expect(createCronJob).toHaveBeenCalledTimes(1);
     expect(updateCronJob).not.toHaveBeenCalled();
-    const historical = await app.inject({ method: "PATCH", url: "/api/v1/cron/jobs/governed-read",
-      payload: { expectedRevision: 1, name: "Renamed" } });
+    const historical = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/cron/jobs/governed-read",
+      payload: { expectedRevision: 1, name: "Renamed" },
+    });
     expect(historical.statusCode, historical.body).toBe(200);
-    expect(updateCronJob).toHaveBeenCalledWith("governed-read", { name: "Renamed" }, 1,
-      { actorId: "operator-real", source: "authenticated_operator" });
+    expect(updateCronJob).toHaveBeenCalledWith("governed-read", { name: "Renamed" }, 1, {
+      actorId: "operator-real",
+      source: "authenticated_operator",
+    });
   });
 
   it("rejects runtime telemetry in public create and update mutations", async () => {
@@ -160,12 +200,8 @@ describe("dashboard cron routes", () => {
     expect(updateCronJob).not.toHaveBeenCalled();
   });
 
-  it("returns conflict when no_agent creation is disabled by the runtime gate", async () => {
-    const createCronJob = vi.fn(() => {
-      throw new Error(
-        "no_agent cron execution is experimental and disabled by default. Set GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON=true only for local, explicitly governed experiments.",
-      );
-    });
+  it("accepts no_agent creation without any runtime env gate", async () => {
+    const createCronJob = vi.fn((input: Record<string, unknown>) => ({ ...input, revision: 1 }));
 
     app = Fastify();
     app.decorate("services", { cron: { createCronJob } } as never);
@@ -183,10 +219,8 @@ describe("dashboard cron routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({
-      error: expect.stringContaining("GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON"),
-    });
+    expect(response.statusCode, response.body).toBe(201);
+    expect(createCronJob).toHaveBeenCalledTimes(1);
   });
 
   it("updates cron fields without schema rejection", async () => {
@@ -568,6 +602,104 @@ describe("dashboard cron routes", () => {
       rawJob.revision,
     );
     expect(rawJob.actionConfig.endpoint).toContain("cron-roundtrip-secret");
+  });
+
+  describe("citadel-scoped listing", () => {
+    const items = [{ jobId: "a", revision: 1 }];
+
+    async function listWith(listCronJobs: ReturnType<typeof vi.fn>, url = "/api/v1/cron/jobs?citadelId=ws-a") {
+      app = Fastify();
+      app.decorate("services", { cron: { listCronJobs } } as never);
+      await app.register(dashboardRoutes);
+      return app.inject({ method: "GET", url });
+    }
+
+    it("returns scoped items when allowed", async () => {
+      const fn = vi.fn(async () => items);
+      const response = await listWith(fn);
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ items });
+      expect(fn).toHaveBeenCalledWith({ citadelId: "ws-a", accessClass: "operator" });
+    });
+
+    it("fails closed with 403 when the route has no tracked access class", async () => {
+      const listCronJobs = vi.fn(async () => {
+        throw new PolicyViolationError({ message: "Citadel ws-a is outside your Watchtower access scope." });
+      });
+      const send = vi.fn();
+      const reply = { code: vi.fn(() => ({ send })), send } as never;
+      const request = { query: { citadelId: "ws-a" }, routeOptions: { config: {} } } as never;
+      await replyWithCronJobs({ listCronJobs } as never, request, reply);
+      expect(listCronJobs).toHaveBeenCalledWith({ citadelId: "ws-a", accessClass: undefined });
+      expect((reply as { code: ReturnType<typeof vi.fn> }).code).toHaveBeenCalledWith(403);
+    });
+
+    it("returns 404 for an unknown citadel", async () => {
+      const response = await listWith(
+        vi.fn(async () => {
+          throw new NotFoundError("Citadel ws-a not found.");
+        }),
+      );
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toEqual({ error: "Citadel ws-a not found." });
+    });
+
+    it("returns 403 when outside the access scope", async () => {
+      const response = await listWith(
+        vi.fn(async () => {
+          throw new PolicyViolationError({ message: "Citadel ws-a is outside your Watchtower access scope." });
+        }),
+      );
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({ error: "Citadel ws-a is outside your Watchtower access scope." });
+    });
+
+    it("keeps the unscoped list unchanged without citadelId", async () => {
+      const fn = vi.fn(async () => [{ jobId: "all" }]);
+      const response = await listWith(fn, "/api/v1/cron/jobs");
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ items: [{ jobId: "all" }] });
+      expect(fn).toHaveBeenCalledWith();
+    });
+
+    it("builds the access scope server-side per access class", async () => {
+      const listByCitadel = vi.fn(async () => items);
+      const getCitadel = vi.fn(async (id: string) => (id === "ws-a" ? { citadelId: id } : undefined));
+      const service = new CronAutomationService({
+        storage: { citadels: { getCitadel }, cronJobs: { listByCitadel } },
+      } as never);
+      expect(await service.listCronJobs({ citadelId: "ws-a", accessClass: "operator" })).toEqual(items);
+      expect(listByCitadel).toHaveBeenCalledWith({ citadelId: "ws-a", readableCitadelIds: "all" });
+      await expect(service.listCronJobs({ citadelId: "ws-a", accessClass: "device" })).rejects.toThrow(
+        /outside your Watchtower/,
+      );
+      await expect(service.listCronJobs({ citadelId: "ws-a", accessClass: undefined })).rejects.toThrow(
+        /outside your Watchtower/,
+      );
+      await expect(service.listCronJobs({ citadelId: "nope", accessClass: "operator" })).rejects.toThrow(/not found/);
+      expect(listByCitadel).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses an out-of-scope caller before revealing whether the citadel exists", async () => {
+      const listByCitadel = vi.fn(async () => items);
+      const getCitadel = vi.fn(async (id: string) => (id === "ws-a" ? { citadelId: id } : undefined));
+      const service = new CronAutomationService({
+        storage: { citadels: { getCitadel }, cronJobs: { listByCitadel } },
+      } as never);
+      for (const accessClass of ["device", undefined]) {
+        await expect(service.listCronJobs({ citadelId: "nope", accessClass })).rejects.toBeInstanceOf(
+          PolicyViolationError,
+        );
+        await expect(service.listCronJobs({ citadelId: "ws-a", accessClass })).rejects.toBeInstanceOf(
+          PolicyViolationError,
+        );
+      }
+      expect(getCitadel).not.toHaveBeenCalled();
+      await expect(service.listCronJobs({ citadelId: "nope", accessClass: "operator" })).rejects.toBeInstanceOf(
+        NotFoundError,
+      );
+      expect(listByCitadel).not.toHaveBeenCalled();
+    });
   });
 });
 

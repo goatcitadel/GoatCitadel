@@ -6,6 +6,7 @@ import {
   BudgetConfigSchema,
   CronJobSchema,
   CronJobsConfigSchema,
+  describeAwsAuthModeApiStyleMismatch,
   LlmConfigFileSchema,
   ToolPolicyConfigSchema,
 } from "./config-schemas.js";
@@ -292,6 +293,38 @@ describe("LlmConfigFileSchema", () => {
       ],
     });
     expect(result.success).toBe(true);
+  });
+
+  it.each(["aws-sigv4", "aws-bedrock-api-key"])(
+    "rejects authMode %s on a non-Bedrock apiStyle with a clear message",
+    (authMode) => {
+      const result = LlmConfigFileSchema.safeParse({
+        activeProviderId: "custom",
+        providers: [
+          {
+            providerId: "custom",
+            label: "Custom",
+            baseUrl: "https://example.com/v1",
+            apiStyle: "openai-chat-completions",
+            defaultModel: "m",
+            authMode,
+          },
+        ],
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0]?.message).toMatch(/only valid with apiStyle "bedrock-messages"/);
+        expect(result.error.issues[0]?.path).toEqual(["providers", 0, "authMode"]);
+      }
+    },
+  );
+
+  it("describeAwsAuthModeApiStyleMismatch only flags AWS modes off Bedrock", () => {
+    expect(describeAwsAuthModeApiStyleMismatch("anthropic-messages", "aws-sigv4")).toBeDefined();
+    expect(describeAwsAuthModeApiStyleMismatch(undefined, "aws-bedrock-api-key")).toBeDefined();
+    expect(describeAwsAuthModeApiStyleMismatch("bedrock-messages", "aws-sigv4")).toBeUndefined();
+    expect(describeAwsAuthModeApiStyleMismatch("openai-chat-completions", "api-key")).toBeUndefined();
+    expect(describeAwsAuthModeApiStyleMismatch("openai-chat-completions", undefined)).toBeUndefined();
   });
 
   it("rejects when activeProviderId is missing", () => {

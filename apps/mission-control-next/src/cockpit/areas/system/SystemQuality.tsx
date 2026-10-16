@@ -7,6 +7,8 @@ import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/Tabs";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 import { QualityGates } from "./quality/QualityGates";
 import { QualityEvaluations } from "./quality/QualityEvaluations";
 import { QualityDesign } from "./quality/QualityDesign";
@@ -29,18 +31,16 @@ export function SystemQuality() {
   });
   const snapshot = proof.isError ? undefined : proof.data;
   return (
-    <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-semibold text-fg">Quality</h1>
-          <p className="text-sm text-fg-secondary">
-            Installation-wide stored evidence. Refresh and exports do not run evaluations.
-          </p>
-        </div>
-        <Button size="sm" disabled={proof.isFetching} onClick={() => void proof.refetch()}>
-          <RefreshCw aria-hidden="true" className="size-4" /> Refresh
-        </Button>
-      </header>
+    <section className={AREA_PAGE}>
+      <AreaHeader
+        title="Quality"
+        description="Installation-wide stored evidence. Refresh and exports do not run evaluations."
+        actions={
+          <Button size="sm" disabled={proof.isFetching} onClick={() => void proof.refetch()}>
+            <RefreshCw aria-hidden="true" className="size-4" /> Refresh
+          </Button>
+        }
+      />
       {proof.isLoading ? (
         <p role="status" className="text-sm text-fg-muted">
           Loading quality proof…
@@ -55,7 +55,7 @@ export function SystemQuality() {
       ) : null}
       {snapshot ? (
         <>
-          <div className="space-y-1 rounded-md border border-line bg-sunken p-3 text-sm text-fg-secondary">
+          <div className="space-y-1 text-sm text-fg-secondary">
             <p>Evidence observed {qualityTimestamp(snapshot.generatedAt)}.</p>
             <p>{snapshot.metricScope.note}</p>
             <QualityNotes items={snapshot.warnings.filter((item) => item !== snapshot.metricScope.note)} />
@@ -81,7 +81,7 @@ export function SystemQuality() {
             </QualityGlobalWarnings.Provider>
           </Tabs>
           {snapshot.nextChecks.length ? (
-            <details className="rounded-lg border border-line bg-raised p-4">
+            <details className="border-t border-line-subtle pt-4">
               <summary className="cursor-pointer text-sm font-semibold text-fg">Recorded next checks</summary>
               <ul className="mt-3 space-y-2">
                 {snapshot.nextChecks.map((check, index) => (

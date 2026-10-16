@@ -97,11 +97,7 @@ export function WorkTaskBulkActions({
     setOutcome(result.message);
   };
   return (
-    <div
-      className="grid min-w-0 gap-2 rounded-lg border border-line bg-raised p-3"
-      aria-label="Task actions"
-      role="group"
-    >
+    <div className="grid min-w-0 gap-2 border-y border-line-subtle py-3" aria-label="Task actions" role="group">
       <p className="text-sm text-fg">
         <strong>{count(selected.length)} selected.</strong> Runs are not affected by task actions.
       </p>

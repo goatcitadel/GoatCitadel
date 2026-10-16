@@ -69,7 +69,7 @@ export function WorkTaskCreate({
   return (
     <section aria-label="New task" className="grid gap-3 rounded-lg border border-line-strong bg-raised p-4">
       <div>
-        <h2 className="font-display text-lg font-semibold text-fg">New task</h2>
+        <h2 className="text-base font-semibold text-fg">New task</h2>
         <p className="text-sm text-fg-secondary">
           Add an operator task to this workspace. Creating a task does not start a run.
         </p>

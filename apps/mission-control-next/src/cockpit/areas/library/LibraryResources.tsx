@@ -25,6 +25,8 @@ import {
 import { TimeText } from "../../ui/TimeText";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 
 const TITLES = LIBRARY_SECTION_LABELS;
 export function LibraryResources({
@@ -106,32 +108,27 @@ function LibraryResourceDirectory({
     setCursors([undefined]);
   }
   return (
-    <section className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-3 sm:p-5" aria-label={`Library ${TITLES[kind]}`}>
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-semibold text-fg">{TITLES[kind]}</h1>
-          <p className="mt-1 text-sm text-fg-secondary">
-            {kind === "files"
-              ? "Installation shared files. Workspace selection does not change this file root."
-              : `Read-only ${TITLES[kind].toLowerCase()} inspection for the selected workspace.`}
-          </p>
-          {kind === "memory" ? (
-            <p className="mt-1 text-xs text-fg-muted">
-              The memory owner also includes globally visible records. Scope is labeled on each item.
-            </p>
-          ) : null}
-        </div>
-        <Button
-          size="sm"
-          disabled={resourceQuery.isFetching || (kind === "artifacts" && !sourceAvailable)}
-          onClick={() => {
-            reset();
-            void resourceQuery.refetch();
-          }}
-        >
-          Refresh {TITLES[kind].toLowerCase()}
-        </Button>
-      </header>
+    <section className={AREA_PAGE} aria-label={`Library ${TITLES[kind]}`}>
+      <AreaHeader
+        title={TITLES[kind]}
+        description={
+          kind === "files"
+            ? "Installation shared files. Workspace selection does not change this file root."
+            : `Read-only ${TITLES[kind].toLowerCase()} inspection for the selected workspace.`
+        }
+        actions={
+          <Button
+            size="sm"
+            disabled={resourceQuery.isFetching || (kind === "artifacts" && !sourceAvailable)}
+            onClick={() => {
+              reset();
+              void resourceQuery.refetch();
+            }}
+          >
+            Refresh {TITLES[kind].toLowerCase()}
+          </Button>
+        }
+      />
       {artifactId ? (
         <LibraryLinkedArtifact
           key={JSON.stringify([access.identity, projectId, artifactId])}
@@ -262,9 +259,9 @@ function LibraryResourceDirectory({
         <>
           <p className="text-xs text-fg-muted">{data.coverage}</p>
           {data.items.length ? (
-            <ul className="grid gap-2">
+            <ul className="divide-y divide-line-subtle">
               {data.items.map((resource) => (
-                <li key={resourceId(resource)} className="rounded-lg border border-line bg-raised p-3">
+                <li key={resourceId(resource)} className="py-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <h2 className="break-words text-sm font-semibold text-fg">{resourceTitle(resource)}</h2>

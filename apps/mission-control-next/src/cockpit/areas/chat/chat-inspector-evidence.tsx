@@ -28,11 +28,11 @@ export function SourcesPanel({ turn }: { turn: ChatThreadTurnRecord | undefined 
   if (!turn.citations.length)
     return <p className="text-sm text-fg-muted">No sources were recorded for this response.</p>;
   return (
-    <ol className="space-y-2">
+    <ol className="divide-y divide-line-subtle">
       {turn.citations.map((source: ChatCitationRecord) => {
         const href = safeSourceHref(source.url);
         return (
-          <li key={source.citationId} className="rounded-md border border-line bg-raised p-3 text-sm">
+          <li key={source.citationId} className="py-3 text-sm">
             <p className="mb-1 text-xs text-fg-muted">{presentSourceType(source.sourceType)}</p>
             {href ? (
               <a
@@ -61,13 +61,13 @@ export function renderInspectorRunEvidence(
   return run ? (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="font-display text-md font-semibold text-fg">{run.label}</h3>
+        <h3 className="text-md font-semibold text-fg">{run.label}</h3>
         <StatusBadge status={presentDelegationRunStatus(run.status)} />
       </div>
       <p className="text-sm text-fg-secondary">{run.objective}</p>
-      <ol className="space-y-2">
+      <ol className="divide-y divide-line-subtle">
         {run.steps.map((step) => (
-          <li key={step.stepId} className="rounded-md border border-line bg-raised p-3">
+          <li key={step.stepId} className="py-3">
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm font-medium text-fg">{step.label ?? `Step ${step.index + 1}`}</span>
               <StatusBadge status={presentDelegationStepStatus(step.status)} />

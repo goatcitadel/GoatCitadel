@@ -1356,6 +1356,34 @@ describe("LlmService", () => {
     );
   });
 
+  it("rejects AWS auth modes on a non-Bedrock apiStyle at provider upsert", () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-4.1-mini",
+        },
+      ],
+    };
+    const secretStore = createNoopSecretStore();
+    const setKey = vi.spyOn(secretStore, "setProviderApiKey");
+    const service = new LlmService(config, process.env, { secretStore });
+
+    expect(() =>
+      service.updateRuntimeConfig({
+        upsertProvider: { providerId: "openai", authMode: "aws-sigv4", apiKey: "new-secret" },
+      }),
+    ).toThrow(/only valid with apiStyle "bedrock-messages"/);
+    expect(setKey).not.toHaveBeenCalled();
+    expect(service.listProviders().find((provider) => provider.providerId === "openai")?.authMode).not.toBe(
+      "aws-sigv4",
+    );
+  });
+
   it("preserves explicit apiStyle values when updating runtime config", () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",

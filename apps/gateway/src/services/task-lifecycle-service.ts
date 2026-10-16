@@ -71,7 +71,7 @@ interface AgenticControlMutationClaim {
     actorScope: string;
   };
   claimToken: string;
-  claimKind: "new" | "retry_after_failure" | "retry_after_stale_claim";
+  claimKind: "new" | "retry_after_failure" | "retry_after_stale_claim" | "redispatch_after_stale_send";
 }
 
 interface AgenticControlCommitOutcome {
@@ -1000,6 +1000,14 @@ export class TaskLifecycleService {
           claim.outcome === "in_progress"
             ? `Agentic control ${controlId} is already in progress.`
             : `Agentic control ${controlId} is completed without its durable activity receipt.`,
+      });
+    }
+    if (claim.outcome !== "claimed") {
+      // Agentic controls never mark a claim dispatched; fail closed if a
+      // dispatch-fenced outcome such as `unknown_after_send` ever appears.
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: `Agentic control ${controlId} has an unresolved claim (${claim.outcome}).`,
       });
     }
     const claimToken = claim.record.claimToken?.trim();

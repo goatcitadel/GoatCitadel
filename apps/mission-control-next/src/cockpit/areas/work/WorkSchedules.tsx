@@ -22,6 +22,8 @@ import { EMPTY_SCHEDULE_SETTINGS, scheduleSettingsInput } from "./ScheduleAdvanc
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 
 import { cockpitHref, readCockpitHistory, subscribeCockpitHistory } from "../../app/cockpit-history";
 import { readCockpitLocation } from "../../app/cockpit-back-guard";
@@ -242,30 +244,29 @@ export function WorkSchedules() {
   }
 
   return (
-    <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-semibold text-fg">Schedules</h1>
-          <p className="text-sm text-fg-secondary">Gateway-wide recurring jobs and their next run.</p>
-          <p className="mt-1 text-xs text-fg-muted">Schedules apply across workspaces.</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={schedules.isFetching || busy} onClick={() => void refresh()}>
-            <RefreshCw aria-hidden="true" className="size-4" /> Refresh
-          </Button>
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={() => {
-              operations.invalidate();
-              setCreateOpen(true);
-              setNotice(null);
-            }}
-          >
-            New schedule
-          </Button>
-        </div>
-      </header>
+    <section className={AREA_PAGE}>
+      <AreaHeader
+        title="Schedules"
+        description="Gateway-wide recurring jobs and their next run. Schedules apply across workspaces."
+        actions={
+          <>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => {
+                operations.invalidate();
+                setCreateOpen(true);
+                setNotice(null);
+              }}
+            >
+              New schedule
+            </Button>
+            <Button size="sm" disabled={schedules.isFetching || busy} onClick={() => void refresh()}>
+              <RefreshCw aria-hidden="true" className="size-4" /> Refresh
+            </Button>
+          </>
+        }
+      />
       {message ? (
         <WorkScheduleNotice message={message} runHref={runLink?.notice === message ? runLink.href : undefined} />
       ) : null}

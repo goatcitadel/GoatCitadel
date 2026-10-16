@@ -7,9 +7,9 @@ export function LlamaSetupSettings({ workspaceId }: { workspaceId?: string }) {
     <section
       id="llamacpp-setup"
       aria-labelledby="llamacpp-setup-title"
-      className="mt-4 space-y-3 rounded-lg border border-line bg-sunken p-4"
+      className="mt-4 space-y-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
     >
-      <h3 id="llamacpp-setup-title" className="font-display text-base font-semibold text-fg">
+      <h3 id="llamacpp-setup-title" className="text-base font-semibold text-fg">
         Set up llama.cpp
       </h3>
       {workspaceId ? (
@@ -17,9 +17,15 @@ export function LlamaSetupSettings({ workspaceId }: { workspaceId?: string }) {
           cockpit
           buttonComponent={Button}
           workspaceId={workspaceId}
-          renderApprovalAction={(plan, pending) => <SettingsApprovalOwnerAction
-            plan={plan} owner="llama-setup" workspaceId={workspaceId} disabled={pending} label="Open approval details"
-          />}
+          renderApprovalAction={(plan, pending) => (
+            <SettingsApprovalOwnerAction
+              plan={plan}
+              owner="llama-setup"
+              workspaceId={workspaceId}
+              disabled={pending}
+              label="Open approval details"
+            />
+          )}
         />
       ) : (
         <p role="status">Select a workspace to record a setup plan and review its approval.</p>

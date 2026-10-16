@@ -17,8 +17,8 @@ import {
 
 function EvidenceSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-lg border border-line bg-raised p-4">
-      <h2 className="font-display text-lg font-semibold text-fg">{title}</h2>
+    <section className="border-t border-line-subtle pt-4">
+      <h2 className="text-base font-semibold text-fg">{title}</h2>
       <div className="mt-3">{children}</div>
     </section>
   );

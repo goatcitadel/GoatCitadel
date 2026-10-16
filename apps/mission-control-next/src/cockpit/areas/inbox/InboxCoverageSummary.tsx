@@ -1,28 +1,23 @@
 import type { OperatorInboxResponse } from "@goatcitadel/contracts";
-import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { plural, presentTime } from "@goatcitadel/mission-control-shared/content/format";
+import { EmptyState } from "../../ui/EmptyState";
 import { inboxCountIsExact, inboxKnownCount, inboxReadGaps } from "./inbox-presentation";
 
 function summaryLine(projection: OperatorInboxResponse): string {
   const total = inboxKnownCount(projection);
-  const hasGap = inboxReadGaps(projection).length > 0;
-  if (total.known === 0) {
-    return hasGap
-      ? "Nothing found, but some sources couldn't be checked completely."
-      : "Nothing needs your attention in the checked sources.";
-  }
   return inboxCountIsExact(projection, total.complete)
     ? `${plural(total.known, "item")} in this workspace.`
     : `${plural(total.known, "known item")}; more may be outside this view.`;
 }
 
-export function InboxCoverageSummary({ projection }: { projection: OperatorInboxResponse }) {
+/** Which sources were not fully read, and which have a declared scope. Plain disclosures, no box. */
+function InboxCoverageDetails({ projection }: { projection: OperatorInboxResponse }) {
   const gaps = inboxReadGaps(projection);
   const scopeNotes = projection.coverage.filter(
     (source) => source.state === "limited" || source.state === "not_enabled",
   );
   return (
-    <div className="rounded-lg border border-line bg-raised p-3 text-sm text-fg-secondary">
-      {summaryLine(projection)}
+    <>
       {gaps.length > 0 ? (
         <details className="mt-2 text-xs text-fg-muted">
           <summary className="cursor-pointer font-medium text-fg-secondary">
@@ -45,6 +40,41 @@ export function InboxCoverageSummary({ projection }: { projection: OperatorInbox
           </ul>
         </details>
       ) : null}
+    </>
+  );
+}
+
+/** One line of coverage above the groups, then the coverage disclosures. Not a card: the page is the card. */
+export function InboxCoverageSummary({ projection }: { projection: OperatorInboxResponse }) {
+  return (
+    <div className="text-sm text-fg-secondary">
+      {summaryLine(projection)}
+      <InboxCoverageDetails projection={projection} />
+    </div>
+  );
+}
+
+/**
+ * The one empty state when no group has anything (IN-10). It says "all caught up" only when every expected source
+ * was read; otherwise it says that some sources could not be checked.
+ */
+export function InboxEmptyState({ projection }: { projection: OperatorInboxResponse }) {
+  const checked = presentTime(projection.generatedAt)?.text;
+  const lastChecked = checked ? ` Last checked ${checked}.` : "";
+  const hasGap = inboxReadGaps(projection).length > 0;
+  return (
+    <div>
+      <EmptyState
+        title={hasGap ? "Some sources couldn't be checked" : "You're all caught up"}
+        description={
+          hasGap
+            ? `Nothing found, but some sources couldn't be checked completely, so items may be missing.${lastChecked}`
+            : `Nothing needs your attention in the checked sources. Decisions, proposals and updates appear here when work needs you.${lastChecked}`
+        }
+      />
+      <div className="mx-auto w-fit max-w-md">
+        <InboxCoverageDetails projection={projection} />
+      </div>
     </div>
   );
 }

@@ -89,7 +89,7 @@ export function BrowserSessionDetail({
   return (
     <section className="grid min-w-0 grid-cols-1 gap-3" aria-label={`Browser session ${record.label}`}>
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="font-display text-lg font-semibold wrap-anywhere">{record.label}</h2>
+        <h2 className="text-lg font-semibold wrap-anywhere">{record.label}</h2>
         <StatusBadge
           status={
             record.status === "active"
@@ -137,10 +137,10 @@ export function BrowserSessionDetail({
         />
       ) : (
         <section
-          className="grid min-w-0 grid-cols-1 gap-2 rounded-lg border border-line p-3"
+          className="grid min-w-0 grid-cols-1 gap-2 border-t border-line-subtle pt-3"
           aria-label="Event timeline"
         >
-          <h3 className="font-display text-md font-semibold">Event timeline</h3>
+          <h3 className="text-base font-semibold">Event timeline</h3>
           <p className="text-sm text-fg-secondary">
             Grant changes and policy blocks. Browser state values stay hidden.
           </p>
@@ -255,8 +255,8 @@ function SessionPosture({
   }
 
   return (
-    <section className="grid min-w-0 grid-cols-1 gap-2 rounded-lg border border-line p-3" aria-label="Session overview">
-      <h3 className="font-display text-md font-semibold">Session overview</h3>
+    <section className="grid min-w-0 grid-cols-1 gap-2 border-t border-line-subtle pt-3" aria-label="Session overview">
+      <h3 className="text-base font-semibold">Session overview</h3>
       <dl className="grid min-w-0 grid-cols-1 gap-2 text-sm sm:grid-cols-2">
         <div>
           <dt className="font-medium">Workspace</dt>

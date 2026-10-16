@@ -35,7 +35,7 @@ export function InboxItemCard({
             {inboxItemKindLabel(item.kind)} · <TimeText value={item.createdAt} />
             {selected ? <span className="font-semibold text-fg"> · Selected</span> : null}
           </p>
-          <h3 className="mt-1 font-display text-md font-semibold text-fg">{item.title}</h3>
+          <h3 className="mt-1 text-md font-semibold text-fg">{item.title}</h3>
           <p className="mt-1 text-sm text-fg-secondary">{item.summary}</p>
         </div>
         {item.riskLevel ? <StatusBadge status={presentRiskLevel(item.riskLevel)} /> : null}

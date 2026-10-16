@@ -2368,6 +2368,14 @@
       "maxDependencyMemberAccesses": 0,
       "reason": "WS5 channel-parity program: Google Chat app inbound helpers: Google-signed bearer JWT verification (RS256, kid certificate selection, issuer/audience/expiry/email checks), a per-registration certificate cache, the fixed-host certificate fetcher and event normalization for the classic and Workspace add-on shapes. Pure functions with no adapter host or injected dependency members; the route owns the HTTP boundary and GatewayService gains nothing.",
       "evidence": "apps/gateway/src/services/google-chat-webhook.test.ts covers valid project-number and endpoint-url tokens, bad audience/issuer/email, expiry and future iat with 60 s skew, unknown kid, alg none and HS256, tampered payload, missing and malformed tokens, cache max-age and failure handling, and classic/add-on/bot/lifecycle normalization; apps/gateway/src/routes/integrations.google-chat-webhook.test.ts covers the route, replay idempotency and the forced default-deny sender gate; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/tool-path-session-scope.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 10,
+      "reason": "Reviewed C0 extraction from GatewayService (operator write-roots program, PR2a, plan approved 2026-10-15): resolveToolRequestPathsForSession moved verbatim so GatewayService shrinks instead of growing. It reads three narrowed storage repositories (session project, project, delegation steps) plus root, workspace and the live sandbox config, and adds the configured write roots for ordinary sessions only.",
+      "evidence": "2026-10-16: tool-path-resolution.test.ts covers absolute writes accepted inside write roots and rejected outside, relative links into and out of write roots, cwd not widened, ordinary vs delegated session scope; tool-path-resolution.loop20 and gateway-service.loop26-large-services-a suites pass; repository counter measures 10 dependency accesses and 0 host callbacks."
     }
   ]
 }

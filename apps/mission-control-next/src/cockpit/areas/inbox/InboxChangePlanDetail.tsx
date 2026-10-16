@@ -27,7 +27,7 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
   return (
     <section aria-label="Current change plan" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="font-display font-semibold text-fg">Current change plan</h3>
+        <h3 className="font-semibold text-fg">Current change plan</h3>
         <Button
           size="sm"
           disabled={query.isFetching || pending || !item.source.planId}

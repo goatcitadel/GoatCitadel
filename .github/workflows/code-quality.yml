@@ -61,6 +61,8 @@ jobs:
           node scripts/check-mission-control-next-danger-actions.mjs
           node --test scripts/check-mission-control-next-raw-values.test.mjs
           node scripts/check-mission-control-next-raw-values.mjs
+          node --test scripts/check-mission-control-next-page-anatomy.test.mjs
+          node scripts/check-mission-control-next-page-anatomy.mjs
           node scripts/check-mission-control-next-token-drift.mjs
           node --test scripts/check-mission-control-next-contrast.test.mjs
           node scripts/check-mission-control-next-contrast.mjs

@@ -35,6 +35,7 @@ import {
   type McpRequesterScopedTurnContextHandle,
 } from "./mcp-requester-resolution-service.js";
 import type { ChatTurnCapabilityProfileResolveDeps } from "./chat-turn-capability-profile-service.js";
+import { readLiveRequesterScopedServerSnapshot } from "./mcp-requester-runtime-composition.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import {
   composeMcpRequesterScopedRuntime,
@@ -1054,6 +1055,37 @@ describe("composeMcpRequesterScopedRuntime (HX-415 slice 7d composed E2E)", () =
     );
     expect(flippedStatic.ok).toBe(false);
     expect(flippedStatic.output).toMatchObject({ requesterScoped: true, reasonCode: "server_not_callable" });
+    expect(captured).toHaveLength(0);
+  });
+
+  it("refuses requester-scoped sse records: the isolated transport speaks Streamable HTTP only", async () => {
+    const sseRecord = { ...requesterScopedServerRecord(), transport: "sse" } as McpServerRecord;
+    expect(
+      await readLiveRequesterScopedServerSnapshot({ listMcpServers: async () => [sseRecord] }, sseRecord.serverId),
+    ).toBeUndefined();
+    expect(
+      await readLiveRequesterScopedServerSnapshot(
+        { listMcpServers: async () => [requesterScopedServerRecord()] },
+        "tenant-mcp",
+      ),
+    ).toBeDefined();
+
+    const harness = buildHarness();
+    const profile = profileRecordFor("operator-a");
+    harness.profiles.set(profile.profileId, profile);
+    expect(await harness.runtime.resolveMcpRequesterResolutionBinding(freezeHookFor(profile))).toBeDefined();
+    captured = [];
+
+    const requesterServer = harness.servers[0] as McpServerRecord;
+    (harness.servers[0] as { transport: string }).transport = "sse";
+    const effectDispatch = vi.fn();
+    const refused = await harness.runtime.requesterScopedMcpDispatch.invoke(
+      { server: requesterServer, toolName: "search", mcpRequesterTurnContext: harness.contextFor(profile) },
+      { effectDispatch },
+    );
+    expect(refused.ok).toBe(false);
+    expect(refused.output).toMatchObject({ requesterScoped: true, reasonCode: "server_not_callable" });
+    expect(effectDispatch).not.toHaveBeenCalled();
     expect(captured).toHaveLength(0);
   });
 

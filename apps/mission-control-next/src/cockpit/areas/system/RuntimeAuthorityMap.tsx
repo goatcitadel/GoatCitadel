@@ -82,13 +82,10 @@ export function RuntimeAuthorityMap({ workspaceId }: { workspaceId: string }) {
   const items = projection.data?.items ?? [];
   const attention = items.filter((item) => ATTENTION_POSTURES.has(item.posture)).length;
   return (
-    <section
-      aria-labelledby="runtime-authority-title"
-      className="mt-4 space-y-3 rounded-lg border border-line bg-sunken p-4"
-    >
+    <section aria-labelledby="runtime-authority-title" className="space-y-3 border-t border-line-subtle pt-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="runtime-authority-title" className="font-display text-base font-semibold text-fg">
+          <h2 id="runtime-authority-title" className="text-base font-semibold text-fg">
             Runtime authority map
           </h2>
           <p className="mt-1 text-sm text-fg-secondary">

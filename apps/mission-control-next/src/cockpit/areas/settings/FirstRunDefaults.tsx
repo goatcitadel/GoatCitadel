@@ -36,9 +36,9 @@ export function FirstRunDefaults({ workspaceId }: { workspaceId: string }) {
   return (
     <section
       aria-label="Advanced first-run defaults"
-      className="grid gap-3 rounded-lg border border-line bg-raised p-4"
+      className="grid gap-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
     >
-      <h2 className="font-display text-lg font-semibold text-fg">First-run defaults</h2>
+      <h2 className="text-lg font-semibold text-fg">First-run defaults</h2>
       <p className="text-sm text-fg-secondary">{ONBOARDING_DEFAULTS_CONSEQUENCE}</p>
       {query.isLoading ? <p role="status">Loading current defaults…</p> : null}
       {query.isError ? <p role="alert">Current defaults could not be read.</p> : null}

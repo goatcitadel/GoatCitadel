@@ -80,7 +80,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
         >
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <h3 className="font-display font-semibold text-fg">Approval needed</h3>
+              <h3 className="font-semibold text-fg">Approval needed</h3>
               <p className="mt-1 text-fg-secondary">{presentApprovalAction(approval.toolName, approval.kind)}</p>
             </div>
             {approval.riskLevel ? <RiskBadge risk={approval.riskLevel} /> : null}

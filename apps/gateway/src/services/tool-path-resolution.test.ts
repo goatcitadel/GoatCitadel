@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ValidationError, type ToolInvokeRequest } from "@goatcitadel/contracts";
+import { ValidationError, type ToolInvokeRequest, type ToolPolicyConfig } from "@goatcitadel/contracts";
 import { resolveProjectRootForToolContext, resolveToolRequestPaths } from "./tool-path-resolution.js";
+import { resolveToolRequestPathsForSessionScope, type SessionToolPathScopeDeps } from "./tool-path-session-scope.js";
 
 const tempRoots: string[] = [];
 
@@ -415,6 +416,136 @@ describe("resolveToolRequestPaths", () => {
         workspaceRoot,
       }),
     ).toThrow(ValidationError);
+  });
+});
+
+describe("resolveToolRequestPaths write roots", () => {
+  function writeRequest(toolName: string, args: Record<string, unknown>): ToolInvokeRequest {
+    return { toolName, args, agentId: "agent", sessionId: "session" };
+  }
+
+  it("accepts absolute write and delete targets inside configured write roots", async () => {
+    const { workspaceRoot, outsideRoot } = await createWorkspaceFixture();
+    const target = path.join(outsideRoot, "stale.tmp");
+
+    for (const toolName of ["fs.write", "fs.delete"]) {
+      const resolved = resolveToolRequestPaths(writeRequest(toolName, { path: target }), {
+        workspaceRoot,
+        writeRoots: [outsideRoot],
+      });
+      expect(resolved.args.path).toBe(target);
+    }
+  });
+
+  it("still rejects absolute writes outside the workspace and every write root", async () => {
+    const { repoRoot, workspaceRoot, outsideRoot } = await createWorkspaceFixture();
+    const elsewhere = path.join(repoRoot, "elsewhere", "file.txt");
+    expect(() =>
+      resolveToolRequestPaths(writeRequest("fs.write", { path: elsewhere }), {
+        workspaceRoot,
+        writeRoots: [outsideRoot],
+      }),
+    ).toThrow(/outside the workspace boundary/);
+    expect(() =>
+      resolveToolRequestPaths(writeRequest("fs.write", { path: path.join(outsideRoot, "x.txt") }), { workspaceRoot }),
+    ).toThrow(/outside the workspace boundary/);
+  });
+
+  it("accepts a relative link from the workspace into a write root but not elsewhere", async () => {
+    const { workspaceRoot, outsideRoot, repoRoot } = await createWorkspaceFixture();
+    await createDirectoryLink(outsideRoot, path.join(workspaceRoot, "linked-root"));
+    const resolved = resolveToolRequestPaths(writeRequest("fs.write", { path: "linked-root/new.txt" }), {
+      workspaceRoot,
+      writeRoots: [outsideRoot],
+    });
+    expect(resolved.args.path).toBe(path.join(workspaceRoot, "linked-root", "new.txt"));
+
+    const otherDir = path.join(repoRoot, "other");
+    await fs.mkdir(otherDir, { recursive: true });
+    await createDirectoryLink(otherDir, path.join(workspaceRoot, "linked-other"));
+    expect(() =>
+      resolveToolRequestPaths(writeRequest("fs.write", { path: "linked-other/new.txt" }), {
+        workspaceRoot,
+        writeRoots: [outsideRoot],
+      }),
+    ).toThrow(ValidationError);
+  });
+
+  it("does not let write roots widen cwd resolution", async () => {
+    const { workspaceRoot, outsideRoot } = await createWorkspaceFixture();
+    await createDirectoryLink(outsideRoot, path.join(workspaceRoot, "linked-cwd"));
+    expect(() =>
+      resolveToolRequestPaths(writeRequest("shell.exec", { command: "dir", cwd: "linked-cwd" }), {
+        workspaceRoot,
+        writeRoots: [outsideRoot],
+      }),
+    ).toThrow(ValidationError);
+  });
+});
+
+describe("resolveToolRequestPathsForSessionScope", () => {
+  function sandboxFor(jailRoot: string, operatorRoot: string): ToolPolicyConfig["sandbox"] {
+    return {
+      writeJailRoots: [jailRoot],
+      readOnlyRoots: [],
+      networkAllowlist: [],
+      riskyShellPatterns: [],
+      requireApprovalForRiskyShell: true,
+      operatorWriteRoots: [{ path: operatorRoot, allowDelete: true }],
+      runtimeWriteProtection: { rootDir: path.dirname(jailRoot), protectedPaths: [] },
+    };
+  }
+
+  function storageFor(delegated: boolean): SessionToolPathScopeDeps["storage"] {
+    return {
+      chatSessionProjects: { get: async () => undefined },
+      chatProjects: { find: async () => undefined },
+      chatDelegationSteps: {
+        listParentsByChildSessionIds: async () => new Map(delegated ? [["session", { stepId: "step-1" }]] : []),
+        get: async () => ({ scopeControl: { rootPath: "", approvedPaths: ["."] } }),
+      },
+    } as unknown as SessionToolPathScopeDeps["storage"];
+  }
+
+  it("lets ordinary sessions write by absolute path into jail and operator roots", async () => {
+    const { repoRoot, outsideRoot } = await createWorkspaceFixture();
+    const jailRoot = path.join(repoRoot, "data");
+    await fs.mkdir(jailRoot, { recursive: true });
+    const deps: SessionToolPathScopeDeps = {
+      rootDir: repoRoot,
+      workspaceDir: "workspace",
+      sandbox: sandboxFor(jailRoot, outsideRoot),
+      storage: storageFor(false),
+    };
+
+    for (const target of [path.join(jailRoot, "a.txt"), path.join(outsideRoot, "b.txt")]) {
+      const resolved = await resolveToolRequestPathsForSessionScope(
+        { toolName: "fs.delete", args: { path: target }, agentId: "agent", sessionId: "session" },
+        deps,
+      );
+      expect(resolved.args.path).toBe(target);
+    }
+  });
+
+  it("keeps delegated child sessions confined to their approved scope", async () => {
+    const { repoRoot, outsideRoot } = await createWorkspaceFixture();
+    const deps: SessionToolPathScopeDeps = {
+      rootDir: repoRoot,
+      workspaceDir: "workspace",
+      sandbox: sandboxFor(path.join(repoRoot, "data"), outsideRoot),
+      storage: storageFor(true),
+    };
+    await expect(
+      resolveToolRequestPathsForSessionScope(
+        {
+          toolName: "fs.delete",
+          args: { path: path.join(outsideRoot, "b.txt") },
+          agentId: "agent",
+          sessionId: "session",
+        },
+        deps,
+      ),
+    ).rejects.toThrow(/outside the workspace boundary/);
   });
 });
 

@@ -188,7 +188,7 @@ export function InboxImprovementProposalDetail({
   return (
     <section aria-label="Current improvement proposal" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="font-display font-semibold text-fg">Current improvement proposal</h3>
+        <h3 className="font-semibold text-fg">Current improvement proposal</h3>
         <Button
           size="sm"
           disabled={query.isFetching || pending || !item.source.proposalId}

@@ -36,11 +36,11 @@ export function ManagedRuntimeSettings() {
     <section
       id="managed-runtime"
       aria-labelledby="managed-runtime-title"
-      className="mt-4 space-y-4 rounded-lg border border-line bg-sunken p-4"
+      className="mt-4 space-y-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 id="managed-runtime-title" className="font-display text-base font-semibold text-fg">
+          <h3 id="managed-runtime-title" className="text-base font-semibold text-fg">
             Managed local runtime
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">

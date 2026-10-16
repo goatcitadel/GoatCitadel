@@ -1,6 +1,31 @@
 #include "cell_installed_pool_capacity.hpp"
 
 namespace goatcitadel::worker_cell {
+namespace {
+template <typename Output> DWORD VerifyRetainedHold(CellControllerMeasurementHold* hold, Output* output) noexcept {
+  if (!output) return ERROR_INVALID_PARAMETER;
+  *output = {};
+  return hold ? hold->Verify() : ERROR_NOT_SUPPORTED;
+}
+}
+DWORD CellInstalledCapacity::Observe(CellControllerMeasurementHold* hold, CellProvisioningJournal& journal,
+  const CellProvisioningAnchor& anchor, const CellFileSha256& head, const CellFootprintScanLimits& limits,
+  const CellFootprintScanGuard& guard, CellProvisioningFootprint* output) noexcept {
+  const auto error = VerifyRetainedHold(hold, output);
+  return error ? error : journal.ObserveMountedFootprint(anchor, head, limits, guard, output);
+}
+DWORD CellInstalledCapacity::ObserveBacking(CellControllerMeasurementHold* hold, CellProvisioningJournal& journal,
+  const CellProvisioningAnchor& anchor, const CellFileSha256& head, DWORD wall_ms,
+  const CellFootprintScanGuard& guard, CellProvisioningBackingFootprint* output) noexcept {
+  const auto error = VerifyRetainedHold(hold, output);
+  return error ? error : journal.ObserveBackingFootprint(anchor, head, wall_ms, guard, output);
+}
+DWORD CellInstalledCapacity::ObserveInventory(CellControllerMeasurementHold* hold, CellProvisioningJournal& journal,
+  const CellProvisioningAnchor& anchor, const CellFileSha256& head, const CellFootprintScanLimits& limits,
+  const CellFootprintScanGuard& guard, CellProvisioningInventory* output) noexcept {
+  const auto error = VerifyRetainedHold(hold, output);
+  return error ? error : journal.ObserveMountedInventory(anchor, head, limits, guard, output);
+}
 DWORD CellInstalledPoolCapacity::Capture(CellControllerIdentity& identity, CellProvisioningJournal& journal,
   const CellControllerRequest& request, const CellFootprintScanLimits& limits, const CellFootprintScanGuard& guard,
   CellCapacityLayoutRecord* record, CellPoolJoinedCapacity* output) noexcept {

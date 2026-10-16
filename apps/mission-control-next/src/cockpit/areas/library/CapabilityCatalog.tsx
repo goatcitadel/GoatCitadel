@@ -1,8 +1,20 @@
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Virtuoso } from "react-virtuoso";
-import { Library, RefreshCw } from "lucide-react";
+import {
+  BookOpen,
+  Code,
+  FilePen,
+  FlaskConical,
+  Network,
+  Puzzle,
+  RefreshCw,
+  Server,
+  Share2,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
 import type { CapabilityCatalogEntry } from "@goatcitadel/contracts";
 import { fetchEffectivePermissionProfile } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -41,7 +53,22 @@ import {
 } from "./capability-catalog";
 import { catalogHref, readCatalogLocation } from "./capability-catalog-route";
 import { AREA_COLUMN } from "../../ui/area-layout";
+import { AreaHeader } from "../../ui/AreaHeader";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
+
+/** The row icon says what kind of capability it is (LB-07); the kind's words stay in the detail. */
+const KIND_ICONS: Record<string, LucideIcon> = {
+  tool: Wrench,
+  skill: BookOpen,
+  code_mode: Code,
+  proposal: FilePen,
+  candidate_skill: FlaskConical,
+  mesh_tool: Network,
+  mesh_mcp_server: Server,
+  mesh_skill: Share2,
+};
+const kindIcon = (kind: string): LucideIcon => KIND_ICONS[kind] ?? Puzzle;
+const PILL = "rounded-full border border-line px-2 py-0.5 text-xs text-fg-muted";
 const TAB_LABELS = {
   overview: "Overview",
   policy: "Policy",
@@ -83,12 +110,8 @@ function CatalogDetail({
       <p className="text-sm leading-relaxed text-fg-secondary">{presentCapabilityDescription(item)}</p>
       <div className="flex flex-wrap gap-2">
         <StatusBadge status={presented} />
-        <span className="rounded-full border border-line px-2 py-0.5 text-xs text-fg-muted">
-          {capabilityKindLabel(item.kind)}
-        </span>
-        <span className="rounded-full border border-line px-2 py-0.5 text-xs text-fg-muted">
-          {item.trustLabel ? freeText(item.trustLabel) : "Trust not labeled"}
-        </span>
+        <span className={PILL}>{capabilityKindLabel(item.kind)}</span>
+        <span className={PILL}>{item.trustLabel ? freeText(item.trustLabel) : "Trust not labeled"}</span>
       </div>
       <Tabs defaultValue="overview">
         <TabsList className="justify-between" aria-label="Capability details">
@@ -138,7 +161,8 @@ function CatalogDetail({
   );
 }
 
-export function CapabilityCatalog() {
+/** `footer` is page content under the catalog (the Mesh publications disclosure on the Skills and tools tab). */
+export function CapabilityCatalog({ footer }: { footer?: ReactNode } = {}) {
   const route = useCockpitRoute();
   const location = readCatalogLocation(route.rest, route.search);
   const { search, kind, status, trust } = location.filters;
@@ -192,25 +216,24 @@ export function CapabilityCatalog() {
   const workspacePolicyState = workspacePolicyQuery.isPending ? "loading" : workspacePolicy ? "ready" : "unavailable";
 
   return (
-    <section className={`${AREA_COLUMN} flex h-full min-h-0 flex-col gap-3 p-4 sm:p-6`}>
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-semibold text-fg">{LIBRARY_SECTION_LABELS.capabilities}</h1>
-          <p className="text-sm text-fg-secondary">
-            Inspect skills, tools, and other capabilities from the Gateway catalog.
-          </p>
-        </div>
-        <Button
-          size="sm"
-          onClick={() => {
-            void catalog.refetch();
-            void workspacePolicyQuery.refetch();
-          }}
-          disabled={catalog.isFetching || workspacePolicyQuery.isFetching}
-        >
-          <RefreshCw aria-hidden="true" className="size-4" /> Refresh
-        </Button>
-      </header>
+    // The page fills the area's height so the catalog list, not the page, scrolls (LB-06).
+    <section className={`${AREA_COLUMN} flex min-h-0 flex-1 flex-col gap-3 p-4 sm:p-6`}>
+      <AreaHeader
+        title={LIBRARY_SECTION_LABELS.capabilities}
+        description="Inspect skills, tools, and other capabilities from the Gateway catalog."
+        actions={
+          <Button
+            size="sm"
+            onClick={() => {
+              void catalog.refetch();
+              void workspacePolicyQuery.refetch();
+            }}
+            disabled={catalog.isFetching || workspacePolicyQuery.isFetching}
+          >
+            <RefreshCw aria-hidden="true" className="size-4" /> Refresh
+          </Button>
+        }
+      />
       {view?.issues.map((issue) => (
         <p
           key={issue}
@@ -260,8 +283,8 @@ export function CapabilityCatalog() {
             />
           ) : null}
           {filtered.length ? (
-            <div className="flex min-h-0 flex-1 gap-3">
-              <div className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-line bg-raised">
+            <div className="flex min-h-80 flex-1 gap-4">
+              <div className="min-h-0 min-w-0 flex-1 overflow-hidden border-t border-line-subtle">
                 <Virtuoso
                   data={filtered}
                   className="h-full w-full"
@@ -270,6 +293,7 @@ export function CapabilityCatalog() {
                       ? presentCapabilityStatus(item)
                       : { label: "Callability unknown", tone: "neutral" as const };
                     const usage = capabilityUsage(item, view);
+                    const KindIcon = kindIcon(item.kind);
                     return (
                       <button
                         type="button"
@@ -278,7 +302,7 @@ export function CapabilityCatalog() {
                         aria-current={selected?.capabilityId === item.capabilityId ? "true" : undefined}
                         className="flex w-full items-center gap-3 border-b border-line-subtle p-3 text-left hover:bg-sunken aria-[current=true]:bg-sunken"
                       >
-                        <Library aria-hidden="true" className="size-4 shrink-0 text-accent" />
+                        <KindIcon aria-hidden="true" className="size-4 shrink-0 text-fg-muted" />
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-sm font-medium text-fg">
                             {presentCapabilityTitle(item)}
@@ -292,10 +316,10 @@ export function CapabilityCatalog() {
                             </span>
                           ) : null}
                         </span>
-                        {item.trustLabel ? (
-                          <span className="hidden text-xs text-fg-muted md:block">{freeText(item.trustLabel)}</span>
-                        ) : null}
-                        <StatusBadge status={presented} />
+                        <span className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
+                          {item.trustLabel ? <span className={PILL}>{freeText(item.trustLabel)}</span> : null}
+                          <StatusBadge status={presented} />
+                        </span>
                       </button>
                     );
                   }}
@@ -304,11 +328,9 @@ export function CapabilityCatalog() {
               {!isPhone && selected ? (
                 <aside
                   aria-label="Capability details"
-                  className="hidden w-80 shrink-0 overflow-y-auto rounded-lg border border-line bg-raised p-4 sm:block xl:w-96"
+                  className="hidden w-80 shrink-0 overflow-y-auto border-l border-line-subtle pl-4 sm:block xl:w-96"
                 >
-                  <h2 className="mb-2 font-display text-lg font-semibold text-fg">
-                    {presentCapabilityTitle(selected)}
-                  </h2>
+                  <h2 className="mb-2 text-base font-semibold text-fg">{presentCapabilityTitle(selected)}</h2>
                   <CatalogDetail
                     key={selected.capabilityId}
                     item={selected}
@@ -351,6 +373,7 @@ export function CapabilityCatalog() {
           ) : null}
         </>
       ) : null}
+      {footer}
     </section>
   );
 }

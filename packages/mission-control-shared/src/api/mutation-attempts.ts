@@ -1,6 +1,6 @@
 import { request } from "./client-core";
 
-export type MutationAttemptStatus = "completed" | "failed" | "pending" | "absent";
+export type MutationAttemptStatus = "completed" | "failed" | "pending" | "unknown_after_send" | "absent";
 export interface MutationAttempt {
   status: MutationAttemptStatus;
   claimExpired?: boolean;
@@ -13,7 +13,8 @@ export interface MutationAttempt {
  *   nothing was applied (a handler can commit and then fail without marking the commit), so the owner must confirm the
  *   canonical state by readback before any retry, and a retry stays protected by the owner's expected revision.
  * - in_progress: the Gateway is still running it; keep the lock and read again.
- * - unknown: the claim expired while running; keep the lock (it may have committed).
+ * - unknown: the claim expired while running, or the Gateway settled it unknown_after_send; keep the lock (it may
+ *   have committed, and it is never retried automatically).
  * - resend_same_key: no record yet for this caller; only re-sending with the SAME key is safe.
  */
 export type MutationAttemptVerdict =
@@ -60,5 +61,7 @@ export function classifyMutationAttempt(attempt: MutationAttempt): MutationAttem
   if (attempt.status === "completed") return "committed";
   if (attempt.status === "failed") return "failed_confirm_by_readback";
   if (attempt.status === "pending") return attempt.claimExpired ? "unknown" : "in_progress";
+  // A settled ambiguous outcome is terminal: it may have been applied, so never re-send it.
+  if (attempt.status === "unknown_after_send") return "unknown";
   return "resend_same_key";
 }

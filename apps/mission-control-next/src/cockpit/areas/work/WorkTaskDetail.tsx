@@ -5,6 +5,8 @@ import { fetchTask, fetchTaskActivities, fetchTaskDeliverables } from "@goatcita
 import { presentTaskStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 import { Button } from "../../ui/Button";
 import { TaskStatusControl } from "./TaskStatusControl";
 import { EmptyState } from "../../ui/EmptyState";
@@ -46,7 +48,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
   });
 
   return (
-    <section className="mx-auto flex max-w-5xl flex-col gap-4 p-4 sm:p-6">
+    <section className={AREA_PAGE}>
       <a
         href="/work"
         onClick={(event) => {
@@ -58,6 +60,17 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
         <ArrowLeft aria-hidden="true" className="size-4" />
         Back to Work
       </a>
+      <AreaHeader title={task?.title ?? "Task"}>
+        {task ? (
+          <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-fg-muted">
+            <StatusBadge status={presentTaskStatus(task.status)} />
+            <span>
+              {TASK_PRIORITY_LABELS[task.priority] ?? "Unknown"} priority ·{" "}
+              <TimeText value={task.updatedAt} prefix="Updated" />
+            </span>
+          </p>
+        ) : null}
+      </AreaHeader>
       {taskQuery.isLoading ? (
         <p role="status" className="text-sm text-fg-muted">
           Loading task…
@@ -81,17 +94,6 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
       ) : null}
       {task ? (
         <>
-          <header>
-            <p className="text-xs font-semibold text-accent">Task record</p>
-            <h1 className="font-display text-xl font-semibold text-fg">{task.title}</h1>
-            <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-fg-muted">
-              <StatusBadge status={presentTaskStatus(task.status)} />
-              <span>
-                {TASK_PRIORITY_LABELS[task.priority] ?? "Unknown"} priority ·{" "}
-                <TimeText value={task.updatedAt} prefix="Updated" />
-              </span>
-            </p>
-          </header>
           {task.distressSignals
             ?.filter((signal) => !signal.resolvedAt)
             .map((signal) => (
@@ -125,8 +127,9 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
             </NativeOwnerLink>
           ) : null}
           {task.description ? (
-            <section className="rounded-lg border border-line bg-raised p-4">
-              <h2 className="font-display text-lg font-semibold text-fg">Description</h2>
+            // The heading and the text share one parent: browser proofs read the description beside its heading.
+            <section className="border-t border-line-subtle pt-4">
+              <h2 className="text-base font-semibold text-fg">Description</h2>
               <p className="mt-2 whitespace-pre-wrap break-words text-sm text-fg-secondary">{task.description}</p>
             </section>
           ) : null}
@@ -146,9 +149,9 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
             />
             <TaskDetailsEditor key={`${workspaceId}:${task.taskId}:details`} task={task} workspaceId={workspaceId} />
           </fieldset>
-          <div className="grid gap-3 md:grid-cols-2">
-            <section className="rounded-lg border border-line bg-raised p-4">
-              <h2 className="font-display text-lg font-semibold text-fg">Activity</h2>
+          <div className="grid gap-x-6 gap-y-4 md:grid-cols-2">
+            <section className="border-t border-line-subtle pt-4">
+              <h2 className="text-base font-semibold text-fg">Activity</h2>
               {activities.isLoading ? <p className="mt-2 text-sm text-fg-muted">Loading activity…</p> : null}
               {activities.isError ? (
                 <p role="alert" className="mt-2 text-sm text-status-failed">
@@ -173,8 +176,8 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
                 <p className="mt-2 text-xs text-fg-muted">The owner returns at most 200 recent activities.</p>
               ) : null}
             </section>
-            <section className="rounded-lg border border-line bg-raised p-4">
-              <h2 className="font-display text-lg font-semibold text-fg">Deliverables</h2>
+            <section className="border-t border-line-subtle pt-4">
+              <h2 className="text-base font-semibold text-fg">Deliverables</h2>
               {deliverables.isLoading ? <p className="mt-2 text-sm text-fg-muted">Loading deliverables…</p> : null}
               {deliverables.isError ? (
                 <p role="alert" className="mt-2 text-sm text-status-failed">

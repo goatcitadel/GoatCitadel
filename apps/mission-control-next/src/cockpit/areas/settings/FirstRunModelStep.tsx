@@ -31,7 +31,7 @@ export function FirstRunModelStep({
   const providerReady = state.setupReadiness?.items.find((item) => item.id === "provider")?.status === "ready";
   return (
     <div className="space-y-4">
-      <h2 className="font-display text-lg font-semibold text-fg">Choose a model</h2>
+      <h2 className="text-lg font-semibold text-fg">Choose a model</h2>
       <p className="break-words text-sm text-fg-secondary">
         Default model:{" "}
         {label && state.settings.llm.activeModel

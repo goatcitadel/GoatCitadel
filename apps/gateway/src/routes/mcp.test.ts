@@ -1481,7 +1481,9 @@ describe("mcp routes", () => {
           runtimePath: "generic_remote_http_sse",
           transportRuntimeSupported: true,
           runtimeSupported: true,
-          operatorNextAction: expect.stringContaining("governed MCP runtime path"),
+          operatorNextAction: expect.stringContaining(
+            "governed MCP runtime path (Streamable HTTP, or the legacy HTTP+SSE handshake for sse records, which only POSTs to a same-origin, allowlisted endpoint)",
+          ),
           blockers: [],
         }),
         expect.objectContaining({
@@ -1928,11 +1930,15 @@ describe("mcp routes", () => {
     expect(disconnectResponse.statusCode).toBe(200);
     expect(oauthStartResponse.statusCode).toBe(200);
     expect(oauthCompleteResponse.statusCode).toBe(200);
-    expect(service.updateMcpServer).toHaveBeenCalledWith("srv-1", {
-      label: "Updated MCP",
-      enabled: false,
-      expectedRevision: "a".repeat(64),
-    }, expect.any(Function));
+    expect(service.updateMcpServer).toHaveBeenCalledWith(
+      "srv-1",
+      {
+        label: "Updated MCP",
+        enabled: false,
+        expectedRevision: "a".repeat(64),
+      },
+      expect.any(Function),
+    );
     expect(service.deleteMcpServer).toHaveBeenCalledWith("srv-1", "a".repeat(64), expect.any(Function));
     expect(service.disconnectMcpServer).toHaveBeenCalledWith("srv-1");
     expect(service.startMcpOAuth).toHaveBeenCalledWith("srv-1");
@@ -1965,12 +1971,16 @@ describe("mcp routes", () => {
     expect(toolsResponse.statusCode).toBe(200);
     expect(policyResponse.statusCode).toBe(200);
     expect(service.listMcpTools).toHaveBeenCalledWith("srv-1");
-    expect(service.updateMcpServerPolicy).toHaveBeenCalledWith("srv-1", {
-      requireFirstToolApproval: true,
-      redactionMode: "strict",
-      allowedToolPatterns: ["tool.*"],
-      expectedRevision: "a".repeat(64),
-    }, expect.any(Function));
+    expect(service.updateMcpServerPolicy).toHaveBeenCalledWith(
+      "srv-1",
+      {
+        requireFirstToolApproval: true,
+        redactionMode: "strict",
+        allowedToolPatterns: ["tool.*"],
+        expectedRevision: "a".repeat(64),
+      },
+      expect.any(Function),
+    );
     expect(toolsResponse.json()).toEqual({ items: [{ serverId: "srv-1", toolName: "tool.echo" }] });
     expect(policyResponse.json()).toMatchObject({
       serverId: "srv-1",

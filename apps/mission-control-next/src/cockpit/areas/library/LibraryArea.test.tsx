@@ -1,12 +1,28 @@
 // @vitest-environment happy-dom
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LibraryArea } from "./LibraryArea";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
 import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
-vi.mock("./CapabilityCatalog", () => ({ CapabilityCatalog: () => <div>Capability directory</div> }));
+// Each mocked page draws its AreaHeader, as the real pages do, so the Library tab row renders.
+const { areaHeader } = vi.hoisted(() => ({
+  areaHeader: async () =>
+    (await vi.importActual<typeof import("../../ui/AreaHeader")>("../../ui/AreaHeader")).AreaHeader,
+}));
+vi.mock("./CapabilityCatalog", async () => {
+  const AreaHeader = await areaHeader();
+  return {
+    CapabilityCatalog: ({ footer }: { footer?: ReactNode }) => (
+      <div>
+        <AreaHeader title="Skills and tools" />
+        Capability directory
+        {footer}
+      </div>
+    ),
+  };
+});
 vi.mock("./MeshCapabilityPublications", () => ({
   MeshCapabilityPublications: ({ workspaceId }: { workspaceId: string }) => (
     <div>mesh publications in {workspaceId}</div>
@@ -30,28 +46,72 @@ vi.mock("../settings/CitadelCouncilSettings", () => ({
 vi.mock("../settings/CitadelVaultSettings", () => ({
   CitadelVaultSettings: ({ citadelId }: { citadelId: string }) => <p>Vault for {citadelId}</p>,
 }));
-vi.mock("./LibraryResources", () => ({
-  LibraryResources: ({ kind, workspaceId }: { kind: string; workspaceId: string }) => (
-    <div>
-      {kind} in {workspaceId}
-    </div>
-  ),
-}));
-vi.mock("./LibraryCommunications", () => ({
-  LibraryCommunications: ({ workspaceId }: { workspaceId: string }) => <div>mail in {workspaceId}</div>,
-}));
-vi.mock("./LibraryCurator", () => ({
-  LibraryCurator: ({ workspaceId }: { workspaceId: string }) => <div>curator in {workspaceId}</div>,
-}));
-vi.mock("./LibraryJourney", () => ({
-  LibraryJourney: ({ workspaceId }: { workspaceId: string }) => <div>journey in {workspaceId}</div>,
-}));
-vi.mock("./LibraryPromptPacks", () => ({
-  LibraryPromptPacks: ({ workspaceId }: { workspaceId: string }) => <div>prompt packs in {workspaceId}</div>,
-}));
-vi.mock("./LibraryKnowledgeWorkspace", () => ({
-  LibraryKnowledgeWorkspace: ({ workspaceId }: { workspaceId: string }) => <div>knowledge in {workspaceId}</div>,
-}));
+vi.mock("./LibraryResources", async () => {
+  const AreaHeader = await areaHeader();
+  return {
+    LibraryResources: ({ kind, workspaceId }: { kind: string; workspaceId: string }) => (
+      <div>
+        <AreaHeader title="Resources" />
+        {kind} in {workspaceId}
+      </div>
+    ),
+  };
+});
+vi.mock("./LibraryCommunications", async () => {
+  const AreaHeader = await areaHeader();
+  return {
+    LibraryCommunications: ({ workspaceId }: { workspaceId: string }) => (
+      <div>
+        <AreaHeader title="Mail" />
+        mail in {workspaceId}
+      </div>
+    ),
+  };
+});
+vi.mock("./LibraryCurator", async () => {
+  const AreaHeader = await areaHeader();
+  return {
+    LibraryCurator: ({ workspaceId }: { workspaceId: string }) => (
+      <div>
+        <AreaHeader title="Skill curator" />
+        curator in {workspaceId}
+      </div>
+    ),
+  };
+});
+vi.mock("./LibraryJourney", async () => {
+  const AreaHeader = await areaHeader();
+  return {
+    LibraryJourney: ({ workspaceId }: { workspaceId: string }) => (
+      <div>
+        <AreaHeader title="Journey timeline" />
+        journey in {workspaceId}
+      </div>
+    ),
+  };
+});
+vi.mock("./LibraryPromptPacks", async () => {
+  const AreaHeader = await areaHeader();
+  return {
+    LibraryPromptPacks: ({ workspaceId }: { workspaceId: string }) => (
+      <div>
+        <AreaHeader title="Prompt packs" />
+        prompt packs in {workspaceId}
+      </div>
+    ),
+  };
+});
+vi.mock("./LibraryKnowledgeWorkspace", async () => {
+  const AreaHeader = await areaHeader();
+  return {
+    LibraryKnowledgeWorkspace: ({ workspaceId }: { workspaceId: string }) => (
+      <div>
+        <AreaHeader title="Knowledge" />
+        knowledge in {workspaceId}
+      </div>
+    ),
+  };
+});
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "scoped-workspace", activeCitadelId: "personal" }),
 }));

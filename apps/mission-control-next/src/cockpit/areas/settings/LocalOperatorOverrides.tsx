@@ -19,7 +19,7 @@ const OVERRIDE_SCOPE_LABELS: Record<LocalOperatorOverrideScope, string> = {
   operator: "This operator across workspaces",
 };
 
-const inputClass = "mt-1 min-h-10 w-full rounded border border-line-control bg-canvas px-2 text-sm text-fg";
+const inputClass = "mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg";
 export function LocalOperatorOverrides({ workspaceId }: { workspaceId: string }) {
   const snapshot = useQuery({
     queryKey: ["settings", "local-operator-overrides", workspaceId],
@@ -66,9 +66,9 @@ export function LocalOperatorOverrides({ workspaceId }: { workspaceId: string })
     <section
       id="local-operator-overrides"
       aria-label="Temporary Local Operator Overrides"
-      className="mt-4 space-y-3 rounded-lg border border-line bg-sunken p-4"
+      className="mt-4 space-y-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
     >
-      <h3 className="font-display text-base font-semibold">Temporary Local Operator Overrides</h3>
+      <h3 className="text-base font-semibold">Temporary Local Operator Overrides</h3>
       <p className="text-sm text-fg-secondary">
         A time-limited override grants broad local tool access and skips normal prompts. Hard denies, auth, path jails,
         network blocks, disabled capabilities and Code Mode checks remain enforced.
@@ -172,7 +172,7 @@ export function LocalOperatorOverrides({ workspaceId }: { workspaceId: string })
       {!snapshot.isError ? (
         <ul className="space-y-3">
           {snapshot.data?.overrides.slice(0, limit).map((item) => (
-            <li key={item.overrideId} className="rounded border border-line p-3 text-sm">
+            <li key={item.overrideId} className="rounded-md border border-line p-3 text-sm">
               <p>{item.reason}</p>
               <p>
                 {OVERRIDE_SCOPE_LABELS[item.scope] ?? "Unknown scope"} ·{" "}

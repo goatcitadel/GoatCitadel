@@ -65,14 +65,14 @@ export function WorkScheduleInspector({
   activeWorkspaceId,
 }: WorkScheduleInspectorProps) {
   return (
-    <div className="grid gap-3 rounded-lg border border-line bg-raised p-4">
+    <div className="grid gap-3 border-t border-line-subtle pt-4 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
       {detail.isFetching ? (
         <p role="status" className="text-sm text-fg-secondary">
           Checking current schedule access. Controls wait for the authorized read.
         </p>
       ) : null}
       <div>
-        <h2 className="font-display text-md font-semibold text-fg">{selected.name}</h2>
+        <h2 className="text-base font-semibold text-fg">{selected.name}</h2>
         <p className="text-xs text-fg-muted">
           {selected.enabled ? "Enabled" : "Paused"} · {presentScheduleAction(selected.action)}
         </p>

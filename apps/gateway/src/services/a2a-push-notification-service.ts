@@ -294,6 +294,7 @@ export class A2APushNotificationService {
     const status: A2ATaskPushDeliveryResult["status"] =
       run.status === "blocked" &&
       (run.claim.replayOutcome === "idempotency_unavailable" ||
+        run.claim.replayOutcome === "unknown_after_send" ||
         run.blockedReason === "external_side_effect_dry_run_required")
         ? "blocked"
         : attemptCount >= config.maxAttempts

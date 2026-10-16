@@ -104,7 +104,7 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
   }
   return (
     <section className="grid gap-3" aria-label="Imported agent catalog">
-      <h2 className="font-display text-lg">Imported agent catalog</h2>
+      <h2 className="text-base font-semibold">Imported agent catalog</h2>
       {query.isFetching ? <p role="status">Reading imported catalog…</p> : null}
       {query.error ? <Callout tone="error">{describeApiError(query.error).summary}</Callout> : null}
       <details>
@@ -151,10 +151,12 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
           />
         )}
       </Field>
-      <Button disabled={query.isFetching} onClick={() => void query.refetch()}>
-        Refresh imported catalog
-      </Button>
-      <ul className="grid gap-2">
+      <div>
+        <Button disabled={query.isFetching} onClick={() => void query.refetch()}>
+          Refresh imported catalog
+        </Button>
+      </div>
+      <ul className="divide-y divide-line-subtle">
         {query.data?.items
           .filter(
             (item) =>
@@ -162,7 +164,7 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
               `${item.definition.frontmatter.name} ${item.division}`.toLowerCase().includes(search.toLowerCase()),
           )
           .map((item) => (
-            <li key={item.entryId} className="rounded-lg border border-line p-3">
+            <li key={item.entryId} className="space-y-1 py-3">
               <h3>{item.definition.frontmatter.name}</h3>
               <p className="text-sm text-fg-secondary">
                 {item.division} · {AGENT_CATALOG_STATE[item.state]} · {AGENT_PARSE_STATUS[item.definition.parseStatus]}
@@ -191,7 +193,7 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
         </p>
       ) : null}
       {selected ? (
-        <section className="grid gap-3 rounded-lg border border-line p-3">
+        <section className="grid gap-3 border-t border-line-subtle pt-4">
           <h3 className="font-semibold">{selected.definition.frontmatter.name}</h3>
           <p>{selected.definition.frontmatter.description}</p>
           <p className="text-sm text-fg-secondary">

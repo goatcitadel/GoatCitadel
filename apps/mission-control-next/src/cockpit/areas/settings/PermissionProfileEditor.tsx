@@ -89,7 +89,7 @@ export function PermissionProfileEditor({
       aria-label="Manage permission profiles"
       className="space-y-3 border-t border-line pt-4"
     >
-      <h3 className="font-display text-base font-semibold">Manage permission profiles</h3>
+      <h3 className="text-base font-semibold">Manage permission profiles</h3>
       <p className="text-sm text-fg-secondary">
         Create workspace profiles or edit your custom profiles. Built-in profiles are read-only. Saving policy defaults
         can affect later tool decisions in existing conversations.
@@ -100,7 +100,7 @@ export function PermissionProfileEditor({
       <label className="block text-sm">
         Find custom profile
         <input
-          className="mt-1 w-full rounded border border-line-control bg-canvas p-2"
+          className="mt-1 w-full rounded-md border border-line-control bg-canvas p-2"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />

@@ -13,6 +13,9 @@ import {
   useTaskMutations,
 } from "../../../features/native-routes/ops/task-mutation-state";
 import { useIsMounted } from "../../../hooks/use-is-mounted";
+import { RefreshCw } from "lucide-react";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { EmptyState } from "../../ui/EmptyState";
@@ -47,6 +50,14 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
     refetchOnMount: "always",
   });
   const available = tasks.isSuccess && tasks.isFetchedAfterMount && !tasks.isFetching && !tasks.isPlaceholderData;
+  const listed = tasks.isSuccess
+    ? tasks.data.pages
+        .flatMap((page) => page.items)
+        .filter(
+          (task) =>
+            (task.workspaceId ?? "default") === workspaceId && task.title.toLowerCase().includes(search.toLowerCase()),
+        )
+    : undefined;
   const locked = review ? readTaskMutation(taskMutationKey(base, workspaceId, review.taskId)).phase !== "idle" : false;
   async function confirm() {
     if (!review || !available || locked) return;
@@ -72,66 +83,80 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
     }
   }
   return (
-    <section className="mx-auto grid max-w-5xl gap-4 p-4 sm:p-6">
-      <h1 className="font-display text-xl font-semibold text-fg">Task archive and restore</h1>
-      <p className="text-sm text-fg-secondary">
-        Workspace operator tasks. Archive removes a task from active lists and can be reversed. It does not cancel a
-        run.
-      </p>
-      <Field label="Task list">
-        {(props) => (
-          <select
-            {...props}
-            value={view}
-            className="rounded-md border border-line bg-sunken p-2"
-            onChange={(event) => {
+    <section className={AREA_PAGE}>
+      <AreaHeader
+        title="Task archive and restore"
+        description="Workspace operator tasks. Archive removes a task from active lists and can be reversed. It does not cancel a run."
+        actions={
+          <Button
+            size="sm"
+            disabled={tasks.isFetching || locked}
+            onClick={() => {
               generation.current++;
               setReview(null);
-              setView(event.target.value as typeof view);
+              void tasks.refetch();
             }}
           >
-            <option value="trash">Archived tasks</option>
-            <option value="active">Active tasks to archive</option>
-          </select>
-        )}
-      </Field>
-      <Field label="Search loaded tasks">
-        {(props) => (
-          <input
-            {...props}
-            value={search}
-            className="rounded-md border border-line bg-sunken p-2"
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        )}
-      </Field>
-      <Button
-        disabled={tasks.isFetching || locked}
-        onClick={() => {
-          generation.current++;
-          setReview(null);
-          void tasks.refetch();
-        }}
-      >
-        Refresh tasks
-      </Button>
-      {message ? <p role="status">{message}</p> : null}
-      {tasks.isLoading ? <p role="status">Loading tasks…</p> : null}
+            <RefreshCw aria-hidden="true" className="size-4" /> Refresh tasks
+          </Button>
+        }
+      />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Task list">
+          {(props) => (
+            <select
+              {...props}
+              value={view}
+              className="rounded-md border border-line bg-sunken p-2"
+              onChange={(event) => {
+                generation.current++;
+                setReview(null);
+                setView(event.target.value as typeof view);
+              }}
+            >
+              <option value="trash">Archived tasks</option>
+              <option value="active">Active tasks to archive</option>
+            </select>
+          )}
+        </Field>
+        <Field label="Search loaded tasks">
+          {(props) => (
+            <input
+              {...props}
+              value={search}
+              className="rounded-md border border-line bg-sunken p-2"
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          )}
+        </Field>
+      </div>
+      {message ? (
+        <p role="status" className="text-sm text-fg-secondary">
+          {message}
+        </p>
+      ) : null}
+      {tasks.isLoading ? (
+        <p role="status" className="text-sm text-fg-muted">
+          Loading tasks…
+        </p>
+      ) : null}
       {tasks.isError ? (
         <EmptyState title="Task archive unavailable" description={describeApiError(tasks.error).summary} />
       ) : null}
-      {tasks.isSuccess ? (
-        <WindowedRecordList
-          label="Archive tasks"
-          items={tasks.data.pages
-            .flatMap((page) => page.items)
-            .filter(
-              (task) =>
-                (task.workspaceId ?? "default") === workspaceId &&
-                task.title.toLowerCase().includes(search.toLowerCase()),
-            )}
-          itemKey={(task) => task.taskId}
-        >
+      {listed && !listed.length && !tasks.hasNextPage ? (
+        <EmptyState
+          title={
+            search ? "No loaded tasks match the search" : view === "trash" ? "No archived tasks" : "No active tasks"
+          }
+          description={
+            view === "trash"
+              ? "Tasks you archive appear here, ready to restore."
+              : "Active workspace tasks appear here, ready to archive."
+          }
+        />
+      ) : null}
+      {listed?.length ? (
+        <WindowedRecordList label="Archive tasks" items={listed} itemKey={(task) => task.taskId}>
           {(task) => (
             <article className="rounded-md border border-line p-3">
               <h2 className="text-sm font-medium text-fg">{task.title}</h2>
@@ -162,7 +187,7 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
         </WindowedRecordList>
       ) : null}
       {tasks.hasNextPage ? (
-        <Button disabled={tasks.isFetching} onClick={() => void tasks.fetchNextPage()}>
+        <Button className="self-start" disabled={tasks.isFetching} onClick={() => void tasks.fetchNextPage()}>
           Load more tasks
         </Button>
       ) : null}
@@ -184,18 +209,20 @@ function ArchiveWorkspace({ workspaceId }: { workspaceId: string }) {
               : "This task leaves active task lists. You can restore it from Archived tasks."}
           </p>
           {review ? <p>{readTaskMutation(taskMutationKey(base, workspaceId, review.taskId)).message}</p> : null}
-          <Button disabled={!available || locked} onClick={() => void confirm()}>
-            {view === "trash" ? "Restore task" : "Archive task"}
-          </Button>
-          <Button
-            disabled={locked}
-            onClick={() => {
-              generation.current++;
-              setReview(null);
-            }}
-          >
-            Keep task
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={!available || locked} onClick={() => void confirm()}>
+              {view === "trash" ? "Restore task" : "Archive task"}
+            </Button>
+            <Button
+              disabled={locked}
+              onClick={() => {
+                generation.current++;
+                setReview(null);
+              }}
+            >
+              Keep task
+            </Button>
+          </div>
         </div>
       </Dialog>
     </section>

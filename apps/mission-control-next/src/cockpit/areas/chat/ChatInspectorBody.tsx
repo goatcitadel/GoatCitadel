@@ -118,7 +118,7 @@ export function ChatInspector({
               setTab(TABS[next]!.id);
               (event.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
             }}
-            className="min-h-8 shrink-0 rounded px-2 text-xs font-medium text-fg-secondary hover:bg-raised aria-selected:bg-raised aria-selected:text-fg"
+            className="min-h-8 shrink-0 rounded-md px-2 text-xs font-medium text-fg-secondary hover:bg-raised aria-selected:bg-raised aria-selected:text-fg"
           >
             {entry.label}
           </button>
@@ -169,7 +169,7 @@ export function ChatInspector({
                     </TechnicalDetails>
                   ) : null}
                   {verifiedRoutedContext ? (
-                    <div className="rounded-md border border-line bg-raised p-3" aria-label="Verified routed context">
+                    <div className="border-t border-line-subtle pt-2" aria-label="Verified routed context">
                       <p className="text-fg-secondary">
                         {"Scoped source inspection: "}
                         {verifiedRoutedContext.includedCount}
@@ -225,12 +225,9 @@ export function ChatInspector({
                     </section>
                   ) : null}
                   {dock?.documents?.includedRefs.length ? (
-                    <ul className="space-y-1">
+                    <ul className="divide-y divide-line-subtle">
                       {dock.documents.includedRefs.map((ref) => (
-                        <li
-                          key={`${ref.kind}:${ref.ref}`}
-                          className="rounded-md border border-line bg-raised p-2 text-fg-secondary"
-                        >
+                        <li key={`${ref.kind}:${ref.ref}`} className="py-2 text-fg-secondary">
                           {ref.label ?? presentRoutedContextKind(ref.kind)}
                         </li>
                       ))}

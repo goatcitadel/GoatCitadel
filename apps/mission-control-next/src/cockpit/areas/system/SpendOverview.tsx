@@ -6,7 +6,6 @@ import { fetchCostSummary } from "@goatcitadel/mission-control-shared/api/system
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import {
-  projectDailyCostBars,
   projectProviderCostRows,
   projectUsageCostSummary,
 } from "@goatcitadel/mission-control-shared/content/cost-summary";
@@ -17,6 +16,11 @@ import { EmptyState } from "../../ui/EmptyState";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { SpendAttempts } from "./SpendAttempts";
 import { BUDGET_MODE } from "./system-vocabulary";
+import { SpendDailyChart } from "./SpendDailyChart";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_PAGE } from "../../ui/area-layout";
+import { MetricList } from "../../ui/MetricList";
+import { Section } from "../../ui/Section";
 
 export function SpendOverview() {
   const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
@@ -39,7 +43,6 @@ export function SpendOverview() {
   });
   const summary = costs.data;
   const projection = summary ? projectUsageCostSummary(summary) : null;
-  const bars = summary ? projectDailyCostBars(summary) : [];
   const providers = summary ? projectProviderCostRows(summary) : [];
   const dates = summary ? [Date.parse(summary.from), Date.parse(summary.to)] : [];
   const period =
@@ -48,19 +51,18 @@ export function SpendOverview() {
       : "Latest seven days";
 
   return (
-    <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-semibold text-fg">Spend</h1>
-          <p className="text-sm text-fg-secondary">Gateway usage and known cost for the latest seven days.</p>
-          {summary ? (
-            <p className="mt-1 text-xs text-fg-muted">Grouped by day (UTC) · {period} · currency USD</p>
-          ) : null}
-        </div>
-        <Button size="sm" onClick={() => void costs.refetch()} disabled={costs.isFetching}>
-          <RefreshCw aria-hidden="true" className="size-4" /> Refresh
-        </Button>
-      </header>
+    <section className={AREA_PAGE}>
+      <AreaHeader
+        title="Spend"
+        description="Gateway usage and known cost for the latest seven days."
+        actions={
+          <Button size="sm" onClick={() => void costs.refetch()} disabled={costs.isFetching}>
+            <RefreshCw aria-hidden="true" className="size-4" /> Refresh
+          </Button>
+        }
+      >
+        {summary ? <p className="mt-1 text-xs text-fg-muted">Grouped by day (UTC) · {period} · currency USD</p> : null}
+      </AreaHeader>
 
       {costs.isLoading ? (
         <p role="status" className="text-sm text-fg-muted">
@@ -76,50 +78,27 @@ export function SpendOverview() {
       ) : null}
       {summary && projection && !costs.isError ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Metric label="Known cost" value={projection.costLabel} />
-            <Metric label="Recorded tokens" value={new Intl.NumberFormat().format(projection.tokens)} />
-            <Metric label="Recorded groups" value={new Intl.NumberFormat().format(summary.items.length)} />
-          </div>
-          <p className="rounded-md border border-line bg-sunken p-3 text-sm text-fg-secondary">
-            {projection.coverageDescription}
-          </p>
-          <p className="text-sm text-fg-secondary">
-            Accounted cost may combine provider-reported amounts and Gateway pricing estimates. Complete coverage means
-            all costs were accounted; it does not make an estimate a measured bill. Recorded groups count summary
-            buckets, not calls.
-          </p>
-
-          <section aria-labelledby="daily-cost-title" className="rounded-lg border border-line bg-raised p-4">
-            <h2 id="daily-cost-title" className="font-display text-lg font-semibold text-fg">
-              Known cost by Gateway day (UTC)
-            </h2>
-            <p className="mt-1 text-sm text-fg-secondary">
-              Bars show cost in USD recorded in UTC day buckets. The period above uses local time; these aggregates
-              cannot be rebucketed into local days. A plus sign marks a lower bound.
+          <div className="grid gap-3">
+            <p className="text-sm text-fg">{projection.coverageDescription}</p>
+            <MetricList
+              label="Spend totals"
+              items={[
+                { term: "Known cost", value: projection.costLabel },
+                { term: "Recorded tokens", value: new Intl.NumberFormat().format(projection.tokens) },
+              ]}
+            />
+            <p className="text-xs text-fg-muted">
+              Accounted cost may combine provider-reported amounts and Gateway pricing estimates. Complete coverage
+              means all costs were accounted; it does not make an estimate a measured bill.
             </p>
-            {bars.length ? (
-              <ol className="mt-4 grid gap-3">
-                {bars.map((bar) => (
-                  <li key={bar.key} className="flex items-center gap-2 text-xs sm:text-sm">
-                    <span className="w-28 shrink-0 text-fg-secondary sm:w-32" title={bar.label}>
-                      {bar.label}
-                    </span>
-                    <span className="h-3 min-w-0 flex-1 overflow-hidden rounded-full bg-sunken">
-                      <span
-                        aria-hidden="true"
-                        className="block h-full rounded-full bg-accent"
-                        style={{ width: `${bar.percent}%` }}
-                      />
-                    </span>
-                    <span className="w-16 shrink-0 text-right tabular-nums text-fg sm:w-20">{bar.costLabel}</span>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="mt-4 text-sm text-fg-muted">No daily usage is recorded for this period.</p>
-            )}
-          </section>
+          </div>
+
+          <Section
+            title="Known cost by Gateway day (UTC)"
+            description="Bars show cost in USD recorded in UTC day buckets. The period above uses local time; these aggregates cannot be rebucketed into local days. A plus sign marks a lower bound."
+          >
+            <SpendDailyChart summary={summary} />
+          </Section>
 
           <SpendAttempts
             key={activeWorkspaceId ?? "default"}
@@ -128,18 +107,14 @@ export function SpendOverview() {
             to={summary.to}
           />
 
-          <section aria-labelledby="provider-cost-title" className="rounded-lg border border-line bg-raised p-4">
-            <h2 id="provider-cost-title" className="font-display text-lg font-semibold text-fg">
-              Provider attribution
-            </h2>
-            <p className="mt-1 text-sm text-fg-secondary">
-              Gateway day segments identify providers and observed models. The API does not supply per-model cost
-              totals.
-            </p>
+          <Section
+            title="Provider attribution"
+            description="Gateway day segments identify providers and observed models. The API does not supply per-model cost totals."
+          >
             {providers.length ? (
-              <ul className="mt-3 grid gap-2">
+              <ul className="divide-y divide-line-subtle">
                 {providers.map((provider) => (
-                  <li key={provider.providerKey} className="rounded-md border border-line-subtle bg-sunken p-3">
+                  <li key={provider.providerKey} className="py-3">
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div className="min-w-0">
                         <h3 className="break-words text-sm font-semibold text-fg">{provider.label}</h3>
@@ -147,7 +122,7 @@ export function SpendOverview() {
                       </div>
                       <strong className="text-sm tabular-nums text-fg">{provider.costLabel}</strong>
                     </div>
-                    <p className="mt-2 break-words text-xs text-fg-muted">
+                    <p className="mt-1 break-words text-xs text-fg-muted">
                       {"Models observed: "}
                       {provider.models.length ? provider.models.slice(0, 3).join(", ") : "Not reported"}
                       {provider.models.length > 3 ? `, +${provider.models.length - 3} more` : ""}
@@ -156,15 +131,12 @@ export function SpendOverview() {
                 ))}
               </ul>
             ) : (
-              <p className="mt-3 text-sm text-fg-muted">No provider segments were returned for this period.</p>
+              <p className="text-sm text-fg-muted">No provider segments were returned for this period.</p>
             )}
-          </section>
+          </Section>
 
-          <section aria-labelledby="spend-budget-title" className="rounded-lg border border-line bg-raised p-4">
-            <h2 id="spend-budget-title" className="font-display text-lg font-semibold text-fg">
-              Budget setting
-            </h2>
-            <p className="mt-1 text-sm text-fg-secondary">
+          <Section title="Budget setting">
+            <p className="text-sm text-fg-secondary">
               {"Gateway budget preference: "}
               <strong className="text-fg">
                 {settings.data && !settings.isError
@@ -187,32 +159,22 @@ export function SpendOverview() {
             >
               Review budget preference
             </NativeOwnerLink>
-          </section>
+          </Section>
 
-          <section className="rounded-lg border border-line p-4">
-            <h2 className="text-sm font-semibold text-fg">More cost detail</h2>
-            <p className="mt-1 text-sm text-fg-secondary">
-              Detailed coverage and per-provider records are on the spend details page.
-            </p>
+          <Section
+            title="More cost detail"
+            description="Detailed coverage and per-provider records are on the spend details page."
+          >
             <NativeOwnerLink
-              className="mt-2 inline-block text-sm font-medium text-accent underline-offset-2 hover:underline"
+              className="inline-block text-sm font-medium text-accent underline-offset-2 hover:underline"
               href={detailsHref}
               scope="installation-costs"
             >
               Open spend details
             </NativeOwnerLink>
-          </section>
+          </Section>
         </>
       ) : null}
     </section>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-line bg-raised p-4">
-      <p className="text-xs text-fg-muted">{label}</p>
-      <p className="mt-1 font-display text-xl font-semibold tabular-nums text-fg">{value}</p>
-    </div>
   );
 }

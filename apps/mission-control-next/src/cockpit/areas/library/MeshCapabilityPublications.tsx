@@ -136,13 +136,10 @@ export function MeshCapabilityPublications({ workspaceId }: { workspaceId: strin
         : { title: "", confirm: "", message: "" };
 
   return (
-    <section
-      aria-labelledby="mesh-publications-title"
-      className="mt-4 space-y-3 rounded-lg border border-line bg-sunken p-4 text-sm"
-    >
+    <section aria-labelledby="mesh-publications-title" className="space-y-3 border-t border-line-subtle pt-4 text-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="mesh-publications-title" className="font-display text-base font-semibold text-fg">
+          <h2 id="mesh-publications-title" className="text-base font-semibold text-fg">
             Mesh capability publications
           </h2>
           <p className="mt-1 text-fg-secondary">
@@ -153,116 +150,120 @@ export function MeshCapabilityPublications({ workspaceId }: { workspaceId: strin
           {ops.loading ? "Reloading publications" : "Reload publications"}
         </Button>
       </div>
-      {receipt ? (
-        <div
-          aria-label="Activation request receipt"
-          role="group"
-          className="space-y-1 rounded-md border border-line bg-raised p-3"
-        >
-          <p className="font-medium text-fg">
-            {receipt.name}: approval is {meshApprovalStatus(receipt.response.approvalStatus).label.toLowerCase()}
-            {receipt.response.replayed ? " (an existing request was returned)" : ""}
-          </p>
-          <p>
-            Permissions {meshPermissionDiffLabel(receipt.response.diff.permissionDisposition)} (
-            {receipt.response.diff.permissionsAdded.length} added, {receipt.response.diff.permissionsRemoved.length}{" "}
-            removed) · effects {meshEffectDiffLabel(receipt.response.diff.effectDisposition)} (
-            {meshEffectsLabel(receipt.response.diff.currentEffectPosture)}) · expires{" "}
-            {time(receipt.response.approvalExpiresAt)}
-          </p>
-          <SystemOwnerLink
-            href={`/inbox?approvalId=${encodeURIComponent(receipt.response.approvalId)}`}
-            scope={[workspaceId, receipt.response.approvalId]}
+      {/* Collapsed by default so the catalog above keeps the page's height (LB-06). */}
+      <details className="space-y-3">
+        <summary className="cursor-pointer font-medium text-fg-secondary hover:text-fg">Show publications</summary>
+        {receipt ? (
+          <div
+            aria-label="Activation request receipt"
+            role="group"
+            className="space-y-1 rounded-md border border-line bg-raised p-3"
           >
-            Review the activation approval
-          </SystemOwnerLink>
-        </div>
-      ) : null}
-      {pendingApproval ? (
-        <SystemOwnerLink
-          href={`/inbox?approvalId=${encodeURIComponent(pendingApproval)}`}
-          scope={[workspaceId, pendingApproval]}
-        >
-          Open the pending activation approval
-        </SystemOwnerLink>
-      ) : null}
-      {notice ? (
-        <p role="status" className="text-fg-secondary">
-          {notice}
-        </p>
-      ) : null}
-      {retry ? (
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={busy} onClick={() => void confirm(retry)}>
-            Retry the same request
-          </Button>
-          <Button size="sm" disabled={busy} onClick={() => setRetry(null)}>
-            Dismiss
-          </Button>
-        </div>
-      ) : null}
-      {ops.error ? (
-        <p role="alert" className="text-status-failed">
-          {ops.error}
-        </p>
-      ) : ops.loading && !ops.inspection ? (
-        <p role="status" className="text-fg-muted">
-          Reading mesh publications…
-        </p>
-      ) : ops.inspection && !manifests.length ? (
-        <p className="text-fg-muted">No accepted node has published a capability manifest into this workspace.</p>
-      ) : manifests.length ? (
-        <ul aria-label="Published mesh capability manifests" className="space-y-3">
-          {manifests.map((manifest) => (
-            <li
-              key={`${manifest.manifestSha256}:${manifest.publisherGeneration}`}
-              className="space-y-2 rounded-md border border-line bg-raised p-3"
+            <p className="font-medium text-fg">
+              {receipt.name}: approval is {meshApprovalStatus(receipt.response.approvalStatus).label.toLowerCase()}
+              {receipt.response.replayed ? " (an existing request was returned)" : ""}
+            </p>
+            <p>
+              Permissions {meshPermissionDiffLabel(receipt.response.diff.permissionDisposition)} (
+              {receipt.response.diff.permissionsAdded.length} added, {receipt.response.diff.permissionsRemoved.length}{" "}
+              removed) · effects {meshEffectDiffLabel(receipt.response.diff.effectDisposition)} (
+              {meshEffectsLabel(receipt.response.diff.currentEffectPosture)}) · expires{" "}
+              {time(receipt.response.approvalExpiresAt)}
+            </p>
+            <SystemOwnerLink
+              href={`/inbox?approvalId=${encodeURIComponent(receipt.response.approvalId)}`}
+              scope={[workspaceId, receipt.response.approvalId]}
             >
-              <h3 className="font-medium text-fg">
-                Capabilities from a mesh node{manifest.supersededByManifestSha256 ? " · Superseded" : ""}
-              </h3>
-              <p className="text-fg-secondary">
-                {plural(manifest.entries.length, "capability", "capabilities")} · Published {time(manifest.createdAt)}
-              </p>
-              <TechnicalDetails label="Manifest identifiers">
-                <ul className="space-y-1 break-words">
-                  {manifest.entries[0]?.nodeId ? <li>Node ID: {manifest.entries[0].nodeId}</li> : null}
-                  <li>
-                    Publisher generation {manifest.publisherGeneration} · Admission generation{" "}
-                    {manifest.admissionGeneration}
-                  </li>
-                  <li>
-                    Manifest digest:{" "}
-                    <code title={`sha256:${manifest.manifestSha256}`}>{shortDigest(manifest.manifestSha256)}</code>
-                  </li>
-                  {manifest.supersedesManifestSha256 ? (
+              Review the activation approval
+            </SystemOwnerLink>
+          </div>
+        ) : null}
+        {pendingApproval ? (
+          <SystemOwnerLink
+            href={`/inbox?approvalId=${encodeURIComponent(pendingApproval)}`}
+            scope={[workspaceId, pendingApproval]}
+          >
+            Open the pending activation approval
+          </SystemOwnerLink>
+        ) : null}
+        {notice ? (
+          <p role="status" className="text-fg-secondary">
+            {notice}
+          </p>
+        ) : null}
+        {retry ? (
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" disabled={busy} onClick={() => void confirm(retry)}>
+              Retry the same request
+            </Button>
+            <Button size="sm" disabled={busy} onClick={() => setRetry(null)}>
+              Dismiss
+            </Button>
+          </div>
+        ) : null}
+        {ops.error ? (
+          <p role="alert" className="text-status-failed">
+            {ops.error}
+          </p>
+        ) : ops.loading && !ops.inspection ? (
+          <p role="status" className="text-fg-muted">
+            Reading mesh publications…
+          </p>
+        ) : ops.inspection && !manifests.length ? (
+          <p className="text-fg-muted">No accepted node has published a capability manifest into this workspace.</p>
+        ) : manifests.length ? (
+          <ul aria-label="Published mesh capability manifests" className="space-y-3">
+            {manifests.map((manifest) => (
+              <li
+                key={`${manifest.manifestSha256}:${manifest.publisherGeneration}`}
+                className="space-y-2 rounded-md border border-line bg-raised p-3"
+              >
+                <h3 className="font-medium text-fg">
+                  Capabilities from a mesh node{manifest.supersededByManifestSha256 ? " · Superseded" : ""}
+                </h3>
+                <p className="text-fg-secondary">
+                  {plural(manifest.entries.length, "capability", "capabilities")} · Published {time(manifest.createdAt)}
+                </p>
+                <TechnicalDetails label="Manifest identifiers">
+                  <ul className="space-y-1 break-words">
+                    {manifest.entries[0]?.nodeId ? <li>Node ID: {manifest.entries[0].nodeId}</li> : null}
                     <li>
-                      Supersedes: <code>{shortDigest(manifest.supersedesManifestSha256)}</code>
+                      Publisher generation {manifest.publisherGeneration} · Admission generation{" "}
+                      {manifest.admissionGeneration}
                     </li>
-                  ) : null}
-                  <li>Publication key: {manifest.publicationKey}</li>
+                    <li>
+                      Manifest digest:{" "}
+                      <code title={`sha256:${manifest.manifestSha256}`}>{shortDigest(manifest.manifestSha256)}</code>
+                    </li>
+                    {manifest.supersedesManifestSha256 ? (
+                      <li>
+                        Supersedes: <code>{shortDigest(manifest.supersedesManifestSha256)}</code>
+                      </li>
+                    ) : null}
+                    <li>Publication key: {manifest.publicationKey}</li>
+                  </ul>
+                </TechnicalDetails>
+                <ul aria-label="Capabilities in this manifest" className="space-y-2">
+                  {manifest.entries.map((entry) => (
+                    <MeshCapabilityEntryRow
+                      key={entry.entrySha256}
+                      entry={entry}
+                      busy={busy}
+                      reason={entry.activation ? (reasons[entry.activation.activationId] ?? "") : ""}
+                      onReason={(value) =>
+                        entry.activation &&
+                        setReasons((current) => ({ ...current, [entry.activation!.activationId]: value }))
+                      }
+                      onReview={setReview}
+                    />
+                  ))}
                 </ul>
-              </TechnicalDetails>
-              <ul aria-label="Capabilities in this manifest" className="space-y-2">
-                {manifest.entries.map((entry) => (
-                  <MeshCapabilityEntryRow
-                    key={entry.entrySha256}
-                    entry={entry}
-                    busy={busy}
-                    reason={entry.activation ? (reasons[entry.activation.activationId] ?? "") : ""}
-                    onReason={(value) =>
-                      entry.activation &&
-                      setReasons((current) => ({ ...current, [entry.activation!.activationId]: value }))
-                    }
-                    onReview={setReview}
-                  />
-                ))}
-              </ul>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <MeshInvocationOutcomes activity={ops.invocationActivity} error={ops.activityError} />
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <MeshInvocationOutcomes activity={ops.invocationActivity} error={ops.activityError} />
+      </details>
       <ConfirmModal
         open={Boolean(review)}
         danger={review?.kind === "revoke"}

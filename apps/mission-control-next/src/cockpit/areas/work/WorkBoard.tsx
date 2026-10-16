@@ -1,12 +1,11 @@
-import { useState, type MouseEvent } from "react";
+import { useId, useState, type MouseEvent } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Search } from "lucide-react";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { presentRunStatus, presentTaskStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
-import { WindowedRecordList } from "../../ui/WindowedRecordList";
 import { Button } from "../../ui/Button";
-import { StatusBadge } from "../../ui/StatusBadge";
+import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { isModifiedClick } from "../../lib/modified-click";
@@ -15,13 +14,12 @@ import { projectWorkTasks } from "./work-tasks";
 import { WorkTaskCreate } from "./WorkTaskCreate";
 import { useWorkspaceDurableRuns } from "./useWorkspaceDurableRuns";
 import { workspaceTasksOptions } from "./work-queries";
-import { Field } from "../../ui/Field";
-import { TimeText } from "../../ui/TimeText";
 import { WorkWaitingDecisions } from "./WorkWaitingDecisions";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { recordView } from "../../data/record-view";
 import { workColumnStatus } from "./work-column-status";
 import { WorkTaskBulkActions } from "./WorkTaskBulkActions";
+import { WorkBoardColumn } from "./WorkBoardColumn";
 
 const COLUMNS: readonly { id: WorkBoardGroup; title: string; description: string }[] = [
   { id: "running", title: "Active", description: "Tasks being prepared or worked; runs queued or executing" },
@@ -29,11 +27,14 @@ const COLUMNS: readonly { id: WorkBoardGroup; title: string; description: string
   { id: "failed", title: "Failed runs", description: "Run failures and recovery" },
   { id: "done", title: "Done", description: "Completed or cancelled" },
 ];
-
-const CARD = "block rounded-md border border-line bg-raised p-3 hover:border-line-strong";
+/** The Done column is an overview; history and the Kanban own older records. */
+const DONE_LIMIT = 25;
+const CONTROL = "rounded-md border border-line bg-sunken py-2 text-sm text-fg";
 
 export function WorkBoard() {
   const { navigate } = useCockpitRoute();
+  const searchId = useId();
+  const kindId = useId();
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState("all");
@@ -66,17 +67,21 @@ export function WorkBoard() {
     `${task.title} ${task.status} ${presentTaskStatus(task.status).label} ${task.description ?? ""}`
       .toLowerCase()
       .includes(query);
-  // A bulk action applies only to the selected tasks the operator can see; the filter never hides a target.
-  const visibleTaskIds = new Set(
-    kind === "run"
+  const limit = (group: WorkBoardGroup) => (group === "done" ? DONE_LIMIT : undefined);
+  const visibleTasks = (group: WorkBoardGroup) =>
+    kind === "run" ? [] : (taskBoard?.[group] ?? []).filter(taskMatches).slice(0, limit(group));
+  const visibleRuns = (group: WorkBoardGroup) =>
+    kind === "task"
       ? []
-      : COLUMNS.flatMap((column) =>
-          (taskBoard?.[column.id] ?? [])
-            .filter(taskMatches)
-            .slice(0, column.id === "done" ? 25 : undefined)
-            .map((task) => task.taskId),
-        ),
-  );
+      : (board?.[group] ?? [])
+          .filter((run) =>
+            `${workRunTitle(run)} ${run.status} ${presentRunStatus(run.status).label} ${run.lastError ?? ""}`
+              .toLowerCase()
+              .includes(query),
+          )
+          .slice(0, limit(group));
+  // A bulk action applies only to the selected tasks the operator can see; the filter never hides a target.
+  const visibleTaskIds = new Set(COLUMNS.flatMap((column) => visibleTasks(column.id).map((task) => task.taskId)));
   const selectedTasks = loadedTasks.filter((task) => selectedIds.has(task.taskId) && visibleTaskIds.has(task.taskId));
   const hiddenSelected = loadedTasks.filter(
     (task) => selectedIds.has(task.taskId) && !visibleTaskIds.has(task.taskId),
@@ -95,69 +100,71 @@ export function WorkBoard() {
   };
   return (
     <section className={`${AREA_PAGE} min-h-full`}>
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-xl font-semibold text-fg">Work</h1>
-          <p className="text-sm text-fg-secondary">Workspace tasks and recent Chat or supervised plan runs.</p>
-          <p className="mt-1 text-xs text-fg-muted">
-            Workspace tasks and saved run pages. Records without matching workspace evidence are omitted. Counts cover
-            only loaded records.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="primary" onClick={() => setCreating(true)} disabled={creating || !writable}>
-            New task
-          </Button>
-          <Button
-            size="sm"
-            aria-pressed={selecting}
-            disabled={!selecting && !tasks.data}
-            onClick={() => {
-              setSelecting((value) => !value);
-              setSelectedIds(new Set());
-              setBulkNotice(undefined);
-            }}
-          >
-            {selecting ? "Done selecting" : "Select tasks"}
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => {
-              void runs.refetch();
-              void tasks.refetch();
-            }}
-            disabled={runs.isFetching || tasks.isFetching}
-          >
-            <RefreshCw aria-hidden="true" className="size-4" /> Refresh
-          </Button>
-        </div>
-      </header>
-      <WorkWaitingDecisions workspaceId={workspaceId} />
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Search loaded work">
-          {(props) => (
-            <input
-              {...props}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              className="rounded-md border border-line bg-sunken p-2 text-fg"
-            />
-          )}
-        </Field>
-        <Field label="Record type">
-          {(props) => (
-            <select
-              {...props}
-              value={kind}
-              onChange={(event) => setKind(event.target.value)}
-              className="rounded-md border border-line bg-sunken p-2 text-fg"
+      <AreaHeader
+        title="Work"
+        description="Workspace tasks and recent Chat or supervised plan runs."
+        actions={
+          <>
+            <Button size="sm" variant="primary" onClick={() => setCreating(true)} disabled={creating || !writable}>
+              New task
+            </Button>
+            <Button
+              size="sm"
+              aria-pressed={selecting}
+              disabled={!selecting && !tasks.data}
+              onClick={() => {
+                setSelecting((value) => !value);
+                setSelectedIds(new Set());
+                setBulkNotice(undefined);
+              }}
             >
-              <option value="all">Tasks and runs</option>
-              <option value="task">Operator tasks</option>
-              <option value="run">Runs</option>
-            </select>
-          )}
-        </Field>
+              {selecting ? "Done selecting" : "Select tasks"}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                void runs.refetch();
+                void tasks.refetch();
+              }}
+              disabled={runs.isFetching || tasks.isFetching}
+            >
+              <RefreshCw aria-hidden="true" className="size-4" /> Refresh
+            </Button>
+          </>
+        }
+      />
+      <WorkWaitingDecisions workspaceId={workspaceId} />
+      <div className="flex flex-wrap items-center gap-2">
+        <label htmlFor={searchId} className="sr-only">
+          Search loaded work
+        </label>
+        <div className="relative min-w-0 flex-1 sm:max-w-sm">
+          <Search
+            aria-hidden="true"
+            className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-fg-muted"
+          />
+          <input
+            id={searchId}
+            type="search"
+            value={search}
+            placeholder="Search loaded tasks and runs"
+            onChange={(event) => setSearch(event.target.value)}
+            className={`${CONTROL} w-full pl-8 pr-2 placeholder:text-fg-muted`}
+          />
+        </div>
+        <label htmlFor={kindId} className="sr-only">
+          Record type
+        </label>
+        <select
+          id={kindId}
+          value={kind}
+          onChange={(event) => setKind(event.target.value)}
+          className={`${CONTROL} px-2`}
+        >
+          <option value="all">Tasks and runs</option>
+          <option value="task">Operator tasks</option>
+          <option value="run">Runs</option>
+        </select>
       </div>
       {selecting ? (
         <WorkTaskBulkActions
@@ -212,156 +219,59 @@ export function WorkBoard() {
           Task list unavailable: {describeApiError(tasks.error).summary}
         </p>
       ) : null}
+      {board || taskBoard ? (
+        <>
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+            {COLUMNS.map((column) => (
+              <WorkBoardColumn
+                key={column.id}
+                title={column.title}
+                description={column.description}
+                count={`${workColumnStatus(taskView, taskBoard?.[column.id].length, "tasks")} · ${workColumnStatus(runView, board?.[column.id].length, "runs")}`}
+                tasks={visibleTasks(column.id)}
+                runs={visibleRuns(column.id)}
+                empty={!runs.isError && !tasks.isError && !board?.[column.id].length && !taskBoard?.[column.id].length}
+                selecting={selecting}
+                selectedIds={selectedIds}
+                onToggle={toggle}
+                onOpen={open}
+              />
+            ))}
+          </div>
+          <p className="text-xs text-fg-muted">
+            {`Counts cover only loaded records; records without matching workspace evidence are omitted. Done shows up to ${DONE_LIMIT} matching tasks and ${DONE_LIMIT} matching runs. `}
+            <NativeOwnerLink href="/work/history" scope={workspaceId}>
+              Open run history
+            </NativeOwnerLink>
+            {" or "}
+            <NativeOwnerLink href="/work/kanban" scope={workspaceId}>
+              the Kanban
+            </NativeOwnerLink>
+            {" for older records."}
+          </p>
+        </>
+      ) : null}
       {!tasks.isError && tasks.hasNextPage ? (
         <p className="text-xs text-fg-muted">More tasks exist beyond the loaded pages.</p>
       ) : null}
-      {board || taskBoard ? (
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-          {COLUMNS.map((column) => (
-            <section
-              key={column.id}
-              aria-label={column.title}
-              className="min-w-0 rounded-lg border border-line bg-sunken p-3"
+      {runs.hasNextPage || (!tasks.isError && tasks.hasNextPage) ? (
+        <div className="flex flex-wrap gap-2">
+          {runs.hasNextPage ? (
+            <Button size="sm" variant="secondary" disabled={runs.isFetching} onClick={() => void runs.fetchNextPage()}>
+              {runs.isFetchingNextPage ? "Loading runs…" : "Load more runs"}
+            </Button>
+          ) : null}
+          {!tasks.isError && tasks.hasNextPage ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={tasks.isFetchingNextPage}
+              onClick={() => void tasks.fetchNextPage()}
             >
-              <div className="mb-3 flex items-baseline justify-between gap-2">
-                <div>
-                  <h2 className="font-display text-md font-semibold text-fg">{column.title}</h2>
-                  <p className="text-xs text-fg-muted">{column.description}</p>
-                </div>
-                <span className="text-sm tabular-nums text-fg-secondary">
-                  {workColumnStatus(taskView, taskBoard?.[column.id].length, "tasks")}
-                  {" · "}
-                  {workColumnStatus(runView, board?.[column.id].length, "runs")}
-                </span>
-              </div>
-              {(["task", "run"] as const)
-                .filter((recordKind) => kind === "all" || kind === recordKind)
-                .map((recordKind) => (
-                  <section key={recordKind} aria-label={recordKind === "task" ? "Operator tasks" : "Runs"}>
-                    <h3 className="mb-2 text-xs font-semibold text-fg-secondary">
-                      {recordKind === "task" ? "Operator tasks" : "Runs"}
-                    </h3>
-                    <WindowedRecordList
-                      label={column.title + " records"}
-                      items={[
-                        ...(taskBoard?.[column.id] ?? []).map((task) => ({
-                          kind: "task" as const,
-                          key: "task:" + task.taskId,
-                          task,
-                        })),
-                        ...(board?.[column.id] ?? []).map((run) => ({
-                          kind: "run" as const,
-                          key: "run:" + run.runId,
-                          run,
-                        })),
-                      ]
-                        .filter(
-                          (item) =>
-                            item.kind === recordKind &&
-                            (item.kind === "task"
-                              ? taskMatches(item.task)
-                              : `${workRunTitle(item.run)} ${item.run.status} ${presentRunStatus(item.run.status).label} ${item.run.lastError ?? ""}`
-                                  .toLowerCase()
-                                  .includes(query)),
-                        )
-                        .slice(0, column.id === "done" ? 25 : undefined)}
-                      itemKey={(item) => item.key}
-                    >
-                      {(item) => {
-                        if (item.kind === "task") {
-                          const task = item.task;
-                          const path = `/work/tasks/${encodeURIComponent(task.taskId)}`;
-                          if (selecting)
-                            return (
-                              <label
-                                key={`task:${task.taskId}`}
-                                className={`${CARD} flex min-h-11 cursor-pointer items-start gap-2`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  className="mt-0.5 size-5 shrink-0"
-                                  checked={selectedIds.has(task.taskId)}
-                                  onChange={() => toggle(task.taskId)}
-                                />
-                                <span className="min-w-0">
-                                  <span className="flex flex-wrap items-center gap-2 text-xs font-semibold text-accent">
-                                    Operator task <StatusBadge status={presentTaskStatus(task.status)} />
-                                  </span>
-                                  <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">
-                                    {task.title}
-                                  </span>
-                                </span>
-                              </label>
-                            );
-                          return (
-                            <a key={`task:${task.taskId}`} href={path} onClick={open(path)} className={CARD}>
-                              <span className="flex flex-wrap items-center gap-2 text-xs font-semibold text-accent">
-                                Operator task <StatusBadge status={presentTaskStatus(task.status)} />
-                              </span>
-                              <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">{task.title}</span>
-                              <TimeText
-                                value={task.updatedAt}
-                                prefix="Updated"
-                                className="mt-2 block text-xs text-fg-muted"
-                              />
-                            </a>
-                          );
-                        }
-                        const run = item.run;
-                        const path = `/work/runs/${encodeURIComponent(run.runId)}`;
-                        return (
-                          <a key={`run:${run.runId}`} href={path} onClick={open(path)} className={CARD}>
-                            <span className="text-xs font-semibold text-accent">Run</span>
-                            <span className="line-clamp-3 text-sm font-medium text-fg">{workRunTitle(run)}</span>
-                            <span className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                              <StatusBadge status={presentRunStatus(run.status)} />
-                              <TimeText value={run.updatedAt} className="text-xs text-fg-muted" />
-                            </span>
-                            {run.lastError || run.recoverySummary ? (
-                              <span className="mt-2 block text-xs text-status-failed">
-                                {run.lastError ?? run.recoverySummary}
-                              </span>
-                            ) : null}
-                          </a>
-                        );
-                      }}
-                    </WindowedRecordList>
-                  </section>
-                ))}
-              {column.id === "done" ? (
-                <p className="mt-2 text-xs text-fg-muted">
-                  {"Overview shows up to 25 matching tasks and 25 matching runs. "}
-                  <NativeOwnerLink href="/work/history" scope={workspaceId}>
-                    Open run history
-                  </NativeOwnerLink>
-                  {" or "}
-                  <NativeOwnerLink href="/work/kanban" scope={workspaceId}>
-                    the Kanban
-                  </NativeOwnerLink>
-                  {" for older records."}
-                </p>
-              ) : null}
-              {!runs.isError && !tasks.isError && !board?.[column.id].length && !taskBoard?.[column.id].length ? (
-                <p className="text-xs text-fg-muted">No recent work in this state.</p>
-              ) : null}
-            </section>
-          ))}
+              {tasks.isFetchingNextPage ? "Loading tasks…" : "Load more tasks"}
+            </Button>
+          ) : null}
         </div>
-      ) : null}
-      {runs.hasNextPage ? (
-        <Button size="sm" variant="secondary" disabled={runs.isFetching} onClick={() => void runs.fetchNextPage()}>
-          {runs.isFetchingNextPage ? "Loading runs…" : "Load more runs"}
-        </Button>
-      ) : null}
-      {!tasks.isError && tasks.hasNextPage ? (
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={tasks.isFetchingNextPage}
-          onClick={() => void tasks.fetchNextPage()}
-        >
-          {tasks.isFetchingNextPage ? "Loading tasks…" : "Load more tasks"}
-        </Button>
       ) : null}
     </section>
   );

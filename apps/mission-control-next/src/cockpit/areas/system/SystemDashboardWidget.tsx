@@ -9,6 +9,7 @@ import { fetchCostSummary, fetchHealthSummary } from "@goatcitadel/mission-contr
 import { fetchTasksByView } from "@goatcitadel/mission-control-shared/api/tasks";
 import { projectUsageCostSummary } from "@goatcitadel/mission-control-shared/content/cost-summary";
 import { Button } from "../../ui/Button";
+import { MetricList } from "../../ui/MetricList";
 
 /** Dashboard widgets are summaries; realtime events refresh their sources, so a minute is enough. */
 export const DASHBOARD_REFRESH_MS = 60_000;
@@ -43,7 +44,7 @@ function WidgetFrame({
     <section aria-label={title} className="min-w-0 rounded-lg border border-line bg-raised p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3 className="font-display text-sm font-semibold text-fg">{title}</h3>
+          <h3 className="text-sm font-semibold text-fg">{title}</h3>
           <p className="mt-0.5 text-xs text-fg-muted">{source}</p>
         </div>
         <Button size="sm" disabled={refreshing} onClick={refresh}>
@@ -72,16 +73,13 @@ function WidgetFrame({
   );
 }
 
-function Metrics({ items }: { items: Array<[string, string]> }) {
+/** A widget leads with a sentence that says what its numbers count, then the numbers as an inline list. */
+function Metrics({ summary, items }: { summary: ReactNode; items: Array<[string, string]> }) {
   return (
-    <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-      {items.map(([label, value]) => (
-        <div key={label} className="rounded-md border border-line-subtle bg-sunken p-2">
-          <dt className="text-xs text-fg-muted">{label}</dt>
-          <dd className="mt-1 text-sm font-semibold tabular-nums text-fg">{value}</dd>
-        </div>
-      ))}
-    </dl>
+    <div className="grid gap-2">
+      <p className="text-sm text-fg-secondary">{summary}</p>
+      <MetricList items={items.map(([term, value]) => ({ term, value }))} />
+    </div>
   );
 }
 
@@ -111,6 +109,7 @@ function AgenticRunsWidget({ workspaceId }: { workspaceId: string }) {
       refresh={() => void query.refetch()}
     >
       <Metrics
+        summary="Active runs are queued, planning, running or checkpointing. Runs that need review are paused, blocked, failed, stopped by a limit or waiting for approval."
         items={[
           ["Known runs", String(runs.length)],
           ["Active", String(active)],
@@ -145,6 +144,7 @@ function ApprovalsWidget({ workspaceId }: { workspaceId: string }) {
       refresh={() => void query.refetch()}
     >
       <Metrics
+        summary="Pending approvals linked to this workspace, by risk level."
         items={[
           ["Known pending", String(approvals.length)],
           ["High risk", String(highRisk)],
@@ -184,13 +184,13 @@ function RuntimeWidget() {
       refresh={() => void query.refetch()}
     >
       <Metrics
+        summary="Host-wide status applies beyond the selected workspace."
         items={[
           ["Gateway host", health?.systemVitals.hostname || "Unknown"],
           ["Daemon", daemon],
           ["Memory", memory],
         ]}
       />
-      <p className="mt-2 text-xs text-fg-muted">Host-wide status applies beyond the selected workspace.</p>
     </WidgetFrame>
   );
 }
@@ -219,6 +219,7 @@ function TasksWidget({ workspaceId }: { workspaceId: string }) {
       refresh={() => void query.refetch()}
     >
       <Metrics
+        summary="Tasks in flight are assigned, in progress, testing or in review."
         items={[
           ["Known tasks", String(tasks.length)],
           ["In flight", String(inFlight)],
@@ -238,6 +239,7 @@ function UsageWidget() {
   });
   const summary = query.data;
   const projection = summary ? projectUsageCostSummary(summary) : null;
+  const coverage = projection ? projection.coverageDescription + " " : "";
   return (
     <WidgetFrame
       title="Usage and cost"
@@ -250,14 +252,12 @@ function UsageWidget() {
       refresh={() => void query.refetch()}
     >
       <Metrics
+        summary={`${coverage}This aggregate is not scoped to the selected workspace.`}
         items={[
           ["Recorded tokens", projection ? new Intl.NumberFormat().format(projection.tokens) : "Unknown"],
           ["Known cost", projection?.costLabel ?? "Unknown"],
-          ["Groups", summary ? String(summary.items.length) : "Unknown"],
         ]}
       />
-      {projection ? <p className="mt-2 text-xs text-fg-muted">{projection.coverageDescription}</p> : null}
-      <p className="mt-1 text-xs text-fg-muted">This aggregate is not scoped to the selected workspace.</p>
     </WidgetFrame>
   );
 }
@@ -276,7 +276,7 @@ export function SystemDashboardWidget({ kind, workspaceId }: { kind: OpsSavedBoa
       return <UsageWidget />;
     default:
       return (
-        <p role="alert" className="rounded-lg border border-line p-4 text-sm text-fg">
+        <p role="alert" className="text-sm text-fg">
           This saved widget kind is unavailable in the cockpit.
         </p>
       );
