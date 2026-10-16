@@ -34,9 +34,20 @@ export function WorkKanban() {
     <section className="min-w-0">
       {/* The classic owner below keeps its own page header; this one carries the Work tabs. */}
       <div className={`${AREA_COLUMN} flex flex-col gap-3 px-4 pt-4 sm:px-6 sm:pt-6`}>
+        {/* On a run, the embedded run page drops its own h1, so the header names the run the way that page did. */}
         <AreaHeader
-          title="Classic Kanban"
-          description="The full task Kanban from the classic view, with advanced task actions."
+          title={
+            route.runId || route.view === "run-detail"
+              ? route.runId
+                ? `Run ${route.runId}`
+                : "Run detail"
+              : "Classic Kanban"
+          }
+          description={
+            route.runId || route.view === "run-detail"
+              ? "A run opened from the classic Kanban, with its saved steps and outcome."
+              : "The full task Kanban from the classic view, with advanced task actions."
+          }
         />
         <p className="text-sm text-fg-secondary">
           {"Runs keep their saved state; editing a task does not start or prove a run. "}

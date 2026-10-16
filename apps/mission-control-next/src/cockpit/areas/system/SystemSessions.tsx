@@ -37,9 +37,10 @@ export function SystemSessions() {
   return route.runId || route.view === "run-detail" ? (
     <section className="min-w-0">
       <div className={AREA_PAGE}>
+        {/* The embedded run page drops its own h1, so the header names the selected run the way that page did. */}
         <AreaHeader
-          title="Sessions"
-          description="Recent conversation details, with controls for the selected Chat session."
+          title={route.runId ? `Run ${route.runId}` : "Run detail"}
+          description="A run opened from Sessions, with its saved steps and outcome."
         />
       </div>
       <RunDetailRoutePage key={access.identity} {...props} />
