@@ -1,5 +1,5 @@
-import type { FastifyInstance, FastifyPluginAsync } from "fastify";
-import { ConflictError, NotFoundError, type ModelComparisonJudgeRequest } from "@goatcitadel/contracts";
+import type { FastifyBaseLogger, FastifyInstance, FastifyPluginAsync, FastifyReply } from "fastify";
+import { isGoatError, redactStructuredSecrets, type ModelComparisonJudgeRequest } from "@goatcitadel/contracts";
 import { z } from "zod";
 import type { ModelComparisonRoutePort } from "../services/model-comparison-route-service.js";
 
@@ -108,7 +108,7 @@ export const modelComparisonRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.code(202).send(await getModelComparisonService(fastify).startComparison(params.data.comparisonId));
     } catch (error) {
-      return reply.code(runControlErrorStatus(error)).send({ error: (error as Error).message });
+      return sendRunControlError(reply, error, request.log);
     }
   });
 
@@ -120,19 +120,30 @@ export const modelComparisonRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(await getModelComparisonService(fastify).cancelComparison(params.data.comparisonId));
     } catch (error) {
-      return reply.code(runControlErrorStatus(error)).send({ error: (error as Error).message });
+      return sendRunControlError(reply, error, request.log);
     }
   });
 };
 
-function runControlErrorStatus(error: unknown): number {
-  if (error instanceof NotFoundError) {
-    return 404;
+const RUN_CONTROL_FAILURE_MESSAGE = "Comparison run control failed.";
+
+/**
+ * Typed domain errors (not found 404, conflict 409, validation 400, ...) keep
+ * their own status and message. Anything else is a server fault: the raw
+ * message stays in the redacted server log and the client gets a fixed body.
+ */
+function sendRunControlError(
+  reply: FastifyReply,
+  error: unknown,
+  log: FastifyBaseLogger,
+): ReturnType<FastifyReply["send"]> {
+  if (isGoatError(error)) {
+    return reply.code(error.httpStatus).send({ error: redactStructuredSecrets(error.message).value });
   }
-  if (error instanceof ConflictError) {
-    return 409;
-  }
-  return 400;
+  const diagnostic =
+    error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : { value: error };
+  log.error({ err: redactStructuredSecrets(diagnostic).value }, "model comparison run control failed");
+  return reply.code(500).send({ error: RUN_CONTROL_FAILURE_MESSAGE });
 }
 
 function getModelComparisonService(fastify: FastifyInstance): ModelComparisonRoutePort {

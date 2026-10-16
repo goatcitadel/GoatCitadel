@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, SemanticValidationError, ValidationError } from "@goatcitadel/contracts";
 import { modelComparisonRoutes } from "./model-comparisons.js";
 
 describe("model comparison routes", () => {
@@ -110,7 +110,48 @@ describe("model comparison routes", () => {
 
     const started = await app.inject({ method: "POST", url: "/api/v1/model-comparisons/cmp-1/run", payload: {} });
 
-    expect(started.statusCode).toBe(400);
-    expect(started.json().error).toMatch(/not registered/i);
+    expect(started.statusCode).toBe(500);
+    expect(started.json().error).toBe("Comparison run control failed.");
+  });
+
+  it("maps typed run-control errors to their own status and hides unexpected error text", async () => {
+    app = Fastify();
+    app.decorate("services", {
+      modelComparisons: {
+        startComparison: async (id: string) => {
+          if (id === "invalid") throw new ValidationError({ field: "candidates", message: "Candidates are invalid." });
+          if (id === "unprocessable") throw new SemanticValidationError("Pack has no tests.");
+          throw new Error("db exploded: secret");
+        },
+        cancelComparison: async () => {
+          throw new Error("db exploded: secret");
+        },
+      },
+    } as never);
+    await app.register(modelComparisonRoutes);
+
+    const invalid = await app.inject({ method: "POST", url: "/api/v1/model-comparisons/invalid/run", payload: {} });
+    const unprocessable = await app.inject({
+      method: "POST",
+      url: "/api/v1/model-comparisons/unprocessable/run",
+      payload: {},
+    });
+    const exploded = await app.inject({ method: "POST", url: "/api/v1/model-comparisons/boom/run", payload: {} });
+    const cancelExploded = await app.inject({
+      method: "POST",
+      url: "/api/v1/model-comparisons/boom/cancel",
+      payload: {},
+    });
+
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().error).toBe("Candidates are invalid.");
+    expect(unprocessable.statusCode).toBe(422);
+    expect(unprocessable.json().error).toBe("Pack has no tests.");
+    for (const response of [exploded, cancelExploded]) {
+      expect(response.statusCode).toBe(500);
+      expect(response.json().error).toBe("Comparison run control failed.");
+      expect(response.body).not.toContain("secret");
+      expect(response.body).not.toContain("db exploded");
+    }
   });
 });
