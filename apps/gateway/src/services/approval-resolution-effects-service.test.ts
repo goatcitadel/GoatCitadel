@@ -7443,6 +7443,10 @@ function claimEffectForService(service: ApprovalEffectsService, effect: Approval
   };
 }
 
+/** The connection revision every seeded communications approval was requested against. */
+const COMMS_CONNECTION_REVISION = "rev-comms";
+const commsLinkage = (actionType: string, connectorId: string) => ({ actionType, connectorId, workspaceId: "default" });
+
 describe("communications approval effects", () => {
   function createCommsEffectHarness() {
     const raw = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
@@ -7460,6 +7464,7 @@ describe("communications approval effects", () => {
       getIntegrationConnection: async (connectionId) =>
         ({
           connectionId,
+          revision: COMMS_CONNECTION_REVISION,
           catalogId: "automation.gmail",
           kind: "automation",
           key: "gmail",
@@ -7519,6 +7524,7 @@ describe("communications approval effects", () => {
       bcc: [],
       subject: "Status",
       bodyText: "All good",
+      connectionRevision: COMMS_CONNECTION_REVISION,
     };
     const payloadHash = computeCommunicationsPayloadHash(hashed);
     await storage.mailDrafts.create({ ...hashed, status: "approval_required", createdAt: now, updatedAt: now });
@@ -7527,6 +7533,7 @@ describe("communications approval effects", () => {
       riskLevel: "danger",
       payload: { action: "mail_send", ...hashed, payloadHash, idempotencyKeyPrefix: COMMUNICATIONS_IDEMPOTENCY_PREFIX },
       preview: {},
+      linkage: commsLinkage("communications.mail.send", hashed.accountId),
     });
     await storage.mailDrafts.transition(hashed.draftId, ["approval_required"], {
       status: "approval_required",
@@ -7700,6 +7707,7 @@ describe("communications approval effects", () => {
         startIso: "2026-10-20T15:00:00.000Z",
         endIso: "2026-10-20T15:30:00.000Z",
         attendees: [],
+        connectionRevision: COMMS_CONNECTION_REVISION,
       };
       const payloadHash = computeCommunicationsPayloadHash(hashed);
       const createCalendarApproval = () =>
@@ -7708,6 +7716,7 @@ describe("communications approval effects", () => {
           riskLevel: "caution",
           payload: { action: "calendar_event_create", ...hashed, payloadHash },
           preview: {},
+          linkage: commsLinkage("communications.calendar.create", hashed.accountId),
         });
       const { service, drain } = harness.createEffects();
 
@@ -7782,12 +7791,14 @@ describe("communications approval effects", () => {
         startIso: "2026-10-20T15:00:00.000Z",
         endIso: "2026-10-20T15:30:00.000Z",
         attendees: [],
+        connectionRevision: COMMS_CONNECTION_REVISION,
       };
       const created = await harness.storage.approvals.create({
         kind: "communications.calendar.create",
         riskLevel: "caution",
         payload: { action: "calendar_event_create", ...hashed, payloadHash: computeCommunicationsPayloadHash(hashed) },
         preview: {},
+        linkage: commsLinkage("communications.calendar.create", hashed.accountId),
       });
       const approval = await harness.storage.approvals.resolve(created.approvalId, {
         decision: "approve",
