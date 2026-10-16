@@ -92,20 +92,21 @@ export function buildCommsPreApproval(
   approvalId: string,
   now: () => Date = () => new Date(),
 ): CommsPreApproval {
+  const pendingActions = storage.pendingApprovalActions;
   return {
     approvalId,
     async recordPendingAction(request) {
       const recordedAt = now();
       // The upsert only rewrites a row that is still pending, so a settled approval
       // keeps its resolution and the re-read below refuses a second invoke.
-      await storage.pendingApprovalActions.upsertPending({
+      await pendingActions.upsertPending({
         approvalId,
         actionType: "tool.invoke",
         request: request as unknown as Record<string, unknown>,
         createdAt: recordedAt.toISOString(),
         expiresAt: new Date(recordedAt.getTime() + COMMS_PRE_APPROVAL_TTL_MS).toISOString(),
       });
-      const row = await storage.pendingApprovalActions.find(approvalId);
+      const row = await pendingActions.find(approvalId);
       if (row?.resolutionStatus !== "pending") {
         throw new Error(COMMS_PRE_APPROVAL_SETTLED_MESSAGE);
       }
@@ -125,8 +126,9 @@ async function invokeCommsTool(
     ...request,
     args: omitAbsentCommsFields(request.args) as ToolInvokeRequest["args"],
   };
+  const invoke = (toolRequest: ToolInvokeRequest) => host.invokeAndUnwrap(toolRequest, realtimeType);
   if (!preApproved) {
-    return host.invokeAndUnwrap(normalized, realtimeType);
+    return invoke(normalized);
   }
   const { preApproval, claim } = preApproved;
   // The approval bypass ignores consentContext when matching, so the recorded request
@@ -138,10 +140,7 @@ async function invokeCommsTool(
   // first turns a crash or failure during the call into an unknown external outcome
   // (manual reconciliation) instead of a retryable claim that could send twice.
   await claim.markExternalCallStarted();
-  return host.invokeAndUnwrap(
-    { ...recorded, consentContext: { source: "ui", reason: `approval:${preApproval.approvalId}` } },
-    realtimeType,
-  );
+  return invoke({ ...recorded, consentContext: { source: "ui", reason: `approval:${preApproval.approvalId}` } });
 }
 
 function omitAbsentCommsFields(value: unknown): unknown {
@@ -159,7 +158,7 @@ export async function commsSend(
   input: ChannelSendInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
   throwIfCommsAborted(input.signal);
-  const connection = await host.getIntegrationConnection(input.connectionId);
+  const connection = await readCommsConnection(host, input.connectionId);
   const sanitized = sanitizeChannelOutboundMessage(input.message ?? "", {
     neutralizeMentions: shouldNeutralizeChannelMentions(connection.key),
     maxLength: connection.key === "discord" ? 2000 : undefined,
@@ -293,7 +292,7 @@ export async function commsUnsend(
 
 export async function commsTyping(host: CommsHost, input: ChannelTypingInput): Promise<ChannelTypingResult> {
   throwIfCommsAborted(input.signal);
-  const connection = await host.getIntegrationConnection(input.connectionId);
+  const connection = await readCommsConnection(host, input.connectionId);
   if (connection.kind !== "channel") {
     throw new Error(`Integration connection ${input.connectionId} is not a channel connection.`);
   }
@@ -328,7 +327,7 @@ export async function commsTyping(host: CommsHost, input: ChannelTypingInput): P
 
 export async function commsActivity(host: CommsHost, input: ChannelActivityInput): Promise<ChannelActivityResult> {
   throwIfCommsAborted(input.signal);
-  const connection = await host.getIntegrationConnection(input.connectionId);
+  const connection = await readCommsConnection(host, input.connectionId);
   if (connection.kind !== "channel") {
     throw new Error(`Integration connection ${input.connectionId} is not a channel connection.`);
   }
@@ -528,14 +527,67 @@ function settleCommsSideEffectRun(
   throw runResult.error;
 }
 
+function readCommsConnection(host: CommsHost, connectionId: string): Promise<IntegrationConnection> {
+  return host.getIntegrationConnection(connectionId);
+}
+
 async function findCommsConnection(host: CommsHost, connectionId: string): Promise<IntegrationConnection | undefined> {
   try {
-    return await host.getIntegrationConnection(connectionId);
+    return await readCommsConnection(host, connectionId);
   } catch {
     // Preserve today's fail-inside-executor behavior for unknown connection ids: fall
     // back to a generic catalog id and let invokeCommsTool surface the real error.
     return undefined;
   }
+}
+
+interface LedgeredCommsInvoke {
+  boundary: string;
+  /** Catalog id used when the connection cannot be read; the invoke then surfaces the real error. */
+  fallbackCatalogId: string;
+  connectionId: string;
+  actionId: string;
+  idempotencyKey?: string;
+  payload: Record<string, unknown>;
+  label: string;
+  request: ToolInvokeRequest;
+  realtimeType: string;
+  preApproval?: CommsPreApproval;
+}
+
+/**
+ * Runs one comms tool invoke through the external side-effect ledger: claim, invoke
+ * (recording any pre-approval first), classify the result against the boundary, and
+ * map the run back to the tool-shaped result callers consume.
+ */
+async function runLedgeredCommsInvoke(
+  host: CommsHost,
+  spec: LedgeredCommsInvoke,
+): Promise<ToolInvokeResult | Record<string, unknown>> {
+  const connection = await findCommsConnection(host, spec.connectionId);
+  const { mutationStore, sideEffectRunStore } = host;
+  const runResult = await runIdempotentExternalSideEffect<Record<string, unknown>>({
+    mutationStore,
+    sideEffectRunStore,
+    boundary: spec.boundary,
+    catalogId: connection?.catalogId ?? spec.fallbackCatalogId,
+    connectionId: spec.connectionId,
+    actionId: spec.actionId,
+    checkedAt: new Date().toISOString(),
+    idempotencyKey: spec.idempotencyKey,
+    payload: spec.payload,
+    label: spec.label,
+    execute: async (claim) => {
+      const result = await invokeCommsTool(
+        host,
+        spec.request,
+        spec.realtimeType,
+        spec.preApproval ? { preApproval: spec.preApproval, claim } : undefined,
+      );
+      return classifyCommsSideEffectResult(result, claim);
+    },
+  });
+  return settleCommsSideEffectRun(runResult);
 }
 
 function isPreBoundaryToolInvokeRefusal(
@@ -554,16 +606,11 @@ export async function commsGmailSend(
   input: GmailSendInput,
   preApproval?: CommsPreApproval,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  const connection = await findCommsConnection(host, input.connectionId);
-  const checkedAt = new Date().toISOString();
-  const runResult = await runIdempotentExternalSideEffect<Record<string, unknown>>({
-    mutationStore: host.mutationStore,
-    sideEffectRunStore: host.sideEffectRunStore,
+  return runLedgeredCommsInvoke(host, {
     boundary: COMMS_GMAIL_SEND_BOUNDARY,
-    catalogId: connection?.catalogId ?? "automation.gmail",
+    fallbackCatalogId: "automation.gmail",
     connectionId: input.connectionId,
     actionId: "gmail.send",
-    checkedAt,
     idempotencyKey: input.idempotencyKey,
     payload: {
       provider: "gmail",
@@ -576,31 +623,24 @@ export async function commsGmailSend(
       bodyHtml: input.bodyHtml,
     },
     label: "Gmail send (comms)",
-    execute: async (claim) => {
-      const result = await invokeCommsTool(
-        host,
-        {
-          toolName: "gmail.send",
-          args: {
-            connectionId: input.connectionId,
-            to: input.to,
-            cc: input.cc,
-            bcc: input.bcc,
-            subject: input.subject,
-            bodyText: input.bodyText,
-            bodyHtml: input.bodyHtml,
-          },
-          sessionId: input.sessionId ?? COMMS_SESSION,
-          agentId: input.agentId ?? KNOWLEDGE_AGENT,
-          taskId: input.taskId,
-        },
-        "comms_gmail_send",
-        preApproval ? { preApproval, claim } : undefined,
-      );
-      return classifyCommsSideEffectResult(result, claim);
+    request: {
+      toolName: "gmail.send",
+      args: {
+        connectionId: input.connectionId,
+        to: input.to,
+        cc: input.cc,
+        bcc: input.bcc,
+        subject: input.subject,
+        bodyText: input.bodyText,
+        bodyHtml: input.bodyHtml,
+      },
+      sessionId: input.sessionId ?? COMMS_SESSION,
+      agentId: input.agentId ?? KNOWLEDGE_AGENT,
+      taskId: input.taskId,
     },
+    realtimeType: "comms_gmail_send",
+    preApproval,
   });
-  return settleCommsSideEffectRun(runResult);
 }
 
 export async function commsCalendarList(
@@ -631,7 +671,6 @@ export async function commsCalendarCreate(
   input: CalendarCreateEventInput & { idempotencyKey?: string },
   preApproval?: CommsPreApproval,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  const connection = await findCommsConnection(host, input.connectionId);
   const eventFields = {
     connectionId: input.connectionId,
     calendarId: input.calendarId,
@@ -642,34 +681,24 @@ export async function commsCalendarCreate(
     attendees: input.attendees,
     timeZone: input.timeZone,
   };
-  const runResult = await runIdempotentExternalSideEffect<Record<string, unknown>>({
-    mutationStore: host.mutationStore,
-    sideEffectRunStore: host.sideEffectRunStore,
+  return runLedgeredCommsInvoke(host, {
     boundary: COMMS_CALENDAR_CREATE_BOUNDARY,
-    catalogId: connection?.catalogId ?? "automation.google-calendar",
+    fallbackCatalogId: "automation.google-calendar",
     connectionId: input.connectionId,
     actionId: "calendar.create_event",
-    checkedAt: new Date().toISOString(),
     // A keyless create gets a fresh per-call key: it is still ledgered, but two identical
     // creates stay distinct (an operator may have deleted the first event upstream).
     idempotencyKey: input.idempotencyKey ?? `calendar:${randomUUID()}`,
     payload: eventFields,
     label: "Calendar create event (comms)",
-    execute: async (claim) => {
-      const result = await invokeCommsTool(
-        host,
-        {
-          toolName: "calendar.create_event",
-          args: eventFields,
-          sessionId: input.sessionId ?? COMMS_SESSION,
-          agentId: input.agentId ?? KNOWLEDGE_AGENT,
-          taskId: input.taskId,
-        },
-        "comms_calendar_create",
-        preApproval ? { preApproval, claim } : undefined,
-      );
-      return classifyCommsSideEffectResult(result, claim);
+    request: {
+      toolName: "calendar.create_event",
+      args: eventFields,
+      sessionId: input.sessionId ?? COMMS_SESSION,
+      agentId: input.agentId ?? KNOWLEDGE_AGENT,
+      taskId: input.taskId,
     },
+    realtimeType: "comms_calendar_create",
+    preApproval,
   });
-  return settleCommsSideEffectRun(runResult);
 }
