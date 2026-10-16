@@ -29,6 +29,7 @@ import {
   type ExternalSideEffectRunStore,
   type IdempotentExternalSideEffectRunResult,
 } from "./external-side-effect-runner-service.js";
+import { COMMUNICATIONS_IDEMPOTENCY_PREFIX } from "./communications-approval-payload.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 
 export interface CommsHost {
@@ -589,6 +590,16 @@ async function runLedgeredCommsInvoke(
   host: CommsHost,
   spec: LedgeredCommsInvoke,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
+  // The communications: key space belongs to approved sends (leased claims). A plain
+  // caller-supplied key in it would share a mutation identity with an approval's send
+  // and let a leased claimer take over the unleased row, so refuse before any claim.
+  if (!spec.preApproval && spec.idempotencyKey?.startsWith(COMMUNICATIONS_IDEMPOTENCY_PREFIX)) {
+    return {
+      status: "failed",
+      deliveryStatus: "blocked",
+      error: "The communications: idempotency key prefix is reserved for approved sends.",
+    };
+  }
   const connection = await findCommsConnection(host, spec.connectionId);
   const { mutationStore, sideEffectRunStore } = host;
   const runResult = await runIdempotentExternalSideEffect<Record<string, unknown>>({

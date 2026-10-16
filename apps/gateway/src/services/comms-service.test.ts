@@ -981,6 +981,47 @@ describe("comms pre-approved invocation", () => {
   });
 });
 
+describe("comms reserved communications idempotency prefix", () => {
+  const reserved = "communications:ap-1";
+  const blocked = {
+    status: "failed",
+    deliveryStatus: "blocked",
+    error: "The communications: idempotency key prefix is reserved for approved sends.",
+  };
+
+  it("blocks plain gmail send, smtp send and calendar create before any claim or invoke", async () => {
+    const gmail = createGmailHost();
+    const smtp = createSmtpHost();
+    const calendar = createCalendarHost();
+
+    await expect(commsGmailSend(gmail.host, gmailInput({ idempotencyKey: reserved }))).resolves.toEqual(blocked);
+    await expect(
+      commsSmtpSend(smtp.host, gmailInput({ connectionId: "conn-smtp", idempotencyKey: reserved })),
+    ).resolves.toEqual(blocked);
+    await expect(commsCalendarCreate(calendar.host, calendarInput({ idempotencyKey: reserved }))).resolves.toEqual(
+      blocked,
+    );
+
+    for (const { host, sideEffectRunStore } of [gmail, smtp, calendar]) {
+      expect(host.invokeAndUnwrap).not.toHaveBeenCalled();
+      expect(sideEffectRunStore.runs.size).toBe(0);
+    }
+  });
+
+  it("still lets a pre-approved send use the communications: key", async () => {
+    const { host } = createGmailHost();
+
+    const result = await commsGmailSend(
+      host,
+      gmailInput({ idempotencyKey: reserved }),
+      createRecordingPreApproval("ap-1"),
+    );
+
+    expect(host.invokeAndUnwrap).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: "sent" });
+  });
+});
+
 describe("comms claim takeover lease", () => {
   // A store with the dispatch marker would otherwise give every claim the default lease.
   function createLeaseRecordingHost(base: ReturnType<typeof createGmailHost>) {
