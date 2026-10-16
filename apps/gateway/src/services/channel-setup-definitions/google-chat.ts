@@ -136,6 +136,19 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
               canChangeLater: true,
             },
             {
+              key: "addOnProjectNumber",
+              label: "Workspace add-on project number (add-on Chat apps only)",
+              type: "text",
+              required: false,
+              explanation:
+                "Only fill this in if your Chat app is built as a Google Workspace add-on. Enter the numeric project number of the add-on's Google Cloud project. Leave it empty for a regular Chat app.",
+              whyNeeded:
+                "Google signs add-on requests with that project's add-on service account instead of the Chat service account. GoatCitadel accepts that one account only, so tokens from any other project are still rejected. Requires the HTTP endpoint URL audience type.",
+              looksLike: "123456789012",
+              commonMistakes: ["Entering the project ID (a name) instead of the numeric project number."],
+              canChangeLater: true,
+            },
+            {
               key: "defaultSpace",
               label: "Default space (Chat app mode)",
               type: "text",
@@ -234,6 +247,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
           serviceAccountKeyEnv: readString(config, "serviceAccountKeyEnv"),
           audienceType: readString(config, "audienceType"),
           audience: readString(config, "audience"),
+          addOnProjectNumber: readString(config, "addOnProjectNumber"),
           defaultSpace: readString(config, "defaultSpace"),
         },
         hydration: {
@@ -245,6 +259,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
             serviceAccountKeyEnv: readString(config, "serviceAccountKeyEnv") ? "configured" : "unknown",
             audienceType: readString(config, "audienceType") ? "configured" : "unknown",
             audience: readString(config, "audience") ? "configured" : "unknown",
+            addOnProjectNumber: readString(config, "addOnProjectNumber") ? "configured" : "unknown",
             defaultSpace: readString(config, "defaultSpace") ? "configured" : "unknown",
           },
           warnings: hasConfiguredSecret
@@ -266,6 +281,7 @@ export function createGoogleChatDefinition(): ChannelSetupRuntimeDefinition {
         serviceAccountKeyEnv: readString(draft.draft, "serviceAccountKeyEnv"),
         audienceType: appMode ? (readString(draft.draft, "audienceType") ?? "project_number") : undefined,
         audience: appMode ? readString(draft.draft, "audience") : undefined,
+        addOnProjectNumber: appMode ? readString(draft.draft, "addOnProjectNumber") : undefined,
         defaultSpace: appMode ? readString(draft.draft, "defaultSpace") : undefined,
         // Google Chat never had inbound: app inbound is default-deny and never inherits a legacy-open posture.
         ...(appMode ? { inboundAccessMode: "allowlist" } : {}),
@@ -312,6 +328,22 @@ function validateAppMode(values: Record<string, unknown>): ChannelSetupIssue[] {
   } else if (audienceType === "endpoint_url" && !/^https:\/\/[^\s]+$/.test(audience)) {
     issues.push(
       malformedFieldIssue("audience", "The endpoint URL audience must be this connection's public HTTPS URL."),
+    );
+  }
+  const addOnProjectNumber = readString(values, "addOnProjectNumber");
+  if (addOnProjectNumber && !/^\d{6,20}$/.test(addOnProjectNumber)) {
+    issues.push(
+      malformedFieldIssue(
+        "addOnProjectNumber",
+        "The add-on project number is the numeric Google Cloud project number, not the project ID.",
+      ),
+    );
+  } else if (addOnProjectNumber && audienceType !== "endpoint_url") {
+    issues.push(
+      malformedFieldIssue(
+        "addOnProjectNumber",
+        "Workspace add-on Chat apps use the HTTP endpoint URL audience. Switch the audience type, or clear this field.",
+      ),
     );
   }
   const defaultSpace = readString(values, "defaultSpace");

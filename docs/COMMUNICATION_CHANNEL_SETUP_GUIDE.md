@@ -290,12 +290,16 @@ Google Chat has two modes. Webhook mode posts into one space through an incoming
 1. In Google Cloud, enable the Google Chat API and create a service account with a JSON key.
 2. Store the whole JSON key in an environment variable on the gateway host (for example `GOOGLE_CHAT_SA_KEY`); never paste it into a tracked file.
 3. Configure the Chat app: set its HTTP endpoint URL to this connection's `/api/v1/integrations/connections/<connectionId>/google-chat/webhook` URL, and note its authentication audience (project number or HTTP endpoint URL).
-4. In GoatCitadel `Connections`, add `channel.google-chat` with `serviceAccountKeyEnv`, `audienceType` (`project_number` or `endpoint_url`), `audience` (the project number, or this endpoint's public HTTPS URL), and optionally `defaultSpace` (`spaces/...`).
+4. In GoatCitadel `Connections`, add `channel.google-chat` with `serviceAccountKeyEnv`, `audienceType` (`project_number` or `endpoint_url`), `audience` (the project number, or this endpoint's public HTTPS URL), and optionally `defaultSpace` (`spaces/...`). If the Chat app is built as a Google Workspace add-on, also set `addOnProjectNumber` (see below); leave it empty for a regular Chat app.
 5. Allow `chat.googleapis.com` and `oauth2.googleapis.com` in the network allowlist.
 6. Add the Google Chat user resource names (`users/...`) that may start conversations. Inbound is default-deny; a dropped message's `sender_not_allowlisted` diagnostic shows the id. Existing Google Chat connections never inherit a legacy-open posture.
 7. Message the app (or @mention it in a space) and confirm its threaded reply.
 
-Every inbound request must carry a Google-signed bearer token: GoatCitadel requires RS256, picks the signing certificate by `kid` from Google's published certificates (cached per their `Cache-Control` max-age), and checks the issuer (`chat@system.gserviceaccount.com` for project-number audiences; `accounts.google.com` plus the `chat@system.gserviceaccount.com` email for endpoint-URL audiences), the configured audience, and expiry before anything is accepted. The message resource name (`spaces/.../messages/...`) is the dedupe key, so a redelivered event is accepted once. Messages from bots, including the app's own messages, are ignored.
+Every inbound request must carry a Google-signed bearer token: GoatCitadel requires RS256, picks the signing certificate by `kid` from Google's published certificates (cached per their `Cache-Control` max-age), and checks the issuer (`chat@system.gserviceaccount.com` for project-number audiences; `accounts.google.com` plus the `chat@system.gserviceaccount.com` email for endpoint-URL audiences), the configured audience, and expiry before anything is accepted.
+
+Workspace add-on Chat apps: Google signs their requests as an OIDC ID token with the same issuer (`accounts.google.com`) and the HTTP endpoint URL as audience, but the email is the add-on's own service account, `service-<PROJECT_NUMBER>@gcp-sa-gsuiteaddons.iam.gserviceaccount.com`. Set `audienceType` to `endpoint_url` and `addOnProjectNumber` to that numeric project number; GoatCitadel then also accepts exactly that one address (with `email_verified` true). Without `addOnProjectNumber`, add-on requests are rejected with `bad_email`. Any other add-on or service-account address is always rejected, because any Google Cloud project can mint a token for a public URL and the email is what proves the request came from your app.
+
+The message resource name (`spaces/.../messages/...`) is the dedupe key, so a redelivered event is accepted once. Messages from bots, including the app's own messages, are ignored.
 
 ### Google Chat troubleshooting
 
@@ -304,6 +308,7 @@ Every inbound request must carry a Google-signed bearer token: GoatCitadel requi
 - post lands in an unexpected thread: remove or correct the default thread key
 - duplicated sandbox posts before this release: fixed for unchanged drafts in the same gateway process lifecycle
 - Chat app requests rejected with `401`: the audience type or audience does not match the Chat app configuration (check the gateway log reason, for example `bad_audience`)
+- Workspace add-on Chat app requests rejected with `401` and log reason `bad_email`: set `addOnProjectNumber` to the add-on's numeric project number (with the `endpoint_url` audience type)
 - Chat app requests rejected with `400`: the connection has no `audienceType`/`audience`
 - Chat app sends fail before reaching Google: allow `chat.googleapis.com` and `oauth2.googleapis.com`, and check that the key environment variable holds the full JSON key
 
