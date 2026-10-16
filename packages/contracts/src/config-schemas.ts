@@ -786,10 +786,6 @@ export const AssistantConfigInputSchema = z
         // audio → transcription → governed turn). Absent/false (default) ⇒
         // byte-identical: parsers keep emitting placeholders / dropping voice.
         channelVoiceInboundV1Enabled: z.boolean().optional(),
-        // Deprecated compatibility input. True is accepted for migration
-        // evidence but never enables Signal receive; the current bridge lacks
-        // an acknowledgement/replay contract.
-        signalInboundV1Enabled: z.boolean().optional(),
         // Weekly governed memory consolidation: mines completed run traces and
         // PROPOSES memory candidates (approval-gated, never auto-applied).
         // Absent/false (default) ⇒ the consolidation job never runs.

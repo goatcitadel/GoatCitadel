@@ -12,7 +12,7 @@ const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
 test("advertised channel parity matrix is complete and internally consistent", () => {
   assert.deepEqual(validateAdvertisedChannelParityMatrix(), []);
-  assert.equal(new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.id)).size, 22);
+  assert.equal(new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.id)).size, 23);
   assert.deepEqual(
     [...new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.family))].sort(),
     [...REQUIRED_CHANNEL_FAMILIES].sort(),
@@ -38,7 +38,12 @@ test("hard quarantine and provider-callability truths cannot drift green", () =>
   const signal = byId.get("signal.bridge-outbound");
   assert.equal(signal?.expected.inboundModes[0], "none");
   assert.equal(signal?.durability.inboundCommitBeforeAck, false);
-  assert.match(signal?.proof.inboundQuarantine ?? "", /signal-inbound-runtime-service/);
+  assert.equal(signal?.proof.inboundQuarantine, undefined);
+  const signalStream = byId.get("signal.daemon-events");
+  assert.equal(signalStream?.expected.inboundModes[0], "stream");
+  assert.equal(signalStream?.expected.lifecycle, "persistent");
+  assert.equal(signalStream?.durability.inboundCommitBeforeAck, true);
+  assert.match(signalStream?.proof.inboundAdapter ?? "", /signal-stream-adapter\.test\.ts$/);
 
   const blueBubbles = byId.get("imessage.bluebubbles");
   const photon = byId.get("imessage.photon-diagnostics");

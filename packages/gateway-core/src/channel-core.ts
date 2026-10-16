@@ -472,26 +472,36 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   },
   signal: {
     supportedActions: ["channel.send"],
-    resolveInboundModes: () => ["none"],
+    resolveInboundModes: (config) => (isSignalInboundEnabled(config) ? ["stream"] : ["none"]),
     threadCapabilities: {
       direct: true,
       groups: true,
     },
     chunkingMode: "fallback",
     supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "api",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary:
-        "Signal is outbound-only through the configured bridge. GoatCitadel does not call the destructive receive endpoint because the current bridge has no acknowledgement or replay contract.",
-    },
+    resolveRuntimePosture: (config) =>
+      isSignalInboundEnabled(config)
+        ? {
+            outboundTransport: "api",
+            inboundTransport: "stream",
+            lifecycle: "persistent",
+            inboundReadiness: "ready",
+            operatorSummary:
+              "Signal sends through the signal-cli JSON-RPC bridge and, with receiveEvents enabled, keeps a persistent subscription to the signal-cli HTTP daemon event stream. Self-echo, receipts and typing events are ignored, and the sender plus message timestamp dedupes any reconnect overlap.",
+          }
+        : {
+            outboundTransport: "api",
+            lifecycle: "stateless",
+            inboundReadiness: "unsupported",
+            operatorSummary:
+              "Signal sends through the configured signal-cli JSON-RPC bridge. Inbound is opt-in: enable receiveEvents on a signal-cli daemon --http bridge to receive messages from its event stream.",
+          },
     resolveSupportNotes: (config) => [
-      "Outbound Signal sends remain available through the configured bridge JSON-RPC send path.",
-      "Inbound Signal receive is intentionally blocked until the bridge exposes a durable offset/ack/replay contract.",
-      ...(isExplicitTrue(config.inboundEnabled)
-        ? ["This connection contains a deprecated inboundEnabled=true value. It is ignored and never starts polling."]
-        : []),
+      "Outbound Signal sends use the configured bridge JSON-RPC send path.",
+      isSignalInboundEnabled(config)
+        ? "Signal inbound subscribes to the signal-cli daemon --http event stream (/api/v1/events); allow the sender UUIDs (or numbers for senders without a UUID) that may start turns, because inbound is default-deny."
+        : "Signal inbound is off; set receiveEvents on a signal-cli daemon --http bridge to receive messages from its event stream (/api/v1/events).",
+      "signal-cli acknowledges messages to the Signal server itself, so messages that arrive while the gateway's event stream is disconnected are not replayed and are lost.",
     ],
     requiredAnyOf: [["baseUrl", "bridgeUrl"]],
   },
@@ -1174,6 +1184,11 @@ function isNtfyInboundEnabled(config: Record<string, unknown>): boolean {
     hasAnyConfigured(config, ["baseUrl"]) &&
     hasAnyConfigured(config, ["subscribeTopic", "topic", "defaultTopic"])
   );
+}
+
+/** Mirrors the Signal stream adapter: receiveEvents opt-in and a bridge URL. */
+function isSignalInboundEnabled(config: Record<string, unknown>): boolean {
+  return isExplicitTrue(config.receiveEvents) && hasAnyConfigured(config, ["baseUrl", "bridgeUrl"]);
 }
 
 /** Mirrors the Mattermost stream adapter: opt-in, server URL and a bot token. */

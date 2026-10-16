@@ -350,7 +350,8 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.signal": {
     catalogId: "channel.signal",
     title: "Signal Connection",
-    description: "Configure a Signal JSON-RPC bridge, account, and default recipient for outbound sends.",
+    description:
+      "Configure a Signal JSON-RPC bridge, account, and default recipient. Inbound from the signal-cli daemon event stream is the receiveEvents option in guided setup.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "Signal" }),
@@ -521,7 +522,8 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.zalouser": {
     catalogId: "channel.zalouser",
     title: "Zalo Personal Connection",
-    description: "Configure an authenticated zca serve bridge for a personal Zalo session and default recipient target.",
+    description:
+      "Configure an authenticated zca serve bridge for a personal Zalo session and default recipient target.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "Zalo Personal" }),
@@ -533,7 +535,8 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         placeholder: "ZALOUSER_AUTH_TOKEN",
         required: true,
         secretRef: true,
-        description: "Required authenticated bridge credential. Supported credential aliases remain available in advanced configuration.",
+        description:
+          "Required authenticated bridge credential. Supported credential aliases remain available in advanced configuration.",
       }),
       text("profile", "Profile", {
         placeholder: "work",

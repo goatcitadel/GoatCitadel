@@ -327,8 +327,8 @@ export const updateSettingsSchema = z.object({
       utilityModelRoutingV1Enabled: z.boolean().optional(),
       cronEvidenceV1Enabled: z.boolean().optional(),
       memoryConsolidationV1Enabled: z.boolean().optional(),
-      // Deprecated compatibility input; true records a blocked Signal posture.
-      signalInboundV1Enabled: z.boolean().optional(),
+      // signalInboundV1Enabled is retired: old clients may still send it, and this
+      // non-strict object strips unknown keys, so it is ignored rather than rejected.
       channelVoiceInboundV1Enabled: z.boolean().optional(),
       channelVoiceReplyV1Enabled: z.boolean().optional(),
       externalSideEffectReplayJobsV1Disabled: z.boolean().optional(),

@@ -77,13 +77,15 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Register the saved connection webhook URL in Meta, complete its verification challenge, and subscribe to messages. Allow trusted wa_id sender values (digits only), send an inbound message and confirm its reply. Personal WhatsApp QR linking is not supported by this adapter.",
   },
   signal: {
-    summary: "Use an outbound-only Signal adapter through a separately configured bridge.",
+    summary:
+      "Send Signal messages through a separately configured bridge and, optionally, receive messages from the signal-cli HTTP daemon event stream.",
     prerequisites: [
       "A reachable Signal JSON-RPC bridge with an already linked sender account.",
       "The recipient or group identifier and permission to send to it.",
+      "For inbound, a signal-cli daemon --http bridge and the sender UUIDs allowed to start conversations (a dropped message's sender_not_allowlisted diagnostic shows the id; senders without a UUID use their number).",
     ],
     firstMessage:
-      "Confirm the sandbox message arrives in Signal. Inbound receive is deliberately unavailable until the bridge provides durable acknowledgement and replay; linking a device does not enable conversations in GoatCitadel.",
+      "Confirm the sandbox message arrives in Signal. For inbound, enable receiveEvents, allow your sender id, send a message and confirm its reply; messages from senders who are not allowed are dropped, and messages sent while the event stream is disconnected are not replayed.",
   },
   mattermost: {
     summary:
@@ -312,7 +314,9 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
         ...normalizeGuidedChannelInboundAccess(key, draft, draft.hydration?.rawLegacyConfig ?? {}),
       };
       // Stream inbound is new for a connection, so a hydrated open_legacy mode must not carry over.
-      return normalized.inboundStreamEnabled === true ? { ...normalized, inboundAccessMode: "allowlist" } : normalized;
+      return normalized.inboundStreamEnabled === true || normalized.receiveEvents === true
+        ? { ...normalized, inboundAccessMode: "allowlist" }
+        : normalized;
     },
     validate(draft) {
       const issues = runtime.validate(draft);

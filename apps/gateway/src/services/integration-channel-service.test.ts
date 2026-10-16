@@ -64,8 +64,7 @@ function createDeps(): IntegrationChannelPort {
     runIntegrationConnectionLiveChecks: vi.fn(async () => ({ checks: [] })),
     pickConnectorDiagnosticAction: vi.fn(),
     recordConnectorHealthRun: vi.fn(),
-    syncDiscordRuntime: vi.fn(async () => undefined),
-    syncSignalInboundRuntime: vi.fn(),
+    syncChannelRuntimes: vi.fn(async () => undefined),
     getDiscordRuntimeStatus: vi.fn(),
     getChannelStreamRuntimeStatus: vi.fn(),
     getIntegrationConnection: (connectionId: string) =>
@@ -308,85 +307,18 @@ describe("integration-channel-service inbound access defaults", () => {
 });
 
 describe("integration-channel-service runtime status", () => {
-  it("fails closed when a Signal connection retains the deprecated inbound toggle", async () => {
+  it("ignores a legacy Signal inboundEnabled value: no blocked branch, no retired feature flag read", async () => {
     const deps = createDeps();
-    deps.isFeatureEnabled = vi.fn((flag) => flag !== "signalInboundV1Enabled");
+    const latestAcceptedInboundAt = vi.fn(async () => "2026-07-05T12:30:00.000Z");
+    Object.assign(deps, { latestAcceptedInboundAt });
     const connection = await createIntegrationConnection(deps, {
       catalogId: "channel.signal",
       label: "Signal",
       config: {
         baseUrl: "http://127.0.0.1:8080",
         accountId: "+15550001111",
-        inboundEnabled: " TRUE ",
-      },
-    });
-    await updateIntegrationConnection(deps, connection.connectionId, {
-      status: "connected",
-      lastSyncAt: "2026-07-05T12:00:00.000Z",
-    });
-
-    const status = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
-
-    expect(status.ready).toBe(false);
-    expect(status.inboundModes).toEqual(["none"]);
-    expect(status.runtimePosture.inboundReadiness).toBe("unsupported");
-    expect(status.metadata).toMatchObject({
-      readinessSource: "blocked_legacy_inbound",
-      featureFlag: "signalInboundV1Enabled",
-      featureEnabled: false,
-      legacyConnectionInboundEnabled: true,
-    });
-    expect(status.metadata.setupDiagnostics).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("no acknowledgement/replay contract"),
-        expect.stringContaining("outbound sends remain available"),
-      ]),
-    );
-  });
-
-  it("fails closed when the deprecated global Signal inbound flag is enabled", async () => {
-    const deps = createDeps();
-    deps.isFeatureEnabled = vi.fn((flag) => flag === "signalInboundV1Enabled");
-    const connection = await createIntegrationConnection(deps, {
-      catalogId: "channel.signal",
-      label: "Signal",
-      config: {
-        baseUrl: "http://127.0.0.1:8080",
         defaultRecipient: "+15550002222",
-      },
-    });
-    await updateIntegrationConnection(deps, connection.connectionId, {
-      status: "connected",
-      lastSyncAt: "2026-07-05T12:00:00.000Z",
-    });
-
-    const status = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
-
-    expect(status).toMatchObject({
-      ready: false,
-      inboundModes: ["none"],
-      runtimePosture: {
-        outboundTransport: "api",
-        lifecycle: "stateless",
-        inboundReadiness: "unsupported",
-      },
-      metadata: {
-        readinessSource: "blocked_legacy_inbound",
-        featureEnabled: true,
-        legacyConnectionInboundEnabled: false,
-      },
-    });
-  });
-
-  it("keeps a clean outbound-only Signal connection ready", async () => {
-    const deps = createDeps();
-    deps.isFeatureEnabled = vi.fn(() => false);
-    const connection = await createIntegrationConnection(deps, {
-      catalogId: "channel.signal",
-      label: "Signal",
-      config: {
-        baseUrl: "http://127.0.0.1:8080",
-        defaultRecipient: "+15550003333",
+        inboundEnabled: " TRUE ",
       },
     });
     await updateIntegrationConnection(deps, connection.connectionId, {
@@ -404,6 +336,50 @@ describe("integration-channel-service runtime status", () => {
       inboundReadiness: "unsupported",
     });
     expect(status.metadata.readinessSource).toBe("last_live_probe");
+    expect(status.metadata).not.toHaveProperty("featureFlag");
+    // Signal is no longer special-cased out of the accepted-inbound timestamp.
+    expect(status.lastInboundAt).toBe("2026-07-05T12:30:00.000Z");
+    expect(deps.isFeatureEnabled).not.toHaveBeenCalledWith("signalInboundV1Enabled");
+  });
+
+  it("reports Signal receiveEvents inbound from the live stream runtime", async () => {
+    const deps = createDeps();
+    const connection = await createIntegrationConnection(deps, {
+      catalogId: "channel.signal",
+      label: "Signal",
+      config: {
+        baseUrl: "http://127.0.0.1:8080",
+        accountId: "+15550001111",
+        defaultRecipient: "+15550003333",
+        receiveEvents: true,
+      },
+    });
+    await updateIntegrationConnection(deps, connection.connectionId, {
+      status: "connected",
+      lastSyncAt: "2026-10-16T12:00:00.000Z",
+    });
+
+    vi.mocked(deps.getChannelStreamRuntimeStatus).mockReturnValue(undefined);
+    const notStarted = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+    expect(notStarted.ready).toBe(false);
+    expect(notStarted.inboundModes).toEqual(["stream"]);
+    expect(notStarted.metadata).toMatchObject({ readinessSource: "live_runtime", authoritative: true });
+
+    vi.mocked(deps.getChannelStreamRuntimeStatus).mockReturnValue({
+      connectionId: connection.connectionId,
+      channelKey: "signal",
+      ready: true,
+      lastReadyAt: "2026-10-16T12:01:00.000Z",
+      lastInboundAt: "2026-10-16T12:02:00.000Z",
+    });
+    const live = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+    expect(live.ready).toBe(true);
+    expect(live.lastInboundAt).toBe("2026-10-16T12:02:00.000Z");
+    expect(live.runtimePosture).toMatchObject({
+      lifecycle: "persistent",
+      inboundTransport: "stream",
+      inboundReadiness: "ready",
+    });
   });
 
   it("reports ntfy stream inbound from the live stream runtime, not the last probe", async () => {

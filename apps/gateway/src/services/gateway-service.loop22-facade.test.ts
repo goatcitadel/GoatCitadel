@@ -132,7 +132,6 @@ function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
       })),
     },
     discordRuntimeService: { close: vi.fn(async () => undefined), sync: vi.fn(async () => undefined) },
-    signalInboundRuntimeService: { stop: vi.fn(), sync: vi.fn() },
     drainDueChannelDeliveries: vi.fn(async () => [{ deliveryId: "delivery-1" }]),
     durableRunService: {
       resumeRunsWaitingForAutonomyKillSwitch: vi.fn(),
@@ -450,7 +449,6 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
       backgroundTasks: new Set<Promise<unknown>>([backgroundTask]),
       chatProactiveService: { stopScheduler: vi.fn() },
       discordRuntimeService: { close: vi.fn(async () => undefined) },
-      signalInboundRuntimeService: { stop: vi.fn() },
       durableRunService: { stopWorker: vi.fn() },
       improvementService: { stopScheduler: vi.fn() },
       inboundChannelEventService: { close: vi.fn() },

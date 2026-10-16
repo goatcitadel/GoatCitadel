@@ -408,7 +408,7 @@ describe("describeChannelCapabilities", () => {
     ]);
   });
 
-  it("keeps Signal outbound-only even when stale inbound settings remain", () => {
+  it("keeps Signal outbound-only unless receiveEvents is set, ignoring legacy inbound settings", () => {
     const capabilities = describeChannelCapabilities("signal", {
       baseUrl: "http://127.0.0.1:8080",
       inboundEnabled: " TRUE ",
@@ -426,13 +426,32 @@ describe("describeChannelCapabilities", () => {
       }),
     );
     expect(capabilities.runtimePosture).not.toHaveProperty("inboundTransport");
-    expect(capabilities.runtimePosture.operatorSummary).toContain("no acknowledgement or replay contract");
-    expect(capabilities.supportNotes).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Outbound Signal sends remain available"),
-        expect.stringContaining("deprecated inboundEnabled=true"),
-      ]),
-    );
+    expect(capabilities.runtimePosture.operatorSummary).toContain("receiveEvents");
+    const text = JSON.stringify([capabilities.runtimePosture, capabilities.supportNotes]);
+    expect(text).not.toMatch(/outbound-only|destructive receive|deprecated inboundEnabled/i);
+  });
+
+  it("describes Signal daemon-event inbound as a persistent stream with honest no-replay notes", () => {
+    for (const config of [
+      { baseUrl: "http://127.0.0.1:8080", receiveEvents: true },
+      { bridgeUrl: "http://127.0.0.1:8080", receiveEvents: "true" },
+    ]) {
+      const capabilities = describeChannelCapabilities("signal", config);
+      expect(capabilities.inboundModes).toEqual(["stream"]);
+      expect(capabilities.runtimePosture).toMatchObject({
+        outboundTransport: "api",
+        inboundTransport: "stream",
+        lifecycle: "persistent",
+        inboundReadiness: "ready",
+      });
+      expect(capabilities.supportNotes).toEqual(
+        expect.arrayContaining([expect.stringContaining("/api/v1/events"), expect.stringContaining("not replayed")]),
+      );
+    }
+    expect(describeChannelCapabilities("signal", { receiveEvents: true }).inboundModes).toEqual(["none"]);
+    expect(
+      describeChannelCapabilities("signal", { baseUrl: "http://127.0.0.1:8080", receiveEvents: false }).inboundModes,
+    ).toEqual(["none"]);
   });
 
   it("falls back to default channel capabilities for unknown adapters", () => {

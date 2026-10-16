@@ -6,6 +6,7 @@ import {
 } from "./channel-inbound-dispatch.js";
 import { createMattermostStreamAdapter } from "./channel-stream-adapters/mattermost-stream-adapter.js";
 import { createNtfyStreamAdapter } from "./channel-stream-adapters/ntfy-stream-adapter.js";
+import { createSignalStreamAdapter } from "./channel-stream-adapters/signal-stream-adapter.js";
 import { ChannelStreamRuntimeService, type ChannelStreamEvent } from "./channel-stream-runtime-service.js";
 
 /** The narrow Gateway surface the stream runtime needs. All members are read lazily, at call time. */
@@ -80,6 +81,7 @@ function createStreamRuntime(host: ChannelStreamRuntimeHost): ChannelStreamRunti
     adapters: [
       createNtfyStreamAdapter(sharedDeps),
       createMattermostStreamAdapter({ ...sharedDeps, createWebSocket: (url) => new WebSocket(url) }),
+      createSignalStreamAdapter({ fetch: sharedDeps.fetch, isUrlAllowlisted: sharedDeps.isUrlAllowlisted }),
     ],
     dispatch,
     recordDevDiagnostic: (input) => host.recordDevDiagnostic(input),

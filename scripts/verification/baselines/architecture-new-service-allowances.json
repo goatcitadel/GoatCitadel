@@ -656,7 +656,6 @@
     "apps/gateway/src/services/shell-command-explainer.ts",
     "apps/gateway/src/services/shell-command-handlers.ts",
     "apps/gateway/src/services/shell-command-prescreen.ts",
-    "apps/gateway/src/services/signal-inbound-runtime-service.ts",
     "apps/gateway/src/services/skill-bundle-manifest.ts",
     "apps/gateway/src/services/skill-content-integrity.ts",
     "apps/gateway/src/services/skill-content-validation.ts",
@@ -2353,6 +2352,14 @@
       "maxDependencyMemberAccesses": 6,
       "reason": "WS5 channel-parity program: Mattermost inbound WebSocket adapter over the generic channel stream runtime; reads its four injected dependencies (fetch, secret resolver, allowlist check, WebSocket factory) per session and has no host callbacks.",
       "evidence": "apps/gateway/src/services/channel-stream-adapters/mattermost-stream-adapter.test.ts covers users/me bot-id lookup, derived wss URL, authentication challenge, hello/OK readiness, exact normalized channel and DM events, self and system post drops, auth FAIL and 401/403 and allowlist/token auth errors, abort, replay-deterministic idempotency keys and the real sender-allowlist gate; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/channel-stream-adapters/signal-stream-adapter.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 2,
+      "reason": "WS5 channel-parity program: Signal inbound adapter over the signal-cli HTTP daemon Server-Sent Events stream on the generic channel stream runtime; reads its two injected dependencies (fetch, allowlist check) once per session and has no host callbacks. Replaces the retired outbound-only SignalInboundRuntimeService facade.",
+      "evidence": "apps/gateway/src/services/channel-stream-adapters/signal-stream-adapter.test.ts covers the exact direct and group events, identity/timestamp fallbacks, syncMessage/receipt/typing/self-account drops, the account query parameter, 401/403 and allowlist auth errors, replay-deterministic idempotency keys and the real sender-allowlist gate; Gateway typecheck passes."
     }
   ]
 }

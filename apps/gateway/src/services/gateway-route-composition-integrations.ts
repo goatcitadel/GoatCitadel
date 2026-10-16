@@ -593,7 +593,7 @@ function createIntegrationChannelPortForGateway(
     recordConnectorHealthRun: async (report) => {
       await connectorDiagnosticsHelpers.recordConnectorHealthRun({ gatewaySql: storage.gatewaySql }, report);
     },
-    syncDiscordRuntime: async () => {
+    syncChannelRuntimes: async () => {
       await gateway.syncDiscordRuntime();
       try {
         await streams.sync();
@@ -606,9 +606,6 @@ function createIntegrationChannelPortForGateway(
           context: { error: (error as Error).message },
         });
       }
-    },
-    syncSignalInboundRuntime: async () => {
-      await gateway.syncSignalInboundRuntime();
     },
     getChannelStreamRuntimeStatus: (connectionId) => streams.getStatus(connectionId),
     getDiscordRuntimeStatus: (connectionId) => discordRuntimeService.getConnectionStatus(connectionId),

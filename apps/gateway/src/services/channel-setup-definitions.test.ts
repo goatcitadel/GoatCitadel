@@ -453,7 +453,7 @@ describe("channel setup definitions", () => {
       { catalogId: "channel.imessage", contentVersion: "2026.08.imessage.v2" },
       { catalogId: "channel.line", contentVersion: "2026.08.line.v2" },
       { catalogId: "channel.mattermost", contentVersion: "2026.10.mattermost.stream.v3" },
-      { catalogId: "channel.signal", contentVersion: "2026.08.signal.v4" },
+      { catalogId: "channel.signal", contentVersion: "2026.10.signal.stream.v5" },
       { catalogId: "channel.whatsapp", contentVersion: "2026.08.whatsapp.v3" },
       { catalogId: "channel.zalo", contentVersion: "2026.08.zalo.v2" },
       { catalogId: "channel.zalouser", contentVersion: "2026.08.zalouser.v2" },
@@ -662,13 +662,16 @@ describe("channel setup definitions", () => {
     );
   });
 
-  it("advertises Signal as outbound-only and strips blocked legacy inbound settings", () => {
+  it("advertises Signal daemon-event inbound with no-replay honesty and strips legacy polling settings", () => {
     const signal = requireChannelSetupDefinition("channel.signal");
     const wizardText = JSON.stringify(signal.definition.wizard);
 
-    expect(signal.definition.wizard.contentVersion).toBe("2026.08.signal.v4.guided-2026-10");
-    expect(signal.definition.wizard.introSummary).toContain("outbound-only");
-    expect(wizardText).toContain("no acknowledgement or replay contract");
+    expect(signal.definition.wizard.contentVersion).toBe("2026.10.signal.stream.v5.guided-2026-10");
+    expect(signal.definition.wizard.introSummary).not.toContain("outbound-only");
+    expect(wizardText).not.toMatch(/outbound-only|destructive receive/i);
+    expect(wizardText).toContain("signal-cli daemon --http");
+    expect(wizardText).toMatch(/not replayed/);
+    expect(wizardText).toContain('"key":"receiveEvents"');
     expect(wizardText).not.toContain('"key":"inboundEnabled"');
     expect(wizardText).not.toContain('"key":"pollIntervalSeconds"');
 
@@ -686,24 +689,24 @@ describe("channel setup definitions", () => {
       }),
     );
 
-    expect(hydrated.draft).toEqual({
+    expect(hydrated.draft).not.toHaveProperty("inboundEnabled");
+    expect(hydrated.draft).not.toHaveProperty("pollIntervalSeconds");
+    expect(hydrated.draft).toMatchObject({
       baseUrl: "http://127.0.0.1:8080",
       accountId: "+15551234567",
       defaultRecipient: "+15557654321",
+      receiveEvents: false,
     });
-    expect(hydrated.hydration.warnings).toEqual([expect.stringContaining("blocked")]);
-    expect(
-      signal.normalize({
-        ...createDraft("channel.signal", hydrated.draft, "edit"),
-        hydration: hydrated.hydration,
-      }),
-    ).toEqual({
-      baseUrl: "http://127.0.0.1:8080",
-      accountId: "+15551234567",
-      defaultRecipient: "+15557654321",
+    expect(hydrated.hydration.warnings).toEqual([expect.stringContaining("replaced by receiveEvents")]);
+    const normalized = signal.normalize({
+      ...createDraft("channel.signal", hydrated.draft, "edit"),
+      hydration: hydrated.hydration,
     });
+    expect(normalized).not.toHaveProperty("inboundEnabled");
+    expect(normalized).not.toHaveProperty("pollIntervalSeconds");
+    expect(normalized).not.toHaveProperty("receiveEvents");
 
-    const blockedIssues = signal.validate(
+    const legacyIssues = signal.validate(
       createDraft("channel.signal", {
         baseUrl: "http://127.0.0.1:8080",
         defaultRecipient: "+15557654321",
@@ -711,9 +714,13 @@ describe("channel setup definitions", () => {
         pollIntervalSeconds: 5,
       }),
     );
-    expect(blockedIssues).toEqual(
+    expect(legacyIssues).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ fieldKey: "inboundEnabled", failureCategory: "malformed_value" }),
+        expect.objectContaining({
+          fieldKey: "inboundEnabled",
+          failureCategory: "malformed_value",
+          message: expect.stringContaining("receiveEvents"),
+        }),
         expect.objectContaining({ fieldKey: "pollIntervalSeconds", failureCategory: "malformed_value" }),
       ]),
     );
@@ -725,6 +732,37 @@ describe("channel setup definitions", () => {
         }),
       ),
     ).toEqual([]);
+  });
+
+  it("collects the Signal receiveEvents opt-in and forces a default-deny allowlist when it is on", () => {
+    const signal = requireChannelSetupDefinition("channel.signal");
+    const fieldKeys = signal.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
+    expect(fieldKeys).toEqual(expect.arrayContaining(["receiveEvents", "allowedSenders"]));
+
+    for (const legacy of [{ inboundAccessMode: "open_legacy" }, {}]) {
+      const hydrated = signal.hydrate(
+        createConnection({
+          catalogId: "channel.signal",
+          key: "signal",
+          config: { baseUrl: "http://127.0.0.1:8080", defaultRecipient: "+15557654321", ...legacy },
+        }),
+      );
+      const draft = {
+        ...createDraft("channel.signal", { ...hydrated.draft, receiveEvents: true }, "edit"),
+        hydration: hydrated.hydration,
+      };
+      expect(signal.validate(draft)).toEqual([]);
+      expect(signal.normalize(draft)).toMatchObject({ receiveEvents: true, inboundAccessMode: "allowlist" });
+    }
+    const created = signal.normalize(
+      createDraft("channel.signal", {
+        baseUrl: "http://127.0.0.1:8080",
+        defaultRecipient: "+15557654321",
+        receiveEvents: true,
+      }),
+    );
+    expect(created).toMatchObject({ receiveEvents: true, inboundAccessMode: "allowlist" });
+    expect(created.allowedSenders ?? []).toEqual([]);
   });
 
   it("preserves env-backed Mattermost auth during edit flows", () => {
@@ -1019,6 +1057,8 @@ describe("channel setup definitions", () => {
     ).toEqual({
       baseUrl: "http://127.0.0.1:8080",
       defaultRecipient: "+15557654321",
+      // Signal is a guided inbound channel; a draft with no saved mode defaults to the allowlist.
+      inboundAccessMode: "allowlist",
     });
     expect(
       signal.validate({

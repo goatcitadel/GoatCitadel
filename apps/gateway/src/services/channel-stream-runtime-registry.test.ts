@@ -35,6 +35,17 @@ function ndjson(lines: unknown[]): ReadableStream<Uint8Array> {
   });
 }
 
+function signalSse(): ReadableStream<Uint8Array> {
+  const envelope = { sourceNumber: "+15550000002", timestamp: 5, dataMessage: { timestamp: 5, message: "hello" } };
+  const data = JSON.stringify({ jsonrpc: "2.0", method: "receive", params: { envelope } });
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(`data: ${data}\n\n`));
+      controller.close();
+    },
+  });
+}
+
 function host() {
   const acceptInboundChannelEvent = vi.fn(async (input: unknown) => ({
     accepted: true,
@@ -79,6 +90,8 @@ describe("stream dispatch never applies legacy-open inbound access", () => {
     { channel: "ntfy", legacy: { inboundAccessMode: "open_legacy" } },
     { channel: "mattermost", legacy: {} },
     { channel: "mattermost", legacy: { inboundAccessMode: "open_legacy" } },
+    { channel: "signal", legacy: {} },
+    { channel: "signal", legacy: { inboundAccessMode: "open_legacy" } },
   ] as const;
   for (const { channel, legacy } of cases) {
     it(`drops a ${channel} event with ${JSON.stringify(legacy)} and no allowed senders`, async () => {
@@ -87,12 +100,14 @@ describe("stream dispatch never applies legacy-open inbound access", () => {
       const config: Record<string, unknown> =
         channel === "ntfy"
           ? { baseUrl: "https://ntfy.example.test", topic: "ops", tokenEnv: "NTFY_TOKEN", inboundStreamEnabled: true }
-          : {
-              serverUrl: "https://chat.example.test",
-              botTokenEnv: "MM_TOKEN",
-              defaultChannel: "town-square",
-              inboundStreamEnabled: true,
-            };
+          : channel === "signal"
+            ? { baseUrl: "http://127.0.0.1:8080", defaultRecipient: "+15550000001", receiveEvents: true }
+            : {
+                serverUrl: "https://chat.example.test",
+                botTokenEnv: "MM_TOKEN",
+                defaultChannel: "town-square",
+                inboundStreamEnabled: true,
+              };
       const conn = { ...base, key: channel, catalogId: `channel.${channel}`, config: { ...config, ...legacy } };
       (h.value.storage.integrationConnections.list as ReturnType<typeof vi.fn>).mockResolvedValue([conn]);
       vi.stubGlobal(
@@ -100,7 +115,9 @@ describe("stream dispatch never applies legacy-open inbound access", () => {
         vi.fn(async (url: string) =>
           String(url).endsWith("/users/me")
             ? new Response(JSON.stringify({ id: "bot" }), { status: 200 })
-            : new Response(ndjson([{ id: "m1", event: "message", message: "hello", topic: "ops" }]), { status: 200 }),
+            : String(url).includes("/api/v1/events")
+              ? new Response(signalSse(), { status: 200 })
+              : new Response(ndjson([{ id: "m1", event: "message", message: "hello", topic: "ops" }]), { status: 200 }),
         ),
       );
       vi.stubGlobal("WebSocket", FakeMattermostSocket);

@@ -34,6 +34,7 @@ const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set([
   "nextcloud-talk",
   "ntfy",
   "mattermost",
+  "signal",
 ]);
 
 export interface IntegrationDiagnosticsPort {

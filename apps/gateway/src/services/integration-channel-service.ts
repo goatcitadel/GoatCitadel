@@ -67,8 +67,8 @@ export interface IntegrationChannelPort {
   pickConnectorDiagnosticAction(checks: ConnectorDiagnosticReport["checks"]): string | undefined;
   recordConnectorHealthRun(report: ConnectorDiagnosticReport): Promise<void>;
   /** Historical name: reconciles every persistent channel runtime (Discord gateway plus generic stream runtimes). */
-  syncDiscordRuntime(): Promise<void>;
-  syncSignalInboundRuntime(): Promise<void>;
+  /** Syncs Discord and the channel stream runtime after a committed connection change. */
+  syncChannelRuntimes(): Promise<void>;
   getChannelStreamRuntimeStatus(connectionId: string): ChannelStreamRuntimeStatus | undefined;
   getDiscordRuntimeStatus(connectionId: string): DiscordRuntimeStatus | undefined;
   latestAcceptedInboundAt?(channelKey: string, connectionId: string): Promise<string | undefined>;
@@ -313,8 +313,7 @@ export async function getIntegrationConnectionChannelRuntimeStatus(
     runtimePosture: capabilities.runtimePosture,
     lastReadyAt: baseReady ? (connection.lastSyncAt ?? connection.updatedAt) : undefined,
     lastError: connection.lastError,
-    lastInboundAt:
-      connection.key === "signal" ? undefined : await deps.latestAcceptedInboundAt?.(connection.key, connectionId),
+    lastInboundAt: await deps.latestAcceptedInboundAt?.(connection.key, connectionId),
     metadata: {
       setupReady: capabilities.setupReady,
       setupDiagnostics: capabilities.setupDiagnostics,
@@ -324,42 +323,6 @@ export async function getIntegrationConnectionChannelRuntimeStatus(
       authoritative: connection.key === "discord" || Boolean(connection.lastSyncAt),
     },
   };
-
-  const legacySignalFeatureEnabled =
-    connection.key === "signal" && (await deps.isFeatureEnabled("signalInboundV1Enabled"));
-  const legacySignalInboundValue = connection.config.inboundEnabled;
-  const legacySignalConnectionInboundEnabled =
-    connection.key === "signal" &&
-    (legacySignalInboundValue === true ||
-      (typeof legacySignalInboundValue === "string" && legacySignalInboundValue.trim().toLowerCase() === "true"));
-  if (connection.key === "signal" && (legacySignalFeatureEnabled || legacySignalConnectionInboundEnabled)) {
-    const metadata = runtimeStatus.metadata ?? {};
-    const setupDiagnostics = Array.isArray(metadata.setupDiagnostics) ? metadata.setupDiagnostics : [];
-    return {
-      ...runtimeStatus,
-      ready: false,
-      lastReadyAt: undefined,
-      metadata: {
-        ...metadata,
-        readinessSource: "blocked_legacy_inbound",
-        authoritative: true,
-        featureFlag: "signalInboundV1Enabled",
-        featureEnabled: legacySignalFeatureEnabled,
-        legacyConnectionInboundEnabled: legacySignalConnectionInboundEnabled,
-        setupDiagnostics: [
-          ...setupDiagnostics,
-          "Signal inbound is blocked: the current bridge receive endpoint has no acknowledgement/replay contract. Legacy inbound settings never start polling; outbound sends remain available.",
-        ],
-      },
-      runtimePosture: {
-        outboundTransport: "api",
-        lifecycle: "stateless",
-        inboundReadiness: "unsupported",
-        operatorSummary:
-          "Signal is outbound-only. Legacy inbound=true is deprecated and blocked because the current bridge cannot safely replay or acknowledge received messages.",
-      },
-    };
-  }
 
   if (capabilities.inboundModes.includes("stream")) {
     const stream = deps.getChannelStreamRuntimeStatus(connectionId);
