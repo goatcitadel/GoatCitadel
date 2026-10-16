@@ -1304,6 +1304,7 @@ export async function executeDurableExternalSideEffectReplayRun(
     replayed: replayAuditResults.filter((item) => item.status === "executed").length,
     blocked: replayAuditResults.filter((item) => item.status === "blocked").length,
     failed: replayAuditResults.filter((item) => item.status === "failed").length,
+    reconciled: replayAuditResults.filter((item) => item.status === "reconciled").length,
     skipped: replayAuditResults.filter((item) => item.status === "skipped").length,
     replayAuditResults,
     results: replayAuditResults,
@@ -1313,7 +1314,7 @@ export async function executeDurableExternalSideEffectReplayRun(
 
 type ExternalSideEffectReplayAuditResult = {
   runId: string;
-  status: "not_found" | "skipped" | "blocked" | "failed" | "executed";
+  status: "not_found" | "skipped" | "blocked" | "failed" | "executed" | "reconciled";
   reason?: string;
   message?: string;
   replayOutcome?: string;
@@ -1422,6 +1423,15 @@ function mapExternalSideEffectReplayResult(
       status: "skipped",
       reason: item.reason,
       message: item.message,
+    };
+  }
+  if (item.status === "reconciled") {
+    return {
+      runId: item.run.runId,
+      status: "reconciled",
+      message: item.message,
+      replayOutcome: item.run.replayOutcome,
+      resumeState: item.run.resumeState,
     };
   }
   return {
@@ -2011,8 +2021,14 @@ export async function executeDurableChatTurnRun(
   }
   const routedContextSnapshot = await loadAndVerifyDurableChatRoutedContextSnapshot(host, run, payload);
   const remoteContext = await loadDurableChatWorkerContext(host, run);
-  const recoveryTrace = await validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage, run,
-    { resumeSettledFanout: true });
+  const recoveryTrace = await validateCommittedDurableChatTurnRecoveryTrace(
+    host,
+    payload,
+    run.runId,
+    userMessage,
+    run,
+    { resumeSettledFanout: true },
+  );
   if (recoveryTrace.outcome === "invalid") {
     throw new Error(recoveryTrace.reason);
   }
@@ -3157,15 +3173,19 @@ async function validateCommittedDurableChatTurnRecoveryTrace(
     // An exact child wake resumes the original parent/tool. The runner refreshes
     // its retained aggregate output before synthesis under the fresh live claim.
     // General recovery/post-commit validation still treats this trace as resting.
-    if (options.resumeSettledFanout && trace.status === "waiting_for_tool" &&
-        await hasDurableFanoutWaitingEvidence(storage, durableRun, trace, toolRuns, { requireSettled: true })) {
+    if (
+      options.resumeSettledFanout &&
+      trace.status === "waiting_for_tool" &&
+      (await hasDurableFanoutWaitingEvidence(storage, durableRun, trace, toolRuns, { requireSettled: true }))
+    ) {
       return { outcome: "not_resting", trace };
     }
     const hasEvidence =
       trace.status === "waiting_for_tool" && trace.routing?.confirmedDelegation
         ? await hasConfirmedDelegationWaitingEvidence(storage, durableRun, trace)
         : hasDurableChatWaitingEvidence(trace, toolRuns) ||
-          (trace.status === "waiting_for_tool" && await hasDurableFanoutWaitingEvidence(storage, durableRun, trace, toolRuns));
+          (trace.status === "waiting_for_tool" &&
+            (await hasDurableFanoutWaitingEvidence(storage, durableRun, trace, toolRuns)));
     if (!hasEvidence) {
       return {
         outcome: "invalid",
@@ -3878,17 +3898,21 @@ async function markDurableChatTurnUnrecoverable(
       !repairIncompleteHeartbeatCompletion &&
       !CHAT_TURN_ACTIVE_STATUSES.includes(trace.status as (typeof CHAT_TURN_ACTIVE_STATUSES)[number])
     ) {
-      const needsTerminalChunk = !systemHeartbeat && trace.status === "failed" && trace.durable?.checkpointKind !== "run_failed";
+      const needsTerminalChunk =
+        !systemHeartbeat && trace.status === "failed" && trace.durable?.checkpointKind !== "run_failed";
       await host.storage.chatTurnTraces.patchIfStatus(payload.turnId, [trace.status], {
         durable: durableFailure,
       });
       if (needsTerminalChunk) {
-        await host.persistChatStreamChunk({
-          type: "error",
-          sessionId: payload.sessionId,
-          turnId: payload.turnId,
-          error: trace.failure?.message ?? executionFailure.message,
-        }, run.runId);
+        await host.persistChatStreamChunk(
+          {
+            type: "error",
+            sessionId: payload.sessionId,
+            turnId: payload.turnId,
+            error: trace.failure?.message ?? executionFailure.message,
+          },
+          run.runId,
+        );
       }
       return;
     }

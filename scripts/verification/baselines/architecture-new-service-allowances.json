@@ -2321,6 +2321,14 @@
       "maxDependencyMemberAccesses": 10,
       "reason": "Reviewed C0 extraction from GatewayService (operator write-roots program, PR2a, plan approved 2026-10-15): resolveToolRequestPathsForSession moved verbatim so GatewayService shrinks instead of growing. It reads three narrowed storage repositories (session project, project, delegation steps) plus root, workspace and the live sandbox config, and adds the configured write roots for ordinary sessions only.",
       "evidence": "2026-10-16: tool-path-resolution.test.ts covers absolute writes accepted inside write roots and rejected outside, relative links into and out of write roots, cwd not widened, ordinary vs delegated session scope; tool-path-resolution.loop20 and gateway-service.loop26-large-services-a suites pass; repository counter measures 10 dependency accesses and 0 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/external-side-effect-reconciliation.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS8 gap-closure replay program: reconciliation of runs that already crossed the external dispatch boundary lives beside the replay runner so the runner stays at its dependency-access baseline. It reads only the replay job it is handed, settles a probe-proven effect through a status-CAS completion and the unknown_after_send mutation transition in one transaction, and never resends.",
+      "evidence": "2026-10-16: external-side-effect-reconciliation.test.ts covers probe found/not found/error, fresh external_call_started, lost completion CAS and no-probe jobs against real SQLite storage; external-side-effect-runner-service and durable-execution-service suites pass; Gateway typecheck passes; repository counter measures 0 dependency accesses and 0 host callbacks."
     }
   ]
 }
