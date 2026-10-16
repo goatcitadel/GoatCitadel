@@ -125,7 +125,7 @@ export function normalizeSlackWebhookPayload(input: {
   botUserId?: string;
   appId?: string;
   /**
-   * channelVoiceInboundV1Enabled gate. Absent/false (default) ⇒ every
+   * channelVoiceInboundV1Enabled gate. Callers pass the resolved flag (on by default). Absent/false ⇒ every
    * file_share message stays ignored, exactly as before voice inbound existed.
    */
   voiceInboundEnabled?: boolean;

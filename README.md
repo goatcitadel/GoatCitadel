@@ -74,6 +74,7 @@ The hero image above is Chat. Conversation, planning, research, supervised agent
 - **Iterate freely**: retry, edit and resend, start a new conversation from any message, and switch between answer versions.
 - **Projects**: group conversations, import a local folder or a GitHub repository, and grant time-limited automatic fan-out.
 - **Voice and images**: live voice, push-to-talk, transcription, spoken replies, and image creation or editing appear when the host supports them, and say why when it does not.
+- **Channel voice**: inbound Telegram, WhatsApp, Slack, and Discord voice messages are transcribed by the local voice runtime by default and fall back to plain text when it is missing; set `GOATCITADEL_FEATURE_CHANNEL_VOICE_INBOUND_V1_ENABLED=false` to turn it off.
 
 ### Inbox — every decision in one queue
 

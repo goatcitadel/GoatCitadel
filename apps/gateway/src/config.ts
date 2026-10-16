@@ -1451,9 +1451,10 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       chatTimersV1Enabled: featuresInput.chatTimersV1Enabled ?? true,
       typedRunVariablesV1Enabled: featuresInput.typedRunVariablesV1Enabled ?? true,
       documentEditingV1Enabled: featuresInput.documentEditingV1Enabled ?? true,
-      // Channel voice inbound (B2a): default OFF. `?? false` keeps inbound
-      // Telegram/WhatsApp/Slack/Discord voice handling unchanged unless an operator opts in.
-      channelVoiceInboundV1Enabled: featuresInput.channelVoiceInboundV1Enabled ?? false,
+      // Channel voice inbound (B2a): default ON after the channel parity proof is green.
+      // Telegram/WhatsApp/Slack/Discord voice is transcribed through the local
+      // media voice pipeline; operators can disable it with an explicit false (stored or env).
+      channelVoiceInboundV1Enabled: featuresInput.channelVoiceInboundV1Enabled ?? true,
       // Round-3 kill switches: planner triviality-skip + speed-model drafting,
       // all-read-only tool-batch parallelism, per-chunk stream idle watchdog,
       // and planner-declared fan-out. `*Disabled` + `?? false` ⇒ ON by default.
