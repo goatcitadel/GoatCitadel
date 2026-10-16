@@ -19,11 +19,14 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { resolveChannelSendAttachments } from "./channel-attachment-payload.js";
 import {
   buildExternalSideEffectReplayOutput,
   runIdempotentExternalSideEffect,
+  type ExternalSideEffectExecutionContext,
   type ExternalSideEffectRunStore,
+  type IdempotentExternalSideEffectRunResult,
 } from "./external-side-effect-runner-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 
@@ -68,15 +71,68 @@ const CHANNEL_ACTIVITY_EMOJI: Partial<Record<ChannelActivityInput["phase"], stri
 };
 const CHANNEL_ACTIVITY_TYPING_PHASES = new Set<ChannelActivityInput["phase"]>(["thinking", "tooling"]);
 
-function invokeCommsTool(
+/**
+ * An operator approval that already authorizes this exact comms invoke. The policy
+ * engine's approval bypass (`consentContext.reason === "approval:<id>"`) only honors a
+ * fresh `pending` tool.invoke row whose stored request matches the presented one, so
+ * the request is recorded first and then presented with that consent.
+ */
+export interface CommsPreApproval {
+  approvalId: string;
+  /** Persist the exact normalized tool request as the approval's pending action; must throw if that row is not still `pending`. */
+  recordPendingAction(request: ToolInvokeRequest): Promise<void>;
+}
+
+const COMMS_PRE_APPROVAL_TTL_MS = 15 * 60_000;
+const COMMS_PRE_APPROVAL_SETTLED_MESSAGE = "Approved communications action already settled; refusing to invoke again.";
+
+export function buildCommsPreApproval(
+  storage: Pick<AsyncStorage, "pendingApprovalActions">,
+  approvalId: string,
+  now: () => Date = () => new Date(),
+): CommsPreApproval {
+  return {
+    approvalId,
+    async recordPendingAction(request) {
+      const recordedAt = now();
+      // The upsert only rewrites a row that is still pending, so a settled approval
+      // keeps its resolution and the re-read below refuses a second invoke.
+      await storage.pendingApprovalActions.upsertPending({
+        approvalId,
+        actionType: "tool.invoke",
+        request: request as unknown as Record<string, unknown>,
+        createdAt: recordedAt.toISOString(),
+        expiresAt: new Date(recordedAt.getTime() + COMMS_PRE_APPROVAL_TTL_MS).toISOString(),
+      });
+      const row = await storage.pendingApprovalActions.find(approvalId);
+      if (row?.resolutionStatus !== "pending") {
+        throw new Error(COMMS_PRE_APPROVAL_SETTLED_MESSAGE);
+      }
+    },
+  };
+}
+
+async function invokeCommsTool(
   host: CommsHost,
   request: ToolInvokeRequest,
   realtimeType: string,
+  preApproval?: CommsPreApproval,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
   // Native optional fields (including normalized attachments) must have the same
   // shape before admission and after approval storage's JSON round trip.
+  const normalized: ToolInvokeRequest = {
+    ...request,
+    args: omitAbsentCommsFields(request.args) as ToolInvokeRequest["args"],
+  };
+  if (!preApproval) {
+    return host.invokeAndUnwrap(normalized, realtimeType);
+  }
+  // The approval bypass ignores consentContext when matching, so the recorded request
+  // is the presented one without it.
+  const { consentContext: _callerConsent, ...recorded } = normalized;
+  await preApproval.recordPendingAction(recorded);
   return host.invokeAndUnwrap(
-    { ...request, args: omitAbsentCommsFields(request.args) as ToolInvokeRequest["args"] },
+    { ...recorded, consentContext: { source: "ui", reason: `approval:${preApproval.approvalId}` } },
     realtimeType,
   );
 }
@@ -387,19 +443,90 @@ export async function commsGmailRead(
   );
 }
 
-/** Boundary key for the Gmail send external side-effect ledger (see comms-service test suite). */
+/** Boundary keys for the comms external side-effect ledger (see comms-service test suite). */
 const COMMS_GMAIL_SEND_BOUNDARY = "comms_gmail_send";
+const COMMS_CALENDAR_CREATE_BOUNDARY = "comms_calendar_create";
 
 /**
- * Carries a structured pre/post-boundary classification of a Gmail send result out of
+ * Carries a structured pre/post-boundary classification of a comms tool result out of
  * the runner's `execute` without losing its shape (same pattern as
  * `DryRunCommitInnerResultError` in integration-dry-run-gate.ts:52). The runner only
- * sees a thrown Error; commsGmailSend unwraps this back to the original result so
- * refusals and failures are returned byte-compatible with pre-ledger behavior.
+ * sees a thrown Error; the ledgered comms functions unwrap this back to the original
+ * result so refusals and failures are returned byte-compatible with pre-ledger behavior.
  */
-class CommsGmailPreBoundaryResultError extends Error {
+class CommsPreBoundaryResultError extends Error {
   public constructor(public readonly result: ToolInvokeResult | Record<string, unknown>) {
-    super("comms_gmail_pre_boundary_result");
+    super("comms_pre_boundary_result");
+  }
+}
+
+/**
+ * Classifies a ledgered comms tool result inside the runner's `execute`: returns the
+ * record when the provider call completed, otherwise throws a
+ * `CommsPreBoundaryResultError`, marking the boundary crossed first whenever the
+ * provider call may have fired.
+ */
+async function classifyCommsSideEffectResult(
+  result: ToolInvokeResult | Record<string, unknown>,
+  claim: ExternalSideEffectExecutionContext,
+): Promise<Record<string, unknown>> {
+  // A ToolInvokeResult that never reached "executed" (policy refusal, approval
+  // required) never crossed the external boundary — the tool executor's commsInvoke
+  // was never entered.
+  if (isPreBoundaryToolInvokeRefusal(result)) {
+    throw new CommsPreBoundaryResultError(result);
+  }
+
+  const record = result as Record<string, unknown>;
+  if (record.status === "failed") {
+    const deliveryStatus = record.deliveryStatus;
+    if (deliveryStatus === "blocked" || deliveryStatus === "not_available") {
+      // These failures are classified before commsInvoke's provider call ever
+      // fired (missing auth, disallowed host, unconfigured channel) — pre-boundary.
+      throw new CommsPreBoundaryResultError(record);
+    }
+    // Any other failed deliveryStatus (degraded, retrying, manual_reconciliation_required,
+    // or unclassified) means the provider call may have fired — the boundary must be
+    // marked crossed before the ledger records this as an unknown external outcome.
+    await claim.markExternalCallStarted();
+    throw new CommsPreBoundaryResultError(record);
+  }
+
+  await claim.markExternalCallStarted();
+  return record;
+}
+
+/** Maps a ledgered comms run back to the tool-shaped result callers already consume. */
+function settleCommsSideEffectRun(
+  runResult: IdempotentExternalSideEffectRunResult<Record<string, unknown>>,
+): ToolInvokeResult | Record<string, unknown> {
+  if (runResult.status === "executed") {
+    return {
+      ...runResult.value,
+      ...buildExternalSideEffectReplayOutput(runResult.claim),
+    };
+  }
+  if (runResult.status === "blocked") {
+    return {
+      status: "failed",
+      deliveryStatus: "blocked",
+      error: runResult.message,
+      ...buildExternalSideEffectReplayOutput(runResult.claim),
+    };
+  }
+  if (runResult.error instanceof CommsPreBoundaryResultError) {
+    return runResult.error.result;
+  }
+  throw runResult.error;
+}
+
+async function findCommsConnection(host: CommsHost, connectionId: string): Promise<IntegrationConnection | undefined> {
+  try {
+    return await host.getIntegrationConnection(connectionId);
+  } catch {
+    // Preserve today's fail-inside-executor behavior for unknown connection ids: fall
+    // back to a generic catalog id and let invokeCommsTool surface the real error.
+    return undefined;
   }
 }
 
@@ -417,16 +544,9 @@ function isPreBoundaryToolInvokeRefusal(
 export async function commsGmailSend(
   host: CommsHost,
   input: GmailSendInput,
+  preApproval?: CommsPreApproval,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  let connection: IntegrationConnection | undefined;
-  try {
-    connection = await host.getIntegrationConnection(input.connectionId);
-  } catch {
-    // Preserve today's fail-inside-executor behavior for unknown connection ids: fall
-    // back to a generic catalog id and let invokeCommsTool surface the real error.
-    connection = undefined;
-  }
-
+  const connection = await findCommsConnection(host, input.connectionId);
   const checkedAt = new Date().toISOString();
   const runResult = await runIdempotentExternalSideEffect<Record<string, unknown>>({
     mutationStore: host.mutationStore,
@@ -467,53 +587,12 @@ export async function commsGmailSend(
           taskId: input.taskId,
         },
         "comms_gmail_send",
+        preApproval,
       );
-
-      // A ToolInvokeResult that never reached "executed" (policy refusal, approval
-      // required) never crossed the external boundary — the tool executor's commsInvoke
-      // was never entered.
-      if (isPreBoundaryToolInvokeRefusal(result)) {
-        throw new CommsGmailPreBoundaryResultError(result);
-      }
-
-      const record = result as Record<string, unknown>;
-      if (record.status === "failed") {
-        const deliveryStatus = record.deliveryStatus;
-        if (deliveryStatus === "blocked" || deliveryStatus === "not_available") {
-          // These failures are classified before commsInvoke's provider call ever
-          // fired (missing auth, disallowed host, unconfigured channel) — pre-boundary.
-          throw new CommsGmailPreBoundaryResultError(record);
-        }
-        // Any other failed deliveryStatus (degraded, retrying, manual_reconciliation_required,
-        // or unclassified) means the provider call may have fired — the boundary must be
-        // marked crossed before the ledger records this as an unknown external outcome.
-        await claim.markExternalCallStarted();
-        throw new CommsGmailPreBoundaryResultError(record);
-      }
-
-      await claim.markExternalCallStarted();
-      return record;
+      return classifyCommsSideEffectResult(result, claim);
     },
   });
-
-  if (runResult.status === "executed") {
-    return {
-      ...runResult.value,
-      ...buildExternalSideEffectReplayOutput(runResult.claim),
-    };
-  }
-  if (runResult.status === "blocked") {
-    return {
-      status: "failed",
-      deliveryStatus: "blocked",
-      error: runResult.message,
-      ...buildExternalSideEffectReplayOutput(runResult.claim),
-    };
-  }
-  if (runResult.error instanceof CommsGmailPreBoundaryResultError) {
-    return runResult.error.result;
-  }
-  throw runResult.error;
+  return settleCommsSideEffectRun(runResult);
 }
 
 export async function commsCalendarList(
@@ -541,26 +620,46 @@ export async function commsCalendarList(
 
 export async function commsCalendarCreate(
   host: CommsHost,
-  input: CalendarCreateEventInput,
+  input: CalendarCreateEventInput & { idempotencyKey?: string },
+  preApproval?: CommsPreApproval,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return invokeCommsTool(
-    host,
-    {
-      toolName: "calendar.create_event",
-      args: {
-        connectionId: input.connectionId,
-        calendarId: input.calendarId,
-        title: input.title,
-        description: input.description,
-        startIso: input.startIso,
-        endIso: input.endIso,
-        attendees: input.attendees,
-        timeZone: input.timeZone,
-      },
-      sessionId: input.sessionId ?? COMMS_SESSION,
-      agentId: input.agentId ?? KNOWLEDGE_AGENT,
-      taskId: input.taskId,
+  const connection = await findCommsConnection(host, input.connectionId);
+  const eventFields = {
+    connectionId: input.connectionId,
+    calendarId: input.calendarId,
+    title: input.title,
+    description: input.description,
+    startIso: input.startIso,
+    endIso: input.endIso,
+    attendees: input.attendees,
+    timeZone: input.timeZone,
+  };
+  const runResult = await runIdempotentExternalSideEffect<Record<string, unknown>>({
+    mutationStore: host.mutationStore,
+    sideEffectRunStore: host.sideEffectRunStore,
+    boundary: COMMS_CALENDAR_CREATE_BOUNDARY,
+    catalogId: connection?.catalogId ?? "automation.google-calendar",
+    connectionId: input.connectionId,
+    actionId: "calendar.create_event",
+    checkedAt: new Date().toISOString(),
+    idempotencyKey: input.idempotencyKey,
+    payload: eventFields,
+    label: "Calendar create event (comms)",
+    execute: async (claim) => {
+      const result = await invokeCommsTool(
+        host,
+        {
+          toolName: "calendar.create_event",
+          args: eventFields,
+          sessionId: input.sessionId ?? COMMS_SESSION,
+          agentId: input.agentId ?? KNOWLEDGE_AGENT,
+          taskId: input.taskId,
+        },
+        "comms_calendar_create",
+        preApproval,
+      );
+      return classifyCommsSideEffectResult(result, claim);
     },
-    "comms_calendar_create",
-  );
+  });
+  return settleCommsSideEffectRun(runResult);
 }

@@ -1,14 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
 import { sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
 import type {
+  CalendarCreateEventInput,
   ChatAttachmentRecord,
   ExternalSideEffectRunRecord,
   GmailSendInput,
   IntegrationConnection,
+  PendingApprovalAction,
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import { commsActivity, commsGmailSend, commsReact, commsSend, commsUnsend, type CommsHost } from "./comms-service.js";
+import {
+  buildCommsPreApproval,
+  commsActivity,
+  commsCalendarCreate,
+  commsGmailSend,
+  commsReact,
+  commsSend,
+  commsUnsend,
+  type CommsHost,
+  type CommsPreApproval,
+} from "./comms-service.js";
 import type { ExternalSideEffectRunStore } from "./external-side-effect-runner-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 
@@ -635,5 +647,220 @@ describe("comms gmail send external side-effect ledger", () => {
     expect(host.invokeAndUnwrap).toHaveBeenCalledTimes(2);
     expect(first).toMatchObject({ status: "sent" });
     expect(second).toMatchObject({ status: "sent" });
+  });
+});
+
+function calendarInput(
+  overrides: Partial<CalendarCreateEventInput & { idempotencyKey?: string }> = {},
+): CalendarCreateEventInput & { idempotencyKey?: string } {
+  return {
+    connectionId: "conn-calendar",
+    calendarId: "primary",
+    title: "Planning",
+    startIso: "2026-10-20T15:00:00.000Z",
+    endIso: "2026-10-20T15:30:00.000Z",
+    attendees: ["guest@example.test"],
+    ...overrides,
+  };
+}
+
+function createCalendarHost(): ReturnType<typeof createGmailHost> {
+  return createGmailHost({
+    invokeAndUnwrap: vi.fn(async () => ({ status: "created", eventId: "event-1" }) as Record<string, unknown>),
+    getIntegrationConnection: vi.fn(
+      async () =>
+        ({
+          connectionId: "conn-calendar",
+          catalogId: "automation.google-calendar",
+          kind: "automation",
+          key: "google-calendar",
+          label: "Google Calendar",
+          enabled: true,
+          status: "connected",
+          config: {},
+        }) as IntegrationConnection,
+    ),
+  });
+}
+
+function createRecordingPreApproval(
+  approvalId = "ap-1",
+  record: (request: ToolInvokeRequest) => Promise<void> = async () => undefined,
+): CommsPreApproval & { recordPendingAction: ReturnType<typeof vi.fn> } {
+  return { approvalId, recordPendingAction: vi.fn(record) };
+}
+
+describe("comms calendar create external side-effect ledger", () => {
+  it("calendar create with the same idempotency key twice invokes calendar.create_event once", async () => {
+    const { host, sideEffectRunStore } = createCalendarHost();
+
+    const first = await commsCalendarCreate(host, calendarInput({ idempotencyKey: "cal-key-1" }));
+    const second = await commsCalendarCreate(host, calendarInput({ idempotencyKey: "cal-key-1" }));
+
+    expect(host.invokeAndUnwrap).toHaveBeenCalledTimes(1);
+    expect(host.invokeAndUnwrap.mock.calls[0]?.[0]).toMatchObject({ toolName: "calendar.create_event" });
+    expect(first).toMatchObject({
+      status: "created",
+      eventId: "event-1",
+      replayPolicy: "idempotent_external",
+      replayOutcome: "claimed",
+      idempotencyKey: "cal-key-1",
+    });
+    expect(second).toMatchObject({
+      status: "failed",
+      deliveryStatus: "blocked",
+      replayOutcome: "duplicate",
+      idempotencyKey: "cal-key-1",
+    });
+    const runs = [...sideEffectRunStore.runs.values()];
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      boundary: "comms_calendar_create",
+      actionId: "calendar.create_event",
+      status: "completed",
+    });
+  });
+
+  it("records calendar policy refusals as failed before the boundary", async () => {
+    const refusal: ToolInvokeResult = {
+      outcome: "approval_required",
+      policyReason: "needs approval",
+      auditEventId: "audit-cal-1",
+      approvalId: "approval-cal-1",
+    };
+    const { host, sideEffectRunStore } = createCalendarHost();
+    host.invokeAndUnwrap.mockImplementation(async () => refusal);
+
+    const result = await commsCalendarCreate(host, calendarInput());
+
+    expect(result).toEqual(refusal);
+    expect([...sideEffectRunStore.runs.values()][0]).toMatchObject({ status: "failed_before_boundary" });
+  });
+});
+
+describe("comms pre-approved invocation", () => {
+  it("pre-approval records the exact request and presents approval:<id> consent", async () => {
+    const { host } = createGmailHost();
+    const preApproval = createRecordingPreApproval("ap-1");
+
+    const result = await commsGmailSend(host, gmailInput({ idempotencyKey: "mail-key-1" }), preApproval);
+
+    expect(result).toMatchObject({ status: "sent" });
+    expect(preApproval.recordPendingAction).toHaveBeenCalledTimes(1);
+    expect(host.invokeAndUnwrap).toHaveBeenCalledTimes(1);
+    const invoked = host.invokeAndUnwrap.mock.calls[0]?.[0] as ToolInvokeRequest;
+    expect(invoked.consentContext).toEqual({ source: "ui", reason: "approval:ap-1" });
+    const { consentContext: _consent, ...invokedWithoutConsent } = invoked;
+    expect(preApproval.recordPendingAction.mock.calls[0]?.[0]).toEqual(invokedWithoutConsent);
+    expect(preApproval.recordPendingAction.mock.invocationCallOrder[0]).toBeLessThan(
+      host.invokeAndUnwrap.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("pre-approval carries approval consent into calendar create", async () => {
+    const { host } = createCalendarHost();
+    const preApproval = createRecordingPreApproval("ap-cal");
+
+    await commsCalendarCreate(host, calendarInput({ idempotencyKey: "cal-key-2" }), preApproval);
+
+    const invoked = host.invokeAndUnwrap.mock.calls[0]?.[0] as ToolInvokeRequest;
+    expect(invoked).toMatchObject({
+      toolName: "calendar.create_event",
+      consentContext: { source: "ui", reason: "approval:ap-cal" },
+    });
+    expect(preApproval.recordPendingAction.mock.calls[0]?.[0]).toMatchObject({ toolName: "calendar.create_event" });
+    expect(preApproval.recordPendingAction.mock.calls[0]?.[0]).not.toHaveProperty("consentContext");
+  });
+
+  it("a settled pending action stops the invoke", async () => {
+    const { host, sideEffectRunStore } = createGmailHost();
+    const preApproval = createRecordingPreApproval("ap-1", async () => {
+      throw new Error("Approved communications action already settled; refusing to invoke again.");
+    });
+
+    const outcome = await commsGmailSend(host, gmailInput(), preApproval).then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error: String(error) }),
+    );
+
+    expect(host.invokeAndUnwrap).not.toHaveBeenCalled();
+    expect(outcome.ok).toBe(false);
+    expect(JSON.stringify(outcome)).toContain("already settled");
+    expect(JSON.stringify(outcome)).not.toContain("approval_required");
+    expect([...sideEffectRunStore.runs.values()][0]).toMatchObject({ status: "failed_before_boundary" });
+  });
+});
+
+describe("buildCommsPreApproval", () => {
+  type UpsertInput = {
+    approvalId: string;
+    actionType: PendingApprovalAction["actionType"];
+    request: Record<string, unknown>;
+    createdAt?: string;
+    expiresAt?: string;
+  };
+
+  function createPendingActionsFake(initial?: PendingApprovalAction) {
+    const rows = new Map<string, PendingApprovalAction>();
+    if (initial) rows.set(initial.approvalId, initial);
+    const upsertPending = vi.fn(async (input: UpsertInput) => {
+      const existing = rows.get(input.approvalId);
+      if (!existing || existing.resolutionStatus === "pending") {
+        rows.set(input.approvalId, {
+          approvalId: input.approvalId,
+          actionType: input.actionType,
+          request: JSON.parse(JSON.stringify(input.request)) as Record<string, unknown>,
+          createdAt: input.createdAt ?? "2026-10-16T00:00:00.000Z",
+          expiresAt: input.expiresAt,
+          resolutionStatus: "pending",
+        });
+      }
+      return rows.get(input.approvalId)!;
+    });
+    const find = vi.fn(async (approvalId: string) => rows.get(approvalId));
+    return { rows, pendingApprovalActions: { upsertPending, find } };
+  }
+
+  const request: ToolInvokeRequest = {
+    toolName: "gmail.send",
+    args: { connectionId: "conn-gmail", to: ["dest@example.test"], subject: "Status", bodyText: "All good" },
+    sessionId: "session:operator:comms",
+    agentId: "operator",
+  };
+
+  it("records a fresh pending tool.invoke row with a 15 minute expiry", async () => {
+    const fake = createPendingActionsFake();
+    const now = new Date("2026-10-16T12:00:00.000Z");
+    const preApproval = buildCommsPreApproval(fake as never, "ap-1", () => now);
+
+    await expect(preApproval.recordPendingAction(request)).resolves.toBeUndefined();
+
+    expect(preApproval.approvalId).toBe("ap-1");
+    expect(fake.pendingApprovalActions.upsertPending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "ap-1",
+        actionType: "tool.invoke",
+        request,
+        expiresAt: "2026-10-16T12:15:00.000Z",
+      }),
+    );
+    expect(fake.rows.get("ap-1")).toMatchObject({ resolutionStatus: "pending", request });
+  });
+
+  it("refuses to invoke again when the pending action row is already resolved", async () => {
+    const fake = createPendingActionsFake({
+      approvalId: "ap-1",
+      actionType: "tool.invoke",
+      request: request as unknown as Record<string, unknown>,
+      createdAt: "2026-10-16T11:00:00.000Z",
+      resolvedAt: "2026-10-16T11:01:00.000Z",
+      resolutionStatus: "executed",
+    });
+    const preApproval = buildCommsPreApproval(fake as never, "ap-1");
+
+    await expect(preApproval.recordPendingAction(request)).rejects.toThrow(
+      "Approved communications action already settled; refusing to invoke again.",
+    );
+    expect(fake.rows.get("ap-1")).toMatchObject({ resolutionStatus: "executed" });
   });
 });
