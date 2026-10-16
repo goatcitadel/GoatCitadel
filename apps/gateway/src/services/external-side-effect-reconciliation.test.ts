@@ -173,18 +173,22 @@ describe("reconcileCrossedExternalSideEffectRun", () => {
     }
   });
 
-  it("leaves a fresh external_call_started run alone", async () => {
+  it.each([
+    { label: "fresh", stale: false },
+    { label: "stale", stale: true },
+  ])("leaves a $label external_call_started run alone without probing", async ({ label, stale }) => {
     const storage = createStorage();
     try {
+      const connectionId = `conn-started-${label}`;
       const created = await storage.externalSideEffectRuns.createOrGet(
         {
           boundary: BOUNDARY,
-          routePath: routePathFor("conn-fresh"),
-          connectionId: "conn-fresh",
+          routePath: routePathFor(connectionId),
+          connectionId,
           actionId: ACTION_ID,
-          actorScope: "conn-fresh",
-          idempotencyKey: "key-fresh",
-          payloadHash: "hash-fresh",
+          actorScope: connectionId,
+          idempotencyKey: `key-started-${label}`,
+          payloadHash: "hash-started",
           status: "claimed_not_sent",
           replayOutcome: "claimed",
           replayAttempt: "new",
@@ -193,8 +197,20 @@ describe("reconcileCrossedExternalSideEffectRun", () => {
       );
       const run = await storage.externalSideEffectRuns.markExternalCallStarted(created.runId, {}, CHECKED_AT);
       expect(run.status).toBe("external_call_started");
+      // A stale started run still has a pending/dispatched mutation row; only the
+      // next claim converges it to unknown_after_send, so it must not be probed.
+      const isStatusStale = vi.fn(async () => stale);
+      const sideEffectRunStore = new Proxy(storage.externalSideEffectRuns, {
+        get(target, property, receiver) {
+          if (property === "isStatusStale") {
+            return isStatusStale;
+          }
+          const value = Reflect.get(target, property, receiver) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }) as ExternalSideEffectRunStore;
       const probe = vi.fn(async (): Promise<ExternalSideEffectProbeResult> => ({ found: true }));
-      const job = buildReplayJob(storage, run, { reconcileExternalOutcome: probe });
+      const job = buildReplayJob(storage, run, { sideEffectRunStore, reconcileExternalOutcome: probe });
 
       const results = await runReplaySafeExternalSideEffectWorker({
         runs: [run],

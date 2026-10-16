@@ -1098,10 +1098,7 @@ async function reconcileCrossedReplayRun<TValue>(
   if (identityMismatch) {
     return { status: "skipped", run, reason: "job_identity_mismatch", message: identityMismatch };
   }
-  return reconcileCrossedExternalSideEffectRun(run, job, {
-    checkedAt: input.checkedAt,
-    staleAfterMs: input.staleClaimedNotSentAfterMs ?? 5 * 60 * 1000,
-  });
+  return reconcileCrossedExternalSideEffectRun(run, job, { checkedAt: input.checkedAt });
 }
 
 function readReplayJobIdentityMismatch<TValue>(

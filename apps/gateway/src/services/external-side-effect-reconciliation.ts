@@ -18,13 +18,10 @@ const NOT_FOUND_MESSAGE =
 
 export interface CrossedExternalSideEffectReconciliationOptions {
   checkedAt: string;
-  staleAfterMs: number;
 }
 
-type CrossedRunStatus = "unknown_external_outcome" | "external_call_started";
-
 /**
- * Reconciles a run that already crossed the external dispatch boundary by
+ * Reconciles an `unknown_external_outcome` run that already crossed the external dispatch boundary by
  * asking the owning integration's read-only provider probe whether the effect
  * landed. It never calls `execute`: a crossed run is settled `completed` only
  * on positive provider proof, and otherwise stays unknown for an operator.
@@ -50,25 +47,17 @@ export async function reconcileCrossedExternalSideEffectRun<TValue>(
       "External side-effect reconciliation requires status-guarded completion stores and one transaction owner.",
     );
   }
-  if (run.status !== "unknown_external_outcome" && run.status !== "external_call_started") {
-    return skip(run, "blocked_or_unrecoverable", "External side-effect run is not recoverable by reconciliation.");
-  }
   if (run.status === "external_call_started") {
-    const isStatusStale = sideEffectRunStore?.isStatusStale?.bind(sideEffectRunStore);
-    if (!isStatusStale) {
-      return skip(
-        run,
-        "job_unavailable",
-        "External side-effect reconciliation requires database-clock stale authority.",
-      );
-    }
-    if (!(await isStatusStale(run.runId, "external_call_started", options.staleAfterMs))) {
-      return skip(
-        run,
-        "external_call_in_flight",
-        "The external call is still recent; reconciliation left it alone to avoid racing a live request.",
-      );
-    }
+    // Its mutation row is still pending/dispatched; the next claim on this
+    // identity converges it to unknown_after_send, after which it is reconciled.
+    return skip(
+      run,
+      "external_call_in_flight",
+      "The external call has not settled as unknown yet; reconciliation left it alone and will not probe or resend it.",
+    );
+  }
+  if (run.status !== "unknown_external_outcome") {
+    return skip(run, "blocked_or_unrecoverable", "External side-effect run is not recoverable by reconciliation.");
   }
 
   let probe: ExternalSideEffectProbeResult;
@@ -85,13 +74,12 @@ export async function reconcileCrossedExternalSideEffectRun<TValue>(
     return skip(run, "external_outcome_not_found", NOT_FOUND_MESSAGE);
   }
 
-  const expectedStatus: CrossedRunStatus = run.status;
   const externalReferenceId = boundString(probe.externalReferenceId, MAX_EXTERNAL_REFERENCE_ID_LENGTH);
   const reconciliationId = randomUUID();
   const settled = await runClaimTransaction(async () => {
     const current = await markCompletedIfStatus(
       run.runId,
-      expectedStatus,
+      "unknown_external_outcome",
       {
         replayOutcome: "duplicate",
         ...(externalReferenceId ? { externalReferenceId } : {}),
