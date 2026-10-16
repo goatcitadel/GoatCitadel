@@ -826,6 +826,37 @@ describe("comms smtp send external side-effect ledger", () => {
     });
     expect(preApproval.recordPendingAction.mock.calls[0]?.[0]).toMatchObject({ toolName: "smtp.send" });
   });
+
+  it.each([
+    ["blocked", "blocked: SMTP server rejected the configured credentials (EAUTH); nothing was sent."],
+    ["not_available", "smtp.send failed before the message was sent (ECONNECTION); nothing was sent."],
+  ])("records an SMTP pre-DATA %s failure as failed before the boundary", async (deliveryStatus, error) => {
+    const failure = { status: "failed", deliveryStatus, error };
+    const { host, sideEffectRunStore } = createSmtpHost();
+    host.invokeAndUnwrap.mockImplementation(async () => failure);
+
+    const result = await commsSmtpSend(host, gmailInput({ connectionId: "conn-smtp" }));
+
+    expect(result).toEqual(failure);
+    expect([...sideEffectRunStore.runs.values()][0]).toMatchObject({
+      boundary: "comms_smtp_send",
+      status: "failed_before_boundary",
+    });
+  });
+
+  it("records a possibly-sent SMTP failure as an unknown external outcome", async () => {
+    const failure = {
+      status: "failed",
+      deliveryStatus: "manual_reconciliation_required",
+      error: "smtp.send unknown_after_send: external boundary may have been crossed; manual reconciliation required.",
+    };
+    const { host, sideEffectRunStore } = createSmtpHost();
+    host.invokeAndUnwrap.mockImplementation(async () => failure);
+
+    await commsSmtpSend(host, gmailInput({ connectionId: "conn-smtp" }));
+
+    expect([...sideEffectRunStore.runs.values()][0]).toMatchObject({ status: "unknown_external_outcome" });
+  });
 });
 
 describe("comms pre-approved invocation", () => {

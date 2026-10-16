@@ -1,6 +1,8 @@
+import { lookup as nodeDnsLookup, type LookupAddress } from "node:dns";
+import { isIP } from "node:net";
 import nodemailer from "nodemailer";
-import { assertHostAllowed } from "../sandbox/network-guard.js";
-import { markCommsMutationRequestStarted, secretFrom } from "./comms-executor.js";
+import { assertHostAllowed, createGuardedDnsLookup, type DnsLookupFunction } from "../sandbox/network-guard.js";
+import { CommsPreBoundaryProviderError } from "./comms-provider-errors.js";
 
 const DEFAULT_SMTP_PORT = 587;
 const IMPLICIT_TLS_SMTP_PORT = 465;
@@ -8,12 +10,19 @@ const SMTP_CONNECTION_TIMEOUT_MS = 20_000;
 const SMTP_GREETING_TIMEOUT_MS = 20_000;
 const SMTP_SOCKET_TIMEOUT_MS = 60_000;
 const SMTP_HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/iu;
+/** nodemailer error codes that are only raised before the DATA command, so nothing was sent. */
+const SMTP_PRE_DATA_ERROR_CODES = new Set(["EDNS", "ETLS", "EAUTH", "ENOAUTH", "EENVELOPE"]);
+const SMTP_AUTH_ERROR_CODES = new Set(["EAUTH", "ENOAUTH"]);
+const MAX_SMTP_ERROR_DETAIL_CHARS = 300;
 
 export interface SmtpTransportOptions {
+  /** The resolved, guard-checked address the transport connects to. */
   host: string;
   port: number;
   secure: boolean;
   auth?: { user: string; pass: string };
+  /** Keeps SNI and certificate verification bound to the configured hostname. */
+  tls?: { servername: string };
 }
 
 export interface SmtpOutboundMessage {
@@ -29,8 +38,17 @@ export interface SmtpTransportFactory {
   (options: SmtpTransportOptions): { sendMail(message: SmtpOutboundMessage): Promise<{ messageId?: string }> };
 }
 
+/** Executor-owned capabilities the comms dispatcher passes in, so this module never imports it back. */
+export interface SmtpSendRuntime {
+  resolveSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined;
+  /** Marks the comms mutation boundary; called once, after every validation, immediately before sending. */
+  markMutationRequestStarted(): Promise<void>;
+  createTransport?: SmtpTransportFactory;
+  dnsLookup?: DnsLookupFunction;
+}
+
 /**
- * Default transport: nodemailer pinned to exactly the configured host. STARTTLS is
+ * Default transport: nodemailer connected to the guard-resolved address. STARTTLS is
  * mandatory on non-implicit-TLS ports so credentials and mail never cross in clear
  * text, and message-level file/URL access is disabled so no content can pull local
  * files or remote URLs into the outbound message.
@@ -41,6 +59,7 @@ const createNodemailerTransport: SmtpTransportFactory = (options) =>
     port: options.port,
     secure: options.secure,
     ...(options.auth ? { auth: options.auth } : {}),
+    ...(options.tls ? { tls: options.tls } : {}),
     requireTLS: !options.secure,
     connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
     greetingTimeout: SMTP_GREETING_TIMEOUT_MS,
@@ -51,26 +70,49 @@ const createNodemailerTransport: SmtpTransportFactory = (options) =>
 
 /**
  * Sends one plain-text message through the IMAP/SMTP account's configured SMTP
- * server and returns the provider messageId. Every validation runs before the
- * transport exists; the comms mutation boundary is marked immediately before
- * `sendMail`, so any failure after that point is an unknown external outcome.
+ * server and returns the provider messageId. Every validation, including the
+ * guarded DNS resolution, runs before the transport exists; the comms mutation
+ * boundary is marked immediately before `sendMail`. A failure nodemailer reports
+ * before DATA is a pre-boundary failure; any other failure is an unknown outcome.
  */
 export async function smtpSend(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
   allowlist: string[],
-  grantAllowlist?: string[],
-  createTransport: SmtpTransportFactory = createNodemailerTransport,
+  grantAllowlist: string[] | undefined,
+  runtime: SmtpSendRuntime,
 ): Promise<string> {
   const host = resolveSmtpHost(config);
   assertSmtpHostAllowed(host, allowlist, grantAllowlist);
   const port = resolveSmtpPort(config.smtpPort);
   const secure = typeof config.smtpSecure === "boolean" ? config.smtpSecure : port === IMPLICIT_TLS_SMTP_PORT;
   const user = readString(config.smtpUser);
-  const pass = secretFrom(config, "smtpPassword", "smtpPasswordEnv");
+  const pass = runtime.resolveSecret(config, "smtpPassword", "smtpPasswordEnv");
   if (user && !pass) {
     throw new Error("Missing SMTP password: smtpPassword or smtpPasswordEnv is not configured.");
   }
+  const message = buildSmtpMessage(config, args);
+  const address = await resolveGuardedSmtpAddress(host, allowlist, runtime.dnsLookup ?? nodeDnsLookup);
+
+  const createTransport = runtime.createTransport ?? createNodemailerTransport;
+  const transport = createTransport({
+    host: address,
+    port,
+    secure,
+    ...(user && pass ? { auth: { user, pass } } : {}),
+    ...(isIP(host) === 0 ? { tls: { servername: host } } : {}),
+  });
+  await runtime.markMutationRequestStarted();
+  let info: { messageId?: string };
+  try {
+    info = await transport.sendMail(message);
+  } catch (error) {
+    throw classifySmtpSendFailure(error);
+  }
+  return readString(info.messageId) ?? `smtp-${Date.now()}`;
+}
+
+function buildSmtpMessage(config: Record<string, unknown>, args: Record<string, unknown>): SmtpOutboundMessage {
   const from = readString(config.fromAddress) ?? readString(config.address) ?? readString(config.email);
   if (!from) {
     throw new Error("smtp.send requires a configured from address (fromAddress, address, or email).");
@@ -83,7 +125,7 @@ export async function smtpSend(
   const text = requireString(args.bodyText, "bodyText");
   const cc = readStringList(args.cc);
   const bcc = readStringList(args.bcc);
-  const message: SmtpOutboundMessage = {
+  return {
     from,
     to,
     ...(cc.length > 0 ? { cc } : {}),
@@ -91,11 +133,6 @@ export async function smtpSend(
     subject,
     text,
   };
-
-  const transport = createTransport({ host, port, secure, ...(user && pass ? { auth: { user, pass } } : {}) });
-  await markCommsMutationRequestStarted();
-  const info = await transport.sendMail(message);
-  return readString(info.messageId) ?? `smtp-${Date.now()}`;
 }
 
 function resolveSmtpHost(config: Record<string, unknown>): string {
@@ -122,6 +159,47 @@ function assertSmtpHostAllowed(host: string, allowlist: string[], grantAllowlist
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`blocked: smtp.send host is not allowlisted. ${detail}`, { cause: error });
   }
+}
+
+/**
+ * Resolves the SMTP host through the same guarded lookup the HTTP egress dispatcher
+ * uses (DNS-rebinding and private/metadata-address defense), so the transport only
+ * ever connects to an address that passed the guard.
+ */
+function resolveGuardedSmtpAddress(host: string, allowlist: string[], dnsLookup: DnsLookupFunction): Promise<string> {
+  const guardedLookup = createGuardedDnsLookup(`https://${host}/`, allowlist, dnsLookup);
+  return new Promise<string>((resolve, reject) => {
+    guardedLookup(host, { all: true }, (error, address) => {
+      const resolved = Array.isArray(address) ? (address as LookupAddress[])[0]?.address : address;
+      if (error || !resolved) {
+        const detail = error ? error.message : "no address returned";
+        reject(new Error(`blocked: smtp.send host failed guarded DNS resolution. ${detail}`, { cause: error }));
+        return;
+      }
+      resolve(resolved);
+    });
+  });
+}
+
+function classifySmtpSendFailure(error: unknown): unknown {
+  if (!error || typeof error !== "object") {
+    return error;
+  }
+  const { code, command } = error as { code?: unknown; command?: unknown };
+  const preData =
+    (typeof code === "string" && SMTP_PRE_DATA_ERROR_CODES.has(code)) || (code === "ECONNECTION" && command === "CONN");
+  if (!preData) {
+    return error;
+  }
+  const detail = truncate(error instanceof Error ? error.message : String(error));
+  const message = SMTP_AUTH_ERROR_CODES.has(code as string)
+    ? `blocked: SMTP server rejected the configured credentials (${String(code)}); nothing was sent. ${detail}`
+    : `smtp.send failed before the message was sent (${String(code)}); nothing was sent. ${detail}`;
+  return new CommsPreBoundaryProviderError(message, { cause: error });
+}
+
+function truncate(value: string): string {
+  return value.length > MAX_SMTP_ERROR_DETAIL_CHARS ? `${value.slice(0, MAX_SMTP_ERROR_DETAIL_CHARS)}…` : value;
 }
 
 function resolveSmtpPort(value: unknown): number {

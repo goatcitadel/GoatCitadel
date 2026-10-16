@@ -1,13 +1,24 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { AsyncStorage, Storage } from "@goatcitadel/storage";
+import type { DnsLookupFunction } from "../sandbox/network-guard.js";
 import { createDefaultToolRegistry } from "../tool-registry.js";
 import { deriveToolCapabilityPolicy } from "../tool-security.js";
 import { executeCommsTool } from "./comms-executor.js";
-import { smtpSend, type SmtpTransportFactory } from "./smtp-mail-executor.js";
+import { CommsPreBoundaryProviderError } from "./comms-provider-errors.js";
+import { smtpSend, type SmtpSendRuntime, type SmtpTransportFactory } from "./smtp-mail-executor.js";
 
 const nodemailerMock = vi.hoisted(() => ({ createTransport: vi.fn() }));
 vi.mock("nodemailer", () => ({ default: nodemailerMock, createTransport: nodemailerMock.createTransport }));
+
+// The executor-level tests run the default (node:dns) lookup path; keep them offline.
+const dnsMock = vi.hoisted(() => ({ lookup: vi.fn() }));
+vi.mock("node:dns", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:dns")>()),
+  lookup: dnsMock.lookup,
+}));
+
+const PUBLIC_SMTP_IP = "93.184.216.34";
 
 const SMTP_CONFIG = {
   smtpHost: "smtp.example.com",
@@ -25,31 +36,72 @@ const SEND_ARGS = {
   bodyText: "Numbers attached inline.",
 };
 
-function fakeTransportFactory(sendMail: ReturnType<typeof vi.fn> = vi.fn(async () => ({ messageId: "<m-1@x>" }))) {
-  const factory = vi.fn(() => ({ sendMail }));
-  return { factory: factory as unknown as SmtpTransportFactory & typeof factory, sendMail };
+function fakeLookup(address: string): DnsLookupFunction {
+  return (_hostname, options, callback) => {
+    if ((options as { all?: boolean }).all) {
+      callback(null, [{ address, family: address.includes(":") ? 6 : 4 }]);
+      return;
+    }
+    callback(null, address, address.includes(":") ? 6 : 4);
+  };
 }
+
+function testSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined {
+  const direct = config[directKey];
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const envName = config[envKey];
+  return typeof envName === "string" ? process.env[envName]?.trim() || undefined : undefined;
+}
+
+function fakeRuntime(
+  overrides: Partial<SmtpSendRuntime> & { sendMail?: ReturnType<typeof vi.fn> } = {},
+): SmtpSendRuntime & {
+  createTransport: ReturnType<typeof vi.fn> & SmtpTransportFactory;
+  markMutationRequestStarted: ReturnType<typeof vi.fn>;
+  sendMail: ReturnType<typeof vi.fn>;
+} {
+  const sendMail = overrides.sendMail ?? vi.fn(async () => ({ messageId: "<m-1@x>" }));
+  const createTransport = vi.fn(() => ({ sendMail }));
+  return {
+    resolveSecret: testSecret,
+    dnsLookup: fakeLookup(PUBLIC_SMTP_IP),
+    ...overrides,
+    createTransport: createTransport as unknown as ReturnType<typeof vi.fn> & SmtpTransportFactory,
+    markMutationRequestStarted: vi.fn(async () => undefined),
+    sendMail,
+  };
+}
+
+function smtpError(message: string, code?: string, command?: string): Error {
+  return Object.assign(new Error(message), { code, command });
+}
+
+beforeEach(() => {
+  dnsMock.lookup.mockImplementation(fakeLookup(PUBLIC_SMTP_IP));
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
   nodemailerMock.createTransport.mockReset();
+  dnsMock.lookup.mockReset();
 });
 
 describe("smtpSend", () => {
-  it("sends through the pinned host, port, and auth and returns the provider messageId", async () => {
-    const { factory, sendMail } = fakeTransportFactory();
+  it("connects to the guard-resolved address with SNI bound to the hostname and returns the messageId", async () => {
+    const runtime = fakeRuntime();
 
-    const messageId = await smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"], undefined, factory);
+    const messageId = await smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"], undefined, runtime);
 
     expect(messageId).toBe("<m-1@x>");
-    expect(factory).toHaveBeenCalledTimes(1);
-    expect(factory).toHaveBeenCalledWith({
-      host: "smtp.example.com",
+    expect(runtime.createTransport).toHaveBeenCalledTimes(1);
+    expect(runtime.createTransport).toHaveBeenCalledWith({
+      host: PUBLIC_SMTP_IP,
       port: 587,
       secure: false,
       auth: { user: "ops@example.com", pass: "smtp-secret" },
+      tls: { servername: "smtp.example.com" },
     });
-    expect(sendMail).toHaveBeenCalledWith({
+    expect(runtime.sendMail).toHaveBeenCalledWith({
       from: "ops@example.com",
       to: ["alice@example.com"],
       cc: ["bob@example.com"],
@@ -57,11 +109,15 @@ describe("smtpSend", () => {
       subject: "Quarterly update",
       text: "Numbers attached inline.",
     });
+    expect(runtime.markMutationRequestStarted).toHaveBeenCalledTimes(1);
+    expect(runtime.markMutationRequestStarted.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.sendMail.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("defaults secure to true on port 465, reads the password from an env var, and falls back to address", async () => {
     vi.stubEnv("GC_TEST_SMTP_PASSWORD", "env-secret");
-    const { factory, sendMail } = fakeTransportFactory();
+    const runtime = fakeRuntime();
 
     await smtpSend(
       {
@@ -74,102 +130,197 @@ describe("smtpSend", () => {
       { to: ["alice@example.com"], subject: "s", bodyText: "b" },
       ["smtp.example.com"],
       undefined,
-      factory,
+      runtime,
     );
 
-    expect(factory).toHaveBeenCalledWith({
-      host: "smtp.example.com",
-      port: 465,
-      secure: true,
-      auth: { user: "u", pass: "env-secret" },
-    });
-    expect(sendMail.mock.calls[0]?.[0]).toMatchObject({ from: "me@example.com" });
+    expect(runtime.createTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ port: 465, secure: true, auth: { user: "u", pass: "env-secret" } }),
+    );
+    expect(runtime.sendMail.mock.calls[0]?.[0]).toMatchObject({ from: "me@example.com" });
   });
 
   it("omits auth when no SMTP user is configured and honors an explicit smtpSecure", async () => {
-    const { factory } = fakeTransportFactory();
+    const runtime = fakeRuntime();
 
     await smtpSend(
       { smtpHost: "smtp.example.com", smtpPort: "2525", smtpSecure: true, email: "me@example.com" },
       { to: ["alice@example.com"], subject: "s", bodyText: "b" },
       ["smtp.example.com"],
       undefined,
-      factory,
+      runtime,
     );
 
-    expect(factory).toHaveBeenCalledWith({ host: "smtp.example.com", port: 2525, secure: true });
+    expect(runtime.createTransport).toHaveBeenCalledWith({
+      host: PUBLIC_SMTP_IP,
+      port: 2525,
+      secure: true,
+      tls: { servername: "smtp.example.com" },
+    });
   });
 
-  it("throws before transport creation when smtpHost is missing", async () => {
-    const { factory } = fakeTransportFactory();
+  it("does not set an SNI servername for a literal IPv4 host", async () => {
+    const runtime = fakeRuntime();
+
+    await smtpSend({ ...SMTP_CONFIG, smtpHost: PUBLIC_SMTP_IP }, SEND_ARGS, [PUBLIC_SMTP_IP], undefined, runtime);
+
+    expect(runtime.createTransport.mock.calls[0]?.[0]).toEqual(expect.not.objectContaining({ tls: expect.anything() }));
+    expect(runtime.createTransport.mock.calls[0]?.[0]).toMatchObject({ host: PUBLIC_SMTP_IP });
+  });
+
+  it("blocks a hostname that resolves to a private address and never creates the transport", async () => {
+    const runtime = fakeRuntime({ dnsLookup: fakeLookup("10.0.0.5") });
+
+    await expect(smtpSend(SMTP_CONFIG, SEND_ARGS, ["*"], undefined, runtime)).rejects.toThrow(
+      /^blocked: smtp\.send host failed guarded DNS resolution/,
+    );
+    expect(runtime.createTransport).not.toHaveBeenCalled();
+    expect(runtime.markMutationRequestStarted).not.toHaveBeenCalled();
+  });
+
+  it("blocks a hostname that resolves to the metadata address", async () => {
+    const runtime = fakeRuntime({ dnsLookup: fakeLookup("169.254.169.254") });
+
+    await expect(smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"], undefined, runtime)).rejects.toThrow(
+      /^blocked:/,
+    );
+    expect(runtime.createTransport).not.toHaveBeenCalled();
+  });
+
+  it("maps a DNS lookup failure to a blocked pre-boundary error", async () => {
+    const runtime = fakeRuntime({
+      dnsLookup: (_hostname, _options, callback) =>
+        callback(Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" }), ""),
+    });
+
+    await expect(smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"], undefined, runtime)).rejects.toThrow(
+      /^blocked:.*ENOTFOUND/,
+    );
+    expect(runtime.createTransport).not.toHaveBeenCalled();
+    expect(runtime.markMutationRequestStarted).not.toHaveBeenCalled();
+  });
+
+  it("throws before transport creation and the boundary when smtpHost is missing", async () => {
+    const runtime = fakeRuntime();
 
     await expect(
-      smtpSend({ ...SMTP_CONFIG, smtpHost: undefined }, SEND_ARGS, ["smtp.example.com"], undefined, factory),
+      smtpSend({ ...SMTP_CONFIG, smtpHost: undefined }, SEND_ARGS, ["smtp.example.com"], undefined, runtime),
     ).rejects.toThrow(/smtpHost/);
-    expect(factory).not.toHaveBeenCalled();
+    expect(runtime.createTransport).not.toHaveBeenCalled();
+    expect(runtime.markMutationRequestStarted).not.toHaveBeenCalled();
   });
 
   it.each([
-    ["absent from the network allowlist", ["other.example.com"], undefined],
-    ["absent from the grant allowlist", ["smtp.example.com"], ["other.example.com"]],
-    ["a private address that is not explicitly allowlisted", ["*.example.com"], undefined],
-  ])("blocks a host %s and never creates the transport", async (_label, allowlist, grantAllowlist) => {
-    const { factory } = fakeTransportFactory();
-    const config = _label.startsWith("a private") ? { ...SMTP_CONFIG, smtpHost: "10.0.0.5" } : SMTP_CONFIG;
+    ["absent from the network allowlist", SMTP_CONFIG, ["other.example.com"], undefined],
+    ["absent from the grant allowlist", SMTP_CONFIG, ["smtp.example.com"], ["other.example.com"]],
+    [
+      "a private literal that is not explicitly allowlisted",
+      { ...SMTP_CONFIG, smtpHost: "10.0.0.5" },
+      ["*.example.com"],
+      undefined,
+    ],
+  ])("blocks a host %s before the transport and the boundary", async (_label, config, allowlist, grantAllowlist) => {
+    const runtime = fakeRuntime();
 
-    await expect(smtpSend(config, SEND_ARGS, allowlist, grantAllowlist, factory)).rejects.toThrow(/^blocked:/);
-    expect(factory).not.toHaveBeenCalled();
+    await expect(smtpSend(config, SEND_ARGS, allowlist, grantAllowlist, runtime)).rejects.toThrow(/^blocked:/);
+    expect(runtime.createTransport).not.toHaveBeenCalled();
+    expect(runtime.markMutationRequestStarted).not.toHaveBeenCalled();
   });
 
   it("rejects a host value that smuggles a port, path, or credentials", async () => {
-    const { factory } = fakeTransportFactory();
+    const runtime = fakeRuntime();
 
     for (const smtpHost of ["smtp.example.com:25", "smtp.example.com/x", "user@smtp.example.com", "smtp example.com"]) {
       await expect(
-        smtpSend({ ...SMTP_CONFIG, smtpHost }, SEND_ARGS, ["smtp.example.com", "*"], undefined, factory),
+        smtpSend({ ...SMTP_CONFIG, smtpHost }, SEND_ARGS, ["smtp.example.com", "*"], undefined, runtime),
       ).rejects.toThrow(/smtpHost/);
     }
-    expect(factory).not.toHaveBeenCalled();
+    expect(runtime.createTransport).not.toHaveBeenCalled();
   });
 
   it("rejects an out-of-range port", async () => {
-    const { factory } = fakeTransportFactory();
+    const runtime = fakeRuntime();
 
     await expect(
-      smtpSend({ ...SMTP_CONFIG, smtpPort: 70000 }, SEND_ARGS, ["smtp.example.com"], undefined, factory),
+      smtpSend({ ...SMTP_CONFIG, smtpPort: 70000 }, SEND_ARGS, ["smtp.example.com"], undefined, runtime),
     ).rejects.toThrow(/smtpPort/);
-    expect(factory).not.toHaveBeenCalled();
+    expect(runtime.createTransport).not.toHaveBeenCalled();
   });
 
-  it("throws when to is empty", async () => {
-    const { factory } = fakeTransportFactory();
+  it("throws when to is empty, before the transport and the boundary", async () => {
+    const runtime = fakeRuntime();
 
     await expect(
-      smtpSend(SMTP_CONFIG, { ...SEND_ARGS, to: [] }, ["smtp.example.com"], undefined, factory),
+      smtpSend(SMTP_CONFIG, { ...SEND_ARGS, to: [] }, ["smtp.example.com"], undefined, runtime),
     ).rejects.toThrow(/requires args\.to/);
-    expect(factory).not.toHaveBeenCalled();
+    expect(runtime.createTransport).not.toHaveBeenCalled();
+    expect(runtime.markMutationRequestStarted).not.toHaveBeenCalled();
   });
 
   it("throws when no from address is configured", async () => {
-    const { factory } = fakeTransportFactory();
+    const runtime = fakeRuntime();
 
     await expect(
-      smtpSend({ ...SMTP_CONFIG, fromAddress: undefined }, SEND_ARGS, ["smtp.example.com"], undefined, factory),
+      smtpSend({ ...SMTP_CONFIG, fromAddress: undefined }, SEND_ARGS, ["smtp.example.com"], undefined, runtime),
     ).rejects.toThrow(/from address/);
-    expect(factory).not.toHaveBeenCalled();
+    expect(runtime.createTransport).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["EAUTH", undefined, /^blocked: SMTP server rejected the configured credentials \(EAUTH\)/],
+    ["ENOAUTH", undefined, /^blocked: SMTP server rejected the configured credentials \(ENOAUTH\)/],
+    ["EDNS", "CONN", /before the message was sent \(EDNS\)/],
+    ["ETLS", "CONN", /before the message was sent \(ETLS\)/],
+    ["EENVELOPE", "RCPT TO", /before the message was sent \(EENVELOPE\)/],
+    ["ECONNECTION", "CONN", /before the message was sent \(ECONNECTION\)/],
+  ])("classifies nodemailer %s as a pre-boundary failure", async (code, command, pattern) => {
+    const runtime = fakeRuntime({
+      sendMail: vi.fn(async () => Promise.reject(smtpError("server said no", code, command))),
+    });
+
+    const failure = await smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"], undefined, runtime).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(CommsPreBoundaryProviderError);
+    expect((failure as Error).message).toMatch(pattern);
+  });
+
+  it.each([
+    ["ESOCKET", "DATA"],
+    ["ETIMEDOUT", "CONN"],
+    ["EMESSAGE", "DATA"],
+    ["ESTREAM", undefined],
+    ["ECONNECTION", "API"],
+    [undefined, undefined],
+  ])("leaves nodemailer %s (%s) as a possibly-sent failure", async (code, command) => {
+    const original = smtpError("connection dropped", code, command);
+    const runtime = fakeRuntime({ sendMail: vi.fn(async () => Promise.reject(original)) });
+
+    await expect(smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"], undefined, runtime)).rejects.toBe(original);
   });
 
   it("uses nodemailer as the default transport factory with TLS required and file/url access disabled", async () => {
     const sendMail = vi.fn(async () => ({ messageId: "<default@x>" }));
     nodemailerMock.createTransport.mockReturnValue({ sendMail });
 
-    await expect(smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"])).resolves.toBe("<default@x>");
+    await expect(
+      smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"], undefined, {
+        resolveSecret: testSecret,
+        markMutationRequestStarted: async () => undefined,
+      }),
+    ).resolves.toBe("<default@x>");
 
+    expect(dnsMock.lookup).toHaveBeenCalledWith(
+      "smtp.example.com",
+      expect.objectContaining({ all: true }),
+      expect.any(Function),
+    );
     expect(nodemailerMock.createTransport).toHaveBeenCalledWith(
       expect.objectContaining({
-        host: "smtp.example.com",
+        host: PUBLIC_SMTP_IP,
         port: 587,
         secure: false,
+        tls: { servername: "smtp.example.com" },
         requireTLS: true,
         disableFileAccess: true,
         disableUrlAccess: true,
@@ -237,6 +388,9 @@ describe("smtp.send through executeCommsTool", () => {
 
     expect(result).toMatchObject({ status: "sent", deliveryStatus: "sent", providerMessageId: "<sent@x>" });
     expect(order).toEqual(["boundary", "sendMail"]);
+    expect(nodemailerMock.createTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ host: PUBLIC_SMTP_IP, tls: { servername: "smtp.example.com" } }),
+    );
   });
 
   it("classifies a host outside the allowlist as blocked without crossing the boundary", async () => {
@@ -252,11 +406,50 @@ describe("smtp.send through executeCommsTool", () => {
     expect(nodemailerMock.createTransport).not.toHaveBeenCalled();
   });
 
-  it("classifies a failure after the SMTP exchange started as an unknown outcome", async () => {
+  it("classifies a DNS answer pointing at a private address as blocked without crossing the boundary", async () => {
+    dnsMock.lookup.mockImplementation(fakeLookup("10.0.0.5"));
+    const boundary = vi.fn();
+    const { storage } = smtpStorage();
+
+    const result = await executeCommsTool(smtpSendRequest(), policyConfig(["smtp.example.com"]), storage, undefined, {
+      beforeExternalSideEffect: boundary,
+    });
+
+    expect(result).toMatchObject({ status: "failed", deliveryStatus: "blocked" });
+    expect(boundary).not.toHaveBeenCalled();
+    expect(nodemailerMock.createTransport).not.toHaveBeenCalled();
+  });
+
+  it("reports an SMTP auth rejection as a readable pre-boundary failure, not manual reconciliation", async () => {
     nodemailerMock.createTransport.mockReturnValue({
-      sendMail: vi.fn(async () => {
-        throw new Error("Connection closed unexpectedly");
-      }),
+      sendMail: vi.fn(async () =>
+        Promise.reject(smtpError("Invalid login: 535 5.7.8 rejected", "EAUTH", "AUTH PLAIN")),
+      ),
+    });
+    const { storage } = smtpStorage();
+
+    const result = await executeCommsTool(smtpSendRequest(), policyConfig(["smtp.example.com"]), storage);
+
+    expect(result).toMatchObject({ status: "failed", deliveryStatus: "blocked" });
+    expect(String(result.error)).toContain("rejected the configured credentials");
+    expect(String(result.error)).not.toContain("unknown_after_send");
+  });
+
+  it("reports a pre-DATA connection failure as not_available, not manual reconciliation", async () => {
+    nodemailerMock.createTransport.mockReturnValue({
+      sendMail: vi.fn(async () => Promise.reject(smtpError("connect ECONNREFUSED", "ECONNECTION", "CONN"))),
+    });
+    const { storage } = smtpStorage();
+
+    const result = await executeCommsTool(smtpSendRequest(), policyConfig(["smtp.example.com"]), storage);
+
+    expect(result).toMatchObject({ status: "failed", deliveryStatus: "not_available" });
+    expect(String(result.error)).not.toContain("unknown_after_send");
+  });
+
+  it("classifies a socket failure after the SMTP exchange started as an unknown outcome", async () => {
+    nodemailerMock.createTransport.mockReturnValue({
+      sendMail: vi.fn(async () => Promise.reject(smtpError("Connection closed unexpectedly", "ESOCKET", "DATA"))),
     });
     const { storage } = smtpStorage();
 
