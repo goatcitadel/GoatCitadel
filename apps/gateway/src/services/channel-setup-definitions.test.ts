@@ -317,7 +317,7 @@ describe("channel setup definitions", () => {
     );
   });
 
-  it("keeps ntfy setup outbound-only with env-backed token hydration and dry-run defaults", () => {
+  it("keeps ntfy setup outbound-first with env-backed token hydration and dry-run defaults", () => {
     const definition = requireChannelSetupDefinition("channel.ntfy");
     const hydrated = definition.hydrate(
       createConnection({
@@ -355,6 +355,41 @@ describe("channel setup definitions", () => {
     );
   });
 
+  it("collects optional ntfy inbound fields, requires a token for them and seeds the topic sender", () => {
+    const definition = requireChannelSetupDefinition("channel.ntfy");
+    const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
+    expect(fieldKeys).toEqual(expect.arrayContaining(["inboundStreamEnabled", "subscribeTopic"]));
+
+    const noToken = createDraft("channel.ntfy", {
+      baseUrl: "https://ntfy.example.com",
+      topic: "ops",
+      inboundStreamEnabled: true,
+    });
+    expect(definition.validate(noToken)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ fieldKey: "tokenEnv", failureCategory: "missing_input" })]),
+    );
+
+    const withToken = createDraft("channel.ntfy", {
+      baseUrl: "https://ntfy.example.com",
+      topic: "ops",
+      tokenEnv: "NTFY_TOKEN",
+      inboundStreamEnabled: true,
+      subscribeTopic: "inbox",
+    });
+    expect(definition.validate(withToken)).toEqual([]);
+    expect(definition.normalize(withToken)).toMatchObject({
+      inboundStreamEnabled: true,
+      subscribeTopic: "inbox",
+      allowedSenders: ["ntfy-topic:inbox"],
+    });
+
+    const outboundOnly = definition.normalize(
+      createDraft("channel.ntfy", { baseUrl: "https://ntfy.example.com", topic: "ops" }),
+    );
+    expect(outboundOnly).not.toHaveProperty("inboundStreamEnabled");
+    expect(outboundOnly).not.toHaveProperty("allowedSenders");
+  });
+
   it("rejects malformed ntfy topic and priority values", () => {
     const definition = requireChannelSetupDefinition("channel.ntfy");
     const issues = definition.validate(
@@ -382,6 +417,7 @@ describe("channel setup definitions", () => {
       "instruction",
       "field-collection",
       "field-collection",
+      "field-collection",
       "test",
       "confirm",
       "instruction",
@@ -395,7 +431,15 @@ describe("channel setup definitions", () => {
   it("gives guided Nextcloud Talk setup a test step and a finalize confirmation step", () => {
     const definition = requireChannelSetupDefinition("channel.nextcloud-talk").definition;
 
-    expect(definition.wizard.steps.map((step) => step.kind)).toEqual(["intro", "field-collection", "field-collection", "field-collection", "test", "confirm", "instruction"]);
+    expect(definition.wizard.steps.map((step) => step.kind)).toEqual([
+      "intro",
+      "field-collection",
+      "field-collection",
+      "field-collection",
+      "test",
+      "confirm",
+      "instruction",
+    ]);
     const testStep = definition.wizard.steps.find((step) => step.kind === "test");
     expect(testStep?.title).toBe("Validate the draft");
     expect(JSON.stringify(testStep)).toMatch(/room/i);
@@ -426,7 +470,9 @@ describe("channel setup definitions", () => {
         finishStep?.successCriteria?.length ?? 0,
         `${catalogId} confirm step needs success criteria`,
       ).toBeGreaterThan(0);
-      expect(definition.wizard.contentVersion, `${catalogId} contentVersion must be bumped`).toBe(contentVersion + ".guided-2026-10");
+      expect(definition.wizard.contentVersion, `${catalogId} contentVersion must be bumped`).toBe(
+        contentVersion + ".guided-2026-10",
+      );
     }
   });
 

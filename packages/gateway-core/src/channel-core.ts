@@ -28,6 +28,8 @@ type ChannelRule = {
   supportsStreaming: boolean;
   supportNotes?: string[];
   resolveSupportNotes?: (config: Record<string, unknown>) => string[];
+  /** Extra setup diagnostics beyond the requiredAnyOf groups. */
+  resolveSetupDiagnostics?: (config: Record<string, unknown>) => string[];
   requiredAnyOf: string[][];
 };
 
@@ -344,24 +346,40 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   ntfy: {
     supportedActions: ["channel.send"],
     supportedAttachmentSources: ["url"],
-    inboundModes: ["none"],
+    resolveInboundModes: (config) => (isNtfyInboundEnabled(config) ? ["stream"] : ["none"]),
     threadCapabilities: {
       rooms: true,
     },
     chunkingMode: "fallback",
     supportsStreaming: false,
-    runtimePosture: {
-      outboundTransport: "api",
-      lifecycle: "stateless",
-      inboundReadiness: "unsupported",
-      operatorSummary:
-        "ntfy is normalized as a stateless outbound-only notification path. It can publish to a configured topic, but it does not accept inbound webhooks, subscriptions, or remote commands in this runtime.",
-    },
-    supportNotes: [
-      "ntfy v1 supports outbound text notifications only; inbound webhook and topic subscription handling are intentionally not wired.",
+    resolveRuntimePosture: (config) =>
+      isNtfyInboundEnabled(config)
+        ? {
+            outboundTransport: "api",
+            inboundTransport: "stream",
+            lifecycle: "persistent",
+            inboundReadiness: "ready",
+            operatorSummary:
+              "ntfy publishes notifications to a configured topic and, when inbound is enabled, subscribes to that topic's JSON stream. The sender is the topic itself, so access control is the token-protected topic; outbound publishes are tagged and ignored on the way back in.",
+          }
+        : {
+            outboundTransport: "api",
+            lifecycle: "stateless",
+            inboundReadiness: "unsupported",
+            operatorSummary:
+              "ntfy is normalized as a stateless outbound-only notification path. Inbound topic subscription is opt-in: enable inboundStreamEnabled on a token-protected topic to subscribe to its JSON stream.",
+          },
+    resolveSupportNotes: (config) => [
+      isNtfyInboundEnabled(config)
+        ? "ntfy inbound subscribes to the topic's JSON stream; the sender is the topic itself, so access control is the token-protected topic. Outbound publishes are tagged and ignored on the way back in."
+        : "ntfy inbound is off; set inboundStreamEnabled on a token-protected topic to subscribe to its JSON stream. Webhook and remote-command inbound are not supported.",
       "Token-backed topics should use tokenEnv so secrets are resolved at the tool host boundary.",
       "Dry-run mode validates routing without publishing to the ntfy server.",
     ],
+    resolveSetupDiagnostics: (config) =>
+      isNtfyInboundRequested(config) && !hasNtfyToken(config)
+        ? ["ntfy inbound requires a token-protected topic (tokenEnv)"]
+        : [],
     requiredAnyOf: [["baseUrl"], ["topic", "defaultTopic"]],
   },
   "google-chat": {
@@ -626,7 +644,16 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     supportNotes: ["Rich media sends currently require URL-backed attachments for the zca bridge."],
     requiredAnyOf: [
       ["baseUrl", "bridgeUrl", "serverUrl"],
-      ["authToken", "authTokenEnv", "authorization", "authorizationEnv", "accessToken", "accessTokenEnv", "basicAuth", "basicAuthEnv"],
+      [
+        "authToken",
+        "authTokenEnv",
+        "authorization",
+        "authorizationEnv",
+        "accessToken",
+        "accessTokenEnv",
+        "basicAuth",
+        "basicAuthEnv",
+      ],
     ],
   },
 };
@@ -1095,6 +1122,7 @@ function buildSetupDiagnostics(rule: ChannelRule, config: Record<string, unknown
     }
     diagnostics.push(`Missing one of: ${group.map((key) => `config.${key}`).join(", ")}.`);
   }
+  diagnostics.push(...(rule.resolveSetupDiagnostics?.(config) ?? []));
   return diagnostics;
 }
 
@@ -1113,6 +1141,25 @@ function uniqueInboundModes(values: ChannelInboundMode[]): ChannelInboundMode[] 
 function readConfigString(config: Record<string, unknown>, key: string): string | undefined {
   const value = config[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isNtfyInboundRequested(config: Record<string, unknown>): boolean {
+  const flag = config.inboundStreamEnabled;
+  return flag === true || (typeof flag === "string" && flag.trim().toLowerCase() === "true");
+}
+
+function hasNtfyToken(config: Record<string, unknown>): boolean {
+  return hasAnyConfigured(config, ["token", "tokenEnv"]);
+}
+
+/** Mirrors the ntfy stream adapter: opt-in, base URL, subscribe topic and a token. */
+function isNtfyInboundEnabled(config: Record<string, unknown>): boolean {
+  return (
+    isNtfyInboundRequested(config) &&
+    hasNtfyToken(config) &&
+    hasAnyConfigured(config, ["baseUrl"]) &&
+    hasAnyConfigured(config, ["subscribeTopic", "topic", "defaultTopic"])
+  );
 }
 
 function hasAnyConfigured(config: Record<string, unknown>, keys: string[]): boolean {

@@ -77,6 +77,8 @@ const checks = [
       "src/services/nextcloud-talk-live-probes.test.ts",
       "src/services/channel-bot-live-probes.test.ts",
       "src/services/channel-bot-live-probes.ntfy.test.ts",
+      "src/services/channel-stream-adapters/ntfy-stream-adapter.test.ts",
+      "src/services/channel-stream-runtime-service.test.ts",
       "src/services/channel-webhook-probes.test.ts",
       "src/services/integration-diagnostics-service.contract.test.ts",
       "src/services/integration-diagnostics-service.live-checks.test.ts",

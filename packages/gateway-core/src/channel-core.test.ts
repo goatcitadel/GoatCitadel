@@ -275,7 +275,69 @@ describe("describeChannelCapabilities", () => {
     );
   });
 
-  it("recognizes every already supported Zalo User credential alias without enabling inbound routing", () => { for (const key of ["authToken", "authTokenEnv", "authorization", "authorizationEnv", "accessToken", "accessTokenEnv", "basicAuth", "basicAuthEnv"]) { const capabilities = describeChannelCapabilities("zalouser", { baseUrl: "https://zca.example.test", [key]: "configured" }); expect(capabilities.setupReady, key).toBe(true); expect(capabilities.inboundModes).toEqual(["none"]); } expect(describeChannelCapabilities("zalouser", { baseUrl: "https://zca.example.test" }).setupReady).toBe(false); });
+  it("enables ntfy stream inbound only for an opted-in, token-protected topic", () => {
+    const enabled = describeChannelCapabilities("ntfy", {
+      baseUrl: "https://ntfy.example.com",
+      topic: "goatcitadel-ops",
+      tokenEnv: "NTFY_TOKEN",
+      inboundStreamEnabled: true,
+    });
+    expect(enabled.inboundModes).toEqual(["stream"]);
+    expect(enabled.runtimePosture).toMatchObject({
+      lifecycle: "persistent",
+      inboundTransport: "stream",
+      inboundReadiness: "ready",
+    });
+    expect(enabled.setupReady).toBe(true);
+    expect(enabled.runtimePosture.operatorSummary).toContain("JSON stream");
+
+    const subscribeOnly = describeChannelCapabilities("ntfy", {
+      baseUrl: "https://ntfy.example.com",
+      subscribeTopic: "inbox",
+      token: "keychain:goatcitadel:channel-x",
+      inboundStreamEnabled: "true",
+    });
+    expect(subscribeOnly.inboundModes).toEqual(["stream"]);
+
+    const noToken = describeChannelCapabilities("ntfy", {
+      baseUrl: "https://ntfy.example.com",
+      topic: "goatcitadel-ops",
+      inboundStreamEnabled: true,
+    });
+    expect(noToken.inboundModes).toEqual(["none"]);
+    expect(noToken.runtimePosture.lifecycle).toBe("stateless");
+    expect(noToken.setupDiagnostics).toContain("ntfy inbound requires a token-protected topic (tokenEnv)");
+    expect(noToken.setupReady).toBe(false);
+
+    const notOptedIn = describeChannelCapabilities("ntfy", {
+      baseUrl: "https://ntfy.example.com",
+      topic: "goatcitadel-ops",
+      tokenEnv: "NTFY_TOKEN",
+    });
+    expect(notOptedIn.inboundModes).toEqual(["none"]);
+    expect(notOptedIn.setupDiagnostics).toEqual([]);
+  });
+
+  it("recognizes every already supported Zalo User credential alias without enabling inbound routing", () => {
+    for (const key of [
+      "authToken",
+      "authTokenEnv",
+      "authorization",
+      "authorizationEnv",
+      "accessToken",
+      "accessTokenEnv",
+      "basicAuth",
+      "basicAuthEnv",
+    ]) {
+      const capabilities = describeChannelCapabilities("zalouser", {
+        baseUrl: "https://zca.example.test",
+        [key]: "configured",
+      });
+      expect(capabilities.setupReady, key).toBe(true);
+      expect(capabilities.inboundModes).toEqual(["none"]);
+    }
+    expect(describeChannelCapabilities("zalouser", { baseUrl: "https://zca.example.test" }).setupReady).toBe(false);
+  });
 
   it("describes static channel rules and setup diagnostics", () => {
     const staticChannels = [

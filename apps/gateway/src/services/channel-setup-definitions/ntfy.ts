@@ -16,6 +16,10 @@ import {
   looksLikeHttpUrl,
 } from "./common.js";
 
+function isTruthyFlag(value: unknown): boolean {
+  return value === true || (typeof value === "string" && value.trim().toLowerCase() === "true");
+}
+
 export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
   const catalog = requireCatalog("channel.ntfy");
   const definition: ChannelSetupDefinition = {
@@ -27,11 +31,11 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
       difficulty: "beginner",
       manualModePolicy: "available-secondary",
       introSummary:
-        "Connect ntfy as an outbound-only notification target for operator-visible status, approvals, and dry-run validation.",
+        "Connect ntfy as an outbound notification target for operator-visible status, approvals, and dry-run validation, with optional inbound over a token-protected topic subscription.",
       prerequisites: [
         "An ntfy.sh topic or a self-hosted ntfy base URL.",
         "A topic name that is safe for GoatCitadel to publish to.",
-        "An optional token stored in an environment variable if the topic requires auth.",
+        "An optional token stored in an environment variable if the topic requires auth (required for inbound).",
       ],
       steps: [
         {
@@ -42,7 +46,7 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
             paragraph("GoatCitadel can send outbound notifications to an ntfy topic using the HTTP publish API."),
             note(
               "warning",
-              "This v1 adapter is send-only. It does not accept inbound webhooks, remote commands, or topic subscriptions.",
+              "ntfy is outbound-only unless you opt in to inbound. Inbound subscribes to the topic's JSON stream and requires a token-protected topic, because ntfy carries no sender identity: the topic is the sender. Outbound publishes are tagged and ignored on the way back in. Webhooks and remote commands are not supported.",
             ),
           ],
         },
@@ -100,6 +104,29 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
               canChangeLater: true,
             },
             {
+              key: "inboundStreamEnabled",
+              label: "Receive messages from the topic",
+              type: "boolean",
+              required: false,
+              defaultValue: false,
+              explanation:
+                "Subscribe to the topic's JSON stream so messages published to it start conversations. Requires a token-protected topic.",
+              whyNeeded:
+                "ntfy has no sender identity, so anyone who can publish to an unprotected topic could start turns. Inbound is therefore opt-in and needs a token.",
+              canChangeLater: true,
+            },
+            {
+              key: "subscribeTopic",
+              label: "Subscribe topic",
+              type: "text",
+              required: false,
+              explanation: "Topic to receive from. Defaults to the publish topic.",
+              whyNeeded: "Lets inbound messages arrive on a different topic than outbound notifications.",
+              looksLike: "goatcitadel-inbox",
+              canChangeLater: true,
+              advanced: true,
+            },
+            {
               key: "priority",
               label: "Priority",
               type: "select",
@@ -149,7 +176,7 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
             "The base URL is an HTTP or HTTPS origin.",
             "A topic is configured.",
             "Dry-run behavior is intentional when enabled.",
-            "No inbound routing or remote command behavior is claimed.",
+            "Inbound is enabled only for a token-protected topic; no webhook or remote command behavior is claimed.",
           ],
         },
       ],
@@ -204,6 +231,8 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
           tokenEnv: readString(config, "tokenEnv"),
           priority: readString(config, "priority") ?? "3",
           dryRun: config.dryRun === true,
+          inboundStreamEnabled: isTruthyFlag(config.inboundStreamEnabled),
+          subscribeTopic: readString(config, "subscribeTopic"),
         },
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
@@ -214,6 +243,8 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
             tokenEnv: readString(config, "tokenEnv") ? "configured" : "unknown",
             priority: readString(config, "priority") ? "configured" : "unknown",
             dryRun: config.dryRun === true ? "configured" : "unknown",
+            inboundStreamEnabled: config.inboundStreamEnabled === undefined ? "unknown" : "configured",
+            subscribeTopic: readString(config, "subscribeTopic") ? "configured" : "unknown",
           },
           warnings: hasConfiguredSecret
             ? ["Saved secrets are intentionally not rehydrated into the wizard. Replace them only if needed."]
@@ -226,6 +257,14 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
       const preservedToken = readLegacyString(draft, "token");
       const preservedTokenEnv = readLegacyString(draft, "tokenEnv");
       const dryRun = draft.draft.dryRun === true || readString(draft.draft, "dryRun") === "true";
+      const inboundStreamEnabled = isTruthyFlag(draft.draft.inboundStreamEnabled);
+      const topic = readString(draft.draft, "topic") ?? readString(draft.draft, "defaultTopic");
+      const subscribeTopic = readString(draft.draft, "subscribeTopic");
+      const hasSavedSenders =
+        draft.draft.allowedSenders !== undefined ||
+        (draft.hydration?.rawLegacyConfig as Record<string, unknown> | undefined)?.allowedSenders !== undefined;
+      // ntfy has no sender identity: the topic is the sender, so seed the allowlist with it.
+      const defaultSender = subscribeTopic ?? topic;
       return compactRecord({
         baseUrl: readString(draft.draft, "baseUrl") ?? "https://ntfy.sh",
         topic: readString(draft.draft, "topic") ?? readString(draft.draft, "defaultTopic"),
@@ -233,6 +272,11 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
         token: readString(draft.draft, "token") ?? preservedToken,
         priority: readString(draft.draft, "priority") ?? "3",
         dryRun,
+        inboundStreamEnabled: inboundStreamEnabled ? true : undefined,
+        subscribeTopic,
+        ...(inboundStreamEnabled && defaultSender && !hasSavedSenders
+          ? { allowedSenders: [`ntfy-topic:${defaultSender}`] }
+          : {}),
       });
     },
     validate(draft) {
@@ -247,6 +291,23 @@ export function createNtfyDefinition(): ChannelSetupRuntimeDefinition {
         issues.push(requiredFieldIssue("topic", "Topic is required."));
       } else if (!/^[A-Za-z0-9._-]{1,128}$/.test(topic)) {
         issues.push(malformedFieldIssue("topic", "Topic may contain letters, numbers, dots, underscores, and dashes."));
+      }
+      const subscribeTopic = readString(draft.draft, "subscribeTopic");
+      if (subscribeTopic && !/^[A-Za-z0-9._-]{1,128}$/.test(subscribeTopic)) {
+        issues.push(
+          malformedFieldIssue(
+            "subscribeTopic",
+            "Subscribe topic may contain letters, numbers, dots, underscores, and dashes.",
+          ),
+        );
+      }
+      if (
+        isTruthyFlag(draft.draft.inboundStreamEnabled) &&
+        !readString(draft.draft, "tokenEnv") &&
+        !readString(draft.draft, "token") &&
+        !readLegacyString(draft, "token", "tokenEnv")
+      ) {
+        issues.push(requiredFieldIssue("tokenEnv", "ntfy inbound requires a token-protected topic (tokenEnv)."));
       }
       if (priority && !/^[1-5]$/.test(priority)) {
         issues.push(malformedFieldIssue("priority", "Priority must be an integer from 1 to 5."));

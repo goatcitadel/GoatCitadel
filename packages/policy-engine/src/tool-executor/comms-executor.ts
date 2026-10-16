@@ -2,13 +2,22 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import type { ChannelDeliveryStatus, ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
-import { clampInt, coerceRetryAfterMs, sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
+import {
+  NTFY_OUTBOUND_MARKER_TAG,
+  clampInt,
+  coerceRetryAfterMs,
+  sanitizeChannelOutboundMessage,
+} from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "../sandbox/network-guard.js";
 import { assertSafeRedirectTransition, isHttpRequestSafeToRetry } from "../sandbox/http-request-policy.js";
 import { sanitizeForAudit } from "../tool-security.js";
 import { assertNoRawRemoteApprovalBearer } from "../approval-action-secrets.js";
-import { createCommsProviderReceipt, markCommsProviderFailed, markCommsProviderSent } from "./channel-delivery-part-execution.js";
+import {
+  createCommsProviderReceipt,
+  markCommsProviderFailed,
+  markCommsProviderSent,
+} from "./channel-delivery-part-execution.js";
 
 const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
@@ -1552,6 +1561,15 @@ async function telegramSendAttachment(
   return providerMessageIdFromValue(result.message_id) ?? `telegram-${Date.now()}`;
 }
 
+/** Caller tags first, then the self-echo marker the ntfy inbound stream drops. */
+function mergeNtfyTags(value: unknown): string {
+  const raw = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
+  const tags = raw
+    .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+    .filter((tag) => tag.length > 0 && tag !== NTFY_OUTBOUND_MARKER_TAG);
+  return [...tags, NTFY_OUTBOUND_MARKER_TAG].join(",");
+}
+
 async function ntfySend(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -1576,6 +1594,7 @@ async function ntfySend(
     Priority: String(priority),
     Title: title,
   };
+  headers["X-Tags"] = mergeNtfyTags(args.tags ?? config.tags);
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }

@@ -210,6 +210,28 @@ export const ADVERTISED_CHANNEL_PARITY_MATRIX = Object.freeze([
     },
   }),
   adapterRow({
+    id: "ntfy.publish-and-stream",
+    family: "ntfy",
+    catalogId: "channel.ntfy",
+    channelKey: "ntfy",
+    variant: "outbound publish plus token-protected topic JSON stream inbound",
+    callability: "callable",
+    config: {
+      baseUrl: "https://ntfy.example.test",
+      topic: "goatcitadel-ops",
+      tokenEnv: "NTFY_TOKEN",
+      inboundStreamEnabled: true,
+    },
+    inboundMode: "stream",
+    expected: { outboundTransport: "api", lifecycle: "persistent", attachmentSources: ["url"] },
+    proof: {
+      outboundAdapter: "packages/policy-engine/src/tool-executor-edges.coverage.test.ts",
+      inboundAdapter: "apps/gateway/src/services/channel-stream-adapters/ntfy-stream-adapter.test.ts",
+      reconnect: "apps/gateway/src/services/channel-stream-runtime-service.test.ts",
+      diagnostics: "apps/gateway/src/services/channel-bot-live-probes.ntfy.test.ts",
+    },
+  }),
+  adapterRow({
     id: "google-chat.webhook",
     family: "google-chat",
     catalogId: "channel.google-chat",

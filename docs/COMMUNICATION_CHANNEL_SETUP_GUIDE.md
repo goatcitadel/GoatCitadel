@@ -33,8 +33,8 @@ Discord, Slack, Telegram, Google Chat, Teams, Mattermost, WhatsApp, Signal, LINE
 
 Inbound capability is derived from the runtime capability rules (`packages/gateway-core/src/channel-core.ts`), not from this doc:
 
-- **Bidirectional (inbound available when configured):** Telegram, Slack, Discord, WhatsApp (app secret + verify token), LINE (channel secret), Nextcloud Talk (webhook).
-- **Outbound delivery today:** Signal (bridge), iMessage (bridge), Microsoft Teams, Google Chat, Mattermost, ntfy, Zalo OA, Zalo Personal.
+- **Bidirectional (inbound available when configured):** Telegram, Slack, Discord, WhatsApp (app secret + verify token), LINE (channel secret), Nextcloud Talk (webhook), ntfy (opt-in persistent subscription to a token-protected topic's JSON stream; the topic is the sender, so allow `ntfy-topic:<topic>`, and GoatCitadel's own publishes are tagged and ignored on the way back in).
+- **Outbound delivery today:** Signal (bridge), iMessage (bridge), Microsoft Teams, Google Chat, Mattermost, Zalo OA, Zalo Personal.
 
 Signal is deliberately outbound-only. The current bridge receive operation does not provide a durable acknowledgement or replay contract, so polling it could lose a message if GoatCitadel crashed after the destructive receive but before committing the event locally. Production therefore never calls that receive operation. Legacy `inboundEnabled=true`, `pollIntervalSeconds`, and `signalInboundV1Enabled=true` settings are deprecated, fail closed, and produce an operator-visible diagnostic; they do not start polling or disable outbound sends.
 

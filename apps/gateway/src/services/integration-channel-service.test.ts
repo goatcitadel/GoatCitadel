@@ -67,6 +67,7 @@ function createDeps(): IntegrationChannelPort {
     syncDiscordRuntime: vi.fn(async () => undefined),
     syncSignalInboundRuntime: vi.fn(),
     getDiscordRuntimeStatus: vi.fn(),
+    getChannelStreamRuntimeStatus: vi.fn(),
     getIntegrationConnection: (connectionId: string) =>
       connections.get(connectionId) ??
       (() => {
@@ -384,5 +385,54 @@ describe("integration-channel-service runtime status", () => {
       inboundReadiness: "unsupported",
     });
     expect(status.metadata.readinessSource).toBe("last_live_probe");
+  });
+
+  it("reports ntfy stream inbound from the live stream runtime, not the last probe", async () => {
+    const deps = createDeps();
+    const connection = await createIntegrationConnection(deps, {
+      catalogId: "channel.ntfy",
+      label: "ntfy",
+      config: {
+        baseUrl: "https://ntfy.example.test",
+        topic: "ops",
+        tokenEnv: "NTFY_TOKEN",
+        inboundStreamEnabled: true,
+      },
+    });
+    await updateIntegrationConnection(deps, connection.connectionId, {
+      status: "connected",
+      lastSyncAt: "2026-10-16T12:00:00.000Z",
+    });
+
+    vi.mocked(deps.getChannelStreamRuntimeStatus).mockReturnValue(undefined);
+    const notStarted = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+    expect(notStarted.ready).toBe(false);
+    expect(notStarted.inboundModes).toEqual(["stream"]);
+    expect(notStarted.metadata).toMatchObject({ readinessSource: "live_runtime", authoritative: true });
+
+    vi.mocked(deps.getChannelStreamRuntimeStatus).mockReturnValue({
+      connectionId: connection.connectionId,
+      channelKey: "ntfy",
+      ready: true,
+      lastReadyAt: "2026-10-16T12:01:00.000Z",
+      lastInboundAt: "2026-10-16T12:02:00.000Z",
+    });
+    const live = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+    expect(live.ready).toBe(true);
+    expect(live.lastReadyAt).toBe("2026-10-16T12:01:00.000Z");
+    expect(live.lastInboundAt).toBe("2026-10-16T12:02:00.000Z");
+    expect(live.runtimePosture).toMatchObject({ lifecycle: "persistent", inboundTransport: "stream" });
+
+    vi.mocked(deps.getChannelStreamRuntimeStatus).mockReturnValue({
+      connectionId: connection.connectionId,
+      channelKey: "ntfy",
+      ready: false,
+      lastError: "ntfy rejected the subscription token (401)",
+      stoppedReason: "auth_failed",
+    });
+    const failed = await getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+    expect(failed.ready).toBe(false);
+    expect(failed.lastError).toContain("401");
+    expect(failed.metadata.streamStoppedReason).toBe("auth_failed");
   });
 });

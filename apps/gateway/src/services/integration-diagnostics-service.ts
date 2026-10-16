@@ -27,7 +27,7 @@ import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import { evaluateHostEgress } from "@goatcitadel/policy-engine";
 
-const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set(["slack", "whatsapp", "line", "nextcloud-talk"]);
+const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set(["slack", "whatsapp", "line", "nextcloud-talk", "ntfy"]);
 
 export interface IntegrationDiagnosticsPort {
   readonly config: {
@@ -230,7 +230,7 @@ export function buildIntegrationConnectionChecks(
           key: "delivery_posture",
           status: "pass",
           message:
-            "ntfy is outbound-only; sandbox diagnostics publish at most once and require manual receipt confirmation.",
+            "ntfy sandbox diagnostics publish at most once and require manual receipt confirmation. Inbound is a separate opt-in topic subscription (inboundStreamEnabled with a token-protected topic).",
         });
         break;
       case "google-chat":
@@ -330,7 +330,9 @@ export function buildIntegrationConnectionChecks(
         checks.push({
           key: "auth",
           status: hasAuth ? "pass" : "fail",
-          message: hasAuth ? "Zalo User bridge authentication is configured." : "An authenticated zca bridge credential is required.",
+          message: hasAuth
+            ? "Zalo User bridge authentication is configured."
+            : "An authenticated zca bridge credential is required.",
         });
         requireText(
           "target",
@@ -535,7 +537,13 @@ export async function runIntegrationConnectionLiveChecks(
       const token = resolveSecret("botToken", "botTokenEnv") ?? resolveSecret("token", "tokenEnv");
       if (!token) {
         const webhookUrl = resolveSecret("webhookUrl", "webhookUrlEnv");
-        if (webhookUrl) return runGovernedWebhookLiveChecks(deps, { channelKey: "slack", webhookUrl, includeSandboxSend: options.includeSandboxSend, fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init) });
+        if (webhookUrl)
+          return runGovernedWebhookLiveChecks(deps, {
+            channelKey: "slack",
+            webhookUrl,
+            includeSandboxSend: options.includeSandboxSend,
+            fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
+          });
         return {
           checks: [
             {
@@ -800,13 +808,32 @@ function readIMessageBridgeProvider(
  * keeps governing Code Mode egress and is intentionally not consulted here.
  */
 export function isDiagnosticsDestinationAllowed(urlValue: string, operatorAllowlist: readonly string[]): boolean {
-  return connectionUrlHelpers.isConnectionUrlRemoteSafe(urlValue) && evaluateHostEgress(urlValue, [...operatorAllowlist, "*"]).allowed;
+  return (
+    connectionUrlHelpers.isConnectionUrlRemoteSafe(urlValue) &&
+    evaluateHostEgress(urlValue, [...operatorAllowlist, "*"]).allowed
+  );
 }
 
-export async function runGovernedWebhookLiveChecks(deps: IntegrationDiagnosticsPort, input: Parameters<typeof runWebhookDestinationLiveChecks>[0]): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
-  if (input.webhookUrl && !isDiagnosticsDestinationAllowed(input.webhookUrl, deps.config.toolPolicy.sandbox.networkAllowlist)) {
-    const step = { key: input.channelKey.replace(/-/g, "_") + "_sandbox_send", label: "Webhook destination", status: "fail" as const, disposition: "blocking" as const, message: "The webhook destination must be a public HTTPS endpoint. Private, loopback, and reserved hosts stay blocked unless the operator allowlists them explicitly." };
-    return { checks: [{ key: step.key, status: "fail", message: step.message }], probe: { kind: input.channelKey + "_webhook", checkedAt: new Date().toISOString(), steps: [step] } };
+export async function runGovernedWebhookLiveChecks(
+  deps: IntegrationDiagnosticsPort,
+  input: Parameters<typeof runWebhookDestinationLiveChecks>[0],
+): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
+  if (
+    input.webhookUrl &&
+    !isDiagnosticsDestinationAllowed(input.webhookUrl, deps.config.toolPolicy.sandbox.networkAllowlist)
+  ) {
+    const step = {
+      key: input.channelKey.replace(/-/g, "_") + "_sandbox_send",
+      label: "Webhook destination",
+      status: "fail" as const,
+      disposition: "blocking" as const,
+      message:
+        "The webhook destination must be a public HTTPS endpoint. Private, loopback, and reserved hosts stay blocked unless the operator allowlists them explicitly.",
+    };
+    return {
+      checks: [{ key: step.key, status: "fail", message: step.message }],
+      probe: { kind: input.channelKey + "_webhook", checkedAt: new Date().toISOString(), steps: [step] },
+    };
   }
   return runWebhookDestinationLiveChecks(input);
 }

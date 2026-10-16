@@ -72,7 +72,9 @@ type RouteDependencyMethod<
 > = GatewayRouteServiceDependencies[TDomain][TMethod];
 
 export interface GatewayRouteCompositionPort {
-  revalidateChatRoutedContextSnapshot(snapshot: import("@goatcitadel/contracts").ChatRoutedContextSnapshotRecord): Promise<void>;
+  revalidateChatRoutedContextSnapshot(
+    snapshot: import("@goatcitadel/contracts").ChatRoutedContextSnapshotRecord,
+  ): Promise<void>;
   createRemoteWorkerExecutionOwners(): {
     readonly operatorNativeFiles: import("./remote-worker-native-file-operator.js").RemoteWorkerNativeFileOperator;
     readonly operatorNativeRuntime: import("./remote-worker-native-review-operator.js").RemoteWorkerNativeReviewOperator;

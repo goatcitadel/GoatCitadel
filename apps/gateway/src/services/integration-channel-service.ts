@@ -23,6 +23,7 @@ import type {
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { INTEGRATION_CATALOG } from "./integration-catalog.js";
+import type { ChannelStreamRuntimeStatus } from "./channel-stream-runtime-service.js";
 import {
   buildInstalledIntegrationPluginRecord,
   resolveIntegrationPluginInstallMetadata,
@@ -65,8 +66,10 @@ export interface IntegrationChannelPort {
   ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe?: ConnectorDiagnosticReport["probe"] }>;
   pickConnectorDiagnosticAction(checks: ConnectorDiagnosticReport["checks"]): string | undefined;
   recordConnectorHealthRun(report: ConnectorDiagnosticReport): Promise<void>;
+  /** Historical name: reconciles every persistent channel runtime (Discord gateway plus generic stream runtimes). */
   syncDiscordRuntime(): Promise<void>;
   syncSignalInboundRuntime(): Promise<void>;
+  getChannelStreamRuntimeStatus(connectionId: string): ChannelStreamRuntimeStatus | undefined;
   getDiscordRuntimeStatus(connectionId: string): DiscordRuntimeStatus | undefined;
   latestAcceptedInboundAt?(channelKey: string, connectionId: string): Promise<string | undefined>;
   getIntegrationConnection(connectionId: string): Promise<IntegrationConnection>;
@@ -131,7 +134,10 @@ export class IntegrationChannelService {
     return runIntegrationConnectionDiagnostics(this.deps, connectionId);
   }
 
-  public createIntegrationConnection(input: IntegrationConnectionCreateInput, onCommitted?: () => Promise<void>): Promise<IntegrationConnection> {
+  public createIntegrationConnection(
+    input: IntegrationConnectionCreateInput,
+    onCommitted?: () => Promise<void>,
+  ): Promise<IntegrationConnection> {
     return createIntegrationConnection(this.deps, input, onCommitted);
   }
 
@@ -141,18 +147,27 @@ export class IntegrationChannelService {
     input: Parameters<AsyncStorage["channelSetupDrafts"]["finalizeConnection"]>[2],
     onCommitted?: () => Promise<void>,
   ): Promise<IntegrationConnection> {
-    if (!this.deps.storage.channelSetupDrafts) throw new ValidationError({ message: "Channel finalization storage is unavailable." });
+    if (!this.deps.storage.channelSetupDrafts)
+      throw new ValidationError({ message: "Channel finalization storage is unavailable." });
     const catalog = INTEGRATION_CATALOG.find((entry) => entry.catalogId === input.catalogId);
-    if (!catalog || catalog.kind !== "channel" || catalog.key !== input.key) throw new ValidationError({ message: "The channel catalog does not match its setup draft." });
+    if (!catalog || catalog.kind !== "channel" || catalog.key !== input.key)
+      throw new ValidationError({ message: "The channel catalog does not match its setup draft." });
     const connection = await this.deps.storage.channelSetupDrafts.finalizeConnection(draftId, expectedRevision, {
       ...input,
       kind: catalog.kind,
       config: applyChannelInboundAccessDefaults(catalog.kind, catalog.key, input.config) ?? {},
     });
-    await publishIntegrationConnectionCommit(this.deps, {
-      type: "channel_setup_finalized", connectionId: connection.connectionId, draftId,
-      enabled: connection.enabled, status: connection.status,
-    }, onCommitted);
+    await publishIntegrationConnectionCommit(
+      this.deps,
+      {
+        type: "channel_setup_finalized",
+        connectionId: connection.connectionId,
+        draftId,
+        enabled: connection.enabled,
+        status: connection.status,
+      },
+      onCommitted,
+    );
     return connection;
   }
 
@@ -164,7 +179,11 @@ export class IntegrationChannelService {
     return updateIntegrationConnection(this.deps, connectionId, input, onCommitted);
   }
 
-  public deleteIntegrationConnection(connectionId: string, expectedRevision?: string, onCommitted?: () => Promise<void>): Promise<boolean> {
+  public deleteIntegrationConnection(
+    connectionId: string,
+    expectedRevision?: string,
+    onCommitted?: () => Promise<void>,
+  ): Promise<boolean> {
     return deleteIntegrationConnection(this.deps, connectionId, expectedRevision, onCommitted);
   }
 
@@ -340,6 +359,24 @@ export async function getIntegrationConnectionChannelRuntimeStatus(
     };
   }
 
+  if (capabilities.inboundModes.includes("stream")) {
+    const stream = deps.getChannelStreamRuntimeStatus(connectionId);
+    return {
+      ...runtimeStatus,
+      ready: Boolean(stream?.ready),
+      lastReadyAt: stream?.lastReadyAt,
+      lastInboundAt: runtimeStatus.lastInboundAt ?? stream?.lastInboundAt,
+      lastReconnectAt: stream?.lastReconnectAt,
+      lastError: stream?.lastError ?? runtimeStatus.lastError,
+      metadata: {
+        ...runtimeStatus.metadata,
+        readinessSource: "live_runtime",
+        authoritative: true,
+        streamStoppedReason: stream?.stoppedReason,
+      },
+    };
+  }
+
   if (connection.key !== "discord") {
     return runtimeStatus;
   }
@@ -417,7 +454,10 @@ export async function createIntegrationConnection(
   onCommitted?: () => Promise<void>,
 ): Promise<IntegrationConnection> {
   if (input.catalogId.startsWith("external_connector.")) {
-    throw new ValidationError({ message: "External connector catalog entries are review-only and cannot be connected until promoted through a governed capability proposal." });
+    throw new ValidationError({
+      message:
+        "External connector catalog entries are review-only and cannot be connected until promoted through a governed capability proposal.",
+    });
   }
   const catalog = INTEGRATION_CATALOG.find((entry) => entry.catalogId === input.catalogId);
   if (!catalog) {
@@ -434,15 +474,19 @@ export async function createIntegrationConnection(
     pluginId: input.pluginId ?? catalog.pluginId,
   });
 
-  await publishIntegrationConnectionCommit(deps, {
-    type: "integration_connection_created",
-    connectionId: created.connectionId,
-    catalogId: created.catalogId,
-    kind: created.kind,
-    key: created.key,
-    enabled: created.enabled,
-    status: created.status,
-  }, onCommitted);
+  await publishIntegrationConnectionCommit(
+    deps,
+    {
+      type: "integration_connection_created",
+      connectionId: created.connectionId,
+      catalogId: created.catalogId,
+      kind: created.kind,
+      key: created.key,
+      enabled: created.enabled,
+      status: created.status,
+    },
+    onCommitted,
+  );
 
   return created;
 }
@@ -462,13 +506,17 @@ export async function updateIntegrationConnection(
         ? applyChannelInboundAccessDefaults(current.kind, current.key, input.config, current.config)
         : input.config,
   });
-  await publishIntegrationConnectionCommit(deps, {
-    type: "integration_connection_updated",
-    connectionId: updated.connectionId,
-    enabled: updated.enabled,
-    status: updated.status,
-    lastError: updated.lastError,
-  }, onCommitted);
+  await publishIntegrationConnectionCommit(
+    deps,
+    {
+      type: "integration_connection_updated",
+      connectionId: updated.connectionId,
+      enabled: updated.enabled,
+      status: updated.status,
+      lastError: updated.lastError,
+    },
+    onCommitted,
+  );
   return updated;
 }
 
@@ -532,10 +580,14 @@ export async function deleteIntegrationConnection(
 ): Promise<boolean> {
   const deleted = await deps.storage.integrationConnections.delete(connectionId, expectedRevision);
   if (deleted) {
-    await publishIntegrationConnectionCommit(deps, {
-      type: "integration_connection_deleted",
-      connectionId,
-    }, onCommitted);
+    await publishIntegrationConnectionCommit(
+      deps,
+      {
+        type: "integration_connection_deleted",
+        connectionId,
+      },
+      onCommitted,
+    );
   }
   return deleted;
 }
