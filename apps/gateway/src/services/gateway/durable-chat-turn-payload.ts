@@ -1,13 +1,11 @@
 import type { ChatSendMessageRequest } from "@goatcitadel/contracts";
 import type { DurableChatTurnExecutionPayload } from "../chat-turn-types.js";
-import type { GatewayService } from "../gateway-service.js";
+import type { PreparedAgentChatTurn } from "../chat-turn-prep-service.js";
 import {
   computeEffectiveChatTurnRequestMaterialSha256,
   deriveChatTurnSurfaceDerivation,
   freezeChatTurnExecutionRequest,
 } from "../session-control-service.js";
-
-type PreparedAgentChatTurn = Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>;
 
 /**
  * Builds the frozen durable Chat turn execution payload from a prepared, admitted turn.
