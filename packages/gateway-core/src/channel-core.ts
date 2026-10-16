@@ -515,7 +515,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
             lifecycle: "persistent",
             inboundReadiness: "ready",
             operatorSummary:
-              "Mattermost sends through the bot REST API and, when inbound is enabled, keeps a persistent bot WebSocket open for posted events. The bot's own posts and system posts are ignored, and the post id dedupes any reconnect overlap.",
+              "Mattermost sends through the bot REST API and, when inbound is enabled, keeps a persistent bot WebSocket open for posted events. The bot's own posts and system posts are ignored. Mattermost has no replay: posts sent while the socket is disconnected or backing off, or that fail durable acceptance, are not recovered.",
           }
         : {
             outboundTransport: "api",
@@ -526,7 +526,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
           },
     resolveSupportNotes: (config) => [
       isMattermostInboundEnabled(config)
-        ? "Mattermost inbound uses the bot WebSocket (/api/v4/websocket); allow the Mattermost user ids that may start turns, because inbound is default-deny."
+        ? "Mattermost inbound uses the bot WebSocket (/api/v4/websocket); allow the Mattermost user ids that may start turns, because inbound is default-deny. Posts sent while the socket is disconnected, or that fail acceptance, are not recovered."
         : "Mattermost inbound is off; set inboundStreamEnabled with a bot token to receive posted events over the bot WebSocket.",
       "Mattermost unsend deletes the original post and typically applies only to posts the bot can remove.",
       "Mattermost rich sends upload files to the resolved channel before creating the post.",
@@ -1178,10 +1178,8 @@ function isNtfyInboundEnabled(config: Record<string, unknown>): boolean {
 
 /** Mirrors the Mattermost stream adapter: opt-in, server URL and a bot token. */
 function isMattermostInboundEnabled(config: Record<string, unknown>): boolean {
-  const flag = config.inboundStreamEnabled;
-  const optedIn = flag === true || (typeof flag === "string" && flag.trim().toLowerCase() === "true");
   return (
-    optedIn &&
+    isExplicitTrue(config.inboundStreamEnabled) &&
     hasAnyConfigured(config, ["serverUrl"]) &&
     hasAnyConfigured(config, ["botToken", "botTokenEnv", "token", "tokenEnv"])
   );
@@ -1191,7 +1189,7 @@ function hasAnyConfigured(config: Record<string, unknown>, keys: string[]): bool
   return keys.some((key) => Boolean(readConfigString(config, key)));
 }
 
-function isExplicitTrue(value: unknown): boolean {
+export function isExplicitTrue(value: unknown): boolean {
   return value === true || (typeof value === "string" && value.trim().toLowerCase() === "true");
 }
 

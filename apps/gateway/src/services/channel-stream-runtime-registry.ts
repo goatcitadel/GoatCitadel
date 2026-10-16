@@ -61,7 +61,9 @@ function createStreamRuntime(host: ChannelStreamRuntimeHost): ChannelStreamRunti
         idempotencyKey: event.idempotencyKey,
         eventType: event.eventType,
         bindingTarget: event.bindingTarget,
-        inboundAccessConfig: connection.config,
+        // Stream channels never had inbound, so legacy-open (open_legacy or unset) must never apply:
+        // force allowlist semantics and keep the connection's allowedSenders (empty means deny all).
+        inboundAccessConfig: { ...connection.config, inboundAccessMode: "allowlist" },
         acceptedConnectionRevision: connection.revision,
         message: event.message,
       },

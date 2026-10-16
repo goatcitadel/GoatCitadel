@@ -56,6 +56,71 @@ function host() {
   return { value, acceptInboundChannelEvent };
 }
 
+class FakeMattermostSocket extends EventTarget {
+  constructor() {
+    super();
+    setTimeout(() => {
+      this.dispatchEvent(new Event("open"));
+      const post = { id: "p1", channel_id: "c1", user_id: "u1", root_id: "", type: "", message: "hi" };
+      this.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({ event: "posted", seq: 3, data: { channel_type: "O", post: JSON.stringify(post) } }),
+        }),
+      );
+    }, 0);
+  }
+  send(): void {}
+  close(): void {}
+}
+
+describe("stream dispatch never applies legacy-open inbound access", () => {
+  const cases = [
+    { channel: "ntfy", legacy: {} },
+    { channel: "ntfy", legacy: { inboundAccessMode: "open_legacy" } },
+    { channel: "mattermost", legacy: {} },
+    { channel: "mattermost", legacy: { inboundAccessMode: "open_legacy" } },
+  ] as const;
+  for (const { channel, legacy } of cases) {
+    it(`drops a ${channel} event with ${JSON.stringify(legacy)} and no allowed senders`, async () => {
+      const h = host();
+      const base = ntfyConnection();
+      const config: Record<string, unknown> =
+        channel === "ntfy"
+          ? { baseUrl: "https://ntfy.example.test", topic: "ops", tokenEnv: "NTFY_TOKEN", inboundStreamEnabled: true }
+          : {
+              serverUrl: "https://chat.example.test",
+              botTokenEnv: "MM_TOKEN",
+              defaultChannel: "town-square",
+              inboundStreamEnabled: true,
+            };
+      const conn = { ...base, key: channel, catalogId: `channel.${channel}`, config: { ...config, ...legacy } };
+      (h.value.storage.integrationConnections.list as ReturnType<typeof vi.fn>).mockResolvedValue([conn]);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) =>
+          String(url).endsWith("/users/me")
+            ? new Response(JSON.stringify({ id: "bot" }), { status: 200 })
+            : new Response(ndjson([{ id: "m1", event: "message", message: "hello", topic: "ops" }]), { status: 200 }),
+        ),
+      );
+      vi.stubGlobal("WebSocket", FakeMattermostSocket);
+      const runtime = getChannelStreamRuntime(h.value);
+      try {
+        await runtime.sync();
+        await vi.waitFor(() =>
+          expect(h.value.recordDevDiagnostic).toHaveBeenCalledWith(
+            expect.objectContaining({ event: "channel.inbound_allowlist_empty" }),
+          ),
+        );
+        expect(h.acceptInboundChannelEvent).not.toHaveBeenCalled();
+      } finally {
+        await runtime.close();
+        vi.unstubAllGlobals();
+      }
+    });
+  }
+});
+
 describe("getChannelStreamRuntime", () => {
   it("reads only host.storage at creation; every other member is read when the runtime runs", () => {
     const reads: string[] = [];

@@ -1,4 +1,5 @@
 import type { IntegrationConnection } from "@goatcitadel/contracts";
+import { isExplicitTrue } from "@goatcitadel/gateway-core";
 import {
   ChannelStreamAuthError,
   type ChannelStreamAdapter,
@@ -10,8 +11,8 @@ import {
  *
  * The bot authenticates the socket with an `authentication_challenge`, then
  * receives `posted` events for every channel it belongs to. There is no history
- * replay on reconnect; the post id is the dedupe key, so any overlap collapses
- * in durable acceptance.
+ * replay on reconnect: posts sent while disconnected (or backing off), or whose
+ * durable acceptance fails, are lost. The post id only dedupes a redelivered event.
  */
 
 /** The slice of the WebSocket API the adapter needs; the Node global satisfies it. */
@@ -59,11 +60,6 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function isOptedIn(config: Record<string, unknown>): boolean {
-  const flag = config.inboundStreamEnabled;
-  return flag === true || (typeof flag === "string" && flag.trim().toLowerCase() === "true");
-}
-
 function hasToken(config: Record<string, unknown>): boolean {
   return ["botToken", "botTokenEnv", "token", "tokenEnv"].some((key) => Boolean(readString(config, key)));
 }
@@ -73,7 +69,9 @@ function trimBase(serverUrl: string): string {
 }
 
 function toWebSocketUrl(httpUrl: string): string {
-  return httpUrl.replace(/^http/i, (scheme) => (scheme.toLowerCase() === "https" ? "wss" : "ws"));
+  const url = new URL(httpUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
 }
 
 function parseJson(text: string): unknown {
@@ -171,7 +169,9 @@ export function createMattermostStreamAdapter(deps: MattermostStreamAdapterDeps)
     channelKey: "mattermost",
     isInboundEnabled(connection: IntegrationConnection): boolean {
       const config = connection.config;
-      return isOptedIn(config) && Boolean(readString(config, "serverUrl")) && hasToken(config);
+      return (
+        isExplicitTrue(config.inboundStreamEnabled) && Boolean(readString(config, "serverUrl")) && hasToken(config)
+      );
     },
     async run(ctx: ChannelStreamRunContext): Promise<void> {
       const config = ctx.connection.config;

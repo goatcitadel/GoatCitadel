@@ -784,6 +784,34 @@ describe("channel setup definitions", () => {
     expect(outboundOnly).not.toHaveProperty("inboundStreamEnabled");
   });
 
+  it("ends in allowlist when inbound is enabled on a migration-stamped open_legacy Mattermost connection", () => {
+    const definition = requireChannelSetupDefinition("channel.mattermost");
+    for (const legacy of [{ inboundAccessMode: "open_legacy" }, {}]) {
+      const hydrated = definition.hydrate(
+        createConnection({
+          catalogId: "channel.mattermost",
+          key: "mattermost",
+          label: "Mattermost Primary",
+          config: {
+            serverUrl: "https://chat.example.com",
+            botTokenEnv: "MATTERMOST_BOT_TOKEN",
+            defaultChannel: "town-square",
+            ...legacy,
+          },
+        }),
+      );
+      const draft = {
+        ...createDraft("channel.mattermost", { ...hydrated.draft, inboundStreamEnabled: true }, "edit"),
+        hydration: hydrated.hydration,
+      };
+      expect(definition.validate(draft)).toEqual([]);
+      expect(definition.normalize(draft)).toMatchObject({
+        inboundStreamEnabled: true,
+        inboundAccessMode: "allowlist",
+      });
+    }
+  });
+
   it("preserves env-backed iMessage bridge auth during edit flows", () => {
     const definition = requireChannelSetupDefinition("channel.imessage");
     const hydrated = definition.hydrate(

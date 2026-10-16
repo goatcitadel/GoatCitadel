@@ -1,4 +1,5 @@
 import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/contracts";
+import { isExplicitTrue as isTruthyFlag } from "@goatcitadel/gateway-core";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
@@ -14,10 +15,6 @@ import {
   requiredFieldIssue,
   malformedFieldIssue,
 } from "./common.js";
-
-function isTruthyFlag(value: unknown): boolean {
-  return value === true || (typeof value === "string" && value.trim().toLowerCase() === "true");
-}
 
 export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
   const catalog = requireCatalog("channel.mattermost");
@@ -103,7 +100,7 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
               explanation:
                 "Keep a persistent WebSocket open so posts in channels the bot belongs to can start conversations.",
               whyNeeded:
-                "Mattermost has no inbound webhook path here; the bot WebSocket is how new posts reach GoatCitadel. Inbound stays off unless you opt in.",
+                "Mattermost has no inbound webhook path here; the bot WebSocket is how new posts reach GoatCitadel. Inbound stays off unless you opt in, and only allowed Mattermost user ids can start turns. Posts sent while the socket is disconnected are not recovered.",
               canChangeLater: true,
             },
             {
@@ -230,6 +227,8 @@ export function createMattermostDefinition(): ChannelSetupRuntimeDefinition {
         defaultChannel: readString(draft.draft, "defaultChannel"),
         defaultTeam: readString(draft.draft, "defaultTeam"),
         inboundStreamEnabled: isTruthyFlag(draft.draft.inboundStreamEnabled) ? true : undefined,
+        // Inbound is default-deny: never inherit a legacy-open posture.
+        ...(isTruthyFlag(draft.draft.inboundStreamEnabled) ? { inboundAccessMode: "allowlist" } : {}),
       });
     },
     validate(draft) {

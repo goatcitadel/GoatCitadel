@@ -91,7 +91,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     prerequisites: [
       "A reachable Mattermost server and bot token.",
       "The bot joined to the intended team/channel, with posting permissions.",
-      "For inbound, the bot must be a member of each channel you want it to hear, and you need the Mattermost user ids allowed to start conversations.",
+      "For inbound, the bot must be a member of each channel you want it to hear, and you need the Mattermost user ids allowed to start conversations (in Mattermost, open a person's profile and choose Copy user ID; a dropped post's sender_not_allowlisted diagnostic also shows the id).",
     ],
     firstMessage:
       "Confirm the test post arrives in the chosen channel. For inbound, allow your Mattermost user id, post in a channel the bot has joined, and confirm its reply; inbound posts from users who are not allowed are dropped.",
@@ -307,10 +307,12 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
       };
     },
     normalize(draft) {
-      return {
+      const normalized = {
         ...runtime.normalize(draft),
         ...normalizeGuidedChannelInboundAccess(key, draft, draft.hydration?.rawLegacyConfig ?? {}),
       };
+      // Stream inbound is new for a connection, so a hydrated open_legacy mode must not carry over.
+      return normalized.inboundStreamEnabled === true ? { ...normalized, inboundAccessMode: "allowlist" } : normalized;
     },
     validate(draft) {
       const issues = runtime.validate(draft);
