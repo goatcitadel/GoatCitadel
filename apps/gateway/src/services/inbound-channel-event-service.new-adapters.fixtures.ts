@@ -41,6 +41,7 @@ function recordingCtx(conn: IntegrationConnection, emitted: ChannelStreamEvent[]
     signal: new AbortController().signal,
     cursor: undefined,
     markReady: () => undefined,
+    touch: () => undefined,
     emit: async (event: ChannelStreamEvent) => {
       emitted.push(event);
     },

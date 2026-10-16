@@ -18,6 +18,8 @@ import { readServerSentEvents } from "./stream-line-reader.js";
  * dedupes a redelivered envelope.
  */
 
+export const SIGNAL_IDLE_TIMEOUT_MS = 90_000;
+
 export interface SignalStreamAdapterDeps {
   /** Plain fetch with the session signal; the stream is long-lived, so no request timeout. */
   fetch: typeof fetch;
@@ -114,6 +116,8 @@ export function createSignalStreamAdapter(deps: SignalStreamAdapterDeps): Channe
 
   return {
     channelKey: "signal",
+    // signal-cli writes an SSE comment keepalive (default every 15s, --sse-keepalive-interval).
+    idleTimeoutMs: SIGNAL_IDLE_TIMEOUT_MS,
     isInboundEnabled(connection: IntegrationConnection): boolean {
       const config = connection.config;
       return isExplicitTrue(config.receiveEvents) && Boolean(baseUrlOf(config));
@@ -144,7 +148,7 @@ export function createSignalStreamAdapter(deps: SignalStreamAdapterDeps): Channe
         throw new Error(`Signal event stream request failed (${response.status})`);
       }
       ctx.markReady();
-      for await (const event of readServerSentEvents(response.body, { signal: ctx.signal })) {
+      for await (const event of readServerSentEvents(response.body, { signal: ctx.signal, onActivity: ctx.touch })) {
         const payload = receivePayloadOf(parseJson(event.data));
         if (!payload) {
           ctx.diagnostic("event_unparseable", "Skipped an unparseable or non-receive Signal event.");

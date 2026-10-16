@@ -66,4 +66,13 @@ describe("readServerSentEvents", () => {
     );
     expect(events).toEqual([{ data: " two spaces" }, { data: "nospace" }]);
   });
+
+  it("reports activity for comment-only keepalive chunks that never surface as events", async () => {
+    let activity = 0;
+    const events = await collect(
+      readServerSentEvents(streamOf([":\n", ":\n", "data: x\n\n"]), { onActivity: () => (activity += 1) }),
+    );
+    expect(events).toEqual([{ data: "x" }]);
+    expect(activity).toBe(3);
+  });
 });

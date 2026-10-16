@@ -112,6 +112,7 @@ function harness(
   const adapter = createMattermostStreamAdapter(deps);
   const emitted: Array<{ event: ChannelStreamEvent; cursor?: string }> = [];
   const markReady = vi.fn();
+  const touch = vi.fn();
   function ctx(overrides: Partial<ChannelStreamRunContext> & { config?: Record<string, unknown> } = {}) {
     const { config, ...rest } = overrides;
     return {
@@ -119,6 +120,7 @@ function harness(
       signal: new AbortController().signal,
       cursor: undefined,
       markReady,
+      touch,
       emit: async (event: ChannelStreamEvent, cursor?: string) => {
         emitted.push({ event, cursor });
       },
@@ -130,7 +132,7 @@ function harness(
     await vi.waitFor(() => expect(sockets.length).toBeGreaterThan(0));
     return sockets[sockets.length - 1]!;
   }
-  return { adapter, deps, fetchMock, sockets, emitted, markReady, ctx, socketOf };
+  return { adapter, deps, fetchMock, sockets, emitted, markReady, touch, ctx, socketOf };
 }
 
 describe("mattermost stream adapter", () => {
@@ -373,5 +375,30 @@ describe("mattermost stream adapter", () => {
     );
     await runtime.close();
     expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("mattermost stream liveness", () => {
+  it("pings after authentication, touches on every frame including the pong, and stops pinging on close", async () => {
+    const h = harness();
+    expect(h.adapter.idleTimeoutMs).toBe(90_000);
+    const fastPing = createMattermostStreamAdapter(h.deps, { pingIntervalMs: 20 });
+    const run = fastPing.run(h.ctx());
+    const socket = await h.socketOf();
+    socket.open();
+    expect(socket.sent).toHaveLength(1);
+    socket.push({ event: "hello", seq: 0 });
+    expect(h.touch).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(socket.sent.length).toBeGreaterThanOrEqual(2));
+    const ping = JSON.parse(socket.sent[1]!) as { action: string; seq: number };
+    expect(ping).toEqual({ action: "ping", seq: 2 });
+    socket.push({ status: "OK", seq_reply: 2, data: { text: "pong" } });
+    expect(h.touch).toHaveBeenCalledTimes(2);
+    expect(h.markReady).toHaveBeenCalledTimes(1);
+    socket.end();
+    await run;
+    const sentAtClose = socket.sent.length;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(socket.sent).toHaveLength(sentAtClose);
   });
 });

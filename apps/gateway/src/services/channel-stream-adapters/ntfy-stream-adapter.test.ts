@@ -59,6 +59,7 @@ function harness(options: { response?: () => Response; allowlisted?: boolean; to
   const adapter = createNtfyStreamAdapter(deps);
   const emitted: Array<{ event: ChannelStreamEvent; cursor?: string }> = [];
   const markReady = vi.fn();
+  const touch = vi.fn();
   function ctx(overrides: Partial<ChannelStreamRunContext> & { config?: Record<string, unknown> } = {}) {
     const { config, ...rest } = overrides;
     return {
@@ -66,6 +67,7 @@ function harness(options: { response?: () => Response; allowlisted?: boolean; to
       signal: new AbortController().signal,
       cursor: undefined,
       markReady,
+      touch,
       emit: async (event: ChannelStreamEvent, cursor?: string) => {
         emitted.push({ event, cursor });
       },
@@ -73,7 +75,7 @@ function harness(options: { response?: () => Response; allowlisted?: boolean; to
       ...rest,
     } as ChannelStreamRunContext;
   }
-  return { adapter, deps, fetchMock, emitted, markReady, ctx };
+  return { adapter, deps, fetchMock, emitted, markReady, touch, ctx };
 }
 
 const MESSAGE = {
@@ -245,5 +247,21 @@ describe("ntfy stream adapter", () => {
     );
     await runtime.close();
     expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("ntfy stream liveness", () => {
+  it("declares a 120s idle timeout and touches the session for keepalive lines", async () => {
+    const h = harness({
+      response: () =>
+        streamResponse([
+          { id: "o1", event: "open", topic: "ops" },
+          { id: "k1", event: "keepalive", topic: "ops" },
+        ]),
+    });
+    expect(h.adapter.idleTimeoutMs).toBe(120_000);
+    await h.adapter.run(h.ctx());
+    expect(h.touch).toHaveBeenCalled();
+    expect(h.emitted).toEqual([]);
   });
 });

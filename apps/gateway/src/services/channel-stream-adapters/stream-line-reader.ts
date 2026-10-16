@@ -3,6 +3,11 @@ const DEFAULT_MAX_LINE_BYTES = 256 * 1024;
 export interface StreamReadOptions {
   maxLineBytes?: number;
   signal?: AbortSignal;
+  /**
+   * Called for every chunk read from the body, including SSE comment keepalives and
+   * blank lines that never surface as a line or event. Stream adapters use it as a liveness touch.
+   */
+  onActivity?: () => void;
 }
 
 export interface ServerSentEvent {
@@ -43,6 +48,7 @@ export async function* readStreamLines(
         pending += decoder.decode();
         break;
       }
+      options.onActivity?.();
       pending += decoder.decode(value, { stream: true });
       let newline = pending.indexOf("\n");
       while (newline >= 0) {

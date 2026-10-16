@@ -39,11 +39,12 @@ interface Run {
   reject(error: unknown): void;
 }
 
-function setup(options: { dispatch?: () => Promise<unknown> } = {}) {
+function setup(options: { dispatch?: () => Promise<unknown>; idleTimeoutMs?: number } = {}) {
   const runs: Run[] = [];
   const adapter: ChannelStreamAdapter = {
     channelKey: "fake",
     isInboundEnabled: (c) => c.config.inbound === true,
+    ...(options.idleTimeoutMs !== undefined ? { idleTimeoutMs: options.idleTimeoutMs } : {}),
     run(ctx) {
       return new Promise<void>((resolve, reject) => {
         runs.push({ ctx, resolve: () => resolve(), reject });
@@ -241,6 +242,66 @@ describe("ChannelStreamRuntimeService", () => {
     await h.service.sync();
     await flush();
     expect(h.runs).toHaveLength(1);
+  });
+});
+
+describe("ChannelStreamRuntimeService liveness and error recovery", () => {
+  it("aborts and reconnects a session idle past idleTimeoutMs; touch keeps it alive", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const h = setup({ idleTimeoutMs: 1_000 });
+      await h.service.sync();
+      const first = await nextRun(h.runs, 1);
+      first.ctx.markReady();
+      vi.advanceTimersByTime(800);
+      first.ctx.touch();
+      vi.advanceTimersByTime(800);
+      expect(first.ctx.signal.aborted).toBe(false);
+      vi.advanceTimersByTime(300);
+      expect(first.ctx.signal.aborted).toBe(true);
+      const second = await nextRun(h.runs, 2);
+      expect(h.service.getStatus("conn-1")).toMatchObject({ ready: false, lastError: "stream idle timeout" });
+      expect(h.service.getStatus("conn-1")?.stoppedReason).toBeUndefined();
+      second.ctx.markReady();
+      const recovered = h.service.getStatus("conn-1");
+      expect(recovered?.ready).toBe(true);
+      expect(recovered).not.toHaveProperty("lastError");
+      await h.service.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("has no watchdog when the adapter declares no idleTimeoutMs", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const h = setup();
+      await h.service.sync();
+      const first = await nextRun(h.runs, 1);
+      vi.advanceTimersByTime(24 * 60 * 60 * 1_000);
+      expect(first.ctx.signal.aborted).toBe(false);
+      await h.service.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears a stale lastError after the next successful emit", async () => {
+    let fail = true;
+    const h = setup({
+      dispatch: async () => {
+        if (fail) throw new Error("store down");
+        return {};
+      },
+    });
+    await h.service.sync();
+    const first = await nextRun(h.runs, 1);
+    await expect(first.ctx.emit(event("e1"), "c1")).rejects.toThrow("store down");
+    expect(h.service.getStatus("conn-1")?.lastError).toContain("store down");
+    fail = false;
+    await first.ctx.emit(event("e2"), "c2");
+    expect(h.service.getStatus("conn-1")).not.toHaveProperty("lastError");
+    await h.service.close();
   });
 });
 

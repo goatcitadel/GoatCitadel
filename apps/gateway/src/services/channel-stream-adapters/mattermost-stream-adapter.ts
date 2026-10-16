@@ -35,6 +35,11 @@ export interface MattermostStreamAdapterDeps {
   createWebSocket(url: string): MattermostWebSocketLike;
 }
 
+/** The bot sends `{"action":"ping"}` this often; the server answers with a pong frame. */
+export const MATTERMOST_PING_INTERVAL_MS = 30_000;
+/** Three missed pongs (no frame at all for this long) means a half-open socket. */
+export const MATTERMOST_IDLE_TIMEOUT_MS = 90_000;
+
 interface MattermostFrame {
   event?: unknown;
   seq?: unknown;
@@ -86,7 +91,16 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
-export function createMattermostStreamAdapter(deps: MattermostStreamAdapterDeps): ChannelStreamAdapter {
+export interface MattermostStreamAdapterOptions {
+  /** Application ping cadence once authenticated; defaults to MATTERMOST_PING_INTERVAL_MS. */
+  pingIntervalMs?: number;
+}
+
+export function createMattermostStreamAdapter(
+  deps: MattermostStreamAdapterDeps,
+  options: MattermostStreamAdapterOptions = {},
+): ChannelStreamAdapter {
+  const pingIntervalMs = options.pingIntervalMs ?? MATTERMOST_PING_INTERVAL_MS;
   function resolveToken(config: Record<string, unknown>): string | undefined {
     return (
       deps.resolveSecret(config, "botToken", "botTokenEnv", "channel.mattermost") ??
@@ -167,6 +181,7 @@ export function createMattermostStreamAdapter(deps: MattermostStreamAdapterDeps)
 
   return {
     channelKey: "mattermost",
+    idleTimeoutMs: MATTERMOST_IDLE_TIMEOUT_MS,
     isInboundEnabled(connection: IntegrationConnection): boolean {
       const config = connection.config;
       return (
@@ -193,15 +208,27 @@ export function createMattermostStreamAdapter(deps: MattermostStreamAdapterDeps)
         let settled = false;
         let chain: Promise<void> = Promise.resolve();
         let ready = false;
+        let seq = 1;
+        let pingTimer: ReturnType<typeof setInterval> | undefined;
         const markReadyOnce = () => {
           if (ready) return;
           ready = true;
           ctx.markReady();
+          pingTimer = setInterval(() => {
+            seq += 1;
+            try {
+              socket.send(JSON.stringify({ action: "ping", seq }));
+            } catch {
+              // A failed send also surfaces as a socket error/close; the idle watchdog covers silence.
+              ctx.diagnostic("ping_failed", "Mattermost websocket ping could not be sent.");
+            }
+          }, pingIntervalMs);
         };
 
         const finish = (error?: unknown) => {
           if (settled) return;
           settled = true;
+          if (pingTimer !== undefined) clearInterval(pingTimer);
           ctx.signal.removeEventListener("abort", onAbort);
           try {
             socket.close();
@@ -222,10 +249,13 @@ export function createMattermostStreamAdapter(deps: MattermostStreamAdapterDeps)
         ctx.signal.addEventListener("abort", onAbort, { once: true });
 
         socket.addEventListener("open", () => {
-          socket.send(JSON.stringify({ seq: 1, action: "authentication_challenge", data: { token } }));
+          socket.send(JSON.stringify({ seq, action: "authentication_challenge", data: { token } }));
         });
         socket.addEventListener("message", (event) => {
-          if (settled || typeof event.data !== "string") return;
+          if (settled) return;
+          // Any frame (including the pong reply to our ping) proves the socket is alive.
+          ctx.touch();
+          if (typeof event.data !== "string") return;
           const frame = asRecord(parseJson(event.data)) as MattermostFrame | undefined;
           if (!frame) {
             ctx.diagnostic("frame_unparseable", "Skipped an unparseable Mattermost websocket frame.");

@@ -10,10 +10,14 @@ import { readStreamLines } from "./stream-line-reader.js";
  * ntfy inbound over the topic's persistent JSON stream
  * (`GET {baseUrl}/{topic}/json`, one JSON object per line).
  *
- * ntfy carries no sender identity, so the topic itself is the sender and the
- * token-protected topic is the access boundary. Inbound is therefore enabled
- * only when a token is configured.
+ * ntfy carries no sender identity, so the topic itself is the sender. The token
+ * only gates reading; anyone able to publish to the topic can start turns, so the
+ * operator must restrict the topic's write access. Inbound is enabled only when a
+ * token is configured. The cursor is in memory: messages published while the
+ * gateway is down or restarting are skipped (no since= after a restart).
  */
+
+export const NTFY_IDLE_TIMEOUT_MS = 120_000;
 
 export interface NtfyStreamAdapterDeps {
   /** Plain fetch with the session signal; the stream is long-lived, so no request timeout. */
@@ -101,6 +105,8 @@ export function createNtfyStreamAdapter(deps: NtfyStreamAdapterDeps): ChannelStr
 
   return {
     channelKey: "ntfy",
+    // ntfy sends a keepalive event about every 45s; two missed keepalives means a dead connection.
+    idleTimeoutMs: NTFY_IDLE_TIMEOUT_MS,
     isInboundEnabled(connection: IntegrationConnection): boolean {
       const config = connection.config;
       return (
@@ -140,7 +146,7 @@ export function createNtfyStreamAdapter(deps: NtfyStreamAdapterDeps): ChannelStr
         await response.body?.cancel().catch(() => undefined);
         throw new Error(`ntfy stream request failed (${response.status})`);
       }
-      for await (const line of readStreamLines(response.body, { signal: ctx.signal })) {
+      for await (const line of readStreamLines(response.body, { signal: ctx.signal, onActivity: ctx.touch })) {
         if (line.trim().length === 0) continue;
         const msg = parseLine(line);
         if (!msg) {

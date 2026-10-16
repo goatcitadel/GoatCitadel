@@ -23,6 +23,11 @@ export interface ChannelStreamRunContext {
   /** Last provider cursor this process saw for the connection (in memory; undefined after restart). */
   readonly cursor: string | undefined;
   markReady(): void;
+  /**
+   * Liveness signal: call on any data received from the provider (including keepalives and pongs).
+   * When the adapter declares idleTimeoutMs, a session with no touch for that long is aborted and reconnected.
+   */
+  touch(): void;
   /** Resolves only after durable acceptance (or a gate drop); the cursor advances only after this resolves. */
   emit(event: ChannelStreamEvent, cursor?: string): Promise<void>;
   diagnostic(event: string, message: string, context?: Record<string, unknown>): void;
@@ -35,6 +40,11 @@ export interface ChannelStreamAdapter {
   channelKey: string;
   /** True only when the connection opted into inbound and has what the stream needs. */
   isInboundEnabled(connection: IntegrationConnection): boolean;
+  /**
+   * Abort and reconnect a session that received nothing (no ctx.touch) for this long.
+   * Undefined means no watchdog: a silently dropped connection is only noticed when the transport errors.
+   */
+  idleTimeoutMs?: number;
   /** Runs one stream session; resolves when the server ends it, rejects on error. Must honor ctx.signal. */
   run(ctx: ChannelStreamRunContext): Promise<void>;
 }
@@ -66,6 +76,13 @@ export interface ChannelStreamRuntimeDeps {
   now?: () => Date;
 }
 
+interface StreamSession {
+  signal: AbortSignal;
+  idleTimedOut: boolean;
+  touch(): void;
+  dispose(): void;
+}
+
 interface Runner {
   revisionKey: string;
   controller: AbortController;
@@ -75,6 +92,7 @@ interface Runner {
 
 const DEFAULT_BACKOFF = { initialMs: 1_000, maxMs: 60_000 };
 const MAX_ERROR_LENGTH = 300;
+export const CHANNEL_STREAM_IDLE_TIMEOUT_ERROR = "stream idle timeout";
 
 function revisionKeyOf(connection: IntegrationConnection): string {
   return `${connection.updatedAt}:${connection.revision ?? ""}`;
@@ -250,7 +268,7 @@ export class ChannelStreamRuntimeService {
     try {
       this.recordDiagnostic(input);
     } catch {
-      // Diagnostics must never break the runtime.
+      // Best-effort: a failing diagnostics sink is ignored so it never breaks the runtime.
     }
   }
 
@@ -283,52 +301,74 @@ export class ChannelStreamRuntimeService {
         context: { connectionId, ...context },
       });
     };
-    const ctx: ChannelStreamRunContext = {
-      connection,
-      signal: controller.signal,
-      get cursor() {
-        return cursor;
-      },
-      markReady: () => {
-        if (controller.signal.aborted) return;
-        update({ ready: true, lastReadyAt: this.now().toISOString() });
-        diagnostic("info", "connected", "Channel stream connected.");
-      },
-      emit: async (event, nextCursor) => {
-        if (controller.signal.aborted) {
-          throw new Error("Channel stream session is closed.");
-        }
-        try {
-          await this.dispatch(connection, event);
-        } catch (error) {
-          update({ lastError: describeError(error) });
-          throw error;
-        }
-        if (nextCursor !== undefined) cursor = nextCursor;
-        failures = 0;
-        update({ lastInboundAt: this.now().toISOString() });
-      },
-      diagnostic: (event, message, context) => {
-        diagnostic("info", event, message, context);
-      },
+    const clearError = () => {
+      if (this.runners.get(connectionId) !== runner && !this.closed) return;
+      const current = this.statuses.get(connectionId);
+      if (current?.lastError !== undefined) {
+        const { lastError: _cleared, ...rest } = current;
+        this.statuses.set(connectionId, rest);
+      }
     };
 
     while (!controller.signal.aborted) {
+      const session = this.openSession(controller.signal, adapter.idleTimeoutMs);
+      const ctx: ChannelStreamRunContext = {
+        connection,
+        signal: session.signal,
+        get cursor() {
+          return cursor;
+        },
+        markReady: () => {
+          if (session.signal.aborted) return;
+          session.touch();
+          update({ ready: true, lastReadyAt: this.now().toISOString() });
+          clearError();
+          diagnostic("info", "connected", "Channel stream connected.");
+        },
+        touch: () => session.touch(),
+        emit: async (event, nextCursor) => {
+          if (session.signal.aborted) {
+            throw new Error("Channel stream session is closed.");
+          }
+          session.touch();
+          try {
+            await this.dispatch(connection, event);
+          } catch (error) {
+            update({ lastError: describeError(error) });
+            throw error;
+          }
+          if (nextCursor !== undefined) cursor = nextCursor;
+          failures = 0;
+          update({ lastInboundAt: this.now().toISOString() });
+          clearError();
+        },
+        diagnostic: (event, message, context) => {
+          diagnostic("info", event, message, context);
+        },
+      };
       try {
         await adapter.run(ctx);
         failures += 1;
       } catch (error) {
         if (controller.signal.aborted) break;
-        if (error instanceof ChannelStreamAuthError) {
+        if (error instanceof ChannelStreamAuthError && !session.idleTimedOut) {
           runner.stopped = true;
           update({ ready: false, lastError: describeError(error), stoppedReason: "auth_failed" });
           diagnostic("error", "auth_failed", `Channel stream authentication failed: ${describeError(error)}`);
           return;
         }
         failures += 1;
-        update({ lastError: describeError(error) });
+        if (!session.idleTimedOut) update({ lastError: describeError(error) });
+      } finally {
+        session.dispose();
       }
       if (controller.signal.aborted) break;
+      if (session.idleTimedOut) {
+        update({ lastError: CHANNEL_STREAM_IDLE_TIMEOUT_ERROR });
+        diagnostic("warn", "idle_timeout", "Channel stream received nothing within its idle timeout; reconnecting.", {
+          idleTimeoutMs: adapter.idleTimeoutMs,
+        });
+      }
       update({ ready: false });
       const delay = Math.min(this.backoff.initialMs * 2 ** Math.max(0, failures - 1), this.backoff.maxMs);
       diagnostic("warn", "reconnecting", `Channel stream ended; reconnecting in ${delay}ms.`, { delayMs: delay });
@@ -337,6 +377,49 @@ export class ChannelStreamRuntimeService {
     }
     runner.stopped = true;
     diagnostic("info", "stopped", "Channel stream stopped.");
+  }
+
+  /**
+   * One session's abort scope: follows the runner's signal and, when idleTimeoutMs is set,
+   * aborts itself after that long without a touch().
+   */
+  private openSession(runnerSignal: AbortSignal, idleTimeoutMs: number | undefined): StreamSession {
+    const controller = new AbortController();
+    let lastActivity = this.now().getTime();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onRunnerAbort = () => controller.abort();
+    const session: StreamSession = {
+      signal: controller.signal,
+      idleTimedOut: false,
+      touch: () => {
+        lastActivity = this.now().getTime();
+      },
+      dispose: () => {
+        if (timer !== undefined) clearTimeout(timer);
+        timer = undefined;
+        runnerSignal.removeEventListener("abort", onRunnerAbort);
+      },
+    };
+    if (runnerSignal.aborted) {
+      controller.abort();
+      return session;
+    }
+    runnerSignal.addEventListener("abort", onRunnerAbort, { once: true });
+    if (idleTimeoutMs !== undefined && idleTimeoutMs > 0) {
+      const check = () => {
+        timer = undefined;
+        if (controller.signal.aborted) return;
+        const idleFor = this.now().getTime() - lastActivity;
+        if (idleFor >= idleTimeoutMs) {
+          session.idleTimedOut = true;
+          controller.abort();
+          return;
+        }
+        timer = setTimeout(check, idleTimeoutMs - idleFor);
+      };
+      timer = setTimeout(check, idleTimeoutMs);
+    }
+    return session;
   }
 
   private markStopped(connectionId: string, reason: "disabled" | "closed"): void {
