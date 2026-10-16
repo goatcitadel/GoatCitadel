@@ -145,7 +145,7 @@ export type ChannelActionName =
 
 export type ChannelAttachmentSource = "url" | "inline";
 
-export type ChannelInboundMode = "none" | "webhook" | "gateway" | "poll" | "local_bridge";
+export type ChannelInboundMode = "none" | "webhook" | "gateway" | "poll" | "local_bridge" | "stream";
 
 export type ChannelChunkingMode = "unsupported" | "fallback" | "native";
 export type ChannelOutboundTransport = "webhook" | "api";

@@ -1872,7 +1872,7 @@
       "maxHostCallbacks": 29,
       "maxDependencyMemberAccesses": 29,
       "reason": "Reviewed new explicit-context admission and dispatch guard owner. Verifies canonical durable identity, immutable admitted bytes and source visibility under the existing live write fence. Current source revalidation and admission-bound replay validation move verbatim from the source resolver and durable executor into this same owner. Historical frozen-profile replay remains in the durable executor; no new storage, transaction or execution owner is introduced. Original baseline and existing-owner limits remain unchanged.",
-      "evidence": "architecture-guard-tests.log passes175 tests with13 skips; durable-context-guard-tests.log passes147 tests. Context composition also moves here through a typed internal preparation port, keeping historical callback hosts compatible. context-preparation-tests.log passes89 with13 skips, and the actual owned-port path passes within9 current cases/13 historical skips in context-preparation-port-tests.log. Gateway typecheck passes; owner measures29/29, preparation returns to55/58 and two Gateway fa\u00e7ade methods become private. No original cap changes."
+      "evidence": "architecture-guard-tests.log passes175 tests with13 skips; durable-context-guard-tests.log passes147 tests. Context composition also moves here through a typed internal preparation port, keeping historical callback hosts compatible. context-preparation-tests.log passes89 with13 skips, and the actual owned-port path passes within9 current cases/13 historical skips in context-preparation-port-tests.log. Gateway typecheck passes; owner measures29/29, preparation returns to55/58 and two Gateway façade methods become private. No original cap changes."
     },
     {
       "planStep": "C1",
@@ -2313,6 +2313,22 @@
       "maxDependencyMemberAccesses": 15,
       "reason": "WS4 gap-closure program (operator-approved 2026-10-15): live blind model comparison execution split out of the baseline-era comparison owner. The cap covers the repository compare-and-swap claim, lease renewal and conditional terminal write plus the lease TTL override that guard a cross-process claim/lease.",
       "evidence": "apps/gateway/src/services/model-comparison-execution-service.test.ts covers concurrency 2, status transitions, partial failure, restart of missing/errored results, conflict rejection, cancel abort, stale running recovery past the lease TTL, cross-process claim races, fresh-lease restart rejection, cancels written by another process, empty/approval-paused responses and background-error reporting; packages/storage/src/model-comparison-run-repo.test.ts covers claimRun, renewRunLease and finishRun including no-match paths; the route-port factory test covers delegation of records and run control; routes/model-comparisons.test.ts covers run/cancel status mapping; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/channel-stream-runtime-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 7,
+      "reason": "WS5 channel-parity program: generic persistent stream runtime (lifecycle, backoff reconnect, revision restart, status) for SSE/WebSocket-style inbound channels; reads its seven injected dependencies once in the constructor and has no host callbacks.",
+      "evidence": "apps/gateway/src/services/channel-stream-runtime-service.test.ts covers one runner per opted-in connection, disable/abort, doubling backoff capped at 60s, backoff reset after ready+emit, auth-failure stop and revision restart, cursor advance only after durable acceptance, dispatch failure propagation, and close settlement; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/channel-stream-adapters/stream-line-reader.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS5 channel-parity program: pure byte-stream line and server-sent-event reader shared by stream channel adapters; reaches no adapter host or dependency.",
+      "evidence": "apps/gateway/src/services/channel-stream-adapters/stream-line-reader.test.ts covers chunk-split lines, split multi-byte UTF-8, CRLF, over-long line rejection, abort, and SSE event grouping."
     }
   ]
 }

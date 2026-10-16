@@ -1,0 +1,245 @@
+import { describe, expect, it, vi } from "vitest";
+import type { IntegrationConnection } from "@goatcitadel/contracts";
+import {
+  ChannelStreamAuthError,
+  ChannelStreamRuntimeService,
+  type ChannelStreamAdapter,
+  type ChannelStreamEvent,
+  type ChannelStreamRunContext,
+} from "./channel-stream-runtime-service.js";
+
+function connection(overrides: Partial<IntegrationConnection> = {}): IntegrationConnection {
+  return {
+    connectionId: "conn-1",
+    revision: "r1",
+    catalogId: "channel.fake",
+    kind: "channel",
+    key: "fake",
+    label: "Fake",
+    enabled: true,
+    status: "connected",
+    config: { inbound: true },
+    createdAt: "2026-10-16T00:00:00.000Z",
+    updatedAt: "2026-10-16T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function event(id: string): ChannelStreamEvent {
+  return {
+    idempotencyKey: `fake:conn-1:${id}`,
+    eventType: "message",
+    message: { eventId: id, account: "a", actorId: "u", content: "hi" },
+  };
+}
+
+interface Run {
+  ctx: ChannelStreamRunContext;
+  resolve(): void;
+  reject(error: unknown): void;
+}
+
+function setup(options: { dispatch?: () => Promise<unknown> } = {}) {
+  const runs: Run[] = [];
+  const adapter: ChannelStreamAdapter = {
+    channelKey: "fake",
+    isInboundEnabled: (c) => c.config.inbound === true,
+    run(ctx) {
+      return new Promise<void>((resolve, reject) => {
+        runs.push({ ctx, resolve: () => resolve(), reject });
+        ctx.signal.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    },
+  };
+  let current: IntegrationConnection[] = [connection()];
+  const delays: number[] = [];
+  const dispatch = vi.fn(async (..._args: unknown[]) => (options.dispatch ? options.dispatch() : { ok: true }));
+  const service = new ChannelStreamRuntimeService({
+    listConnections: async () => current,
+    adapters: [adapter],
+    dispatch: dispatch as never,
+    recordDevDiagnostic: vi.fn(),
+    sleep: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  return {
+    service,
+    runs,
+    delays,
+    dispatch,
+    setConnections(next: IntegrationConnection[]) {
+      current = next;
+    },
+  };
+}
+
+async function flush(): Promise<void> {
+  for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+async function nextRun(runs: Run[], count: number): Promise<Run> {
+  for (let i = 0; i < 50 && runs.length < count; i += 1) await flush();
+  const run = runs[count - 1];
+  if (!run) throw new Error(`run ${count} never started`);
+  return run;
+}
+
+describe("ChannelStreamRuntimeService", () => {
+  it("starts one runner per enabled opted-in connection and does not duplicate on unchanged sync", async () => {
+    const h = setup();
+    await h.service.sync();
+    await nextRun(h.runs, 1);
+    await h.service.sync();
+    await flush();
+    expect(h.service.activeRunnerCount).toBe(1);
+    expect(h.runs).toHaveLength(1);
+    await h.service.close();
+  });
+
+  it("skips disabled, disconnected and non-opted-in connections", async () => {
+    const h = setup();
+    h.setConnections([
+      connection({ connectionId: "a", enabled: false }),
+      connection({ connectionId: "b", status: "disconnected" }),
+      connection({ connectionId: "c", config: {} }),
+    ]);
+    await h.service.sync();
+    await flush();
+    expect(h.service.activeRunnerCount).toBe(0);
+    expect(h.runs).toHaveLength(0);
+  });
+
+  it("aborts a runner when its connection is disabled", async () => {
+    const h = setup();
+    await h.service.sync();
+    const run = await nextRun(h.runs, 1);
+    h.setConnections([connection({ enabled: false, updatedAt: "2026-10-16T01:00:00.000Z" })]);
+    await h.service.sync();
+    await flush();
+    expect(run.ctx.signal.aborted).toBe(true);
+    expect(h.service.getStatus("conn-1")?.stoppedReason).toBe("disabled");
+    expect(h.service.activeRunnerCount).toBe(0);
+  });
+
+  it("reconnects with doubling backoff capped at maxMs and records status", async () => {
+    const h = setup();
+    await h.service.sync();
+    for (let i = 1; i <= 9; i += 1) {
+      const run = await nextRun(h.runs, i);
+      run.reject(new Error(`boom ${i}`));
+      await flush();
+    }
+    await nextRun(h.runs, 10);
+    expect(h.delays).toEqual([1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000, 60000]);
+    const status = h.service.getStatus("conn-1");
+    expect(status?.lastError).toContain("boom 9");
+    expect(status?.lastReconnectAt).toBeTruthy();
+    await h.service.close();
+  });
+
+  it("treats a clean server end as a reconnect", async () => {
+    const h = setup();
+    await h.service.sync();
+    (await nextRun(h.runs, 1)).resolve();
+    await flush();
+    await nextRun(h.runs, 2);
+    expect(h.delays).toEqual([1000]);
+    await h.service.close();
+  });
+
+  it("resets backoff after markReady and a successful emit", async () => {
+    const h = setup();
+    await h.service.sync();
+    (await nextRun(h.runs, 1)).reject(new Error("x"));
+    await flush();
+    (await nextRun(h.runs, 2)).reject(new Error("y"));
+    await flush();
+    const third = await nextRun(h.runs, 3);
+    third.ctx.markReady();
+    expect(h.service.getStatus("conn-1")?.ready).toBe(true);
+    await third.ctx.emit(event("e1"), "c1");
+    third.reject(new Error("z"));
+    await flush();
+    await nextRun(h.runs, 4);
+    expect(h.delays).toEqual([1000, 2000, 1000]);
+    await h.service.close();
+  });
+
+  it("stops on ChannelStreamAuthError until the connection changes", async () => {
+    const h = setup();
+    await h.service.sync();
+    (await nextRun(h.runs, 1)).reject(new ChannelStreamAuthError("401"));
+    await flush();
+    expect(h.service.getStatus("conn-1")?.stoppedReason).toBe("auth_failed");
+    expect(h.runs).toHaveLength(1);
+    await h.service.sync();
+    await flush();
+    expect(h.runs).toHaveLength(1);
+    h.setConnections([connection({ updatedAt: "2026-10-16T02:00:00.000Z" })]);
+    await h.service.sync();
+    await nextRun(h.runs, 2);
+    expect(h.runs).toHaveLength(2);
+    await h.service.close();
+  });
+
+  it("restarts when only the storage revision changes", async () => {
+    const h = setup();
+    await h.service.sync();
+    const first = await nextRun(h.runs, 1);
+    h.setConnections([connection({ revision: "r2" })]);
+    await h.service.sync();
+    await nextRun(h.runs, 2);
+    expect(first.ctx.signal.aborted).toBe(true);
+    await h.service.close();
+  });
+
+  it("dispatches emitted events and advances the cursor only after acceptance", async () => {
+    const h = setup();
+    await h.service.sync();
+    const first = await nextRun(h.runs, 1);
+    expect(first.ctx.cursor).toBeUndefined();
+    await first.ctx.emit(event("e1"), "cursor-1");
+    expect(h.dispatch).toHaveBeenCalledTimes(1);
+    expect(h.dispatch.mock.calls[0]?.[1]).toMatchObject({ idempotencyKey: "fake:conn-1:e1" });
+    expect(h.service.getStatus("conn-1")?.lastInboundAt).toBeTruthy();
+    first.reject(new Error("drop"));
+    await flush();
+    const second = await nextRun(h.runs, 2);
+    expect(second.ctx.cursor).toBe("cursor-1");
+    await h.service.close();
+  });
+
+  it("propagates dispatch failure to the adapter without advancing the cursor", async () => {
+    let fail = false;
+    const h = setup({
+      dispatch: async () => {
+        if (fail) throw new Error("store down");
+        return {};
+      },
+    });
+    await h.service.sync();
+    const first = await nextRun(h.runs, 1);
+    await first.ctx.emit(event("e1"), "c1");
+    fail = true;
+    await expect(first.ctx.emit(event("e2"), "c2")).rejects.toThrow("store down");
+    expect(h.service.getStatus("conn-1")?.lastError).toContain("store down");
+    first.reject(new Error("store down"));
+    await flush();
+    const second = await nextRun(h.runs, 2);
+    expect(second.ctx.cursor).toBe("c1");
+    await h.service.close();
+  });
+
+  it("close aborts runners, awaits settlement and blocks later sync", async () => {
+    const h = setup();
+    await h.service.sync();
+    const run = await nextRun(h.runs, 1);
+    await h.service.close();
+    expect(run.ctx.signal.aborted).toBe(true);
+    expect(h.service.activeRunnerCount).toBe(0);
+    await h.service.sync();
+    await flush();
+    expect(h.runs).toHaveLength(1);
+  });
+});
