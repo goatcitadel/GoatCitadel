@@ -290,7 +290,7 @@ export interface ApprovalReplayEvent {
 
 export interface PendingApprovalAction {
   approvalId: string;
-  actionType: "tool.invoke" | "code_mode.run" | "integration.dry_run_commit";
+  actionType: "tool.invoke" | "code_mode.run" | "code_mode.aider_promote" | "integration.dry_run_commit";
   request: Record<string, unknown>;
   linkage?: ApprovalLinkage;
   createdAt: string;
