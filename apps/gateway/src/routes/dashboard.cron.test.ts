@@ -9,6 +9,7 @@ import { createDatabase, CronJobRepository, type DatabaseClient, type Storage } 
 import { CronAutomationService } from "../services/gateway/cron-automation-service.js";
 import { createTestCronSpecOwner } from "../services/gateway/cron-spec-owner.test-utils.js";
 import { dashboardRoutes } from "./dashboard.js";
+import { replyWithCronJobs } from "./dashboard-cron-citadel.js";
 
 describe("dashboard cron routes", () => {
   let app: FastifyInstance | null = null;
@@ -625,6 +626,18 @@ describe("dashboard cron routes", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({ items });
       expect(fn).toHaveBeenCalledWith({ citadelId: "ws-a", accessClass: "operator" });
+    });
+
+    it("fails closed with 403 when the route has no tracked access class", async () => {
+      const listCronJobs = vi.fn(async () => {
+        throw new PolicyViolationError({ message: "Citadel ws-a is outside your Watchtower access scope." });
+      });
+      const send = vi.fn();
+      const reply = { code: vi.fn(() => ({ send })), send } as never;
+      const request = { query: { citadelId: "ws-a" }, routeOptions: { config: {} } } as never;
+      await replyWithCronJobs({ listCronJobs } as never, request, reply);
+      expect(listCronJobs).toHaveBeenCalledWith({ citadelId: "ws-a", accessClass: undefined });
+      expect((reply as { code: ReturnType<typeof vi.fn> }).code).toHaveBeenCalledWith(403);
     });
 
     it("returns 404 for an unknown citadel", async () => {

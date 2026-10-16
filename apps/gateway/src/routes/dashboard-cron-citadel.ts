@@ -1,15 +1,17 @@
-import { NotFoundError, PolicyViolationError, type CronJobRecord } from "@goatcitadel/contracts";
+import { NotFoundError, PolicyViolationError } from "@goatcitadel/contracts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import type { CronAutomationService } from "../services/gateway/cron-automation-service.js";
 import { projectPublicSecretValue } from "../services/public-secret-projection.js";
 
 const cronJobListQuerySchema = z.object({
   citadelId: z.string().trim().min(1).max(200).optional(),
 });
 
-interface CronListPort {
-  listCronJobs(citadel?: { citadelId: string; accessClass: string | undefined }): Promise<CronJobRecord[]>;
-}
+type CronListPort = Pick<CronAutomationService, "listCronJobs">;
+
+/** Route options declaring the operator access class the citadel scope is derived from. */
+export const CRON_JOBS_LIST_ROUTE_OPTIONS = { config: { goatcitadelRouteAccessClass: "operator" } } as const;
 
 /**
  * `GET /api/v1/cron/jobs`. With `?citadelId=` the response is scope-checked (the service builds the
@@ -24,10 +26,9 @@ export async function replyWithCronJobs(cron: CronListPort, request: FastifyRequ
   if (!citadelId) {
     return reply.send(projectPublicSecretValue({ items: await cron.listCronJobs() }));
   }
-  // The central route-access preHandler already enforced the "/api/v1/cron" prefix policy
-  // (operator), so a request that reaches the handler holds that class even when the route
-  // config does not declare it explicitly.
-  const accessClass = request.routeOptions.config?.goatcitadelRouteAccessClass ?? "operator";
+  // Fail closed: the route must declare its access class in config (see CRON_JOBS_LIST_ROUTE_OPTIONS);
+  // a missing class reaches the service as `undefined`, which builds an empty readable set (403).
+  const accessClass = request.routeOptions.config?.goatcitadelRouteAccessClass;
   try {
     const items = await cron.listCronJobs({ citadelId, accessClass });
     return reply.send(projectPublicSecretValue({ items }));
