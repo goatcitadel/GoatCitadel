@@ -1137,6 +1137,16 @@ export class LlmService {
 
   private enrichModelRecord(providerId: string, record: LlmModelRecord): LlmModelRecord {
     const meta = lookupModelMetadata(this.modelMetadata, providerId, record.id);
+    const provider = this.providers.get(providerId);
+    if (provider && providerOmitsReasoningEffort(provider, record.id)) {
+      // Never advertise selectable efforts the adapter would silently drop.
+      const { reasoningEfforts: _droppedEfforts, ...withoutEfforts } = record;
+      return {
+        ...withoutEfforts,
+        contextWindow: record.contextWindow ?? meta?.contextWindow,
+        outputTokenLimit: record.outputTokenLimit ?? meta?.outputTokenLimit,
+      };
+    }
     if (!meta) return record;
     return {
       ...record,
@@ -1151,6 +1161,27 @@ export class LlmService {
     model: string,
   ): ChatCompletionReasoningEffort[] | undefined {
     return this.getLiveCatalogModel(provider, model)?.reasoningEfforts;
+  }
+
+  private resolveDispatchReasoningProfile(
+    request: ChatCompletionRequest,
+    provider: LlmProviderConfig,
+    model: string,
+    attribution: ModelUsageAttributionContext,
+  ): ReturnType<typeof resolveLlmReasoningProfile> {
+    // An adapter that never sends a reasoning field must not inherit efforts
+    // from the catalog or model metadata, or the receipt would claim "honored".
+    const omitsReasoning = providerOmitsReasoningEffort(provider, model);
+    return resolveLlmReasoningProfile({
+      request,
+      providerId: provider.providerId,
+      providerCapabilities: inferProviderCapabilities(provider),
+      modelMetadata: omitsReasoning
+        ? undefined
+        : lookupExactModelMetadata(this.modelMetadata, provider.providerId, model),
+      catalogReasoningEfforts: omitsReasoning ? undefined : this.getCatalogReasoningEfforts(provider, model),
+      attribution,
+    });
   }
 
   public getCachedModelAvailability(
@@ -1786,14 +1817,7 @@ export class LlmService {
     try {
       const model = this.resolveRequestModel(resolved.provider, sanitizedRequest.model);
       this.assertFastModeAvailable(resolved.provider, model, sanitizedRequest);
-      const reasoning = resolveLlmReasoningProfile({
-        request: sanitizedRequest,
-        providerId: resolved.provider.providerId,
-        providerCapabilities: inferProviderCapabilities(resolved.provider),
-        modelMetadata: lookupExactModelMetadata(this.modelMetadata, resolved.provider.providerId, model),
-        catalogReasoningEfforts: this.getCatalogReasoningEfforts(resolved.provider, model),
-        attribution,
-      });
+      const reasoning = this.resolveDispatchReasoningProfile(sanitizedRequest, resolved.provider, model, attribution);
       const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
       const providerAdapter = this.providerAdapters.get(apiStyle);
       let completion: ChatCompletionResponse;
@@ -1953,14 +1977,7 @@ export class LlmService {
     try {
       const model = this.resolveRequestModel(resolved.provider, sanitizedRequest.model);
       this.assertFastModeAvailable(resolved.provider, model, sanitizedRequest);
-      const reasoning = resolveLlmReasoningProfile({
-        request: sanitizedRequest,
-        providerId: resolved.provider.providerId,
-        providerCapabilities: inferProviderCapabilities(resolved.provider),
-        modelMetadata: lookupExactModelMetadata(this.modelMetadata, resolved.provider.providerId, model),
-        catalogReasoningEfforts: this.getCatalogReasoningEfforts(resolved.provider, model),
-        attribution,
-      });
+      const reasoning = this.resolveDispatchReasoningProfile(sanitizedRequest, resolved.provider, model, attribution);
       const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
       const providerAdapter = this.providerAdapters.get(apiStyle);
       let stream: AsyncGenerator<Record<string, unknown>>;
@@ -6430,7 +6447,7 @@ function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapa
     model.includes("o3") ||
     model.includes("claude-sonnet-4") ||
     model.includes("claude-opus-4");
-  return {
+  const capabilities: LlmProviderCapabilities = {
     vision: hasVision,
     audio: hasAudio,
     video: hasVideo,
@@ -6443,6 +6460,22 @@ function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapa
     imageEdit: supportsImageGenerationProvider(provider.providerId),
     ...(provider.capabilities ?? {}),
   };
+  if (!providerOmitsReasoningEffort(provider, provider.defaultModel)) {
+    return capabilities;
+  }
+  // The adapter drops `reasoning`, so no configured override may advertise a
+  // selectable effort; legacy compatibility then resolves to "none" only.
+  const { reasoningEfforts: _droppedEfforts, ...withoutEfforts } = capabilities;
+  return { ...withoutEfforts, reasoning: false };
+}
+
+/**
+ * True when the execution adapter never sends a reasoning-effort field.
+ * Bedrock Converse thinking combined with tools would require replaying
+ * reasoning blocks, which the Bedrock adapter does not do.
+ */
+function providerOmitsReasoningEffort(provider: LlmProviderConfig, model: string): boolean {
+  return resolveProviderExecutionApiStyle(provider, model) === "bedrock-messages";
 }
 
 function defaultModelForProvider(providerId: string): string {

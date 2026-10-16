@@ -1577,6 +1577,95 @@ describe("LlmService", () => {
         globalThis.fetch = originalFetch;
       }
     });
+
+    describe("reasoning effort truth", () => {
+      // The Converse adapter never sends a reasoning/thinking field, so no
+      // input source may make the receipt claim an honored effort.
+      const createClaimingBedrockService = () => {
+        const dir = mkdtempSync(join(tmpdir(), "gc-bedrock-reasoning-"));
+        const manifestPath = join(dir, "llm-model-metadata.json");
+        writeFileSync(
+          manifestPath,
+          JSON.stringify({
+            version: 1,
+            entries: {
+              [`bedrock/${bedrockModel}`]: {
+                contextWindow: 200000,
+                outputTokenLimit: 32000,
+                reasoning: { supportedEfforts: ["none", "low", "medium", "high"] },
+              },
+            },
+          }),
+        );
+        const service = new LlmService(
+          {
+            activeProviderId: "bedrock",
+            providers: [
+              {
+                ...bedrockProvider("aws-bedrock-api-key"),
+                capabilities: { reasoning: true, reasoningEfforts: ["low", "medium", "high"] },
+              },
+            ],
+          },
+          { BEDROCK_API_KEY: "bedrock-env-key" } as NodeJS.ProcessEnv,
+          { secretStore: createNoopSecretStore(), modelMetadataPath: manifestPath },
+        );
+        return { service, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+      };
+
+      it("downgrades a requested effort to none and sends no reasoning field", async () => {
+        const { service, cleanup } = createClaimingBedrockService();
+        const originalFetch = globalThis.fetch;
+        let sentBody: Record<string, unknown> = {};
+        globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+          sentBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return converseResponse();
+        }) as unknown as typeof fetch;
+        try {
+          const completion = await service.chatCompletions({
+            providerId: "bedrock",
+            model: bedrockModel,
+            messages: [{ role: "user", content: "hi" }],
+            reasoning: { effort: "high" },
+          });
+          expect(completion.routing?.reasoning).toMatchObject({
+            requested: "high",
+            actual: "none",
+            disposition: "downgraded",
+            reasonCode: "legacy_provider_reasoning_omitted",
+            capabilitySource: "legacy_compatibility",
+          });
+          expect(completion.routing?.reasoning?.disposition).not.toBe("honored");
+          const serialized = JSON.stringify(sentBody).toLowerCase();
+          expect(serialized).not.toContain("reasoning");
+          expect(serialized).not.toContain("thinking");
+          expect(sentBody).not.toHaveProperty("additionalModelRequestFields");
+        } finally {
+          globalThis.fetch = originalFetch;
+          cleanup();
+        }
+      });
+
+      it("advertises no selectable reasoning efforts in provider listings or model catalogs", async () => {
+        const { service, cleanup } = createClaimingBedrockService();
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn(async () => new Response("{}", { status: 500 })) as unknown as typeof fetch;
+        try {
+          // The fixture metadata really is loaded, so the listing must ignore it.
+          expect(service.getModelReasoningMetadata("bedrock", bedrockModel)?.supportedEfforts).toContain("high");
+          const provider = service.listProviders().find((entry) => entry.providerId === "bedrock");
+          expect(provider?.capabilities?.reasoning).toBe(false);
+          expect(provider?.capabilities?.reasoningEfforts).toBeUndefined();
+          const models = await service.listModelsWithSource("bedrock");
+          const model = models.items.find((item) => item.id === bedrockModel);
+          expect(model).toBeDefined();
+          expect(model?.reasoningEfforts).toBeUndefined();
+        } finally {
+          globalThis.fetch = originalFetch;
+          cleanup();
+        }
+      });
+    });
   });
 
   it("rejects raw API-key storage for the OpenAI Codex OAuth provider", () => {
