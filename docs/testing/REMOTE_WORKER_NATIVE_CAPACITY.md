@@ -1298,7 +1298,8 @@ do not themselves establish workload quiescence.
 Read-only operation 16 retains the complete twenty-one-record history, trusted
 local principals, current authority and bounded deadline used by capacity
 observations. An absent `observe_inventory` owner refuses dispatch before opening
-the parent. The installed service does not yet supply a quiescence/capture owner.
+the parent. The installed service supplies an owner that requires its retained
+measurement hold before calling the journal's inventory observation.
 
 Controller message 17 carries the 352-byte bound summary; message 18 carries a
 fixed 1,000-byte batch containing the connection nonce, first object index,
@@ -1328,7 +1329,9 @@ mount and workspace histories. Operations 1-12 keep their existing encoding;
 operation 13 remains reserved. Observation is bounded to 60 seconds, 20,000
 entries and 64 levels. The controller requires a composed quiescence owner and
 returns unavailable before opening the parent when that owner is absent. The
-installed service does not yet supply it.
+installed service supplies it: the observer refuses unless the session retains
+the measurement hold acquired for this request, and rechecks that hold before
+the journal's read-only observation.
 
 The 352-byte capacity frame carries the connection nonce, journal anchor,
 assignment/profile hashes, final checkpoint hash, all five recorded workspace
@@ -1386,7 +1389,8 @@ lease token or protected credential. Concurrent local observation owners and
 late authorization callbacks are rejected.
 
 This delivery entry point is not an automatic installed observer. The installed
-controller still lacks a workload-quiescence owner and refuses operation 14.
+controller answers operation 14 only inside its retained measurement hold; no
+live scan through the installed controller on a mounted volume has been proven.
 The protected executor must establish that boundary before calling the observer.
 Whole-pool accounting, hard quotas, backend activation and physical mounted-volume
 acceptance remain open. See the separate
@@ -1440,9 +1444,10 @@ and their host-file allocation sum. Every identity and disk field must match
 the complete validated history. The journal is exactly 21,504 bytes and its
 allocation is bounded to 64 KiB; fixed VHDX allocation must fit its reservation.
 
-The controller requires a distinct quiescence-owning backing observer. The
-installed service supplies neither observer and refuses either operation before
-opening the parent. Host observation shares the 60-second deadline and at most
+The controller requires a distinct quiescence-owning backing observer and
+refuses the operation before opening the parent when it is absent. The installed
+service supplies both observers; each requires the session's retained
+measurement hold before journal access. Host observation shares the 60-second deadline and at most
 256 current-authority challenges. The client rejects mixed observation kinds,
 duplicates, altered history, observations before authority and missing or failed
 terminal receipts. The helper forwards the validated host frame as kind 7;
@@ -1487,8 +1492,8 @@ assignment, while their retained keys and revisions stay separate. Cancellation,
 late callbacks, lease regression, corrupt state and mismatched acknowledgements
 withhold success and preserve pending evidence.
 
-This is an explicit delivery entry point. The installed controller still lacks
-the required quiescence owner; persistence neither starts an observation nor
+This is an explicit delivery entry point. The installed controller observes
+only inside its retained measurement hold; persistence neither starts an observation nor
 updates reservations, full-pool accounting, quotas or readiness. See
 [host persistence evidence](COMPARISON_IMPLEMENTATION_STATUS.md#retained-host-capacity-observations).
 
