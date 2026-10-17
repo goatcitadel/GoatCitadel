@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 266,
+      "expectedCount": 267,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 266,
+      "expectedLastVersion": 267,
       "migrations": [
         {
           "version": 1,
@@ -1866,9 +1866,16 @@
         },
         {
           "version": 266,
+          "name": "mail_drafts",
+          "groupName": "canonical",
+          "definitionSha256": "e9c41d9b5c3bc2a5e6dcb9962db6b16edcd975077aa6c86ecfb04f223e3a2b3f",
+          "implementationSha256": "ca7a19462adb85f75963690fdfe6da91a141c3d88621e566201ca0a2a07761ed"
+        },
+        {
+          "version": 267,
           "name": "external_side_effect_replay_record",
           "groupName": "canonical",
-          "definitionSha256": "7fc97ef7de31b5448bb607dc5161f5f3fce08e0c7d6ce58b365a0755363c23d5",
+          "definitionSha256": "c7dcb7d64746ad27a0ae82a5d1e4b87454fa08cf50bacce609b814fa773bb810",
           "implementationSha256": "05cab7216f4e13e919ba0df693dc1af86dbe025fd25cb2bdbcc9c6e738084de4"
         }
       ]
@@ -1876,9 +1883,9 @@
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 213,
+      "expectedCount": 215,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 213,
+      "expectedLastVersion": 215,
       "migrations": [
         {
           "version": 1,
@@ -3159,8 +3166,20 @@
         },
         {
           "version": 213,
+          "name": "mail_drafts",
+          "definitionSha256": "0dc522cc8e50029e7ebd4e39c15ee4eee7a91f5dcebf2a932d46a9ec7a959065",
+          "runtimeIntegritySha256": "28ee54b9449bc3b136cea4be2767546aea30d108e986c8b542b77b96808072b1"
+        },
+        {
+          "version": 214,
+          "name": "mail_drafts_schema_convergence",
+          "definitionSha256": "fcec1fcd5a0d86a9b34b91b9626e7ba28ca2269fe084f253d044995d2dec181c",
+          "runtimeIntegritySha256": "17014e5475fc236af54039b995f07f527804e014b8e712fb2ee05f43f1b23cdb"
+        },
+        {
+          "version": 215,
           "name": "external_side_effect_replay_record",
-          "definitionSha256": "2d99a99302e9138d5aca2f2ef240d4a294999f9441795d2f17d8bb60464d7d11",
+          "definitionSha256": "ad7f4212ec0f4d8d6612a4c09803801e8671090fd875bf14bce012787682e7fe",
           "sqlPayloadSha256": "467c542c0cf38a4da5a70081a0fc0625fedee1690b08ed7acb49a20394f8606c",
           "runtimeIntegritySha256": "1368d55a32906a665fd9209b3346e9667242b705d200a2fc19238a462f65649d"
         }

@@ -19,10 +19,7 @@ import {
 import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
 import { RequesterMcpApprovalResumeRequiredError } from "./mcp-requester-admission-approval.js";
 import { yieldFanoutApprovalEffect } from "./chat-fanout-approval-service.js";
-import {
-  StaleDelegationScopeResumeError,
-  UnverifiableDelegationInstructionsError,
-} from "./chat-delegation-service.js";
+import { StaleDelegationScopeResumeError, UnverifiableDelegationInstructionsError } from "./chat-delegation-service.js";
 import { isNativeExecutionApproval, readPendingNativeApprovalParentWake } from "./approval-native-runtime-parent.js";
 import type {
   ApprovalEffectRecord,
@@ -84,6 +81,14 @@ import {
   MeshCapabilityActivationServiceError,
   type MeshCapabilityActivationApplyResult,
 } from "./mesh-capability-activation-service.js";
+import {
+  COMMUNICATIONS_CALENDAR_CREATE_EFFECT_KIND,
+  COMMUNICATIONS_MAIL_SEND_EFFECT_KIND,
+  buildCommunicationsApprovalEffectUpsert,
+  isCommunicationsApprovalKind,
+  runCommunicationsApprovalEffect,
+  type CommunicationsApprovalEffectExecutors,
+} from "./communications-approval-effect-service.js";
 import { MemoryLifecycleApplyError } from "./memory-domain-journey-producer.js";
 import { parseMemoryLifecycleApprovalBinding } from "./memory-journey-producer.js";
 import type { MemoryLifecycleApplyResult } from "./memory-lifecycle-service.js";
@@ -371,7 +376,12 @@ export interface ApprovalResolutionEffectsResult {
   chatTurnResume: ApprovalChatTurnResumeResult;
 }
 
-export interface ApprovalEffectsServiceDeps {
+/**
+ * WS2: the communications executors (`executeApprovedCommunicationsMailSend`,
+ * `executeApprovedCommunicationsCalendarCreate`, `recordCommunicationsMailSendRejected`)
+ * come from `CommunicationsApprovalEffectExecutors`.
+ */
+export interface ApprovalEffectsServiceDeps extends CommunicationsApprovalEffectExecutors {
   backgroundTasks: Set<Promise<void>>;
   sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
   wakeDurableRun(
@@ -786,6 +796,14 @@ export class ApprovalEffectsService {
     if (approval.kind === ENGINEERING_LEARNING_APPROVAL_KIND && input.decision === "approve") {
       enqueued.push(await this.enqueueEngineeringLearningLifecycleApply(approval));
     }
+    const communicationsEffect = buildCommunicationsApprovalEffectUpsert(
+      approval,
+      input.decision,
+      options.outcome === "expired" || (options.allowExpired === true && !options.outcome),
+    );
+    if (communicationsEffect) {
+      enqueued.push(await this.approvalEffectRepository.upsert(communicationsEffect));
+    }
     enqueued.push(
       await this.ctx.storage.approvalEffects.upsert({
         approvalId: approval.approvalId,
@@ -800,7 +818,10 @@ export class ApprovalEffectsService {
     );
     const pendingAction = await this.ctx.storage.pendingApprovalActions.find(approval.approvalId);
     if (
-      (input.decision === "approve" && pendingAction?.resolutionStatus === "pending") ||
+      // A communications tool.invoke row only ever runs through the comms ledger effect.
+      (input.decision === "approve" &&
+        pendingAction?.resolutionStatus === "pending" &&
+        !isCommunicationsApprovalKind(approval.kind)) ||
       (approval.kind === "code_mode.run" &&
         (input.decision === "approve" || input.decision === "reject") &&
         !pendingAction)
@@ -1467,9 +1488,13 @@ export class ApprovalEffectsService {
     }
   }
 
+  private get approvalEffectRepository() {
+    return this.ctx.storage.approvalEffects;
+  }
+
   private async isEffectStillClaimed(effectId: string): Promise<boolean> {
     try {
-      const current = await this.ctx.storage.approvalEffects.get(effectId);
+      const current = await this.approvalEffectRepository.get(effectId);
       return current.status === "running" && current.claimedBy === this.workerIdForEffect(current);
     } catch {
       return false;
@@ -1477,7 +1502,7 @@ export class ApprovalEffectsService {
   }
 
   private async executeClaimedEffect(effectId: string, signal?: AbortSignal): Promise<void> {
-    const effect = await this.ctx.storage.approvalEffects.get(effectId);
+    const effect = await this.approvalEffectRepository.get(effectId);
     switch (effect.effectKind) {
       case "approval_wait_materialize":
         await this.handleApprovalWaitMaterialization(effect);
@@ -1526,6 +1551,10 @@ export class ApprovalEffectsService {
         return;
       case ENGINEERING_LEARNING_EFFECT_KIND:
         await this.handleEngineeringLearningLifecycleApply(effect);
+        return;
+      case COMMUNICATIONS_MAIL_SEND_EFFECT_KIND:
+      case COMMUNICATIONS_CALENDAR_CREATE_EFFECT_KIND:
+        await this.handleCommunicationsApprovalEffect(effect);
         return;
       case "approval_inbox_follow_up":
         await this.handleApprovalInboxFollowUp(effect);
@@ -1749,6 +1778,25 @@ export class ApprovalEffectsService {
         approvalId: effect.approvalId,
       });
     }
+  }
+
+  /**
+   * WS2: execute one approved mail send or calendar create (or record a rejected
+   * send on its draft) through the communications executor. A
+   * `CommunicationsApprovalEffectError` fails the effect closed with its code; only an
+   * unexpected error defers for retry, which the side-effect ledger keeps exactly-once.
+   */
+  private async handleCommunicationsApprovalEffect(effect: ApprovalEffectRecord): Promise<void> {
+    await runCommunicationsApprovalEffect(effect, this.deps, {
+      workerId: this.workerId,
+      approvalEffects: this.approvalEffectRepository,
+      isEffectStillClaimed: (effectId) => this.isEffectStillClaimed(effectId),
+      deferForRetry: (error) =>
+        this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+          deliveryState: "retry_scheduled",
+          approvalId: effect.approvalId,
+        }),
+    });
   }
 
   private async handleDelegationScopeExpansionApply(effect: ApprovalEffectRecord): Promise<void> {
@@ -2032,7 +2080,13 @@ export class ApprovalEffectsService {
       }
       const resume = this.deps.resumeDelegatedScopeExpansion;
       if (!resume) throw new Error("Delegated scope resume executor is not configured.");
-      const resumed = await resume({ approvalId: effect.approvalId, delegationRunId, stepId, childTurnId, durableRunId });
+      const resumed = await resume({
+        approvalId: effect.approvalId,
+        delegationRunId,
+        stepId,
+        childTurnId,
+        durableRunId,
+      });
       const resumedStep = await this.ctx.storage.chatDelegationSteps.get(stepId);
       const stillWaitingOnSameApproval =
         resumedStep.status === "running" &&
@@ -2072,10 +2126,14 @@ export class ApprovalEffectsService {
       if (!completed) throw new Error(`Delegation scope resume effect ${effect.effectId} lost its completion lease.`);
     } catch (error) {
       if (!(await this.isEffectStillClaimed(effect.effectId))) return;
-      if (error instanceof UnverifiableDelegationInstructionsError || error instanceof StaleDelegationScopeResumeError) {
-        const reason = error instanceof UnverifiableDelegationInstructionsError
-          ? "unverifiable_delegation_instructions"
-          : "stale_delegation_scope_resume";
+      if (
+        error instanceof UnverifiableDelegationInstructionsError ||
+        error instanceof StaleDelegationScopeResumeError
+      ) {
+        const reason =
+          error instanceof UnverifiableDelegationInstructionsError
+            ? "unverifiable_delegation_instructions"
+            : "stale_delegation_scope_resume";
         await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
           lastError: error.message,
           result: {
@@ -2965,7 +3023,11 @@ export class ApprovalEffectsService {
         if (await yieldFanoutApprovalEffect(this.ctx, error, effect, this.workerId, pendingAction.actionType)) return;
         if (error instanceof RequesterMcpApprovalResumeRequiredError) {
           await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
-            result: { reason: "requester_mcp_resume_required", actionType: pendingAction.actionType, resolutionStatus: "pending" },
+            result: {
+              reason: "requester_mcp_resume_required",
+              actionType: pendingAction.actionType,
+              resolutionStatus: "pending",
+            },
           });
           return;
         }

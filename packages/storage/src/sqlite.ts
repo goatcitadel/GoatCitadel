@@ -1,6 +1,7 @@
 import { APPROVAL_EXECUTION_LINKAGE_SQLITE_SQL } from "./approval-execution-linkage-migration.js";
 import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_SQLITE_SQL } from "./approval-execution-linkage-index-repair.js";
 import { createChannelGuidedSetupSchema } from "./channel-guided-setup-schema.js";
+import { createMailDraftSchema } from "./mail-draft-schema.js";
 import { upgradeChatRoutedContextAdmissionSchema } from "./chat-routed-context-admission-schema.js";
 import { upgradeHeartbeatFeatureBindingSchema } from "./heartbeat-feature-binding-schema.js";
 import { upgradeCommitmentOccurrenceSchema } from "./commitment-occurrence-schema.js";
@@ -7459,9 +7460,10 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           }
         },
       },
+      { version: 266, name: "mail_drafts", up: createMailDraftSchema },
       // Sealed (AES-GCM) replay record for crossed external side effects; opaque to storage.
       {
-        version: 266,
+        version: 267,
         name: "external_side_effect_replay_record",
         up: (db) => {
           addColumnIfMissingIfTableExists(db, "external_side_effect_runs", "replay_record_json", "TEXT");

@@ -40,6 +40,7 @@ import {
   type MeshCapabilityActivationApprovalPayload,
   ValidationError,
 } from "@goatcitadel/contracts";
+import { isCommunicationsApprovalKind } from "./communications-approval-effect-service.js";
 import { DEVICE_ACCESS_APPROVAL_KIND } from "./device-access-helpers.js";
 import { assertChatTurnToolUseOpen, closeChatTurnToolUse, resolveChatTurnControlOwner } from "./chat-turn-control.js";
 import type { ApprovalReplayResult, ApprovalResolutionContext, ApprovalResolveResult } from "./approval-types.js";
@@ -1063,6 +1064,12 @@ async function commitStandardApprovalResolution(
     throw new ValidationError({
       message:
         "Mesh capability activation approvals bind one exact immutable request; reject and request a new activation instead of editing.",
+    });
+  }
+  if (isCommunicationsApprovalKind(current.kind) && input.decision === "edit") {
+    throw new ValidationError({
+      message:
+        "Communications approvals bind one exact hashed message or event; reject it and send a new request instead of editing.",
     });
   }
 

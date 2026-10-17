@@ -5,7 +5,10 @@ import { composeIntegrationChannelRouteDependencies } from "./gateway-route-comp
 import { composeRuntimeAdminRouteDependencies } from "./gateway-route-composition-runtime.js";
 import { composeMemoryKnowledgeRouteDependencies } from "./gateway-route-composition-memory.js";
 import { composeToolsMcpRouteDependencies } from "./gateway-route-composition-tools.js";
-import { composeSystemRouteDependencies } from "./gateway-route-composition-system.js";
+import {
+  composeCommunicationsMailDraftStore,
+  composeSystemRouteDependencies,
+} from "./gateway-route-composition-system.js";
 
 export {
   createGatewayRouteCompositionPort,
@@ -26,12 +29,15 @@ export {
 } from "./gateway-route-composition-integrations.js";
 
 export function composeGatewayRouteServices(gateway: GatewayRouteCompositionPort): GatewayRouteServices {
-  return createGatewayRouteServices({
-    ...composeChatRouteDependencies(gateway),
-    ...composeIntegrationChannelRouteDependencies(gateway),
-    ...composeRuntimeAdminRouteDependencies(gateway),
-    ...composeMemoryKnowledgeRouteDependencies(gateway),
-    ...composeToolsMcpRouteDependencies(gateway),
-    ...composeSystemRouteDependencies(gateway),
-  });
+  return {
+    ...createGatewayRouteServices({
+      ...composeChatRouteDependencies(gateway),
+      ...composeIntegrationChannelRouteDependencies(gateway),
+      ...composeRuntimeAdminRouteDependencies(gateway),
+      ...composeMemoryKnowledgeRouteDependencies(gateway),
+      ...composeToolsMcpRouteDependencies(gateway),
+      ...composeSystemRouteDependencies(gateway),
+    }),
+    mailDrafts: composeCommunicationsMailDraftStore(gateway),
+  };
 }

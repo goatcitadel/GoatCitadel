@@ -44,8 +44,8 @@ test(
 
       // The full registry (not a canonical prefix) runs the schema-shape gate.
       const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-      assert.deepEqual(migrated.appliedVersions, [212, 213]);
-      assert.equal(migrated.latestVersion, 213);
+      assert.deepEqual(migrated.appliedVersions, [212, 213, 214, 215]);
+      assert.equal(migrated.latestVersion, 215);
 
       const column = await admin.query<{ data_type: string; is_nullable: string }>(
         `SELECT data_type, is_nullable FROM information_schema.columns
@@ -123,13 +123,13 @@ test(
     try {
       await admin.query(`CREATE SCHEMA ${schema}`);
       // v2 renders from the current SQLite blueprint, so an install that predates
-      // the column is simulated by dropping it before v213.
-      await runPostgresMigrations(migrations, upTo(212));
+      // the column is simulated by dropping it before v215.
+      await runPostgresMigrations(migrations, upTo(214));
       await admin.query(`ALTER TABLE ${schema}.external_side_effect_runs DROP COLUMN replay_record_json`);
 
       const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-      assert.deepEqual(migrated.appliedVersions, [213]);
-      assert.equal(migrated.latestVersion, 213);
+      assert.deepEqual(migrated.appliedVersions, [215]);
+      assert.equal(migrated.latestVersion, 215);
 
       const column = await admin.query<{ data_type: string; is_nullable: string }>(
         `SELECT data_type, is_nullable FROM information_schema.columns
