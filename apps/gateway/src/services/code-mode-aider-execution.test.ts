@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -537,7 +538,257 @@ describe("code-mode-aider-execution", () => {
       "diff --git a/input.ts b/input.ts",
     );
   });
+
+  describe("pinned workspace seed", () => {
+    it("seeds a pinned run from the pinned commit and diffs against it", async () => {
+      const operator = await createOperatorRepo({ "src/a.ts": "export const a = 1;\n" });
+      const persisted: Array<{ filename: string; content: string }> = [];
+
+      const result = await executeCodeModeAiderAdapter({
+        ...seededInput(operator, persisted),
+        spawnCommand: vi.fn(() =>
+          fakeChild({
+            stdout: "edited\n",
+            exitCode: 0,
+            beforeClose: async () => {
+              await fs.writeFile(
+                path.join(operator.runTempRoot, "aider-live", "src", "a.ts"),
+                "export const a = 2;\n",
+                "utf8",
+              );
+            },
+          }),
+        ) as never,
+      });
+
+      expect(result).toMatchObject({ failed: false, outcome: "patch_produced" });
+      expect(result.result.aiderAdapter.envelope).toMatchObject({
+        patchArtifact: { kind: "git_patch", baseRef: operator.head, fileCount: 1 },
+      });
+      const patch = persisted.find((item) => item.filename === "aider.git.patch")?.content ?? "";
+      expect(patch).toContain("diff --git a/src/a.ts b/src/a.ts");
+      await expect(fs.stat(path.join(operator.runTempRoot, "aider-live", "input.ts"))).rejects.toThrow();
+      const patchFile = path.join(operator.root, "seeded.patch");
+      await fs.writeFile(patchFile, patch, "utf8");
+      expect(() => git(operator.repo, ["apply", "--check", patchFile])).not.toThrow();
+    });
+
+    it("seeding never touches the operator worktree", async () => {
+      const operator = await createOperatorRepo({ "src/a.ts": "export const a = 1;\n" });
+      const before = operatorSnapshot(operator.repo);
+      let mountArg = "";
+
+      await executeCodeModeAiderAdapter({
+        ...seededInput(operator, []),
+        spawnCommand: vi.fn((_executable: string, args: string[]) => {
+          mountArg = args[args.indexOf("--mount") + 1] ?? "";
+          return fakeChild({
+            exitCode: 0,
+            beforeClose: async () => {
+              await fs.writeFile(path.join(operator.runTempRoot, "aider-live", "src", "b.ts"), "export {};\n", "utf8");
+            },
+          });
+        }) as never,
+      });
+
+      expect(operatorSnapshot(operator.repo)).toEqual(before);
+      expect(mountArg).toContain(`src=${path.join(operator.runTempRoot, "aider-live")},`);
+      expect(mountArg).not.toContain("aider-baseline.git");
+      await expect(fs.stat(path.join(operator.runTempRoot, "aider-baseline.git"))).resolves.toBeTruthy();
+    });
+
+    it("ignores aider.patch, the request file and .aider files in seeded runs", async () => {
+      const operator = await createOperatorRepo({ "src/a.ts": "export const a = 1;\n" });
+      const persisted: Array<{ filename: string; content: string }> = [];
+      const liveRoot = path.join(operator.runTempRoot, "aider-live");
+
+      const result = await executeCodeModeAiderAdapter({
+        ...seededInput(operator, persisted),
+        spawnCommand: vi.fn(() =>
+          fakeChild({
+            exitCode: 0,
+            beforeClose: async () => {
+              await fs.writeFile(path.join(liveRoot, "aider.patch"), "diff --git a/x b/x\n", "utf8");
+              await fs.writeFile(path.join(liveRoot, "aider.git.patch"), "diff --git a/y b/y\n", "utf8");
+              await fs.writeFile(path.join(liveRoot, "aider", "request.md"), "rewritten\n", "utf8");
+              await fs.writeFile(path.join(liveRoot, ".aider.chat.history.md"), "history\n", "utf8");
+              await fs.mkdir(path.join(liveRoot, ".aider.tags.cache.v3"), { recursive: true });
+              await fs.writeFile(path.join(liveRoot, ".aider.tags.cache.v3", "cache.db"), "cache\n", "utf8");
+            },
+          }),
+        ) as never,
+      });
+
+      expect(result).toMatchObject({ failed: false, outcome: "no_changes" });
+      expect(persisted.map((item) => item.filename)).not.toContain("aider.git.patch");
+      expect(persisted.map((item) => item.filename)).not.toContain("aider.patch");
+    });
+
+    it("refuses to seed when the pinned commit is unavailable", async () => {
+      const operator = await createOperatorRepo({ "src/a.ts": "export const a = 1;\n" });
+      const spawnCommand = vi.fn();
+      const beforeDispatch = vi.fn(async () => undefined);
+      const input = seededInput(operator, []);
+
+      await expect(
+        executeCodeModeAiderAdapter({
+          ...input,
+          workspaceSeed: { ...input.workspaceSeed, baseCommit: "f".repeat(40) },
+          beforeDispatch,
+          spawnCommand: spawnCommand as never,
+        }),
+      ).rejects.toThrow(/pinned commit/iu);
+      expect(beforeDispatch).not.toHaveBeenCalled();
+      expect(spawnCommand).not.toHaveBeenCalled();
+    });
+
+    it("refuses to seed over a tracked aider/request.md", async () => {
+      const operator = await createOperatorRepo({ "aider/request.md": "tracked\n", "src/a.ts": "export {};\n" });
+      const spawnCommand = vi.fn();
+
+      await expect(
+        executeCodeModeAiderAdapter({ ...seededInput(operator, []), spawnCommand: spawnCommand as never }),
+      ).rejects.toThrow(/reserved path aider\/request\.md/iu);
+      expect(spawnCommand).not.toHaveBeenCalled();
+    });
+
+    it("records a patch capture failure without a patch", async () => {
+      const operator = await createOperatorRepo({ "src/a.ts": "export const a = 1;\n" });
+      const persisted: Array<{ filename: string; content: string }> = [];
+
+      const result = await executeCodeModeAiderAdapter({
+        ...seededInput(operator, persisted),
+        spawnCommand: vi.fn(() =>
+          fakeChild({
+            exitCode: 0,
+            beforeClose: async () => {
+              await fs.writeFile(path.join(operator.runTempRoot, "aider-live", "src", "a.ts"), "changed\n", "utf8");
+              await fs.rm(path.join(operator.runTempRoot, "aider-baseline.git"), { recursive: true, force: true });
+            },
+          }),
+        ) as never,
+      });
+
+      expect(result).toMatchObject({ failed: true, outcome: "failed", errorCode: "AIDER_PATCH_CAPTURE_FAILED" });
+      expect(persisted.map((item) => item.filename)).not.toContain("aider.git.patch");
+    });
+
+    it("fails closed when Aider plants a nested .git entry in a seeded run", async () => {
+      const operator = await createOperatorRepo({ "src/a.ts": "export const a = 1;\n" });
+      const persisted: Array<{ filename: string; content: string }> = [];
+      const before = operatorSnapshot(operator.repo);
+
+      const result = await executeCodeModeAiderAdapter({
+        ...seededInput(operator, persisted),
+        spawnCommand: vi.fn(() =>
+          fakeChild({
+            exitCode: 0,
+            beforeClose: async () => {
+              await fs.writeFile(path.join(operator.runTempRoot, "aider-live", "src", "a.ts"), "changed\n", "utf8");
+              await fs.writeFile(
+                path.join(operator.runTempRoot, "aider-live", "src", ".git"),
+                `gitdir: ${path.join(operator.repo, ".git")}\n`,
+                "utf8",
+              );
+            },
+          }),
+        ) as never,
+      });
+
+      expect(result).toMatchObject({ failed: true, outcome: "failed", errorCode: "AIDER_PATCH_CAPTURE_FAILED" });
+      expect(result.error).toContain("nested Git entry at src/.git");
+      expect(persisted.map((item) => item.filename)).not.toContain("aider.git.patch");
+      expect(operatorSnapshot(operator.repo)).toEqual(before);
+    });
+
+    it("unpinned runs keep the synthetic input workspace", async () => {
+      const runTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-unpinned-"));
+      tempRoots.push(runTempRoot);
+
+      await executeCodeModeAiderAdapter({
+        runId: "code-run-aider-unpinned",
+        runTempRoot,
+        language: "typescript",
+        source: "return { ok: true };",
+        requestMarkdown: "Unpinned.",
+        aiderAdapter: { enabled: true, image: "ghcr.io/goatcitadel/aider-adapter:preview" },
+        dockerBackend: { enabled: true, image: "ghcr.io/goatcitadel/code-mode-runner:preview" },
+        persister: fakePersister([]),
+        spawnCommand: vi.fn(() => fakeChild({ exitCode: 0 })) as never,
+      });
+
+      await expect(fs.readFile(path.join(runTempRoot, "aider-live", "input.ts"), "utf8")).resolves.toBe(
+        "return { ok: true };",
+      );
+      await expect(fs.stat(path.join(runTempRoot, "aider-baseline.git"))).rejects.toThrow();
+    });
+  });
 });
+
+async function createOperatorRepo(files: Record<string, string>) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-seeded-"));
+  tempRoots.push(root);
+  const repo = path.join(root, "repo");
+  await fs.mkdir(repo);
+  git(repo, ["init", "--quiet"]);
+  git(repo, ["config", "user.name", "Seed Test"]);
+  git(repo, ["config", "user.email", "seed@example.invalid"]);
+  git(repo, ["config", "core.autocrlf", "false"]);
+  git(repo, ["config", "commit.gpgsign", "false"]);
+  for (const [relPath, content] of Object.entries(files)) {
+    const target = path.join(repo, ...relPath.split("/"));
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, content, "utf8");
+  }
+  git(repo, ["add", "-A"]);
+  git(repo, ["commit", "--quiet", "-m", "seed"]);
+  return {
+    root,
+    repo: await fs.realpath(repo),
+    head: git(repo, ["rev-parse", "HEAD"]).trim(),
+    runTempRoot: path.join(root, "run-temp"),
+  };
+}
+
+function seededInput(
+  operator: Awaited<ReturnType<typeof createOperatorRepo>>,
+  persisted: Array<{ filename: string; content: string }>,
+) {
+  return {
+    runId: "code-run-aider-seeded",
+    runTempRoot: operator.runTempRoot,
+    language: "typescript" as const,
+    source: "return { ok: true };",
+    requestMarkdown: "Edit the pinned workspace.",
+    aiderAdapter: { enabled: true, image: "ghcr.io/goatcitadel/aider-adapter:preview" },
+    dockerBackend: { enabled: true, image: "ghcr.io/goatcitadel/code-mode-runner:preview" },
+    persister: fakePersister(persisted),
+    workspaceSeed: {
+      worktreePath: operator.repo,
+      baseCommit: operator.head,
+      pin: {
+        version: 1 as const,
+        sessionId: "session-a",
+        worktreeIdentityHash: "a".repeat(64),
+        worktreeHead: operator.head,
+        worktreeStateHash: "b".repeat(64),
+        capturedAt: "2026-10-16T12:00:00.000Z",
+      },
+    },
+  };
+}
+
+function operatorSnapshot(repo: string) {
+  return {
+    head: git(repo, ["rev-parse", "HEAD"]),
+    status: git(repo, ["status", "--porcelain=v1", "--untracked-files=all"]),
+    objects: git(repo, ["count-objects", "-v"]),
+  };
+}
+
+function git(cwd: string, args: string[]): string {
+  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", windowsHide: true });
+}
 
 function fakePersister(persisted: Array<{ filename: string; content: string }>) {
   const makeArtifact = (filename: string, content: string, mimeType: string): CapabilityArtifactRecord => ({

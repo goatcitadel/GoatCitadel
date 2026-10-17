@@ -455,8 +455,8 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
           });
         }
         const selected = detail.versions.find((item) => item.versionId === detail.latestVersion?.versionId);
-        const workspaceId = await resolveCandidateLifecycleWorkspace(
-          detail, selected, (runId) => fastify.services.capabilities.getCodeModeRun(runId),
+        const workspaceId = await resolveCandidateLifecycleWorkspace(detail, selected, (runId) =>
+          fastify.services.capabilities.getCodeModeRun(runId),
         );
         const proposal = detail.relatedProposals.find((item) => item.candidateId === detail.candidateId);
         if (!proposal) {
@@ -525,8 +525,8 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
           ? detail.versions.find((item) => item.versionId === body.data.versionId)
           : (detail.activeVersion ?? detail.latestVersion);
         if (!selected) throw new SemanticValidationError("The capability candidate has no version to revoke.");
-        const workspaceId = await resolveCandidateLifecycleWorkspace(
-          detail, selected, (runId) => fastify.services.capabilities.getCodeModeRun(runId),
+        const workspaceId = await resolveCandidateLifecycleWorkspace(detail, selected, (runId) =>
+          fastify.services.capabilities.getCodeModeRun(runId),
         );
         const proposal = detail.relatedProposals.find((item) => item.candidateId === detail.candidateId);
         if (!proposal) throw new SemanticValidationError("The capability candidate has no linked proposal.");
@@ -595,8 +595,8 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
             message: "The requested rollback target is no longer part of this capability candidate.",
           });
         }
-        const workspaceId = await resolveCandidateLifecycleWorkspace(
-          detail, selected, (runId) => fastify.services.capabilities.getCodeModeRun(runId),
+        const workspaceId = await resolveCandidateLifecycleWorkspace(detail, selected, (runId) =>
+          fastify.services.capabilities.getCodeModeRun(runId),
         );
         const proposal = detail.relatedProposals.find((item) => item.candidateId === detail.candidateId);
         if (!proposal) throw new SemanticValidationError("The capability candidate has no linked proposal.");
@@ -740,6 +740,38 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/code-mode/runs/:runId/promote", async (request, reply) => {
+    const params = runParamsSchema.safeParse(request.params);
+    const query = runDetailQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(
+        projectCapabilityPublicValue(
+          await fastify.services.capabilities.requestCodeModeAiderPromotion(
+            params.data.runId,
+            {
+              ...query.data,
+              workspaceId: query.data.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            },
+            request.authActorId,
+          ),
+        ),
+      );
+    } catch (error) {
+      if (error instanceof ConflictError) {
+        return reply.code(409).send({ error: error.message, details: error.details });
+      }
+      return sendRouteError(reply, error, request.log);
     }
   });
 

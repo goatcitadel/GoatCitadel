@@ -138,6 +138,7 @@ import {
   computeFrozenChatTurnAdmissionMaterialSha256,
   reconstructAdmittedChatTurnRequest,
 } from "./session-control-service.js";
+import { isCodeModePendingActionType } from "./code-mode-pending-action-types.js";
 import { readToolDomainExecutionFailure, type ToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
 import type { SharedHostLifecycleAdmissionPort, SharedHostWorkReservation } from "./shared-host-lifecycle-service.js";
 import {
@@ -3014,7 +3015,7 @@ export class ApprovalEffectsService {
     }
 
     let executedAction: ToolInvokeResult | undefined;
-    if (pendingAction.actionType === "code_mode.run") {
+    if (isCodeModePendingActionType(pendingAction.actionType)) {
       executedAction = await this.deps.executeCodeModePendingApproval(effect.approvalId, signal);
     } else {
       try {

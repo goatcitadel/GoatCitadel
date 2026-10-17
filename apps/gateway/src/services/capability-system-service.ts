@@ -32,8 +32,11 @@ import type {
   ChatMessageRecord,
   ChatSessionWorkbenchCommandRunRequest,
   ChatSessionWorkbenchCommandRunResponse,
+  ChatSessionWorkbenchPatchApplyResponse,
   ChatSessionWorkbenchRecord,
   ChatTurnTraceRecord,
+  CodeModeAiderPromotionRequestResponse,
+  CodeModeAiderWorkspacePin,
   CodeModeAutonomousActivationEvidence,
   CodeModeLanguage,
   CodeModeSandboxMetadata,
@@ -74,10 +77,8 @@ import {
   ValidationError,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
-import {
-  resolveBundledSkillLockEntry,
-  type BundledSkillLockEntry,
-} from "@goatcitadel/skills";
+import { resolveBundledSkillLockEntry, type BundledSkillLockEntry } from "@goatcitadel/skills";
+import { logger } from "@goatcitadel/gateway-core";
 import {
   buildCapabilityLifecycleApprovalBinding,
   buildCapabilityLifecycleApprovalPayload,
@@ -106,12 +107,26 @@ import type {
   FeatureFlagsConfig,
 } from "../config.js";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
+import type { ChatSessionWorkbenchPatchApplyInput } from "./chat-workbench-service.js";
 import { trackBackgroundTask } from "./background-scheduler.js";
 import {
   CodeModeExecutionBackendUnavailableError,
   createCodeModeExecutionBackendRunner,
 } from "./code-mode-execution-backend-runner.js";
-import { parseCodeModeAiderAdapterResultEnvelope } from "./code-mode-aider-result-contract.js";
+import {
+  parseCodeModeAiderAdapterResultEnvelope,
+  parseCodeModeAiderWorkspacePin,
+} from "./code-mode-aider-result-contract.js";
+import {
+  captureCodeModeAiderWorkspacePin,
+  CodeModeAiderWorkspaceRefusal,
+  resolveCodeModeAiderWorkspaceSeed,
+} from "./code-mode-aider-workspace-pin.js";
+import {
+  CODE_MODE_AIDER_PROMOTE_ACTION_TYPE,
+  executeApprovedCodeModeAiderPromotion,
+  requestCodeModeAiderPromotion,
+} from "./code-mode-aider-promotion.js";
 import {
   CODE_MODE_AIDER_ADAPTER_ID,
   buildCodeModeExecutionBackends,
@@ -141,6 +156,7 @@ import {
   isSkillCallable,
 } from "./candidate-skill-catalog-service.js";
 
+const log = logger.child("capability-system");
 const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
 const CODE_MODE_WRAPPER_SETTLE_TIMEOUT_MS = 500;
 const CODE_MODE_OUTPUT_CAPTURE_LIMIT_BYTES = 64 * 1024;
@@ -229,6 +245,10 @@ export interface CapabilitySystemServiceOptions {
     sessionId: string,
     input: ChatSessionWorkbenchCommandRunRequest,
   ) => Promise<ChatSessionWorkbenchCommandRunResponse>;
+  applyChatSessionWorkbenchPatch?: (
+    sessionId: string,
+    input: ChatSessionWorkbenchPatchApplyInput,
+  ) => Promise<ChatSessionWorkbenchPatchApplyResponse>;
   flushTranscriptOutbox?: () => Promise<number>;
   onVerifiedCodeModeRun?: (response: CodeModeRunVerificationResponse) => void | Promise<void>;
   /** Durable aggregates using a revoked grant must request child cancellation immediately. */
@@ -1596,6 +1616,16 @@ export class CapabilitySystemService {
     return response;
   }
 
+  /** Requests the separate `code_mode.aider_promote` approval for a completed, workspace-pinned Aider patch. */
+  public async requestCodeModeAiderPromotion(
+    runId: string,
+    scope: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
+    operatorId?: string,
+  ): Promise<CodeModeAiderPromotionRequestResponse> {
+    const run = await this.getCodeModeRunInScope(runId, scope);
+    return await requestCodeModeAiderPromotion({ ...this.options, artifactRoot: this.artifactRoot }, run, operatorId);
+  }
+
   public async listCodeModeRunVerificationEvidence(
     runId: string,
     scope: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
@@ -1814,7 +1844,6 @@ export class CapabilitySystemService {
         throw new ValidationError({ message: error instanceof Error ? error.message : String(error) });
       }
     }
-    const runInputHash = hashCodeModeInputBinding(runInput, normalizedAiderRequest, frozenAiderExecution);
     const originSurface = normalizeCodeModeOriginSurface(request.originSurface);
     const sessionId = request.sessionId?.trim() || undefined;
     const turnId = request.turnId?.trim() || undefined;
@@ -1838,6 +1867,16 @@ export class CapabilitySystemService {
         });
       }
     }
+    const aiderWorkspacePin =
+      normalizedAiderRequest && sessionId
+        ? await captureAiderWorkspacePinOrNone(this.options, { sessionId, runId })
+        : undefined;
+    const runInputHash = hashCodeModeInputBinding(
+      runInput,
+      normalizedAiderRequest,
+      frozenAiderExecution,
+      aiderWorkspacePin,
+    );
     const sessionWorkspaceId = chatSessionMeta?.workspaceId;
     const workspaceId = resolveCodeModeWorkspaceId({
       sessionId,
@@ -1877,6 +1916,7 @@ export class CapabilitySystemService {
       codeModeInputHash: runInputHash,
       ...(normalizedAiderRequest ? { codeModeAiderRequest: normalizedAiderRequest } : {}),
       ...(frozenAiderExecution ? { codeModeAiderExecution: frozenAiderExecution } : {}),
+      ...(aiderWorkspacePin ? { codeModeAiderWorkspacePin: aiderWorkspacePin } : {}),
       codeModeAutonomousActivation: autonomousActivation,
     };
     const policySnapshotHash = sha256Text(JSON.stringify(policySnapshot));
@@ -1923,6 +1963,7 @@ export class CapabilitySystemService {
       executionBackend,
       aiderRequest: normalizedAiderRequest,
       aiderExecution: frozenAiderExecution,
+      aiderWorkspacePin,
       autonomousActivation,
     });
     const approvalLinkage = buildCodeModeApprovalLinkage({
@@ -2354,6 +2395,13 @@ export class CapabilitySystemService {
     signal?: AbortSignal,
   ): Promise<ToolInvokeResult | undefined> {
     const pending = await this.options.storage.pendingApprovalActions.find(approvalId);
+    if (pending?.resolutionStatus === "pending" && pending.actionType === CODE_MODE_AIDER_PROMOTE_ACTION_TYPE) {
+      return await executeApprovedCodeModeAiderPromotion(
+        { ...this.options, artifactRoot: this.artifactRoot },
+        approvalId,
+        pending,
+      );
+    }
     if (!pending || pending.resolutionStatus !== "pending" || pending.actionType !== "code_mode.run") {
       return await this.terminalizeCodeModeRunForMissingPendingAction(approvalId);
     }
@@ -2718,6 +2766,8 @@ export class CapabilitySystemService {
               source,
               pendingAiderRequest: inputBinding.aiderRequest,
               frozenAiderExecution: inputBinding.aiderExecution,
+              aiderWorkspacePin: inputBinding.aiderWorkspacePin,
+              sessionId: finalRun.sessionId,
               beforeExecutionDispatch,
               onExecutionDispatchFailed,
               signal,
@@ -3893,6 +3943,8 @@ export class CapabilitySystemService {
     source: string;
     pendingAiderRequest: unknown;
     frozenAiderExecution?: FrozenCodeModeAiderExecution;
+    aiderWorkspacePin?: CodeModeAiderWorkspacePin;
+    sessionId?: string;
     beforeExecutionDispatch: () => Promise<void>;
     onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
@@ -3950,6 +4002,13 @@ export class CapabilitySystemService {
     }
     let dispatchBoundaryCrossed = false;
     try {
+      // A pinned run edits the pinned commit; resolution fails closed before dispatch on any pin drift.
+      const workspaceSeed = input.aiderWorkspacePin
+        ? await resolveCodeModeAiderWorkspaceSeed(this.options, input.aiderWorkspacePin, {
+            sessionId: input.sessionId,
+            runId: input.runId,
+          })
+        : undefined;
       const execution = await backendRunner.executeAiderAdapter({
         runId: input.runId,
         runTempRoot,
@@ -3957,6 +4016,7 @@ export class CapabilitySystemService {
         source: input.source,
         requestMarkdown: aider.requestMarkdown,
         repositoryRootRelPath: aider.repositoryRootRelPath,
+        ...(workspaceSeed ? { workspaceSeed } : {}),
         model: aider.model,
         persister: this.buildAiderArtifactPersister(),
         beforeDispatch: async () => {
@@ -3979,6 +4039,10 @@ export class CapabilitySystemService {
         stderr: toCaptureState(execution.stderr),
       };
     } catch (error) {
+      // A deterministic pin/seed refusal would repeat on every retry: rethrow it so the run terminalizes.
+      if (!dispatchBoundaryCrossed && error instanceof CodeModeAiderWorkspaceRefusal) {
+        throw error;
+      }
       if (!dispatchBoundaryCrossed) {
         throw new CodeModeExecutionPreDispatchFailure(
           `Aider Code Mode execution failed before dispatch: ${error instanceof Error ? error.message : String(error)}`,
@@ -4969,7 +5033,7 @@ function selectAiderEnvelopeArtifact(
   label: string,
 ): CapabilityArtifactRecord {
   const adapter = readAiderAdapterResult(run);
-  const envelope = parseCodeModeAiderAdapterResultEnvelope(adapter.envelope);
+  const envelope = parseCodeModeAiderAdapterResultEnvelope(adapter.envelope, { promotion: adapter.promotion });
   if (key === "patchArtifact") {
     return readCapabilityArtifactRecord(envelope.patchArtifact?.artifact, run.runId, label);
   }
@@ -5815,6 +5879,7 @@ function readFrozenCodeModeInputBinding(
   input: Record<string, unknown>;
   aiderRequest?: ReturnType<typeof readPendingAiderRunRequest>;
   aiderExecution?: FrozenCodeModeAiderExecution;
+  aiderWorkspacePin?: CodeModeAiderWorkspacePin;
 } {
   const frozenInput = isRecord(policySnapshot.codeModeInput) ? policySnapshot.codeModeInput : undefined;
   const runInput = frozenInput ?? (isRecord(legacyPendingInput) ? legacyPendingInput : {});
@@ -5836,11 +5901,22 @@ function readFrozenCodeModeInputBinding(
   const aiderExecution = hasFrozenAiderExecution
     ? readFrozenCodeModeAiderExecution(policySnapshot.codeModeAiderExecution)
     : undefined;
+  const hasFrozenAiderWorkspacePin = Object.prototype.hasOwnProperty.call(policySnapshot, "codeModeAiderWorkspacePin");
+  if (hasFrozenAiderWorkspacePin && !hasFrozenAiderRequest) {
+    throw new ConflictError({
+      message:
+        "Code Mode Aider workspace pin snapshot is invalid; refusing to execute run. The pin is not bound to a frozen Aider request.",
+    });
+  }
+  const aiderWorkspacePin = hasFrozenAiderWorkspacePin
+    ? readFrozenCodeModeAiderWorkspacePin(policySnapshot.codeModeAiderWorkspacePin)
+    : undefined;
   const inputHash = asOptionalString(policySnapshot.codeModeInputHash);
   const computedInputHash = hashCodeModeInputBinding(
     runInput,
     hasFrozenAiderRequest ? aiderRequest : undefined,
     hasFrozenAiderExecution ? aiderExecution : undefined,
+    aiderWorkspacePin,
   );
   if (inputHash && computedInputHash !== inputHash) {
     throw new ConflictError({ message: "Code Mode input snapshot hash mismatch; refusing to execute run." });
@@ -5848,15 +5924,56 @@ function readFrozenCodeModeInputBinding(
   if (expectedInputHash && computedInputHash !== expectedInputHash) {
     throw new ConflictError({ message: "Code Mode stored input hash mismatch; refusing to execute run." });
   }
-  return { input: runInput, aiderRequest, aiderExecution };
+  return { input: runInput, aiderRequest, aiderExecution, ...(aiderWorkspacePin ? { aiderWorkspacePin } : {}) };
+}
+
+function readFrozenCodeModeAiderWorkspacePin(value: unknown): CodeModeAiderWorkspacePin {
+  try {
+    return parseCodeModeAiderWorkspacePin(value);
+  } catch (error) {
+    throw new ConflictError({
+      message: `Code Mode Aider workspace pin snapshot is invalid; refusing to execute run. ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
+  }
+}
+
+const AIDER_WORKSPACE_PIN_WARNING_MAX_CHARS = 240;
+
+/**
+ * Only an explicit ready + clean capture yields a pin. A failed workbench read must not block a plain (unpinned,
+ * never-promotable) Aider run, so it degrades to no pin with a bounded warning instead of failing run creation.
+ */
+async function captureAiderWorkspacePinOrNone(
+  deps: Parameters<typeof captureCodeModeAiderWorkspacePin>[0],
+  binding: { sessionId: string; runId: string },
+): Promise<CodeModeAiderWorkspacePin | undefined> {
+  try {
+    return await captureCodeModeAiderWorkspacePin(deps, binding);
+  } catch (error) {
+    const detail = (error instanceof Error ? error.message : String(error)).slice(
+      0,
+      AIDER_WORKSPACE_PIN_WARNING_MAX_CHARS,
+    );
+    log.warn("Aider run created without a workspace pin", { runId: binding.runId, detail });
+    return undefined;
+  }
 }
 
 function hashCodeModeInputBinding(
   input: Record<string, unknown>,
   aiderRequest?: ReturnType<typeof readPendingAiderRunRequest>,
   aiderExecution?: FrozenCodeModeAiderExecution,
+  aiderWorkspacePin?: CodeModeAiderWorkspacePin,
 ): string {
-  return sha256Text(JSON.stringify(aiderRequest ? { input, aiderRequest, aiderExecution } : input));
+  return sha256Text(
+    JSON.stringify(
+      aiderRequest
+        ? { input, aiderRequest, aiderExecution, ...(aiderWorkspacePin ? { aiderWorkspacePin } : {}) }
+        : input,
+    ),
+  );
 }
 
 function buildFrozenCodeModeAiderExecution(
@@ -6136,6 +6253,7 @@ function buildCodeModeApprovalPayload(input: {
     model?: string;
   };
   aiderExecution?: FrozenCodeModeAiderExecution;
+  aiderWorkspacePin?: CodeModeAiderWorkspacePin;
   autonomousActivation?: CodeModeAutonomousActivationEvidence;
   permissionProfileId?: string;
   permissionProfileLabel?: string;
@@ -6163,6 +6281,14 @@ function buildCodeModeApprovalPayload(input: {
     executionBackend: input.executionBackend,
     aiderRequest: input.aiderRequest,
     aiderExecution: input.aiderExecution,
+    ...(input.aiderWorkspacePin
+      ? {
+          aiderWorkspacePin: {
+            worktreeHead: input.aiderWorkspacePin.worktreeHead,
+            sessionId: input.aiderWorkspacePin.sessionId,
+          },
+        }
+      : {}),
     autonomousActivation: input.autonomousActivation,
     permissionProfileId: input.permissionProfileId,
     permissionProfileLabel: input.permissionProfileLabel,
@@ -6813,6 +6939,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export const __internal = {
+  log,
   createMinimalSyntheticEnv,
   createCodeModeChildStreamError,
   normalizeCodeModeIpcError,

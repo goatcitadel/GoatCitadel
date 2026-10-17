@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { ConflictError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import { capabilitiesRoutes } from "./capabilities.js";
 
 describe("capabilities routes", () => {
@@ -276,6 +276,14 @@ describe("capabilities routes", () => {
             scope,
             operatorId,
           },
+        }),
+      ),
+      requestCodeModeAiderPromotion: vi.fn(
+        async (runId: string, _scope: Record<string, unknown>, _operatorId?: string) => ({
+          runId,
+          status: "approval_pending",
+          approvalId: "approval-promote-1",
+          expiresAt: "2026-04-10T00:15:00.000Z",
         }),
       ),
       listCodeModeRunVerificationEvidence: vi.fn(
@@ -890,39 +898,86 @@ describe("capabilities routes", () => {
     });
   });
 
-  it.each(["promote", "revoke", "rollback"])("binds %s to a non-default captured version and rejects stale/foreign linkage", async action => {
-    const version = { candidateId: "captured", versionId: "captured-version", workspaceId: "captured-workspace", sourceKind: "workflow_capture" };
-    const detail = { candidateId: "captured", revision: 3, latestVersion: version, activeVersion: undefined,
-      versions: [version], relatedProposals: [{ proposalId: "captured-proposal", candidateId: "captured" }], activationBlocked: true };
-    const create = vi.fn(async (input: unknown) => input);
-    const direct = vi.fn();
-    app = Fastify();
-    app.decorateRequest("authActorId", "authenticated-operator");
-    app.decorate("services", { capabilities: {
-      getCapabilityCandidateDetail: vi.fn(async () => detail), getCodeModeRun: vi.fn(),
-      promoteCapabilityCandidate: direct, revokeCapabilityCandidate: direct, rollbackCapabilityCandidate: direct,
-    }, evolution: { isEnabled: vi.fn(async () => true), create } } as never);
-    await app.register(capabilitiesRoutes);
-    const selection = action === "rollback" ? { targetVersionId: version.versionId } : {};
-    const response = await app.inject({ method: "POST", url: `/api/v1/capabilities/candidates/captured/${action}`,
-      payload: { expectedRevision: 3, ...selection, workspaceId: "client-forged-scope", actorId: "client-forged-actor" } });
-    expect(response.statusCode, response.body).toBe(202);
-    expect(create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      actor: expect.objectContaining({ workspaceId: "captured-workspace", actorId: "authenticated-operator" }),
-      request: { kind: "capability_candidate", proposalId: "captured-proposal", action: action === "promote" ? "activate" : action, versionId: version.versionId },
-      expectedTargetRevision: 3,
-    }));
-    const stale = await app.inject({ method: "POST", url: `/api/v1/capabilities/candidates/captured/${action}`, payload: { expectedRevision: 2, ...selection } });
-    expect(stale.statusCode).toBe(409);
-    const foreign = await app.inject({ method: "POST", url: `/api/v1/capabilities/candidates/captured/${action}`,
-      payload: { expectedRevision: 3, [action === "rollback" ? "targetVersionId" : "versionId"]: "foreign" } });
-    expect(foreign.statusCode).toBe(action === "revoke" ? 422 : 409);
-    detail.relatedProposals[0]!.candidateId = "foreign";
-    const unlinked = await app.inject({ method: "POST", url: `/api/v1/capabilities/candidates/captured/${action}`, payload: { expectedRevision: 3, ...selection } });
-    expect(unlinked.statusCode).toBe(422);
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(direct).not.toHaveBeenCalled();
-  });
+  it.each(["promote", "revoke", "rollback"])(
+    "binds %s to a non-default captured version and rejects stale/foreign linkage",
+    async (action) => {
+      const version = {
+        candidateId: "captured",
+        versionId: "captured-version",
+        workspaceId: "captured-workspace",
+        sourceKind: "workflow_capture",
+      };
+      const detail = {
+        candidateId: "captured",
+        revision: 3,
+        latestVersion: version,
+        activeVersion: undefined,
+        versions: [version],
+        relatedProposals: [{ proposalId: "captured-proposal", candidateId: "captured" }],
+        activationBlocked: true,
+      };
+      const create = vi.fn(async (input: unknown) => input);
+      const direct = vi.fn();
+      app = Fastify();
+      app.decorateRequest("authActorId", "authenticated-operator");
+      app.decorate("services", {
+        capabilities: {
+          getCapabilityCandidateDetail: vi.fn(async () => detail),
+          getCodeModeRun: vi.fn(),
+          promoteCapabilityCandidate: direct,
+          revokeCapabilityCandidate: direct,
+          rollbackCapabilityCandidate: direct,
+        },
+        evolution: { isEnabled: vi.fn(async () => true), create },
+      } as never);
+      await app.register(capabilitiesRoutes);
+      const selection = action === "rollback" ? { targetVersionId: version.versionId } : {};
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/capabilities/candidates/captured/${action}`,
+        payload: {
+          expectedRevision: 3,
+          ...selection,
+          workspaceId: "client-forged-scope",
+          actorId: "client-forged-actor",
+        },
+      });
+      expect(response.statusCode, response.body).toBe(202);
+      expect(create).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          actor: expect.objectContaining({ workspaceId: "captured-workspace", actorId: "authenticated-operator" }),
+          request: {
+            kind: "capability_candidate",
+            proposalId: "captured-proposal",
+            action: action === "promote" ? "activate" : action,
+            versionId: version.versionId,
+          },
+          expectedTargetRevision: 3,
+        }),
+      );
+      const stale = await app.inject({
+        method: "POST",
+        url: `/api/v1/capabilities/candidates/captured/${action}`,
+        payload: { expectedRevision: 2, ...selection },
+      });
+      expect(stale.statusCode).toBe(409);
+      const foreign = await app.inject({
+        method: "POST",
+        url: `/api/v1/capabilities/candidates/captured/${action}`,
+        payload: { expectedRevision: 3, [action === "rollback" ? "targetVersionId" : "versionId"]: "foreign" },
+      });
+      expect(foreign.statusCode).toBe(action === "revoke" ? 422 : 409);
+      detail.relatedProposals[0]!.candidateId = "foreign";
+      const unlinked = await app.inject({
+        method: "POST",
+        url: `/api/v1/capabilities/candidates/captured/${action}`,
+        payload: { expectedRevision: 3, ...selection },
+      });
+      expect(unlinked.statusCode).toBe(422);
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(direct).not.toHaveBeenCalled();
+    },
+  );
 
   it("requires candidate revisions and returns structured stale-write conflicts", async () => {
     const promoteCapabilityCandidate = vi.fn(() => {
@@ -1048,6 +1103,66 @@ describe("capabilities routes", () => {
       run: { runId: "code-run-1", verification: { status: "verified" } },
       evidence: { evidenceId: "proof-1", status: "verified" },
     });
+  });
+
+  it("POST /api/v1/code-mode/runs/:runId/promote requests promotion in scope", async () => {
+    const service = await registerCapabilitiesService();
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/code-mode/runs/code-run-1/promote?sessionId=session-1&turnId=turn-1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(service.requestCodeModeAiderPromotion).toHaveBeenCalledWith(
+      "code-run-1",
+      { workspaceId: "default", sessionId: "session-1", turnId: "turn-1" },
+      "operator-test",
+    );
+    expect(response.json()).toEqual({
+      runId: "code-run-1",
+      status: "approval_pending",
+      approvalId: "approval-promote-1",
+      expiresAt: "2026-04-10T00:15:00.000Z",
+    });
+  });
+
+  it("maps Aider promotion refusals to 409, typed errors to their status, and unexpected failures to 500", async () => {
+    const service = await registerCapabilitiesService({
+      requestCodeModeAiderPromotion: vi
+        .fn()
+        .mockRejectedValueOnce(
+          new ConflictError({
+            message: "Aider run is not pinned.",
+            details: { reason: "not_pinned", runId: "code-run-1" },
+          }),
+        )
+        .mockRejectedValueOnce(new NotFoundError({ entity: "code mode run", id: "code-run-2" }))
+        .mockRejectedValueOnce(new Error("artifact store failed at an internal path")),
+    });
+
+    const refused = await app!.inject({
+      method: "POST",
+      url: "/api/v1/code-mode/runs/code-run-1/promote?workspaceId=workspace-1",
+    });
+    const missing = await app!.inject({ method: "POST", url: "/api/v1/code-mode/runs/code-run-2/promote" });
+    const unexpected = await app!.inject({ method: "POST", url: "/api/v1/code-mode/runs/code-run-3/promote" });
+
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toEqual({
+      error: "Aider run is not pinned.",
+      details: { reason: "not_pinned", runId: "code-run-1" },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(unexpected.statusCode).toBe(500);
+    expect(unexpected.json()).toEqual({ error: "Internal server error" });
+    expect(unexpected.body).not.toContain("internal path");
+    expect(service.requestCodeModeAiderPromotion).toHaveBeenNthCalledWith(
+      1,
+      "code-run-1",
+      { workspaceId: "workspace-1" },
+      "operator-test",
+    );
   });
 
   it("rejects arbitrary Code Mode verification commands", async () => {

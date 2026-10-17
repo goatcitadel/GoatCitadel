@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,7 @@ import type {
   CapabilityCatalogSnapshotRecord,
   CandidateSkillVersionRecord,
   ChatMessageRecord,
+  ChatSessionWorkbenchRecord,
   CodeModeSandboxMetadata,
   CodeModeRunRecord,
   LoadedSkill,
@@ -905,6 +907,134 @@ describe("CapabilitySystemService", () => {
     });
   });
 
+  it("reads promoted Aider runs through the envelope validator", async () => {
+    const harness = await createHarness({ sandboxConfig: { required: false, bestEffortHostEnabled: false } });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { run: 'aider-promoted' };",
+      originSurface: "code",
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+    });
+    const fixture = await createPromotableAiderResult(harness.rootDir, run.runId);
+    const scope = { sessionId: "session-a", workspaceId: "workspace-a" };
+    const promotedEnvelope = {
+      ...fixture.envelope,
+      replay: { replaySafe: false, policy: "promoted", reason: "Patch promoted under approval approval-promote-1." },
+    };
+    const promotion = {
+      version: 1,
+      status: "promoted",
+      approvalId: "approval-promote-1",
+      patchArtifactId: fixture.patchArtifact.artifactId,
+      patchSha256: fixture.patchArtifact.sha256,
+      pin: {
+        version: 1,
+        sessionId: "session-a",
+        worktreeIdentityHash: "c".repeat(64),
+        worktreeHead: "d".repeat(40),
+        worktreeStateHash: "e".repeat(64),
+        capturedAt: "2026-10-16T12:00:00.000Z",
+      },
+      startedAt: "2026-10-16T12:01:00.000Z",
+      promotedAt: "2026-10-16T12:02:00.000Z",
+    };
+    const writeAdapter = (adapter: Record<string, unknown>) =>
+      harness.storage.codeModeRuns.upsert({
+        ...harness.storage.codeModeRuns.get(run.runId),
+        result: { aiderAdapter: { ...fixture.adapter, ...adapter } },
+      });
+
+    writeAdapter({ envelope: promotedEnvelope, promotion });
+    await expect(harness.service.getCodeModeRunArtifactPreview(run.runId, "aider_patch", scope)).resolves.toMatchObject(
+      { artifactKind: "aider_patch", sha256: fixture.patchArtifact.sha256 },
+    );
+
+    writeAdapter({ envelope: promotedEnvelope, promotion: undefined });
+    await expect(harness.service.getCodeModeRunArtifactPreview(run.runId, "aider_patch", scope)).rejects.toThrow(
+      /promoted posture requires a promoted promotion record/,
+    );
+
+    writeAdapter({ envelope: fixture.envelope, promotion });
+    await expect(harness.service.getCodeModeRunArtifactPreview(run.runId, "aider_patch", scope)).rejects.toThrow(
+      /audit_only posture cannot carry a promoted promotion record/,
+    );
+
+    writeAdapter({ envelope: promotedEnvelope, promotion: { ...promotion, patchSha256: "f".repeat(64) } });
+    await expect(harness.service.getCodeModeRunArtifactPreview(run.runId, "aider_patch", scope)).rejects.toThrow(
+      /promotion record does not match the patch artifact/,
+    );
+  });
+
+  it("a rejected promote approval never applies the patch", async () => {
+    const applyChatSessionWorkbenchPatch = vi.fn();
+    const harness = await createHarness({
+      sandboxConfig: { required: false, bestEffortHostEnabled: false },
+      applyChatSessionWorkbenchPatch,
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { run: 'aider-rejected-promote' };",
+      originSurface: "code",
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+    });
+    const fixture = await createPromotableAiderResult(harness.rootDir, run.runId);
+    harness.storage.codeModeRuns.upsert({
+      ...harness.storage.codeModeRuns.get(run.runId),
+      status: "completed",
+      result: { aiderAdapter: fixture.adapter },
+    });
+    const before = harness.storage.codeModeRuns.get(run.runId);
+    harness.approvals.set("approval-promote-1", {
+      approvalId: "approval-promote-1",
+      kind: "code_mode.aider_promote",
+      riskLevel: "caution",
+      status: "rejected",
+      payload: { runId: run.runId },
+      preview: {},
+      linkage: { runId: run.runId, workspaceId: "workspace-a" },
+      createdAt: "2026-10-16T12:00:00.000Z",
+      explanationStatus: "not_requested",
+    });
+    harness.storage.pendingApprovalActions.upsertPending({
+      approvalId: "approval-promote-1",
+      actionType: "code_mode.aider_promote",
+      request: {
+        runId: run.runId,
+        patchSha256: fixture.patchArtifact.sha256,
+        patchArtifactId: fixture.patchArtifact.artifactId,
+      },
+      createdAt: "2026-10-16T12:00:00.000Z",
+    });
+    harness.storage.pendingApprovalActions.find("approval-promote-1")!.resolutionStatus = "rejected";
+
+    await expect(harness.service.executeApprovedCodeModeRun("approval-promote-1")).resolves.toBeUndefined();
+
+    expect(applyChatSessionWorkbenchPatch).not.toHaveBeenCalled();
+    expect(harness.storage.codeModeRuns.get(run.runId)).toEqual(before);
+
+    // The same action while still pending dispatches to the promotion module. A pending action whose approval is
+    // not an approved promote approval for the same patch hash is refused on that binding first.
+    harness.storage.pendingApprovalActions.find("approval-promote-1")!.resolutionStatus = "pending";
+    await expect(harness.service.executeApprovedCodeModeRun("approval-promote-1")).resolves.toMatchObject({
+      outcome: "blocked",
+      result: { reason: "approval_binding_mismatch" },
+    });
+    // Once the binding holds, the promotion module refuses the unpinned run without touching the workbench.
+    harness.approvals.set("approval-promote-1", {
+      ...harness.approvals.get("approval-promote-1")!,
+      status: "approved",
+      payload: { runId: run.runId, patchSha256: fixture.patchArtifact.sha256 },
+    });
+    harness.storage.pendingApprovalActions.find("approval-promote-1")!.resolutionStatus = "pending";
+    await expect(harness.service.executeApprovedCodeModeRun("approval-promote-1")).resolves.toMatchObject({
+      outcome: "blocked",
+      result: { reason: "not_pinned" },
+    });
+    expect(applyChatSessionWorkbenchPatch).not.toHaveBeenCalled();
+  });
+
   it("fails Code Mode JSON artifact previews closed when managed artifact content is not JSON", async () => {
     const harness = await createHarness({
       sandboxConfig: {
@@ -1096,6 +1226,268 @@ describe("CapabilitySystemService", () => {
         executionBackendId: "aider-cli-adapter",
       }),
     ).rejects.toThrow("Aider Code Mode runs require aider.requestMarkdown.");
+  });
+
+  it("freezes the workspace pin into the approved input binding", async () => {
+    const harness = await createAiderPinHarness();
+    const head = await initAiderPinWorktree(harness.rootDir);
+    const workbenchGet = attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      sessionId: "session-pin",
+      aider: { requestMarkdown: "Refactor this file." },
+    });
+
+    expect(workbenchGet).toHaveBeenCalledWith("session-pin");
+    const policySnapshot = JSON.parse(
+      await fs.readFile(path.resolve(harness.rootDir, run.policySnapshotArtifact.relPath), "utf8"),
+    ) as Record<string, unknown>;
+    const pin = policySnapshot.codeModeAiderWorkspacePin as Record<string, unknown>;
+    expect(pin).toMatchObject({ version: 1, sessionId: "session-pin", worktreeHead: head });
+    expect(run.codeModeInputHash).toBe(
+      sha256Text(
+        JSON.stringify({
+          input: {},
+          aiderRequest: policySnapshot.codeModeAiderRequest,
+          aiderExecution: policySnapshot.codeModeAiderExecution,
+          aiderWorkspacePin: pin,
+        }),
+      ),
+    );
+    expect(policySnapshot.codeModeInputHash).toBe(run.codeModeInputHash);
+    expect(harness.createApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          inputHash: run.codeModeInputHash,
+          aiderWorkspacePin: { worktreeHead: head, sessionId: "session-pin" },
+        }),
+      }),
+    );
+    expect(
+      __internal.readFrozenCodeModeInputBinding(policySnapshot, {}, undefined, run.codeModeInputHash, true),
+    ).toMatchObject({ input: {}, aiderWorkspacePin: pin });
+  });
+
+  it("does not pin Aider runs without a ready clean workbench", async () => {
+    const harness = await createAiderPinHarness();
+    await initAiderPinWorktree(harness.rootDir);
+    await fs.writeFile(path.join(harness.rootDir, "repo", "scratch.txt"), "untracked\n", "utf8");
+    const workbenchGet = attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+    const warn = vi.spyOn(__internal.log, "warn").mockImplementation(() => undefined);
+    try {
+      const dirtyRun = await harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        executionBackendId: "aider-cli-adapter",
+        sessionId: "session-pin",
+        aider: { requestMarkdown: "Refactor this file." },
+      });
+      const sessionlessRun = await harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        executionBackendId: "aider-cli-adapter",
+        aider: { requestMarkdown: "Refactor this file." },
+      });
+      workbenchGet.mockImplementationOnce(async () => {
+        throw new Error("workbench storage offline");
+      });
+      const brokenReadRun = await harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        executionBackendId: "aider-cli-adapter",
+        sessionId: "session-pin",
+        aider: { requestMarkdown: "Refactor this file." },
+      });
+
+      expect(workbenchGet).toHaveBeenCalledTimes(2);
+      for (const run of [dirtyRun, sessionlessRun, brokenReadRun]) {
+        const policySnapshot = JSON.parse(
+          await fs.readFile(path.resolve(harness.rootDir, run.policySnapshotArtifact.relPath), "utf8"),
+        ) as Record<string, unknown>;
+        expect(Object.prototype.hasOwnProperty.call(policySnapshot, "codeModeAiderWorkspacePin")).toBe(false);
+        expect(run.codeModeInputHash).toBe(
+          sha256Text(
+            JSON.stringify({
+              input: {},
+              aiderRequest: policySnapshot.codeModeAiderRequest,
+              aiderExecution: policySnapshot.codeModeAiderExecution,
+            }),
+          ),
+        );
+      }
+      for (const call of harness.createApproval.mock.calls) {
+        expect((call[0] as ApprovalCreateInput).payload).not.toHaveProperty("aiderWorkspacePin");
+      }
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith("Aider run created without a workspace pin", {
+        runId: brokenReadRun.runId,
+        detail: "workbench storage offline",
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("refuses execution when the frozen workspace pin was edited", async () => {
+    const harness = await createAiderPinHarness();
+    await initAiderPinWorktree(harness.rootDir);
+    attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      sessionId: "session-pin",
+      aider: { requestMarkdown: "Refactor this file." },
+    });
+    const policySnapshot = JSON.parse(
+      await fs.readFile(path.resolve(harness.rootDir, run.policySnapshotArtifact.relPath), "utf8"),
+    ) as Record<string, unknown>;
+    const pin = policySnapshot.codeModeAiderWorkspacePin as Record<string, unknown>;
+
+    expect(() =>
+      __internal.readFrozenCodeModeInputBinding(
+        { ...policySnapshot, codeModeAiderWorkspacePin: { ...pin, worktreeHead: "f".repeat(40) } },
+        {},
+        undefined,
+        run.codeModeInputHash,
+        true,
+      ),
+    ).toThrow("Code Mode input snapshot hash mismatch");
+    const { codeModeAiderWorkspacePin: _removed, ...unpinnedSnapshot } = policySnapshot;
+    void _removed;
+    expect(() =>
+      __internal.readFrozenCodeModeInputBinding(unpinnedSnapshot, {}, undefined, run.codeModeInputHash, true),
+    ).toThrow("Code Mode input snapshot hash mismatch");
+  });
+
+  it("refuses an invalid frozen workspace pin", async () => {
+    const harness = await createAiderPinHarness();
+    await initAiderPinWorktree(harness.rootDir);
+    attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      sessionId: "session-pin",
+      aider: { requestMarkdown: "Refactor this file." },
+    });
+    const policySnapshot = JSON.parse(
+      await fs.readFile(path.resolve(harness.rootDir, run.policySnapshotArtifact.relPath), "utf8"),
+    ) as Record<string, unknown>;
+
+    expect(() =>
+      __internal.readFrozenCodeModeInputBinding(
+        { ...policySnapshot, codeModeAiderWorkspacePin: { version: 2 } },
+        {},
+        undefined,
+        run.codeModeInputHash,
+        true,
+      ),
+    ).toThrow("workspace pin snapshot is invalid");
+  });
+
+  it("refuses a frozen workspace pin without a frozen Aider request", async () => {
+    const harness = await createAiderPinHarness();
+    await initAiderPinWorktree(harness.rootDir);
+    attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      sessionId: "session-pin",
+      aider: { requestMarkdown: "Refactor this file." },
+    });
+    const policySnapshot = JSON.parse(
+      await fs.readFile(path.resolve(harness.rootDir, run.policySnapshotArtifact.relPath), "utf8"),
+    ) as Record<string, unknown>;
+    const { codeModeAiderRequest: _request, ...unboundSnapshot } = policySnapshot;
+    void _request;
+    expect(unboundSnapshot).toHaveProperty("codeModeAiderWorkspacePin");
+
+    expect(() => __internal.readFrozenCodeModeInputBinding(unboundSnapshot, {}, undefined)).toThrow(
+      "workspace pin snapshot is invalid",
+    );
+  });
+
+  it("terminalizes a pinned Aider run on a deterministic workspace refusal before dispatch", async () => {
+    const harness = await createAiderPinExecutionHarness();
+    await initAiderPinWorktree(harness.rootDir);
+    const workbenchGet = attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      sessionId: "session-pin",
+      aider: { requestMarkdown: "Refactor this file." },
+    });
+    // The workbench was re-pointed at another project: the frozen pin identity can never match again.
+    workbenchGet.mockImplementation(async () => ({ ...readyAiderPinWorkbench(), projectId: "project-moved" }));
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        error: expect.stringContaining("worktree identity no longer matches its workspace pin"),
+      }),
+    });
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "failed",
+      executionRecovery: expect.objectContaining({ phase: "terminal" }),
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({ error: expect.stringContaining("worktree identity no longer matches") }),
+    );
+    expect(harness.publishRealtime).not.toHaveBeenCalledWith(
+      "code_mode_run_dispatch_deferred",
+      "capabilities",
+      expect.anything(),
+    );
+    expect(harness.publishRealtime).not.toHaveBeenCalledWith(
+      "code_mode_execution_boundary_crossed",
+      "capabilities",
+      expect.anything(),
+    );
+  });
+
+  it("defers a pinned Aider run on a transient workspace failure before dispatch", async () => {
+    const harness = await createAiderPinExecutionHarness();
+    await initAiderPinWorktree(harness.rootDir);
+    const workbenchGet = attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      sessionId: "session-pin",
+      aider: { requestMarkdown: "Refactor this file." },
+    });
+    // A workbench that is not ready yet can become ready again: the claim is released for a later retry.
+    workbenchGet.mockImplementation(async () => ({ ...readyAiderPinWorkbench(), worktreeStatus: "provisioning" }));
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toBeUndefined();
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "approval_pending",
+      executionRecovery: expect.objectContaining({ phase: "not_started", disposition: "retryable" }),
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).not.toHaveBeenCalledWith(
+      "approval-1",
+      expect.any(String),
+      expect.anything(),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_dispatch_deferred",
+      "capabilities",
+      expect.objectContaining({ runId: run.runId, status: "approval_pending" }),
+    );
   });
 
   it("lists Code Mode execution backends without promoting Docker or Aider as callable", async () => {
@@ -5751,6 +6143,9 @@ async function createHarness(input?: {
   spawnCodeModeChild?: ConstructorParameters<typeof CapabilitySystemService>[0]["spawnCodeModeChild"];
   loadedSkills?: LoadedSkill[];
   meshCatalogEntries?: CapabilityCatalogEntry[];
+  applyChatSessionWorkbenchPatch?: ConstructorParameters<
+    typeof CapabilitySystemService
+  >[0]["applyChatSessionWorkbenchPatch"];
 }) {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-capability-system-"));
   tempRoots.push(rootDir);
@@ -5848,6 +6243,7 @@ async function createHarness(input?: {
       : undefined,
     resolveSandboxMetadata: input?.resolveSandboxMetadata,
     spawnCodeModeChild: input?.spawnCodeModeChild,
+    applyChatSessionWorkbenchPatch: input?.applyChatSessionWorkbenchPatch,
   });
 
   return {
@@ -6846,6 +7242,36 @@ async function createCandidateVersion(
   };
 }
 
+async function createPromotableAiderResult(rootDir: string, runId: string) {
+  const bundleRoot = `data/code-mode-artifacts/${runId}/aider`;
+  const requestArtifact = await createManagedArtifact(rootDir, bundleRoot, "request.md", "Bump.", "text/markdown");
+  const invocationPlanArtifact = await createManagedArtifact(rootDir, bundleRoot, "invocation-plan.json", {
+    contractVersion: 1,
+    adapterId: "aider-cli-adapter",
+  });
+  const patchArtifact = await createManagedArtifact(
+    rootDir,
+    bundleRoot,
+    "aider.patch",
+    "diff --git a/file.ts b/file.ts\n",
+    "text/x-diff",
+  );
+  const envelope = {
+    contractVersion: 1,
+    adapterId: "aider-cli-adapter",
+    outcome: "patch_produced",
+    command: { argvRedacted: ["aider", "--yes"] },
+    patchArtifact: { kind: "unified_diff", artifact: patchArtifact },
+    replay: { replaySafe: false, policy: "audit_only", reason: "Aider runs are audit-only." },
+  };
+  const resultEnvelopeArtifact = await createManagedArtifact(rootDir, bundleRoot, "result-envelope.json", envelope);
+  return {
+    patchArtifact,
+    envelope,
+    adapter: { requestArtifact, invocationPlanArtifact, resultEnvelopeArtifact, envelope } as Record<string, unknown>,
+  };
+}
+
 async function createManagedArtifact(
   rootDir: string,
   bundleRoot: string,
@@ -6870,4 +7296,66 @@ async function createManagedArtifact(
 
 function sha256Text(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+async function createAiderPinHarness() {
+  return await createHarness({
+    sandboxConfig: { bestEffortHostEnabled: true },
+    dockerBackend: { enabled: true, image: digestPinnedRunnerImage },
+    aiderAdapter: { enabled: true, image: digestPinnedAiderImage },
+  });
+}
+
+/** Pin harness whose sandbox probe is stubbed available, so execution reaches the workspace seed on any host. */
+async function createAiderPinExecutionHarness() {
+  return await createHarness({
+    sandboxConfig: { bestEffortHostEnabled: true },
+    dockerBackend: { enabled: true, image: digestPinnedRunnerImage },
+    aiderAdapter: { enabled: true, image: digestPinnedAiderImage },
+    resolveSandboxMetadata: () => ({
+      runnerId: "goatcitadel.best-effort-host",
+      runnerVersion: "0.1.0",
+      platform: "win32",
+      isolationProfile: "best_effort_host/temp_only/no_network",
+      required: true,
+      available: true,
+      checksPassed: ["windows_appcontainer_present"],
+      checksFailed: [],
+    }),
+  });
+}
+
+async function initAiderPinWorktree(rootDir: string): Promise<string> {
+  const worktree = path.join(rootDir, "repo");
+  await fs.mkdir(worktree);
+  const git = (args: string[]) =>
+    execFileSync("git", ["-C", worktree, ...args], { encoding: "utf8", windowsHide: true });
+  git(["init", "-q"]);
+  git(["config", "user.name", "Pin Test"]);
+  git(["config", "user.email", "pin-test@example.invalid"]);
+  git(["config", "commit.gpgsign", "false"]);
+  git(["config", "core.autocrlf", "false"]);
+  await fs.writeFile(path.join(worktree, "index.ts"), "export const value = 1;\n", "utf8");
+  git(["add", "index.ts"]);
+  git(["commit", "-q", "-m", "initial"]);
+  return git(["rev-parse", "HEAD"]).trim();
+}
+
+function readyAiderPinWorkbench(): ChatSessionWorkbenchRecord {
+  return {
+    sessionId: "session-pin",
+    projectId: "project-pin",
+    worktreeStatus: "ready",
+    baseRef: "main",
+    worktreePath: "repo",
+  } as unknown as ChatSessionWorkbenchRecord;
+}
+
+function attachAiderPinWorkbench(
+  storage: object,
+  get: (sessionId: string) => Promise<ChatSessionWorkbenchRecord | undefined>,
+) {
+  const workbenchGet = vi.fn(get);
+  Object.assign(storage, { chatSessionWorkbench: { get: workbenchGet } });
+  return workbenchGet;
 }

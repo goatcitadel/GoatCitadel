@@ -5313,6 +5313,69 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
+  it("dispatches code_mode.aider_promote pending actions through executeCodeModePendingApproval", async () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    const asyncStorage = createSqliteAsyncStorage(storage);
+    const approval = storage.approvals.create({
+      kind: "code_mode.aider_promote",
+      riskLevel: "caution",
+      payload: { runId: "code-run-promote-1" },
+      preview: {},
+      linkage: { runId: "code-run-promote-1", workspaceId: "workspace-1" },
+    });
+    storage.pendingApprovalActions.upsertPending({
+      approvalId: approval.approvalId,
+      actionType: "code_mode.aider_promote",
+      request: { runId: "code-run-promote-1", patchSha256: "a".repeat(64), patchArtifactId: "artifact-1" },
+    });
+    const effect = storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: approval.approvalId,
+      payload: { actionType: "code_mode.aider_promote" },
+    });
+    const executeCodeModePendingApproval = vi.fn(async (approvalId: string) => {
+      storage.pendingApprovalActions.markResolved(approvalId, "executed", {
+        outcome: "executed",
+        status: "promoted",
+        runId: "code-run-promote-1",
+      });
+      return {
+        outcome: "executed" as const,
+        policyReason: "code_mode_aider_promote:promoted",
+        auditEventId: "code-mode-aider-promote-code-run-promote-1",
+        result: { runId: "code-run-promote-1", status: "promoted" },
+      };
+    });
+    const executeApprovedPendingAction = vi.fn();
+    const worker = new ApprovalEffectsService(
+      { storage: asyncStorage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+      {
+        ...createApprovalEffectDeps(),
+        executeCodeModePendingApproval,
+        executeApprovedPendingAction,
+      },
+    );
+
+    try {
+      await (
+        worker as unknown as {
+          drainPendingEffects(): Promise<void>;
+        }
+      ).drainPendingEffects();
+
+      expect(executeCodeModePendingApproval).toHaveBeenCalledOnce();
+      expect(executeCodeModePendingApproval.mock.calls[0]?.[0]).toBe(approval.approvalId);
+      expect(executeApprovedPendingAction).not.toHaveBeenCalled();
+      expect(storage.pendingApprovalActions.get(approval.approvalId)).toMatchObject({ resolutionStatus: "executed" });
+      expect(storage.approvalEffects.get(effect.effectId)).toMatchObject({ status: "completed" });
+    } finally {
+      worker.stopWorker();
+      storage.close();
+    }
+  });
+
   it.each([
     {
       label: "communications failure",

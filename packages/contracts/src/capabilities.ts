@@ -1,3 +1,5 @@
+import type { ChatSessionWorkbenchValidationStatus } from "./chat.js";
+
 export type CapabilityKind =
   | "tool"
   | "skill"
@@ -484,9 +486,42 @@ export interface CodeModeAiderAdapterResultEnvelope {
   };
   replay: {
     replaySafe: false;
-    policy: "audit_only";
+    policy: CodeModeAiderReplayPolicy;
     reason: string;
   };
+}
+
+export type CodeModeAiderReplayPolicy = "audit_only" | "promoted";
+
+export interface CodeModeAiderWorkspacePin {
+  version: 1;
+  sessionId: string;
+  worktreeIdentityHash: string;
+  worktreeHead: string;
+  worktreeStateHash: string;
+  capturedAt: string;
+}
+
+export interface CodeModeAiderPromotionRecord {
+  version: 1;
+  status: "applying" | "promoted";
+  approvalId: string;
+  patchArtifactId: string;
+  patchSha256: string;
+  pin: CodeModeAiderWorkspacePin;
+  startedAt: string;
+  promotedAt?: string;
+  resolvedBy?: string;
+  changedFiles?: string[];
+  workbenchValidationStatus?: ChatSessionWorkbenchValidationStatus;
+}
+
+export interface CodeModeAiderPromotionRequestResponse {
+  runId: string;
+  status: "approval_pending" | "already_promoted";
+  approvalId?: string;
+  expiresAt?: string;
+  promotion?: CodeModeAiderPromotionRecord;
 }
 
 export type CodeModeTrustedCodeWriteVerificationArtifactKind =

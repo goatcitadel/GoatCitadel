@@ -13,6 +13,13 @@ import {
   type CodeModeAiderArtifactBundle,
   type CodeModeAiderArtifactPersister,
 } from "./code-mode-aider-artifacts.js";
+import type { CodeModeAiderWorkspaceSeed } from "./code-mode-aider-workspace-pin.js";
+import {
+  CODE_MODE_AIDER_SEED_TIMEOUT_MS,
+  collectSeededCodeModeAiderPatch,
+  seedCodeModeAiderWorkspace,
+  type SeededCodeModeAiderWorkspace,
+} from "./code-mode-aider-workspace-seed.js";
 import { terminateProcessTree } from "./process-tree-killer.js";
 
 export interface CodeModeAiderExecutionInput {
@@ -22,6 +29,8 @@ export interface CodeModeAiderExecutionInput {
   source: string;
   requestMarkdown: string;
   repositoryRootRelPath?: string;
+  /** Pinned workbench commit: when set, the run edits that commit's tracked files instead of a synthetic input. */
+  workspaceSeed?: CodeModeAiderWorkspaceSeed;
   model?: string;
   aiderAdapter: CodeModeAiderAdapterConfig;
   dockerBackend: CodeModeDockerBackendConfig;
@@ -76,9 +85,21 @@ export async function executeCodeModeAiderAdapter(
   const requestPath = path.join(repositoryRoot, ...requestRelPathSegments);
   const sourceFilename = `input.${input.language === "typescript" ? "ts" : "js"}`;
   const sourcePath = path.join(repositoryRoot, sourceFilename);
+  const seeded = input.workspaceSeed
+    ? await seedCodeModeAiderWorkspace({
+        seed: input.workspaceSeed,
+        runTempRoot: input.runTempRoot,
+        workTreeRoot: runRoot,
+        pathspec: repositoryRootRelPath,
+        reservedRelPaths: [path.posix.join(repositoryRootRelPath, CODE_MODE_AIDER_MESSAGE_FILE)],
+        timeoutMs: CODE_MODE_AIDER_SEED_TIMEOUT_MS,
+      })
+    : undefined;
   await fs.mkdir(path.dirname(requestPath), { recursive: true });
   await fs.writeFile(requestPath, input.requestMarkdown, "utf8");
-  await fs.writeFile(sourcePath, input.source, "utf8");
+  if (!seeded) {
+    await fs.writeFile(sourcePath, input.source, "utf8");
+  }
 
   const invocationPlan = buildCodeModeAiderAdapterInvocationPlan({
     runId: input.runId,
@@ -128,18 +149,23 @@ export async function executeCodeModeAiderAdapter(
     terminate: input.terminateProcessTree ?? terminateProcessTree,
   });
   const finishedAt = new Date().toISOString();
-  const failure = buildAiderFailureEvidence(execution);
-  const mayReadMutableArtifacts = !failure || execution.mutableArtifactsSafe;
-  const explicitPatch = mayReadMutableArtifacts ? await readAiderPatchIfPresent(runRoot, repositoryRoot) : undefined;
-  const sourcePatch =
-    mayReadMutableArtifacts && !explicitPatch
-      ? buildAiderSourcePatchIfChanged({
-          relPath: toPatchRelPath(repositoryRootRelPath, sourceFilename),
-          originalSource: input.source,
-          currentSource: await fs.readFile(sourcePath, "utf8"),
-        })
-      : undefined;
-  const patch = explicitPatch ?? sourcePatch;
+  const executionFailure = buildAiderFailureEvidence(execution);
+  const mayReadMutableArtifacts = !executionFailure || execution.mutableArtifactsSafe;
+  const captured: { patch?: AiderPatchEvidence; failure?: AiderPatchCaptureFailure } = !mayReadMutableArtifacts
+    ? {}
+    : seeded
+      ? await captureSeededAiderPatch(seeded, input.runId)
+      : {
+          patch: await readUnpinnedAiderPatch(input.source, {
+            runRoot,
+            repositoryRoot,
+            repositoryRootRelPath,
+            sourceFilename,
+            sourcePath,
+          }),
+        };
+  const patch = captured.patch;
+  const failure = executionFailure ?? captured.failure;
   const failed = Boolean(failure);
   const outcome: CodeModeAiderAdapterOutcome = failed ? "failed" : patch ? "patch_produced" : "no_changes";
   const bundle = await persistCodeModeAiderArtifactBundle(input.persister, {
@@ -175,6 +201,58 @@ export async function executeCodeModeAiderAdapter(
     stderrTruncated: execution.stderrTruncated,
     bundle,
   };
+}
+
+interface AiderPatchEvidence {
+  kind: "unified_diff" | "git_patch";
+  content: string;
+  fileCount?: number;
+  baseRef?: string;
+}
+
+interface AiderPatchCaptureFailure {
+  code: "AIDER_PATCH_CAPTURE_FAILED";
+  message: string;
+  details: Record<string, unknown>;
+}
+
+async function captureSeededAiderPatch(
+  seeded: SeededCodeModeAiderWorkspace,
+  runId: string,
+): Promise<{ patch?: AiderPatchEvidence; failure?: AiderPatchCaptureFailure }> {
+  // F5: for seeded runs the computed diff against the pinned commit wins; explicit patch files are ignored.
+  try {
+    return { patch: await collectSeededCodeModeAiderPatch(seeded, { timeoutMs: CODE_MODE_AIDER_SEED_TIMEOUT_MS }) };
+  } catch (error) {
+    return {
+      failure: {
+        code: "AIDER_PATCH_CAPTURE_FAILED",
+        message: `Aider seeded patch capture failed: ${error instanceof Error ? error.message : String(error)}`,
+        details: { runId, baseRef: seeded.baseCommit },
+      },
+    };
+  }
+}
+
+async function readUnpinnedAiderPatch(
+  originalSource: string,
+  paths: {
+    runRoot: string;
+    repositoryRoot: string;
+    repositoryRootRelPath: string;
+    sourceFilename: string;
+    sourcePath: string;
+  },
+): Promise<AiderPatchEvidence | undefined> {
+  const explicitPatch = await readAiderPatchIfPresent(paths.runRoot, paths.repositoryRoot);
+  if (explicitPatch) {
+    return explicitPatch;
+  }
+  return buildAiderSourcePatchIfChanged({
+    relPath: toPatchRelPath(paths.repositoryRootRelPath, paths.sourceFilename),
+    originalSource,
+    currentSource: await fs.readFile(paths.sourcePath, "utf8"),
+  });
 }
 
 function buildAiderDockerCommand(input: {
