@@ -114,7 +114,10 @@ import {
   parseCodeModeAiderAdapterResultEnvelope,
   parseCodeModeAiderWorkspacePin,
 } from "./code-mode-aider-result-contract.js";
-import { captureCodeModeAiderWorkspacePin } from "./code-mode-aider-workspace-pin.js";
+import {
+  captureCodeModeAiderWorkspacePin,
+  resolveCodeModeAiderWorkspaceSeed,
+} from "./code-mode-aider-workspace-pin.js";
 import {
   CODE_MODE_AIDER_ADAPTER_ID,
   buildCodeModeExecutionBackends,
@@ -2733,6 +2736,8 @@ export class CapabilitySystemService {
               source,
               pendingAiderRequest: inputBinding.aiderRequest,
               frozenAiderExecution: inputBinding.aiderExecution,
+              aiderWorkspacePin: inputBinding.aiderWorkspacePin,
+              sessionId: finalRun.sessionId,
               beforeExecutionDispatch,
               onExecutionDispatchFailed,
               signal,
@@ -3908,6 +3913,8 @@ export class CapabilitySystemService {
     source: string;
     pendingAiderRequest: unknown;
     frozenAiderExecution?: FrozenCodeModeAiderExecution;
+    aiderWorkspacePin?: CodeModeAiderWorkspacePin;
+    sessionId?: string;
     beforeExecutionDispatch: () => Promise<void>;
     onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
@@ -3965,6 +3972,13 @@ export class CapabilitySystemService {
     }
     let dispatchBoundaryCrossed = false;
     try {
+      // A pinned run edits the pinned commit; resolution fails closed before dispatch on any pin drift.
+      const workspaceSeed = input.aiderWorkspacePin
+        ? await resolveCodeModeAiderWorkspaceSeed(this.options, input.aiderWorkspacePin, {
+            sessionId: input.sessionId,
+            runId: input.runId,
+          })
+        : undefined;
       const execution = await backendRunner.executeAiderAdapter({
         runId: input.runId,
         runTempRoot,
@@ -3972,6 +3986,7 @@ export class CapabilitySystemService {
         source: input.source,
         requestMarkdown: aider.requestMarkdown,
         repositoryRootRelPath: aider.repositoryRootRelPath,
+        ...(workspaceSeed ? { workspaceSeed } : {}),
         model: aider.model,
         persister: this.buildAiderArtifactPersister(),
         beforeDispatch: async () => {
