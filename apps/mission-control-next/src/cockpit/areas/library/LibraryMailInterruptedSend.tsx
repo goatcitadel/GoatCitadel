@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { MailDraftRecord } from "@goatcitadel/contracts";
 import { releaseMailDraft } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
@@ -32,7 +33,7 @@ export async function releaseInterruptedSend(
     const minutes = Math.max(1, Math.ceil((result.retryAfterSeconds ?? 60) / 60));
     return {
       kind: "wait",
-      text: `The interrupted request may still be finishing. Try again in about ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+      text: `The interrupted request may still be finishing. Try again in about ${plural(minutes, "minute")}.`,
     };
   }
   // A draft already back in "draft" (this release, or an earlier one whose response was lost) is reviewable.
