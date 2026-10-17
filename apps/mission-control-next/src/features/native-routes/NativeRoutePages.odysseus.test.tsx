@@ -444,6 +444,7 @@ describe("NativeRoutePages odysseus library sections", () => {
       subject: "Launch",
       bodyText: "Confirmed.",
       status: "failed",
+      approvalId: "22222222-2222-4222-8222-222222222222",
       failureReason: raw,
       createdAt: "2026-06-01T12:00:00.000Z",
       updatedAt: "2026-06-01T12:01:00.000Z",
