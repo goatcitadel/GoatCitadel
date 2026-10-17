@@ -26,7 +26,7 @@ describe("Aider workspace seed", () => {
   it("exposes the baseline and seeding bounds", () => {
     expect(CODE_MODE_AIDER_BASELINE_GIT_DIR).toBe("aider-baseline.git");
     expect(CODE_MODE_AIDER_SEED_MAX_FILES).toBe(20_000);
-    expect(CODE_MODE_AIDER_SEEDED_PATCH_MAX_BYTES).toBe(8 * 1024 * 1024);
+    expect(CODE_MODE_AIDER_SEEDED_PATCH_MAX_BYTES).toBe(4 * 1024 * 1024);
   });
 
   it("checks the pinned commit out into the work tree through an alternates-backed baseline", async () => {

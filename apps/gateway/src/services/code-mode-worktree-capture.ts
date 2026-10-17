@@ -12,6 +12,11 @@ import type { AsyncStorage } from "@goatcitadel/storage";
  */
 
 export const CODE_MODE_GIT_CAPTURE_TIMEOUT_MS = 15_000;
+/**
+ * The Chat workbench patch byte limit. Seeded Aider patch collection and promotion share it so a patch Code Mode
+ * records is never larger than the workbench will accept.
+ */
+export const CODE_MODE_WORKBENCH_PATCH_MAX_BYTES = 4 * 1024 * 1024;
 const MAX_GIT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const MAX_CAPTURED_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_CHANGED_FILES_IN_EVIDENCE = 200;

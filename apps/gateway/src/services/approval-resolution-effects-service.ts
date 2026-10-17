@@ -130,7 +130,7 @@ import {
   computeFrozenChatTurnAdmissionMaterialSha256,
   reconstructAdmittedChatTurnRequest,
 } from "./session-control-service.js";
-import { isCodeModePendingActionType } from "./code-mode-aider-promotion.js";
+import { isCodeModePendingActionType } from "./code-mode-pending-action-types.js";
 import { readToolDomainExecutionFailure, type ToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
 import type { SharedHostLifecycleAdmissionPort, SharedHostWorkReservation } from "./shared-host-lifecycle-service.js";
 import {

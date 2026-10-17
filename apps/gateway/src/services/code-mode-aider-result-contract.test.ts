@@ -77,7 +77,7 @@ describe("code-mode-aider-result-contract", () => {
           reason: "unsupported claim",
         },
       }),
-    ).toThrow("replay posture must be audit_only and non-replayable");
+    ).toThrow("replay posture must be non-replayable with an audit_only or promoted policy and a reason");
   });
 
   const patchEnvelope = () => ({
@@ -146,6 +146,27 @@ describe("code-mode-aider-result-contract", () => {
         promotion: record({ patchSha256: "e".repeat(64) }),
       }),
     ).toThrow(/patch/);
+  });
+
+  it("rejects promoted posture on a non-patch_produced outcome", () => {
+    const { patchArtifact: _patch, ...withoutPatch } = promotedEnvelope();
+    expect(() =>
+      parseCodeModeAiderAdapterResultEnvelope({ ...withoutPatch, outcome: "no_changes" }, { promotion: record() }),
+    ).toThrow("promoted posture requires a patch_produced outcome");
+    expect(() =>
+      parseCodeModeAiderAdapterResultEnvelope(
+        { ...promotedEnvelope(), outcome: "no_changes" },
+        { promotion: record() },
+      ),
+    ).toThrow("promoted posture requires a patch_produced outcome");
+  });
+
+  it("rejects promoted posture when the record names a different patch artifact id", () => {
+    expect(() =>
+      parseCodeModeAiderAdapterResultEnvelope(promotedEnvelope(), {
+        promotion: record({ patchArtifactId: "patch-other" }),
+      }),
+    ).toThrow("promotion record does not match the patch artifact");
   });
 
   it("rejects audit_only posture paired with a promoted record", () => {

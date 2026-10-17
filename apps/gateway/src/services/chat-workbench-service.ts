@@ -46,7 +46,11 @@ import {
 } from "@goatcitadel/policy-engine";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { serializePathWithinRoot } from "./security-utils.js";
-import { CODE_MODE_GIT_CAPTURE_TIMEOUT_MS, captureCodeModeGitWorktreeState } from "./code-mode-worktree-capture.js";
+import {
+  CODE_MODE_GIT_CAPTURE_TIMEOUT_MS,
+  CODE_MODE_WORKBENCH_PATCH_MAX_BYTES,
+  captureCodeModeGitWorktreeState,
+} from "./code-mode-worktree-capture.js";
 import {
   readWorkbenchFileSnapshot,
   withWorkbenchWriteLock,
@@ -650,7 +654,14 @@ export interface ChatSessionWorkbenchPatchApplyInput extends ChatSessionWorkbenc
   expectedWorktreeStateHash?: string;
 }
 
-export type ChatWorkbenchPatchRefusalReason = "out_of_scope" | "head_moved" | "state_drift" | "check_failed";
+export type ChatWorkbenchPatchRefusalReason =
+  | "out_of_scope"
+  | "head_moved"
+  | "state_drift"
+  | "check_failed"
+  | "precondition_failed";
+
+const GUARDED_REFUSAL_DETAIL_MAX_CHARS = 240;
 
 /** A guarded patch apply refused before touching the worktree. */
 export class ChatWorkbenchPatchRefusedError extends ConflictError {
@@ -667,24 +678,41 @@ export async function applyChatSessionWorkbenchPatch(
   sessionId: string,
   input: ChatSessionWorkbenchPatchApplyInput,
 ): Promise<ChatSessionWorkbenchPatchApplyResponse> {
-  await deps.requireChatSession(sessionId);
-  const state = await syncWorkbenchState(deps, sessionId);
-  const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   const guarded = input.expectedWorktreeHead !== undefined;
-  const patch = normalizeWorkbenchPatch(input.patch);
+  // Guarded mode: every error raised before the patch write is a typed refusal, so a caller can tell "nothing was
+  // written" apart from an unknown outcome.
+  let writeStarted = false;
+  const refuseBeforeWrite = <T>(action: () => Promise<T>) =>
+    refuseGuardedPatchBeforeWrite(guarded, () => writeStarted, action);
+  const { context, patch } = await refuseBeforeWrite(async () => {
+    if (guarded && input.checkOnly) {
+      throw new ValidationError({ message: "Guarded workbench patch apply does not support checkOnly." });
+    }
+    await deps.requireChatSession(sessionId);
+    const state = await syncWorkbenchState(deps, sessionId);
+    const resolved = await resolveWorkbenchContext(deps, sessionId, state, true);
+    return { context: resolved, patch: normalizeWorkbenchPatch(input.patch) };
+  });
   refuseGuardedPatchOnError(guarded, "out_of_scope", () => {
     assertWorkbenchMutationScope(deps, context);
-    assertPatchPathsInWorkbenchScope(context, extractPatchPaths(patch));
+    const patchPaths = extractPatchPaths(patch);
+    if (guarded) {
+      assertGuardedPatchPathsRepoScoped(context.repoScopePath, patchPaths);
+    }
+    assertPatchPathsInWorkbenchScope(context, patchPaths);
   });
   const checkOnly = Boolean(input.checkOnly);
   const startedAt = new Date().toISOString();
   const artifactId = `workbench-patch:${randomUUID()}`;
-  const applyResult = await withWorkbenchWriteLock(context.projectRoot, async () => {
-    if (guarded) {
-      assertGuardedWorkbenchPatchApplies(context, patch, input);
-    }
-    return applyPatchWithScope(context, patch, checkOnly);
-  });
+  const applyResult = await refuseBeforeWrite(() =>
+    withWorkbenchWriteLock(context.projectRoot, async () => {
+      if (guarded) {
+        assertGuardedWorkbenchPatchApplies(context, patch, input);
+      }
+      writeStarted = true;
+      return applyPatchWithScope(context, patch, checkOnly, guarded);
+    }),
+  );
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
   const validation =
     applyResult.exitCode === 0 && !checkOnly
@@ -1770,9 +1798,51 @@ function refuseGuardedPatchOnError(
     if (!guarded) {
       throw error;
     }
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new ChatWorkbenchPatchRefusedError(reason, `Patch is outside the workbench scope: ${detail}`);
+    throw new ChatWorkbenchPatchRefusedError(reason, `Patch is outside the workbench scope: ${boundedDetail(error)}`);
   }
+}
+
+/** Guarded mode only: an error before the write starts (and not already typed) becomes `precondition_failed`. */
+async function refuseGuardedPatchBeforeWrite<T>(
+  guarded: boolean,
+  hasWriteStarted: () => boolean,
+  action: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    if (!guarded || hasWriteStarted() || error instanceof ChatWorkbenchPatchRefusedError) {
+      throw error;
+    }
+    throw new ChatWorkbenchPatchRefusedError(
+      "precondition_failed",
+      `Workbench patch precondition failed before any file was written: ${boundedDetail(error)}`,
+    );
+  }
+}
+
+/**
+ * Guarded mode on a sub-scoped project: every patch path must be repository-relative inside the project scope, so
+ * the patch applies from the repository root without `--directory` rewriting.
+ */
+function assertGuardedPatchPathsRepoScoped(repoScopePath: string, patchPaths: string[]): void {
+  const normalizedScope = repoScopePath.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+  if (normalizedScope === "." || !normalizedScope) {
+    return;
+  }
+  const outside = patchPaths.find((patchPath) => !patchPath.startsWith(`${normalizedScope}/`));
+  if (outside !== undefined) {
+    throw new ValidationError({
+      message: `Patch path ${outside.slice(0, 200)} is not inside the project scope ${normalizedScope}/.`,
+    });
+  }
+}
+
+function boundedDetail(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  return detail.length > GUARDED_REFUSAL_DETAIL_MAX_CHARS
+    ? `${detail.slice(0, GUARDED_REFUSAL_DETAIL_MAX_CHARS)}...`
+    : detail;
 }
 
 /**
@@ -1803,7 +1873,7 @@ function assertGuardedWorkbenchPatchApplies(
   if (!expected.expectedWorktreeStateHash || current.stateHash !== expected.expectedWorktreeStateHash) {
     throw new ChatWorkbenchPatchRefusedError("state_drift", "Workbench files changed since the patch was pinned.");
   }
-  const check = applyPatchWithScope(context, patch, true);
+  const check = applyPatchWithScope(context, patch, true, true);
   if (check.exitCode !== 0) {
     throw new ChatWorkbenchPatchRefusedError(
       "check_failed",
@@ -1816,8 +1886,10 @@ function applyPatchWithScope(
   context: { worktreePath: string; repoScopePath: string },
   patch: string,
   checkOnly: boolean,
+  guarded = false,
 ): WorkbenchCommandExecutionResult {
-  const usesRepoScopedPaths = patchUsesRepoScopedPaths(patch, context.repoScopePath);
+  // Guarded mode never rewrites paths with --directory: its paths were already checked to be repository-relative.
+  const usesRepoScopedPaths = guarded || patchUsesRepoScopedPaths(patch, context.repoScopePath);
   if (context.repoScopePath !== "." && !usesRepoScopedPaths) {
     const scopedArgs = ["apply", "--whitespace=nowarn", `--directory=${context.repoScopePath}`];
     if (checkOnly) {
@@ -2252,7 +2324,7 @@ function normalizeWorkbenchPatch(inputPatch: string): string {
   if (inputPatch.includes("\0")) {
     throw new ValidationError({ message: "Patch content contains an invalid null byte." });
   }
-  if (Buffer.byteLength(inputPatch, "utf8") > 4 * 1024 * 1024) {
+  if (Buffer.byteLength(inputPatch, "utf8") > CODE_MODE_WORKBENCH_PATCH_MAX_BYTES) {
     throw new ValidationError({ message: "Patch content exceeds the 4 MB workbench limit." });
   }
   return inputPatch;

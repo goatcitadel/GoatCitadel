@@ -41,7 +41,9 @@ export function parseCodeModeAiderAdapterResultEnvelope(
     (replay.policy !== "audit_only" && replay.policy !== "promoted") ||
     typeof replay.reason !== "string"
   ) {
-    throw new Error("Aider adapter result envelope replay posture must be audit_only and non-replayable.");
+    throw new Error(
+      "Aider adapter result envelope replay posture must be non-replayable with an audit_only or promoted policy and a reason.",
+    );
   }
   const promotion =
     options?.promotion === undefined || options.promotion === null

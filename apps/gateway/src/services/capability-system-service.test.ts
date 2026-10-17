@@ -1014,8 +1014,19 @@ describe("CapabilitySystemService", () => {
     expect(applyChatSessionWorkbenchPatch).not.toHaveBeenCalled();
     expect(harness.storage.codeModeRuns.get(run.runId)).toEqual(before);
 
-    // The same action while still pending dispatches to the promotion module, which refuses the unpinned run
-    // without touching the workbench.
+    // The same action while still pending dispatches to the promotion module. A pending action whose approval is
+    // not an approved promote approval for the same patch hash is refused on that binding first.
+    harness.storage.pendingApprovalActions.find("approval-promote-1")!.resolutionStatus = "pending";
+    await expect(harness.service.executeApprovedCodeModeRun("approval-promote-1")).resolves.toMatchObject({
+      outcome: "blocked",
+      result: { reason: "approval_binding_mismatch" },
+    });
+    // Once the binding holds, the promotion module refuses the unpinned run without touching the workbench.
+    harness.approvals.set("approval-promote-1", {
+      ...harness.approvals.get("approval-promote-1")!,
+      status: "approved",
+      payload: { runId: run.runId, patchSha256: fixture.patchArtifact.sha256 },
+    });
     harness.storage.pendingApprovalActions.find("approval-promote-1")!.resolutionStatus = "pending";
     await expect(harness.service.executeApprovedCodeModeRun("approval-promote-1")).resolves.toMatchObject({
       outcome: "blocked",

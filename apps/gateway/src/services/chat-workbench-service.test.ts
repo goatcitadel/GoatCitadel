@@ -910,9 +910,9 @@ describe("chat workbench helpers", () => {
     const { deps, projectRoot, rootDir } = await createGitWorkbenchFixture();
     const { pin, worktreePath } = await preparePinnedWorkbenchPatch(deps, projectRoot, rootDir);
     const failingPatch = [
-      "diff --git a/index.ts b/index.ts",
-      "--- a/index.ts",
-      "+++ b/index.ts",
+      "diff --git a/workspace/demo/index.ts b/workspace/demo/index.ts",
+      "--- a/workspace/demo/index.ts",
+      "+++ b/workspace/demo/index.ts",
       "@@ -99,1 +99,1 @@",
       "-missing line",
       "+replacement line",
@@ -960,6 +960,67 @@ describe("chat workbench helpers", () => {
     expect(applied.applied).toBe(true);
     expect(applied.changedFiles).toEqual(["index.ts"]);
     expect(await readNormalized(path.join(projectRoot, "index.ts"))).toBe("export const demo = false;\n");
+  }, 30_000);
+
+  it("guarded apply on a sub-scoped project refuses project-relative and outside-scope paths", async () => {
+    const { deps, projectRoot, rootDir } = await createGitWorkbenchFixture();
+    const { patch, pin, worktreePath } = await preparePinnedWorkbenchPatch(deps, projectRoot, rootDir);
+    expect(patch).toContain("diff --git a/workspace/demo/index.ts b/workspace/demo/index.ts");
+    // Unguarded callers may send project-relative paths (rewritten with --directory); guarded mode never does.
+    const projectRelative = patch.replaceAll("workspace/demo/index.ts", "index.ts");
+    const outsideScope = [
+      patch.trimEnd(),
+      "diff --git a/workspace/other.ts b/workspace/other.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/workspace/other.ts",
+      "@@ -0,0 +1 @@",
+      "+export const other = true;",
+      "",
+    ].join("\n");
+
+    for (const candidate of [projectRelative, outsideScope]) {
+      const refusal = await expectPatchRefusal(
+        applyChatSessionWorkbenchPatch(deps, "sess-1", { patch: candidate, ...pin }),
+      );
+      expect(refusal.reason).toBe("out_of_scope");
+    }
+    expect(captureCodeModeGitWorktreeState(worktreePath, CODE_MODE_GIT_CAPTURE_TIMEOUT_MS).stateHash).toBe(
+      pin.expectedWorktreeStateHash,
+    );
+    expect(deps.publishRealtime).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it("guarded apply turns pre-write errors into precondition_failed refusals", async () => {
+    const { deps, projectRoot, rootDir } = await createGitWorkbenchFixture();
+    const { patch, pin, worktreePath } = await preparePinnedWorkbenchPatch(deps, projectRoot, rootDir);
+    const oversize = `${patch}${"+".repeat(4 * 1024 * 1024)}\n`;
+
+    const tooLarge = await expectPatchRefusal(
+      applyChatSessionWorkbenchPatch(deps, "sess-1", { patch: oversize, ...pin }),
+    );
+    expect(tooLarge.reason).toBe("precondition_failed");
+    expect(tooLarge.message).toMatch(/4 MB workbench limit/);
+    expect(tooLarge.message.length).toBeLessThan(400);
+
+    const checkOnly = await expectPatchRefusal(
+      applyChatSessionWorkbenchPatch(deps, "sess-1", { patch, ...pin, checkOnly: true }),
+    );
+    expect(checkOnly.reason).toBe("precondition_failed");
+
+    vi.mocked(deps.requireChatSession).mockRejectedValueOnce(new Error("Chat session sess-1 was not found."));
+    const missing = await expectPatchRefusal(applyChatSessionWorkbenchPatch(deps, "sess-1", { patch, ...pin }));
+    expect(missing.reason).toBe("precondition_failed");
+    expect(missing.message).toMatch(/not found/);
+
+    // Unguarded callers keep the plain errors.
+    await expect(applyChatSessionWorkbenchPatch(deps, "sess-1", { patch: oversize })).rejects.not.toBeInstanceOf(
+      ChatWorkbenchPatchRefusedError,
+    );
+    expect(captureCodeModeGitWorktreeState(worktreePath, CODE_MODE_GIT_CAPTURE_TIMEOUT_MS).stateHash).toBe(
+      pin.expectedWorktreeStateHash,
+    );
+    expect(deps.publishRealtime).not.toHaveBeenCalled();
   }, 30_000);
 
   it("summarizes helper run output and maps latest helper status onto validation state", async () => {

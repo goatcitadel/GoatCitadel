@@ -25,8 +25,10 @@ import {
   parseCodeModeAiderWorkspacePin,
   withPromotedCodeModeAiderReplayPosture,
 } from "./code-mode-aider-result-contract.js";
+import { CODE_MODE_AIDER_PROMOTE_ACTION_TYPE } from "./code-mode-pending-action-types.js";
 import {
   CODE_MODE_GIT_CAPTURE_TIMEOUT_MS,
+  CODE_MODE_WORKBENCH_PATCH_MAX_BYTES,
   captureCodeModeWorkbenchWorktree,
   readContainedRegularFile,
 } from "./code-mode-worktree-capture.js";
@@ -35,11 +37,11 @@ import {
  * Approval-gated promotion of a pinned Aider patch into the Chat workbench. The operator requests promotion of a
  * completed, workspace-pinned `patch_produced` run; a separate `code_mode.aider_promote` approval gates it. On
  * approval the patch artifact sha256 and the workbench HEAD/state are re-checked against the plan-time pin, and the
- * patch is applied through the guarded workbench path exactly once. An `applying` intent written before the apply
+ * patch is applied through the guarded workbench path at most once. An `applying` intent written before the apply
  * makes any retry after an interrupted apply refuse with `promotion_outcome_unknown` instead of re-applying.
  */
 
-export const CODE_MODE_AIDER_PROMOTE_ACTION_TYPE = "code_mode.aider_promote" as const;
+export { CODE_MODE_AIDER_PROMOTE_ACTION_TYPE, isCodeModePendingActionType } from "./code-mode-pending-action-types.js";
 export const CODE_MODE_AIDER_PROMOTE_APPROVAL_KIND = CODE_MODE_AIDER_PROMOTE_ACTION_TYPE;
 
 export type CodeModeAiderPromotionRefusalReason =
@@ -57,7 +59,9 @@ export type CodeModeAiderPromotionRefusalReason =
   | "patch_check_failed"
   | "promotion_in_progress"
   | "promotion_outcome_unknown"
-  | "workbench_apply_unavailable";
+  | "workbench_apply_unavailable"
+  | "workbench_precondition_failed"
+  | "approval_binding_mismatch";
 
 export interface CodeModeAiderPromotionDeps {
   storage: Pick<
@@ -82,7 +86,10 @@ export interface CodeModeAiderPromotionDeps {
 }
 
 const PROMOTE_APPROVAL_TTL_MS = 15 * 60_000;
-const MAX_PROMOTED_PATCH_BYTES = 8 * 1024 * 1024;
+const MAX_PROMOTED_PATCH_BYTES = CODE_MODE_WORKBENCH_PATCH_MAX_BYTES;
+const MAX_APPROVAL_CHANGED_PATHS = 50;
+const MAX_APPROVAL_PATH_CHARS = 512;
+const MAX_STORED_ERROR_CHARS = 240;
 const MAX_POLICY_SNAPSHOT_BYTES = 16 * 1024 * 1024;
 const PIN_SNAPSHOT_KEY = "codeModeAiderWorkspacePin";
 
@@ -91,12 +98,8 @@ const WORKBENCH_REFUSAL_REASONS: Record<ChatWorkbenchPatchRefusalReason, CodeMod
   head_moved: "worktree_head_moved",
   state_drift: "worktree_state_drift",
   check_failed: "patch_check_failed",
+  precondition_failed: "workbench_precondition_failed",
 };
-
-/** True for the pending actions the Code Mode executor owns: an approved run and an approved Aider promotion. */
-export function isCodeModePendingActionType(actionType: unknown): boolean {
-  return actionType === "code_mode.run" || actionType === CODE_MODE_AIDER_PROMOTE_ACTION_TYPE;
-}
 
 class PromotionRefusal extends Error {
   public constructor(
@@ -122,6 +125,7 @@ export async function requestCodeModeAiderPromotion(
   operatorId?: string,
 ): Promise<CodeModeAiderPromotionRequestResponse> {
   let promotable: PromotableRun;
+  let changedPaths: { paths: string[]; truncated: boolean };
   try {
     const existing = readPromotionRecord(readAdapter(run));
     if (existing?.status === "promoted") {
@@ -134,6 +138,8 @@ export async function requestCodeModeAiderPromotion(
       );
     }
     promotable = await readPromotableRun(deps, run);
+    // Shown to the approver; the hash-verified patch bytes (not this list) are what promotion applies.
+    changedPaths = listPatchChangedPaths(readVerifiedPatch(deps, promotable.patchArtifact.artifact));
   } catch (error) {
     if (error instanceof PromotionRefusal) {
       throw new ConflictError({ message: error.message, details: { reason: error.reason, runId: run.runId } });
@@ -149,6 +155,8 @@ export async function requestCodeModeAiderPromotion(
     patchArtifactId: artifact.artifactId,
     ...(promotable.patchArtifact.fileCount !== undefined ? { fileCount: promotable.patchArtifact.fileCount } : {}),
     pinnedHead: promotable.pin.worktreeHead,
+    changedPaths: changedPaths.paths,
+    changedPathsTruncated: changedPaths.truncated,
   };
   const now = readNow(deps);
   const approval = await deps.createApproval({
@@ -202,6 +210,7 @@ export async function executeApprovedCodeModeAiderPromotion(
     if (!run) {
       throw new PromotionRefusal("run_not_completed", `Aider run ${runId || "(missing)"} was not found.`);
     }
+    const approval = await readBoundApproval(deps, approvalId, pending);
     const existing = readPromotionRecord(readAdapter(run));
     if (existing) {
       return await settleExistingPromotion(deps, approvalId, run.runId, existing);
@@ -224,7 +233,7 @@ export async function executeApprovedCodeModeAiderPromotion(
       patchSha256: artifact.sha256,
       pin: promotable.pin,
       startedAt: readNow(deps).toISOString(),
-      ...(await readResolvedBy(deps, approvalId)),
+      ...(approval.resolvedBy ? { resolvedBy: approval.resolvedBy } : {}),
     };
     const claimed = await writePromotionIntent(deps, run.runId, intent);
     if (claimed) {
@@ -238,6 +247,57 @@ export async function executeApprovedCodeModeAiderPromotion(
     }
     throw error;
   }
+}
+
+/** Defense in depth: the pending action must belong to an approved promote approval for the same patch hash. */
+async function readBoundApproval(
+  deps: CodeModeAiderPromotionDeps,
+  approvalId: string,
+  pending: PendingApprovalAction,
+): Promise<ApprovalRequest> {
+  let approval: ApprovalRequest;
+  try {
+    approval = await deps.storage.approvals.get(approvalId);
+  } catch (error) {
+    throw new PromotionRefusal(
+      "approval_binding_mismatch",
+      `Approval ${approvalId} could not be read: ${describeError(error)}`,
+    );
+  }
+  const payload = isRecord(approval.payload) ? approval.payload : {};
+  if (
+    approval.kind !== CODE_MODE_AIDER_PROMOTE_APPROVAL_KIND ||
+    approval.status !== "approved" ||
+    pending.actionType !== CODE_MODE_AIDER_PROMOTE_ACTION_TYPE ||
+    typeof pending.request.patchSha256 !== "string" ||
+    payload.patchSha256 !== pending.request.patchSha256
+  ) {
+    throw new PromotionRefusal(
+      "approval_binding_mismatch",
+      `Approval ${approvalId} is not an approved Aider promotion for this patch.`,
+    );
+  }
+  return approval;
+}
+
+/** Repository paths named by the patch's `diff --git` headers, bounded for the approval payload. */
+export function listPatchChangedPaths(patch: string): { paths: string[]; truncated: boolean } {
+  const paths = new Set<string>();
+  let truncated = false;
+  for (const line of patch.split(/\r?\n/)) {
+    const match = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
+    if (!match) {
+      continue;
+    }
+    for (const raw of new Set([match[1]!, match[2]!])) {
+      if (paths.size >= MAX_APPROVAL_CHANGED_PATHS) {
+        truncated = true;
+        break;
+      }
+      paths.add(raw.length > MAX_APPROVAL_PATH_CHARS ? `${raw.slice(0, MAX_APPROVAL_PATH_CHARS)}...` : raw);
+    }
+  }
+  return { paths: [...paths], truncated };
 }
 
 async function readPromotableRun(deps: CodeModeAiderPromotionDeps, run: CodeModeRunRecord): Promise<PromotableRun> {
@@ -522,26 +582,28 @@ async function refusePromotion(
   message: string,
 ): Promise<ToolInvokeResult> {
   const manual = reason === "promotion_outcome_unknown";
+  const boundedError =
+    message.length > MAX_STORED_ERROR_CHARS ? `${message.slice(0, MAX_STORED_ERROR_CHARS)}...` : message;
   await deps.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
     outcome: "blocked",
     status: "refused",
     ...(runId ? { runId } : {}),
     reason,
-    error: message,
+    error: boundedError,
     ...(manual ? { manualReconciliationRequired: true } : {}),
   });
   await appendExecutedEvent(deps, approvalId, runId, "refused", { reason });
+  // Realtime carries only the typed reason; the bounded error text stays in the pending action result.
   await deps.publishRealtime("code_mode_aider_promotion_refused", "capabilities", {
     ...(runId ? { runId } : {}),
     approvalId,
     reason,
-    error: message,
   });
   return {
     outcome: "blocked",
     policyReason: `code_mode_aider_promote:${reason}`,
     auditEventId: `code-mode-aider-promote-${runId || approvalId}`,
-    result: { ...(runId ? { runId } : {}), status: "refused", reason, error: message },
+    result: { ...(runId ? { runId } : {}), status: "refused", reason, error: boundedError },
   };
 }
 
@@ -558,18 +620,6 @@ async function appendExecutedEvent(
     actorId: "system",
     payload: { actionType: CODE_MODE_AIDER_PROMOTE_ACTION_TYPE, ...(runId ? { runId } : {}), outcome, ...extra },
   });
-}
-
-async function readResolvedBy(
-  deps: CodeModeAiderPromotionDeps,
-  approvalId: string,
-): Promise<Pick<CodeModeAiderPromotionRecord, "resolvedBy">> {
-  try {
-    const approval = await deps.storage.approvals.get(approvalId);
-    return approval.resolvedBy ? { resolvedBy: approval.resolvedBy } : {};
-  } catch {
-    return {};
-  }
 }
 
 function readAdapter(run: CodeModeRunRecord): Record<string, unknown> | undefined {

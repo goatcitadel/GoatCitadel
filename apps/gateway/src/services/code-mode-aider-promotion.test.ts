@@ -20,6 +20,7 @@ import {
   CODE_MODE_AIDER_PROMOTE_ACTION_TYPE,
   executeApprovedCodeModeAiderPromotion,
   isCodeModePendingActionType,
+  listPatchChangedPaths,
   requestCodeModeAiderPromotion,
   type CodeModeAiderPromotionDeps,
 } from "./code-mode-aider-promotion.js";
@@ -233,6 +234,73 @@ describe("Aider promotion", { timeout: 60_000 }, () => {
     });
   });
 
+  it("clears the intent when the workbench refuses a precondition, so a later request is allowed", async () => {
+    const fx = await createFixture();
+    const approvalId = await fx.requestAndApprove();
+    fx.apply.mockImplementationOnce(async () => {
+      throw new ChatWorkbenchPatchRefusedError(
+        "precondition_failed",
+        "Workbench patch precondition failed before any file was written: Chat session was not found.",
+      );
+    });
+
+    const result = await fx.execute(approvalId);
+
+    expect(result).toMatchObject({ outcome: "blocked", result: { reason: "workbench_precondition_failed" } });
+    expect(fx.storage.pendingApprovalActions.get(approvalId).result).not.toHaveProperty("manualReconciliationRequired");
+    expect(await fx.promotion()).toBeUndefined();
+    expect(fx.readWorktreeFile()).toBe(ORIGINAL);
+    const next = await requestCodeModeAiderPromotion(fx.deps, await fx.run(), "operator-1");
+    expect(next).toMatchObject({ status: "approval_pending" });
+    fx.storage.approvals.resolve(next.approvalId!, { decision: "approve", resolvedBy: "operator-1" });
+    expect(await fx.execute(next.approvalId!)).toMatchObject({ outcome: "executed", result: { status: "promoted" } });
+    expect(fx.readWorktreeFile()).toBe(PROMOTED);
+  });
+
+  it("refuses a patch artifact above the workbench patch limit before recording an intent", async () => {
+    const fx = await createFixture();
+    const approvalId = await fx.requestAndApprove();
+    fs.writeFileSync(path.resolve(fx.root, fx.patchArtifact.relPath), "+".repeat(4 * 1024 * 1024 + 1));
+
+    const result = await fx.execute(approvalId);
+
+    expect(result).toMatchObject({ outcome: "blocked", result: { reason: "patch_hash_mismatch" } });
+    expect(fx.apply).not.toHaveBeenCalled();
+    expect(await fx.promotion()).toBeUndefined();
+    const stored = fx.storage.pendingApprovalActions.get(approvalId).result as { error: string };
+    expect(stored.error.length).toBeLessThanOrEqual(243);
+    const refused = fx.publishRealtime.mock.calls.find((call) => call[0] === "code_mode_aider_promotion_refused");
+    expect(refused?.[2]).toEqual({ runId: fx.runId, approvalId, reason: "patch_hash_mismatch" });
+  });
+
+  it("refuses when the approval is not an approved promote approval for the same patch hash", async () => {
+    const fx = await createFixture();
+    const pendingOnly = await requestCodeModeAiderPromotion(fx.deps, await fx.run(), "operator-1");
+    const notApproved = await fx.execute(pendingOnly.approvalId!);
+    expect(notApproved).toMatchObject({ outcome: "blocked", result: { reason: "approval_binding_mismatch" } });
+
+    const approvalId = await fx.requestAndApprove();
+    const rebound = await executeApprovedCodeModeAiderPromotion(fx.deps, approvalId, {
+      ...fx.storage.pendingApprovalActions.get(approvalId),
+      request: { ...fx.storage.pendingApprovalActions.get(approvalId).request, patchSha256: "f".repeat(64) },
+    });
+    expect(rebound).toMatchObject({ outcome: "blocked", result: { reason: "approval_binding_mismatch" } });
+    expect(fx.apply).not.toHaveBeenCalled();
+    expect(await fx.promotion()).toBeUndefined();
+  });
+
+  it("lists bounded changed paths from diff --git headers", () => {
+    const headers = Array.from({ length: 60 }, (_, index) => `diff --git a/src/f${index}.ts b/src/f${index}.ts`);
+    const listed = listPatchChangedPaths([...headers, "diff --git a/old.ts b/new.ts"].join("\n"));
+    expect(listed.paths).toHaveLength(50);
+    expect(listed.paths[0]).toBe("src/f0.ts");
+    expect(listed.truncated).toBe(true);
+    expect(listPatchChangedPaths("diff --git a/old.ts b/new.ts\r\n")).toEqual({
+      paths: ["old.ts", "new.ts"],
+      truncated: false,
+    });
+  });
+
   it("registers a caution approval without session linkage or code hashes", async () => {
     const fx = await createFixture();
 
@@ -250,6 +318,8 @@ describe("Aider promotion", { timeout: 60_000 }, () => {
         patchArtifactId: fx.patchArtifact.artifactId,
         fileCount: 1,
         pinnedHead: fx.pin.worktreeHead,
+        changedPaths: ["index.ts"],
+        changedPathsTruncated: false,
       },
       linkage: {
         workspaceId: "workspace-a",

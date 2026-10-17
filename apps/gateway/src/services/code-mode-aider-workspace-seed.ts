@@ -5,6 +5,7 @@ import path from "node:path";
 import type { CodeModeAiderWorkspaceSeed } from "./code-mode-aider-workspace-pin.js";
 import {
   CODE_MODE_GIT_CAPTURE_TIMEOUT_MS,
+  CODE_MODE_WORKBENCH_PATCH_MAX_BYTES,
   runCodeModeGit,
   runCodeModeGitBuffer,
 } from "./code-mode-worktree-capture.js";
@@ -23,12 +24,17 @@ import {
  * - Any `.git` entry (directory or gitfile) in the work tree refuses collection, so host-side Git never opens a
  *   nested repository; gitlinks (mode 160000) and new or changed symlinks (mode 120000) are refused after staging.
  * - The diff is captured as bytes and refused unless it is valid UTF-8.
+ * - The patch is bounded by the Chat workbench patch limit, so any recorded patch fits the promote path.
  * The baseline is SHA-1 only: SHA-256 repositories are refused.
+ *
+ * Scope: the seed checks out every tracked file of the workbench repository at the pinned commit, so a pinned run's
+ * container sees the whole repository, which can be wider than the session's project scope. Promotion narrows the
+ * write side only: it accepts a patch only when every path lies inside the session's project scope.
  */
 
 export const CODE_MODE_AIDER_BASELINE_GIT_DIR = "aider-baseline.git";
 export const CODE_MODE_AIDER_SEED_MAX_FILES = 20_000;
-export const CODE_MODE_AIDER_SEEDED_PATCH_MAX_BYTES = 8 * 1024 * 1024;
+export const CODE_MODE_AIDER_SEEDED_PATCH_MAX_BYTES = CODE_MODE_WORKBENCH_PATCH_MAX_BYTES;
 /** Git timeout for seeding and patch collection; checkout, add and diff of large trees outlast the capture default. */
 export const CODE_MODE_AIDER_SEED_TIMEOUT_MS = 120_000;
 
