@@ -3975,10 +3975,8 @@ async function apiProbe(probe, state) {
       if (matches.length !== 1) {
         throw new Error(`expected one pending Communications send approval; found ${matches.length}`);
       }
-      if (
-        matches[0]?.preview?.execution !== "Approval records operator intent; this route does not send the message."
-      ) {
-        throw new Error("Communications approval did not retain the no-send execution boundary");
+      if (matches[0]?.preview?.execution !== "Approving sends this exact message once through the connected account.") {
+        throw new Error("Communications approval did not state its exact-once send execution");
       }
       const sideEffects = await checkedRequest(
         state.gatewayUrl,

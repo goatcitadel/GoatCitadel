@@ -2244,6 +2244,14 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "comms",
   },
   {
+    name: "smtp.send",
+    category: "comms",
+    riskLevel: "danger",
+    requiresApproval: true,
+    description: "Send a plain-text email through the configured IMAP/SMTP account's SMTP server.",
+    pack: "comms",
+  },
+  {
     name: "calendar.list",
     category: "comms",
     riskLevel: "safe",

@@ -71,6 +71,7 @@ export function deriveToolCapabilityPolicy(
     isMeshInvocation ||
     isNetworkWrite ||
     startsWith("gmail.send") ||
+    startsWith("smtp.send") ||
     startsWith("calendar.create_event") ||
     startsWith("channel.") ||
     startsWith("slack.") ||
@@ -90,6 +91,7 @@ export function deriveToolCapabilityPolicy(
     isMeshInvocation ||
     toolName === "mcp.invoke" ||
     startsWith("gmail.") ||
+    startsWith("smtp.") ||
     startsWith("calendar.") ||
     startsWith("channel.") ||
     startsWith("slack.") ||
@@ -138,7 +140,12 @@ export function deriveToolCapabilityPolicy(
     toolName,
     family,
     usesNetwork:
-      isNetworkRead || isNetworkWrite || isMeshInvocation || family === "mcp" || category === "comms" || toolName === "docs.ingest",
+      isNetworkRead ||
+      isNetworkWrite ||
+      isMeshInvocation ||
+      family === "mcp" ||
+      category === "comms" ||
+      toolName === "docs.ingest",
     readsFilesystem: family === "filesystem_read" || toolName === "docs.ingest",
     mutatesFilesystem,
     mutatesRemoteState,
@@ -300,6 +307,7 @@ function stringifyUnknown(value: unknown): string {
 function defaultSecretBoundaryForTool(toolName: string): SecretResolutionBoundary {
   if (
     toolName.startsWith("gmail.") ||
+    toolName.startsWith("smtp.") ||
     toolName.startsWith("calendar.") ||
     toolName.startsWith("channel.") ||
     toolName.startsWith("slack.") ||

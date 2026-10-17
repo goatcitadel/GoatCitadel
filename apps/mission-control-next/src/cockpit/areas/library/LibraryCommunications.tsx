@@ -65,8 +65,8 @@ export function LibraryCommunications({ workspaceId }: { workspaceId: string }) 
         description={
           <>
             Inbox, agenda and contacts read through governed integrations for{" "}
-            <span title={workspaceId}>{workspaceName ?? `workspace ${workspaceId}`}</span>. Sending is approval-gated
-            and this screen never delivers mail.
+            <span title={workspaceId}>{workspaceName ?? `workspace ${workspaceId}`}</span>. Sending is approval-gated:
+            approving sends the exact reviewed message once.
           </>
         }
         actions={

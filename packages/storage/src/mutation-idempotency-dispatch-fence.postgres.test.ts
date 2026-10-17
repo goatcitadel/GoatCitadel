@@ -44,8 +44,8 @@ test(
 
       // The full registry (not a canonical prefix) runs the schema-shape gate.
       const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-      assert.deepEqual(migrated.appliedVersions, [212]);
-      assert.equal(migrated.latestVersion, 212);
+      assert.deepEqual(migrated.appliedVersions, [212, 213, 214]);
+      assert.equal(migrated.latestVersion, 214);
 
       const column = await admin.query<{ data_type: string; is_nullable: string }>(
         `SELECT data_type, is_nullable FROM information_schema.columns

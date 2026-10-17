@@ -28,8 +28,8 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 265,
-        name: "mutation_idempotency_dispatch_fence",
+        version: 266,
+        name: "mail_drafts",
       },
     );
     db.close();

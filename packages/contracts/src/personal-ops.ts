@@ -101,7 +101,10 @@ export interface MailDraftRecord {
   subject: string;
   bodyText: string;
   approvalId?: string;
-  status: "draft" | "approval_required" | "sent" | "failed";
+  /** `outcome_unknown`: the provider may have delivered; never resent or promoted to `sent` automatically. */
+  status: "draft" | "approval_required" | "sent" | "failed" | "send_unavailable" | "outcome_unknown";
+  failureReason?: string;
+  sentAt?: string;
   createdAt: string;
   updatedAt: string;
 }

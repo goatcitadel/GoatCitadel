@@ -870,14 +870,15 @@ describe("Postgres migration ledger compatibility", () => {
     // Reviewed published registry through v208 plus task appends v209/v210:
     // feature admissions, context/heartbeat bindings, remote references and cron
     // authority remain intact; approval linkage adds six columns and two indexes;
-    // v212 adds mutation_idempotency.dispatched_at.
+    // v212 adds mutation_idempotency.dispatched_at; v213/v214 add mail_drafts
+    // (14 columns, one index).
     // Keep independent drift tripwires for the complete current shape.
-    assert.equal(manifest.tables.length, 368);
+    assert.equal(manifest.tables.length, 369);
     assert.equal(
       manifest.tables.reduce((count, table) => count + table.columns.length, 0),
-      5_085,
+      5_099,
     );
-    assert.equal(manifest.indexes.length, 768);
+    assert.equal(manifest.indexes.length, 769);
     assert.deepEqual(
       manifest.tables
         .find((table) => table.name === "approval_execution_linkages")
@@ -1084,8 +1085,8 @@ describe("Postgres migration ledger compatibility", () => {
 
   it("covers every canonical IF NOT EXISTS table and index and fails closed on catalog issues", () => {
     const manifest = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    assert.equal(manifest.tables.length, 368);
-    assert.equal(manifest.indexes.length, 785);
+    assert.equal(manifest.tables.length, 369);
+    assert.equal(manifest.indexes.length, 786);
     assert.equal(
       manifest.tables.every((table) => table.columns.length > 0),
       true,
