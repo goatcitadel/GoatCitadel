@@ -2,6 +2,7 @@ import { APPROVAL_EXECUTION_LINKAGE_SQLITE_SQL } from "./approval-execution-link
 import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_SQLITE_SQL } from "./approval-execution-linkage-index-repair.js";
 import { createChannelGuidedSetupSchema } from "./channel-guided-setup-schema.js";
 import { createMailDraftSchema } from "./mail-draft-schema.js";
+import { PAUSE_DORMANT_NO_AGENT_CRON_JOBS_SQLITE_SQL } from "./pause-dormant-no-agent-cron.js";
 import { upgradeChatRoutedContextAdmissionSchema } from "./chat-routed-context-admission-schema.js";
 import { upgradeHeartbeatFeatureBindingSchema } from "./heartbeat-feature-binding-schema.js";
 import { upgradeCommitmentOccurrenceSchema } from "./commitment-occurrence-schema.js";
@@ -7461,6 +7462,18 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         },
       },
       { version: 266, name: "mail_drafts", up: createMailDraftSchema },
+      // no_agent cron graduated from an env-gated experiment. Enabled jobs that
+      // never ran under the gate are paused once so an operator re-confirms the
+      // host command before it runs; jobs that already ran keep their state.
+      {
+        version: 267,
+        name: "pause_dormant_no_agent_cron_jobs",
+        up: (db) => {
+          if (tableExists(db, "cron_jobs")) {
+            db.exec(PAUSE_DORMANT_NO_AGENT_CRON_JOBS_SQLITE_SQL);
+          }
+        },
+      },
     ],
   },
 ];
