@@ -51,6 +51,7 @@ export function composeSystemRouteDependencies(
       chatTurnRuntime: gateway.chatTurnRuntime,
       mutationIdempotencyStore: gateway.mutationIdempotencyStore,
       evidenceEnvelopeService: gateway.evidenceEnvelopeService,
+      createApproval: (input) => gateway.createApproval(input),
     },
     addons: createAddonsRoutePort({
       addonsService: gateway.addonsService,

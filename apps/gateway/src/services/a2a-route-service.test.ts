@@ -1,6 +1,10 @@
+import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   A2AJsonRpcResponse,
+  A2AOutboundPeerConfig,
+  ApprovalCreateInput,
+  ApprovalRequest,
   ChatSendMessageResponse,
   TaskDeliverableRecord,
   TaskRecord,
@@ -9,11 +13,14 @@ import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { projectA2AExternalValue } from "./a2a-public-projection.js";
 import { A2ARouteService } from "./a2a-route-service.js";
 import { buildInboundIdempotencyKey, normalizeInboundMessage } from "./a2a-route-utils.js";
+import { citadelWardReplayIdempotencyKey } from "./citadel-ward-approval.js";
 
 describe("A2ARouteService", () => {
   let storage: Storage | undefined;
+  const httpServers: Server[] = [];
 
-  afterEach(() => {
+  afterEach(async () => {
+    await Promise.all(httpServers.splice(0).map(closeHttpServer));
     storage?.close();
     storage = undefined;
   });
@@ -1459,6 +1466,168 @@ describe("A2ARouteService", () => {
     });
   });
 
+  describe("citadel ward gate on outbound", () => {
+    const wardAction = "a2a.outbound.jsonrpc.message.send";
+    const outboundInput = {
+      peerId: "peer-remote",
+      method: "message/send",
+      params: { text: "Ward-gated outbound." },
+    };
+    const wardApproval = { approvalId: "approval-ward-1", wardAction };
+    const replayInput = { ...outboundInput, idempotencyKey: citadelWardReplayIdempotencyKey("approval-ward-1") };
+
+    async function createWardedHarness(createApproval?: A2ARouteServiceDependencies["createApproval"]) {
+      const peer = await startJsonRpcPeer();
+      const harness = createService({
+        networkAllowlist: ["127.0.0.1"],
+        outboundPeers: [{ peerId: "peer-remote", agentCardUrl: peer.agentCardUrl }],
+        createApproval,
+      });
+      addWard(harness.storage, "require_approval");
+      return { ...harness, peer };
+    }
+
+    function approvalStub() {
+      return vi.fn(
+        async (input: ApprovalCreateInput) =>
+          ({ approvalId: "approval-ward-1", kind: input.kind, status: "pending" }) as ApprovalRequest,
+      );
+    }
+
+    it("opens an approval for require_approval and sends nothing", async () => {
+      const createApproval = approvalStub();
+      const harness = await createWardedHarness(createApproval);
+
+      const response = await harness.service.sendOutbound(outboundInput, "operator-1", "2026-06-01T00:00:00.000Z");
+
+      expect(response).toMatchObject({ status: "approval_required", approvalId: "approval-ward-1" });
+      expect(createApproval).toHaveBeenCalledTimes(1);
+      expect(createApproval.mock.calls[0]?.[0]).toMatchObject({
+        kind: "citadel_ward.a2a_outbound",
+        payload: {
+          wardAction,
+          citadelId: "personal",
+          payloadHash: expect.any(String),
+          request: { outbound: outboundInput, actorId: "operator-1" },
+        },
+        expiresAt: "2026-06-01T00:15:00.000Z",
+      });
+      expect(harness.peer.posts()).toHaveLength(0);
+      expect(harness.storage.externalSideEffectRuns.listByConnection("peer-remote")).toEqual([]);
+    });
+
+    it("sends once on an approved replay", async () => {
+      const createApproval = approvalStub();
+      const harness = await createWardedHarness(createApproval);
+
+      const first = await harness.service.sendOutbound(replayInput, "operator-1", "2026-06-01T00:00:00.000Z", {
+        wardApproval,
+      });
+      const second = await harness.service.sendOutbound(replayInput, "operator-1", "2026-06-01T00:00:01.000Z", {
+        wardApproval,
+      });
+
+      expect(first).toMatchObject({ status: "sent" });
+      expect(second).toMatchObject({ status: "replayed" });
+      expect(harness.peer.posts()).toHaveLength(1);
+      expect(createApproval).not.toHaveBeenCalled();
+    });
+
+    it("does not accept a ward approval minted for another action", async () => {
+      const createApproval = approvalStub();
+      const harness = await createWardedHarness(createApproval);
+
+      const response = await harness.service.sendOutbound(replayInput, "operator-1", "2026-06-01T00:00:00.000Z", {
+        wardApproval: { approvalId: "approval-other", wardAction: "a2a.outbound.jsonrpc.tasks.get" },
+      });
+
+      expect(response).toMatchObject({ status: "approval_required" });
+      expect(harness.peer.posts()).toHaveLength(0);
+    });
+
+    it("deny after approval blocks the replay", async () => {
+      const createApproval = approvalStub();
+      const harness = await createWardedHarness(createApproval);
+      addWard(harness.storage, "deny");
+
+      const response = await harness.service.sendOutbound(replayInput, "operator-1", "2026-06-01T00:00:00.000Z", {
+        wardApproval,
+      });
+
+      expect(response).toMatchObject({ status: "blocked", warnings: [expect.stringMatching(/denies/)] });
+      expect(harness.peer.posts()).toHaveLength(0);
+      expect(createApproval).not.toHaveBeenCalled();
+    });
+
+    it("keeps the fail-closed block when no approval loop is wired", async () => {
+      const harness = await createWardedHarness();
+
+      const response = await harness.service.sendOutbound(outboundInput, "operator-1", "2026-06-01T00:00:00.000Z");
+
+      expect(response).toMatchObject({ status: "blocked" });
+      expect(response.approvalId).toBeUndefined();
+      expect(harness.peer.posts()).toHaveLength(0);
+    });
+
+    it("surfaces an approval creation failure as a block", async () => {
+      const harness = await createWardedHarness(
+        vi.fn(async () => {
+          throw new Error("approval store unavailable");
+        }),
+      );
+
+      const response = await harness.service.sendOutbound(outboundInput, "operator-1", "2026-06-01T00:00:00.000Z");
+
+      expect(response).toMatchObject({
+        status: "blocked",
+        warnings: expect.arrayContaining([expect.stringContaining("approval store unavailable")]),
+      });
+      expect(response.approvalId).toBeUndefined();
+      expect(harness.peer.posts()).toHaveLength(0);
+    });
+
+    function addWard(target: Storage, effect: "deny" | "require_approval") {
+      target.citadels.addWard({
+        citadelId: "personal",
+        name: `Outbound ${effect}`,
+        actionPattern: "a2a.outbound.*",
+        effect,
+      });
+    }
+
+    async function startJsonRpcPeer(): Promise<{ agentCardUrl: string; posts: () => string[] }> {
+      const posts: string[] = [];
+      let baseUrl = "";
+      const server = createServer((request, response) => {
+        response.writeHead(200, { "content-type": "application/json" });
+        if (request.method === "GET") {
+          response.end(
+            JSON.stringify({
+              supportedInterfaces: [{ protocolBinding: "JSONRPC", enabled: true, url: `${baseUrl}/a2a/jsonrpc` }],
+            }),
+          );
+          return;
+        }
+        posts.push(request.url ?? "");
+        response.end(JSON.stringify({ jsonrpc: "2.0", id: "peer", result: { ok: true } }));
+      });
+      httpServers.push(server);
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.off("error", reject);
+          resolve();
+        });
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("JSON-RPC test peer did not expose a TCP port.");
+      }
+      baseUrl = `http://127.0.0.1:${address.port}`;
+      return { agentCardUrl: `${baseUrl}/.well-known/agent-card.json`, posts: () => [...posts] };
+    }
+  });
+
   function createService(
     options: {
       bindings?: Array<"JSONRPC" | "HTTP_JSON">;
@@ -1466,6 +1635,8 @@ describe("A2ARouteService", () => {
       networkAllowlist?: string[];
       deliverables?: TaskDeliverableRecord[];
       allowedWorkspaceIds?: string[];
+      outboundPeers?: A2AOutboundPeerConfig[];
+      createApproval?: A2ARouteServiceDependencies["createApproval"];
     } = {},
   ) {
     storage = new Storage({
@@ -1634,8 +1805,8 @@ describe("A2ARouteService", () => {
               ],
             },
             outbound: {
-              enabled: false,
-              peers: [],
+              enabled: Boolean(options.outboundPeers),
+              peers: options.outboundPeers ?? [],
             },
           },
         },
@@ -1651,12 +1822,19 @@ describe("A2ARouteService", () => {
       chatTurnRuntime,
       mutationIdempotencyStore: asyncStorage.mutationIdempotency,
       pushDeliveryFetch: options.pushDeliveryFetch,
+      createApproval: options.createApproval,
     });
     return { service, storage, tasks, chatTurnRuntime, createChatSession, seedTask };
   }
 });
 
 type A2ARouteServiceDependencies = ConstructorParameters<typeof A2ARouteService>[0];
+
+function closeHttpServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
 
 function readResultTask(response: A2AJsonRpcResponse) {
   if ("error" in response) {
