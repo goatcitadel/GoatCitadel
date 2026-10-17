@@ -4,10 +4,12 @@ import type {
   DeviceAccessGrantListResponse,
   DeviceAccessGrantRevokeResponse,
   GatewayInstallTokenResolution,
+  GlobalToolAccessChange,
   LlmProviderConfig,
   LlmProviderRequestConfig,
   OnboardingBootstrapInput,
   OnboardingBootstrapResult,
+  OperatorWriteRootChange,
   PersonalityCatalogResponse,
   PersonalityCatalogMutationInput,
 } from "@goatcitadel/contracts";
@@ -63,6 +65,8 @@ export async function patchSettings(input: {
   budgetMode?: "saver" | "balanced" | "power";
   readAccessMode?: "roots_only" | "approval_required" | "full_disk";
   networkAllowlist?: string[];
+  operatorWriteRootChange?: OperatorWriteRootChange;
+  globalToolAccessChange?: GlobalToolAccessChange;
   auth?: AuthSettingsUpdateInput;
   llm?: {
     activeProviderId?: string;

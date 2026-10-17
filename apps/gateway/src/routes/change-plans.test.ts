@@ -15,10 +15,22 @@ describe("Change Plan resource routes", () => {
   it("binds monitoring verification to actor scope and the supplied revision", async () => {
     const verifyMonitoringPlan = vi.fn(async () => ({ planId: "plan-1", status: "completed", revision: 6 }));
     const app = build({ verifyMonitoringPlan });
-    const response = await app.inject({ method: "POST", url: "/api/v1/change-plans/plan-1/verifications", payload: { workspaceId: "default", expectedRevision: 5 } });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/change-plans/plan-1/verifications",
+      payload: { workspaceId: "default", expectedRevision: 5 },
+    });
     expect(response.statusCode).toBe(200);
-    expect(verifyMonitoringPlan).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "default", actorId: "operator-test" }), "plan-1", 5);
-    const invalid = await app.inject({ method: "POST", url: "/api/v1/change-plans/plan-1/verifications", payload: { workspaceId: "default", expectedRevision: 5, actorId: "another-operator" } });
+    expect(verifyMonitoringPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "default", actorId: "operator-test" }),
+      "plan-1",
+      5,
+    );
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/v1/change-plans/plan-1/verifications",
+      payload: { workspaceId: "default", expectedRevision: 5, actorId: "another-operator" },
+    });
     expect(invalid.statusCode).toBe(400);
     expect(verifyMonitoringPlan).toHaveBeenCalledTimes(1);
     await app.close();
@@ -60,6 +72,42 @@ describe("Change Plan resource routes", () => {
       expect(response.statusCode).toBe(400);
     }
     expect(create).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("accepts typed operator write-root and tool-posture intents and rejects extra fields", async () => {
+    const create = vi.fn(async () => ({ planId: "plan-1", status: "awaiting_confirmation", revision: 1 }));
+    const app = build({ create });
+    for (const change of [
+      { operation: "operator_write_root", action: "add", path: "/srv/scratch", allowDelete: true, label: "Scratch" },
+      { operation: "operator_write_root", action: "remove", preset: "os_temp" },
+      { operation: "tool_global_access", toolName: "fs.delete", posture: "available" },
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/change-plans",
+        payload: { request: { kind: "runtime_configuration", change } },
+      });
+      expect(response.statusCode).toBe(201);
+      expect(create).toHaveBeenLastCalledWith(
+        expect.objectContaining({ request: { kind: "runtime_configuration", change } }),
+      );
+    }
+    for (const change of [
+      { operation: "operator_write_root", action: "add", path: "relative/dir" },
+      { operation: "operator_write_root", action: "add", path: "/srv", writeJailRoots: ["/"] },
+      { operation: "operator_write_root", action: "add", preset: "home" },
+      { operation: "tool_global_access", toolName: "shell.exec", posture: "available" },
+      { operation: "tool_global_access", toolName: "fs.write", posture: "available", agentId: "main" },
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/change-plans",
+        payload: { request: { kind: "runtime_configuration", change } },
+      });
+      expect(response.statusCode).toBe(400);
+    }
+    expect(create).toHaveBeenCalledTimes(3);
     await app.close();
   });
 
