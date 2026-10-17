@@ -11,6 +11,9 @@ import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_COLUMN } from "../../ui/area-layout";
 import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
 import { WorkArchive } from "./WorkArchive";
+import { useOperatorInbox } from "../../data/use-operator-inbox";
+import { inboxMatchesWorkspace } from "../inbox/inbox-presentation";
+import { OLDER_KANBAN_VIEW } from "./WorkMoreViews";
 
 /** Reuse the revision-aware action owner and its self-contained native styles. */
 export function WorkKanban() {
@@ -20,12 +23,16 @@ export function WorkKanban() {
   const location = useCockpitRoute();
   const route = parseAppRoute(new URL("/ops/kanban" + location.search + location.hash, "http://cockpit.invalid"));
   const taskId = new URLSearchParams(location.search).get("taskId");
+  // WK-01: the embedded page gets the shell's own decision count for this workspace, not a hard-coded zero.
+  const inbox = useOperatorInbox(workspaceId);
+  const pendingApprovals =
+    !inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data.counts.needs_decision.known : 0;
   const access = useProjectAccess(JSON.stringify(["work-kanban", activeCitadelId, workspaceId, taskId]));
   const props: NativeRoutePagesProps = {
     activeWorkspaceId: workspaceId,
     activeWorkspaceName: workspaceLabel,
     activeCitadelId: activeCitadelId ?? undefined,
-    pendingApprovals: 0,
+    pendingApprovals,
     setActiveWorkspaceId,
     route,
     navigate: (next, options) => location.navigate(buildAppHref(next), options),
@@ -41,12 +48,12 @@ export function WorkKanban() {
               ? route.runId
                 ? `Run ${route.runId}`
                 : "Run detail"
-              : "Classic Kanban"
+              : OLDER_KANBAN_VIEW.label
           }
           description={
             route.runId || route.view === "run-detail"
               ? "A run opened from the classic Kanban, with its saved steps and outcome."
-              : "The full task Kanban from the classic view, with advanced task actions."
+              : "The older task Kanban, kept for its advanced task actions. Board is the main Work view."
           }
         />
         <p className="text-sm text-fg-secondary">

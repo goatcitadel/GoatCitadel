@@ -4,6 +4,7 @@ import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/thre
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { presentDelegationRunStatus } from "./chat-vocabulary";
 import { StatusBadge } from "../../ui/StatusBadge";
+import { useAutoOpenDisclosure } from "./use-auto-open-disclosure";
 
 export function ChatRunCard({
   props,
@@ -18,14 +19,14 @@ export function ChatRunCard({
 }) {
   const run =
     props.delegationRun?.attachedTurnId && props.delegationRun.attachedTurnId !== turnId ? null : props.delegationRun;
+  // CH-10/CH-39: opens while work is running; a pending decision has its own card. Never closes itself.
+  const disclosure = useAutoOpenDisclosure(Boolean(props.hasActiveStream || (run && run.status !== "completed")));
   if (!run && !durableRunId) return null;
   const completed = run?.steps.filter((step) => step.status === "completed").length ?? 0;
   const status = run ? presentDelegationRunStatus(run.status) : null;
   return (
     <details
-      open={Boolean(
-        props.hasActiveStream || props.pendingApproval || props.pendingUserInput || (run && run.status !== "completed"),
-      )}
+      {...disclosure}
       aria-label="Conversation run"
       className="group mt-3 rounded-lg border border-line bg-raised p-3 text-sm"
     >

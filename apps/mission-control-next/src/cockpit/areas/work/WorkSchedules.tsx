@@ -30,6 +30,7 @@ import { readCockpitLocation } from "../../app/cockpit-back-guard";
 import { CockpitNavigationContext } from "../../app/cockpit-navigation-context";
 import { WorkScheduleListItem, WorkScheduleNotice } from "./WorkScheduleSummary";
 import { useRevealScheduleDetail } from "./use-reveal-schedule-detail";
+import { defaultScheduleExpression } from "./schedule-cadence";
 
 export function WorkSchedules() {
   const client = useQueryClient();
@@ -91,7 +92,12 @@ export function WorkSchedules() {
   const [notice, setNotice] = useState<string | null>(null);
   const [runLink, setRunLink] = useState<{ notice: string; href: string } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const empty = { ...EMPTY_SCHEDULE_SETTINGS, name: "", schedule: "0 9 * * *", action: "task" as CreateScheduleAction };
+  const empty = {
+    ...EMPTY_SCHEDULE_SETTINGS,
+    name: "",
+    schedule: defaultScheduleExpression(),
+    action: "task" as CreateScheduleAction,
+  };
   const editor = useSessionDraft(scheduleCreateDraftKey(getGatewayApiBaseUrl()), empty, undefined, {
     label: "New schedule",
     active: createOpen,

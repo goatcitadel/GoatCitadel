@@ -285,7 +285,9 @@ function SessionPosture({
         <p>Workspace {session.workspaceId}</p>
         <p>Created by {session.createdBy}</p>
       </TechnicalDetails>
-      {operation.locked && pending ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && pending && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       {outcome && !reviewOpen ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
       {session.status === "active" || activeGrants.length > 0 || canReplay ? (
         <div>

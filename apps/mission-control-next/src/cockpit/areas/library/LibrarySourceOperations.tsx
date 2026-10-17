@@ -225,7 +225,9 @@ export function SourceOperations({ detail, workspaceId, available }: SourceOpera
         <p className="break-all">Root SHA-256: {source.rootIdentitySha256}</p>
         <p className="break-all">Scan manifest: {scan?.manifestSha256 ?? "No sealed scan"}</p>
       </TechnicalDetails>
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       <Button
         disabled={!available || busy || operation.locked || source.status !== "active"}
         onClick={() => start("scan")}

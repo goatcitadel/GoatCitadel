@@ -39,6 +39,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({
   fetchOperatorInbox: api.fetchOperatorInbox,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({ fetchDurableRun: api.fetchDurableRun }));
+const specialist = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock("./specialist-approval-evidence", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./specialist-approval-evidence")>()),
+  readSpecialistEvidence: specialist.read,
+}));
 const notFound = () => new ApiRequestError("API error 404", { kind: "http", method: "GET", path: "/x", status: 404 });
 vi.mock("./InboxApprovalActions", () => ({
   InboxApprovalActions: ({
@@ -232,9 +237,12 @@ describe("Inbox approval detail", () => {
       // Query status reaches React on a zero-delay timer; let it fire inside act.
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    // The superseded record and its controls leave, so only this panel announces the outcome.
+    // The superseded record and its controls leave. Outside the Inbox page the notice takes focus, so it is read
+    // once without being a second live region (IN-07).
     expect(container.textContent).not.toContain("Decision controls");
-    expect([...container.querySelectorAll('[role="status"]')].map((node) => node.textContent)).toContain(notice);
+    const shown = container.querySelector("[data-inbox-decision-notice]");
+    expect(shown?.textContent).toBe(notice);
+    expect(shown?.getAttribute("role")).toBeNull();
     await act(async () => release());
     await settleUntil(() => !container.textContent?.includes("Loading the current approval"));
     expect(container.textContent).not.toContain("This approval is no longer waiting.");
@@ -324,4 +332,80 @@ it("shows linked execution independently of the approved decision", async () => 
   expect(container.textContent).toContain("Original linked work: Waiting");
   expect(container.textContent).toContain("Approved");
   expect(container.textContent).not.toContain("Decision controls");
+});
+
+describe("Inbox approval detail states (IN-05, IN-07, IN-16)", () => {
+  function render(onDecision?: (message: string, settled: boolean) => void) {
+    return act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <InboxApprovalDetail item={item} workspaceId="default" onDecision={onDecision} />
+        </QueryClientProvider>,
+      ),
+    );
+  }
+
+  it("hands the outcome to the Inbox page and leaves focus to it", async () => {
+    const onDecision = vi.fn();
+    await render(onDecision);
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+    const trigger = [...container.querySelectorAll("button")].find((b) => b.textContent === "Record decision")!;
+    trigger.focus();
+    await act(async () => trigger.click());
+    expect(onDecision).toHaveBeenCalledExactlyOnceWith("Approved decision recorded.", true);
+    expect(container.querySelector("[data-inbox-decision-notice]")?.textContent).toBe("Approved decision recorded.");
+    expect(document.activeElement?.hasAttribute("data-inbox-decision-notice")).toBe(false);
+    const changed = [...container.querySelectorAll("button")].find((b) => b.textContent === "Report changed record");
+    if (changed) {
+      await act(async () => changed.click());
+      expect(onDecision).toHaveBeenLastCalledWith(
+        "The approval changed. Review the refreshed record before deciding.",
+        false,
+      );
+    }
+  });
+
+  it("shows an Expired badge once a pending record's expiry passes", async () => {
+    api.fetchApproval.mockResolvedValue({ ...approval, expiresAt: "2020-01-01T00:00:00Z" });
+    await render();
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+    const badges = [...container.querySelectorAll("[data-tone]")].map((node) => node.textContent);
+    expect(badges).toContain("Expired");
+    expect(badges).not.toContain("Waiting on you");
+  });
+
+  it("prints a fixed explanation failure and keeps the server text out of the page", async () => {
+    api.fetchApproval.mockResolvedValue({
+      ...approval,
+      explanationStatus: "failed",
+      explanationError: "upstream 502 from provider-x",
+    });
+    await render();
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toBe("Approval summary unavailable. Review the action preview before deciding.");
+    // Technical details are off by default, so the raw server text is not shown at all.
+    expect(container.textContent).not.toContain("upstream 502");
+  });
+
+  it("says specialist evidence is loading before raising an alert, and alerts only when the read fails", async () => {
+    let fail!: (cause: Error) => void;
+    specialist.read.mockReset().mockReturnValue(
+      new Promise((_resolve, reject) => {
+        fail = reject;
+      }),
+    );
+    api.fetchApproval.mockResolvedValue({ ...approval, kind: "remote_worker.native_runtime" });
+    await render();
+    await settleUntil(() => Boolean(container.textContent?.includes("Checking specialist evidence")));
+    const checking = [...container.querySelectorAll('[role="status"]')].find((node) =>
+      node.textContent?.includes("Checking specialist evidence"),
+    );
+    expect(checking).toBeDefined();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    await act(async () => fail(new Error("replay read failed")));
+    await settleUntil(() => Boolean(container.querySelector('[role="alert"]')));
+    expect(container.textContent).not.toContain("Checking specialist evidence");
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+  });
 });

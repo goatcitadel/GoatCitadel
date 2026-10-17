@@ -57,6 +57,8 @@ const MEMORY_NAMESPACES: Record<string, string> = {
   global: "Global",
   facts: "Facts",
 };
+/** Namespaces with a fixed label, offered as server-side filters beside any seen on the current page. */
+export const KNOWN_MEMORY_NAMESPACES = Object.keys(MEMORY_NAMESPACES);
 /** Namespaces are operator-defined free text; known ones get a fixed label, others read as plain words. */
 export const memoryNamespaceLabel = (namespace: string) =>
   MEMORY_NAMESPACES[namespace] ?? (humanizeToken(namespace) || "No namespace");

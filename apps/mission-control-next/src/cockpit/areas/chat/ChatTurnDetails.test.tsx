@@ -101,3 +101,37 @@ describe("ChatTurnDetails design advisories", () => {
     expect(container.textContent).not.toContain("Design advisories");
   });
 });
+
+describe("ChatTurnDetails copy feedback (CH-31)", () => {
+  it("confirms a copy once, swaps the button label, and clears both after a moment", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    try {
+      render(turnWith([]));
+      const copy = () =>
+        [...container.querySelectorAll("button")].find((b) => /Copy answer|Copied/.test(b.textContent ?? ""));
+      await act(async () => copy()!.click());
+      expect(writeText).toHaveBeenCalledWith("Done.");
+      expect(container.querySelector('[role="status"]')?.textContent).toBe("Answer copied.");
+      expect(copy()?.textContent).toBe("Copied");
+      await act(async () => vi.advanceTimersByTime(2000));
+      expect(container.querySelector('[role="status"]')).toBeNull();
+      expect(copy()?.textContent).toBe("Copy answer");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an operator-opened tool list open after streaming ends (CH-39)", () => {
+    const executed = toolRun({ bytesWritten: 1 });
+    act(() =>
+      root.render(<ChatTurnDetails turn={turnWith([executed])} streaming readOnly={false} actions={actions} />),
+    );
+    const tools = () =>
+      container.querySelector<HTMLDetailsElement>('details[aria-label="Tool activity for this turn"]')!;
+    expect(tools().open).toBe(true);
+    render(turnWith([executed]));
+    expect(tools().open).toBe(true);
+  });
+});

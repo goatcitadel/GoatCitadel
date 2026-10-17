@@ -72,3 +72,28 @@ it("keeps Custom expression selected after choosing it, until a guided option is
   await choose("hourly");
   expect(onChange).toHaveBeenLastCalledWith("0 * * * *");
 });
+
+it("WK-02: saves the chosen timezone with the time and previews the next run in that zone", async () => {
+  await render("0 9 * * *");
+  const zone = () => container.querySelectorAll<HTMLSelectElement>("select")[1]!;
+  // No zone in the expression: it runs in UTC, and the select says so rather than guessing the browser's zone.
+  expect(zone().value).toBe("UTC");
+  const time = container.querySelector<HTMLInputElement>('input[type="time"]')!;
+  const help = document.getElementById(time.getAttribute("aria-describedby")!)!;
+  expect(help.textContent).toMatch(/^Next run: .*09:00 UTC/);
+  await act(async () => {
+    zone().value = "Europe/Paris";
+    zone().dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(onChange).toHaveBeenLastCalledWith("0 9 * * * Europe/Paris");
+  await render("30 7 * * 1-5 Europe/Paris");
+  expect(zone().value).toBe("Europe/Paris");
+  expect(help.isConnected ? help.textContent : "").toMatch(/07:30 Europe\/Paris/);
+  await setTime("08:15");
+  expect(onChange).toHaveBeenLastCalledWith("15 8 * * 1-5 Europe/Paris");
+});
+
+it("WK-02: hides the timezone select for custom expressions", async () => {
+  await render("*/5 * * * *");
+  expect(container.querySelectorAll("select")).toHaveLength(1);
+});

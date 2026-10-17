@@ -112,7 +112,9 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
   }
   return (
     <>
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       <details className="border-t border-line-subtle pt-4">
         <summary className="cursor-pointer text-sm font-medium text-fg">
           Upload text file{draft.isDirty ? " · Unsaved draft" : ""}

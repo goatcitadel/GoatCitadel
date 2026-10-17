@@ -17,6 +17,7 @@ import { InboxOwnerLink } from "./InboxOwnerLink";
 import { InboxRunRecovery } from "./InboxRunRecovery";
 import { InboxSourceContext } from "./InboxSourceContext";
 import { InboxUserInputDetail } from "./InboxUserInputDetail";
+import { useMinuteClock } from "./use-minute-clock";
 
 function RecordViewedUpdate({ onOpened }: { onOpened: () => void }) {
   useEffect(onOpened, [onOpened]);
@@ -30,6 +31,7 @@ export function InboxInspectorBody({
   focusAction,
   explicitDetails,
   onOpened,
+  onDecision,
 }: {
   item: OperatorInboxItem;
   workspaceId: string;
@@ -37,7 +39,10 @@ export function InboxInspectorBody({
   focusAction?: "approve" | "deny";
   explicitDetails: boolean;
   onOpened: () => void;
+  /** The Inbox page announces a decision and moves focus once; see use-inbox-decision-focus (IN-07). */
+  onDecision?: (message: string, settled: boolean) => void;
 }) {
+  const now = useMinuteClock(item.expiresAt);
   return (
     <div className="grid gap-4 text-sm">
       <div>
@@ -45,7 +50,7 @@ export function InboxInspectorBody({
           {inboxItemKindLabel(item.kind)} · <TimeText value={item.createdAt} />
         </p>
         <p className="mt-2 text-fg-secondary">{item.summary}</p>
-        {item.expiresAt ? <p className="mt-2 text-fg-muted">{approvalExpiryLabel(item.expiresAt)}</p> : null}
+        {item.expiresAt ? <p className="mt-2 text-fg-muted">{approvalExpiryLabel(item.expiresAt, now)}</p> : null}
       </div>
       {explicitDetails && inboxUpdateVersion(item, workspaceId) ? <RecordViewedUpdate onOpened={onOpened} /> : null}
       {/* An approval's detail shows the risk from its current record; show the projected risk only once (IN-15). */}
@@ -55,7 +60,7 @@ export function InboxInspectorBody({
         </div>
       ) : null}
       {item.kind === "approval" ? (
-        <InboxApprovalDetail item={item} workspaceId={workspaceId} focusAction={focusAction} />
+        <InboxApprovalDetail item={item} workspaceId={workspaceId} focusAction={focusAction} onDecision={onDecision} />
       ) : item.kind === "change_plan" ? (
         <InboxChangePlanDetail key={`${workspaceId}:${item.id}`} item={item} workspaceId={workspaceId} />
       ) : item.kind === "failed_run" || item.kind === "dead_letter" ? (

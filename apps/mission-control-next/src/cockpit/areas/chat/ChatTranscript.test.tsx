@@ -203,7 +203,7 @@ describe("ChatTranscript", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
     expect(container.textContent).toContain(
-      record?.status === "approved" ? "Decision recorded" : "Current approval unavailable",
+      record?.status === "approved" ? "Decision recorded" : "The approval record wasn’t found",
     );
     expect(container.textContent).not.toContain("Approve once");
   });
@@ -570,8 +570,11 @@ describe("ChatTranscript", () => {
     expect(container.textContent).toContain("Partial answer copied.");
     recorded.assistantMessage!.content += " final";
     await render(false);
+    // CH-31: the button reads "Copied" briefly after the first copy; it is the same copy action.
     await act(async () =>
-      [...container.querySelectorAll("button")].find((button) => button.textContent === "Copy answer")!.click(),
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent === "Copy answer" || button.textContent === "Copied")!
+        .click(),
     );
     expect(writeText).toHaveBeenLastCalledWith(recorded.assistantMessage!.content);
   });

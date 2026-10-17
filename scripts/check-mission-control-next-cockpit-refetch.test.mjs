@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { findRefetchHiddenRecords } from "./check-mission-control-next-cockpit-refetch.mjs";
+import { findEmptyMessageAlerts, findRefetchHiddenRecords } from "./check-mission-control-next-cockpit-refetch.mjs";
 
 const lines = (source, file = "panel.tsx") => findRefetchHiddenRecords(file, source).map((finding) => finding.line);
 
@@ -99,5 +99,31 @@ describe("cockpit refetch guard", () => {
 
   it("ignores test files", () => {
     assert.deepEqual(lines("const record = query.isFetching ? undefined : query.data;", "panel.test.tsx"), []);
+  });
+});
+
+describe("empty message alerts", () => {
+  const alerts = (source, file = "panel.tsx") => findEmptyMessageAlerts(file, source).map((finding) => finding.line);
+
+  it("flags an alert whose only content is an optional message", () => {
+    assert.deepEqual(alerts('{op.locked ? <Callout tone="warning">{op.attempt?.message}</Callout> : null}'), [1]);
+    assert.deepEqual(alerts("<Alert>{query.error?.message}</Alert>"), [1]);
+  });
+
+  it("allows an alert gated on its own message", () => {
+    assert.deepEqual(
+      alerts('{op.locked && op.attempt?.message ? <Callout tone="warning">{op.attempt?.message}</Callout> : null}'),
+      [],
+    );
+    assert.deepEqual(alerts("{query.error?.message && <Alert>{query.error?.message}</Alert>}"), []);
+    assert.deepEqual(alerts('<Callout tone="warning">{attempt.message}</Callout>'), []);
+  });
+
+  it("allows an opt-out with a reason and ignores test files", () => {
+    assert.deepEqual(
+      alerts("<Alert>{query.error?.message}</Alert> // refetch-guard: allow the parent gates on query.isError"),
+      [],
+    );
+    assert.deepEqual(alerts("<Alert>{query.error?.message}</Alert>", "panel.test.tsx"), []);
   });
 });
