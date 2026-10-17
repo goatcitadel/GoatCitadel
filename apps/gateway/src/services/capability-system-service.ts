@@ -34,6 +34,7 @@ import type {
   ChatSessionWorkbenchCommandRunResponse,
   ChatSessionWorkbenchRecord,
   ChatTurnTraceRecord,
+  CodeModeAiderWorkspacePin,
   CodeModeAutonomousActivationEvidence,
   CodeModeLanguage,
   CodeModeSandboxMetadata,
@@ -74,10 +75,7 @@ import {
   ValidationError,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
-import {
-  resolveBundledSkillLockEntry,
-  type BundledSkillLockEntry,
-} from "@goatcitadel/skills";
+import { resolveBundledSkillLockEntry, type BundledSkillLockEntry } from "@goatcitadel/skills";
 import {
   buildCapabilityLifecycleApprovalBinding,
   buildCapabilityLifecycleApprovalPayload,
@@ -111,7 +109,11 @@ import {
   CodeModeExecutionBackendUnavailableError,
   createCodeModeExecutionBackendRunner,
 } from "./code-mode-execution-backend-runner.js";
-import { parseCodeModeAiderAdapterResultEnvelope } from "./code-mode-aider-result-contract.js";
+import {
+  parseCodeModeAiderAdapterResultEnvelope,
+  parseCodeModeAiderWorkspacePin,
+} from "./code-mode-aider-result-contract.js";
+import { captureCodeModeAiderWorkspacePin } from "./code-mode-aider-workspace-pin.js";
 import {
   CODE_MODE_AIDER_ADAPTER_ID,
   buildCodeModeExecutionBackends,
@@ -1814,7 +1816,6 @@ export class CapabilitySystemService {
         throw new ValidationError({ message: error instanceof Error ? error.message : String(error) });
       }
     }
-    const runInputHash = hashCodeModeInputBinding(runInput, normalizedAiderRequest, frozenAiderExecution);
     const originSurface = normalizeCodeModeOriginSurface(request.originSurface);
     const sessionId = request.sessionId?.trim() || undefined;
     const turnId = request.turnId?.trim() || undefined;
@@ -1838,6 +1839,16 @@ export class CapabilitySystemService {
         });
       }
     }
+    const aiderWorkspacePin =
+      normalizedAiderRequest && sessionId
+        ? await captureAiderWorkspacePinOrNone(this.options, { sessionId, runId })
+        : undefined;
+    const runInputHash = hashCodeModeInputBinding(
+      runInput,
+      normalizedAiderRequest,
+      frozenAiderExecution,
+      aiderWorkspacePin,
+    );
     const sessionWorkspaceId = chatSessionMeta?.workspaceId;
     const workspaceId = resolveCodeModeWorkspaceId({
       sessionId,
@@ -1877,6 +1888,7 @@ export class CapabilitySystemService {
       codeModeInputHash: runInputHash,
       ...(normalizedAiderRequest ? { codeModeAiderRequest: normalizedAiderRequest } : {}),
       ...(frozenAiderExecution ? { codeModeAiderExecution: frozenAiderExecution } : {}),
+      ...(aiderWorkspacePin ? { codeModeAiderWorkspacePin: aiderWorkspacePin } : {}),
       codeModeAutonomousActivation: autonomousActivation,
     };
     const policySnapshotHash = sha256Text(JSON.stringify(policySnapshot));
@@ -1923,6 +1935,7 @@ export class CapabilitySystemService {
       executionBackend,
       aiderRequest: normalizedAiderRequest,
       aiderExecution: frozenAiderExecution,
+      aiderWorkspacePin,
       autonomousActivation,
     });
     const approvalLinkage = buildCodeModeApprovalLinkage({
@@ -5815,6 +5828,7 @@ function readFrozenCodeModeInputBinding(
   input: Record<string, unknown>;
   aiderRequest?: ReturnType<typeof readPendingAiderRunRequest>;
   aiderExecution?: FrozenCodeModeAiderExecution;
+  aiderWorkspacePin?: CodeModeAiderWorkspacePin;
 } {
   const frozenInput = isRecord(policySnapshot.codeModeInput) ? policySnapshot.codeModeInput : undefined;
   const runInput = frozenInput ?? (isRecord(legacyPendingInput) ? legacyPendingInput : {});
@@ -5836,11 +5850,15 @@ function readFrozenCodeModeInputBinding(
   const aiderExecution = hasFrozenAiderExecution
     ? readFrozenCodeModeAiderExecution(policySnapshot.codeModeAiderExecution)
     : undefined;
+  const aiderWorkspacePin = Object.prototype.hasOwnProperty.call(policySnapshot, "codeModeAiderWorkspacePin")
+    ? readFrozenCodeModeAiderWorkspacePin(policySnapshot.codeModeAiderWorkspacePin)
+    : undefined;
   const inputHash = asOptionalString(policySnapshot.codeModeInputHash);
   const computedInputHash = hashCodeModeInputBinding(
     runInput,
     hasFrozenAiderRequest ? aiderRequest : undefined,
     hasFrozenAiderExecution ? aiderExecution : undefined,
+    aiderWorkspacePin,
   );
   if (inputHash && computedInputHash !== inputHash) {
     throw new ConflictError({ message: "Code Mode input snapshot hash mismatch; refusing to execute run." });
@@ -5848,15 +5866,57 @@ function readFrozenCodeModeInputBinding(
   if (expectedInputHash && computedInputHash !== expectedInputHash) {
     throw new ConflictError({ message: "Code Mode stored input hash mismatch; refusing to execute run." });
   }
-  return { input: runInput, aiderRequest, aiderExecution };
+  return { input: runInput, aiderRequest, aiderExecution, ...(aiderWorkspacePin ? { aiderWorkspacePin } : {}) };
+}
+
+function readFrozenCodeModeAiderWorkspacePin(value: unknown): CodeModeAiderWorkspacePin {
+  try {
+    return parseCodeModeAiderWorkspacePin(value);
+  } catch (error) {
+    throw new ConflictError({
+      message: `Code Mode Aider workspace pin snapshot is invalid; refusing to execute run. ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
+  }
+}
+
+const AIDER_WORKSPACE_PIN_WARNING_MAX_CHARS = 240;
+
+/**
+ * Only an explicit ready + clean capture yields a pin. A failed workbench read must not block a plain (unpinned,
+ * never-promotable) Aider run, so it degrades to no pin with a bounded warning instead of failing run creation.
+ */
+async function captureAiderWorkspacePinOrNone(
+  deps: Parameters<typeof captureCodeModeAiderWorkspacePin>[0],
+  binding: { sessionId: string; runId: string },
+): Promise<CodeModeAiderWorkspacePin | undefined> {
+  try {
+    return await captureCodeModeAiderWorkspacePin(deps, binding);
+  } catch (error) {
+    const detail = (error instanceof Error ? error.message : String(error)).slice(
+      0,
+      AIDER_WORKSPACE_PIN_WARNING_MAX_CHARS,
+    );
+    // eslint-disable-next-line no-console -- bounded diagnostic: a broken workbench read must not block an unpinned run.
+    console.warn(`[code-mode] Aider run ${binding.runId} created without a workspace pin: ${detail}`);
+    return undefined;
+  }
 }
 
 function hashCodeModeInputBinding(
   input: Record<string, unknown>,
   aiderRequest?: ReturnType<typeof readPendingAiderRunRequest>,
   aiderExecution?: FrozenCodeModeAiderExecution,
+  aiderWorkspacePin?: CodeModeAiderWorkspacePin,
 ): string {
-  return sha256Text(JSON.stringify(aiderRequest ? { input, aiderRequest, aiderExecution } : input));
+  return sha256Text(
+    JSON.stringify(
+      aiderRequest
+        ? { input, aiderRequest, aiderExecution, ...(aiderWorkspacePin ? { aiderWorkspacePin } : {}) }
+        : input,
+    ),
+  );
 }
 
 function buildFrozenCodeModeAiderExecution(
@@ -6136,6 +6196,7 @@ function buildCodeModeApprovalPayload(input: {
     model?: string;
   };
   aiderExecution?: FrozenCodeModeAiderExecution;
+  aiderWorkspacePin?: CodeModeAiderWorkspacePin;
   autonomousActivation?: CodeModeAutonomousActivationEvidence;
   permissionProfileId?: string;
   permissionProfileLabel?: string;
@@ -6163,6 +6224,14 @@ function buildCodeModeApprovalPayload(input: {
     executionBackend: input.executionBackend,
     aiderRequest: input.aiderRequest,
     aiderExecution: input.aiderExecution,
+    ...(input.aiderWorkspacePin
+      ? {
+          aiderWorkspacePin: {
+            worktreeHead: input.aiderWorkspacePin.worktreeHead,
+            sessionId: input.aiderWorkspacePin.sessionId,
+          },
+        }
+      : {}),
     autonomousActivation: input.autonomousActivation,
     permissionProfileId: input.permissionProfileId,
     permissionProfileLabel: input.permissionProfileLabel,
