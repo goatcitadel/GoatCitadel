@@ -1837,8 +1837,8 @@ describe("integration-action-service", () => {
       expect(host.publishRealtime).toHaveBeenCalled();
     });
 
-    it("blocks require_approval fail-closed until the approval loop is wired (Stage 2)", async () => {
-      const connection = createConnection({
+    function guardedActivepiecesConnection(): IntegrationConnection {
+      return createConnection({
         catalogId: "automation.activepieces",
         key: "activepieces",
         kind: "automation",
@@ -1846,12 +1846,169 @@ describe("integration-action-service", () => {
         workspaceId: "ws-guarded",
         config: { webhookUrl: "https://flows.example.test/hook" },
       });
+    }
+
+    function wardApprovalCreate() {
+      return vi.fn(
+        async (input: ApprovalCreateInput): Promise<ApprovalRequest> => ({
+          approvalId: "approval-ward-1",
+          kind: input.kind,
+          riskLevel: input.riskLevel,
+          status: "pending",
+          payload: input.payload,
+          preview: input.preview,
+          linkage: input.linkage,
+          createdAt: "2026-07-07T00:00:00.000Z",
+          expiresAt: input.expiresAt ?? undefined,
+          explanationStatus: "not_requested",
+        }),
+      );
+    }
+
+    function webhookFetch() {
+      return vi.fn(
+        async () =>
+          new Response(JSON.stringify({ id: "run-1", message: "flow accepted" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+    }
+
+    const activepiecesWardAction = "integration.automation.activepieces.trigger_webhook";
+
+    it("opens a citadel ward approval for require_approval instead of blocking", async () => {
+      const connection = guardedActivepiecesConnection();
+      const createApproval = wardApprovalCreate();
+      const host = wardHost(connection, [{ actionPattern: "integration.*", effect: "require_approval" }], {
+        createApproval,
+      });
+
+      const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "trigger_webhook");
+
+      expect(result.status).toBe("approval_required");
+      expect(result.blockedReason).toBe("citadel_ward_approval_required");
+      expect(result.message).toBe(
+        `A Citadel Ward requires operator approval for ${activepiecesWardAction}; approval approval-ward-1 is pending.`,
+      );
+      expect(result.output).toMatchObject({
+        approvalId: "approval-ward-1",
+        wardAction: activepiecesWardAction,
+        wardEffect: "require_approval",
+        citadelId: "citadel-guarded",
+      });
+      expect(createApproval).toHaveBeenCalledTimes(1);
+      const approvalInput = createApproval.mock.calls[0]![0];
+      expect(approvalInput.kind).toBe("citadel_ward.integration_action");
+      expect(approvalInput.riskLevel).toBe("caution");
+      const payload = approvalInput.payload as Record<string, unknown>;
+      expect(payload.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+      expect((payload.request as Record<string, unknown>).connectionId).toBe(connection.connectionId);
+      expect(payload).toMatchObject({
+        wardAction: activepiecesWardAction,
+        citadelId: "citadel-guarded",
+        workspaceId: "ws-guarded",
+        request: { actionId: "trigger_webhook", invokeRequest: { input: {} } },
+      });
+      expect(approvalInput.linkage?.workspaceId).toBe("ws-guarded");
+      expect(approvalInput.preview).toMatchObject({
+        route: activepiecesWardAction,
+        target: `${connection.connectionId}:trigger_webhook`,
+      });
+      expect(Date.parse(approvalInput.expiresAt ?? "") - Date.parse(result.checkedAt)).toBe(15 * 60_000);
+      expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+      expect(host.publishRealtime).toHaveBeenCalled();
+    });
+
+    it("executes an approved ward replay through the idempotent runner", async () => {
+      const connection = guardedActivepiecesConnection();
+      const fetchMock = webhookFetch();
+      const host = wardHost(connection, [{ actionPattern: "integration.*", effect: "require_approval" }], {
+        createApproval: wardApprovalCreate(),
+        fetchWithDiagnosticsTimeout: fetchMock,
+      });
+
+      const result = await invokeIntegrationConnectionAction(
+        host,
+        connection.connectionId,
+        "trigger_webhook",
+        { idempotencyKey: "citadel-ward:approval-ward-1" },
+        { wardApproval: { approvalId: "approval-ward-1", wardAction: activepiecesWardAction } },
+      );
+
+      expect(result.status).toBe("executed");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(host.createApproval).not.toHaveBeenCalled();
+    });
+
+    it("deny still wins over an approved ward replay", async () => {
+      const connection = guardedActivepiecesConnection();
+      const fetchMock = webhookFetch();
+      const host = wardHost(connection, [{ actionPattern: "integration.*", effect: "deny" }], {
+        createApproval: wardApprovalCreate(),
+        fetchWithDiagnosticsTimeout: fetchMock,
+      });
+
+      const result = await invokeIntegrationConnectionAction(
+        host,
+        connection.connectionId,
+        "trigger_webhook",
+        { idempotencyKey: "citadel-ward:approval-ward-1" },
+        { wardApproval: { approvalId: "approval-ward-1", wardAction: activepiecesWardAction } },
+      );
+
+      expect(result.status).toBe("blocked");
+      expect(result.blockedReason).toBe("citadel_ward_deny");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("refuses a ward approval minted for a different action", async () => {
+      const connection = guardedActivepiecesConnection();
+      const fetchMock = webhookFetch();
+      const createApproval = wardApprovalCreate();
+      const host = wardHost(connection, [{ actionPattern: "integration.*", effect: "require_approval" }], {
+        createApproval,
+        fetchWithDiagnosticsTimeout: fetchMock,
+      });
+
+      const result = await invokeIntegrationConnectionAction(
+        host,
+        connection.connectionId,
+        "trigger_webhook",
+        { idempotencyKey: "citadel-ward:approval-ward-1" },
+        { wardApproval: { approvalId: "approval-ward-1", wardAction: "integration.other.x" } },
+      );
+
+      expect(result.status).toBe("approval_required");
+      expect(createApproval).toHaveBeenCalledTimes(1);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("stays blocked when the host cannot create approvals", async () => {
+      const connection = guardedActivepiecesConnection();
       const host = wardHost(connection, [{ actionPattern: "integration.*", effect: "require_approval" }]);
 
       const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "trigger_webhook");
 
       expect(result.status).toBe("blocked");
       expect(result.blockedReason).toBe("citadel_ward_approval_required");
+      expect(result.message).toMatch(/no approval loop is available on this host/);
+      expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+    });
+
+    it("keeps the blocked result and reports approvalError when approval creation throws", async () => {
+      const connection = guardedActivepiecesConnection();
+      const host = wardHost(connection, [{ actionPattern: "integration.*", effect: "require_approval" }], {
+        createApproval: vi.fn(async () => {
+          throw new Error("approval store offline");
+        }),
+      });
+
+      const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "trigger_webhook");
+
+      expect(result.status).toBe("blocked");
+      expect(result.blockedReason).toBe("citadel_ward_approval_required");
+      expect(result.output).toMatchObject({ approvalError: "approval store offline" });
       expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
     });
 

@@ -35,6 +35,12 @@ import {
   type CitadelWardGateStorage,
 } from "./citadel-ward-gate.js";
 import {
+  buildCitadelWardApprovalPayload,
+  CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,
+  type CitadelWardApprovalRef,
+} from "./citadel-ward-approval.js";
+import {
+  DRY_RUN_APPROVAL_TTL_MS,
   type IntegrationDryRunApprovalCreate,
   type IntegrationDryRunApprovalStores,
   type IntegrationDryRunCommitRef,
@@ -82,6 +88,11 @@ export interface IntegrationActionHost {
 export interface IntegrationActionInvokeOptions {
   /** Present when replaying an operator-approved dry-run commit (Stage 2). */
   dryRunCommit?: IntegrationDryRunCommitRef;
+  /**
+   * Present when replaying an operator-approved Citadel Ward approval. Satisfies a live
+   * `require_approval` only when minted for the same ward action; deny still wins.
+   */
+  wardApproval?: CitadelWardApprovalRef;
 }
 
 export async function invokeIntegrationConnectionAction(
@@ -113,8 +124,10 @@ export async function invokeIntegrationConnectionAction(
     workspaceId: connection.workspaceId,
     action: wardAction,
   });
+  // A matching approved ward replay satisfies require_approval (and only that).
+  const wardApproved = wardResolution.effect === "require_approval" && options.wardApproval?.wardAction === wardAction;
   const ward: IntegrationWardContext = {
-    effect: wardResolution.effect,
+    effect: wardApproved ? undefined : wardResolution.effect,
     action: wardAction,
     citadelId: wardResolution.citadelId,
     invokeRequest: request,
@@ -122,19 +135,19 @@ export async function invokeIntegrationConnectionAction(
   };
 
   let result: IntegrationActionInvokeResult;
-  if (ward.effect === "deny" || ward.effect === "require_approval") {
-    // Blocked results fall through the shared writeback-envelope + realtime
+  if (ward.effect === "deny") {
+    // Blocked/approval results fall through the shared writeback-envelope + realtime
     // tail below, so ward refusals are audited exactly like provider results.
     result = blocked(
       connection,
       actionId,
       checkedAt,
-      ward.effect === "deny"
-        ? `A Citadel Ward denies ${wardAction} for this connection's citadel.`
-        : `A Citadel Ward requires approval for ${wardAction}; approval-gated execution for integration actions is not wired yet, so the action is blocked.`,
-      ward.effect === "deny" ? "citadel_ward_deny" : "citadel_ward_approval_required",
+      `A Citadel Ward denies ${wardAction} for this connection's citadel.`,
+      "citadel_ward_deny",
       { wardAction, wardEffect: ward.effect, citadelId: ward.citadelId },
     );
+  } else if (ward.effect === "require_approval") {
+    result = await openIntegrationWardApproval(host, connection, action, request, ward, checkedAt);
   } else if (isLocalBridgeCatalogId(connection.catalogId)) {
     result = await invokeLocalBridgeAction(host, connection, action, request, checkedAt, ward);
   } else if (connection.catalogId === "productivity.trello") {
@@ -670,6 +683,75 @@ async function invokeGmailAction(
     `Unsupported Gmail operator action: ${actionId}.`,
     "action_unsupported",
   );
+}
+
+/**
+ * Open an operator approval for a ward `require_approval` refusal. The approval carries the
+ * exact invoke request plus its hash; executing it is the approval effect's job (it re-invokes
+ * with `wardApproval`). Hosts without `createApproval` keep the fail-closed block.
+ */
+async function openIntegrationWardApproval(
+  host: IntegrationActionHost,
+  connection: IntegrationConnection,
+  action: IntegrationOperatorAction,
+  request: IntegrationActionInvokeInput,
+  ward: IntegrationWardContext,
+  checkedAt: string,
+): Promise<IntegrationActionInvokeResult> {
+  const wardOutput = { wardAction: ward.action, wardEffect: ward.effect, citadelId: ward.citadelId };
+  const refusal = (message: string, extra: Record<string, unknown> = {}) =>
+    blocked(connection, action.actionId, checkedAt, message, "citadel_ward_approval_required", {
+      ...wardOutput,
+      ...extra,
+    });
+  const createApproval = host.createApproval;
+  if (!createApproval) {
+    return refusal(
+      `A Citadel Ward requires approval for ${ward.action}, but no approval loop is available on this host, so the action is blocked.`,
+    );
+  }
+  const payload = buildCitadelWardApprovalPayload({
+    wardAction: ward.action,
+    citadelId: ward.citadelId,
+    workspaceId: connection.workspaceId,
+    request: {
+      connectionId: connection.connectionId,
+      actionId: action.actionId,
+      invokeRequest: {
+        input: request.input ?? {},
+        ...(request.idempotencyKey ? { idempotencyKey: request.idempotencyKey } : {}),
+      },
+    },
+  });
+  try {
+    const approval = await createApproval({
+      kind: CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,
+      riskLevel: "caution",
+      payload: { ...payload },
+      preview: {
+        title: `${action.label} — Citadel Ward approval`,
+        route: ward.action,
+        target: `${connection.connectionId}:${action.actionId}`,
+      },
+      linkage: { workspaceId: connection.workspaceId, actionType: CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND },
+      expiresAt: new Date(Date.parse(checkedAt) + DRY_RUN_APPROVAL_TTL_MS).toISOString(),
+    });
+    return {
+      connectionId: connection.connectionId,
+      catalogId: connection.catalogId,
+      actionId: action.actionId,
+      status: "approval_required",
+      message: `A Citadel Ward requires operator approval for ${ward.action}; approval ${approval.approvalId} is pending.`,
+      blockedReason: "citadel_ward_approval_required",
+      output: { approvalId: approval.approvalId, ...wardOutput },
+      checkedAt,
+    };
+  } catch (error) {
+    return refusal(
+      `A Citadel Ward requires approval for ${ward.action}; the approval could not be opened, so the action is blocked.`,
+      { approvalError: error instanceof Error ? error.message : "citadel_ward_approval_create_failed" },
+    );
+  }
 }
 
 function blocked(
