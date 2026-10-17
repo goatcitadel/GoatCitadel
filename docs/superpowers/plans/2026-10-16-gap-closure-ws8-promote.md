@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Own worktree; branch `claude/gap-ws8-promote` off `origin/main`. Never edit `C:\personal-ai`. Never `git stash`.
+- Own worktree; branch `claude/gap-ws8-promote` off `origin/main`. Never edit the operator's primary checkout. Never `git stash`.
 - vitest with `--maxWorkers=2`, low priority, one heavy job at a time; re-run a failed file alone before treating it as real.
 - Gateway focused test: `pnpm --filter @goatcitadel/gateway exec vitest run <file> --maxWorkers=2`.
 - `prettier --write` only on changed files. Search with `git grep`.
@@ -142,7 +142,7 @@
 - Test: `apps/gateway/src/services/code-mode-aider-execution.test.ts` (real mkdtemp git repo + existing fake child/`spawnCommand`), `apps/gateway/src/services/code-mode-aider-workspace-seed.test.ts`
 
 **Interfaces:**
-- `CODE_MODE_AIDER_BASELINE_GIT_DIR = "aider-baseline.git"`, `CODE_MODE_AIDER_SEED_MAX_FILES = 20_000`, `CODE_MODE_AIDER_SEEDED_PATCH_MAX_BYTES = 8 * 1024 * 1024`.
+- `CODE_MODE_AIDER_BASELINE_GIT_DIR = "aider-baseline.git"`, `CODE_MODE_AIDER_SEED_MAX_FILES = 20_000`, `CODE_MODE_AIDER_SEEDED_PATCH_MAX_BYTES = CODE_MODE_WORKBENCH_PATCH_MAX_BYTES` (4 MiB).
 - `SeededCodeModeAiderWorkspace { baselineGitDir; workTreeRoot; baseCommit; pathspec; excludePathspecs: string[] }`
 - `seedCodeModeAiderWorkspace(input: { seed: CodeModeAiderWorkspaceSeed; runTempRoot: string; workTreeRoot: string; pathspec: string; reservedRelPaths: string[]; timeoutMs?: number }): Promise<SeededCodeModeAiderWorkspace>` — (1) assert baseline not inside `workTreeRoot`; (2) `git init --bare --quiet` + write `objects/info/alternates`; (3) `cat-file -e <sha>^{commit}`; (4) `ls-tree -r --name-only -z <sha> -- <pathspec>`: refuse > max files or a tracked reserved path; (5) `--git-dir <baseline> --work-tree <workTreeRoot> checkout <sha> -- <pathspec>`.
 - `collectSeededCodeModeAiderPatch(seeded, options?): Promise<{ kind: "git_patch"; content: string; fileCount: number; baseRef: string } | undefined>` — `add -A -- <pathspec> <excludes>` then `diff --cached --binary --full-index <sha> -- <pathspec> <excludes>` (pathspec restriction mandatory). Excludes: `:(exclude)<reserved>`, `:(exclude)aider.patch`, `:(exclude)aider.git.patch`, `:(exclude,glob)**/.aider*`. Empty → `undefined`; over max bytes → throw.
