@@ -34,10 +34,7 @@ import {
 import { markGeneralChatPostCommitPending } from "./chat-durable-run-service.js";
 import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
 import { ChatFanoutApprovalResumeRequiredError } from "./chat-fanout-approval-service.js";
-import {
-  StaleDelegationScopeResumeError,
-  UnverifiableDelegationInstructionsError,
-} from "./chat-delegation-service.js";
+import { StaleDelegationScopeResumeError, UnverifiableDelegationInstructionsError } from "./chat-delegation-service.js";
 import {
   DELEGATION_SCOPE_EXPANSION_EFFECT_KIND,
   DELEGATION_SCOPE_EXPANSION_RESUME_EFFECT_KIND,
@@ -60,28 +57,62 @@ describe("approval-resolution-effects-service", () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     try {
       const approvalId = "fanout-owner-approval";
-      storage.approvals.createDeterministicDetachedWithTtlDuration({
-        approvalId, kind: "tool.invoke", riskLevel: "danger", payload: { toolName: "agent.fanout" }, preview: {},
-        linkage: { workspaceId: "workspace", sessionId: "session", turnId: "turn", runId: "run" },
-      }, 60_000);
+      storage.approvals.createDeterministicDetachedWithTtlDuration(
+        {
+          approvalId,
+          kind: "tool.invoke",
+          riskLevel: "danger",
+          payload: { toolName: "agent.fanout" },
+          preview: {},
+          linkage: { workspaceId: "workspace", sessionId: "session", turnId: "turn", runId: "run" },
+        },
+        60_000,
+      );
       storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator" });
-      storage.pendingApprovalActions.upsertPending({ approvalId, actionType: "tool.invoke", createdAt: new Date().toISOString(),
-        request: { toolName: "agent.fanout", args: { tasks: ["Review fixture"] }, sessionId: "session", turnId: "turn", runId: "run" } });
+      storage.pendingApprovalActions.upsertPending({
+        approvalId,
+        actionType: "tool.invoke",
+        createdAt: new Date().toISOString(),
+        request: {
+          toolName: "agent.fanout",
+          args: { tasks: ["Review fixture"] },
+          sessionId: "session",
+          turnId: "turn",
+          runId: "run",
+        },
+      });
       const original = storage.pendingApprovalActions.find(approvalId);
-      const effect = storage.approvalEffects.upsert({ approvalId, effectKind: "pending_action_execute",
-        targetKind: "pending_action", targetId: approvalId, payload: {} });
+      const effect = storage.approvalEffects.upsert({
+        approvalId,
+        effectKind: "pending_action_execute",
+        targetKind: "pending_action",
+        targetId: approvalId,
+        payload: {},
+      });
       const deps = createApprovalEffectDeps();
       deps.executeApprovedPendingAction.mockRejectedValue(new ChatFanoutApprovalResumeRequiredError());
-      const processor = new ApprovalEffectsService({ storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
-        deps) as unknown as { workerId: string; handlePendingActionExecute(effect: ApprovalEffectRecord): Promise<void> };
-      const claim = storage.approvalEffects.claimNextPendingEffect(processor.workerId, new Date().toISOString(),
-        new Date(Date.now() + 60_000).toISOString())!;
+      const processor = new ApprovalEffectsService(
+        { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
+        deps,
+      ) as unknown as { workerId: string; handlePendingActionExecute(effect: ApprovalEffectRecord): Promise<void> };
+      const claim = storage.approvalEffects.claimNextPendingEffect(
+        processor.workerId,
+        new Date().toISOString(),
+        new Date(Date.now() + 60_000).toISOString(),
+      )!;
       await processor.handlePendingActionExecute(claim);
       expect(storage.pendingApprovalActions.find(approvalId)).toEqual(original);
-      expect(storage.approvalEffects.get(effect.effectId)).toMatchObject({ status: "skipped",
-        result: { reason: "chat_fanout_resume_required", actionType: "tool.invoke", resolutionStatus: "pending" } });
-      expect(storage.approvalEffects.claimNextPendingEffect("replacement-worker", new Date().toISOString(),
-        new Date(Date.now() + 60_000).toISOString())).toBeUndefined();
+      expect(storage.approvalEffects.get(effect.effectId)).toMatchObject({
+        status: "skipped",
+        result: { reason: "chat_fanout_resume_required", actionType: "tool.invoke", resolutionStatus: "pending" },
+      });
+      expect(
+        storage.approvalEffects.claimNextPendingEffect(
+          "replacement-worker",
+          new Date().toISOString(),
+          new Date(Date.now() + 60_000).toISOString(),
+        ),
+      ).toBeUndefined();
       expect(deps.executeApprovedPendingAction).toHaveBeenCalledOnce();
       expect(deps.wakeDurableRun).not.toHaveBeenCalled();
     } finally {
@@ -93,76 +124,83 @@ describe("approval-resolution-effects-service", () => {
     { error: new UnverifiableDelegationInstructionsError(), terminal: true },
     { error: new StaleDelegationScopeResumeError(), terminal: true },
     { error: new Error("temporary storage failure"), terminal: false },
-  ])("settles an unverifiable delegation resume without retrying other failures ($terminal)", async ({ error, terminal }) => {
-    const scopeEffect = createEffect({
-      effectId: "scope-effect",
-      effectKind: DELEGATION_SCOPE_EXPANSION_EFFECT_KIND,
-      status: "completed",
-      result: { applied: true },
-    });
-    let resumeEffect = createEffect({
-      effectId: "scope-resume-effect",
-      effectKind: DELEGATION_SCOPE_EXPANSION_RESUME_EFFECT_KIND,
-      status: "running",
-      payload: {
-        stepId: "step-1",
+  ])(
+    "settles an unverifiable delegation resume without retrying other failures ($terminal)",
+    async ({ error, terminal }) => {
+      const scopeEffect = createEffect({
+        effectId: "scope-effect",
+        effectKind: DELEGATION_SCOPE_EXPANSION_EFFECT_KIND,
+        status: "completed",
+        result: { applied: true },
+      });
+      let resumeEffect = createEffect({
+        effectId: "scope-resume-effect",
+        effectKind: DELEGATION_SCOPE_EXPANSION_RESUME_EFFECT_KIND,
+        status: "running",
+        payload: {
+          stepId: "step-1",
+          delegationRunId: "delegation-1",
+          childTurnId: "turn-1",
+          durableRunId: "child-1",
+        },
+      });
+      const failEffect = vi.fn();
+      const deferEffectForRetry = vi.fn(() => ({ ...resumeEffect, status: "pending" as const }));
+      const resumeDelegatedScopeExpansion = vi.fn(async () => {
+        throw error;
+      });
+      const service = new ApprovalEffectsService(
+        {
+          storage: {
+            approvalEffects: {
+              get: vi.fn(() => resumeEffect),
+              listByApproval: vi.fn(() => [scopeEffect, resumeEffect]),
+              failEffect,
+              deferEffectForRetry,
+            },
+            durableRuns: { getRun: vi.fn(() => ({ runId: "child-1", status: "completed" })) },
+          },
+        } as unknown as ServiceContext,
+        {
+          ...createApprovalEffectDeps(),
+          resumeDelegatedScopeExpansion,
+        },
+      );
+      resumeEffect = claimEffectForService(service, resumeEffect);
+      await (
+        service as unknown as { handleDelegationScopeExpansionResume(effect: ApprovalEffectRecord): Promise<void> }
+      ).handleDelegationScopeExpansionResume(resumeEffect);
+      expect(resumeDelegatedScopeExpansion).toHaveBeenCalledWith({
+        approvalId: resumeEffect.approvalId,
         delegationRunId: "delegation-1",
+        stepId: "step-1",
         childTurnId: "turn-1",
         durableRunId: "child-1",
-      },
-    });
-    const failEffect = vi.fn();
-    const deferEffectForRetry = vi.fn(() => ({ ...resumeEffect, status: "pending" as const }));
-    const resumeDelegatedScopeExpansion = vi.fn(async () => { throw error; });
-    const service = new ApprovalEffectsService(
-      {
-        storage: {
-          approvalEffects: {
-            get: vi.fn(() => resumeEffect),
-            listByApproval: vi.fn(() => [scopeEffect, resumeEffect]),
-            failEffect,
-            deferEffectForRetry,
-          },
-          durableRuns: { getRun: vi.fn(() => ({ runId: "child-1", status: "completed" })) },
-        },
-      } as unknown as ServiceContext,
-      {
-        ...createApprovalEffectDeps(),
-        resumeDelegatedScopeExpansion,
-      },
-    );
-    resumeEffect = claimEffectForService(service, resumeEffect);
-    await (service as unknown as { handleDelegationScopeExpansionResume(effect: ApprovalEffectRecord): Promise<void> })
-      .handleDelegationScopeExpansionResume(resumeEffect);
-    expect(resumeDelegatedScopeExpansion).toHaveBeenCalledWith({
-      approvalId: resumeEffect.approvalId,
-      delegationRunId: "delegation-1",
-      stepId: "step-1",
-      childTurnId: "turn-1",
-      durableRunId: "child-1",
-    });
+      });
 
-    if (terminal) {
-      expect(failEffect).toHaveBeenCalledWith(
-        resumeEffect.effectId,
-        resumeEffect.claimedBy,
-        resumeEffect.version,
-        expect.objectContaining({
-          lastError: error.message,
-          result: expect.objectContaining({
-            reason: error instanceof UnverifiableDelegationInstructionsError
-              ? "unverifiable_delegation_instructions"
-              : "stale_delegation_scope_resume",
-            resumed: false,
+      if (terminal) {
+        expect(failEffect).toHaveBeenCalledWith(
+          resumeEffect.effectId,
+          resumeEffect.claimedBy,
+          resumeEffect.version,
+          expect.objectContaining({
+            lastError: error.message,
+            result: expect.objectContaining({
+              reason:
+                error instanceof UnverifiableDelegationInstructionsError
+                  ? "unverifiable_delegation_instructions"
+                  : "stale_delegation_scope_resume",
+              resumed: false,
+            }),
           }),
-        }),
-      );
-      expect(deferEffectForRetry).not.toHaveBeenCalled();
-    } else {
-      expect(failEffect).not.toHaveBeenCalled();
-      expect(deferEffectForRetry).toHaveBeenCalledOnce();
-    }
-  });
+        );
+        expect(deferEffectForRetry).not.toHaveBeenCalled();
+      } else {
+        expect(failEffect).not.toHaveBeenCalled();
+        expect(deferEffectForRetry).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("defers a denied approval wake until its waiting generation settles, then resumes once", async () => {
     const effect = createEffect({
@@ -5259,6 +5297,69 @@ describe("approval-resolution-effects-service", () => {
       });
     } finally {
       firstWorker.stopWorker();
+      storage.close();
+    }
+  });
+
+  it("dispatches code_mode.aider_promote pending actions through executeCodeModePendingApproval", async () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    const asyncStorage = createSqliteAsyncStorage(storage);
+    const approval = storage.approvals.create({
+      kind: "code_mode.aider_promote",
+      riskLevel: "caution",
+      payload: { runId: "code-run-promote-1" },
+      preview: {},
+      linkage: { runId: "code-run-promote-1", workspaceId: "workspace-1" },
+    });
+    storage.pendingApprovalActions.upsertPending({
+      approvalId: approval.approvalId,
+      actionType: "code_mode.aider_promote",
+      request: { runId: "code-run-promote-1", patchSha256: "a".repeat(64), patchArtifactId: "artifact-1" },
+    });
+    const effect = storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: approval.approvalId,
+      payload: { actionType: "code_mode.aider_promote" },
+    });
+    const executeCodeModePendingApproval = vi.fn(async (approvalId: string) => {
+      storage.pendingApprovalActions.markResolved(approvalId, "executed", {
+        outcome: "executed",
+        status: "promoted",
+        runId: "code-run-promote-1",
+      });
+      return {
+        outcome: "executed" as const,
+        policyReason: "code_mode_aider_promote:promoted",
+        auditEventId: "code-mode-aider-promote-code-run-promote-1",
+        result: { runId: "code-run-promote-1", status: "promoted" },
+      };
+    });
+    const executeApprovedPendingAction = vi.fn();
+    const worker = new ApprovalEffectsService(
+      { storage: asyncStorage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+      {
+        ...createApprovalEffectDeps(),
+        executeCodeModePendingApproval,
+        executeApprovedPendingAction,
+      },
+    );
+
+    try {
+      await (
+        worker as unknown as {
+          drainPendingEffects(): Promise<void>;
+        }
+      ).drainPendingEffects();
+
+      expect(executeCodeModePendingApproval).toHaveBeenCalledOnce();
+      expect(executeCodeModePendingApproval.mock.calls[0]?.[0]).toBe(approval.approvalId);
+      expect(executeApprovedPendingAction).not.toHaveBeenCalled();
+      expect(storage.pendingApprovalActions.get(approval.approvalId)).toMatchObject({ resolutionStatus: "executed" });
+      expect(storage.approvalEffects.get(effect.effectId)).toMatchObject({ status: "completed" });
+    } finally {
+      worker.stopWorker();
       storage.close();
     }
   });

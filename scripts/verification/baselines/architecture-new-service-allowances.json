@@ -2400,6 +2400,14 @@
       "maxDependencyMemberAccesses": 0,
       "reason": "WS8 PR B (Aider promote, Task 10): seeds a pinned Aider run from the pinned commit through an isolated bare baseline Git directory in the run-temp root (outside the Docker bind mount) whose objects/info/alternates borrows the operator repository's object store, and collects the patch as the baseline-index diff against the pinned commit with a mandatory pathspec and Aider bookkeeping excludes. Pure functions over the hardened runCodeModeGit; no injected dependencies, no host callbacks, nothing written to the operator repository.",
       "evidence": "2026-10-16: code-mode-aider-workspace-seed.test.ts (real temporary git repos) covers checkout through alternates, diff excludes, repository-root pathspec restriction, git apply --check against the operator repo, operator HEAD/status/count-objects unchanged, baseline-inside-work-tree, missing/malformed commit, tracked reserved path, file-count and patch-size bounds; code-mode-aider-execution.test.ts covers seeded runs end to end; repository counter measures 0 dependency accesses and 0 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/code-mode-aider-promotion.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 31,
+      "reason": "WS8 PR B (Aider promote, Task 12): approval-gated promotion of a completed, workspace-pinned Aider patch. Requests the separate code_mode.aider_promote approval and pending action, then on approval re-verifies the policy-snapshot pin, the patch artifact sha256 (contained regular-file read) and the workbench identity/HEAD/state, writes an applying intent, applies through the guarded workbench path exactly once, and finalizes the promoted ledger posture. Reads only its injected deps (narrowed storage repositories, rootDir, artifactRoot, createApproval, publishRealtime, applyChatSessionWorkbenchPatch); CapabilitySystemService and ApprovalEffectsService stay at their 259 baselines.",
+      "evidence": "2026-10-16: code-mode-aider-promotion.test.ts (real temporary git repo, real in-memory Storage) covers patch hash mismatch, HEAD moved, uncommitted drift, unpinned refusal without approval, git apply --check refusal with the intent cleared, a promoted ledger envelope that validates with its promotion record while the on-disk envelope stays audit_only, a second approval applying once, already_promoted without a new approval, and an interrupted apply never re-applying; approval-resolution-effects-service.test.ts, capability-system-service.test.ts and routes/capabilities.test.ts cover dispatch, rejected approvals and the promote route; repository counter measures 31 dependency accesses and 0 host callbacks."
     }
   ]
 }

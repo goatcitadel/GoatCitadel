@@ -19,10 +19,7 @@ import {
 import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
 import { RequesterMcpApprovalResumeRequiredError } from "./mcp-requester-admission-approval.js";
 import { yieldFanoutApprovalEffect } from "./chat-fanout-approval-service.js";
-import {
-  StaleDelegationScopeResumeError,
-  UnverifiableDelegationInstructionsError,
-} from "./chat-delegation-service.js";
+import { StaleDelegationScopeResumeError, UnverifiableDelegationInstructionsError } from "./chat-delegation-service.js";
 import { isNativeExecutionApproval, readPendingNativeApprovalParentWake } from "./approval-native-runtime-parent.js";
 import type {
   ApprovalEffectRecord,
@@ -133,6 +130,7 @@ import {
   computeFrozenChatTurnAdmissionMaterialSha256,
   reconstructAdmittedChatTurnRequest,
 } from "./session-control-service.js";
+import { isCodeModePendingActionType } from "./code-mode-aider-promotion.js";
 import { readToolDomainExecutionFailure, type ToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
 import type { SharedHostLifecycleAdmissionPort, SharedHostWorkReservation } from "./shared-host-lifecycle-service.js";
 import {
@@ -2032,7 +2030,13 @@ export class ApprovalEffectsService {
       }
       const resume = this.deps.resumeDelegatedScopeExpansion;
       if (!resume) throw new Error("Delegated scope resume executor is not configured.");
-      const resumed = await resume({ approvalId: effect.approvalId, delegationRunId, stepId, childTurnId, durableRunId });
+      const resumed = await resume({
+        approvalId: effect.approvalId,
+        delegationRunId,
+        stepId,
+        childTurnId,
+        durableRunId,
+      });
       const resumedStep = await this.ctx.storage.chatDelegationSteps.get(stepId);
       const stillWaitingOnSameApproval =
         resumedStep.status === "running" &&
@@ -2072,10 +2076,14 @@ export class ApprovalEffectsService {
       if (!completed) throw new Error(`Delegation scope resume effect ${effect.effectId} lost its completion lease.`);
     } catch (error) {
       if (!(await this.isEffectStillClaimed(effect.effectId))) return;
-      if (error instanceof UnverifiableDelegationInstructionsError || error instanceof StaleDelegationScopeResumeError) {
-        const reason = error instanceof UnverifiableDelegationInstructionsError
-          ? "unverifiable_delegation_instructions"
-          : "stale_delegation_scope_resume";
+      if (
+        error instanceof UnverifiableDelegationInstructionsError ||
+        error instanceof StaleDelegationScopeResumeError
+      ) {
+        const reason =
+          error instanceof UnverifiableDelegationInstructionsError
+            ? "unverifiable_delegation_instructions"
+            : "stale_delegation_scope_resume";
         await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
           lastError: error.message,
           result: {
@@ -2956,7 +2964,7 @@ export class ApprovalEffectsService {
     }
 
     let executedAction: ToolInvokeResult | undefined;
-    if (pendingAction.actionType === "code_mode.run") {
+    if (isCodeModePendingActionType(pendingAction.actionType)) {
       executedAction = await this.deps.executeCodeModePendingApproval(effect.approvalId, signal);
     } else {
       try {
@@ -2965,7 +2973,11 @@ export class ApprovalEffectsService {
         if (await yieldFanoutApprovalEffect(this.ctx, error, effect, this.workerId, pendingAction.actionType)) return;
         if (error instanceof RequesterMcpApprovalResumeRequiredError) {
           await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
-            result: { reason: "requester_mcp_resume_required", actionType: pendingAction.actionType, resolutionStatus: "pending" },
+            result: {
+              reason: "requester_mcp_resume_required",
+              actionType: pendingAction.actionType,
+              resolutionStatus: "pending",
+            },
           });
           return;
         }

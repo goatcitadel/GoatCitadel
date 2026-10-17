@@ -35,6 +35,7 @@ import type {
   ChatSessionWorkbenchPatchApplyResponse,
   ChatSessionWorkbenchRecord,
   ChatTurnTraceRecord,
+  CodeModeAiderPromotionRequestResponse,
   CodeModeAiderWorkspacePin,
   CodeModeAutonomousActivationEvidence,
   CodeModeLanguage,
@@ -120,6 +121,11 @@ import {
   captureCodeModeAiderWorkspacePin,
   resolveCodeModeAiderWorkspaceSeed,
 } from "./code-mode-aider-workspace-pin.js";
+import {
+  CODE_MODE_AIDER_PROMOTE_ACTION_TYPE,
+  executeApprovedCodeModeAiderPromotion,
+  requestCodeModeAiderPromotion,
+} from "./code-mode-aider-promotion.js";
 import {
   CODE_MODE_AIDER_ADAPTER_ID,
   buildCodeModeExecutionBackends,
@@ -1609,6 +1615,16 @@ export class CapabilitySystemService {
     return response;
   }
 
+  /** Requests the separate `code_mode.aider_promote` approval for a completed, workspace-pinned Aider patch. */
+  public async requestCodeModeAiderPromotion(
+    runId: string,
+    scope: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
+    operatorId?: string,
+  ): Promise<CodeModeAiderPromotionRequestResponse> {
+    const run = await this.getCodeModeRunInScope(runId, scope);
+    return await requestCodeModeAiderPromotion({ ...this.options, artifactRoot: this.artifactRoot }, run, operatorId);
+  }
+
   public async listCodeModeRunVerificationEvidence(
     runId: string,
     scope: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
@@ -2378,6 +2394,13 @@ export class CapabilitySystemService {
     signal?: AbortSignal,
   ): Promise<ToolInvokeResult | undefined> {
     const pending = await this.options.storage.pendingApprovalActions.find(approvalId);
+    if (pending?.resolutionStatus === "pending" && pending.actionType === CODE_MODE_AIDER_PROMOTE_ACTION_TYPE) {
+      return await executeApprovedCodeModeAiderPromotion(
+        { ...this.options, artifactRoot: this.artifactRoot },
+        approvalId,
+        pending,
+      );
+    }
     if (!pending || pending.resolutionStatus !== "pending" || pending.actionType !== "code_mode.run") {
       return await this.terminalizeCodeModeRunForMissingPendingAction(approvalId);
     }
@@ -5005,7 +5028,7 @@ function selectAiderEnvelopeArtifact(
   label: string,
 ): CapabilityArtifactRecord {
   const adapter = readAiderAdapterResult(run);
-  const envelope = parseCodeModeAiderAdapterResultEnvelope(adapter.envelope);
+  const envelope = parseCodeModeAiderAdapterResultEnvelope(adapter.envelope, { promotion: adapter.promotion });
   if (key === "patchArtifact") {
     return readCapabilityArtifactRecord(envelope.patchArtifact?.artifact, run.runId, label);
   }

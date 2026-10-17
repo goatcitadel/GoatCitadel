@@ -907,6 +907,123 @@ describe("CapabilitySystemService", () => {
     });
   });
 
+  it("reads promoted Aider runs through the envelope validator", async () => {
+    const harness = await createHarness({ sandboxConfig: { required: false, bestEffortHostEnabled: false } });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { run: 'aider-promoted' };",
+      originSurface: "code",
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+    });
+    const fixture = await createPromotableAiderResult(harness.rootDir, run.runId);
+    const scope = { sessionId: "session-a", workspaceId: "workspace-a" };
+    const promotedEnvelope = {
+      ...fixture.envelope,
+      replay: { replaySafe: false, policy: "promoted", reason: "Patch promoted under approval approval-promote-1." },
+    };
+    const promotion = {
+      version: 1,
+      status: "promoted",
+      approvalId: "approval-promote-1",
+      patchArtifactId: fixture.patchArtifact.artifactId,
+      patchSha256: fixture.patchArtifact.sha256,
+      pin: {
+        version: 1,
+        sessionId: "session-a",
+        worktreeIdentityHash: "c".repeat(64),
+        worktreeHead: "d".repeat(40),
+        worktreeStateHash: "e".repeat(64),
+        capturedAt: "2026-10-16T12:00:00.000Z",
+      },
+      startedAt: "2026-10-16T12:01:00.000Z",
+      promotedAt: "2026-10-16T12:02:00.000Z",
+    };
+    const writeAdapter = (adapter: Record<string, unknown>) =>
+      harness.storage.codeModeRuns.upsert({
+        ...harness.storage.codeModeRuns.get(run.runId),
+        result: { aiderAdapter: { ...fixture.adapter, ...adapter } },
+      });
+
+    writeAdapter({ envelope: promotedEnvelope, promotion });
+    await expect(harness.service.getCodeModeRunArtifactPreview(run.runId, "aider_patch", scope)).resolves.toMatchObject(
+      { artifactKind: "aider_patch", sha256: fixture.patchArtifact.sha256 },
+    );
+
+    writeAdapter({ envelope: promotedEnvelope, promotion: undefined });
+    await expect(harness.service.getCodeModeRunArtifactPreview(run.runId, "aider_patch", scope)).rejects.toThrow(
+      /promoted posture requires a promoted promotion record/,
+    );
+
+    writeAdapter({ envelope: fixture.envelope, promotion });
+    await expect(harness.service.getCodeModeRunArtifactPreview(run.runId, "aider_patch", scope)).rejects.toThrow(
+      /audit_only posture cannot carry a promoted promotion record/,
+    );
+
+    writeAdapter({ envelope: promotedEnvelope, promotion: { ...promotion, patchSha256: "f".repeat(64) } });
+    await expect(harness.service.getCodeModeRunArtifactPreview(run.runId, "aider_patch", scope)).rejects.toThrow(
+      /promotion record does not match the patch artifact/,
+    );
+  });
+
+  it("a rejected promote approval never applies the patch", async () => {
+    const applyChatSessionWorkbenchPatch = vi.fn();
+    const harness = await createHarness({
+      sandboxConfig: { required: false, bestEffortHostEnabled: false },
+      applyChatSessionWorkbenchPatch,
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { run: 'aider-rejected-promote' };",
+      originSurface: "code",
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+    });
+    const fixture = await createPromotableAiderResult(harness.rootDir, run.runId);
+    harness.storage.codeModeRuns.upsert({
+      ...harness.storage.codeModeRuns.get(run.runId),
+      status: "completed",
+      result: { aiderAdapter: fixture.adapter },
+    });
+    const before = harness.storage.codeModeRuns.get(run.runId);
+    harness.approvals.set("approval-promote-1", {
+      approvalId: "approval-promote-1",
+      kind: "code_mode.aider_promote",
+      riskLevel: "caution",
+      status: "rejected",
+      payload: { runId: run.runId },
+      preview: {},
+      linkage: { runId: run.runId, workspaceId: "workspace-a" },
+      createdAt: "2026-10-16T12:00:00.000Z",
+      explanationStatus: "not_requested",
+    });
+    harness.storage.pendingApprovalActions.upsertPending({
+      approvalId: "approval-promote-1",
+      actionType: "code_mode.aider_promote",
+      request: {
+        runId: run.runId,
+        patchSha256: fixture.patchArtifact.sha256,
+        patchArtifactId: fixture.patchArtifact.artifactId,
+      },
+      createdAt: "2026-10-16T12:00:00.000Z",
+    });
+    harness.storage.pendingApprovalActions.find("approval-promote-1")!.resolutionStatus = "rejected";
+
+    await expect(harness.service.executeApprovedCodeModeRun("approval-promote-1")).resolves.toBeUndefined();
+
+    expect(applyChatSessionWorkbenchPatch).not.toHaveBeenCalled();
+    expect(harness.storage.codeModeRuns.get(run.runId)).toEqual(before);
+
+    // The same action while still pending dispatches to the promotion module, which refuses the unpinned run
+    // without touching the workbench.
+    harness.storage.pendingApprovalActions.find("approval-promote-1")!.resolutionStatus = "pending";
+    await expect(harness.service.executeApprovedCodeModeRun("approval-promote-1")).resolves.toMatchObject({
+      outcome: "blocked",
+      result: { reason: "not_pinned" },
+    });
+    expect(applyChatSessionWorkbenchPatch).not.toHaveBeenCalled();
+  });
+
   it("fails Code Mode JSON artifact previews closed when managed artifact content is not JSON", async () => {
     const harness = await createHarness({
       sandboxConfig: {
@@ -5937,6 +6054,9 @@ async function createHarness(input?: {
   spawnCodeModeChild?: ConstructorParameters<typeof CapabilitySystemService>[0]["spawnCodeModeChild"];
   loadedSkills?: LoadedSkill[];
   meshCatalogEntries?: CapabilityCatalogEntry[];
+  applyChatSessionWorkbenchPatch?: ConstructorParameters<
+    typeof CapabilitySystemService
+  >[0]["applyChatSessionWorkbenchPatch"];
 }) {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-capability-system-"));
   tempRoots.push(rootDir);
@@ -6034,6 +6154,7 @@ async function createHarness(input?: {
       : undefined,
     resolveSandboxMetadata: input?.resolveSandboxMetadata,
     spawnCodeModeChild: input?.spawnCodeModeChild,
+    applyChatSessionWorkbenchPatch: input?.applyChatSessionWorkbenchPatch,
   });
 
   return {
@@ -7029,6 +7150,36 @@ async function createCandidateVersion(
     createdAt: "2026-04-10T00:00:00.000Z",
     updatedAt: input.updatedAt,
     lastSuccessfulExecutionAt: "2026-04-10T00:00:00.000Z",
+  };
+}
+
+async function createPromotableAiderResult(rootDir: string, runId: string) {
+  const bundleRoot = `data/code-mode-artifacts/${runId}/aider`;
+  const requestArtifact = await createManagedArtifact(rootDir, bundleRoot, "request.md", "Bump.", "text/markdown");
+  const invocationPlanArtifact = await createManagedArtifact(rootDir, bundleRoot, "invocation-plan.json", {
+    contractVersion: 1,
+    adapterId: "aider-cli-adapter",
+  });
+  const patchArtifact = await createManagedArtifact(
+    rootDir,
+    bundleRoot,
+    "aider.patch",
+    "diff --git a/file.ts b/file.ts\n",
+    "text/x-diff",
+  );
+  const envelope = {
+    contractVersion: 1,
+    adapterId: "aider-cli-adapter",
+    outcome: "patch_produced",
+    command: { argvRedacted: ["aider", "--yes"] },
+    patchArtifact: { kind: "unified_diff", artifact: patchArtifact },
+    replay: { replaySafe: false, policy: "audit_only", reason: "Aider runs are audit-only." },
+  };
+  const resultEnvelopeArtifact = await createManagedArtifact(rootDir, bundleRoot, "result-envelope.json", envelope);
+  return {
+    patchArtifact,
+    envelope,
+    adapter: { requestArtifact, invocationPlanArtifact, resultEnvelopeArtifact, envelope } as Record<string, unknown>,
   };
 }
 
