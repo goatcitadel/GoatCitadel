@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitBlueBubblesTyping,
   emitDiscordRestTyping,
+  emitMatrixTyping,
   emitMattermostTyping,
   emitProviderTyping,
   emitSignalTyping,
   emitWhatsAppTyping,
   normalizeBlueBubblesBaseUrl,
+  resetMatrixTypingUserCache,
   resetMattermostTypingUserCache,
   type ChannelTypingAdapterArgs,
 } from "./channel-typing-adapters.js";
@@ -48,7 +50,10 @@ function args(
   } as Harness;
 }
 
-beforeEach(() => resetMattermostTypingUserCache());
+beforeEach(() => {
+  resetMattermostTypingUserCache();
+  resetMatrixTypingUserCache();
+});
 
 describe("Mattermost typing", () => {
   const conn = connection("mattermost", { serverUrl: "https://mm.example.com/", botToken: "tok" });
@@ -105,6 +110,60 @@ describe("Mattermost typing", () => {
     const failing = args(conn, { target: CHANNEL_ID });
     failing.fetch.mockRejectedValue(new Error("boom"));
     expect(await emitMattermostTyping(failing)).toMatchObject({ status: "unsupported" });
+  });
+});
+
+describe("Matrix typing", () => {
+  const conn = connection("matrix", { homeserverUrl: "https://matrix.example.com/", accessToken: "syt_tok" });
+  const ROOM = "!room:example.com";
+
+  it("resolves the bot user with whoami once, then PUTs the typing state", async () => {
+    const a = args(conn, { target: ROOM });
+    a.fetch
+      .mockResolvedValueOnce(json({ user_id: "@bot:example.com" }))
+      .mockResolvedValueOnce(json({}))
+      .mockResolvedValueOnce(json({}));
+    const result = await emitMatrixTyping(a);
+    expect(result).toMatchObject({ status: "sent", supported: true, channelKey: "matrix" });
+    const [whoamiUrl, whoamiInit] = a.fetch.mock.calls[0];
+    expect(whoamiUrl).toBe("https://matrix.example.com/_matrix/client/v3/account/whoami");
+    expect(new Headers(whoamiInit.headers).get("Authorization")).toBe("Bearer syt_tok");
+    const [url, init] = a.fetch.mock.calls[1];
+    expect(url).toBe(
+      "https://matrix.example.com/_matrix/client/v3/rooms/!room%3Aexample.com/typing/%40bot%3Aexample.com",
+    );
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body)).toEqual({ typing: true, timeout: 10000 });
+    await emitMatrixTyping(a);
+    expect(a.fetch.mock.calls.map((c) => c[0])).toHaveLength(3);
+  });
+
+  it("accepts a matrix: prefixed room, and denies on allowlist, bad targets and 4xx without throwing", async () => {
+    const prefixed = args(conn, { target: `matrix:${ROOM}` });
+    prefixed.fetch.mockResolvedValueOnce(json({ user_id: "@bot:example.com" })).mockResolvedValueOnce(json({}));
+    expect((await emitMatrixTyping(prefixed)).status).toBe("sent");
+
+    const denied = args(conn, { target: ROOM }, { isAllowlisted: () => false });
+    expect(await emitMatrixTyping(denied)).toMatchObject({ status: "unsupported" });
+    expect(denied.fetch).not.toHaveBeenCalled();
+
+    expect((await emitMatrixTyping(args(conn, { target: "general" }))).status).toBe("unsupported");
+
+    resetMatrixTypingUserCache();
+    const forbidden = args(conn, { target: ROOM });
+    forbidden.fetch
+      .mockResolvedValueOnce(json({ user_id: "@bot:example.com" }))
+      .mockResolvedValueOnce(json({ errcode: "M_FORBIDDEN", error: "no" }, 403));
+    const result = await emitMatrixTyping(forbidden);
+    expect(result.status).toBe("unsupported");
+    expect(result.reason).toContain("403");
+    expect(result.reason).not.toContain("syt_tok");
+  });
+
+  it("is routed by emitProviderTyping", async () => {
+    const a = args(conn, { target: ROOM });
+    a.fetch.mockResolvedValueOnce(json({ user_id: "@bot:example.com" })).mockResolvedValueOnce(json({}));
+    expect((await emitProviderTyping(a)).channelKey).toBe("matrix");
   });
 });
 

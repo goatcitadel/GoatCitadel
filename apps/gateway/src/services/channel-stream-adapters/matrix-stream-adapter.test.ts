@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
+import { isMatrixInboundEnabled } from "@goatcitadel/gateway-core";
 import { dispatchInboundWebhookMessage } from "../channel-inbound-dispatch.js";
 import type { ChannelStreamCursorStore } from "../channel-stream-cursor-store.js";
 import {
@@ -8,11 +9,7 @@ import {
   type ChannelStreamEvent,
   type ChannelStreamRunContext,
 } from "../channel-stream-runtime-service.js";
-import {
-  createMatrixStreamAdapter,
-  isMatrixInboundEnabled,
-  type MatrixStreamAdapterDeps,
-} from "./matrix-stream-adapter.js";
+import { createMatrixStreamAdapter, type MatrixStreamAdapterDeps } from "./matrix-stream-adapter.js";
 
 const HS = "https://matrix.example.test";
 const SELF = "@bot:example.test";
@@ -140,7 +137,8 @@ describe("matrix stream adapter", () => {
     expect(adapter.isInboundEnabled(connection({ homeserverUrl: "" }))).toBe(false);
     expect(adapter.isInboundEnabled(connection({ accessTokenEnv: undefined }))).toBe(false);
     expect(adapter.isInboundEnabled(connection({ accessTokenEnv: undefined, accessToken: "keychain:x" }))).toBe(true);
-    expect(isMatrixInboundEnabled({ inboundStreamEnabled: "true", homeserverUrl: HS, accessToken: "t" })).toBe(true);
+    expect(isMatrixInboundEnabled({ inboundStreamEnabled: true, homeserverUrl: HS, accessToken: "t" })).toBe(true);
+    expect(isMatrixInboundEnabled({ inboundStreamEnabled: "true", homeserverUrl: HS, accessToken: "t" })).toBe(false);
     expect(isMatrixInboundEnabled({ homeserverUrl: HS, accessToken: "t" })).toBe(false);
   });
 

@@ -30,6 +30,13 @@ import {
   readGoogleChatMessageThread,
   sendGoogleChatAppMessage,
 } from "./google-chat-service-account.js";
+import {
+  deriveMatrixTxnId,
+  matrixReact,
+  matrixRedact,
+  matrixSendText,
+  type MatrixClientContext,
+} from "./matrix-client.js";
 
 const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
@@ -459,6 +466,8 @@ async function executeCommsProviderTool(
       return lineSend(connectionConfig, args, allowlist, target, renderedMessage, grantAllowlist);
     case "mattermost":
       return mattermostSend(connectionConfig, args, allowlist, target, sanitizedMessage, attachments, grantAllowlist);
+    case "matrix":
+      return matrixSend(connectionConfig, args, allowlist, target, sanitizedMessage, grantAllowlist);
     case "nextcloud-talk":
       return nextcloudTalkSend(
         connectionConfig,
@@ -540,6 +549,8 @@ async function commsReact(
       return discordReact(connectionConfig, args, allowlist, target, grantAllowlist);
     case "mattermost":
       return mattermostReact(connectionConfig, args, allowlist, target, grantAllowlist);
+    case "matrix":
+      return matrixReactAction(connectionConfig, args, allowlist, target, grantAllowlist);
     case "nextcloud-talk":
       return nextcloudTalkReact(connectionConfig, args, allowlist, target, grantAllowlist);
     case "telegram":
@@ -577,6 +588,8 @@ async function commsUnsend(
       return telegramUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
     case "mattermost":
       return mattermostUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
+    case "matrix":
+      return matrixUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
     case "google-chat":
       return googleChatUnsend(connectionConfig, args, allowlist, grantAllowlist);
     case "imessage":
@@ -2200,6 +2213,121 @@ async function mattermostUnsend(
   return postId;
 }
 
+const MATRIX_ROOM_ID_PATTERN = /^![^\s:]+:\S+$/;
+const MATRIX_EVENT_ID_PATTERN = /^\$\S+$/;
+
+function resolveMatrixClient(
+  config: Record<string, unknown>,
+  allowlist: string[],
+  grantAllowlist?: string[],
+): MatrixClientContext {
+  const homeserverUrl = asString(config.homeserverUrl);
+  const accessToken = secretFrom(config, "accessToken", "accessTokenEnv");
+  if (!homeserverUrl) {
+    throw new Error("Missing Matrix homeserver URL");
+  }
+  if (!accessToken) {
+    throw new Error("Missing Matrix access token");
+  }
+  return {
+    homeserverUrl,
+    accessToken,
+    allowlist,
+    grantAllowlist,
+    fetcher: async (url, init) => (await fetchAllowlisted(url, init, allowlist, undefined, grantAllowlist)).response,
+  };
+}
+
+function resolveMatrixRoomId(config: Record<string, unknown>, args: Record<string, unknown>, target: string): string {
+  const raw =
+    asString(args.target) ??
+    asString(args.roomId) ??
+    normalizeChannelTarget(target, "matrix") ??
+    resolveDefaultChannelTarget("matrix", config);
+  if (!raw) {
+    throw new Error("Missing Matrix room id");
+  }
+  const roomId = raw.replace(/^(?:matrix|room):/i, "");
+  if (!MATRIX_ROOM_ID_PATTERN.test(roomId)) {
+    throw new Error("Matrix target must be a room id like !room:example.com");
+  }
+  return roomId;
+}
+
+function resolveMatrixEventId(value: unknown, field: string): string {
+  const eventId = required(value, field);
+  if (!MATRIX_EVENT_ID_PATTERN.test(eventId)) {
+    throw new Error(`${field} must be a Matrix event id starting with a dollar sign`);
+  }
+  return eventId;
+}
+
+function optionalMatrixEventId(...values: unknown[]): string | undefined {
+  return values
+    .map((value) => asString(value))
+    .find((value): value is string => Boolean(value && MATRIX_EVENT_ID_PATTERN.test(value)));
+}
+
+/** Idempotent per delivery key and chunk so a re-sent chunk dedupes at the homeserver; random otherwise. */
+function resolveMatrixTxnId(args: Record<string, unknown>): string {
+  const chunkIndex = typeof args.chunkIndex === "number" && Number.isInteger(args.chunkIndex) ? args.chunkIndex : 0;
+  return deriveMatrixTxnId(asString(args.idempotencyKey), chunkIndex);
+}
+
+async function matrixSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+  grantAllowlist?: string[],
+): Promise<string> {
+  const client = resolveMatrixClient(config, allowlist, grantAllowlist);
+  const roomId = resolveMatrixRoomId(config, args, target);
+  const { eventId } = await matrixSendText(client, {
+    roomId,
+    body: message,
+    txnId: resolveMatrixTxnId(args),
+    replyToEventId: optionalMatrixEventId(args.replyToMessageId, args.replyTo),
+    threadRootId: optionalMatrixEventId(args.threadId, args.rootId),
+  });
+  return eventId;
+}
+
+async function matrixReactAction(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  grantAllowlist?: string[],
+): Promise<string> {
+  const client = resolveMatrixClient(config, allowlist, grantAllowlist);
+  const roomId = resolveMatrixRoomId(config, args, target);
+  const eventId = resolveMatrixEventId(args.messageId, "Matrix messageId");
+  const key = required(args.reaction, "Matrix reaction");
+  const result = await matrixReact(client, { roomId, eventId, key, txnId: resolveMatrixTxnId(args) });
+  return result.eventId;
+}
+
+async function matrixUnsend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  grantAllowlist?: string[],
+): Promise<string> {
+  const client = resolveMatrixClient(config, allowlist, grantAllowlist);
+  const roomId = resolveMatrixRoomId(config, args, target);
+  const eventId = resolveMatrixEventId(args.messageId, "Matrix messageId");
+  const result = await matrixRedact(client, {
+    roomId,
+    eventId,
+    txnId: resolveMatrixTxnId(args),
+    reason: asString(args.reason),
+  });
+  return result.eventId;
+}
+
 async function signalSend(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -2817,6 +2945,7 @@ const CHANNEL_TARGET_KEYS: Record<string, string[]> = {
   signal: ["defaultRecipient", "defaultTarget", "target"],
   imessage: ["defaultHandle", "defaultTarget", "target"],
   mattermost: ["defaultChannel", "defaultTarget", "target"],
+  matrix: ["defaultRoomId", "defaultTarget", "target"],
   "nextcloud-talk": ["defaultRoomId", "defaultConversationId", "defaultTarget", "target"],
   line: ["defaultTarget", "defaultUserId", "defaultGroupId", "defaultRoomId", "target"],
   zalo: ["defaultRecipientId", "defaultTarget", "target"],

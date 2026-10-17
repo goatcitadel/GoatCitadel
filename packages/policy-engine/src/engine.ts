@@ -2687,7 +2687,27 @@ async function extractGrantHostCandidates(
   // ntfy encodes target as a topic path; it never selects the network origin.
   // Use the same canonical base URL/default as the executor, retaining every
   // attachment and other URL constraint. Execution rechecks the grant as well.
-  const candidates = extractHostCandidates(ntfySend ? { ...args, target: undefined } : args);
+  // Matrix room ids (!room:server) never select the network origin; the configured
+  // homeserver is the only outbound host for send, react and redact.
+  const matrixAction =
+    (request.toolName === "channel.send" ||
+      request.toolName === "channel.react" ||
+      request.toolName === "channel.unsend") &&
+    connection?.key === "matrix";
+  const candidates = extractHostCandidates(ntfySend || matrixAction ? { ...args, target: undefined } : args);
+  if (matrixAction) {
+    const configured = connection.config.homeserverUrl;
+    let homeserver: URL;
+    try {
+      homeserver = new URL(typeof configured === "string" ? configured.trim() : "");
+    } catch {
+      return { hosts: [], blockedReason: "grant host constraints require a valid Matrix homeserver URL" };
+    }
+    if (!["http:", "https:"].includes(homeserver.protocol) || !homeserver.hostname) {
+      return { hosts: [], blockedReason: "grant host constraints require an HTTP Matrix homeserver URL" };
+    }
+    candidates.push(homeserver.hostname.toLowerCase());
+  }
   if (ntfySend) {
     const configured = connection.config.baseUrl;
     const baseUrl = typeof configured === "string" && configured.trim() ? configured.trim() : "https://ntfy.sh";

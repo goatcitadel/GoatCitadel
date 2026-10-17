@@ -4269,6 +4269,131 @@ describe("executeTool", () => {
     });
   });
 
+  describe("matrix outbound", () => {
+    function matrixStorage(config: Record<string, unknown>) {
+      return {
+        integrationConnections: {
+          get: vi.fn(() => ({ connectionId: "conn-matrix", key: "matrix", kind: "channel", config })),
+        },
+        commsDeliveries: {
+          createQueued: vi.fn((input: Record<string, unknown>) => ({
+            deliveryId: "delivery-matrix",
+            status: "queued",
+            channelKey: input.channelKey,
+            target: input.target,
+            createdAt: "2026-10-17T00:00:00.000Z",
+            updatedAt: "2026-10-17T00:00:00.000Z",
+          })),
+          markSent: vi.fn(),
+          markFailed: vi.fn(),
+        },
+      } as unknown as Storage & AsyncStorage;
+    }
+    const matrixPolicy = {
+      ...policyConfig,
+      sandbox: { ...policyConfig.sandbox, networkAllowlist: ["matrix.example.com"] },
+    };
+    const matrixConfig = {
+      homeserverUrl: "https://matrix.example.com",
+      accessTokenEnv: "MATRIX_OUTBOUND_TOKEN",
+      defaultRoomId: "!default:example.com",
+    };
+
+    it("matrix channel.send posts m.room.message", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      process.env.MATRIX_OUTBOUND_TOKEN = "syt_outbound";
+      const fetchMock = vi.fn(
+        async (..._args: unknown[]) =>
+          new Response(JSON.stringify({ event_id: "$sent1" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const storage = matrixStorage(matrixConfig);
+      const result = await executeTool(
+        {
+          toolName: "channel.send",
+          args: { connectionId: "conn-matrix", message: "hello matrix", idempotencyKey: "delivery-1" },
+          agentId: "operator",
+          sessionId: "sess-matrix-send",
+        },
+        matrixPolicy,
+        storage,
+      );
+      expect(result).toMatchObject({ status: "sent", providerMessageId: "$sent1" });
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(String(url)).toMatch(
+        /^https:\/\/matrix\.example\.com\/_matrix\/client\/v3\/rooms\/!default%3Aexample\.com\/send\/m\.room\.message\/[0-9a-f]{32}$/,
+      );
+      expect(init.method).toBe("PUT");
+      expect(new Headers(init.headers).get("authorization")).toBe("Bearer syt_outbound");
+      expect(JSON.parse(String(init.body))).toEqual({ msgtype: "m.text", body: "hello matrix" });
+      delete process.env.MATRIX_OUTBOUND_TOKEN;
+    });
+
+    it("matrix channel.react and channel.unsend use the message's room and event id", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      process.env.MATRIX_OUTBOUND_TOKEN = "syt_outbound";
+      const fetchMock = vi.fn(
+        async (..._args: unknown[]) => new Response(JSON.stringify({ event_id: "$new" }), { status: 200 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const react = await executeTool(
+        {
+          toolName: "channel.react",
+          args: { connectionId: "conn-matrix", target: "!other:example.com", messageId: "$orig", reaction: "👍" },
+          agentId: "operator",
+          sessionId: "sess-matrix-react",
+        },
+        matrixPolicy,
+        matrixStorage(matrixConfig),
+      );
+      expect(react).toMatchObject({ status: "sent", providerMessageId: "$new" });
+      const [reactUrl, reactInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(String(reactUrl)).toContain("/rooms/!other%3Aexample.com/send/m.reaction/");
+      expect(JSON.parse(String(reactInit.body))).toEqual({
+        "m.relates_to": { rel_type: "m.annotation", event_id: "$orig", key: "👍" },
+      });
+
+      const unsend = await executeTool(
+        {
+          toolName: "channel.unsend",
+          args: { connectionId: "conn-matrix", messageId: "$orig" },
+          agentId: "operator",
+          sessionId: "sess-matrix-unsend",
+        },
+        matrixPolicy,
+        matrixStorage(matrixConfig),
+      );
+      expect(unsend).toMatchObject({ status: "sent" });
+      const [redactUrl, redactInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+      expect(String(redactUrl)).toContain("/rooms/!default%3Aexample.com/redact/%24orig/");
+      expect(redactInit.method).toBe("PUT");
+      delete process.env.MATRIX_OUTBOUND_TOKEN;
+    });
+
+    it("matrix refuses a homeserver outside the allowlist before any request", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      process.env.MATRIX_OUTBOUND_TOKEN = "syt_outbound";
+      const fetchMock = vi.fn(async (..._args: unknown[]) => new Response("{}", { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.send",
+          args: { connectionId: "conn-matrix", message: "hi" },
+          agentId: "operator",
+          sessionId: "sess-matrix-deny",
+        },
+        { ...policyConfig, sandbox: { ...policyConfig.sandbox, networkAllowlist: ["other.example.com"] } },
+        matrixStorage(matrixConfig),
+      );
+      expect(result).toMatchObject({ status: "failed" });
+      expect(fetchMock).not.toHaveBeenCalled();
+      delete process.env.MATRIX_OUTBOUND_TOKEN;
+    });
+  });
+
   describe("ntfy unsend", () => {
     function ntfyStorage(config: Record<string, unknown>) {
       return {

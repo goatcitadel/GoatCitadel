@@ -353,6 +353,7 @@ export async function commsTyping(host: CommsHost, input: ChannelTypingInput): P
     connection.key === "discord" ||
     connection.key === "telegram" ||
     connection.key === "mattermost" ||
+    connection.key === "matrix" ||
     connection.key === "signal" ||
     connection.key === "whatsapp" ||
     connection.key === "imessage"

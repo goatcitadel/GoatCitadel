@@ -1,4 +1,5 @@
 import type { IntegrationConnection } from "@goatcitadel/contracts";
+import { isMatrixInboundEnabled } from "@goatcitadel/gateway-core";
 import { readBoundedResponseJson } from "../bounded-response-reader.js";
 import type { ChannelStreamCursorStore } from "../channel-stream-cursor-store.js";
 import {
@@ -68,20 +69,6 @@ interface MatrixSyncResponse {
 function readString(config: Record<string, unknown>, key: string): string | undefined {
   const value = config[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function isOptedIn(config: Record<string, unknown>): boolean {
-  const flag = config.inboundStreamEnabled;
-  return flag === true || (typeof flag === "string" && flag.trim().toLowerCase() === "true");
-}
-
-/** Inbound is on only with the opt-in, a homeserver URL and a configured access token. */
-export function isMatrixInboundEnabled(config: Record<string, unknown>): boolean {
-  return (
-    isOptedIn(config) &&
-    Boolean(readString(config, "homeserverUrl")) &&
-    Boolean(readString(config, "accessToken") ?? readString(config, "accessTokenEnv"))
-  );
 }
 
 /** A non-auth HTTP failure; carries the Matrix errcode enum (never body text). */
