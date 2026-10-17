@@ -31,7 +31,7 @@ export type CreateCalendarEventInput = Omit<CalendarEventRecord, "eventId" | "cr
   workspaceId?: string;
 };
 
-/** Raised when the approval lookup a draft release needs was not composed; releasing then fails closed. */
+/** Raised (by the caller) when the approval lookup a draft release needs was not composed; releasing then fails closed. */
 export class MailDraftRecoveryUnavailableError extends Error {
   public constructor() {
     super("Mail draft recovery is unavailable: send approvals for the draft cannot be checked.");
@@ -75,8 +75,6 @@ export interface CommunicationsDashboardServiceDependencies {
   listContacts?: (workspaceId: string) => ContactRecord[];
   /** Durable draft store; required by the draft methods, which fail closed without it. */
   mailDrafts?: CommunicationsMailDraftStore;
-  /** Draft recovery owner; releasing an interrupted draft fails closed without it. */
-  mailDraftRecovery?: CommunicationsMailDraftRecovery;
 }
 
 export interface CommunicationsMailDraftRecovery {
@@ -237,12 +235,11 @@ export class CommunicationsDashboardService {
    * that names the draft is re-linked instead, so a draft never gets a second approval; only when none
    * exists, and the grace period has passed, does the draft return to `draft`. Both are audited.
    */
-  public async releaseInterruptedDraft(draftId: string): Promise<MailDraftReleaseResponse> {
+  public async releaseInterruptedDraft(
+    draftId: string,
+    recovery: CommunicationsMailDraftRecovery,
+  ): Promise<MailDraftReleaseResponse> {
     const store = this.requireDraftStore();
-    const recovery = this.deps.mailDraftRecovery;
-    if (!recovery) {
-      throw new MailDraftRecoveryUnavailableError();
-    }
     const draft = await store.find(draftId);
     if (!draft) {
       throw new NotFoundError({ entity: "Mail draft", id: draftId });

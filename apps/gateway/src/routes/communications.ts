@@ -93,7 +93,6 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
       return fixture ? { items: fixture.events } : await fastify.services.comms.commsCalendarList(input);
     },
     mailDrafts: fastify.services.mailDrafts,
-    mailDraftRecovery: fastify.services.mailDraftRecovery,
   });
 
   fastify.get("/api/v1/communications", async (request, reply) => {
@@ -141,7 +140,14 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
   // Operator recovery for a send interrupted before its approval id was recorded; the outcome
   // (released, relinked, not_interrupted, too_recent) is always a 200 body, see releaseInterruptedDraft.
   fastify.post("/api/v1/mail/drafts/:draftId/release", async (request, reply) =>
-    withScopedDraft(request, reply, async (draftId) => reply.send(await service.releaseInterruptedDraft(draftId))),
+    withScopedDraft(request, reply, async (draftId) => {
+      // Without the approval lookup a release could hand a draft a second approval, so it fails closed.
+      const recovery = fastify.services.mailDraftRecovery;
+      if (!recovery) {
+        throw new MailDraftRecoveryUnavailableError();
+      }
+      return reply.send(await service.releaseInterruptedDraft(draftId, recovery));
+    }),
   );
 
   /** Binds the draft to the workspace named in the query or body before `handle` sees it; a mismatch is a 404. */

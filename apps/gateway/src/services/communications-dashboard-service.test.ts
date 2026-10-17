@@ -13,7 +13,6 @@ import {
 import {
   createCommunicationsDashboardService,
   INTERRUPTED_SEND_RELEASE_GRACE_MS,
-  MailDraftRecoveryUnavailableError,
   type CommunicationsMailDraftRecovery,
   type CommunicationsMailDraftStore,
 } from "./communications-dashboard-service.js";
@@ -693,10 +692,9 @@ describe("releasing an interrupted send", () => {
     const service = createCommunicationsDashboardService({
       now: () => new Date(Date.parse(NOW) + 60_000),
       mailDrafts,
-      mailDraftRecovery,
     });
 
-    const result = await service.releaseInterruptedDraft(fenced.draftId);
+    const result = await service.releaseInterruptedDraft(fenced.draftId, mailDraftRecovery);
 
     expect(result).toEqual({ outcome: "too_recent", draft: fenced, retryAfterSeconds: 540 });
     expect(mailDraftRecovery.findMailSendApprovals).not.toHaveBeenCalled();
@@ -712,10 +710,9 @@ describe("releasing an interrupted send", () => {
       now: () => AFTER_GRACE,
       createApproval,
       mailDrafts,
-      mailDraftRecovery,
     });
 
-    const result = await service.releaseInterruptedDraft(fenced.draftId);
+    const result = await service.releaseInterruptedDraft(fenced.draftId, mailDraftRecovery);
 
     expect(result.outcome).toBe("released");
     expect(result.draft).toMatchObject({ status: "draft", updatedAt: AFTER_GRACE.toISOString() });
@@ -750,10 +747,9 @@ describe("releasing an interrupted send", () => {
       now: () => AFTER_GRACE,
       createApproval,
       mailDrafts,
-      mailDraftRecovery,
     });
 
-    const result = await service.releaseInterruptedDraft(fenced.draftId);
+    const result = await service.releaseInterruptedDraft(fenced.draftId, mailDraftRecovery);
 
     expect(result).toMatchObject({
       outcome: "relinked",
@@ -770,9 +766,9 @@ describe("releasing an interrupted send", () => {
     const mailDrafts = createMailDraftStore();
     const linked = await fencedDraft(mailDrafts, { approvalId: "approval-1" });
     const mailDraftRecovery = recovery();
-    const service = createCommunicationsDashboardService({ now: () => AFTER_GRACE, mailDrafts, mailDraftRecovery });
+    const service = createCommunicationsDashboardService({ now: () => AFTER_GRACE, mailDrafts });
 
-    expect(await service.releaseInterruptedDraft(linked.draftId)).toEqual({
+    expect(await service.releaseInterruptedDraft(linked.draftId, mailDraftRecovery)).toEqual({
       outcome: "not_interrupted",
       draft: linked,
     });
@@ -796,7 +792,6 @@ describe("releasing an interrupted send", () => {
       now: () => now,
       createApproval,
       mailDrafts,
-      mailDraftRecovery,
     });
     const draft = await service.createDraft({
       accountId: "acct-a",
@@ -808,23 +803,12 @@ describe("releasing an interrupted send", () => {
     const sending = service.sendDraft(draft.draftId);
     await vi.waitFor(() => expect(createApproval).toHaveBeenCalledOnce());
     now = AFTER_GRACE;
-    const result = await service.releaseInterruptedDraft(draft.draftId);
+    const result = await service.releaseInterruptedDraft(draft.draftId, mailDraftRecovery);
     finish();
 
     expect(result.outcome).toBe("too_recent");
     expect(mailDraftRecovery.findMailSendApprovals).not.toHaveBeenCalled();
     expect(await sending).toMatchObject({ approvalId: "22222222-2222-4222-8222-222222222222" });
-  });
-
-  it("fails closed when the approval lookup is not composed", async () => {
-    const mailDrafts = createMailDraftStore();
-    const fenced = await fencedDraft(mailDrafts);
-    const service = createCommunicationsDashboardService({ now: () => AFTER_GRACE, mailDrafts });
-
-    await expect(service.releaseInterruptedDraft(fenced.draftId)).rejects.toBeInstanceOf(
-      MailDraftRecoveryUnavailableError,
-    );
-    expect(await mailDrafts.find(fenced.draftId)).toEqual(fenced);
   });
 });
 
