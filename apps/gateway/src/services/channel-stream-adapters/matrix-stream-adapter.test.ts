@@ -378,6 +378,49 @@ describe("matrix stream adapter", () => {
     });
   });
 
+  it("a persistent 4xx after re-priming rethrows instead of looping", async () => {
+    const prime = vi.fn(() => json({ next_batch: "fresh" }));
+    const h = harness({
+      store: memoryStore({ cursor: "stale", scope: SELF }),
+      prime,
+      syncs: [
+        () => json({ errcode: "M_UNKNOWN_POS" }, 400),
+        () => json({ errcode: "M_UNKNOWN_POS" }, 400),
+        () => json({ errcode: "M_UNKNOWN_POS" }, 400),
+      ],
+    });
+    await expect(h.adapter.run(h.ctx())).rejects.toThrow(/Matrix sync request failed .400 M_UNKNOWN_POS/);
+    expect(prime).toHaveBeenCalledTimes(1);
+    expect(h.diagnostic).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-primes again after an incremental sync succeeded in between", async () => {
+    const prime = vi.fn(() => json({ next_batch: "fresh" }));
+    const h = harness({
+      store: memoryStore({ cursor: "stale", scope: SELF }),
+      prime,
+      syncs: [
+        () => json({ errcode: "M_UNKNOWN_POS" }, 400),
+        () => json(syncBody("ok", [])),
+        () => json({ errcode: "M_UNKNOWN_POS" }, 400),
+        () => json(syncBody("ok2", [])),
+      ],
+    });
+    await h.adapter.run(h.ctx());
+    expect(prime).toHaveBeenCalledTimes(2);
+  });
+
+  it("408 is rethrown, not re-primed", async () => {
+    const prime = vi.fn(() => json({ next_batch: "fresh" }));
+    const h = harness({
+      store: memoryStore({ cursor: "c", scope: SELF }),
+      prime,
+      syncs: [() => json({ errcode: "M_UNKNOWN" }, 408)],
+    });
+    await expect(h.adapter.run(h.ctx())).rejects.toThrow(/request failed .408 /);
+    expect(prime).not.toHaveBeenCalled();
+  });
+
   it("resolves quietly when the session is aborted mid long-poll", async () => {
     const h = harness({ store: memoryStore({ cursor: "c", scope: SELF }) });
     await expect(h.adapter.run(h.ctx())).resolves.toBeUndefined();

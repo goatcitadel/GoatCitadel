@@ -96,7 +96,13 @@ class MatrixRequestError extends Error {
 }
 
 function isRejectedSince(error: unknown): boolean {
-  return error instanceof MatrixRequestError && error.status >= 400 && error.status < 500 && error.status !== 429;
+  return (
+    error instanceof MatrixRequestError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 429 &&
+    error.status !== 408
+  );
 }
 
 function isAbortLike(error: unknown): boolean {
@@ -251,6 +257,7 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
         const resumeFrom = (stored && stored.scope === selfId ? stored.cursor : undefined) ?? ctx.cursor;
         let cursor = resumeFrom ?? (await prime());
 
+        let reprimedSinceLastSuccess = false;
         while (!ctx.signal.aborted) {
           let sync: MatrixSyncResponse;
           try {
@@ -264,7 +271,9 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
               "sync",
             );
           } catch (error) {
-            if (!isRejectedSince(error)) throw error;
+            // Re-prime at most once until an incremental sync succeeds; a repeat rethrows so the runtime backs off.
+            if (!isRejectedSince(error) || reprimedSinceLastSuccess) throw error;
+            reprimedSinceLastSuccess = true;
             // A stale or invalid since token would otherwise wedge the connection on endless retries.
             ctx.diagnostic(
               "matrix.stream.since_rejected",
@@ -273,6 +282,7 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
             cursor = await prime();
             continue;
           }
+          reprimedSinceLastSuccess = false;
           markReadyOnce();
           ctx.touch();
           const limitedRooms = Object.values(sync.rooms?.join ?? {}).filter(
