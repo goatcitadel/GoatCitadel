@@ -2323,6 +2323,14 @@
     },
     {
       "planStep": "C0",
+      "path": "apps/gateway/src/services/citadel-ward-approval.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS3 gap-closure program: pure helper that defines the Citadel Ward approval payload contract (ward action, citadel id, exact request, SHA-256 payloadHash over canonical JSON, and the citadel-ward:<approvalId> replay idempotency key) shared by the ward gates that create approvals and the later executor that verifies them; it reaches no host or dependency.",
+      "evidence": "apps/gateway/src/services/citadel-ward-approval.test.ts covers hash stability under key reordering, hash change on content change, build/read round-trip, malformed payload rejection, the replay key and kind recognition; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
       "path": "apps/gateway/src/services/communications-approval-effect-service.ts",
       "maxHostCallbacks": 1,
       "maxDependencyMemberAccesses": 16,

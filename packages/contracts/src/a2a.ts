@@ -216,7 +216,13 @@ export interface A2ABridgeTaskEvent {
 
 export type A2ATaskPushEventKind = A2ABridgeTaskEvent["kind"];
 
-export type A2ATaskPushDeliveryStatus = "pending" | "delivered" | "retry_scheduled" | "dead_lettered" | "blocked";
+export type A2ATaskPushDeliveryStatus =
+  | "pending"
+  | "delivered"
+  | "retry_scheduled"
+  | "dead_lettered"
+  | "blocked"
+  | "deferred_pending_approval";
 
 export interface A2ATaskPushNotificationConfig {
   taskId: string;
@@ -252,6 +258,7 @@ export interface A2ATaskPushDeliveryResult {
   nextRetryAt?: string;
   error?: string;
   auditRef?: string;
+  approvalId?: string;
 }
 
 export interface A2ATaskBindingRecord {
@@ -345,12 +352,13 @@ export interface A2AOutboundSendResponse {
   peerId: string;
   method: A2AJsonRpcMethod;
   transport: A2AOutboundTransport;
-  status: "blocked" | "sent" | "replayed";
+  status: "blocked" | "sent" | "replayed" | "approval_required";
   agentCardUrl?: string;
   jsonRpcUrl?: string;
   grpcUrl?: string;
   idempotencyKey: string;
   auditRef?: string;
+  approvalId?: string;
   response?: A2AJsonRpcResponse;
   warnings: string[];
 }
