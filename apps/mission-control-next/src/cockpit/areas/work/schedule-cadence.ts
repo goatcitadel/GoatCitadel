@@ -98,3 +98,114 @@ export function buildScheduleExpression(
   const [hour = 9, minute = 0] = (time ?? "09:00").split(":").map(Number);
   return `${minute} ${hour} * * ${cadence === "weekdays" ? "1-5" : "*"}${suffix}`;
 }
+
+const UTC_NAMES = new Set(["UTC", "Etc/UTC", "Etc/GMT", "GMT"]);
+
+/** The browser's IANA timezone, or the Gateway default when the browser does not report one. */
+export function browserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || GATEWAY_DEFAULT_SCHEDULE_ZONE;
+  } catch {
+    return GATEWAY_DEFAULT_SCHEDULE_ZONE;
+  }
+}
+
+/**
+ * WK-02: a new guided schedule runs at the typed time in the browser's timezone. The zone is saved as the expression's
+ * timezone suffix, which the Gateway cron parser already accepts ("M H * * * [Timezone]"). UTC needs no suffix.
+ */
+export function defaultScheduleExpression(zone = browserTimeZone()): string {
+  return buildScheduleExpression("daily", "09:00", UTC_NAMES.has(zone) ? null : zone);
+}
+
+/** The zones offered by the guided Timezone select: the chosen one, the browser's, UTC, then every zone the runtime knows. */
+export function scheduleZoneOptions(chosen: string, browser = browserTimeZone()): string[] {
+  return [...new Set([chosen, browser, GATEWAY_DEFAULT_SCHEDULE_ZONE, ...knownTimeZones()])];
+}
+
+function knownTimeZones(): string[] {
+  try {
+    return typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The minutes `zone` is ahead of UTC at `instant`. */
+function zoneOffsetMinutes(instant: number, zone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(new Date(instant));
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  return Math.round((asUtc - Math.floor(instant / 1000) * 1000) / 60_000);
+}
+
+/** The instant a wall-clock time on a calendar day in `zone` happens. */
+function zonedInstant(year: number, month: number, day: number, hour: number, minute: number, zone: string): number {
+  const guess = Date.UTC(year, month - 1, day, hour, minute);
+  const first = guess - zoneOffsetMinutes(guess, zone) * 60_000;
+  return guess - zoneOffsetMinutes(first, zone) * 60_000;
+}
+
+/**
+ * The next time a guided daily or weekday schedule runs, as the Gateway evaluates it: `time` on the wall clock in
+ * `zone`. Returns null for other cadences, which the field does not preview.
+ */
+export function nextGuidedRun(
+  cadence: ScheduleCadence,
+  time: string | null,
+  zone: string,
+  now: Date = new Date(),
+): Date | null {
+  if ((cadence !== "daily" && cadence !== "weekdays") || !time) return null;
+  const [hour = 0, minute = 0] = time.split(":").map(Number);
+  let today: { year: number; month: number; day: number };
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(now);
+    const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+    today = { year: get("year"), month: get("month"), day: get("day") };
+  } catch {
+    return null;
+  }
+  for (let offset = 0; offset < 8; offset += 1) {
+    const calendar = new Date(Date.UTC(today.year, today.month - 1, today.day + offset));
+    const weekday = calendar.getUTCDay();
+    if (cadence === "weekdays" && (weekday === 0 || weekday === 6)) continue;
+    const instant = zonedInstant(
+      calendar.getUTCFullYear(),
+      calendar.getUTCMonth() + 1,
+      calendar.getUTCDate(),
+      hour,
+      minute,
+      zone,
+    );
+    if (instant > now.getTime()) return new Date(instant);
+  }
+  return null;
+}
+
+/** "Fri 17 Oct, 09:00" on the wall clock in `zone`. */
+export function formatInZone(instant: Date, zone: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone: zone,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(instant);
+}

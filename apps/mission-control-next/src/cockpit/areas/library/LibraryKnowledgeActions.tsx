@@ -226,7 +226,9 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
         Choose the source conversation. Tool policy and read access still decide what this conversation can use.
       </p>
       {sessions.error ? <Callout tone="error">{describeApiError(sessions.error).summary}</Callout> : null}
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       <Field label="Source conversation">
         {(props) => (
           <select

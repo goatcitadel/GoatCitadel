@@ -1,10 +1,10 @@
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { LibraryLinkedArtifact } from "./LibraryLinkedArtifact";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../data/record-view";
+import { CHECKING_FOR_CHANGES, keepRecordForSameItem, lastVersionNote, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
@@ -13,8 +13,10 @@ import { LibraryFileUpload } from "./LibraryFileUpload";
 import { LibraryFileTemplates } from "./LibraryFileTemplates";
 import { LibraryNotesWorkspace } from "./LibraryNotesWorkspace";
 import { LibraryMemoryWorkspace } from "./LibraryMemoryWorkspace";
+import { LibraryFileFolders } from "./LibraryFileFolders";
 import {
   loadLibraryResources,
+  RESOURCE_LIMIT,
   resourceBinding,
   resourceDescription,
   resourceId,
@@ -29,6 +31,7 @@ import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 
 const TITLES = LIBRARY_SECTION_LABELS;
+const SEARCH_DEBOUNCE_MS = 300;
 export function LibraryResources({
   kind,
   workspaceId,
@@ -62,23 +65,40 @@ function LibraryResourceDirectory({
   const access = useProjectAccess(JSON.stringify([workspaceId, citadelId]));
   const [draftQuery, setDraftQuery] = useState("");
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("active");
-  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  const [dir, setDir] = useState(".");
+  const [limit, setLimit] = useState(RESOURCE_LIMIT);
   const [selected, setSelected] = useState<string>();
+  const folderRef = useRef<HTMLSpanElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const pendingFocus = useRef<"folder" | "more">(undefined);
+  // One live search pattern: typing searches after a short pause; Enter searches at once.
+  useEffect(() => {
+    const next = draftQuery.trim();
+    if (next === query) return;
+    const timer = window.setTimeout(() => {
+      setSelected(undefined);
+      setLimit(RESOURCE_LIMIT);
+      setQuery(next);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [draftQuery, query]);
+  // "Load more" only grows the window (the last key segment), so the loaded records stay while it reads.
+  const resourceKey = [
+    "library",
+    "resources",
+    kind,
+    workspaceId,
+    citadelId,
+    access.identity,
+    projectId,
+    query,
+    ...(kind === "files" ? [dir] : []),
+    ...(kind === "artifacts" ? [sourceSurface] : []),
+    limit,
+  ];
   const resourceQuery = useQuery({
-    queryKey: [
-      "library",
-      "resources",
-      kind,
-      workspaceId,
-      citadelId,
-      access.identity,
-      projectId,
-      query,
-      status,
-      cursors.at(-1),
-      ...(kind === "artifacts" ? [sourceSurface] : []),
-    ],
+    queryKey: resourceKey,
+    placeholderData: keepRecordForSameItem(resourceKey),
     queryFn: () => {
       if (kind === "artifacts" && !sourceAvailable)
         throw new Error("Choose a supported recorded artifact source before reading this directory.");
@@ -88,8 +108,9 @@ function LibraryResourceDirectory({
         citadelId,
         projectId,
         query,
-        status,
-        cursor: cursors.at(-1),
+        status: "active",
+        limit,
+        ...(kind === "files" ? { dir } : {}),
         ...(kind === "artifacts" && sourceSurface !== "all" && sourceAvailable
           ? { sourceSurface: sourceSurface as "chat" | "cowork" | "code" }
           : {}),
@@ -103,10 +124,24 @@ function LibraryResourceDirectory({
   const data = view.record;
   const lastVersion = lastVersionNote(view);
   const selection = data?.items.find((item) => resourceBinding(item) === selected);
+  useEffect(() => {
+    if (resourceQuery.isFetching || !pendingFocus.current) return;
+    const target = pendingFocus.current;
+    pendingFocus.current = undefined;
+    if (target === "folder") folderRef.current?.focus();
+    // "Load more" keeps focus while it is still there; once everything is loaded, focus the last record.
+    else if (!data?.hasMore) listRef.current?.querySelector<HTMLButtonElement>("li:last-child button")?.focus();
+  }, [resourceQuery.isFetching, data]);
   function reset() {
     setSelected(undefined);
-    setCursors([undefined]);
+    setLimit(RESOURCE_LIMIT);
   }
+  function openFolder(next: string) {
+    reset();
+    pendingFocus.current = "folder";
+    setDir(next);
+  }
+  const searchLabel = kind === "files" ? "Search files in this folder" : `Search ${TITLES[kind].toLowerCase()}`;
   return (
     <section className={AREA_PAGE} aria-label={`Library ${TITLES[kind]}`}>
       <AreaHeader
@@ -153,6 +188,7 @@ function LibraryResourceDirectory({
         </>
       ) : null}
       <form
+        role="search"
         className="flex flex-wrap items-end gap-2"
         onSubmit={(event) => {
           event.preventDefault();
@@ -161,33 +197,15 @@ function LibraryResourceDirectory({
         }}
       >
         <label className="min-w-0 flex-1 text-sm text-fg-secondary">
-          Filter {TITLES[kind].toLowerCase()}
+          {searchLabel}
           <input
+            type="search"
             className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-raised px-3 text-fg"
             maxLength={200}
             value={draftQuery}
             onChange={(event) => setDraftQuery(event.target.value)}
           />
         </label>
-        {kind === "memory" || kind === "notes" ? (
-          <label className="text-sm text-fg-secondary">
-            Status
-            <select
-              className="mt-1 block min-h-10 rounded-md border border-line-control bg-raised px-2 text-fg"
-              value={status}
-              onChange={(event) => {
-                reset();
-                setStatus(event.target.value);
-              }}
-            >
-              <option value="active">Active</option>
-              <option value={kind === "notes" ? "archived" : "forgotten"}>
-                {kind === "notes" ? "Archived" : "Forgotten"}
-              </option>
-              <option value="all">All statuses</option>
-            </select>
-          </label>
-        ) : null}
         {kind === "artifacts" ? (
           <label className="text-sm text-fg-secondary">
             Recorded source
@@ -217,8 +235,16 @@ function LibraryResourceDirectory({
             </select>
           </label>
         ) : null}
-        <Button type="submit">Apply filter</Button>
       </form>
+      {kind === "files" ? (
+        <LibraryFileFolders
+          ref={folderRef}
+          dir={dir}
+          folders={data?.folders ?? []}
+          disabled={resourceQuery.isFetching}
+          onOpen={openFolder}
+        />
+      ) : null}
       {kind === "artifacts" && !sourceAvailable ? (
         <EmptyState
           title="Artifact source filter unavailable"
@@ -259,7 +285,7 @@ function LibraryResourceDirectory({
         <>
           <p className="text-xs text-fg-muted">{data.coverage}</p>
           {data.items.length ? (
-            <ul className="divide-y divide-line-subtle">
+            <ul ref={listRef} className="divide-y divide-line-subtle">
               {data.items.map((resource) => (
                 <li key={resourceId(resource)} className="py-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -283,31 +309,25 @@ function LibraryResourceDirectory({
             </ul>
           ) : (
             <EmptyState
-              title={`No ${TITLES[kind].toLowerCase()} returned`}
-              description="No matching records were returned in this directory window."
+              title={
+                query ? `No ${TITLES[kind].toLowerCase()} match “${query}”` : `No ${TITLES[kind].toLowerCase()} here`
+              }
+              description={
+                query ? "Try a shorter search, or clear it to see everything here." : "Nothing has been saved here yet."
+              }
             />
           )}
-          {kind === "memory" ? (
-            <div className="flex flex-wrap gap-2">
+          {data.hasMore ? (
+            <div>
               <Button
-                size="sm"
-                disabled={cursors.length < 2}
+                loading={resourceQuery.isFetching}
+                loadingLabel="Loading more…"
                 onClick={() => {
-                  setSelected(undefined);
-                  setCursors((current) => current.slice(0, -1));
+                  pendingFocus.current = "more";
+                  setLimit((value) => value + RESOURCE_LIMIT);
                 }}
               >
-                Previous memory page
-              </Button>
-              <Button
-                size="sm"
-                disabled={!data.nextCursor}
-                onClick={() => {
-                  setSelected(undefined);
-                  setCursors((current) => [...current, data.nextCursor]);
-                }}
-              >
-                Next memory page
+                Load more {TITLES[kind].toLowerCase()}
               </Button>
             </div>
           ) : null}

@@ -294,7 +294,9 @@ function Registration({
           Require verified Git identity
         </label>
         {notice ? <Callout>{notice}</Callout> : null}
-        {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+        {operation.locked && operation.attempt?.message ? (
+          <Callout tone="warning">{operation.attempt.message}</Callout>
+        ) : null}
         {registered ? (
           <div>
             <p>Saved source: {registered.label}</p>

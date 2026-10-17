@@ -44,6 +44,7 @@ export function SpendOverview() {
   const summary = costs.data;
   const projection = summary ? projectUsageCostSummary(summary) : null;
   const providers = summary ? projectProviderCostRows(summary) : [];
+  const missingTokenDays = projection?.tokenCoverage.missingGroups ?? 0;
   const dates = summary ? [Date.parse(summary.from), Date.parse(summary.to)] : [];
   const period =
     dates.length === 2 && dates.every(Number.isFinite)
@@ -84,9 +85,14 @@ export function SpendOverview() {
               label="Spend totals"
               items={[
                 { term: "Known cost", value: projection.costLabel },
-                { term: "Recorded tokens", value: new Intl.NumberFormat().format(projection.tokens) },
+                { term: "Recorded tokens", value: projection.tokenLabel },
               ]}
             />
+            {missingTokenDays > 0 ? (
+              <p className="text-xs text-fg-muted">
+                {`Token counts are missing or partial for ${plural(missingTokenDays, "day")}, so the token total is a lower bound.`}
+              </p>
+            ) : null}
             <p className="text-xs text-fg-muted">
               Accounted cost may combine provider-reported amounts and Gateway pricing estimates. Complete coverage
               means all costs were accounted; it does not make an estimate a measured bill.

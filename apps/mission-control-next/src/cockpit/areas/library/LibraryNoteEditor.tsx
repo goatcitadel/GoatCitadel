@@ -146,7 +146,9 @@ function LibraryNoteEditorContent({
           the latest version before reviewing another save.
         </Callout>
       ) : null}
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       <Field label="Note title">
         {(props) => (
           <input

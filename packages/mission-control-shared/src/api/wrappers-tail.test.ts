@@ -329,6 +329,11 @@ describe("shared API wrapper tail coverage", () => {
       operatorsAgentsFiles.fetchFilesList("docs", 20, { citadelId: "company", workspaceId: "engineering" }),
       "/api/v1/files/list?dir=docs&limit=20&citadelId=company&workspaceId=engineering",
     );
+    await expectCall(operatorsAgentsFiles.fetchFilesPage({}), "/api/v1/files/list?dir=.&limit=100&paged=1");
+    await expectCall(
+      operatorsAgentsFiles.fetchFilesPage({ dir: "docs", limit: 50, query: " read ", cursor: "50" }),
+      "/api/v1/files/list?dir=docs&limit=50&paged=1&query=read&cursor=50",
+    );
     await expectCall(
       operatorsAgentsFiles.fetchPathSuggestions("root", 999),
       "/api/v1/files/path-suggestions?root=root&limit=500",

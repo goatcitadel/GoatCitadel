@@ -100,7 +100,9 @@ function LibraryRemindersContent({ workspaceId, note }: { workspaceId: string; n
       {query.isPending ? <p role="status">Loading reminders…</p> : null}
       {query.error ? <Callout tone="error">{describeApiError(query.error).summary}</Callout> : null}
       {notice ? <Callout tone={notice.error ? "error" : "info"}>{notice.text}</Callout> : null}
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       <details>
         <summary>New reminder</summary>
         <div className="mt-2 grid gap-3">

@@ -366,29 +366,36 @@ describe("CronConfigGenerationOwner", () => {
     await recoveredConfig.completeRuntimeOwnerReconciliation();
   });
 
-  it("projects nextRunAt for a due-swept system job when a committed generation changes its spec", async () => {
-    // A fixed-minute schedule stays due for five minutes (02:45-02:49 here), so
-    // a real clock inside that window projects the next in-window minute
-    // instead of 02:45. Pin the clock before the window to keep this exact.
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-10-16T01:00:00.000Z"));
-    const stored = spec({
-      jobId: PRIVATE_BETA_BACKUP_JOB_ID,
-      name: "Private Beta Daily Backup",
-      action: "backup",
-      schedule: "30 2 * * * UTC",
-    });
-    const committed = { ...stored, schedule: "45 2 * * * UTC" };
-    const { root } = await createRoot([committed]);
-    const storage = createStorage(root);
-    storage.cronJobs.createSpec(stored);
-    const owner = new CronConfigGenerationOwner(new ConfigGenerationService(root), createSqliteAsyncStorage(storage));
+  // Fixed-minute schedules match a five-minute due window (02:45-02:49 for "45 2"), and the scheduler fires a
+  // job that has not run in an open window on its next tick, so an in-window projection is intended.
+  it.each([
+    { now: "2026-10-17T02:44:30.000Z", expected: "2026-10-17T02:45:00.000Z" },
+    { now: "2026-10-17T02:45:00.000Z", expected: "2026-10-17T02:46:00.000Z" },
+    { now: "2026-10-17T02:47:10.000Z", expected: "2026-10-17T02:48:00.000Z" },
+    { now: "2026-10-17T02:50:30.000Z", expected: "2026-10-18T02:45:00.000Z" },
+  ])(
+    "projects nextRunAt $expected at $now for a due-swept system job when a committed generation changes its spec",
+    async ({ now, expected }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(now));
+      const stored = spec({
+        jobId: PRIVATE_BETA_BACKUP_JOB_ID,
+        name: "Private Beta Daily Backup",
+        action: "backup",
+        schedule: "30 2 * * * UTC",
+      });
+      const committed = { ...stored, schedule: "45 2 * * * UTC" };
+      const { root } = await createRoot([committed]);
+      const storage = createStorage(root);
+      storage.cronJobs.createSpec(stored);
+      const owner = new CronConfigGenerationOwner(new ConfigGenerationService(root), createSqliteAsyncStorage(storage));
 
-    const [reconciled] = await owner.reconcileCommittedGeneration();
+      const [reconciled] = await owner.reconcileCommittedGeneration();
 
-    expect(reconciled).toMatchObject({ jobId: PRIVATE_BETA_BACKUP_JOB_ID, schedule: committed.schedule });
-    expect(reconciled?.nextRunAt).toBe("2026-10-16T02:45:00.000Z");
-  });
+      expect(reconciled).toMatchObject({ jobId: PRIVATE_BETA_BACKUP_JOB_ID, schedule: committed.schedule });
+      expect(reconciled?.nextRunAt).toBe(expected);
+    },
+  );
 
   it("canonicalizes legacy telemetry and adopts Storage-only specs once without disturbing telemetry", async () => {
     const canonicalJob = spec();

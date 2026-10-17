@@ -985,3 +985,122 @@ it("selects the canonical linked item without an inherited approval and retains 
   expect(switchShellMock).not.toHaveBeenCalled();
   client.clear();
 });
+
+describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN-09)", () => {
+  const first = projection.items[0]!;
+  const second: OperatorInboxItem = {
+    ...first,
+    id: "approval:second",
+    title: "Second write",
+    riskLevel: "caution",
+    source: { workspaceId: "default", approvalId: "second" },
+  };
+  function show(items: OperatorInboxItem[], counts: Partial<OperatorInboxResponse["counts"]> = {}) {
+    inboxMock.result = {
+      data: { ...projection, items, counts: { ...projection.counts, ...counts } },
+      isLoading: false,
+      isError: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    };
+  }
+  const press = (key: string) =>
+    act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    });
+  const announcer = () => container.querySelector("[data-inbox-announcer]")?.textContent?.trim();
+  const settle = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+  it("announces a decision once and moves focus once, to the next item", async () => {
+    show([first, second], { needs_decision: { known: 2, complete: true } });
+    apiMocks.resolveApproval.mockResolvedValue({ approval: { ...approval, status: "rejected" }, effects: [] });
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    await press("d");
+    await settle();
+    await settle();
+    expect(document.activeElement?.textContent).toBe("Deny");
+    await act(async () => (document.activeElement as HTMLButtonElement).click());
+    const confirm = [...document.body.querySelectorAll("button")].find((b) => b.textContent === "Confirm deny")!;
+    await act(async () => confirm.click());
+    await vi.waitFor(() => expect(announcer()).toContain("Decision recorded: Denied"));
+    await vi.waitFor(() =>
+      expect(document.activeElement?.closest("[data-inbox-row]")?.getAttribute("data-inbox-row")).toBe(
+        "approval:second",
+      ),
+    );
+    expect(document.activeElement?.textContent).toBe("Details");
+    // The inspector keeps the notice as plain text: one announcement, one focus move.
+    const notice = document.querySelector("[data-inbox-decision-notice]");
+    expect(notice?.getAttribute("role")).toBeNull();
+    expect(container.querySelectorAll("[data-inbox-announcer]")).toHaveLength(1);
+  });
+
+  it("moves the open inspector with J/K and says when A or D do not apply", async () => {
+    show([first, update], { updates: { known: 1, complete: true } });
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    await press("o");
+    expect(container.querySelector('[aria-label="Inspector: Review file write"]')).not.toBeNull();
+    await press("j");
+    expect(container.querySelector('[aria-label="Inspector: Viewed report"]')).not.toBeNull();
+    expect(container.querySelector('[data-inbox-item][data-selected="true"] h3')?.textContent).toBe("Viewed report");
+    await press("a");
+    expect(announcer()).toBe("No approval actions for this item.");
+    await press("d");
+    // The same message is announced again (a trailing no-break space changes the region's text).
+    expect(announcer()).toBe("No approval actions for this item.");
+    expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it("filters loaded items by kind and risk with truthful counts and a visible sort order", async () => {
+    show([first, second, update], {
+      needs_decision: { known: 2, complete: true },
+      updates: { known: 3, complete: false },
+    });
+    await renderUpdates(new QueryClient());
+    const summary = () => container.querySelector("[data-inbox-filter-summary]")?.textContent;
+    const count = (group: string) => container.querySelector(`[data-inbox-count="${group}"]`)?.textContent;
+    expect(summary()).toBe("Sorted by risk, then expiry, then age.");
+    expect(count("needs_decision")).toBe("2");
+    const choose = (label: string, value: string) =>
+      act(async () => {
+        const select = container.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+        select.value = value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    await choose("Filter loaded items by kind", "task_deliverable");
+    expect(summary()).toBe("1 of 3 loaded items shown. Sorted by risk, then expiry, then age.");
+    expect(count("needs_decision")).toBe("0 of 2 shown");
+    expect(count("updates")).toBe("1 of at least 3 shown");
+    expect(container.textContent).toContain("Nothing here matches the filters.");
+    await choose("Filter loaded items by kind", "all");
+    await choose("Filter loaded items by risk", "caution");
+    expect(summary()).toBe("1 of 3 loaded items shown. Sorted by risk, then expiry, then age.");
+    expect([...container.querySelectorAll("[data-inbox-item] h3")].map((node) => node.textContent)).toEqual([
+      "Second write",
+    ]);
+    await clickButton("Clear filters");
+    expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(3);
+  });
+
+  it("moves expired decisions to their own visible group with an Expired badge", async () => {
+    const expired: OperatorInboxItem = {
+      ...first,
+      id: "approval:old",
+      title: "Old write",
+      expiresAt: "2020-01-01T00:00:00Z",
+      source: { workspaceId: "default", approvalId: "old" },
+    };
+    show([first, expired], { needs_decision: { known: 2, complete: true } });
+    await renderUpdates(new QueryClient());
+    expect(container.querySelector('[data-inbox-count="needs_decision"]')?.textContent).toBe("1");
+    expect(container.querySelector('[data-inbox-count="expired"]')?.textContent).toBe("1");
+    const group = container.querySelector('section[aria-labelledby="inbox-expired"]');
+    expect(group?.textContent).toContain("Old write");
+    expect([...(group?.querySelectorAll("[data-tone]") ?? [])].map((node) => node.textContent)).toContain("Expired");
+    const decisions = container.querySelector('section[aria-labelledby="inbox-needs_decision"]');
+    expect(decisions?.textContent).not.toContain("Old write");
+  });
+});

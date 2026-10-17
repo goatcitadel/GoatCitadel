@@ -1,5 +1,8 @@
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
-import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import {
+  presentApprovalOutcome,
+  presentRiskLevel,
+} from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TimeText } from "../../ui/TimeText";
@@ -7,6 +10,7 @@ import { approvalExpiryLabel } from "./approval-preview";
 import { inboxItemKindLabel } from "./inbox-presentation";
 import { InboxOwnerLink } from "./InboxOwnerLink";
 import { InboxSourceContext } from "./InboxSourceContext";
+import { hasExpired, useMinuteClock } from "./use-minute-clock";
 
 export function InboxItemCard({
   item,
@@ -23,6 +27,8 @@ export function InboxItemCard({
   onDetails: () => void;
   onToggleContext: () => void;
 }) {
+  const now = useMinuteClock(item.expiresAt);
+  const expired = hasExpired(item.expiresAt, now);
   return (
     <article
       data-selected={selected}
@@ -38,11 +44,14 @@ export function InboxItemCard({
           <h3 className="mt-1 text-md font-semibold text-fg">{item.title}</h3>
           <p className="mt-1 text-sm text-fg-secondary">{item.summary}</p>
         </div>
-        {item.riskLevel ? <StatusBadge status={presentRiskLevel(item.riskLevel)} /> : null}
+        <div className="flex flex-wrap gap-2">
+          {expired ? <StatusBadge status={presentApprovalOutcome("expired")} /> : null}
+          {item.riskLevel ? <StatusBadge status={presentRiskLevel(item.riskLevel)} /> : null}
+        </div>
       </div>
       {item.expiresAt || item.group === "needs_decision" ? (
         <p className="mt-2 text-xs text-fg-muted">
-          {approvalExpiryLabel(item.expiresAt) ?? "Expiry not provided; review the current decision."}
+          {approvalExpiryLabel(item.expiresAt, now) ?? "Expiry not provided; review the current decision."}
         </p>
       ) : null}
       <div className="mt-3 flex flex-wrap items-center gap-3">

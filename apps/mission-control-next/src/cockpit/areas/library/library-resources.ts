@@ -7,7 +7,7 @@ import {
 import { fetchMemoryItems } from "@goatcitadel/mission-control-shared/api/memory";
 import { listNotes } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import { fetchChatGeneratedArtifacts } from "@goatcitadel/mission-control-shared/api/chat";
-import { fetchFilesList } from "@goatcitadel/mission-control-shared/api/operators-agents-files";
+import { fetchFilesPage } from "@goatcitadel/mission-control-shared/api/operators-agents-files";
 import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
 import { resourceFolder } from "./resource-title";
 import { artifactKindLabel, memoryNamespaceLabel, noteLifecycleLabel, presentMemoryStatus } from "./library-vocabulary";
@@ -16,6 +16,8 @@ export { resourceFolder, resourceTitle } from "./resource-title";
 export const RESOURCE_KINDS = ["memory", "notes", "files", "artifacts"] as const;
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 export const RESOURCE_LIMIT = 100;
+/** The artifact owner returns at most this many recent records; "Load more" grows the window up to it. */
+export const ARTIFACT_WINDOW_MAX = 1000;
 export type FileResource = {
   relativePath: string;
   size: number;
@@ -30,6 +32,10 @@ export interface ResourcePage {
   items: LibraryResource[];
   coverage: string;
   nextCursor?: string;
+  /** Files only: the listed folder's direct subfolders. */
+  folders?: string[];
+  /** Files and artifacts: a larger window would return more records. */
+  hasMore?: boolean;
 }
 export interface ResourceQuery {
   kind: ResourceKind;
@@ -38,6 +44,12 @@ export interface ResourceQuery {
   query: string;
   status: string;
   cursor?: string;
+  /** Memory only: exact namespace, filtered by the Gateway. */
+  namespace?: string;
+  /** Files only: the folder to list, relative to the shared file root ("." for the root). */
+  dir?: string;
+  /** Files and artifacts: how many of the newest records to read (grows with "Load more"). */
+  limit?: number;
   projectId?: string;
   sourceSurface?: ChatGeneratedArtifactRecord["sourceSurface"];
   /** Checked between reads; the Library owners themselves take no signal. */
@@ -107,6 +119,7 @@ export async function loadLibraryResources(input: ResourceQuery): Promise<Resour
     const response = await fetchMemoryItems({
       workspaceId,
       query,
+      ...(input.namespace ? { namespace: input.namespace } : {}),
       limit: RESOURCE_LIMIT,
       cursor,
       status: status === "forgotten" || status === "all" ? status : "active",
@@ -134,16 +147,19 @@ export async function loadLibraryResources(input: ResourceQuery): Promise<Resour
       coverage: `Showing up to ${RESOURCE_LIMIT} matching workspace notes. ${matches.length > RESOURCE_LIMIT ? "Narrow the filter to inspect additional notes." : ""} ${scoped.length !== response.items.length ? "Records from another or unknown workspace were withheld." : ""}`,
     };
   }
+  const limit = input.limit ?? RESOURCE_LIMIT;
   if (kind === "artifacts") {
+    const window = Math.min(limit, ARTIFACT_WINDOW_MAX);
     const response = await fetchChatGeneratedArtifacts({
       workspaceId,
       citadelId,
       ...(projectId ? { projectId } : {}),
-      limit: RESOURCE_LIMIT,
+      limit: window,
     });
     const scoped = response.items.filter(
       (item) => item.workspaceId === workspaceId && (!projectId || item.projectId === projectId),
     );
+    const hasMore = response.items.length >= window && window < ARTIFACT_WINDOW_MAX;
     return {
       items: scoped
         .filter(
@@ -154,18 +170,22 @@ export async function loadLibraryResources(input: ResourceQuery): Promise<Resour
                 .toLowerCase()
                 .includes(text)),
         )
-        .slice(0, RESOURCE_LIMIT)
         .map((item) => ({ kind, item })),
-      coverage: `Up to ${RESOURCE_LIMIT} recent workspace artifacts; filtering applies to this returned window. Older records may not be shown. ${scoped.length !== response.items.length ? "Records without this workspace binding were withheld." : ""}`,
+      hasMore,
+      coverage:
+        `Search and the source filter cover the ${response.items.length} most recent artifacts loaded. ${hasMore ? "Older records may not be shown; load more to include them." : response.items.length >= window ? `This list stops at the ${window} most recent artifacts; older ones are not shown.` : "There are no older artifacts."} ${scoped.length !== response.items.length ? "Records without this workspace binding were withheld." : ""}`.trim(),
     };
   }
+  const dir = input.dir?.trim() || ".";
   // This owner uses the installation file root. Its route does not honor workspace/Citadel query parameters.
-  const response = await fetchFilesList(".", RESOURCE_LIMIT);
+  // The Gateway searches and pages the whole folder; item paths come back relative to it.
+  const response = await fetchFilesPage({ dir, limit, query });
+  const prefix = dir === "." ? "" : `${dir}/`;
+  const hasMore = Boolean(response.nextCursor);
   return {
-    items: response.items
-      .filter((item) => !text || item.relativePath.toLowerCase().includes(text))
-      .slice(0, RESOURCE_LIMIT)
-      .map((item) => ({ kind, item })),
-    coverage: `Up to ${RESOURCE_LIMIT} files from the installation shared file root. This list is shared across workspaces; filtering applies to this returned window.`,
+    items: response.items.map((item) => ({ kind, item: { ...item, relativePath: prefix + item.relativePath } })),
+    folders: response.folders,
+    hasMore,
+    coverage: `${response.items.length} newest ${query.trim() ? "matching " : ""}files in ${dir === "." ? "the shared file root" : dir} and its subfolders. ${hasMore ? "Load more to see older files." : "No more files."}${response.complete ? "" : " The Gateway stopped scanning at its limit, so some files may be missing."} This list is shared across workspaces.`,
   };
 }

@@ -1,6 +1,16 @@
 import { useRef, useState } from "react";
 import { Field } from "../../ui/Field";
-import { buildScheduleExpression, scheduleCadence, scheduleTiming, type ScheduleCadence } from "./schedule-cadence";
+import {
+  browserTimeZone,
+  buildScheduleExpression,
+  formatInZone,
+  GATEWAY_DEFAULT_SCHEDULE_ZONE,
+  nextGuidedRun,
+  scheduleCadence,
+  scheduleTiming,
+  scheduleZoneOptions,
+  type ScheduleCadence,
+} from "./schedule-cadence";
 
 const INPUT = "w-full rounded-md border border-line bg-sunken p-2 text-fg";
 
@@ -19,6 +29,14 @@ export function ScheduleTiming({
   // Choosing Custom keeps that choice visible while the expression is edited, even if it still matches a preset.
   const [customChosen, setCustomChosen] = useState(false);
   const cadence = customChosen ? "custom" : timing.cadence;
+  // WK-02: the typed time runs on the wall clock of the chosen zone; no suffix means the Gateway's UTC default.
+  const zone = timing.zone ?? GATEWAY_DEFAULT_SCHEDULE_ZONE;
+  const browser = browserTimeZone();
+  const nextRun = nextGuidedRun(timing.cadence, timing.time, zone);
+  const nextRunHelp = nextRun
+    ? `Next run: ${formatInZone(nextRun, zone)} ${zone}` +
+      (browser === zone ? "." : ` (${formatInZone(nextRun, browser)} your time, ${browser}).`)
+    : undefined;
   return (
     <div className="grid min-w-0 gap-2">
       <Field label="Frequency">
@@ -50,7 +68,7 @@ export function ScheduleTiming({
         )}
       </Field>
       {cadence === "daily" || cadence === "weekdays" ? (
-        <Field label="Time">
+        <Field label="Time" help={nextRunHelp}>
           {(props) => (
             <input
               {...props}
@@ -63,6 +81,31 @@ export function ScheduleTiming({
                   onChange(buildScheduleExpression(timing.cadence, event.target.value, timing.zone));
               }}
             />
+          )}
+        </Field>
+      ) : null}
+      {cadence === "daily" || cadence === "weekdays" ? (
+        <Field label="Timezone">
+          {(props) => (
+            <select
+              {...props}
+              className={INPUT}
+              value={zone}
+              disabled={disabled}
+              onChange={(event) => {
+                const next = event.target.value;
+                // Choosing UTC for an expression without a zone keeps it unchanged: UTC is already its zone.
+                const suffix = next === GATEWAY_DEFAULT_SCHEDULE_ZONE && !timing.zone ? null : next;
+                if (timing.cadence === "daily" || timing.cadence === "weekdays")
+                  onChange(buildScheduleExpression(timing.cadence, timing.time, suffix));
+              }}
+            >
+              {scheduleZoneOptions(zone, browser).map((option) => (
+                <option key={option} value={option}>
+                  {option === browser ? `${option} (your timezone)` : option}
+                </option>
+              ))}
+            </select>
           )}
         </Field>
       ) : null}

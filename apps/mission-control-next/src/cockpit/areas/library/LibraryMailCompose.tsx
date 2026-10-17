@@ -221,7 +221,9 @@ function LibraryMailComposeContent({
           No mail account is connected to this workspace. Connect a mail integration before drafting.
         </Callout>
       ) : null}
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       {operation.locked && pending ? (
         <Button
           onClick={() => {

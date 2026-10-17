@@ -131,6 +131,41 @@ describe("Evolution Control Plane Change Plan contract", () => {
     );
   });
 
+  it("accepts only bounded operator write-root and curated tool-posture intents", () => {
+    const runtime = (change: Record<string, unknown>) => isChangePlanRequest({ kind: "runtime_configuration", change });
+    expect(runtime({ operation: "operator_write_root", action: "add", path: "D:\\scratch\\out" })).toBe(true);
+    expect(runtime({ operation: "operator_write_root", action: "add", path: "\\\\host\\share\\out" })).toBe(true);
+    expect(
+      runtime({
+        operation: "operator_write_root",
+        action: "add",
+        path: "/srv/scratch",
+        allowDelete: true,
+        label: "Out",
+      }),
+    ).toBe(true);
+    expect(runtime({ operation: "operator_write_root", action: "add", preset: "os_temp" })).toBe(true);
+    expect(runtime({ operation: "operator_write_root", action: "remove", preset: "os_temp" })).toBe(true);
+
+    expect(runtime({ operation: "operator_write_root", action: "add" })).toBe(false);
+    expect(runtime({ operation: "operator_write_root", action: "add", path: "/srv", preset: "os_temp" })).toBe(false);
+    expect(runtime({ operation: "operator_write_root", action: "add", path: "relative/dir" })).toBe(false);
+    expect(runtime({ operation: "operator_write_root", action: "add", path: "/srv/a\nb" })).toBe(false);
+    expect(runtime({ operation: "operator_write_root", action: "add", path: `/${"a".repeat(1_024)}` })).toBe(false);
+    expect(runtime({ operation: "operator_write_root", action: "add", preset: "home" })).toBe(false);
+    expect(runtime({ operation: "operator_write_root", action: "remove", path: "/srv", allowDelete: true })).toBe(
+      false,
+    );
+    expect(runtime({ operation: "operator_write_root", action: "rename", path: "/srv" })).toBe(false);
+    expect(runtime({ operation: "operator_write_root", action: "add", path: "/srv", extra: true })).toBe(false);
+
+    expect(runtime({ operation: "tool_global_access", toolName: "fs.delete", posture: "available" })).toBe(true);
+    expect(runtime({ operation: "tool_global_access", toolName: "fs.patch", posture: "unlisted" })).toBe(true);
+    expect(runtime({ operation: "tool_global_access", toolName: "shell.exec", posture: "available" })).toBe(false);
+    expect(runtime({ operation: "tool_global_access", toolName: "fs.*", posture: "denied" })).toBe(false);
+    expect(runtime({ operation: "tool_global_access", toolName: "fs.write", posture: "allowed" })).toBe(false);
+  });
+
   it("rejects credentials, paths, patches, and extra fields from persisted intent", () => {
     expect(isChangePlanRequest({ kind: "provider_connection", providerId: "openai", apiKey: "secret" })).toBe(false);
     expect(

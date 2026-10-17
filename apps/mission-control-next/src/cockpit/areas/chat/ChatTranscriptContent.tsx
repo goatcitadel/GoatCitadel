@@ -209,19 +209,16 @@ export type TranscriptFooterContext = {
 
 export function ChatTranscriptEmpty({ context }: { context?: TranscriptFooterContext }) {
   const props = context?.props;
-  if (
-    !props ||
-    props.loading ||
-    context?.gatewayUnavailable ||
-    !props.selectedSessionId ||
-    !props.thread ||
-    props.hasActiveStream ||
-    props.optimisticUserMessage ||
-    context?.pendingTurnId
-  )
+  // CH-04: while the first message is sending, the footer shows the pending turn; nothing else belongs here.
+  if (props && (props.hasActiveStream || props.optimisticUserMessage || context?.pendingTurnId)) return null;
+  if (!props || props.loading || context?.gatewayUnavailable || !props.selectedSessionId || !props.thread)
     return (
       <p className="p-5 text-center text-sm text-fg-muted">
-        {props?.loading ? "Loading messages…" : "No messages in this view."}
+        {props?.loading
+          ? "Loading messages…"
+          : context?.gatewayUnavailable
+            ? "Messages can’t load while the Gateway is unreachable."
+            : "No messages in this view."}
       </p>
     );
   return <ChatConversationStarters props={props} />;
@@ -334,7 +331,11 @@ export function ChatTranscriptFooter({ context }: { context?: TranscriptFooterCo
         ) : null}
         <ChatBlockers key={props.selectedSessionId} props={props} />
         {props.streamError && latestTurn?.trace.status !== "failed" && latestTurn?.trace.status !== "partial" ? (
-          <ChatStreamErrorNotice error={props.streamError} source={props.streamErrorSource} />
+          <ChatStreamErrorNotice
+            error={props.streamError}
+            source={props.streamErrorSource}
+            onReload={props.onRefreshThread}
+          />
         ) : null}
       </div>
       <div ref={context.threadEndRef} aria-hidden="true" className="h-px" />

@@ -30,7 +30,48 @@ type ChatApprovalRendererProps = Omit<DecisionProps, "approval"> & {
   approvalId: string;
   approval?: ApprovalRequest | null;
   recordPending: boolean;
+  /** Recovery while the record is missing or failed to load; see `ApprovalRecordRecovery`. */
+  recovery?: RecordRecovery;
 };
+
+type RecordRecovery = {
+  /** The record read failed, as opposed to returning no record. */
+  failed: boolean;
+  retrying: boolean;
+  onRetry: () => void;
+  /** Denies the pending request by id. Denying is the safe choice, so it never waits for the full record. */
+  onDeny?: () => void;
+  denying: boolean;
+};
+
+/** A missing or unreadable record still leaves a way forward: read it again, or deny by id. */
+function ApprovalRecordRecovery({ pending, recovery }: { pending: boolean; recovery?: RecordRecovery }) {
+  return (
+    <div className="space-y-2">
+      <p role="status">
+        {pending
+          ? "Checking the current approval…"
+          : !recovery
+            ? "Current approval unavailable. Open the persisted record before deciding."
+            : recovery.failed
+              ? "The approval record couldn’t load, so approving is unavailable. Try again, or deny the request."
+              : "The approval record wasn’t found. It may have been decided or expired elsewhere. Check again, or deny the request."}
+      </p>
+      {recovery && !pending ? (
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" loading={recovery.retrying} loadingLabel="Checking…" onClick={recovery.onRetry}>
+            {recovery.failed ? "Try again" : "Check again"}
+          </Button>
+          {recovery.onDeny ? (
+            <Button size="sm" loading={recovery.denying} loadingLabel="Denying…" onClick={recovery.onDeny}>
+              Deny
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 // Shared code only; records, callbacks and decision attempts stay with their existing owners.
 let rendererLoad: Promise<RendererCode> | undefined;
@@ -51,6 +92,7 @@ export function ChatApprovalRenderer({
   approvalId,
   approval,
   recordPending,
+  recovery,
   ...decisionProps
 }: ChatApprovalRendererProps) {
   const callerRevision = useSyncExternalStore(
@@ -158,11 +200,7 @@ export function ChatApprovalRenderer({
   return (
     <div aria-busy={Boolean(record && !code && !failed)}>
       {!record ? (
-        <p role="status">
-          {recordPending
-            ? "Checking the current approval…"
-            : "Current approval unavailable. Open the persisted record before deciding."}
-        </p>
+        <ApprovalRecordRecovery pending={recordPending} recovery={recovery} />
       ) : (
         <>
           {record.status !== "pending" ? <p role="status">Decision recorded. Check follow-on work below.</p> : null}

@@ -59,7 +59,6 @@ describe("Work view tabs", () => {
       "Board",
       "History",
       "Schedules",
-      "Classic Kanban",
       "Archived tasks",
       "Automation designer",
     ]);

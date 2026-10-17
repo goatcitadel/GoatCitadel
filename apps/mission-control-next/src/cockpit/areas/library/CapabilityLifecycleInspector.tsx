@@ -190,7 +190,9 @@ function CandidateVersions({
   }
   return (
     <>
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       <p className="text-sm text-fg-secondary">
         {detail.activeVersion
           ? `Active version: ${detail.activeVersion.title}`

@@ -23,7 +23,13 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { recordView } from "../../data/record-view";
 import { TimeText } from "../../ui/TimeText";
 import { formatSeconds } from "@goatcitadel/mission-control-shared/content/format";
-import { MEMORY_CHANGE, memoryNamespaceLabel, memoryScopeLabel, presentMemoryLifecycle } from "./library-vocabulary";
+import { memoryNamespaceLabel, memoryScopeLabel, presentMemoryLifecycle } from "./library-vocabulary";
+import {
+  MEMORY_TTL_MAX_SECONDS,
+  MemoryHistoryList,
+  MemoryTtlField,
+  noApprovalNeededMessage,
+} from "./LibraryMemoryEditorParts";
 
 export function LibraryMemoryEditor({ itemId, workspaceId }: { itemId: string; workspaceId: string }) {
   const access = useLibraryOperation(JSON.stringify(["memory-item", workspaceId, itemId]));
@@ -117,8 +123,8 @@ function MemoryEditor({
               "Memory changed during review. Close this review and refresh the item before trying again.",
             );
           const ttl = review.draft.ttl.trim() ? Number(review.draft.ttl) : null;
-          if (ttl !== null && (!Number.isInteger(ttl) || ttl < 1 || ttl > 31536000))
-            throw new Error("TTL must be empty for default or a whole number from 1 to 31536000 seconds.");
+          if (ttl !== null && (!Number.isInteger(ttl) || ttl < 1 || ttl > MEMORY_TTL_MAX_SECONDS))
+            throw new Error("Choose the default expiry or a duration between 1 minute and 365 days.");
           const { ttl: _ttl, ...values } = review.draft;
           return {
             ...values,
@@ -144,8 +150,8 @@ function MemoryEditor({
       if (!result) return;
       const approval = result.pendingApproval;
       setOutcome({
-        error: false,
-        text: "This item was already forgotten. Nothing changed.",
+        error: !approval && review.action === "save",
+        text: noApprovalNeededMessage(review.action),
         request: approval ?? undefined,
       });
     } catch (cause) {
@@ -205,21 +211,14 @@ function MemoryEditor({
           />
         )}
       </Field>
-      <Field label="Memory TTL override (seconds)">
-        {(props) => (
-          <input
-            {...props}
-            type="number"
-            min={1}
-            max={31536000}
-            placeholder="Use default"
-            className="rounded-md border border-line bg-raised p-2"
-            value={draft.value.ttl}
-            onChange={(event) => draft.setValue({ ...draft.value, ttl: event.target.value })}
-          />
-        )}
-      </Field>
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      <MemoryTtlField
+        key={draft.baseRevision}
+        value={draft.value.ttl}
+        onChange={(ttl) => draft.setValue({ ...draft.value, ttl })}
+      />
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       <label className="text-sm">
         <input
           type="checkbox"
@@ -288,24 +287,9 @@ function MemoryEditor({
         <section aria-label="Memory history">
           {history.isFetching ? <p role="status">Reading memory history…</p> : null}
           {history.error ? <Callout tone="error">{describeApiError(history.error).summary}</Callout> : null}
-          <ul className="grid gap-2">
-            {history.data?.items
-              .filter((event) => event.itemId === item.itemId)
-              .map((event) => (
-                <li key={event.changeId} className="rounded-md border border-line p-2">
-                  <h3>{MEMORY_CHANGE[event.changeType]}</h3>
-                  <p className="text-sm text-fg-secondary">
-                    <TimeText value={event.createdAt} />
-                  </p>
-                  <TechnicalDetails label="Technical event details">
-                    <p>
-                      {event.createdAt} · Actor ID: {event.actorId ?? "none"}
-                    </p>
-                    <pre className="whitespace-pre-wrap break-words">{JSON.stringify(event.payload, null, 2)}</pre>
-                  </TechnicalDetails>
-                </li>
-              ))}
-          </ul>
+          {history.data ? (
+            <MemoryHistoryList events={history.data.items.filter((event) => event.itemId === item.itemId)} />
+          ) : null}
         </section>
       ) : null}
       <Dialog

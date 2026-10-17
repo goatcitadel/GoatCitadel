@@ -6,6 +6,7 @@ import {
   BACKUP_INSPECT_PATH,
   RUNTIME_INSPECT_PATH,
   deriveHealthChecks,
+  describeRuntimeService,
   summarizeHealthChecks,
 } from "./health-overview";
 
@@ -183,4 +184,18 @@ it("separates actionable problems, missing proof and verified available evidence
     unknown: [unknown],
   });
   expect(healthOverviewState([]).kind).toBe("incomplete");
+});
+
+describe("describeRuntimeService (SY-01)", () => {
+  it("is the one derivation Health uses, so an unsupported host reads Unavailable everywhere", () => {
+    const unsupported = { ...healthy.daemonStatus, supported: false, running: false, state: "stopped" as const };
+    expect(describeRuntimeService(unsupported)).toMatchObject({ label: "Unavailable", tone: "neutral" });
+    const service = deriveHealthChecks({ ...healthy, daemonStatus: unsupported }).find(
+      (check) => check.id === "service",
+    );
+    expect(service?.status).toEqual({ label: "Unavailable", tone: "neutral" });
+    expect(describeRuntimeService({ ...healthy.daemonStatus, running: false }).label).toBe("Problem");
+    expect(describeRuntimeService(healthy.daemonStatus).label).toBe("Running");
+    expect(describeRuntimeService(undefined).label).toBe("Unknown");
+  });
 });

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { ChatThreadTurnRecord, ChatToolRunRecord, DesignAdvisory } from "@goatcitadel/contracts";
 import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
 import { getChatToolRunDiagnostics } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
@@ -8,8 +8,12 @@ const ChatOpenCodeEvidence = lazy(async () => ({
   default: (await import("./ChatOpenCodeEvidence")).ChatOpenCodeEvidence,
 }));
 import { ChatTurnActions } from "./ChatTurnActions";
+import { useAutoOpenDisclosure } from "./use-auto-open-disclosure";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
+
+/** How long a copy confirmation stays before the button returns to its label. */
+const COPIED_MS = 2000;
 
 type TurnActions = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -61,19 +65,30 @@ export function ChatTurnDetails({
   readOnly: boolean;
   actions: TurnActions;
 }) {
-  const [copyStatus, setCopyStatus] = useState("");
+  const [copy, setCopy] = useState<{ status: string; copied: boolean }>({ status: "", copied: false });
+  // CH-31: success is temporary; the confirmation clears after a moment. Failures stay until the next try.
+  useEffect(() => {
+    if (!copy.copied) return;
+    const timer = setTimeout(() => setCopy({ status: "", copied: false }), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copy]);
   const copyAnswer = async () => {
     if (!answerContent || !navigator.clipboard?.writeText) {
-      setCopyStatus("Copy is unavailable in this host.");
+      setCopy({ status: "Copy is unavailable in this host.", copied: false });
       return;
     }
     try {
       await navigator.clipboard.writeText(answerContent);
-      setCopyStatus(streaming ? "Partial answer copied." : "Answer copied.");
+      setCopy({ status: streaming ? "Partial answer copied." : "Answer copied.", copied: true });
     } catch {
-      setCopyStatus("Copy failed. Select the answer text to copy it.");
+      setCopy({ status: "Copy failed. Select the answer text to copy it.", copied: false });
     }
   };
+  // CH-39: opens while streaming or when a tool needs attention, and stays open once the operator opened it.
+  const toolDisclosure = useAutoOpenDisclosure(
+    streaming ||
+      turn.toolRuns.some((tool) => tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal),
+  );
   const counts = new Map<string, number>();
   for (const tool of turn.toolRuns) {
     const label = activityLabel(tool);
@@ -110,13 +125,7 @@ export function ChatTurnDetails({
         </details>
       ) : null}
       {turn.toolRuns.length ? (
-        <details
-          open={
-            streaming ||
-            turn.toolRuns.some((tool) => tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal)
-          }
-          aria-label="Tool activity for this turn"
-        >
+        <details {...toolDisclosure} aria-label="Tool activity for this turn">
           <summary className="cursor-pointer text-accent">
             {plural(turn.toolRuns.length, "tool call")} · {activitySummary}
           </summary>
@@ -202,9 +211,10 @@ export function ChatTurnDetails({
         streaming={streaming}
         readOnly={readOnly}
         hasAnswer={Boolean(answerContent)}
+        copied={copy.copied}
         onCopy={() => void copyAnswer()}
       />
-      {copyStatus ? <p role="status">{copyStatus}</p> : null}
+      {copy.status ? <p role="status">{copy.status}</p> : null}
     </div>
   );
 }

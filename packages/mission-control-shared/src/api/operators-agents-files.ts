@@ -40,6 +40,30 @@ export async function fetchFilesList(
   );
 }
 
+/**
+ * One page of a shared-file folder, newest first, searched and paged by the Gateway.
+ * Item paths are relative to `dir`; `folders` are its direct subfolders; `complete` is false when the
+ * Gateway's scan stopped at a cap, so a search may have missed files.
+ */
+export interface FilesPage {
+  items: Array<{ relativePath: string; size: number; modifiedAt: string }>;
+  folders: string[];
+  nextCursor?: string;
+  complete: boolean;
+}
+
+export async function fetchFilesPage(input: {
+  dir?: string;
+  limit?: number;
+  query?: string;
+  cursor?: string;
+}): Promise<FilesPage> {
+  const query = new URLSearchParams({ dir: input.dir ?? ".", limit: String(input.limit ?? 100), paged: "1" });
+  if (input.query?.trim()) query.set("query", input.query.trim());
+  if (input.cursor) query.set("cursor", input.cursor);
+  return request<FilesPage>(`/api/v1/files/list?${query.toString()}`);
+}
+
 export async function downloadFile(
   relativePath: string,
   scope?: { citadelId?: string; workspaceId?: string },

@@ -63,7 +63,8 @@ export function InboxEmptyState({ projection }: { projection: OperatorInboxRespo
   const lastChecked = checked ? ` Last checked ${checked}.` : "";
   const hasGap = inboxReadGaps(projection).length > 0;
   return (
-    <div>
+    // Focus lands here after the last item is decided (IN-07).
+    <div data-inbox-empty tabIndex={-1}>
       <EmptyState
         title={hasGap ? "Some sources couldn't be checked" : "You're all caught up"}
         description={

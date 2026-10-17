@@ -1,4 +1,4 @@
-import { useId, useState, type MouseEvent } from "react";
+import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { RefreshCw, Search } from "lucide-react";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -21,6 +21,7 @@ import { workColumnStatus } from "./work-column-status";
 import { WorkTaskBulkActions } from "./WorkTaskBulkActions";
 import { WorkBoardColumn } from "./WorkBoardColumn";
 import { WorkBoardColumnPicker } from "./WorkBoardColumnPicker";
+import { WorkMoreViews } from "./WorkMoreViews";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 
@@ -39,6 +40,14 @@ export function WorkBoard() {
   const searchId = useId();
   const kindId = useId();
   const [creating, setCreating] = useState(false);
+  // WK-12: closing the form returns focus to "New task" once it is enabled again, never to <body>.
+  const newTaskButton = useRef<HTMLButtonElement>(null);
+  const [returnFocus, setReturnFocus] = useState(false);
+  useEffect(() => {
+    if (!returnFocus || creating) return;
+    newTaskButton.current?.focus();
+    setReturnFocus(false);
+  }, [returnFocus, creating]);
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState("all");
   // Select mode turns operator task cards into checkboxes for reviewed task actions; runtime runs stay links.
@@ -74,18 +83,33 @@ export function WorkBoard() {
       .toLowerCase()
       .includes(query);
   const limit = (group: WorkBoardGroup) => (group === "done" ? DONE_LIMIT : undefined);
-  const visibleTasks = (group: WorkBoardGroup) =>
-    kind === "run" ? [] : (taskBoard?.[group] ?? []).filter(taskMatches).slice(0, limit(group));
-  const visibleRuns = (group: WorkBoardGroup) =>
-    kind === "task"
-      ? []
-      : (board?.[group] ?? [])
-          .filter((run) =>
-            `${workRunTitle(run)} ${run.status} ${presentRunStatus(run.status).label} ${run.lastError ?? ""}`
-              .toLowerCase()
-              .includes(query),
-          )
-          .slice(0, limit(group));
+  const matchingTasks = (group: WorkBoardGroup) => (taskBoard?.[group] ?? []).filter(taskMatches);
+  const matchingRuns = (group: WorkBoardGroup) =>
+    (board?.[group] ?? []).filter((run) =>
+      `${workRunTitle(run)} ${run.status} ${presentRunStatus(run.status).label} ${run.lastError ?? ""}`
+        .toLowerCase()
+        .includes(query),
+    );
+  const visibleTasks = (group: WorkBoardGroup) => (kind === "run" ? [] : matchingTasks(group).slice(0, limit(group)));
+  const visibleRuns = (group: WorkBoardGroup) => (kind === "task" ? [] : matchingRuns(group).slice(0, limit(group)));
+  // WK-06: a column counts what the filters leave, and says when the list under it is capped.
+  const columnCount = (group: WorkBoardGroup) =>
+    [
+      kind === "run"
+        ? null
+        : workColumnStatus(taskView, taskBoard ? matchingTasks(group).length : undefined, "tasks", {
+            shown: visibleTasks(group).length,
+            matching: Boolean(query),
+          }),
+      kind === "task"
+        ? null
+        : workColumnStatus(runView, board ? matchingRuns(group).length : undefined, "runs", {
+            shown: visibleRuns(group).length,
+            matching: Boolean(query),
+          }),
+    ]
+      .filter(Boolean)
+      .join(" · ");
   // A bulk action applies only to the selected tasks the operator can see; the filter never hides a target.
   const visibleTaskIds = new Set(COLUMNS.flatMap((column) => visibleTasks(column.id).map((task) => task.taskId)));
   const selectedTasks = loadedTasks.filter((task) => selectedIds.has(task.taskId) && visibleTaskIds.has(task.taskId));
@@ -111,7 +135,13 @@ export function WorkBoard() {
         description="Workspace tasks and recent Chat or supervised plan runs."
         actions={
           <>
-            <Button size="sm" variant="primary" onClick={() => setCreating(true)} disabled={creating || !writable}>
+            <Button
+              ref={newTaskButton}
+              size="sm"
+              variant="primary"
+              onClick={() => setCreating(true)}
+              disabled={creating || !writable}
+            >
               New task
             </Button>
             <Button
@@ -136,6 +166,7 @@ export function WorkBoard() {
             >
               <RefreshCw aria-hidden="true" className="size-4" /> Refresh
             </Button>
+            <WorkMoreViews />
           </>
         }
       />
@@ -202,7 +233,10 @@ export function WorkBoard() {
           key={workspaceId}
           workspaceId={workspaceId}
           accessAvailable={writable}
-          onClose={() => setCreating(false)}
+          onClose={() => {
+            setCreating(false);
+            setReturnFocus(true);
+          }}
           onCreated={(task) => {
             setCreating(false);
             navigate(`/work/tasks/${encodeURIComponent(task.taskId)}`);
@@ -244,10 +278,13 @@ export function WorkBoard() {
                 key={column.id}
                 title={column.title}
                 description={column.description}
-                count={`${workColumnStatus(taskView, taskBoard?.[column.id].length, "tasks")} · ${workColumnStatus(runView, board?.[column.id].length, "runs")}`}
+                count={columnCount(column.id)}
                 tasks={visibleTasks(column.id)}
                 runs={visibleRuns(column.id)}
-                empty={!runs.isError && !tasks.isError && !board?.[column.id].length && !taskBoard?.[column.id].length}
+                empty={
+                  !runs.isError && !tasks.isError && !visibleTasks(column.id).length && !visibleRuns(column.id).length
+                }
+                filtered={Boolean(query) || kind !== "all"}
                 selecting={selecting}
                 selectedIds={selectedIds}
                 onToggle={toggle}

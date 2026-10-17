@@ -131,4 +131,37 @@ describe("Library resource inspection lifecycle", () => {
     );
     await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
   });
+  it("searches live after a pause, loads more in place and navigates folders (LB-08)", async () => {
+    api.load.mockImplementation(async (input: { dir?: string; query: string; limit?: number }) => ({
+      items: Array.from({ length: (input.limit ?? 100) / 100 }, (_, index) =>
+        resource(`${input.dir === "docs" ? "docs" : "root"}-${input.query || "all"}-${index}`),
+      ),
+      folders: input.dir === "." ? ["docs"] : [],
+      hasMore: (input.limit ?? 100) < 200,
+      coverage: "Gateway search",
+    }));
+    await render();
+    await vi.waitFor(() => expect(container.textContent).toContain("root-all-0"));
+    expect(button("Apply filter")).toBeUndefined();
+    const input = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "read");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await vi.waitFor(() => expect(container.textContent).toContain("root-read-0"));
+    expect(api.load).toHaveBeenLastCalledWith(expect.objectContaining({ query: "read", dir: ".", limit: 100 }));
+    const more = button("Load more files");
+    await act(async () => more.click());
+    await vi.waitFor(() => expect(container.textContent).toContain("root-read-1"));
+    expect(container.textContent).toContain("root-read-0");
+    expect(button("Load more files")).toBeUndefined();
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Inspect root-read-1");
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Open folder docs"]')!.click());
+    await vi.waitFor(() => expect(container.textContent).toContain("docs-read-0"));
+    expect(api.load).toHaveBeenLastCalledWith(expect.objectContaining({ dir: "docs", limit: 100 }));
+    expect(document.activeElement?.getAttribute("aria-current")).toBe("page");
+    expect(document.activeElement?.textContent).toBe("docs");
+    await act(async () => button("Shared files").click());
+    await vi.waitFor(() => expect(api.load).toHaveBeenLastCalledWith(expect.objectContaining({ dir: "." })));
+  });
 });

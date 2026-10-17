@@ -294,7 +294,14 @@ it.each([404, 401, 403, "foreign"] as const)(
         }),
       );
     await act(async () => renderBlockers());
-    await vi.waitFor(() => expect(host.textContent).toContain("Current approval unavailable"));
+    // CH-02: a failed read and a missing record are distinct, and both keep Retry and Deny available.
+    await vi.waitFor(() =>
+      expect(host.textContent).toContain(
+        outcome === 401 || outcome === 403 ? "The approval record couldn’t load" : "The approval record wasn’t found",
+      ),
+    );
+    expect(button(outcome === 401 || outcome === 403 ? "Try again" : "Check again")).toBeDefined();
+    expect(button("Deny")).toBeDefined();
     await act(async () => code.resolve());
     expect(button("Approve once")).toBeUndefined();
     expect(button("Review approval")).toBeUndefined();

@@ -1,0 +1,104 @@
+import type {
+  ChangePlanRisk,
+  GlobalToolAccessChange,
+  GlobalToolAccessPosture,
+  OperatorWriteRootChange,
+} from "@goatcitadel/contracts";
+import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+import { isSameOperatorWriteRootFolder } from "./settings-operator-write-access.js";
+
+/**
+ * Change Plan descriptions and owner-match checks for the runtime write-access
+ * operations (operator write roots and curated fs tool posture). The settings
+ * owner applies them; see `settings-operator-write-access.ts`.
+ */
+
+interface WriteAccessDescription {
+  readonly title: string;
+  readonly summary: string;
+  readonly completedSummary: string;
+  readonly impact: string;
+  readonly risk: ChangePlanRisk;
+}
+
+const DENY_WINS_NOTE =
+  "Deny-wins still applies: agent, permission-profile, and wildcard deny entries keep blocking the tool, and the protected runtime paths stay unwritable.";
+
+export function describeOperatorWriteRootChange(change: OperatorWriteRootChange): WriteAccessDescription {
+  const target = change.preset === "os_temp" ? "the OS temp folder" : (change.path ?? "the folder");
+  if (change.action === "remove") {
+    return {
+      title: "Remove an operator write root",
+      summary: `Remove ${target} from the operator write roots.`,
+      completedSummary: `${target} is no longer an operator write root.`,
+      impact:
+        "Filesystem tools can no longer write inside this folder unless the workspace write jail covers it. Files already in it are left as they are.",
+      risk: "caution",
+    };
+  }
+  const allowDelete = change.allowDelete === true;
+  return {
+    title: allowDelete ? "Add an operator write root with delete" : "Add an operator write root",
+    summary: `Add ${target} as an operator write root with delete ${allowDelete ? "allowed" : "off"}.`,
+    completedSummary: `${target} is now an operator write root with delete ${allowDelete ? "allowed" : "off"}.`,
+    impact: [
+      "Filesystem tools that are not denied (fs.write, fs.patch, fs.copy, fs.move, fs.delete) become callable, with approval, inside this folder.",
+      allowDelete
+        ? "Delete-shaped operations (fs.delete and the source of fs.move) are allowed here too."
+        : "Delete-shaped operations (fs.delete and the source of fs.move) stay blocked here.",
+      "Workbench, worktrees, and memory exports are not affected.",
+      DENY_WINS_NOTE,
+    ].join(" "),
+    risk: allowDelete ? "danger" : "caution",
+  };
+}
+
+export function describeGlobalToolAccessChange(
+  change: GlobalToolAccessChange,
+  settings: RuntimeSettings,
+): WriteAccessDescription {
+  const { toolName, posture } = change;
+  const current = currentPosture(toolName, settings);
+  const removesDeny = current === "denied" && posture !== "denied";
+  const highImpactTool = toolName === "fs.delete" || toolName === "fs.write";
+  const risk: ChangePlanRisk =
+    posture === "denied" ? "safe" : highImpactTool && (posture === "available" || removesDeny) ? "danger" : "caution";
+  return {
+    title: `Set ${toolName} to ${posture}`,
+    summary: `Change the global posture of ${toolName} from ${current} to ${posture}.`,
+    completedSummary: `${toolName} is now ${posture} in the global tool policy.`,
+    impact: describePostureImpact(toolName, posture),
+    risk,
+  };
+}
+
+function describePostureImpact(toolName: string, posture: GlobalToolAccessPosture): string {
+  switch (posture) {
+    case "denied":
+      return `${toolName} is denied for every agent and session; deny-wins means no permission profile or grant can re-enable it.`;
+    case "available":
+      return `Un-denying ${toolName} makes it callable, with approval, in every write root: the workspace write jail and each operator write root. ${DENY_WINS_NOTE}`;
+    case "unlisted":
+      return `${toolName} leaves the global allow and deny lists, so permission profiles and agent policy decide. Un-denying it makes it callable, with approval, in every write root where they allow it. ${DENY_WINS_NOTE}`;
+  }
+}
+
+function currentPosture(toolName: string, settings: RuntimeSettings): GlobalToolAccessPosture {
+  if (settings.globalToolAccess.deny.some((entry) => entry.trim() === toolName)) return "denied";
+  if (settings.globalToolAccess.allow.some((entry) => entry.trim() === toolName)) return "available";
+  return "unlisted";
+}
+
+export function matchesGlobalToolAccessChange(change: GlobalToolAccessChange, settings: RuntimeSettings): boolean {
+  return currentPosture(change.toolName, settings) === change.posture;
+}
+
+export function matchesOperatorWriteRootChange(change: OperatorWriteRootChange, settings: RuntimeSettings): boolean {
+  const root = settings.operatorWriteRoots.find((candidate) =>
+    change.preset
+      ? candidate.preset === change.preset
+      : isSameOperatorWriteRootFolder(candidate.path, change.path ?? ""),
+  );
+  if (change.action === "remove") return root === undefined;
+  return root !== undefined && root.allowDelete === (change.allowDelete ?? false);
+}
