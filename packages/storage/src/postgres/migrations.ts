@@ -15215,6 +15215,16 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     sql: PAUSE_DORMANT_NO_AGENT_CRON_JOBS_POSTGRES_SQL,
     integritySha256: "a8601087087845ba7deafc8fc55e1d631cb369ba423ab956e700b142ffa6d385",
   },
+  {
+    // Nullable TEXT: sealed (AES-GCM) replay record for crossed external side
+    // effects. Opaque to storage; cleared on completion.
+    version: 216,
+    name: "external_side_effect_replay_record",
+    sql: `
+      ALTER TABLE external_side_effect_runs ADD COLUMN IF NOT EXISTS replay_record_json TEXT;
+    `,
+    integritySha256: "1368d55a32906a665fd9209b3346e9667242b705d200a2fc19238a462f65649d",
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

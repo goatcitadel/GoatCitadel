@@ -7474,6 +7474,14 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           }
         },
       },
+      // Sealed (AES-GCM) replay record for crossed external side effects; opaque to storage.
+      {
+        version: 268,
+        name: "external_side_effect_replay_record",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "external_side_effect_runs", "replay_record_json", "TEXT");
+        },
+      },
     ],
   },
 ];

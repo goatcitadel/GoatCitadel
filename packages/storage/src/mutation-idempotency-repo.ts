@@ -65,6 +65,7 @@ export class MutationIdempotencyRepository {
   private readonly takeoverStaleStmt;
   private readonly settleStaleDispatchedStmt;
   private readonly markDispatchedStmt;
+  private readonly markReconciledCompletedStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.databaseNowStmt = db.prepare(
@@ -125,6 +126,17 @@ export class MutationIdempotencyRepository {
         AND idempotency_key = @idempotencyKey
         AND actor_scope = @actorScope
         AND status <> 'unknown_after_send'
+    `);
+    this.markReconciledCompletedStmt = db.prepare(`
+      UPDATE mutation_idempotency
+      SET status = 'completed',
+          claim_expires_at = NULL,
+          updated_at = @updatedAt
+      WHERE method = @method
+        AND route_path = @routePath
+        AND idempotency_key = @idempotencyKey
+        AND actor_scope = @actorScope
+        AND status = 'unknown_after_send'
     `);
     this.updateOwnedStatusStmt = db.prepare(`
       UPDATE mutation_idempotency
@@ -401,6 +413,23 @@ export class MutationIdempotencyRepository {
       return false;
     }
     return this.updateStatus(input, "unknown_after_send");
+  }
+
+  /**
+   * Settles an ambiguous sent claim as completed once a provider probe has
+   * proven the effect landed. Only unknown_after_send is eligible; any other
+   * status (including a concurrent winner) is left untouched.
+   */
+  public markReconciledCompleted(input: MutationIdempotencyIdentityInput & { updatedAt?: string }): boolean {
+    return (
+      this.markReconciledCompletedStmt.run({
+        method: input.method,
+        routePath: input.routePath,
+        idempotencyKey: input.idempotencyKey,
+        actorScope: input.actorScope?.trim() ?? "",
+        updatedAt: input.updatedAt ?? new Date().toISOString(),
+      }).changes > 0
+    );
   }
 
   private readDatabaseNow(): string {

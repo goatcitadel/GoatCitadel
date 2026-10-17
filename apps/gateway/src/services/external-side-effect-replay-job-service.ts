@@ -5,7 +5,13 @@ import type {
 } from "@goatcitadel/contracts";
 import { buildIntegrationWardAction, resolveWardEffectForExternalAction } from "./citadel-ward-gate.js";
 import type { IdempotentExternalSideEffectRunInput } from "./external-side-effect-runner-service.js";
+import {
+  reconstructSealedGmailSend,
+  reconstructSealedLocalBridgeWrite,
+  reconstructSealedTrelloCardCreate,
+} from "./external-side-effect-replay-reconstruction.js";
 import { buildActivepiecesTriggerWebhookRunInput, type IntegrationActionHost } from "./integration-action-service.js";
+import type { WritebackRunInputParts } from "./integration-writeback-run-inputs.js";
 
 export type GatewayExternalSideEffectReplayJob = IdempotentExternalSideEffectRunInput<Record<string, unknown>> & {
   externalDestinationFingerprint: string;
@@ -16,11 +22,17 @@ export type GatewayExternalSideEffectReplayJob = IdempotentExternalSideEffectRun
 /**
  * Production replay allowlist for the durable `external_side_effect.replay`
  * workflow. Each entry is an EXACT (boundary, catalogId, actionId) triple
- * that this gateway is willing to safely reconstruct — from LIVE connection
- * config only, never from persisted request payload (ledger rows store no
- * raw payload/target, only identity fields, a redacted destination digest,
- * and a payloadHash) — and re-execute after
- * the original attempt failed before crossing the external boundary.
+ * that this gateway is willing to safely reconstruct and re-execute after the
+ * original attempt failed before crossing the external boundary, or — when the
+ * reconstructed job carries a provider probe — reconcile after it crossed with
+ * an unknown outcome (never by resending).
+ *
+ * - Activepieces `trigger_webhook` reconstructs from LIVE connection config
+ *   only (`defaultFlowId`, empty payload); ledger rows store no raw payload.
+ * - Gmail send, Trello card create and local-bridge writes reconstruct from the
+ *   run's encrypted replay record (sealed by the live path before the boundary),
+ *   rebuilt through the live builder in replay mode, and refused unless the
+ *   rebuilt payload hashes to the run's `payloadHash` with the LIVE destination.
  *
  * Anything not listed here makes `buildGatewayExternalSideEffectReplayJob`
  * return `undefined`, which the replay-safe worker treats as
@@ -29,13 +41,56 @@ export type GatewayExternalSideEffectReplayJob = IdempotentExternalSideEffectRun
  */
 export const EXTERNAL_SIDE_EFFECT_REPLAY_JOB_ALLOWLIST = [
   { boundary: "integration_operator_action", catalogId: "automation.activepieces", actionId: "trigger_webhook" },
+  { boundary: "integration_operator_action", catalogId: "automation.gmail", actionId: "write" },
+  { boundary: "integration_operator_action", catalogId: "productivity.trello", actionId: "write" },
+  { boundary: "integration_local_bridge_action", catalogId: "productivity.apple-notes", actionId: "write" },
+  { boundary: "integration_local_bridge_action", catalogId: "productivity.apple-reminders", actionId: "write" },
+  { boundary: "integration_local_bridge_action", catalogId: "productivity.things3", actionId: "write" },
+  { boundary: "integration_local_bridge_action", catalogId: "productivity.bear", actionId: "write" },
 ] as const;
+
+type ReplayInputParts = Pick<WritebackRunInputParts, "input">;
+type ReplayAllowlistCatalogId = (typeof EXTERNAL_SIDE_EFFECT_REPLAY_JOB_ALLOWLIST)[number]["catalogId"];
+type ReplayReconstructor = (
+  host: IntegrationActionHost,
+  connection: IntegrationConnection,
+  run: ExternalSideEffectRunRecord,
+  checkedAt: string,
+) => Promise<ReplayInputParts | undefined>;
+
+/**
+ * Activepieces `trigger_webhook`: never replays the original request payload —
+ * the ledger never persisted it. The safe reconstruction is an empty trigger
+ * payload driven entirely by the live connection's configured flow. Returns
+ * `undefined` when no webhook URL is configured on the live connection.
+ */
+const reconstructActivepiecesTriggerWebhook: ReplayReconstructor = async (host, connection, run, checkedAt) => {
+  const parts = buildActivepiecesTriggerWebhookRunInput(host, connection, {
+    checkedAt,
+    flowId: host.readConnectionConfigValue(connection.config, "defaultFlowId"),
+    payload: {},
+    idempotencyKey: run.idempotencyKey,
+    actorScope: run.actorScope,
+  });
+  return "blockedReason" in parts ? undefined : parts;
+};
+
+/** One reconstructor per allowlisted catalog; each entry's catalogId is unique in the allowlist. */
+const REPLAY_RECONSTRUCTORS: Record<ReplayAllowlistCatalogId, ReplayReconstructor> = {
+  "automation.activepieces": reconstructActivepiecesTriggerWebhook,
+  "automation.gmail": reconstructSealedGmailSend,
+  "productivity.trello": reconstructSealedTrelloCardCreate,
+  "productivity.apple-notes": reconstructSealedLocalBridgeWrite,
+  "productivity.apple-reminders": reconstructSealedLocalBridgeWrite,
+  "productivity.things3": reconstructSealedLocalBridgeWrite,
+  "productivity.bear": reconstructSealedLocalBridgeWrite,
+};
 
 /**
  * Builds a replay-safe runner input for a durably-recorded external
- * side-effect run, reconstructed entirely from LIVE state (the current
- * connection config and the current Citadel Ward posture) — never from the
- * original request payload, which the ledger never persisted. Returns
+ * side-effect run from LIVE state (the current connection config and the
+ * current Citadel Ward posture) plus, for sealed-record providers, the run's
+ * authenticated replay record — never from a plaintext ledger payload. Returns
  * `undefined` when replay is not safe or not possible; every branch below is
  * a DISTINCT, commented fail-closed reason.
  *
@@ -109,31 +164,21 @@ export async function buildGatewayExternalSideEffectReplayJob(
     return undefined;
   }
 
-  const flowId = host.readConnectionConfigValue(connection.config, "defaultFlowId");
   const checkedAt = new Date().toISOString();
 
-  let parts: ReturnType<typeof buildActivepiecesTriggerWebhookRunInput>;
+  let parts: ReplayInputParts | undefined;
   try {
-    parts = buildActivepiecesTriggerWebhookRunInput(host, connection, {
-      checkedAt,
-      flowId,
-      // Never replay the original request payload — the ledger never
-      // persisted it. The safe reconstruction is an empty trigger payload
-      // driven entirely by the live connection's configured flow.
-      payload: {},
-      idempotencyKey: run.idempotencyKey,
-      actorScope: run.actorScope,
-    });
+    parts = await REPLAY_RECONSTRUCTORS[allowlisted.catalogId](host, connection, run, checkedAt);
   } catch {
-    // Reason: the builder threw while reconstructing the job (e.g.
-    // `parseHttpUrl` rejecting a malformed non-empty `webhookUrl`). A
+    // Reason: the per-provider reconstruction threw (e.g. `parseHttpUrl`
+    // rejecting a malformed non-empty Activepieces `webhookUrl`). A
     // replay-job builder must never let a reconstruction failure escape as
     // an unhandled workflow crash — treat it as job-unavailable.
     return undefined;
   }
-  // Reason: config unreconstructable — no webhook URL is configured on the
-  // live connection, so there is nothing safe to replay.
-  if ("blockedReason" in parts) {
+  // Reason: config or sealed payload unreconstructable — see the
+  // per-provider reconstructor for its distinct refusal reasons.
+  if (!parts) {
     return undefined;
   }
   if (!parts.input.externalDestinationFingerprint) {

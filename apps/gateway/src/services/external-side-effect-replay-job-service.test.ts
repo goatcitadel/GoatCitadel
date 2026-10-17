@@ -464,39 +464,40 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
   });
 
   it("returns undefined for non-allowlisted runs", async () => {
-    const gmailWriteRun = buildRun({
+    const gmailReadRun = buildRun({
       runId: "extfx-gmail",
       boundary: "integration_operator_action",
       catalogId: "automation.gmail",
       connectionId: "conn-gmail",
-      actionId: "write",
-      routePath: "external_side_effect:integration_operator_action:automation.gmail:conn-gmail:write",
+      actionId: "read",
+      routePath: "external_side_effect:integration_operator_action:automation.gmail:conn-gmail:read",
     });
-    const trelloWriteRun = buildRun({
-      runId: "extfx-trello",
+    // A local-bridge catalog on the operator-action boundary is not an exact allowlist match.
+    const notesOnOperatorBoundaryRun = buildRun({
+      runId: "extfx-notes",
       boundary: "integration_operator_action",
-      catalogId: "productivity.trello",
-      connectionId: "conn-trello",
+      catalogId: "productivity.apple-notes",
+      connectionId: "conn-notes",
       actionId: "write",
-      routePath: "external_side_effect:integration_operator_action:productivity.trello:conn-trello:write",
+      routePath: "external_side_effect:integration_operator_action:productivity.apple-notes:conn-notes:write",
     });
     const localBridgeRun = buildRun({
       runId: "extfx-bridge",
       boundary: "integration_local_bridge_action",
-      catalogId: "productivity.local-bridge",
+      catalogId: "automation.peekaboo-screen",
       connectionId: "conn-bridge",
-      actionId: "run",
-      routePath: "external_side_effect:integration_local_bridge_action:productivity.local-bridge:conn-bridge:run",
+      actionId: "write",
+      routePath: "external_side_effect:integration_local_bridge_action:automation.peekaboo-screen:conn-bridge:write",
     });
     const host = createHost(createConnection());
     const payload = buildPayload();
 
-    expect(await buildGatewayExternalSideEffectReplayJob(host, gmailWriteRun, payload)).toBeUndefined();
-    expect(await buildGatewayExternalSideEffectReplayJob(host, trelloWriteRun, payload)).toBeUndefined();
+    expect(await buildGatewayExternalSideEffectReplayJob(host, gmailReadRun, payload)).toBeUndefined();
+    expect(await buildGatewayExternalSideEffectReplayJob(host, notesOnOperatorBoundaryRun, payload)).toBeUndefined();
     expect(await buildGatewayExternalSideEffectReplayJob(host, localBridgeRun, payload)).toBeUndefined();
 
     const results = await runReplaySafeExternalSideEffectWorker({
-      runs: [gmailWriteRun, trelloWriteRun, localBridgeRun],
+      runs: [gmailReadRun, notesOnOperatorBoundaryRun, localBridgeRun],
       checkedAt: "2026-06-01T00:00:00.000Z",
       buildJob: (candidate) => buildGatewayExternalSideEffectReplayJob(host, candidate, payload),
     });
@@ -559,7 +560,8 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
 
   it("returns undefined when ward denies or requires dry-run at replay time", async () => {
     const connection = createConnection({ workspaceId: "ws-guarded" });
-    const run = buildRun();
+    // Same workspace as the connection, so the refusal comes from the ward, not workspace drift.
+    const run = buildRun({ workspaceId: "ws-guarded" });
     const payload = buildPayload();
 
     const denyHost = wardHost(connection, [{ actionPattern: "integration.*", effect: "deny" }]);
@@ -572,6 +574,38 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
 
     const approvalHost = wardHost(connection, [{ actionPattern: "integration.*", effect: "require_approval" }]);
     expect(await buildGatewayExternalSideEffectReplayJob(approvalHost, run, payload)).toBeUndefined();
+  });
+
+  it("re-checks the ward for a sealed-record catalog before opening its replay record", async () => {
+    const connection = createConnection({
+      connectionId: "conn-gmail",
+      catalogId: "automation.gmail",
+      key: "gmail",
+      label: "Gmail",
+      workspaceId: "ws-guarded",
+      config: { accessToken: "gmail-token" },
+    });
+    const run = buildRun({
+      workspaceId: "ws-guarded",
+      routePath: "external_side_effect:integration_operator_action:automation.gmail:conn-gmail:write",
+      catalogId: "automation.gmail",
+      connectionId: "conn-gmail",
+      actionId: "write",
+    });
+    const payload = buildPayload();
+    const open = vi.fn(async () => undefined);
+    const replayRecords = { seal: vi.fn(async () => true), open };
+
+    const denyHost = wardHost(connection, [{ actionPattern: "integration.automation.gmail.*", effect: "deny" }], {
+      replayRecords,
+    });
+    expect(await buildGatewayExternalSideEffectReplayJob(denyHost, run, payload)).toBeUndefined();
+    expect(open).not.toHaveBeenCalled();
+
+    // Control: without the ward the builder does reach the sealed record.
+    const allowHost = wardHost(connection, [], { replayRecords });
+    expect(await buildGatewayExternalSideEffectReplayJob(allowHost, run, payload)).toBeUndefined();
+    expect(open).toHaveBeenCalledTimes(1);
   });
 
   it("returns undefined for missing connection or missing webhook url", async () => {
@@ -603,9 +637,15 @@ describe("buildGatewayExternalSideEffectReplayJob", () => {
     await expect(buildGatewayExternalSideEffectReplayJob(malformedHost, run, payload)).resolves.toBeUndefined();
   });
 
-  it("exposes exactly the Activepieces trigger_webhook allowlist entry", () => {
+  it("exposes exactly the reviewed allowlist", () => {
     expect(EXTERNAL_SIDE_EFFECT_REPLAY_JOB_ALLOWLIST).toEqual([
       { boundary: "integration_operator_action", catalogId: "automation.activepieces", actionId: "trigger_webhook" },
+      { boundary: "integration_operator_action", catalogId: "automation.gmail", actionId: "write" },
+      { boundary: "integration_operator_action", catalogId: "productivity.trello", actionId: "write" },
+      { boundary: "integration_local_bridge_action", catalogId: "productivity.apple-notes", actionId: "write" },
+      { boundary: "integration_local_bridge_action", catalogId: "productivity.apple-reminders", actionId: "write" },
+      { boundary: "integration_local_bridge_action", catalogId: "productivity.things3", actionId: "write" },
+      { boundary: "integration_local_bridge_action", catalogId: "productivity.bear", actionId: "write" },
     ]);
   });
 });

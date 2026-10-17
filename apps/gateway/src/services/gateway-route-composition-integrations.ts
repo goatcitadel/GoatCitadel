@@ -61,6 +61,10 @@ import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-s
 import * as channelSetupService from "./channel-setup-service.js";
 import { composeChannelSetupHost } from "./channel-setup-host-composition.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
+import {
+  createExternalSideEffectReplayRecords,
+  sharedExternalSideEffectReplayKeyResolver,
+} from "./external-side-effect-replay-record.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { readChatAttachmentContentForGateway } from "./gateway-route-composition-shared.js";
 import { getChannelStreamRuntime } from "./channel-stream-runtime-registry.js";
@@ -660,8 +664,9 @@ function assertDiscordConnection(connection: IntegrationConnection): void {
  * callers can never drift apart on which gateway capabilities the action runtime sees.
  */
 export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompositionPort): IntegrationActionHost {
+  const { storage, secretStore } = gateway;
   return {
-    storage: gateway.storage,
+    storage,
     fetchWithDiagnosticsTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
     readConnectionConfigValue: (config, key) => gateway.readConnectionConfigValue(config, key),
     resolveConnectionSecret: (config, directKey, envKey, catalogId) =>
@@ -669,7 +674,11 @@ export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompos
     publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     evidenceEnvelopeService: gateway.evidenceEnvelopeService,
     mutationStore: gateway.mutationIdempotencyStore,
-    sideEffectRunStore: gateway.storage.externalSideEffectRuns,
+    sideEffectRunStore: storage.externalSideEffectRuns,
+    replayRecords: createExternalSideEffectReplayRecords({
+      resolveKey: sharedExternalSideEffectReplayKeyResolver(secretStore, storage.externalSideEffectRuns),
+      runs: storage.externalSideEffectRuns,
+    }),
     createApproval: (input) => gateway.createApproval(input),
   };
 }

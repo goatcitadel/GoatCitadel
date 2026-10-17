@@ -290,4 +290,78 @@ describe("ExternalSideEffectRunRepository", () => {
     });
     assert.equal(fresh.status, "claimed_not_sent");
   });
+
+  function seedRun(repo: ExternalSideEffectRunRepository, key: string) {
+    return repo.createOrGet({
+      workspaceId: "workspace-replay",
+      boundary: "approved_external_runtime",
+      routePath: `external_side_effect:approved_external_runtime:plugin.mutate:unknown_connection:${key}`,
+      catalogId: "plugin.mutate",
+      actionId: key,
+      actorScope: "workspace-replay",
+      idempotencyKey: `approved-external-runtime:${key}`,
+      payloadHash: `payload-hash-${key}`,
+    });
+  }
+
+  it("attachReplayRecord writes once and getReplayRecord returns it", () => {
+    const repo = createRepo();
+    const run = seedRun(repo, "replay-once");
+    assert.equal(repo.getReplayRecord(run.runId), undefined);
+    assert.equal(repo.attachReplayRecord(run.runId, "sealed-one"), true);
+    assert.equal(repo.attachReplayRecord(run.runId, "sealed-two"), false);
+    assert.equal(repo.getReplayRecord(run.runId), "sealed-one");
+    // The sealed column never leaks into the public record.
+    assert.equal("replayRecordJson" in repo.get(run.runId), false);
+  });
+
+  it("markCompleted clears the sealed replay record", () => {
+    const repo = createRepo();
+    const run = seedRun(repo, "replay-clear");
+    repo.attachReplayRecord(run.runId, "sealed");
+    repo.markCompleted(run.runId, { externalReferenceId: "ref-1" });
+    assert.equal(repo.getReplayRecord(run.runId), undefined);
+  });
+
+  it("hasReplayRecords reports whether any run still holds a sealed record", () => {
+    const repo = createRepo();
+    const run = seedRun(repo, "replay-presence");
+    assert.equal(repo.hasReplayRecords(), false);
+    repo.attachReplayRecord(run.runId, "sealed");
+    assert.equal(repo.hasReplayRecords(), true);
+    repo.markCompleted(run.runId, { externalReferenceId: "ref-1" });
+    assert.equal(repo.hasReplayRecords(), false);
+  });
+
+  it("markCompletedIfStatus settles only from the expected status", () => {
+    const repo = createRepo();
+    const run = seedRun(repo, "replay-cas");
+    repo.attachReplayRecord(run.runId, "sealed");
+    repo.markExternalCallStarted(run.runId);
+    repo.markFailure(run.runId, { status: "unknown_external_outcome", errorText: "crossed" });
+
+    const settled = repo.markCompletedIfStatus(run.runId, "unknown_external_outcome", {
+      replayOutcome: "duplicate",
+      externalReferenceId: "provider-ref",
+    });
+    assert.equal(settled.status, "completed");
+    assert.equal(settled.externalReferenceId, "provider-ref");
+    assert.equal(settled.replayOutcome, "duplicate");
+    assert.equal(repo.getReplayRecord(run.runId), undefined);
+
+    const again = repo.markCompletedIfStatus(run.runId, "unknown_external_outcome", {
+      externalReferenceId: "other-ref",
+    });
+    assert.equal(again.status, "completed");
+    assert.equal(again.externalReferenceId, "provider-ref");
+  });
+
+  it("markCompletedIfStatus leaves a non-matching row and its sealed record untouched", () => {
+    const repo = createRepo();
+    const run = seedRun(repo, "replay-cas-miss");
+    repo.attachReplayRecord(run.runId, "sealed");
+    const unchanged = repo.markCompletedIfStatus(run.runId, "unknown_external_outcome", {});
+    assert.equal(unchanged.status, "claimed_not_sent");
+    assert.equal(repo.getReplayRecord(run.runId), "sealed");
+  });
 });

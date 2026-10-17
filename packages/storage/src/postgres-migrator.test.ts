@@ -871,12 +871,12 @@ describe("Postgres migration ledger compatibility", () => {
     // feature admissions, context/heartbeat bindings, remote references and cron
     // authority remain intact; approval linkage adds six columns and two indexes;
     // v212 adds mutation_idempotency.dispatched_at; v213/v214 add mail_drafts
-    // (14 columns, one index).
+    // (14 columns, one index); v215 is data-only; v216 adds external_side_effect_runs.replay_record_json.
     // Keep independent drift tripwires for the complete current shape.
     assert.equal(manifest.tables.length, 369);
     assert.equal(
       manifest.tables.reduce((count, table) => count + table.columns.length, 0),
-      5_099,
+      5_100,
     );
     assert.equal(manifest.indexes.length, 769);
     assert.deepEqual(
