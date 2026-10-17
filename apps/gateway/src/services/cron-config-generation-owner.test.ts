@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConflictError } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage, type CronJobSpecInput } from "@goatcitadel/storage";
 import {
@@ -18,6 +18,7 @@ const roots: string[] = [];
 const stores: Storage[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   for (const storage of stores.splice(0)) {
     storage.close();
   }
@@ -26,8 +27,15 @@ afterEach(async () => {
 
 describe("CronConfigGenerationOwner", () => {
   it("records creator proof atomically outside imported config and reviews unchanged historical actions", async () => {
-    const job = spec({ action: "agent_turn", actionConfig: { agentTurn: { prompt: "Read status",
-      createdBy: { operatorId: "operator", permissionProfileId: "trusted_local_power" } } } });
+    const job = spec({
+      action: "agent_turn",
+      actionConfig: {
+        agentTurn: {
+          prompt: "Read status",
+          createdBy: { operatorId: "operator", permissionProfileId: "trusted_local_power" },
+        },
+      },
+    });
     const { root } = await createRoot([job]);
     const storage = createStorage(root);
     const config = new ConfigGenerationService(root);
@@ -35,18 +43,30 @@ describe("CronConfigGenerationOwner", () => {
     await owner.reconcileStartupGeneration();
     const historical = storage.cronJobs.get(job.jobId)!;
     expect(historical.creatorAuthority).toBeUndefined();
-    const reviewed = await owner.updateSpec(job, historical.revision, undefined,
-      { actorId: "operator", source: "authenticated_operator" });
-    expect(reviewed.creatorAuthority).toMatchObject({ actorId: "operator", jobId: job.jobId, version: "cron.creator-authority.v1" });
+    const reviewed = await owner.updateSpec(job, historical.revision, undefined, {
+      actorId: "operator",
+      source: "authenticated_operator",
+    });
+    expect(reviewed.creatorAuthority).toMatchObject({
+      actorId: "operator",
+      jobId: job.jobId,
+      version: "cron.creator-authority.v1",
+    });
     expect(JSON.stringify(config.getActivePayload().cronJobs)).not.toContain("creatorAuthority");
     await owner.reconcileCommittedGeneration();
     expect(storage.cronJobs.get(job.jobId)?.creatorAuthority).toEqual(reviewed.creatorAuthority);
     const changed = { ...job, actionConfig: { agentTurn: { ...job.actionConfig!.agentTurn!, prompt: "New action" } } };
     const failing = new CronConfigGenerationOwner(config, createSqliteAsyncStorage(storage), {
-      afterStorageMutation: () => { throw new Error("Injected owner rollback"); },
+      afterStorageMutation: () => {
+        throw new Error("Injected owner rollback");
+      },
     });
-    await expect(failing.updateSpec(changed, reviewed.revision, undefined,
-      { actorId: "operator", source: "authenticated_operator" })).rejects.toThrow();
+    await expect(
+      failing.updateSpec(changed, reviewed.revision, undefined, {
+        actorId: "operator",
+        source: "authenticated_operator",
+      }),
+    ).rejects.toThrow();
     expect(storage.cronJobs.get(job.jobId)?.creatorAuthority).toEqual(reviewed.creatorAuthority);
     expect(storage.cronJobs.get(job.jobId)?.actionConfig).toEqual(job.actionConfig);
   });
@@ -347,6 +367,11 @@ describe("CronConfigGenerationOwner", () => {
   });
 
   it("projects nextRunAt for a due-swept system job when a committed generation changes its spec", async () => {
+    // A fixed-minute schedule stays due for five minutes (02:45-02:49 here), so
+    // a real clock inside that window projects the next in-window minute
+    // instead of 02:45. Pin the clock before the window to keep this exact.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-16T01:00:00.000Z"));
     const stored = spec({
       jobId: PRIVATE_BETA_BACKUP_JOB_ID,
       name: "Private Beta Daily Backup",
@@ -362,7 +387,7 @@ describe("CronConfigGenerationOwner", () => {
     const [reconciled] = await owner.reconcileCommittedGeneration();
 
     expect(reconciled).toMatchObject({ jobId: PRIVATE_BETA_BACKUP_JOB_ID, schedule: committed.schedule });
-    expect(reconciled?.nextRunAt).toMatch(/T02:45:00\.000Z$/);
+    expect(reconciled?.nextRunAt).toBe("2026-10-16T02:45:00.000Z");
   });
 
   it("canonicalizes legacy telemetry and adopts Storage-only specs once without disturbing telemetry", async () => {
