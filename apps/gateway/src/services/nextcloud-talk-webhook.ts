@@ -9,6 +9,15 @@ import {
 
 const NEXTCLOUD_TALK_WEBHOOK_PATH = /^\/api\/v1\/integrations\/connections\/[^/]+\/nextcloud-talk\/webhook$/i;
 
+/**
+ * Talk bots only hold the HMAC shared secret, and the bot API (send message,
+ * reactions) has no file download endpoint, so a shared voice file cannot be
+ * fetched or transcribed. A voice message is routed as an agent turn carrying
+ * this notice instead of the bare file name.
+ */
+export const NEXTCLOUD_TALK_VOICE_NOT_TRANSCRIBED_CONTENT =
+  "[voice message received — Nextcloud Talk bots cannot download shared media, so it was not transcribed]";
+
 export type NextcloudTalkWebhookNormalization =
   | {
       kind: "message";
@@ -124,7 +133,11 @@ function normalizeCreateEvent(
   const displayName = asString(actor.name);
   const messageId = asString(object.id);
   const roomId = asString(target.id);
-  const messageContent = renderNextcloudTalkMessage(asString(object.content));
+  const rawContent = asString(object.content);
+  const voiceAttachment = readNextcloudTalkVoiceAttachment(rawContent);
+  const messageContent = voiceAttachment
+    ? buildNextcloudTalkVoiceContent(rawContent, voiceAttachment.placeholderKey)
+    : renderNextcloudTalkMessage(rawContent);
   const inReplyTo = asRecord(object.inReplyTo);
   const replyToObject = asRecord(inReplyTo.object);
   const replyToMessageId = asString(replyToObject.id);
@@ -161,6 +174,9 @@ function normalizeCreateEvent(
       mediaType: asString(object.mediaType),
       objectName: asString(object.name),
       replyToMessageId,
+      ...(voiceAttachment
+        ? { voiceAttachment: { fileId: voiceAttachment.fileId, mimeType: voiceAttachment.mimeType } }
+        : {}),
     },
   };
 }
@@ -211,7 +227,10 @@ function renderNextcloudTalkMessage(content: string | undefined): string {
   if (!template) {
     return "";
   }
-  const parameters = asRecord(parsed.parameters);
+  return renderNextcloudTalkTemplate(template, asRecord(parsed.parameters));
+}
+
+function renderNextcloudTalkTemplate(template: string, parameters: JsonRecord): string {
   return template
     .replace(/\{([^}]+)\}/g, (match, key) => {
       const parameter = asRecord(parameters[key]);
@@ -220,4 +239,40 @@ function renderNextcloudTalkMessage(content: string | undefined): string {
       return replacement ?? match;
     })
     .trim();
+}
+
+type NextcloudTalkVoiceAttachment = { placeholderKey: string; fileId?: string; mimeType: string };
+
+function parseNextcloudTalkRichMessage(content: string | undefined): JsonRecord | undefined {
+  if (!content) {
+    return undefined;
+  }
+  try {
+    return asRecord(JSON.parse(content));
+  } catch {
+    return undefined;
+  }
+}
+
+/** First rich-object "file" parameter whose mimetype is audio (Talk voice messages). */
+function readNextcloudTalkVoiceAttachment(content: string | undefined): NextcloudTalkVoiceAttachment | undefined {
+  const parameters = asRecord(parseNextcloudTalkRichMessage(content)?.parameters);
+  for (const [placeholderKey, value] of Object.entries(parameters)) {
+    const parameter = asRecord(value);
+    const mimeType = asString(parameter.mimetype);
+    if (asString(parameter.type) === "file" && mimeType?.toLowerCase().startsWith("audio/")) {
+      return { placeholderKey, fileId: asString(parameter.id), mimeType };
+    }
+  }
+  return undefined;
+}
+
+function buildNextcloudTalkVoiceContent(content: string | undefined, placeholderKey: string): string {
+  const parsed = parseNextcloudTalkRichMessage(content);
+  const template = asString(parsed?.message) ?? "";
+  const withoutVoice = template.split(`{${placeholderKey}}`).join(" ");
+  const caption = renderNextcloudTalkTemplate(withoutVoice, asRecord(parsed?.parameters)).replace(/\s+/g, " ").trim();
+  return caption
+    ? `${NEXTCLOUD_TALK_VOICE_NOT_TRANSCRIBED_CONTENT} ${caption}`
+    : NEXTCLOUD_TALK_VOICE_NOT_TRANSCRIBED_CONTENT;
 }

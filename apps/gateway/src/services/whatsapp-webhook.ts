@@ -119,7 +119,7 @@ export function normalizeWhatsAppWebhookPayload(input: {
   connectionId: string;
   payload: unknown;
   /**
-   * channelVoiceInboundV1Enabled gate. Absent/false (default) ⇒ audio messages
+   * channelVoiceInboundV1Enabled gate. Callers pass the resolved flag (on by default). Absent/false ⇒ audio messages
    * keep today's behavior: the literal "[whatsapp audio]" placeholder content.
    */
   voiceInboundEnabled?: boolean;

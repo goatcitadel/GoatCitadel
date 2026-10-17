@@ -1,5 +1,12 @@
 export { runNtfyLiveChecks } from "./ntfy-channel-live-probes.js";
-import { mapProbeStepsToChecks, parseJsonRecord, parseJsonValue, inferFailureCategory, asString, asRecord } from "./channel-probe-result.js";
+import {
+  mapProbeStepsToChecks,
+  parseJsonRecord,
+  parseJsonValue,
+  inferFailureCategory,
+  asString,
+  asRecord,
+} from "./channel-probe-result.js";
 /* eslint-disable max-lines -- Live probe coverage stays in one file so probe heuristics and result shaping remain traceable together. */
 import { randomUUID } from "node:crypto";
 import {
@@ -9,6 +16,7 @@ import {
   type DiscordRuntimeStatus,
 } from "@goatcitadel/contracts";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
+import { normalizeBlueBubblesBaseUrl } from "./channel-typing-adapters.js";
 
 type BotProbeChecks = { checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport };
 
@@ -473,8 +481,21 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
   }
 
   if (!input.channelId && input.deferDestination) {
-    probe.steps.push({ key: "discord_channel_access", label: "DM destination", status: "skipped", disposition: "deferred", message: "The direct-message destination is verified after activation, pairing and the first DM." });
-    if (input.includeSandboxSend) probe.steps.push({ key: "discord_sandbox_send", label: "DM delivery", status: "skipped", disposition: "deferred", message: "Send verification awaits the first paired DM; bot authentication remains required." });
+    probe.steps.push({
+      key: "discord_channel_access",
+      label: "DM destination",
+      status: "skipped",
+      disposition: "deferred",
+      message: "The direct-message destination is verified after activation, pairing and the first DM.",
+    });
+    if (input.includeSandboxSend)
+      probe.steps.push({
+        key: "discord_sandbox_send",
+        label: "DM delivery",
+        status: "skipped",
+        disposition: "deferred",
+        message: "Send verification awaits the first paired DM; bot authentication remains required.",
+      });
     probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   }
@@ -594,7 +615,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
         key: "discord_sandbox_send",
         label: "Sandbox send",
         status: "pass",
-      providerMessageId: asString(send.payload.id),
+        providerMessageId: asString(send.payload.id),
         message: "Sandbox message post succeeded.",
       });
 
@@ -1063,7 +1084,8 @@ export async function runLineBotLiveChecks(input: LineProbeInput): Promise<BotPr
 
 export async function runIMessageBridgeLiveChecks(input: IMessageProbeInput): Promise<BotProbeChecks> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
-  const baseUrl = normalizeBridgeProbeBaseUrl(input.bridgeUrl);
+  // BlueBubbles authenticates via ?password=, so schemeless remote hosts default to https.
+  const baseUrl = normalizeBlueBubblesBaseUrl(requireBridgeProbeUrl(input.bridgeUrl));
   const probe: ChannelProbeReport = {
     kind: "imessage_bridge",
     mode: "bluebubbles",
@@ -1390,7 +1412,14 @@ export async function runZaloUserBridgeLiveChecks(input: ZalouserProbeInput): Pr
   };
 
   if (!input.authorizationHeader?.trim()) {
-    probe.steps.push({ key: "zalouser_auth", label: "Bridge authentication", status: "fail", disposition: "blocking", message: "An authenticated zca bridge credential is required before probing.", failureCategory: "missing_input" });
+    probe.steps.push({
+      key: "zalouser_auth",
+      label: "Bridge authentication",
+      status: "fail",
+      disposition: "blocking",
+      message: "An authenticated zca bridge credential is required before probing.",
+      failureCategory: "missing_input",
+    });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   }
 
@@ -1738,11 +1767,16 @@ function normalizeZaloProbeTarget(target: string | undefined): string | undefine
     .trim();
 }
 
-function normalizeBridgeProbeBaseUrl(baseUrl: string | undefined): string {
+function requireBridgeProbeUrl(baseUrl: string | undefined): string {
   const trimmed = asString(baseUrl);
   if (!trimmed) {
     throw new Error("Bridge URL is missing.");
   }
+  return trimmed;
+}
+
+function normalizeBridgeProbeBaseUrl(baseUrl: string | undefined): string {
+  const trimmed = requireBridgeProbeUrl(baseUrl);
   if (/^https?:\/\//i.test(trimmed)) {
     return trimmed.replace(/\/+$/, "");
   }

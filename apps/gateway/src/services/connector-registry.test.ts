@@ -178,11 +178,11 @@ describe("buildGatewayConnectorRecords", () => {
     );
     expect(imessage?.metadata?.setupReady).toBe(true);
     expect(imessage?.metadata?.channelSupportNotes).toEqual(
-      expect.arrayContaining(["Reactions and unsend require BlueBubbles Private API support."]),
+      expect.arrayContaining(["Reactions, unsend, and typing indicators require BlueBubbles Private API support."]),
     );
     expect(
       (imessage?.metadata?.channelCapabilities as { runtimePolicy?: { typing?: boolean } })?.runtimePolicy?.typing,
-    ).toBe(false);
+    ).toBe(true);
 
     const slack = slackRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(slack?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);

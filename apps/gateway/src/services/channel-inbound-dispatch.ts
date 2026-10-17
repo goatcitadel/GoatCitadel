@@ -203,6 +203,8 @@ export type DurableInboundChannelAcceptInput = InboundWebhookDispatchOptions & {
   dispatchKind: "agent_turn" | "voice_agent_turn" | "record_only" | "command";
   voiceRequest?: ChannelVoiceInboundRequest;
   voiceFallbackContent?: string;
+  /** Typed text sent alongside the audio; appended after a successful transcript. */
+  voiceCaption?: string;
 };
 
 export type DurableInboundChannelAcceptResult = {
@@ -423,6 +425,8 @@ export type InboundVoiceDispatchOptions = InboundWebhookDispatchOptions & {
     request: ChannelVoiceInboundRequest;
     /** Ingested instead of a transcript when transcription fails — the message is never silently dropped. */
     fallbackContent: string;
+    /** Typed text sent with the audio (secret-free); kept alongside a successful transcript. */
+    caption?: string;
   };
 };
 
@@ -459,5 +463,6 @@ export async function dispatchInboundVoiceWebhookMessage(
     dispatchKind: "voice_agent_turn",
     voiceRequest: voice.request,
     voiceFallbackContent: voice.fallbackContent,
+    ...(voice.caption ? { voiceCaption: voice.caption } : {}),
   });
 }

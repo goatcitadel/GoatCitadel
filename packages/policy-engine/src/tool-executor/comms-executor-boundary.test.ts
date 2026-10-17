@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { AsyncStorage, Storage } from "@goatcitadel/storage";
-import { executeCommsTool } from "./comms-executor.js";
+import { executeCommsTool, normalizeBlueBubblesBaseUrl } from "./comms-executor.js";
 import { resetGoogleChatAccessTokenCache } from "./google-chat-service-account.js";
 
 const MATTERMOST_CHANNEL_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -517,5 +517,69 @@ describe("google chat app reply references", () => {
     );
     expect(result).toMatchObject({ status: "sent" });
     expect(calls.at(-1)).toMatchObject({ method: "POST" });
+  });
+});
+
+describe("BlueBubbles bridge URL scheme (password travels in the query string)", () => {
+  it("defaults schemeless remote hosts to https and keeps http only for loopback or an explicit http URL", () => {
+    expect(normalizeBlueBubblesBaseUrl("bluebubbles.example")).toBe("https://bluebubbles.example");
+    expect(normalizeBlueBubblesBaseUrl("bluebubbles.example:1234/")).toBe("https://bluebubbles.example:1234");
+    expect(normalizeBlueBubblesBaseUrl("192.168.1.20:1234")).toBe("https://192.168.1.20:1234");
+    expect(normalizeBlueBubblesBaseUrl("127.0.0.1:1234")).toBe("http://127.0.0.1:1234");
+    expect(normalizeBlueBubblesBaseUrl("LOCALHOST:1234")).toBe("http://LOCALHOST:1234");
+    expect(normalizeBlueBubblesBaseUrl("[::1]:1234")).toBe("http://[::1]:1234");
+    expect(normalizeBlueBubblesBaseUrl("http://bluebubbles.lan:1234/")).toBe("http://bluebubbles.lan:1234");
+    expect(normalizeBlueBubblesBaseUrl("https://bluebubbles.example")).toBe("https://bluebubbles.example");
+    expect(normalizeBlueBubblesBaseUrl("  ")).toBeUndefined();
+  });
+
+  it("sends a schemeless remote bridge's password-bearing lookup over https", async () => {
+    const calls: FetchCall[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        recordFetchCall(calls, input, init);
+        return new Response("lookup unavailable", { status: 503 });
+      }),
+    );
+    const storage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-bluebubbles-schemeless",
+          key: "imessage",
+          enabled: true,
+          status: "connected",
+          config: { provider: "bluebubbles", bridgeUrl: "bluebubbles.example", password: "bb-password" },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn(() => ({
+          deliveryId: "delivery-bluebubbles-schemeless",
+          status: "queued",
+          channelKey: "imessage",
+          target: "chat:123",
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage & AsyncStorage;
+
+    await executeCommsTool(
+      {
+        toolName: "imessage.send",
+        args: { connectionId: "conn-bluebubbles-schemeless", target: "chat:123", message: "hello" },
+        agentId: "operator",
+        sessionId: "sess-bluebubbles-schemeless",
+      },
+      policyConfig(["bluebubbles.example"]),
+      storage,
+    );
+
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      expect(call.url.startsWith("https://bluebubbles.example/")).toBe(true);
+    }
   });
 });

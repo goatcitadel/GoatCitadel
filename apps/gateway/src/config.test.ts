@@ -413,4 +413,46 @@ describe("loadGatewayConfig", () => {
       expect((await loadGatewayConfig(second.rootDir)).assistant.database.postgres.asyncGatewayEnabled).toBe(false);
     });
   });
+
+  describe("channelVoiceInboundV1Enabled default", () => {
+    const ENV_KEY = "GOATCITADEL_FEATURE_CHANNEL_VOICE_INBOUND_V1_ENABLED";
+    let previous: string | undefined;
+
+    afterEach(() => {
+      if (previous === undefined) {
+        delete process.env[ENV_KEY];
+      } else {
+        process.env[ENV_KEY] = previous;
+      }
+    });
+
+    it("is on when neither the env var nor a stored value is present", async () => {
+      const { rootDir } = await createConfigFixture();
+      previous = process.env[ENV_KEY];
+      delete process.env[ENV_KEY];
+      expect((await loadGatewayConfig(rootDir)).assistant.features.channelVoiceInboundV1Enabled).toBe(true);
+    });
+
+    it("stays off when the env var is false", async () => {
+      const { rootDir } = await createConfigFixture();
+      previous = process.env[ENV_KEY];
+      process.env[ENV_KEY] = "false";
+      expect((await loadGatewayConfig(rootDir)).assistant.features.channelVoiceInboundV1Enabled).toBe(false);
+    });
+
+    it("stays off when the config explicitly stores false", async () => {
+      const { rootDir, configDir } = await createConfigFixture();
+      previous = process.env[ENV_KEY];
+      delete process.env[ENV_KEY];
+      const assistantPath = path.join(configDir, "assistant.config.json");
+      const assistantConfig = JSON.parse(await readFile(assistantPath, "utf8")) as {
+        features?: Record<string, unknown>;
+      };
+      await writeJson(assistantPath, {
+        ...assistantConfig,
+        features: { ...assistantConfig.features, channelVoiceInboundV1Enabled: false },
+      });
+      expect((await loadGatewayConfig(rootDir)).assistant.features.channelVoiceInboundV1Enabled).toBe(false);
+    });
+  });
 });

@@ -232,6 +232,7 @@ async function dispatchIntegrationChannelAction(
       connectionId: connector.sourceId,
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
       threadId: optionalString(actionPayload.threadId),
+      messageId: optionalString(actionPayload.messageId),
       durationMs: optionalInteger(actionPayload.durationMs),
       ...governance,
       signal: deps.signal,

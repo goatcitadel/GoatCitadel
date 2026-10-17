@@ -3984,6 +3984,390 @@ describe("executeTool", () => {
     });
   });
 
+  describe("Signal react and remote delete", () => {
+    function signalActionStorage(defaultRecipient: string) {
+      return {
+        integrationConnections: {
+          get: vi.fn(() => ({
+            connectionId: "conn-signal",
+            key: "signal",
+            config: { baseUrl: "https://signal.example.com", accountId: "+15557654321", defaultRecipient },
+          })),
+        },
+        commsDeliveries: {
+          createQueued: vi.fn((input: Record<string, unknown>) => ({
+            deliveryId: "delivery-signal-action",
+            status: "queued",
+            channelKey: input.channelKey,
+            target: input.target,
+            createdAt: "2026-03-18T00:00:00.000Z",
+            updatedAt: "2026-03-18T00:00:00.000Z",
+          })),
+          markSent: vi.fn(),
+          markFailed: vi.fn(),
+        },
+      } as unknown as Storage & AsyncStorage;
+    }
+    const signalPolicy = {
+      ...policyConfig,
+      sandbox: { ...policyConfig.sandbox, networkAllowlist: ["signal.example.com"] },
+    };
+    function signalFetch() {
+      return vi.fn(
+        async (..._args: unknown[]) =>
+          new Response(JSON.stringify({ jsonrpc: "2.0", result: { timestamp: 1712345679999 }, id: "rpc-1" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      );
+    }
+    function rpcBody(fetchMock: ReturnType<typeof signalFetch>): Record<string, unknown> {
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      return JSON.parse(String(init.body)) as Record<string, unknown>;
+    }
+
+    it("reacts to a direct message with the target defaulting to the author", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.react",
+          args: { connectionId: "conn-signal", target: "signal:+15551234567", messageId: "1712345678901", emoji: "👍" },
+          agentId: "operator",
+          sessionId: "sess-signal-react",
+        },
+        signalPolicy,
+        signalActionStorage("signal:+15551234567"),
+      );
+      const body = rpcBody(fetchMock);
+      expect(body.method).toBe("sendReaction");
+      expect(body.params).toEqual({
+        account: "+15557654321",
+        emoji: "👍",
+        targetAuthor: "+15551234567",
+        targetTimestamp: 1712345678901,
+        remove: false,
+        recipient: ["+15551234567"],
+      });
+      expect(result).toMatchObject({ status: "sent", providerMessageId: "1712345679999" });
+    });
+
+    it("reacts in a group with an explicit targetAuthor and supports remove", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      await executeTool(
+        {
+          toolName: "channel.react",
+          args: {
+            connectionId: "conn-signal",
+            messageId: "1712345678901",
+            reaction: "🎉",
+            targetAuthor: "uuid-author",
+            remove: true,
+          },
+          agentId: "operator",
+          sessionId: "sess-signal-react-group",
+        },
+        signalPolicy,
+        signalActionStorage("signal:group:group-123"),
+      );
+      expect(rpcBody(fetchMock).params).toMatchObject({
+        groupId: "group-123",
+        targetAuthor: "uuid-author",
+        emoji: "🎉",
+        remove: true,
+      });
+    });
+
+    it("rejects a group reaction without targetAuthor before any fetch", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.react",
+          args: { connectionId: "conn-signal", messageId: "1712345678901", emoji: "👍" },
+          agentId: "operator",
+          sessionId: "sess-signal-react-noauthor",
+        },
+        signalPolicy,
+        signalActionStorage("signal:group:group-123"),
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        error: expect.stringMatching(/Signal group and username reactions need targetAuthor/),
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("unsends through remoteDelete with the target timestamp", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.unsend",
+          args: { connectionId: "conn-signal", messageId: "1712345678901" },
+          agentId: "operator",
+          sessionId: "sess-signal-unsend",
+        },
+        signalPolicy,
+        signalActionStorage("signal:group:group-123"),
+      );
+      const body = rpcBody(fetchMock);
+      expect(body.method).toBe("remoteDelete");
+      expect(body.params).toEqual({ account: "+15557654321", targetTimestamp: 1712345678901, groupId: "group-123" });
+      expect(result).toMatchObject({ status: "sent", providerMessageId: "1712345679999" });
+    });
+
+    it("reacts in a group using the author carried by an inbound <source>:<timestamp> event id", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.react",
+          args: {
+            connectionId: "conn-signal",
+            messageId: "6f1c2a7e-1111-4c4c-9a9a-123456789abc:1712345678901",
+            emoji: "👍",
+          },
+          agentId: "operator",
+          sessionId: "sess-signal-react-eventid",
+        },
+        signalPolicy,
+        signalActionStorage("signal:group:group-123"),
+      );
+      expect(result).toMatchObject({ status: "sent" });
+      expect(rpcBody(fetchMock).params).toMatchObject({
+        groupId: "group-123",
+        targetAuthor: "6f1c2a7e-1111-4c4c-9a9a-123456789abc",
+        targetTimestamp: 1712345678901,
+      });
+    });
+
+    it("prefers an explicit targetAuthor over the event id source", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      await executeTool(
+        {
+          toolName: "channel.react",
+          args: {
+            connectionId: "conn-signal",
+            messageId: "+15551234567:1712345678901",
+            emoji: "👍",
+            targetAuthor: "uuid-explicit",
+          },
+          agentId: "operator",
+          sessionId: "sess-signal-react-explicit",
+        },
+        signalPolicy,
+        signalActionStorage("signal:group:group-123"),
+      );
+      expect(rpcBody(fetchMock).params).toMatchObject({
+        targetAuthor: "uuid-explicit",
+        targetTimestamp: 1712345678901,
+      });
+    });
+
+    it("unsends with the timestamp from an inbound event id", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.unsend",
+          args: { connectionId: "conn-signal", messageId: "+15557654321:1712345678901" },
+          agentId: "operator",
+          sessionId: "sess-signal-unsend-eventid",
+        },
+        signalPolicy,
+        signalActionStorage("signal:+15551234567"),
+      );
+      expect(result).toMatchObject({ status: "sent" });
+      expect(rpcBody(fetchMock).params).toEqual({
+        account: "+15557654321",
+        targetTimestamp: 1712345678901,
+        recipient: ["+15551234567"],
+      });
+    });
+
+    it("requires targetAuthor for a username target instead of defaulting to the username", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      const missing = await executeTool(
+        {
+          toolName: "channel.react",
+          args: { connectionId: "conn-signal", messageId: "1712345678901", emoji: "👍" },
+          agentId: "operator",
+          sessionId: "sess-signal-react-username",
+        },
+        signalPolicy,
+        signalActionStorage("signal:username:goat.01"),
+      );
+      expect(missing).toMatchObject({
+        status: "failed",
+        error: expect.stringMatching(/username reactions need targetAuthor/),
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      await executeTool(
+        {
+          toolName: "channel.react",
+          args: { connectionId: "conn-signal", messageId: "1712345678901", emoji: "👍", targetAuthor: "uuid-goat" },
+          agentId: "operator",
+          sessionId: "sess-signal-react-username-ok",
+        },
+        signalPolicy,
+        signalActionStorage("signal:username:goat.01"),
+      );
+      expect(rpcBody(fetchMock).params).toMatchObject({ username: ["goat.01"], targetAuthor: "uuid-goat" });
+    });
+
+    it("rejects an event id with an empty source or a non-numeric timestamp", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      for (const messageId of [":1712345678901", "+1555:abc"]) {
+        const result = await executeTool(
+          {
+            toolName: "channel.unsend",
+            args: { connectionId: "conn-signal", messageId },
+            agentId: "operator",
+            sessionId: "sess-signal-bad-eventid",
+          },
+          signalPolicy,
+          signalActionStorage("signal:+15551234567"),
+        );
+        expect(result).toMatchObject({ status: "failed", error: expect.stringMatching(/numeric/) });
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects a non-numeric messageId without calling the bridge", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = signalFetch();
+      vi.stubGlobal("fetch", fetchMock);
+      for (const toolName of ["channel.react", "channel.unsend"]) {
+        const result = await executeTool(
+          {
+            toolName,
+            args: { connectionId: "conn-signal", messageId: "not-a-ts", emoji: "👍", targetAuthor: "+1555" },
+            agentId: "operator",
+            sessionId: "sess-signal-badid",
+          },
+          signalPolicy,
+          signalActionStorage("signal:+15551234567"),
+        );
+        expect(result).toMatchObject({ status: "failed", error: expect.stringMatching(/numeric/) });
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("ntfy unsend", () => {
+    function ntfyStorage(config: Record<string, unknown>) {
+      return {
+        integrationConnections: {
+          get: vi.fn(() => ({ connectionId: "conn-ntfy", key: "ntfy", kind: "channel", config })),
+        },
+        commsDeliveries: {
+          createQueued: vi.fn((input: Record<string, unknown>) => ({
+            deliveryId: "delivery-ntfy-unsend",
+            status: "queued",
+            channelKey: input.channelKey,
+            target: input.target,
+            createdAt: "2026-10-16T00:00:00.000Z",
+            updatedAt: "2026-10-16T00:00:00.000Z",
+          })),
+          markSent: vi.fn(),
+          markFailed: vi.fn(),
+        },
+      } as unknown as Storage & AsyncStorage;
+    }
+    const ntfyPolicy = {
+      ...policyConfig,
+      sandbox: { ...policyConfig.sandbox, networkAllowlist: ["ntfy.example.com"] },
+    };
+
+    it("deletes the published message with DELETE /<topic>/<message id> and the bearer token", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      process.env.NTFY_UNSEND_TOKEN = "ntfy-token";
+      const fetchMock = vi.fn(
+        async (..._args: unknown[]) => new Response(JSON.stringify({ id: "x" }), { status: 200 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.unsend",
+          args: { connectionId: "conn-ntfy", messageId: "xE73Iyuabi" },
+          agentId: "operator",
+          sessionId: "sess-ntfy-unsend",
+        },
+        ntfyPolicy,
+        ntfyStorage({ baseUrl: "https://ntfy.example.com", topic: "goat alerts", tokenEnv: "NTFY_UNSEND_TOKEN" }),
+      );
+      expect(result).toMatchObject({ status: "sent", providerMessageId: "xE73Iyuabi" });
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://ntfy.example.com/goat%20alerts/xE73Iyuabi");
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(init.method).toBe("DELETE");
+      expect(init.headers).toEqual({ Authorization: "Bearer ntfy-token" });
+      delete process.env.NTFY_UNSEND_TOKEN;
+    });
+
+    it("rejects a malformed message id and a host outside the allowlist before deleting", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = vi.fn(async (..._args: unknown[]) => new Response("", { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const badId = await executeTool(
+        {
+          toolName: "channel.unsend",
+          args: { connectionId: "conn-ntfy", messageId: "../admin" },
+          agentId: "operator",
+          sessionId: "sess-ntfy-unsend-bad",
+        },
+        ntfyPolicy,
+        ntfyStorage({ baseUrl: "https://ntfy.example.com", topic: "goat" }),
+      );
+      expect(badId).toMatchObject({ status: "failed", error: expect.stringMatching(/message id ntfy returned/) });
+      const foreign = await executeTool(
+        {
+          toolName: "channel.unsend",
+          args: { connectionId: "conn-ntfy", messageId: "xE73Iyuabi" },
+          agentId: "operator",
+          sessionId: "sess-ntfy-unsend-foreign",
+        },
+        ntfyPolicy,
+        ntfyStorage({ baseUrl: "https://foreign.example", topic: "goat" }),
+      );
+      expect(foreign).toMatchObject({ status: "failed" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("reports a bounded provider error", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = vi.fn(async (..._args: unknown[]) => new Response("x".repeat(5_000), { status: 404 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.unsend",
+          args: { connectionId: "conn-ntfy", messageId: "xE73Iyuabi" },
+          agentId: "operator",
+          sessionId: "sess-ntfy-unsend-404",
+        },
+        ntfyPolicy,
+        ntfyStorage({ baseUrl: "https://ntfy.example.com", topic: "goat" }),
+      );
+      expect(result).toMatchObject({ status: "failed" });
+      expect(String((result as { error?: string }).error)).toContain("ntfy.unsend failed (404): ");
+      expect(String((result as { error?: string }).error).length).toBeLessThan(400);
+    });
+  });
+
   it("sends channel messages through iMessage BlueBubbles adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.IMESSAGE_PASSWORD = "bb-password";

@@ -1054,7 +1054,9 @@ describe("durable-execution-service orchestration workflow", () => {
 
     await executeDurableExternalSideEffectReplayRun(host as never, run);
 
-    expect(host.buildExternalSideEffectReplayJob).not.toHaveBeenCalled();
+    // Crossed runs ask the owner for a job only to find a reconciliation probe;
+    // without one the run keeps the boundary-crossed skip and is never resent.
+    expect(host.buildExternalSideEffectReplayJob).toHaveBeenCalledTimes(1);
     expect(createCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({
         state: expect.objectContaining({
@@ -1321,6 +1323,108 @@ describe("durable-execution-service orchestration workflow", () => {
               runId: "extfx-activepieces",
               status: "skipped",
               reason: "job_unavailable",
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("records a probe-reconciled crossed run as reconciled in the replay checkpoint", async () => {
+    const run = buildRunWithPayload("external_side_effect.replay", {
+      version: "external_side_effect.replay.v1",
+      workspaceId: "default",
+      requestedBy: "operator",
+      requestedAt: "2026-06-01T00:00:00.000Z",
+      runIds: ["extfx-crossed"],
+    });
+    let storedRun = { ...run, status: "running" as const };
+    const externalRun: ExternalSideEffectRunRecord = {
+      runId: "extfx-crossed",
+      workspaceId: "default",
+      boundary: "durable_connector_delivery",
+      routePath: "external_side_effect:durable_connector_delivery:unknown_catalog:conn-1:send",
+      connectionId: "conn-1",
+      actionId: "send",
+      actorScope: "conn-1",
+      idempotencyKey: "key-crossed",
+      payloadHash: "hash-1",
+      status: "unknown_external_outcome",
+      replayPolicy: "idempotent_external",
+      replayOutcome: "claimed",
+      replayAttempt: "new",
+      resumeState: "not_resumable",
+      attemptCount: 1,
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    };
+    const updateRun = vi.fn((patch: Record<string, unknown>) => {
+      storedRun = { ...storedRun, status: patch.status as DurableRunRecord["status"], version: storedRun.version + 1 };
+      return storedRun;
+    });
+    const createCheckpoint = vi.fn();
+    const execute = vi.fn();
+    const markReconciledCompleted = vi.fn(async () => true);
+    const sideEffectRunStore = {
+      createOrGet: vi.fn(),
+      markExternalCallStarted: vi.fn(),
+      markCompleted: vi.fn(),
+      markFailure: vi.fn(),
+      markFailureIfStatus: vi.fn(),
+      markCompletedIfStatus: vi.fn(
+        async (_runId: string, _expected: string, input: Record<string, unknown> | undefined) => ({
+          ...externalRun,
+          status: "completed" as const,
+          replayOutcome: "duplicate" as const,
+          resumeState: "completed" as const,
+          responsePayload: input?.responsePayload as Record<string, unknown>,
+        }),
+      ),
+    };
+    const host = {
+      storage: {
+        durableRuns: { getRun: vi.fn(() => storedRun), updateRun, createCheckpoint },
+        externalSideEffectRuns: {
+          get: vi.fn(() => externalRun),
+          listByConnection: vi.fn(),
+          listByWorkspace: vi.fn(),
+        },
+      },
+      publishRealtime: vi.fn(),
+      recordDurableTimelineEvent: vi.fn(),
+      buildExternalSideEffectReplayJob: vi.fn(() => ({
+        mutationStore: { claim: vi.fn(), markCompleted: vi.fn(), markFailed: vi.fn(), markReconciledCompleted },
+        sideEffectRunStore,
+        runClaimTransaction: async (work: () => unknown) => await work(),
+        boundary: externalRun.boundary,
+        connectionId: externalRun.connectionId,
+        actionId: externalRun.actionId,
+        idempotencyKey: externalRun.idempotencyKey,
+        checkedAt: "2026-06-01T00:00:00.000Z",
+        payload: {},
+        label: "Crossed delivery",
+        execute,
+        reconcileExternalOutcome: async () => ({ found: true, externalReferenceId: "messageId:1" }),
+      })),
+    };
+
+    await executeDurableExternalSideEffectReplayRun(host as never, run);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(markReconciledCompleted).toHaveBeenCalledOnce();
+    expect(createCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: expect.objectContaining({
+          executed: 0,
+          reconciled: 1,
+          skipped: 0,
+          results: [
+            expect.objectContaining({
+              runId: "extfx-crossed",
+              status: "reconciled",
+              replayOutcome: "duplicate",
+              resumeState: "completed",
+              message: expect.stringContaining("without resending"),
             }),
           ],
         }),
@@ -3647,31 +3751,67 @@ describe("durable-execution-service orchestration workflow", () => {
   });
 
   it("publishes a known pre-provider durable failure exactly once after trace reconciliation", async () => {
-    const run = { ...buildRunWithPayload("chat.turn.execute", {
-      version: "chat.turn.execute.v1", sessionId: "session-1", turnId: "turn-1", userMessageId: "user-1",
-      assistantMessageId: "assistant-1", branchKind: "new", threadEventType: "chat_thread_turn_appended",
-      request: { content: "Read the admitted note." },
-    }), status: "failed" as const };
-    let trace = { turnId: "turn-1", sessionId: "session-1", userMessageId: "user-1", assistantMessageId: "assistant-1",
-      status: "running", durable: { runId: run.runId, status: "running" } } as ChatTurnTraceRecord;
+    const run = {
+      ...buildRunWithPayload("chat.turn.execute", {
+        version: "chat.turn.execute.v1",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        userMessageId: "user-1",
+        assistantMessageId: "assistant-1",
+        branchKind: "new",
+        threadEventType: "chat_thread_turn_appended",
+        request: { content: "Read the admitted note." },
+      }),
+      status: "failed" as const,
+    };
+    let trace = {
+      turnId: "turn-1",
+      sessionId: "session-1",
+      userMessageId: "user-1",
+      assistantMessageId: "assistant-1",
+      status: "running",
+      durable: { runId: run.runId, status: "running" },
+    } as ChatTurnTraceRecord;
     const host = {
       storage: {
         runImmediateTransaction: async (work: () => unknown) => await work(),
         durableRuns: { getRun: vi.fn(() => run) },
         chatTurnTraces: {
-          get: vi.fn(() => trace), getForUpdate: vi.fn(() => trace),
+          get: vi.fn(() => trace),
+          getForUpdate: vi.fn(() => trace),
           patch: vi.fn((_id, patch) => (trace = { ...trace, ...patch })),
-          patchIfStatus: vi.fn((_id, statuses, patch) => statuses.includes(trace.status) ? (trace = { ...trace, ...patch }) : undefined),
+          patchIfStatus: vi.fn((_id, statuses, patch) =>
+            statuses.includes(trace.status) ? (trace = { ...trace, ...patch }) : undefined,
+          ),
         },
-        chatToolRuns: { listByTurn: vi.fn(() => []) }, chatStreamEvents: { listByTurn: vi.fn(() => []) },
-        chatMessages: { get: vi.fn(() => undefined) }, sessions: { getBySessionId: vi.fn(() => ({ sessionId: "session-1", workspaceId: "default" })) },
+        chatToolRuns: { listByTurn: vi.fn(() => []) },
+        chatStreamEvents: { listByTurn: vi.fn(() => []) },
+        chatMessages: { get: vi.fn(() => undefined) },
+        sessions: { getBySessionId: vi.fn(() => ({ sessionId: "session-1", workspaceId: "default" })) },
       },
-      persistChatStreamChunk: vi.fn(), publishRealtime: vi.fn(), recordDevDiagnostic: vi.fn(),
+      persistChatStreamChunk: vi.fn(),
+      publishRealtime: vi.fn(),
+      recordDevDiagnostic: vi.fn(),
     };
     await markDurableWorkflowUnrecoverable(host as never, run, "Explicit context access revalidation is unavailable.");
     await markDurableWorkflowUnrecoverable(host as never, run, "Explicit context access revalidation is unavailable.");
-    expect(trace).toMatchObject({ status: "failed", failure: { failureClass: "unknown", message: "Explicit context access revalidation is unavailable.", retryable: false } });
-    expect(host.persistChatStreamChunk).toHaveBeenCalledExactlyOnceWith({ type: "error", sessionId: "session-1", turnId: "turn-1", error: "Explicit context access revalidation is unavailable." }, run.runId);
+    expect(trace).toMatchObject({
+      status: "failed",
+      failure: {
+        failureClass: "unknown",
+        message: "Explicit context access revalidation is unavailable.",
+        retryable: false,
+      },
+    });
+    expect(host.persistChatStreamChunk).toHaveBeenCalledExactlyOnceWith(
+      {
+        type: "error",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        error: "Explicit context access revalidation is unavailable.",
+      },
+      run.runId,
+    );
   });
 
   it("preserves a location answer and supplies verified configuration as server context on resume", async () => {

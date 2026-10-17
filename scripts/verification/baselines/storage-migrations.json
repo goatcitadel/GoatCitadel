@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 267,
+      "expectedCount": 268,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 267,
+      "expectedLastVersion": 268,
       "migrations": [
         {
           "version": 1,
@@ -1877,15 +1877,22 @@
           "groupName": "canonical",
           "definitionSha256": "8b38d50fcbf28bb106a5d08cf02e17c136602d2565d5c53ff4da9f7dc1888d68",
           "implementationSha256": "a51cfb9ff94b08dceeca9b014909854fc65b37d0badcf0c0b4cd25c746793683"
+        },
+        {
+          "version": 268,
+          "name": "external_side_effect_replay_record",
+          "groupName": "canonical",
+          "definitionSha256": "105f693d3129c342edda5ed0a495c2f9bd91bd1fb76e79defbd362a1dbd17ff0",
+          "implementationSha256": "05cab7216f4e13e919ba0df693dc1af86dbe025fd25cb2bdbcc9c6e738084de4"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 215,
+      "expectedCount": 216,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 215,
+      "expectedLastVersion": 216,
       "migrations": [
         {
           "version": 1,
@@ -3181,6 +3188,13 @@
           "name": "pause_dormant_no_agent_cron_jobs",
           "definitionSha256": "35123b65f168097cdbebc38887ce767b9aca66894d99e77ae67a169aed209c33",
           "runtimeIntegritySha256": "a8601087087845ba7deafc8fc55e1d631cb369ba423ab956e700b142ffa6d385"
+        },
+        {
+          "version": 216,
+          "name": "external_side_effect_replay_record",
+          "definitionSha256": "20c1a479ac95d016db33c6812bbde7075d9a23d0500e45b85423ecb95801876a",
+          "sqlPayloadSha256": "467c542c0cf38a4da5a70081a0fc0625fedee1690b08ed7acb49a20394f8606c",
+          "runtimeIntegritySha256": "1368d55a32906a665fd9209b3346e9667242b705d200a2fc19238a462f65649d"
         }
       ]
     }

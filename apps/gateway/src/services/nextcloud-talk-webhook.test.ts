@@ -3,6 +3,7 @@ import {
   buildNextcloudTalkSignature,
   deriveNextcloudTalkWebhookIdempotencyKey,
   isNextcloudTalkWebhookPath,
+  NEXTCLOUD_TALK_VOICE_NOT_TRANSCRIBED_CONTENT,
   normalizeNextcloudTalkWebhookPayload,
   verifyNextcloudTalkSignature,
 } from "./nextcloud-talk-webhook.js";
@@ -293,5 +294,51 @@ describe("nextcloudTalkWebhook utilities", () => {
         room: "room-from-target",
       }),
     );
+  });
+
+  it("labels shared voice files honestly because Talk bots cannot download shared media", () => {
+    const buildPayload = (message: string, mimetype: string) => ({
+      type: "Create",
+      actor: { type: "Person", id: "users/ada", name: "Ada" },
+      object: {
+        type: "Note",
+        id: "1900",
+        name: "",
+        content: JSON.stringify({
+          message,
+          parameters: { file: { type: "file", id: "4242", name: "Talk recording.mp3", mimetype } },
+        }),
+      },
+      target: { type: "Collection", id: "room-42", name: "Room" },
+    });
+
+    const voiceOnly = normalizeNextcloudTalkWebhookPayload({
+      connectionId: "conn-1",
+      payload: buildPayload("{file}", "audio/mpeg"),
+    });
+    expect(voiceOnly).toEqual(
+      expect.objectContaining({
+        kind: "message",
+        content: NEXTCLOUD_TALK_VOICE_NOT_TRANSCRIBED_CONTENT,
+        metadata: expect.objectContaining({ voiceAttachment: { fileId: "4242", mimeType: "audio/mpeg" } }),
+      }),
+    );
+    expect(NEXTCLOUD_TALK_VOICE_NOT_TRANSCRIBED_CONTENT).toBe(
+      "[voice message received — Nextcloud Talk bots cannot download shared media, so it was not transcribed]",
+    );
+
+    const withCaption = normalizeNextcloudTalkWebhookPayload({
+      connectionId: "conn-1",
+      payload: buildPayload("listen {file}", "audio/ogg"),
+    });
+    expect(withCaption).toEqual(
+      expect.objectContaining({ content: `${NEXTCLOUD_TALK_VOICE_NOT_TRANSCRIBED_CONTENT} listen` }),
+    );
+
+    const image = normalizeNextcloudTalkWebhookPayload({
+      connectionId: "conn-1",
+      payload: buildPayload("{file}", "image/png"),
+    });
+    expect(image).toEqual(expect.objectContaining({ content: "Talk recording.mp3" }));
   });
 });

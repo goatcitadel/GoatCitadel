@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeChannelCapabilities,
+  listChannelRuleKeys,
   planChannelRichMessageDelivery,
   planChannelTextDelivery,
 } from "./channel-core.js";
@@ -263,7 +264,7 @@ describe("describeChannelCapabilities", () => {
       topic: "goatcitadel-ops",
       tokenEnv: "NTFY_TOKEN",
     });
-    expect(ntfyOutbound.supportedActions).toEqual(["channel.send", "channel.activity"]);
+    expect(ntfyOutbound.supportedActions).toEqual(["channel.send", "channel.unsend", "channel.activity"]);
     expect(ntfyOutbound.inboundModes).toEqual(["none"]);
     expect(ntfyOutbound.runtimePosture).toMatchObject({
       outboundTransport: "api",
@@ -744,3 +745,197 @@ function startsWithDanglingLowSurrogate(value: string): boolean {
   const code = value.charCodeAt(0);
   return code >= 0xdc00 && code <= 0xdfff;
 }
+
+describe("platform-unsupported channel actions", () => {
+  it("declares WhatsApp unsend as a platform limit, not a missing wire-up", () => {
+    const capabilities = describeChannelCapabilities("whatsapp", { phoneNumberId: "1", accessTokenEnv: "WA_TOKEN" });
+    expect(capabilities.supportedActions).not.toContain("channel.unsend");
+    expect(capabilities.platformUnsupportedActions["channel.unsend"]).toMatch(/no endpoint for deleting/i);
+    const text = [capabilities.runtimePosture.operatorSummary, ...capabilities.supportNotes].join(" ");
+    expect(text).not.toMatch(/still incomplete|not wired|still not/i);
+  });
+
+  it("declares Slack typing as a platform limit and keeps Slack react/unsend", () => {
+    const capabilities = describeChannelCapabilities("slack", { botTokenEnv: "SLACK_BOT_TOKEN" });
+    expect(capabilities.supportedActions).not.toContain("channel.typing");
+    expect(capabilities.platformUnsupportedActions["channel.typing"]).toMatch(/no typing indicator for bot messages/i);
+    expect(capabilities.platformUnsupportedActions["channel.unsend"]).toBeUndefined();
+  });
+
+  it("declares Nextcloud Talk unsend and the ntfy react/typing limits", () => {
+    expect(
+      describeChannelCapabilities("nextcloud-talk", {}).platformUnsupportedActions["channel.unsend"],
+    ).toBeDefined();
+    const ntfy = describeChannelCapabilities("ntfy", {}).platformUnsupportedActions;
+    expect(Object.keys(ntfy).sort()).toEqual(["channel.react", "channel.typing"]);
+  });
+
+  it("resolves Google Chat unsend by mode and never marks supported actions unsupported", () => {
+    const webhook = describeChannelCapabilities("google-chat", {
+      webhookUrl: "https://chat.googleapis.com/v1/spaces/A/messages",
+    });
+    expect(webhook.platformUnsupportedActions["channel.typing"]).toBeDefined();
+    expect(webhook.platformUnsupportedActions["channel.unsend"]).toMatch(/webhook/i);
+    const app = describeChannelCapabilities("google-chat", { serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY" });
+    expect(app.platformUnsupportedActions["channel.unsend"]).toBeUndefined();
+    expect(app.supportedActions).toContain("channel.unsend");
+  });
+
+  it("defaults to an empty map and never overlaps supported actions", () => {
+    expect(describeChannelCapabilities("telegram", {}).platformUnsupportedActions).toEqual({});
+    for (const key of ["slack", "whatsapp", "ntfy", "nextcloud-talk", "google-chat", "teams"]) {
+      const c = describeChannelCapabilities(key, { botTokenEnv: "X", serviceAccountKeyEnv: "Y" });
+      for (const action of Object.keys(c.platformUnsupportedActions)) {
+        expect(c.supportedActions).not.toContain(action);
+      }
+    }
+  });
+});
+
+describe("provider typing support", () => {
+  it.each(["mattermost", "signal", "whatsapp"])(
+    "advertises channel.typing and a native typing effect for %s",
+    (key) => {
+      const capabilities = describeChannelCapabilities(key, {});
+      expect(capabilities.supportedActions).toContain("channel.typing");
+      expect(capabilities.activityCapabilities.nativeEffects).toContain("typing");
+      expect(capabilities.platformUnsupportedActions?.["channel.typing"]).toBeUndefined();
+    },
+  );
+});
+
+describe("inbound voice support notes", () => {
+  it("tells operators how Slack and Discord voice messages are transcribed", () => {
+    const slack = describeChannelCapabilities("slack", { botToken: "token", signingSecret: "secret" });
+    expect(slack.supportNotes.join(" ")).toContain("Slack audio file shares are transcribed");
+    const slackNoIngress = describeChannelCapabilities("slack", { botToken: "token" });
+    expect(slackNoIngress.supportNotes.join(" ")).not.toContain("audio file shares are transcribed");
+
+    const discord = describeChannelCapabilities("discord", { runtimeMode: "gateway", botToken: "token" });
+    expect(discord.supportNotes.join(" ")).toContain("Discord voice messages");
+  });
+
+  it("says plainly that Nextcloud Talk voice messages are not transcribed", () => {
+    const nextcloud = describeChannelCapabilities("nextcloud-talk", { baseUrl: "https://cloud.test", token: "t" });
+    expect(nextcloud.supportNotes).toEqual(
+      expect.arrayContaining([
+        "Nextcloud Talk bots cannot download shared media, so inbound voice messages are not transcribed: the agent receives a notice that a voice message arrived instead.",
+      ]),
+    );
+  });
+});
+
+describe("channel action matrix (#354)", () => {
+  const MATRIX_ACTIONS = ["channel.react", "channel.unsend", "channel.typing"] as const;
+
+  /**
+   * Every connection mode each channel rule distinguishes. An action missing in
+   * one mode but supported in another mode of the same channel is mode-gated:
+   * the capability text tells the operator which connection mode to use.
+   */
+  const REPRESENTATIVE_CONFIGS: Record<string, Array<Record<string, unknown>>> = {
+    slack: [{ botTokenEnv: "SLACK_BOT_TOKEN" }, { webhookUrl: "https://hooks.slack.com/services/A/B/C" }],
+    discord: [
+      { runtimeMode: "gateway", botTokenEnv: "DISCORD_BOT_TOKEN" },
+      { runtimeMode: "bridge", botTokenEnv: "DISCORD_BOT_TOKEN" },
+      { webhookUrl: "https://discord.com/api/webhooks/1/abc" },
+    ],
+    telegram: [{ botTokenEnv: "TELEGRAM_BOT_TOKEN" }],
+    ntfy: [{ baseUrl: "https://ntfy.sh", topic: "goat" }],
+    "google-chat": [
+      { webhookUrl: "https://chat.googleapis.com/v1/spaces/A/messages" },
+      { serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY" },
+    ],
+    teams: [{ webhookUrl: "https://example.webhook.office.com/webhookb2/x" }],
+    whatsapp: [{ phoneNumberId: "1", accessTokenEnv: "WA_TOKEN" }],
+    signal: [{ baseUrl: "http://127.0.0.1:8080" }],
+    mattermost: [{ serverUrl: "https://mm.example.test", botTokenEnv: "MM_TOKEN" }],
+    imessage: [{ bridgeUrl: "http://127.0.0.1:1234", passwordEnv: "BB_PASSWORD" }],
+    "nextcloud-talk": [{ baseUrl: "https://cloud.example.test", tokenEnv: "NC_TOKEN" }],
+    line: [{ channelAccessTokenEnv: "LINE_TOKEN" }],
+    zalo: [{ accessTokenEnv: "ZALO_TOKEN" }],
+    zalouser: [{ bridgeUrl: "http://127.0.0.1:3000" }],
+  };
+
+  /**
+   * Channel × action cells that are neither implemented nor declared as a
+   * platform limit. Each entry needs a reason; keep this list honest and short.
+   */
+  const SCOPE_EXCLUDED = "Excluded from the WS5 channel-actions scope (#354 covers the core channel set only).";
+  const KNOWN_ACTION_GAPS: Record<string, Partial<Record<(typeof MATRIX_ACTIONS)[number], string>>> = {
+    line: { "channel.react": SCOPE_EXCLUDED, "channel.unsend": SCOPE_EXCLUDED, "channel.typing": SCOPE_EXCLUDED },
+    zalo: { "channel.react": SCOPE_EXCLUDED, "channel.unsend": SCOPE_EXCLUDED, "channel.typing": SCOPE_EXCLUDED },
+    zalouser: {
+      "channel.react": SCOPE_EXCLUDED,
+      "channel.unsend": SCOPE_EXCLUDED,
+      "channel.typing": SCOPE_EXCLUDED,
+    },
+  };
+
+  it("has representative configs for every channel rule", () => {
+    expect(Object.keys(REPRESENTATIVE_CONFIGS).sort()).toEqual(listChannelRuleKeys().sort());
+  });
+
+  it.each(listChannelRuleKeys())(
+    "%s implements, declares, mode-gates, or lists every react/unsend/typing cell",
+    (key) => {
+      const modes = (REPRESENTATIVE_CONFIGS[key] ?? [{}]).map((config) => describeChannelCapabilities(key, config));
+      for (const action of MATRIX_ACTIONS) {
+        const supportedInSomeMode = modes.some((capabilities) => capabilities.supportedActions.includes(action));
+        for (const capabilities of modes) {
+          const supported = capabilities.supportedActions.includes(action);
+          const declared = capabilities.platformUnsupportedActions[action];
+          expect(supported && declared !== undefined, `${key} ${action} is both supported and declared`).toBe(false);
+          const knownGap = KNOWN_ACTION_GAPS[key]?.[action];
+          expect(
+            supported || declared !== undefined || supportedInSomeMode || knownGap !== undefined,
+            `${key} ${action} is neither implemented, declared platform-unsupported, mode-gated, nor a listed gap`,
+          ).toBe(true);
+          if (knownGap !== undefined) {
+            expect(
+              supportedInSomeMode || declared !== undefined,
+              `${key} ${action} is listed as a gap but resolved`,
+            ).toBe(false);
+          }
+        }
+      }
+    },
+  );
+
+  it("declares the verified platform limits added for #354", () => {
+    expect(describeChannelCapabilities("nextcloud-talk", {}).platformUnsupportedActions["channel.typing"]).toMatch(
+      /no typing-indicator endpoint/i,
+    );
+    for (const config of REPRESENTATIVE_CONFIGS["google-chat"] ?? []) {
+      expect(describeChannelCapabilities("google-chat", config).platformUnsupportedActions["channel.react"]).toMatch(
+        /user authentication/i,
+      );
+    }
+    const webhook = describeChannelCapabilities("discord", { webhookUrl: "https://discord.com/api/webhooks/1/abc" });
+    expect(webhook.platformUnsupportedActions["channel.typing"]).toBe(
+      "Discord webhooks cannot send typing indicators.",
+    );
+    expect(webhook.platformUnsupportedActions["channel.react"]).toBe("Discord webhooks cannot add reactions.");
+    const bridge = describeChannelCapabilities("discord", { runtimeMode: "bridge", botTokenEnv: "DISCORD_BOT_TOKEN" });
+    expect(bridge.supportedActions).toContain("channel.typing");
+    expect(bridge.platformUnsupportedActions).toEqual({});
+  });
+
+  it("advertises ntfy unsend and iMessage typing", () => {
+    const ntfy = describeChannelCapabilities("ntfy", { baseUrl: "https://ntfy.sh", topic: "goat" });
+    expect(ntfy.supportedActions).toContain("channel.unsend");
+    expect(Object.keys(ntfy.platformUnsupportedActions).sort()).toEqual(["channel.react", "channel.typing"]);
+    const imessage = describeChannelCapabilities("imessage", { bridgeUrl: "http://127.0.0.1:1234" });
+    expect(imessage.supportedActions).toContain("channel.typing");
+    expect(imessage.activityCapabilities.nativeEffects).toContain("typing");
+  });
+
+  it("names the media hosts Slack and Discord voice need in the network allowlist", () => {
+    const slack = describeChannelCapabilities("slack", { botToken: "token", signingSecret: "secret" });
+    expect(slack.supportNotes.join(" ")).toContain("files.slack.com must be in the network allowlist");
+    const discord = describeChannelCapabilities("discord", { runtimeMode: "gateway", botToken: "token" });
+    const discordNotes = discord.supportNotes.join(" ");
+    expect(discordNotes).toContain("cdn.discordapp.com");
+    expect(discordNotes).toContain("media.discordapp.net");
+  });
+});

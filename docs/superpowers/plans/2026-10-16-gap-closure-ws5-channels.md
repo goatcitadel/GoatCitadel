@@ -388,7 +388,7 @@ export function normalizeGoogleChatEvent(input: { connectionId: string; payload:
   - `slack`: `{ "channel.typing": "Slack has no typing-indicator API for bots (only legacy RTM, which bot tokens cannot use)." }`
   - `nextcloud-talk`: `{ "channel.unsend": "Nextcloud Talk bots cannot delete messages through the bot API." }`. Only add this if the docs confirm it; otherwise leave it out.
   - `google-chat`: `{ "channel.typing": "Google Chat has no typing-indicator API." }`
-  - `ntfy`: `{ "channel.react": …, "channel.unsend": …, "channel.typing": "ntfy topics are one-way notifications." }`
+  - `ntfy`: `{ "channel.react": …, "channel.typing": … }`. (Final fix: ntfy unsend is implemented as `DELETE /<topic>/<message id>`, so it is no longer declared platform-unsupported.)
 - Modify: `apps/gateway/src/services/comms-service.ts` (`commsTyping`) and `comms-executor.ts` (`commsReact`/`commsUnsend` default branches). When the action is in `platformUnsupportedActions`, return or throw with that reason, and with `status: "unsupported"` and `reason` prefixed `"Platform does not support this: "`, instead of the generic "not supported" text.
 - Modify: `apps/mission-control-next/src/features/native-routes/settings/channel-setup/ChannelJourneyEvidence.tsx:28`. After the supported list, render "Not offered by the platform: typing (Slack has no …)" when the map is non-empty. Use plain operator language, per DESIGN.md / PRODUCT.md. Update any fixture that constructs `ChannelCapabilities` literally; `git grep -n "supportedDeliveryActions:"` finds them.
 

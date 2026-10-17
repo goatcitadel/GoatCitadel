@@ -59,6 +59,10 @@ export class ExternalSideEffectRunRepository {
   private readonly isStatusStaleStmt;
   private readonly markFailureIfStatusStaleStmt;
   private readonly attachEnvelopeStmt;
+  private readonly markCompletedIfStatusStmt;
+  private readonly attachReplayRecordStmt;
+  private readonly getReplayRecordStmt;
+  private readonly hasReplayRecordsStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     const databaseNowInstant = db.dialect === "postgres" ? "statement_timestamp()" : "julianday('now')";
@@ -152,10 +156,36 @@ export class ExternalSideEffectRunRepository {
           external_reference_id = @externalReferenceId,
           envelope_id = @envelopeId,
           error_text = NULL,
+          replay_record_json = NULL,
           completed_at = @completedAt,
           updated_at = ${databaseNowText}
       WHERE run_id = @runId
     `);
+    this.markCompletedIfStatusStmt = db.prepare(`
+      UPDATE external_side_effect_runs
+      SET status = 'completed',
+          replay_outcome = @replayOutcome,
+          resume_state = 'completed',
+          response_payload_json = @responsePayloadJson,
+          external_reference_id = @externalReferenceId,
+          envelope_id = @envelopeId,
+          error_text = NULL,
+          replay_record_json = NULL,
+          completed_at = @completedAt,
+          updated_at = ${databaseNowText}
+      WHERE run_id = @runId
+        AND status = @expectedStatus
+    `);
+    this.attachReplayRecordStmt = db.prepare(`
+      UPDATE external_side_effect_runs
+      SET replay_record_json = @sealedRecordJson
+      WHERE run_id = @runId
+        AND replay_record_json IS NULL
+    `);
+    this.getReplayRecordStmt = db.prepare("SELECT replay_record_json FROM external_side_effect_runs WHERE run_id = ?");
+    this.hasReplayRecordsStmt = db.prepare(
+      "SELECT run_id FROM external_side_effect_runs WHERE replay_record_json IS NOT NULL LIMIT 1",
+    );
     this.markFailureStmt = db.prepare(`
       UPDATE external_side_effect_runs
       SET status = @status,
@@ -356,6 +386,52 @@ export class ExternalSideEffectRunRepository {
       completedAt: now,
     });
     return this.get(runId);
+  }
+
+  /**
+   * Compare-and-set completion for reconciliation: settles only the still-matching
+   * status, so a concurrent winner is never overwritten. Returns the current row
+   * (unchanged when the CAS missed). Clears the sealed replay record on success.
+   */
+  public markCompletedIfStatus(
+    runId: string,
+    expectedStatus: ExternalSideEffectRunStatus,
+    input: {
+      replayOutcome?: IntegrationExternalWritebackReplayOutcome;
+      responsePayload?: Record<string, unknown>;
+      externalReferenceId?: string;
+      envelopeId?: string;
+    } = {},
+    now = new Date().toISOString(),
+  ): ExternalSideEffectRunRecord {
+    this.markCompletedIfStatusStmt.run({
+      runId,
+      expectedStatus,
+      replayOutcome: input.replayOutcome ?? "claimed",
+      responsePayloadJson: serializeJson(input.responsePayload),
+      externalReferenceId: input.externalReferenceId ?? null,
+      envelopeId: input.envelopeId ?? null,
+      completedAt: now,
+    });
+    return this.get(runId);
+  }
+
+  /**
+   * Stores an opaque sealed replay record once. The column is write-once so a
+   * later attempt cannot replace the record a crossed run may need for replay.
+   */
+  public attachReplayRecord(runId: string, sealedRecordJson: string): boolean {
+    return this.attachReplayRecordStmt.run({ runId, sealedRecordJson }).changes === 1;
+  }
+
+  public getReplayRecord(runId: string): string | undefined {
+    const row = this.getReplayRecordStmt.get(runId) as { replay_record_json?: unknown } | undefined;
+    return typeof row?.replay_record_json === "string" ? row.replay_record_json : undefined;
+  }
+
+  /** True while any run still holds a sealed replay record (records are cleared on completion). */
+  public hasReplayRecords(): boolean {
+    return this.hasReplayRecordsStmt.get() !== undefined;
   }
 
   public markFailure(

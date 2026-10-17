@@ -750,6 +750,20 @@ describe("tool executor edge coverage", () => {
       }),
     );
     expect(unsupportedUnsend).toMatchObject({ status: "failed", deliveryStatus: "not_available" });
+
+    const whatsappUnsend = await executeTool(
+      request("channel.unsend", { connectionId: "wa-unsend", messageId: "wamid.1" }),
+      commsConfig,
+      commsStorage({
+        connectionId: "wa-unsend",
+        key: "whatsapp",
+        config: { phoneNumberId: "1", accessToken: "x" },
+      }),
+    );
+    expect(whatsappUnsend).toMatchObject({ status: "failed", deliveryStatus: "not_available" });
+    expect(JSON.stringify(whatsappUnsend)).toContain(
+      "Platform does not support this: WhatsApp Cloud API has no endpoint for deleting a sent message.",
+    );
   });
 
   it("retries safe HTTP reads but never retries ambiguous HTTP mutations", async () => {

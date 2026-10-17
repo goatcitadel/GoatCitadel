@@ -7,6 +7,7 @@ import {
 } from "../services/whatsapp-webhook.js";
 import {
   createWebhookRouteOptions,
+  readWebhookVoiceInboundEnabled,
   resolveWhatsAppAppSecret,
   resolveWhatsAppVerifyToken,
 } from "./integration-webhooks-shared.js";
@@ -127,7 +128,7 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
         const normalized = normalizeWhatsAppWebhookPayloads({
           connectionId,
           payload: request.body,
-          voiceInboundEnabled: (await fastify.services.integrationWebhooks.isVoiceInboundEnabled?.()) === true,
+          voiceInboundEnabled: await readWebhookVoiceInboundEnabled(fastify, request, "whatsapp"),
         });
         const messages = normalized.filter((event) => event.kind === "message");
         if (messages.length === 0) {

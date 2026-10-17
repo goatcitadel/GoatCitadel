@@ -508,3 +508,28 @@ describe("MutationIdempotencyRepository", () => {
     assert.equal(revived.record.dispatchedAt, undefined);
   });
 });
+
+describe("MutationIdempotencyRepository reconciled completion", () => {
+  const identity = {
+    method: "POST",
+    routePath: "external_side_effect:reconcile",
+    idempotencyKey: "reconcile-key",
+    actorScope: "operator:reconcile",
+  };
+
+  it("markReconciledCompleted settles only unknown_after_send", () => {
+    const repo = createRepo();
+    const claim = repo.claim({ ...identity, payloadHash: "hash", now: "2026-10-16T00:00:00.000Z" });
+    assert.equal(claim.outcome, "claimed");
+    assert.equal(repo.markReconciledCompleted(identity), false);
+    assert.equal(repo.get(identity)?.status, "pending");
+
+    assert.equal(repo.markUnknownAfterSend({ ...identity, claimToken: claim.record.claimToken! }), true);
+    assert.equal(repo.get(identity)?.status, "unknown_after_send");
+    assert.equal(repo.markReconciledCompleted({ ...identity, updatedAt: "2026-10-16T01:00:00.000Z" }), true);
+    const settled = repo.get(identity);
+    assert.equal(settled?.status, "completed");
+    assert.equal(settled?.claimExpiresAt, undefined);
+    assert.equal(repo.markReconciledCompleted(identity), false);
+  });
+});

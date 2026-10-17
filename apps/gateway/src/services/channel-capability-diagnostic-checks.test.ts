@@ -146,6 +146,7 @@ describe("buildChannelCapabilityDiagnosticChecks", () => {
 function createCapabilities(overrides?: Partial<ChannelCapabilities>): ChannelCapabilities {
   return {
     channelKey: "discord",
+    platformUnsupportedActions: {},
     supportedActions: ["channel.send"],
     supportedDeliveryActions: ["channel.send"],
     supportedAttachmentSources: [],

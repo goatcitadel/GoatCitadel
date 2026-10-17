@@ -14,6 +14,7 @@ import { logger } from "@goatcitadel/gateway-core";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { wardRequiresDryRun } from "./dry-run-commit-service.js";
+import { reconcileCrossedExternalSideEffectRun } from "./external-side-effect-reconciliation.js";
 
 const log = logger.child("external-side-effect-runner");
 const EXTERNAL_SIDE_EFFECT_DIGEST_DOMAIN_KEY = "goatcitadel:external-side-effect-digest:v1";
@@ -73,10 +74,27 @@ export interface ExternalSideEffectRunStore {
     now?: string,
   ): Promise<ExternalSideEffectRunRecord>;
   isStatusStale?(runId: string, expectedStatus: ExternalSideEffectRunStatus, staleAfterMs: number): Promise<boolean>;
+  /** Status-CAS completion used by reconciliation; returns the current row, unchanged on a miss. */
+  markCompletedIfStatus?(
+    runId: string,
+    expectedStatus: ExternalSideEffectRunStatus,
+    input?: {
+      replayOutcome?: IntegrationExternalWritebackReplayOutcome;
+      responsePayload?: Record<string, unknown>;
+      externalReferenceId?: string;
+      envelopeId?: string;
+    },
+    now?: string,
+  ): Promise<ExternalSideEffectRunRecord>;
 }
 
 type MutationIdempotencyStore = Pick<AsyncStorage["mutationIdempotency"], "claim" | "markCompleted" | "markFailed"> &
-  Partial<Pick<AsyncStorage["mutationIdempotency"], "discardPending" | "markDispatched" | "markUnknownAfterSend">>;
+  Partial<
+    Pick<
+      AsyncStorage["mutationIdempotency"],
+      "discardPending" | "markDispatched" | "markUnknownAfterSend" | "markReconciledCompleted"
+    >
+  >;
 
 /**
  * Lease applied to every run whose caller leaves `claimLeaseDurationMs` unset,
@@ -348,9 +366,19 @@ export interface IdempotentExternalSideEffectRunInput<TValue> extends ExternalSi
    */
   isExternalCallProvenNotDispatched?(error: unknown): boolean;
   execute(claim: ExternalSideEffectExecutionContext): Promise<TValue>;
+  /**
+   * Optional read-only provider probe for a run that already crossed the
+   * dispatch boundary. The replay worker uses it to settle a proven-landed
+   * effect `completed`; it never resends a crossed run.
+   */
+  reconcileExternalOutcome?(): Promise<ExternalSideEffectProbeResult>;
   /** Optional canonical completion commit. When present it owns all terminal stores atomically. */
   commitCompleted?(claim: ExternalSideEffectExecutionContext, value: TValue): Promise<void>;
 }
+
+export type ExternalSideEffectProbeResult =
+  | { found: true; externalReferenceId?: string; output?: Record<string, unknown> }
+  | { found: false; reason: string };
 
 export type IdempotentExternalSideEffectRunResult<TValue> =
   | {
@@ -379,7 +407,9 @@ export type ExternalSideEffectReplayWorkerSkipReason =
   | "blocked_or_unrecoverable"
   | "idempotency_unavailable"
   | "job_unavailable"
-  | "job_identity_mismatch";
+  | "job_identity_mismatch"
+  | "external_outcome_not_found"
+  | "external_call_in_flight";
 
 export type ExternalSideEffectReplayWorkerResult<TValue> =
   | {
@@ -398,6 +428,12 @@ export type ExternalSideEffectReplayWorkerResult<TValue> =
       result: Extract<IdempotentExternalSideEffectRunResult<TValue>, { status: "failed" }>;
     }
   | {
+      status: "reconciled";
+      run: ExternalSideEffectRunRecord;
+      externalReferenceId?: string;
+      message: string;
+    }
+  | {
       status: "skipped";
       run: ExternalSideEffectRunRecord;
       reason: ExternalSideEffectReplayWorkerSkipReason;
@@ -412,6 +448,25 @@ export interface ExternalSideEffectReplayWorkerInput<TValue> {
   buildJob(run: ExternalSideEffectRunRecord): Promise<IdempotentExternalSideEffectRunInput<TValue> | undefined>;
 }
 
+/**
+ * The mutation identity scope every claim, run row and provider-side dedupe identifier
+ * derives from. Exported so probes built outside a claim derive exactly what the claim will.
+ */
+export function resolveExternalSideEffectRouteIdentity(
+  input: Pick<ExternalSideEffectClaimInput, "boundary" | "catalogId" | "connectionId" | "actionId" | "actorScope">,
+): { actorScope: string; routePath: string } {
+  return {
+    actorScope: input.actorScope?.trim() || input.connectionId || input.catalogId || "",
+    routePath: [
+      "external_side_effect",
+      input.boundary,
+      input.catalogId ?? "unknown_catalog",
+      input.connectionId ?? "unknown_connection",
+      input.actionId ?? "unknown_action",
+    ].join(":"),
+  };
+}
+
 export async function claimIdempotentExternalSideEffect(
   input: ExternalSideEffectClaimInput,
 ): Promise<ExternalSideEffectClaimResult> {
@@ -420,14 +475,7 @@ export async function claimIdempotentExternalSideEffect(
   const idempotencyKey =
     input.idempotencyKey?.trim() ||
     hashStableIntentParts([input.boundary, input.catalogId, input.connectionId, input.actionId, payloadHash]);
-  const actorScope = input.actorScope?.trim() || input.connectionId || input.catalogId || "";
-  const routePath = [
-    "external_side_effect",
-    input.boundary,
-    input.catalogId ?? "unknown_catalog",
-    input.connectionId ?? "unknown_connection",
-    input.actionId ?? "unknown_action",
-  ].join(":");
+  const { actorScope, routePath } = resolveExternalSideEffectRouteIdentity(input);
   const { checkedAt } = input;
   const mutationStore = input.mutationStore;
   const sideEffectRunStore = input.sideEffectRunStore;
@@ -547,12 +595,18 @@ export async function runReplaySafeExternalSideEffectWorker<TValue>(
   for (const run of input.runs.slice(0, limit)) {
     const eligibility = readExternalSideEffectReplayEligibility(run);
     if (!eligibility.eligible) {
-      results.push({
-        status: "skipped",
-        run,
-        reason: eligibility.reason,
-        message: eligibility.message,
-      });
+      const reconciled =
+        eligibility.reason === "external_boundary_already_crossed"
+          ? await reconcileCrossedReplayRun(run, input)
+          : undefined;
+      results.push(
+        reconciled ?? {
+          status: "skipped",
+          run,
+          reason: eligibility.reason,
+          message: eligibility.message,
+        },
+      );
       continue;
     }
     const job = await input.buildJob(run);
@@ -659,14 +713,7 @@ export async function runIdempotentExternalSideEffect<TValue>(
         input.payload,
         normalizeExternalDestinationFingerprint(input.externalDestinationFingerprint),
       ),
-      actorScope: input.actorScope?.trim() || input.connectionId || input.catalogId || "",
-      routePath: [
-        "external_side_effect",
-        input.boundary,
-        input.catalogId ?? "unknown_catalog",
-        input.connectionId ?? "unknown_connection",
-        input.actionId ?? "unknown_action",
-      ].join(":"),
+      ...resolveExternalSideEffectRouteIdentity(input),
     });
     return {
       status: "blocked",
@@ -1038,6 +1085,25 @@ function readExternalSideEffectReplayEligibility(
     reason: "blocked_or_unrecoverable",
     message: "External side-effect run is not recoverable by the replay worker.",
   };
+}
+
+/**
+ * Crossed runs are never resent. A job that supplies a provider read probe may
+ * settle a proven-landed effect; anything else keeps the boundary-crossed skip.
+ */
+async function reconcileCrossedReplayRun<TValue>(
+  run: ExternalSideEffectRunRecord,
+  input: ExternalSideEffectReplayWorkerInput<TValue>,
+): Promise<ExternalSideEffectReplayWorkerResult<TValue> | undefined> {
+  const job = await input.buildJob(run);
+  if (!job) {
+    return undefined;
+  }
+  const identityMismatch = readReplayJobIdentityMismatch(run, job);
+  if (identityMismatch) {
+    return { status: "skipped", run, reason: "job_identity_mismatch", message: identityMismatch };
+  }
+  return reconcileCrossedExternalSideEffectRun(run, job, { checkedAt: input.checkedAt });
 }
 
 function readReplayJobIdentityMismatch<TValue>(
@@ -1551,7 +1617,10 @@ function hashStableJson(value: unknown): string {
   return domainSeparatedDigestHex(stableStringify(value));
 }
 
-function hashExternalSideEffectPayload(value: unknown, externalDestinationFingerprint: string | undefined): string {
+export function hashExternalSideEffectPayload(
+  value: unknown,
+  externalDestinationFingerprint: string | undefined,
+): string {
   return externalDestinationFingerprint
     ? hashStableJson({ externalDestinationFingerprint, payload: value })
     : hashStableJson(value);

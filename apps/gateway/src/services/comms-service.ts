@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
-import { sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
+import { describeChannelPlatformUnsupported, sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
 import type {
   CalendarCreateEventInput,
   CalendarListQuery,
@@ -22,6 +22,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { resolveChannelSendAttachments } from "./channel-attachment-payload.js";
+import { isDiscordGatewayMode } from "./channel-typing-adapters.js";
 import {
   buildExternalSideEffectReplayOutput,
   runIdempotentExternalSideEffect,
@@ -43,7 +44,8 @@ export interface CommsHost {
   }>;
   getIntegrationConnection(connectionId: string): Promise<IntegrationConnection>;
   emitDiscordTyping(connection: IntegrationConnection, input: ChannelTypingInput): Promise<ChannelTypingResult>;
-  emitTelegramTyping(connection: IntegrationConnection, input: ChannelTypingInput): Promise<ChannelTypingResult>;
+  /** Typing for channels without a dedicated runtime service: Telegram, Mattermost, Signal and WhatsApp. */
+  emitProviderTyping(connection: IntegrationConnection, input: ChannelTypingInput): Promise<ChannelTypingResult>;
   emitChannelActivity(
     connection: IntegrationConnection,
     input: ChannelActivityInput,
@@ -329,21 +331,33 @@ export async function commsTyping(host: CommsHost, input: ChannelTypingInput): P
   }
   const capabilities = describeChannelCapabilities(connection.key, connection.config ?? {});
   if (!capabilities.supportedActions.includes("channel.typing")) {
+    const platformReason = describeChannelPlatformUnsupported(
+      connection.key,
+      "channel.typing",
+      capabilities.platformUnsupportedActions,
+    );
     return {
       channelKey: connection.key,
       connectionId: input.connectionId,
       target: input.target,
       supported: false,
       status: "unsupported",
-      reason: `${connection.label} does not advertise typing support in the current runtime mode.`,
+      reason: platformReason ?? `${connection.label} does not advertise typing support in the current runtime mode.`,
     };
   }
 
-  if (connection.key === "discord") {
+  if (connection.key === "discord" && isDiscordGatewayMode(connection.config)) {
     return host.emitDiscordTyping(connection, input);
   }
-  if (connection.key === "telegram") {
-    return host.emitTelegramTyping(connection, input);
+  if (
+    connection.key === "discord" ||
+    connection.key === "telegram" ||
+    connection.key === "mattermost" ||
+    connection.key === "signal" ||
+    connection.key === "whatsapp" ||
+    connection.key === "imessage"
+  ) {
+    return host.emitProviderTyping(connection, input);
   }
 
   return {

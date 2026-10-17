@@ -3,6 +3,11 @@ import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import type { IntegrationChannelPort } from "./integration-channel-service.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
+import {
+  emitProviderTypingWithDeps,
+  isDiscordGatewayMode,
+  normalizeWhatsAppBaseUrl,
+} from "./channel-typing-adapters.js";
 export async function emitChannelActivityImpl(
   deps: IntegrationChannelPort,
   connection: IntegrationConnection,
@@ -29,12 +34,16 @@ export async function emitChannelActivityImpl(
     effects.push(await sendActivityReaction(deps, connection, input, options.emoji));
   }
 
-  if (options.typing) {
+  if (options.typing && connection.key !== "whatsapp") {
     effects.push(await sendActivityTyping(deps, connection, input));
   }
 
   if (connection.key === "whatsapp" && (input.phase === "seen" || options.typing)) {
-    effects.push(await sendWhatsAppReadReceipt(deps, connection, input, { typing: options.typing }));
+    const receipt = await sendWhatsAppReadReceipt(deps, connection, input, { typing: options.typing });
+    if (options.typing) {
+      effects.push(whatsAppTypingEffectFromReceipt(receipt));
+    }
+    effects.push(receipt);
   }
 
   return effects;
@@ -156,7 +165,7 @@ async function sendActivityTyping(
   connection: IntegrationConnection,
   input: ChannelActivityInput,
 ): Promise<ChannelActivityEffectResult> {
-  if (connection.key === "discord") {
+  if (connection.key === "discord" && isDiscordGatewayMode(connection.config)) {
     const result = await deps.discordRuntimeService.sendTyping(
       connection.connectionId,
       input.target,
@@ -173,10 +182,40 @@ async function sendActivityTyping(
   if (connection.key === "telegram") {
     return sendTelegramActivityTyping(deps, connection, input);
   }
-  if (connection.key === "whatsapp") {
-    return { effect: "typing", supported: true, status: "sent", detail: "Sent with WhatsApp read receipt." };
+  if (
+    connection.key === "discord" ||
+    connection.key === "mattermost" ||
+    connection.key === "signal" ||
+    connection.key === "imessage"
+  ) {
+    const result = await emitProviderTypingWithDeps(deps, connection, {
+      connectionId: connection.connectionId,
+      target: input.target,
+      threadId: input.threadId,
+      messageId: input.messageId,
+      signal: input.signal,
+    });
+    return {
+      effect: "typing",
+      supported: result.supported,
+      status: result.status === "sent" ? "sent" : "unsupported",
+      detail: result.reason,
+    };
   }
   return { effect: "typing", supported: false, status: "unsupported" };
+}
+
+/** WhatsApp carries the typing indicator inside the read receipt, so typing mirrors the receipt's outcome. */
+function whatsAppTypingEffectFromReceipt(receipt: ChannelActivityEffectResult): ChannelActivityEffectResult {
+  if (receipt.status === "sent") {
+    return { effect: "typing", supported: true, status: "sent", detail: "Sent with WhatsApp read receipt." };
+  }
+  return {
+    effect: "typing",
+    supported: receipt.supported,
+    status: receipt.status === "failed" ? "failed" : "unsupported",
+    detail: `The WhatsApp read receipt that carries the typing indicator did not send${receipt.detail ? `: ${receipt.detail}` : "."}`,
+  };
 }
 
 async function sendTelegramActivityTyping(
@@ -568,42 +607,6 @@ function normalizeSlackActivityReaction(emoji: string): string {
     default:
       return emoji.trim().replace(/^:/, "").replace(/:$/, "");
   }
-}
-
-function validateWhatsAppBaseUrl(url: string): void {
-  try {
-    const parsed = new URL(url);
-    const hostname = parsed.hostname.toLowerCase();
-    const isAllowedMetaHost =
-      hostname === "graph.facebook.com" ||
-      hostname.endsWith(".facebook.com") ||
-      hostname === "facebook.com" ||
-      hostname.endsWith(".meta.com") ||
-      hostname === "meta.com";
-
-    const isLoopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
-
-    if (!isAllowedMetaHost && !isLoopback) {
-      throw new Error(`WhatsApp outbound URL host "${parsed.hostname}" is not an allowed Meta or localhost domain.`);
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("is not an allowed Meta or localhost domain")) {
-      throw error;
-    }
-    throw new Error(`Invalid WhatsApp baseUrl: ${url}`, { cause: error });
-  }
-}
-
-function normalizeWhatsAppBaseUrl(baseUrl: string | undefined, apiVersion: string | undefined): string {
-  let result: string;
-  if (baseUrl?.trim()) {
-    result = baseUrl.trim().replace(/\/+$/, "");
-  } else {
-    const version = apiVersion?.trim() || "v23.0";
-    result = `https://graph.facebook.com/${version.replace(/^\/+/, "").replace(/\/+$/, "")}`;
-  }
-  validateWhatsAppBaseUrl(result);
-  return result;
 }
 
 function readConfigString(config: Record<string, unknown>, key: string): string | undefined {

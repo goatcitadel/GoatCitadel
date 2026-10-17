@@ -12,6 +12,8 @@ import type {
   ChannelThreadCapabilities,
 } from "@goatcitadel/contracts";
 
+import { CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS } from "@goatcitadel/contracts";
+
 type ChannelRule = {
   supportedActions?: ChannelActionName[];
   resolveSupportedActions?: (config: Record<string, unknown>) => ChannelActionName[];
@@ -28,6 +30,9 @@ type ChannelRule = {
   supportsStreaming: boolean;
   supportNotes?: string[];
   resolveSupportNotes?: (config: Record<string, unknown>) => string[];
+  /** Actions the platform itself cannot do (reason per action); static map or per-config resolver. */
+  platformUnsupportedActions?: Partial<Record<ChannelActionName, string>>;
+  resolvePlatformUnsupportedActions?: (config: Record<string, unknown>) => Partial<Record<ChannelActionName, string>>;
   /** Extra setup diagnostics beyond the requiredAnyOf groups. */
   resolveSetupDiagnostics?: (config: Record<string, unknown>) => string[];
   requiredAnyOf: string[][];
@@ -160,6 +165,7 @@ const CHANNEL_RICH_MESSAGE_PROFILES: Record<
 
 const CHANNEL_RULES: Record<string, ChannelRule> = {
   slack: {
+    platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS.slack,
     resolveSupportedActions: (config) =>
       hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
         ? ["channel.send", "channel.reply", "channel.react", "channel.unsend"]
@@ -205,6 +211,11 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
             hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
               ? "Slack inbound event routing is enabled through the signed Events API webhook path."
               : "Slack inbound routing remains disabled until a signing secret is configured.",
+            ...(hasAnyConfigured(config, ["signingSecret", "signingSecretEnv"])
+              ? [
+                  "When inbound channel voice is enabled, Slack audio file shares are transcribed: the gateway downloads the file from files.slack.com with the bot token (needs the files:read scope, 8 MB cap) and routes the transcript as an untrusted voice turn. files.slack.com must be in the network allowlist (toolPolicy.sandbox.networkAllowlist); otherwise the download is refused and the turn runs on the [voice message] fallback.",
+                ]
+              : []),
             "Guided setup can run a sandbox send/delete probe on the bot-token path before finalize.",
           ]
         : [
@@ -217,12 +228,17 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["botTokenEnv", "botToken", "webhookUrl", "url"]],
   },
   discord: {
+    resolvePlatformUnsupportedActions: (config) =>
+      !hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"]) &&
+      hasAnyConfigured(config, ["webhookUrl", "url"])
+        ? {
+            "channel.react": "Discord webhooks cannot add reactions.",
+            "channel.typing": "Discord webhooks cannot send typing indicators.",
+          }
+        : {},
     resolveSupportedActions: (config) => {
-      const runtimeMode = readConfigString(config, "runtimeMode") === "gateway" ? "gateway" : "bridge";
       if (hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])) {
-        return runtimeMode === "gateway"
-          ? ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"]
-          : ["channel.send", "channel.reply", "channel.react", "channel.unsend"];
+        return ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"];
       }
       if (hasAnyConfigured(config, ["webhookUrl", "url"])) {
         return ["channel.send", "channel.unsend"];
@@ -283,12 +299,13 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       (readConfigString(config, "runtimeMode") ?? "bridge") === "gateway"
         ? [
             "Gateway-mode Discord connections keep a persistent Discord gateway session, so the bot can appear online and route inbound DMs or allowlisted guild messages.",
+            "When inbound channel voice is enabled, Discord voice messages and audio attachments that pass the same pairing and guild allowlist gates as text are downloaded from the Discord CDN (8 MB cap) and transcribed into an untrusted voice turn. Voice messages cannot mention the bot, so in mention-gated guild channels they are not routed. cdn.discordapp.com and media.discordapp.net must be in the network allowlist (toolPolicy.sandbox.networkAllowlist; discord.com does not cover them); otherwise the download is refused and the turn runs on the [voice message] fallback.",
             "Outbound replies still use the shared Discord send bridge, so reactions and unsend follow the same REST constraints as bridge mode.",
             "Guided setup can run token, channel, sandbox send/delete, and runtime-readiness probes before finalize.",
           ]
         : hasAnyConfigured(config, ["botTokenEnv", "botToken", "tokenEnv", "token"])
           ? [
-              "Bridge-mode Discord connections are outbound REST bridges. They support reactions and deleting messages in channels the bot can manage, but they do not create a persistent online presence.",
+              "Bridge-mode Discord connections are outbound REST bridges. They support reactions, deleting messages in channels the bot can manage, and typing indicators through the REST typing endpoint, but they do not create a persistent online presence.",
               "Discord rich sends support uploaded inline files and URL-backed embeds.",
               "Guided setup can run token, channel, and sandbox send/delete probes before finalize.",
             ]
@@ -344,7 +361,8 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["botTokenEnv", "botToken", "tokenEnv", "token"]],
   },
   ntfy: {
-    supportedActions: ["channel.send"],
+    platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS.ntfy,
+    supportedActions: ["channel.send", "channel.unsend"],
     supportedAttachmentSources: ["url"],
     resolveInboundModes: (config) => (isNtfyInboundEnabled(config) ? ["stream"] : ["none"]),
     threadCapabilities: {
@@ -379,6 +397,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
             "ntfy inbound is off; set inboundStreamEnabled with a token to subscribe to the topic's JSON stream. Webhook and remote-command inbound are not supported.",
           ]),
       "Token-backed topics should use tokenEnv so secrets are resolved at the tool host boundary.",
+      "ntfy unsend deletes a published notification with DELETE /<topic>/<message id>, using the id ntfy returned on publish; subscribed clients receive a message_delete event.",
       "Dry-run mode validates routing without publishing to the ntfy server.",
     ],
     resolveSetupDiagnostics: (config) =>
@@ -388,6 +407,15 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["baseUrl"], ["topic", "defaultTopic"]],
   },
   "google-chat": {
+    resolvePlatformUnsupportedActions: (config) => ({
+      ...CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS["google-chat"],
+      ...(isGoogleChatServiceAccountMode(config)
+        ? {}
+        : {
+            "channel.unsend":
+              "Google Chat webhook-authored messages cannot be deleted; unsend needs Chat app (service-account) mode.",
+          }),
+    }),
     resolveSupportedActions: (config) =>
       isGoogleChatServiceAccountMode(config) ? ["channel.send", "channel.reply", "channel.unsend"] : ["channel.send"],
     supportedAttachmentSources: ["url"],
@@ -441,6 +469,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["webhookUrl", "url", "serviceAccountKeyEnv", "serviceAccountKey"]],
   },
   teams: {
+    platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS.teams,
     supportedActions: ["channel.send"],
     supportedAttachmentSources: ["url"],
     inboundModes: ["none"],
@@ -465,7 +494,8 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["webhookUrl", "url"]],
   },
   whatsapp: {
-    supportedActions: ["channel.send", "channel.reply", "channel.react"],
+    platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS.whatsapp,
+    supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.typing"],
     supportedAttachmentSources: ["url", "inline"],
     resolveInboundModes: (config) =>
       hasAnyConfigured(config, ["appSecret", "appSecretEnv"]) &&
@@ -489,14 +519,15 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
         lifecycle: "stateless",
         inboundReadiness: hasWebhookIngress ? "ready" : "unsupported",
         operatorSummary: hasWebhookIngress
-          ? "WhatsApp Cloud API is normalized as a stateless bridge with signed webhook ingress. Rich outbound media, reactions, and inbound message routing are available, but delete parity is still incomplete."
-          : "WhatsApp Cloud API is normalized as a stateless outbound bridge. Rich outbound media and reactions are supported, but inbound routing and delete parity are still incomplete.",
+          ? "WhatsApp Cloud API is normalized as a stateless bridge with signed webhook ingress. Rich outbound media, reactions, and inbound message routing are available. The platform has no message-delete endpoint, so unsend is not offered."
+          : "WhatsApp Cloud API is normalized as a stateless outbound bridge. Rich outbound media and reactions are supported; inbound routing needs the app secret and webhook verify token, and the platform has no message-delete endpoint, so unsend is not offered.",
       };
     },
     resolveSupportNotes: (config) => [
       "WhatsApp Cloud API rich sends support public URL media and uploaded inline files for supported image, video, audio, and document types.",
       "WhatsApp rich-message preflight labels native media, text fallbacks, pending attachment hydration, and Cloud API provider evidence before send.",
-      "WhatsApp reactions are sent through the Cloud API, but unsend/delete is still not wired in this bridge.",
+      "WhatsApp reactions are sent through the Cloud API. Unsend is not offered because the Cloud API has no endpoint for deleting a sent message.",
+      "WhatsApp typing indicators are tied to an inbound message: they are sent with a read receipt for that message id and last up to 25 seconds, so a typing request without an inbound message id is reported as unsupported.",
       hasAnyConfigured(config, ["appSecret", "appSecretEnv"]) &&
       hasAnyConfigured(config, ["webhookVerifyToken", "webhookVerifyTokenEnv", "verifyToken", "verifyTokenEnv"])
         ? "WhatsApp inbound routing is enabled through the signed Cloud API webhook path when both the app secret and webhook verify token are configured."
@@ -505,7 +536,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["phoneNumberId"], ["accessTokenEnv", "accessToken", "tokenEnv", "token"]],
   },
   signal: {
-    supportedActions: ["channel.send"],
+    supportedActions: ["channel.send", "channel.react", "channel.unsend", "channel.typing"],
     resolveInboundModes: (config) => (isSignalInboundEnabled(config) ? ["stream"] : ["none"]),
     threadCapabilities: {
       direct: true,
@@ -532,6 +563,9 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
           },
     resolveSupportNotes: (config) => [
       "Outbound Signal sends use the configured bridge JSON-RPC send path.",
+      "Signal typing indicators use the bridge JSON-RPC sendTyping method for a recipient or a group: target.",
+      "Signal reactions use sendReaction with the target message timestamp as messageId; group reactions also need targetAuthor.",
+      "Signal remote delete (unsend) uses remoteDelete and works only on messages this account sent.",
       isSignalInboundEnabled(config)
         ? "Signal inbound subscribes to the signal-cli daemon --http event stream (/api/v1/events); allow the sender UUIDs (or numbers for senders without a UUID) that may start turns, because inbound is default-deny."
         : "Signal inbound is off; set receiveEvents on a signal-cli daemon --http bridge to receive messages from its event stream (/api/v1/events).",
@@ -545,7 +579,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     requiredAnyOf: [["baseUrl", "bridgeUrl"]],
   },
   mattermost: {
-    supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend"],
+    supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
     supportedAttachmentSources: ["url", "inline"],
     resolveInboundModes: (config) => (isMattermostInboundEnabled(config) ? ["stream"] : ["none"]),
     threadCapabilities: {
@@ -583,12 +617,13 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
           ]
         : []),
       "Mattermost unsend deletes the original post and typically applies only to posts the bot can remove.",
+      "Mattermost typing posts the bot typing event to a channel id (optionally within a thread root); channel names and user targets are not resolved for typing.",
       "Mattermost rich sends upload files to the resolved channel before creating the post.",
     ],
     requiredAnyOf: [["serverUrl"], ["botTokenEnv", "botToken"]],
   },
   imessage: {
-    supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend"],
+    supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
     supportedAttachmentSources: ["url", "inline"],
     inboundModes: ["none"],
     threadCapabilities: {
@@ -609,7 +644,9 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       "BlueBubbles is the local-first callable provider for this Gateway build.",
       "Photon/Spectrum provider metadata is recognized for diagnostics, but sends fail closed until a Photon adapter is installed.",
       "Attachment sends to brand-new handles require BlueBubbles chat creation support.",
-      "Reactions and unsend require BlueBubbles Private API support.",
+      "Reactions, unsend, and typing indicators require BlueBubbles Private API support.",
+      "Typing indicators post to the BlueBubbles chat typing endpoint and need a chat GUID target (chat_guid:iMessage;-;+15551234567); handles and chat ids are not resolved for typing.",
+      "BlueBubbles authenticates with a ?password= URL query parameter, so use an https:// bridge URL or a loopback bridge (127.0.0.1, localhost, [::1]); a schemeless non-loopback bridge URL defaults to https.",
     ],
     requiredAnyOf: [
       ["bridgeUrl", "baseUrl", "serverUrl"],
@@ -617,6 +654,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     ],
   },
   "nextcloud-talk": {
+    platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS["nextcloud-talk"],
     supportedActions: ["channel.send", "channel.reply", "channel.react"],
     inboundModes: ["webhook"],
     threadCapabilities: {
@@ -640,7 +678,8 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     },
     supportNotes: [
       "Nextcloud Talk bot connections support inbound webhooks, outbound replies, and bot reactions through the documented bot API.",
-      "Attachments and unsend remain unsupported in this adapter.",
+      "Attachments are unsupported in this adapter, and Nextcloud Talk bots cannot delete messages through the bot API.",
+      "Nextcloud Talk bots cannot download shared media, so inbound voice messages are not transcribed: the agent receives a notice that a voice message arrived instead.",
     ],
     requiredAnyOf: [["baseUrl"], ["tokenEnv", "token", "botSecretEnv", "botSecret", "secretEnv", "secret"]],
   },
@@ -726,6 +765,11 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
   },
 };
 
+/** Channel keys that have an explicit capability rule (every other key gets the send-only fallback). */
+export function listChannelRuleKeys(): string[] {
+  return Object.keys(CHANNEL_RULES);
+}
+
 export function describeChannelCapabilities(channelKey: string, config: Record<string, unknown>): ChannelCapabilities {
   const rule = CHANNEL_RULES[channelKey] ?? {
     supportedActions: ["channel.send"],
@@ -772,6 +816,9 @@ export function describeChannelCapabilities(channelKey: string, config: Record<s
     channelKey,
     supportedActions,
     supportedDeliveryActions: [...supportedActions],
+    platformUnsupportedActions: {
+      ...(rule.resolvePlatformUnsupportedActions?.(config) ?? rule.platformUnsupportedActions ?? {}),
+    },
     supportedAttachmentSources,
     inboundModes,
     threadCapabilities,
