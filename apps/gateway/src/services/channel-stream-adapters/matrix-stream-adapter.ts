@@ -23,13 +23,18 @@ const MATRIX_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MATRIX_REQUEST_SLACK_MS = 30_000;
 const MATRIX_INBOUND_MSGTYPES: readonly string[] = ["m.text", "m.emote"];
 
+const MATRIX_TIMELINE_LIMIT = 100;
 const PRIMING_FILTER = JSON.stringify({
-  room: { timeline: { limit: 0 } },
+  room: { timeline: { limit: 0 }, state: { lazy_load_members: true, types: [] }, ephemeral: { types: [] } },
   presence: { types: [] },
   account_data: { types: [] },
 });
 const SYNC_FILTER = JSON.stringify({
-  room: { timeline: { types: ["m.room.message"] } },
+  room: {
+    timeline: { types: ["m.room.message"], limit: MATRIX_TIMELINE_LIMIT },
+    state: { lazy_load_members: true },
+    ephemeral: { types: [] },
+  },
   presence: { types: [] },
   account_data: { types: [] },
 });
@@ -57,7 +62,7 @@ interface MatrixTimelineEvent {
 
 interface MatrixSyncResponse {
   next_batch?: unknown;
-  rooms?: { join?: Record<string, { timeline?: { events?: unknown } } | undefined> };
+  rooms?: { join?: Record<string, { timeline?: { events?: unknown; limited?: unknown } } | undefined> };
 }
 
 function readString(config: Record<string, unknown>, key: string): string | undefined {
@@ -79,6 +84,21 @@ export function isMatrixInboundEnabled(config: Record<string, unknown>): boolean
   );
 }
 
+/** A non-auth HTTP failure; carries the Matrix errcode enum (never body text). */
+class MatrixRequestError extends Error {
+  public constructor(
+    public readonly status: number,
+    public readonly errcode: string | undefined,
+    label: string,
+  ) {
+    super(`Matrix ${label} request failed (${status}${errcode ? ` ${errcode}` : ""})`);
+  }
+}
+
+function isRejectedSince(error: unknown): boolean {
+  return error instanceof MatrixRequestError && error.status >= 400 && error.status < 500 && error.status !== 429;
+}
+
 function isAbortLike(error: unknown): boolean {
   return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }
@@ -92,6 +112,7 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
     path: string,
     token: string,
     timeoutMs: number,
+    label: string,
   ): Promise<T> {
     const url = `${base}${path}`;
     if (!deps.isUrlAllowlisted(url)) {
@@ -110,7 +131,7 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
       body = await readBoundedResponseJson<T & { errcode?: unknown }>(response, {
         maxBytes: MATRIX_MAX_RESPONSE_BYTES,
         timeoutMs,
-        label: "matrix-sync",
+        label: `matrix-${label}`,
       });
     } catch (error) {
       if (response.ok) throw error;
@@ -126,7 +147,11 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
       throw new ChannelStreamAuthError(`Matrix rejected the access token (${response.status})`);
     }
     if (!response.ok || !body) {
-      throw new Error(`Matrix request failed (${response.status})`);
+      throw new MatrixRequestError(
+        response.status,
+        errcode && /^M_[A-Z_]+$/.test(errcode) ? errcode : undefined,
+        label,
+      );
     }
     return body;
   }
@@ -192,6 +217,7 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
           "/_matrix/client/v3/account/whoami",
           token,
           MATRIX_REQUEST_SLACK_MS,
+          "whoami",
         );
         if (typeof whoami.user_id !== "string" || whoami.user_id.length === 0) {
           throw new Error("Matrix whoami returned no user_id");
@@ -199,41 +225,66 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
         const selfId = whoami.user_id;
         ctx.touch();
 
-        const stored = await deps.cursorStore.read("matrix", connectionId);
-        const resumeFrom = (stored && stored.scope === selfId ? stored.cursor : undefined) ?? ctx.cursor;
-        let cursor: string;
-        if (resumeFrom) {
-          cursor = resumeFrom;
-        } else {
+        let ready = false;
+        const markReadyOnce = () => {
+          if (ready) return;
+          ready = true;
+          ctx.markReady();
+        };
+        const prime = async (): Promise<string> => {
           const primed = await request<MatrixSyncResponse>(
             ctx,
             base,
             `/_matrix/client/v3/sync?timeout=0&filter=${encodeURIComponent(PRIMING_FILTER)}`,
             token,
             requestTimeoutMs,
+            "priming-sync",
           );
           if (typeof primed.next_batch !== "string") throw new Error("Matrix priming sync returned no next_batch");
-          cursor = primed.next_batch;
-          await deps.cursorStore.write("matrix", connectionId, { cursor, scope: selfId });
+          await deps.cursorStore.write("matrix", connectionId, { cursor: primed.next_batch, scope: selfId });
           ctx.touch();
-          ctx.markReady();
-        }
+          markReadyOnce();
+          return primed.next_batch;
+        };
 
-        let ready = false;
+        const stored = await deps.cursorStore.read("matrix", connectionId);
+        const resumeFrom = (stored && stored.scope === selfId ? stored.cursor : undefined) ?? ctx.cursor;
+        let cursor = resumeFrom ?? (await prime());
+
         while (!ctx.signal.aborted) {
-          const sync = await request<MatrixSyncResponse>(
-            ctx,
-            base,
-            `/_matrix/client/v3/sync?since=${encodeURIComponent(cursor)}&timeout=${longPollTimeoutMs}` +
-              `&filter=${encodeURIComponent(SYNC_FILTER)}`,
-            token,
-            requestTimeoutMs,
-          );
-          if (!ready) {
-            ready = true;
-            ctx.markReady();
+          let sync: MatrixSyncResponse;
+          try {
+            sync = await request<MatrixSyncResponse>(
+              ctx,
+              base,
+              `/_matrix/client/v3/sync?since=${encodeURIComponent(cursor)}&timeout=${longPollTimeoutMs}` +
+                `&filter=${encodeURIComponent(SYNC_FILTER)}`,
+              token,
+              requestTimeoutMs,
+              "sync",
+            );
+          } catch (error) {
+            if (!isRejectedSince(error)) throw error;
+            // A stale or invalid since token would otherwise wedge the connection on endless retries.
+            ctx.diagnostic(
+              "matrix.stream.since_rejected",
+              "Matrix rejected the stored sync token; re-primed. Messages in the gap were skipped.",
+            );
+            cursor = await prime();
+            continue;
           }
+          markReadyOnce();
           ctx.touch();
+          const limitedRooms = Object.values(sync.rooms?.join ?? {}).filter(
+            (room) => room?.timeline?.limited === true,
+          ).length;
+          if (limitedRooms > 0) {
+            ctx.diagnostic(
+              "matrix.stream.timeline_limited",
+              `Matrix returned a limited timeline for ${limitedRooms} room(s); older messages in the gap were skipped.`,
+              { roomCount: limitedRooms },
+            );
+          }
           await emitBatch(ctx, selfId, sync);
           if (typeof sync.next_batch === "string" && sync.next_batch !== cursor) {
             // Only after every emit in the batch resolved.

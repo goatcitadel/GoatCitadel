@@ -109,6 +109,7 @@ function harness(options: HarnessOptions = {}) {
   const emitted: ChannelStreamEvent[] = [];
   const markReady = vi.fn();
   const touch = vi.fn();
+  const diagnostic = vi.fn();
   let emitCount = 0;
   function ctx(overrides: Partial<ChannelStreamRunContext> & { config?: Record<string, unknown> } = {}) {
     const { config, ...rest } = overrides;
@@ -123,11 +124,11 @@ function harness(options: HarnessOptions = {}) {
         if (options.emitFailsAt === emitCount) throw new Error("durable accept failed");
         emitted.push(event);
       },
-      diagnostic: vi.fn(),
+      diagnostic,
       ...rest,
     } as ChannelStreamRunContext;
   }
-  return { adapter, deps, fetchMock, urls, emitted, markReady, touch, ctx, cursor, controller };
+  return { adapter, deps, fetchMock, urls, emitted, markReady, touch, diagnostic, ctx, cursor, controller };
 }
 
 describe("matrix stream adapter", () => {
@@ -161,7 +162,7 @@ describe("matrix stream adapter", () => {
     expect(JSON.parse(primeUrl.searchParams.get("filter")!).room.timeline.limit).toBe(0);
     expect(h.emitted).toEqual([]);
     expect(h.cursor.writes[0]).toEqual({ cursor: "prime-1", scope: SELF });
-    expect(h.markReady).toHaveBeenCalled();
+    expect(h.markReady).toHaveBeenCalledTimes(1);
     expect(new URL(h.urls[2]!).searchParams.get("since")).toBe("prime-1");
   });
 
@@ -307,6 +308,74 @@ describe("matrix stream adapter", () => {
     const h = harness({ token: undefined });
     await expect(h.adapter.run(h.ctx())).rejects.toBeInstanceOf(ChannelStreamAuthError);
     expect(h.fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("requests lean filters: priming drops state and ephemeral, incremental lazy-loads members with a timeline limit", async () => {
+    const h = harness({ syncs: [() => json(syncBody("n", []))] });
+    await h.adapter.run(h.ctx());
+    const prime = JSON.parse(new URL(h.urls[1]!).searchParams.get("filter")!);
+    expect(prime.room).toEqual({
+      timeline: { limit: 0 },
+      state: { lazy_load_members: true, types: [] },
+      ephemeral: { types: [] },
+    });
+    const incremental = JSON.parse(new URL(h.urls[2]!).searchParams.get("filter")!);
+    expect(incremental.room).toEqual({
+      timeline: { types: ["m.room.message"], limit: 100 },
+      state: { lazy_load_members: true },
+      ephemeral: { types: [] },
+    });
+  });
+
+  it("discards a rejected since token, re-primes, reports it and keeps going", async () => {
+    const store = memoryStore({ cursor: "stale", scope: SELF });
+    const h = harness({
+      store,
+      prime: () => json({ next_batch: "fresh" }),
+      syncs: [
+        () => json({ errcode: "M_UNKNOWN_POS", error: "Invalid stream token" }, 400),
+        () => json(syncBody("after", [msg("$new")])),
+      ],
+    });
+    await h.adapter.run(h.ctx());
+    expect(h.diagnostic).toHaveBeenCalledWith(
+      "matrix.stream.since_rejected",
+      "Matrix rejected the stored sync token; re-primed. Messages in the gap were skipped.",
+    );
+    expect(store.writes[0]).toEqual({ cursor: "fresh", scope: SELF });
+    expect(new URL(h.urls[3]!).searchParams.get("since")).toBe("fresh");
+    expect(h.emitted.map((e) => e.message.eventId)).toEqual(["$new"]);
+    expect(h.markReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-prime on 429 or 5xx, and includes only the errcode in the error", async () => {
+    for (const status of [429, 500]) {
+      const h = harness({
+        store: memoryStore({ cursor: "c", scope: SELF }),
+        syncs: [() => json({ errcode: "M_LIMIT_EXCEEDED", error: "secret detail" }, status)],
+      });
+      const error = (await h.adapter.run(h.ctx()).catch((e: unknown) => e)) as Error;
+      expect(error.message).toBe(`Matrix sync request failed (${status} M_LIMIT_EXCEEDED)`);
+      expect(h.diagnostic).not.toHaveBeenCalled();
+    }
+  });
+
+  it("reports limited timelines by room count only", async () => {
+    const body = {
+      next_batch: "n",
+      rooms: {
+        join: {
+          "!a:x": { timeline: { limited: true, events: [] } },
+          "!b:x": { timeline: { limited: false, events: [] } },
+          "!c:x": { timeline: { limited: true, events: [] } },
+        },
+      },
+    };
+    const h = harness({ store: memoryStore({ cursor: "c", scope: SELF }), syncs: [() => json(body)] });
+    await h.adapter.run(h.ctx());
+    expect(h.diagnostic).toHaveBeenCalledWith("matrix.stream.timeline_limited", expect.not.stringContaining("!a:x"), {
+      roomCount: 2,
+    });
   });
 
   it("resolves quietly when the session is aborted mid long-poll", async () => {
