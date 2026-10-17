@@ -490,6 +490,28 @@ export class ApprovalRepository {
     return { items, nextCursor: rows.length > limit ? encodeApprovalListCursor(items.at(-1)!) : undefined };
   }
 
+  /**
+   * Approvals of one kind whose stored payload carries `payload[key] === value`, newest first.
+   * A dialect-neutral LIKE on the serialized `"key":"value"` pair narrows the scan; every
+   * candidate is then re-checked on its parsed payload, so the LIKE never decides a match.
+   */
+  public listByKindAndPayloadString(kind: string, key: string, value: string, limit = 50): ApprovalRequest[] {
+    if (!kind || !key || !value) {
+      throw new ValidationError({ message: "Kind, payload key and value are required for an approval payload lookup" });
+    }
+    const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 200)) : 50;
+    const serializedPair = JSON.stringify({ [key]: value }).slice(1, -1);
+    const rows = toApprovalRows(
+      this.db
+        .prepare(
+          `SELECT * FROM approvals WHERE kind = @kind AND payload_json LIKE @pattern ESCAPE '\\'
+           ORDER BY created_at DESC, approval_id DESC LIMIT @limit`,
+        )
+        .all({ kind, pattern: `%${escapeLikePattern(serializedPair)}%`, limit: boundedLimit }),
+    );
+    return rows.map(mapRow).filter((approval) => approval.kind === kind && approval.payload[key] === value);
+  }
+
   public listPage(input: {
     status?: ApprovalRequest["status"];
     limit?: number;
@@ -747,6 +769,11 @@ export class ApprovalRepository {
     });
     return this.get(approvalId);
   }
+}
+
+/** Escapes LIKE wildcards and the escape character itself (paired with `ESCAPE '\'`). */
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/gu, (character) => `\\${character}`);
 }
 
 function normalizeApprovalTtlMs(ttlMs: number): number {

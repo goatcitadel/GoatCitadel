@@ -15,6 +15,12 @@ import {
   validateLlamaSetup,
 } from "./runtime-llama-setup-change.js";
 import type { UpdateSettingsInput } from "./settings-auth-service.js";
+import {
+  describeGlobalToolAccessChange,
+  describeOperatorWriteRootChange,
+  matchesGlobalToolAccessChange,
+  matchesOperatorWriteRootChange,
+} from "./runtime-write-access-change.js";
 import type { LlamaCppSetupSelection } from "./llama-cpp-setup-selection-service.js";
 import type { LlamaCppRuntimeStatus } from "@goatcitadel/contracts";
 import type {
@@ -32,6 +38,8 @@ export interface RuntimeConfigurationChangePlanAdapterDependencies {
   readonly resolveManagedSelection?: (selectionId: string, workspaceId: string) => Promise<LlamaCppSetupSelection>;
   readonly discardManagedSelection?: (selectionId: string) => void;
   readonly refreshLlamaRuntime?: () => Promise<LlamaCppRuntimeStatus>;
+  /** Dry-runs a settings mutation against an isolated candidate; throws the owner validation error. */
+  readonly validateSettingsUpdate?: (input: UpdateSettingsInput) => Promise<void>;
   readonly hasTemporaryAuthCredential: (planId: string) => boolean | Promise<boolean>;
   readonly consumeTemporaryAuthCredential: (planId: string) => string | Promise<string>;
   readonly discardTemporaryAuthCredential: (planId: string) => void | Promise<void>;
@@ -118,7 +126,8 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       throw new SemanticValidationError("Runtime configuration Change Plan kind drifted.");
     }
     assertNotRetiredToolProfileChange(plan.request);
-    const current = await this.deps.getSettings();
+    const { getSettings, updateSettings } = this.deps;
+    const current = await getSettings();
     assertRevision(plan, current.revision);
     if (plan.request.change.operation === "gateway_auth_configuration") {
       const change = plan.request.change;
@@ -136,7 +145,7 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
         }
         credential = await this.deps.consumeTemporaryAuthCredential(plan.planId);
       }
-      const updated = await this.deps.updateSettings({
+      const updated = await updateSettings({
         expectedRevision: current.revision,
         auth: {
           mode: change.mode,
@@ -158,7 +167,7 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
     if (plan.request.change.operation === "llama_cpp_setup") {
       return await applyLlamaSetup(this.deps, plan, current);
     }
-    const updated = await this.deps.updateSettings({
+    const updated = await updateSettings({
       expectedRevision: current.revision,
       ...settingsPatch(plan.request),
     });
@@ -277,18 +286,29 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       await validateLlamaSetup(this.deps, request.change, workspaceId);
       return;
     }
+    if (request.change.operation === "operator_write_root" || request.change.operation === "tool_global_access") {
+      // The settings owner canonicalizes folders and checks tool posture; a
+      // plan is never prepared for a change the owner would refuse.
+      const validateSettingsUpdate = this.deps.validateSettingsUpdate;
+      if (!validateSettingsUpdate) {
+        throw new SemanticValidationError("The runtime write-access settings owner is unavailable.");
+      }
+      await validateSettingsUpdate({ expectedRevision: settings.revision, ...settingsPatch(request) });
+      return;
+    }
     if (request.change.operation !== "utility_model") return;
     const change = request.change;
     const provider = settings.llm.providers.find((item) => item.providerId === change.providerId);
     if (!provider || provider.authReadiness?.status === "unavailable") {
       throw new SemanticValidationError(`Utility-model provider ${change.providerId} is unavailable.`);
     }
-    if (!this.deps.listModels) {
+    const listModels = this.deps.listModels;
+    if (!listModels) {
       throw new SemanticValidationError("The utility-model catalog owner is unavailable.");
     }
     let models: readonly LlmModelRecord[];
     try {
-      models = await this.deps.listModels(provider.providerId);
+      models = await listModels(provider.providerId);
     } catch {
       throw new SemanticValidationError(`Unable to verify models for ${provider.label}.`);
     }
@@ -298,8 +318,6 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       });
     }
   }
-
-
 }
 
 function assertNotRetiredToolProfileChange(request: ChangePlanRuntimeConfigurationRequest): void {
@@ -338,6 +356,12 @@ function settingsPatch(request: ChangePlanRuntimeConfigurationRequest): Omit<Upd
       return { llamaCpp: { ...request.change.config } };
     case "llama_cpp_setup":
       throw new SemanticValidationError("llama.cpp setup uses its dedicated validated owner path.");
+    case "operator_write_root": {
+      const { operation: _operation, ...change } = request.change;
+      return { operatorWriteRootChange: change };
+    }
+    case "tool_global_access":
+      return { globalToolAccessChange: { toolName: request.change.toolName, posture: request.change.posture } };
     case "feature_flag":
       return { features: { [request.change.flag]: request.change.enabled } };
     case "feature_flags":
@@ -381,6 +405,10 @@ function matches(request: ChangePlanRuntimeConfigurationRequest, settings: Runti
       return matchesPartial(settings.llamaCpp, request.change.config, true);
     case "llama_cpp_setup":
       return matchesLlamaSetup(request.change, settings);
+    case "operator_write_root":
+      return matchesOperatorWriteRootChange(request.change, settings);
+    case "tool_global_access":
+      return matchesGlobalToolAccessChange(request.change, settings);
     case "feature_flag":
       return settings.features[request.change.flag] === request.change.enabled;
     case "feature_flags":
@@ -391,7 +419,16 @@ function matches(request: ChangePlanRuntimeConfigurationRequest, settings: Runti
 }
 
 function targetResourceId(request: ChangePlanRuntimeConfigurationRequest): string {
-  return request.change.operation === "feature_flag" ? `feature:${request.change.flag}` : request.change.operation;
+  switch (request.change.operation) {
+    case "feature_flag":
+      return `feature:${request.change.flag}`;
+    case "operator_write_root":
+      return `operator_write_root:${request.change.preset ?? "path"}`;
+    case "tool_global_access":
+      return `tool_global_access:${request.change.toolName}`;
+    default:
+      return request.change.operation;
+  }
 }
 
 function describe(request: ChangePlanRuntimeConfigurationRequest, settings: RuntimeSettings) {
@@ -427,7 +464,8 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
         title: "Change filesystem read policy",
         summary: `Change filesystem read access from ${settings.readAccessMode} to ${request.change.mode}.`,
         completedSummary: `Filesystem read access is now ${request.change.mode}.`,
-        impact: "Future file reads use the new policy; write jails and deny-wins policy remain unchanged.",
+        impact:
+          "Future file reads use the new policy; write access (the workspace jail and operator write roots) and deny-wins policy remain unchanged.",
         risk: request.change.mode === "roots_only" ? ("caution" as const) : ("danger" as const),
       };
     case "network_allowlist":
@@ -501,6 +539,10 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
           "Gateway validates the runtime before changing the Chat default. Managed files remain in Gateway custody.",
         risk: "caution" as const,
       };
+    case "operator_write_root":
+      return describeOperatorWriteRootChange(request.change);
+    case "tool_global_access":
+      return describeGlobalToolAccessChange(request.change, settings);
     case "feature_flag": {
       const protectedFlag = request.change.flag === "productSourceEvolutionV1Enabled";
       return {

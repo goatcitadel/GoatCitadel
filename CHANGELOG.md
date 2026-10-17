@@ -4,6 +4,12 @@ All notable changes to GoatCitadel are documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- The example tool policies (`config/tool-policy.example.json` and `config/goatcitadel.example.json`) now also deny `fs.patch` and `shell.exec_background`. Deny patterns match tool names exactly, so denying `fs.write` and `shell.exec` never covered these sibling tools. Operators who copied an earlier example should add both entries to `tools.deny` in their own config if they want the same posture.
+- `shell.exec_background` now raises the same approval request as `shell.exec` when a command matches `sandbox.riskyShellPatterns`. Before, the risk check ran only at execution time and failed without creating an approval.
+- Chat guidance for a tool blocked by `tools.deny`, the allow list or permission profile, a Citadel Ward, or the write roots now names the operator setting to change (for example `tools.deny` or `sandbox.operatorWriteRoots`). It no longer suggests retrying with narrower input or writing to a fallback path.
+
 ## [0.1.0-rc.1] - 2026-07-04
 
 ### Added

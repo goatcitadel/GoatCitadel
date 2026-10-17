@@ -1858,6 +1858,25 @@ describe("ToolPolicyEngine policy edge coverage", () => {
       ).reasonCodes,
     ).toContain("shell_risky_requires_approval");
 
+    // shell.exec_background spawns the same command, so the engine must raise the
+    // approval request up front rather than leaving the executor to throw later.
+    const backgroundEvaluation = await shellEngine.evaluateAccess({
+      toolName: "shell.exec_background",
+      args: { command: "rm -rf ./workspace/tmp" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+    expect(backgroundEvaluation.allowed).toBe(true);
+    expect(backgroundEvaluation.requiresApproval).toBe(true);
+    expect(backgroundEvaluation.reasonCodes).toContain("shell_risky_requires_approval");
+    const safeBackgroundEvaluation = await shellEngine.evaluateAccess({
+      toolName: "shell.exec_background",
+      args: { command: "node --version" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+    expect(safeBackgroundEvaluation.reasonCodes).not.toContain("shell_risky_requires_approval");
+
     const shellGlobEngine = new ToolPolicyEngine(
       {
         ...policyConfig,

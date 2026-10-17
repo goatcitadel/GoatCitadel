@@ -433,6 +433,44 @@ describe("NativeRoutePages odysseus library sections", () => {
     );
   });
 
+  it("words a failed send for operators and keeps the raw provider reason out of the notice", async () => {
+    const raw = "Mail send failed: 535 5.7.8 Username and Password not accepted";
+    mocks.sendMailDraft.mockImplementationOnce(async (draftId: string) => ({
+      draftId,
+      accountId: "mail-1",
+      to: ["lead@example.test"],
+      cc: [],
+      bcc: [],
+      subject: "Launch",
+      bodyText: "Confirmed.",
+      status: "failed",
+      approvalId: "22222222-2222-4222-8222-222222222222",
+      failureReason: raw,
+      createdAt: "2026-06-01T12:00:00.000Z",
+      updatedAt: "2026-06-01T12:01:00.000Z",
+    }));
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderLibrary("communications");
+    });
+    await act(async () => undefined);
+    await act(async () => findButton(renderer!.root, "New draft").props.onClick());
+    await act(async () => {
+      findInputByPlaceholder(renderer!.root, "client@example.com").props.onChange({
+        target: { value: "lead@example.test" },
+      });
+      findInputByPlaceholder(renderer!.root, "Follow-up").props.onChange({ target: { value: "Launch window" } });
+      findTextareaByPlaceholder(renderer!.root, "Draft body").props.onChange({ target: { value: "Confirmed." } });
+    });
+    await act(async () => {
+      await findButton(renderer!.root, "Queue approval").props.onClick();
+    });
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("The mail provider refused the message. Nothing was sent.");
+    expect(text).not.toContain("535 5.7.8");
+  });
+
   it("renders model comparisons under prompt packs and saves a judgment", async () => {
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {

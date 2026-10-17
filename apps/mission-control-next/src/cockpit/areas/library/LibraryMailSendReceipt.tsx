@@ -1,9 +1,11 @@
 import type { ApprovalRequest, MailDraftRecord } from "@goatcitadel/contracts";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { getMailDraft } from "@goatcitadel/mission-control-shared/api/personal-ops";
+import { describeMailDraftFailure } from "@goatcitadel/mission-control-shared/content/mail-draft-failure";
 import { presentApprovalOutcome } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { LibraryApproval } from "./LibraryApproval";
 
 /**
@@ -73,8 +75,21 @@ function draftOutcomeText(draft: MailDraftRecord | undefined): string | undefine
   if (draft.status === "sent") return "Sent.";
   if (draft.status === "outcome_unknown") return OUTCOME_UNKNOWN_LABEL;
   if (draft.status === "failed" || draft.status === "send_unavailable")
-    return `Not sent: ${draft.failureReason ?? "the Gateway did not record a reason."}`;
+    return describeMailDraftFailure(draft.failureReason).summary;
   return undefined;
+}
+
+/** The Gateway's raw failure reason stays behind technical details; the callout shows operator copy. */
+function FailureTechnicalDetails({ draft }: { draft: MailDraftRecord | undefined }) {
+  const detail =
+    draft?.status === "failed" || draft?.status === "send_unavailable"
+      ? describeMailDraftFailure(draft.failureReason).technicalDetail
+      : undefined;
+  return detail ? (
+    <TechnicalDetails label="Recorded failure reason">
+      <p className="wrap-anywhere">{detail}</p>
+    </TechnicalDetails>
+  ) : null;
 }
 
 type Props = {
@@ -100,10 +115,13 @@ export function LibraryMailSendReceipt({ receipt, workspaceId, onRefresh, onDism
           ) : receipt.observed?.status === "outcome_unknown" ? (
             <OutcomeUnknownCallout intro="The approval was decided, but the delivery outcome was not confirmed." />
           ) : receipt.observed?.status === "failed" || receipt.observed?.status === "send_unavailable" ? (
-            <Callout tone="error">
-              The approval was decided, but the message was not sent.
-              <span className="wrap-anywhere block font-medium">{outcome}</span>
-            </Callout>
+            <>
+              <Callout tone="error">
+                The approval was decided, but the message was not sent.
+                <span className="wrap-anywhere block font-medium">{outcome}</span>
+              </Callout>
+              <FailureTechnicalDetails draft={receipt.observed} />
+            </>
           ) : decidedPending ? (
             <Callout>{decidedPending}</Callout>
           ) : (

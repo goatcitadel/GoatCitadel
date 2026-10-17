@@ -13,6 +13,10 @@ const SMTP_HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9
 /** nodemailer error codes that are only raised before the DATA command, so nothing was sent. */
 const SMTP_PRE_DATA_ERROR_CODES = new Set(["EDNS", "ETLS", "EAUTH", "ENOAUTH", "EENVELOPE"]);
 const SMTP_AUTH_ERROR_CODES = new Set(["EAUTH", "ENOAUTH"]);
+/** nodemailer codes for a connection that was refused, reset or timed out; a probe that hits one moves on. */
+const SMTP_CONNECTION_ERROR_CODES = new Set(["ECONNECTION", "ESOCKET", "ETIMEDOUT"]);
+/** At most this many guard-vetted addresses are probed for one send. */
+const MAX_SMTP_CONNECT_ADDRESSES = 4;
 const MAX_SMTP_ERROR_DETAIL_CHARS = 300;
 
 export interface SmtpTransportOptions {
@@ -45,8 +49,14 @@ export interface SmtpSendInfo {
   rejectedErrors?: unknown[];
 }
 
+export interface SmtpTransport {
+  sendMail(message: SmtpOutboundMessage): Promise<SmtpSendInfo>;
+  /** Connects, greets, negotiates TLS and authenticates, then quits; never sends a message. */
+  verify?(): Promise<unknown>;
+}
+
 export interface SmtpTransportFactory {
-  (options: SmtpTransportOptions): { sendMail(message: SmtpOutboundMessage): Promise<SmtpSendInfo> };
+  (options: SmtpTransportOptions): SmtpTransport;
 }
 
 /** Executor-owned capabilities the comms dispatcher passes in, so this module never imports it back. */
@@ -82,8 +92,9 @@ const createNodemailerTransport: SmtpTransportFactory = (options) =>
 /**
  * Sends one plain-text message through the IMAP/SMTP account's configured SMTP
  * server and returns the provider messageId. Every validation, including the
- * guarded DNS resolution, runs before the transport exists; the comms mutation
- * boundary is marked immediately before `sendMail`. A failure nodemailer reports
+ * guarded DNS resolution and (for a host with several vetted addresses) the
+ * connection probes, runs first; the comms mutation boundary is marked
+ * immediately before `sendMail`. A failure nodemailer reports
  * before DATA is a pre-boundary failure; any other failure is an unknown outcome.
  */
 export async function smtpSend(
@@ -103,16 +114,19 @@ export async function smtpSend(
     throw new Error("Missing SMTP password: smtpPassword or smtpPasswordEnv is not configured.");
   }
   const message = buildSmtpMessage(config, args);
-  const address = await resolveGuardedSmtpAddress(host, allowlist, runtime.dnsLookup ?? nodeDnsLookup);
+  const addresses = await resolveGuardedSmtpAddresses(host, allowlist, runtime.dnsLookup ?? nodeDnsLookup);
 
-  const createTransport = runtime.createTransport ?? createNodemailerTransport;
-  const transport = createTransport({
-    host: address,
-    port,
-    secure,
-    ...(user && pass ? { auth: { user, pass } } : {}),
-    ...(isIP(host) === 0 ? { tls: { servername: host } } : {}),
-  });
+  const transport = await selectReachableTransport(
+    addresses,
+    (address) => ({
+      host: address,
+      port,
+      secure,
+      ...(user && pass ? { auth: { user, pass } } : {}),
+      ...(isIP(host) === 0 ? { tls: { servername: host } } : {}),
+    }),
+    runtime.createTransport ?? createNodemailerTransport,
+  );
   await runtime.markMutationRequestStarted();
   let info: SmtpSendInfo;
   try {
@@ -197,22 +211,87 @@ function assertSmtpHostAllowed(host: string, allowlist: string[], grantAllowlist
 
 /**
  * Resolves the SMTP host through the same guarded lookup the HTTP egress dispatcher
- * uses (DNS-rebinding and private/metadata-address defense), so the transport only
- * ever connects to an address that passed the guard.
+ * uses (DNS-rebinding and private/metadata-address defense). The guard rejects the whole
+ * answer when any address is private or reserved, so every returned address is vetted;
+ * the transport only ever connects to one of them.
  */
-function resolveGuardedSmtpAddress(host: string, allowlist: string[], dnsLookup: DnsLookupFunction): Promise<string> {
+function resolveGuardedSmtpAddresses(
+  host: string,
+  allowlist: string[],
+  dnsLookup: DnsLookupFunction,
+): Promise<string[]> {
   const guardedLookup = createGuardedDnsLookup(`https://${host}/`, allowlist, dnsLookup);
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<string[]>((resolve, reject) => {
     guardedLookup(host, { all: true }, (error, address) => {
-      const resolved = Array.isArray(address) ? (address as LookupAddress[])[0]?.address : address;
-      if (error || !resolved) {
+      const resolved = (
+        Array.isArray(address) ? (address as LookupAddress[]).map((entry) => entry.address) : [address]
+      ).filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+      const unique = [...new Set(resolved)].slice(0, MAX_SMTP_CONNECT_ADDRESSES);
+      if (error || unique.length === 0) {
         const detail = error ? error.message : "no address returned";
         reject(new Error(`blocked: smtp.send host failed guarded DNS resolution. ${detail}`, { cause: error }));
         return;
       }
-      resolve(resolved);
+      resolve(unique);
     });
   });
+}
+
+/**
+ * With one vetted address the transport connects straight to it. With several, each is probed
+ * in DNS order with `verify()` (connect, greeting, TLS and auth, then QUIT) and the first that
+ * answers sends. A probe never issues MAIL FROM, so a probe failure can never have sent mail:
+ * a refused, reset or timed-out connection moves on to the next address, and any other probe
+ * failure ends the send as a pre-boundary error. Once `sendMail` starts there is no fallback,
+ * so an error after that point keeps its unknown-outcome classification.
+ */
+async function selectReachableTransport(
+  addresses: string[],
+  optionsFor: (address: string) => SmtpTransportOptions,
+  createTransport: SmtpTransportFactory,
+): Promise<SmtpTransport> {
+  if (addresses.length === 1) {
+    return createTransport(optionsFor(addresses[0]!));
+  }
+  let lastError: unknown;
+  for (const address of addresses) {
+    const transport = createTransport(optionsFor(address));
+    if (!transport.verify) {
+      return transport;
+    }
+    try {
+      await transport.verify();
+      return transport;
+    } catch (error) {
+      if (!isSmtpConnectionError(error)) {
+        throw classifySmtpProbeFailure(error);
+      }
+      lastError = error;
+    }
+  }
+  const detail = truncate(lastError instanceof Error ? lastError.message : String(lastError));
+  throw new CommsPreBoundaryProviderError(
+    `smtp.send could not connect to any of the ${addresses.length} vetted SMTP server addresses; nothing was sent. ${detail}`,
+    { cause: lastError },
+  );
+}
+
+function isSmtpConnectionError(error: unknown): boolean {
+  const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+  return typeof code === "string" && SMTP_CONNECTION_ERROR_CODES.has(code);
+}
+
+/** A failed probe never reached MAIL FROM, so every probe failure is pre-boundary. */
+function classifySmtpProbeFailure(error: unknown): CommsPreBoundaryProviderError {
+  const classified = classifySmtpSendFailure(error);
+  if (classified instanceof CommsPreBoundaryProviderError) {
+    return classified;
+  }
+  const detail = truncate(error instanceof Error ? error.message : String(error));
+  return new CommsPreBoundaryProviderError(
+    `smtp.send could not verify the SMTP server before sending; nothing was sent. ${detail}`,
+    { cause: error },
+  );
 }
 
 function classifySmtpSendFailure(error: unknown): unknown {

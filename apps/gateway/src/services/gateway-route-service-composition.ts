@@ -6,6 +6,7 @@ import { composeRuntimeAdminRouteDependencies } from "./gateway-route-compositio
 import { composeMemoryKnowledgeRouteDependencies } from "./gateway-route-composition-memory.js";
 import { composeToolsMcpRouteDependencies } from "./gateway-route-composition-tools.js";
 import {
+  composeCommunicationsMailDraftRecovery,
   composeCommunicationsMailDraftStore,
   composeSystemRouteDependencies,
 } from "./gateway-route-composition-system.js";
@@ -39,5 +40,6 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionPort
       ...composeSystemRouteDependencies(gateway),
     }),
     mailDrafts: composeCommunicationsMailDraftStore(gateway),
+    mailDraftRecovery: composeCommunicationsMailDraftRecovery(gateway),
   };
 }

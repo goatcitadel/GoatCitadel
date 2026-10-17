@@ -1,6 +1,6 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, parse, sep } from "node:path";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
@@ -342,9 +342,9 @@ function buildAuthHarness(options: { storage?: Storage; rootDir?: string } = {})
 }
 
 function readAuthFixtureDatabaseTime(harness: AuthHarness): number {
-  const row = harness.storage.db
-    .prepare("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS timestamp")
-    .get() as { timestamp: string };
+  const row = harness.storage.db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS timestamp").get() as {
+    timestamp: string;
+  };
   return Date.parse(row.timestamp);
 }
 
@@ -533,12 +533,19 @@ describe("settings-auth-service durable settings", () => {
     host.config.assistant.durable = { ...host.config.assistant.durable, enabled: true, executionEnabled: true };
     await host.updateFeatureFlags({ chatExplicitContextV1Enabled: true, chatProviderFallbackV1Enabled: true });
     expect((await getSettings(host)).chatFeatureAvailability).toMatchObject({
-      durableExecution: true, explicitContext: true, providerFallback: true, automaticFanout: false,
+      durableExecution: true,
+      explicitContext: true,
+      providerFallback: true,
+      automaticFanout: false,
     });
     host.config.assistant.durable.executionEnabled = false;
     expect((await getSettings(host)).chatFeatureAvailability).toEqual({
-      durableExecution: false, explicitContext: false, providerFallback: false,
-      automaticFanout: false, supervisedDelegation: false, staticMcp: false,
+      durableExecution: false,
+      explicitContext: false,
+      providerFallback: false,
+      automaticFanout: false,
+      supervisedDelegation: false,
+      staticMcp: false,
     });
   });
 
@@ -1507,6 +1514,134 @@ function restoreEnv(key: string, value: string | undefined): void {
   }
   process.env[key] = value;
 }
+
+describe("settings-auth-service operator write access", () => {
+  const tempRoots: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempRoots.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function buildWriteAccessHost() {
+    const base = realpathSync.native(mkdtempSync(join(tmpdir(), "gc-write-access-")));
+    tempRoots.push(base);
+    const rootDir = join(base, "runtime");
+    const outside = join(base, "outside");
+    for (const dir of [rootDir, join(rootDir, "config"), outside]) mkdirSync(dir, { recursive: true });
+    const host = buildHost();
+    const toolPolicy = host.config.toolPolicy as unknown as Record<string, any>;
+    toolPolicy.tools = { ...toolPolicy.tools, allow: ["fs.read"], deny: ["fs.write", "fs.delete", "shell.exec"] };
+    toolPolicy.sandbox.runtimeWriteProtection = { rootDir, protectedPaths: [join(rootDir, "config")] };
+    return { host, rootDir, outside };
+  }
+
+  it("projects operator write roots and the global tool lists", async () => {
+    const { host, outside } = buildWriteAccessHost();
+    host.config.toolPolicy.sandbox.operatorWriteRoots = [{ path: outside, allowDelete: true, label: "Scratch" }];
+
+    const settings = await getSettings(host);
+
+    expect(settings.operatorWriteRoots).toEqual([{ path: outside, allowDelete: true, label: "Scratch" }]);
+    expect(settings.globalToolAccess).toEqual({ allow: ["fs.read"], deny: ["fs.write", "fs.delete", "shell.exec"] });
+  });
+
+  it("adds a canonical root with delete off by default and removes it by an equivalent path", async () => {
+    const { host, outside } = buildWriteAccessHost();
+
+    const added = await updateSettings(host, {
+      operatorWriteRootChange: { action: "add", path: `${outside}${sep}`, label: " Scratch " },
+    });
+
+    expect(added.operatorWriteRoots).toEqual([
+      { path: outside, allowDelete: false, label: "Scratch", addedAt: expect.any(String) },
+    ]);
+    const alias = process.platform === "win32" ? outside.toUpperCase() : outside;
+    const removed = await updateSettings(host, { operatorWriteRootChange: { action: "remove", path: alias } });
+    expect(removed.operatorWriteRoots).toEqual([]);
+  });
+
+  it("rejects protected, duplicate, and unknown roots without changing the list", async () => {
+    const { host, rootDir, outside } = buildWriteAccessHost();
+    await updateSettings(host, { operatorWriteRootChange: { action: "add", path: outside, allowDelete: true } });
+
+    await expect(
+      updateSettings(host, { operatorWriteRootChange: { action: "add", path: join(rootDir, "config") } }),
+    ).rejects.toThrow(/cannot be an operator write root/);
+    await expect(updateSettings(host, { operatorWriteRootChange: { action: "add", path: outside } })).rejects.toThrow(
+      /already an operator write root/,
+    );
+    await expect(
+      updateSettings(host, { operatorWriteRootChange: { action: "remove", path: join(rootDir, "missing") } }),
+    ).rejects.toThrow(/not an operator write root/);
+    expect(host.config.toolPolicy.sandbox.operatorWriteRoots).toEqual([
+      expect.objectContaining({ path: outside, allowDelete: true }),
+    ]);
+  });
+
+  it("fails closed when the runtime write protection is missing", async () => {
+    const { host, outside } = buildWriteAccessHost();
+    delete host.config.toolPolicy.sandbox.runtimeWriteProtection;
+
+    await expect(updateSettings(host, { operatorWriteRootChange: { action: "add", path: outside } })).rejects.toThrow(
+      /Runtime write protection is unavailable/,
+    );
+    expect(host.config.toolPolicy.sandbox.operatorWriteRoots ?? []).toEqual([]);
+  });
+
+  it("resolves the OS temp preset on the server and removes it by preset", async () => {
+    const { host } = buildWriteAccessHost();
+    // The test runtime lives under the OS temp folder, which the safety rules
+    // refuse to open (it would contain the runtime root).
+    await expect(
+      updateSettings(host, { operatorWriteRootChange: { action: "add", preset: "os_temp" } }),
+    ).rejects.toThrow(/contains_runtime_root/);
+    host.config.toolPolicy.sandbox.runtimeWriteProtection = {
+      rootDir: join(parse(tmpdir()).root, "goatcitadel-absent-runtime"),
+      protectedPaths: [],
+    };
+
+    const added = await updateSettings(host, { operatorWriteRootChange: { action: "add", preset: "os_temp" } });
+
+    expect(added.operatorWriteRoots).toEqual([
+      expect.objectContaining({ preset: "os_temp", allowDelete: false, path: realpathSync.native(tmpdir()) }),
+    ]);
+    await expect(
+      updateSettings(host, { operatorWriteRootChange: { action: "add", preset: "os_temp" } }),
+    ).rejects.toThrow(/already an operator write root/);
+    const removed = await updateSettings(host, { operatorWriteRootChange: { action: "remove", preset: "os_temp" } });
+    expect(removed.operatorWriteRoots).toEqual([]);
+  });
+
+  it("sets the global posture of curated fs tools by exact entry only", async () => {
+    const { host } = buildWriteAccessHost();
+
+    const available = await updateSettings(host, {
+      globalToolAccessChange: { toolName: "fs.delete", posture: "available" },
+    });
+    expect(available.globalToolAccess).toEqual({ allow: ["fs.read", "fs.delete"], deny: ["fs.write", "shell.exec"] });
+
+    const unlisted = await updateSettings(host, {
+      globalToolAccessChange: { toolName: "fs.delete", posture: "unlisted" },
+    });
+    expect(unlisted.globalToolAccess).toEqual({ allow: ["fs.read"], deny: ["fs.write", "shell.exec"] });
+
+    const denied = await updateSettings(host, { globalToolAccessChange: { toolName: "fs.patch", posture: "denied" } });
+    expect(denied.globalToolAccess.deny).toEqual(["fs.write", "shell.exec", "fs.patch"]);
+  });
+
+  it("refuses to report a tool available while a wildcard deny still blocks it", async () => {
+    const { host } = buildWriteAccessHost();
+    host.config.toolPolicy.tools.deny = ["fs.*"];
+
+    await expect(
+      updateSettings(host, { globalToolAccessChange: { toolName: "fs.write", posture: "available" } }),
+    ).rejects.toThrow(/global deny pattern "fs\.\*"/);
+    await expect(
+      updateSettings(host, { globalToolAccessChange: { toolName: "shell.exec", posture: "available" } as never }),
+    ).rejects.toThrow(/curated filesystem mutation tool/);
+    expect(host.config.toolPolicy.tools.deny).toEqual(["fs.*"]);
+  });
+});
 
 describe("settings-auth-service device access lifecycle", () => {
   it("creates, approves, delivers, validates, and revokes a durable device grant", async () => {

@@ -77,6 +77,35 @@ describe("cron job config helpers", () => {
     );
   });
 
+  it("keeps a paused never-run no_agent job disabled even when the config file enables it", async () => {
+    const host = createHost(await makeRoot());
+    await writeFile(
+      getCronJobsConfigPath(host),
+      JSON.stringify({
+        jobs: [
+          { jobId: "dormant-host", name: "Dormant", schedule: "0 8 * * *", action: "no_agent", enabled: true },
+          { jobId: "ran-host", name: "Ran", schedule: "0 8 * * *", action: "no_agent", enabled: true },
+        ],
+      }),
+      "utf8",
+    );
+    host.storage.cronJobs.get.mockImplementation((jobId: string) =>
+      jobId === "dormant-host"
+        ? { jobId, action: "no_agent", enabled: false }
+        : { jobId, action: "no_agent", enabled: false, lastRunAt: "2026-10-01T00:00:00.000Z", lastRunId: "run-1" },
+    );
+
+    await loadCronJobsFromConfig(host);
+
+    expect(host.cronConfigGenerationOwner.reconcileSpec).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "dormant-host", enabled: false }),
+    );
+    // A job that already ran under operator control may be re-enabled from config.
+    expect(host.cronConfigGenerationOwner.reconcileSpec).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "ran-host", enabled: true }),
+    );
+  });
+
   it("preserves existing operator spec state when ensuring built-in cron jobs", async () => {
     const host = createHost("F:/tmp/goatcitadel");
     host.storage.cronJobs.get.mockImplementation((jobId: string) => ({

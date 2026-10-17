@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { NotFoundError } from "@goatcitadel/contracts";
 import type {
   ApprovalCreateInput,
   ApprovalRequest,
@@ -12,6 +13,7 @@ import type {
   IntegrationKind,
   MailAccountRecord,
   MailDraftRecord,
+  MailDraftReleaseResponse,
   MailMessageSummary,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
@@ -28,6 +30,14 @@ export type CommunicationsMailDraftStore = Pick<AsyncStorage["mailDrafts"], "cre
 export type CreateCalendarEventInput = Omit<CalendarEventRecord, "eventId" | "createdAt" | "updatedAt"> & {
   workspaceId?: string;
 };
+
+/** Raised (by the caller) when the approval lookup a draft release needs was not composed; releasing then fails closed. */
+export class MailDraftRecoveryUnavailableError extends Error {
+  public constructor() {
+    super("Mail draft recovery is unavailable: send approvals for the draft cannot be checked.");
+    this.name = "MailDraftRecoveryUnavailableError";
+  }
+}
 
 /** Raised when draft persistence was not composed; routes answer 503 rather than keeping drafts in memory. */
 export class MailDraftStoreUnavailableError extends Error {
@@ -67,10 +77,22 @@ export interface CommunicationsDashboardServiceDependencies {
   mailDrafts?: CommunicationsMailDraftStore;
 }
 
+export interface CommunicationsMailDraftRecovery {
+  /** Every persisted `communications.mail.send` approval whose payload names this draft. */
+  findMailSendApprovals(draftId: string): Promise<ApprovalRequest[]>;
+  /** Appends a bounded audit record for a release or relink; never carries message content. */
+  recordAudit(event: Record<string, unknown>): Promise<void>;
+}
+
 const DEFAULT_WORKSPACE_ID = "default";
 const MAIL_SEND_EXECUTION_COPY = "Approving sends this exact message once through the connected account.";
 const CALENDAR_CREATE_EXECUTION_COPY = "Approving creates this exact event once on the connected calendar.";
 const MAX_FAILURE_DETAIL_LENGTH = 300;
+/**
+ * How long an interrupted send must sit before it can be released. A request still creating its
+ * approval would otherwise race the release; no send request runs anywhere near this long.
+ */
+export const INTERRUPTED_SEND_RELEASE_GRACE_MS = 10 * 60 * 1000;
 const DEFAULT_INBOX_LIMIT = 10;
 const DEFAULT_AGENDA_LIMIT = 20;
 const INTEGRATION_CONNECTION_LIMIT = 200;
@@ -128,8 +150,8 @@ export class CommunicationsDashboardService {
     return await this.requireDraftStore().find(draftId);
   }
 
-  /** True only when the account is a mail account projected into this workspace's dashboard. */
-  public async isMailAccountVisible(workspaceId: string, accountId: string): Promise<boolean> {
+  /** True only when the account is a mail account projected into this (or, unnamed, the default) workspace's dashboard. */
+  public async isMailAccountVisible(workspaceId: string | undefined, accountId: string): Promise<boolean> {
     const normalized = normalizeWorkspaceId(workspaceId);
     const connections = await this.listWorkspaceConnections(normalized);
     return connections.some((connection) =>
@@ -138,7 +160,7 @@ export class CommunicationsDashboardService {
   }
 
   /** True only when the account is a calendar account projected into this workspace's dashboard. */
-  public async isCalendarAccountVisible(workspaceId: string, accountId: string): Promise<boolean> {
+  public async isCalendarAccountVisible(workspaceId: string | undefined, accountId: string): Promise<boolean> {
     const normalized = normalizeWorkspaceId(workspaceId);
     const connections = await this.listWorkspaceConnections(normalized);
     return connections.some((connection) =>
@@ -205,6 +227,62 @@ export class CommunicationsDashboardService {
       updatedAt: this.nowIso(),
     });
     return settled ?? (await store.find(draftId)) ?? { ...claimed, approvalId };
+  }
+
+  /**
+   * Recovers a draft fenced for sending (`approval_required`) whose approval id was never recorded,
+   * because its send request died between the fence and approval creation. A persisted send approval
+   * that names the draft is re-linked instead, so a draft never gets a second approval; only when none
+   * exists, and the grace period has passed, does the draft return to `draft`. Both are audited.
+   */
+  public async releaseInterruptedDraft(
+    draftId: string,
+    recovery: CommunicationsMailDraftRecovery,
+  ): Promise<MailDraftReleaseResponse> {
+    const store = this.requireDraftStore();
+    const draft = await store.find(draftId);
+    if (!draft) {
+      throw new NotFoundError({ entity: "Mail draft", id: draftId });
+    }
+    if (draft.status !== "approval_required" || draft.approvalId) {
+      return { outcome: "not_interrupted", draft };
+    }
+    // A send still in flight in this process, or one fenced within the grace period, may yet record its approval.
+    const elapsedMs = this.nowDate().getTime() - Date.parse(draft.updatedAt);
+    const waitMs = this.sending.has(draftId)
+      ? INTERRUPTED_SEND_RELEASE_GRACE_MS
+      : INTERRUPTED_SEND_RELEASE_GRACE_MS - elapsedMs;
+    if (waitMs > 0) {
+      return {
+        outcome: "too_recent",
+        draft,
+        retryAfterSeconds: Math.ceil(Math.min(waitMs, INTERRUPTED_SEND_RELEASE_GRACE_MS) / 1000),
+      };
+    }
+    const [approval] = await recovery.findMailSendApprovals(draftId);
+    const audit = { draftId, workspaceId: normalizeWorkspaceId(draft.workspaceId), accountId: draft.accountId };
+    if (approval) {
+      const relinked = await store.transition(draftId, ["approval_required"], {
+        status: "approval_required",
+        approvalId: approval.approvalId,
+        updatedAt: this.nowIso(),
+      });
+      if (!relinked) {
+        return { outcome: "not_interrupted", draft: (await store.find(draftId)) ?? draft };
+      }
+      await recovery.recordAudit({ event: "mail_draft_send_relinked", ...audit, approvalId: approval.approvalId });
+      return { outcome: "relinked", draft: relinked };
+    }
+    const released = await store.transition(draftId, ["approval_required"], {
+      status: "draft",
+      clearFailureReason: true,
+      updatedAt: this.nowIso(),
+    });
+    if (!released) {
+      return { outcome: "not_interrupted", draft: (await store.find(draftId)) ?? draft };
+    }
+    await recovery.recordAudit({ event: "mail_draft_send_released", ...audit, interruptedAt: draft.updatedAt });
+    return { outcome: "released", draft: released };
   }
 
   private async createSendApproval(existing: MailDraftRecord): Promise<string> {
@@ -302,6 +380,12 @@ export class CommunicationsDashboardService {
   /**
    * The connection's storage revision at approval time, which the approval binds. An
    * unreadable connection records none, and execution then refuses to act.
+   *
+   * The revision covers every stored setting, including which env var or keychain handle
+   * holds each secret, so re-pointing a credential invalidates the approval. A credential
+   * value rotated behind an unchanged reference deliberately does not: OAuth tokens rotate
+   * on their own, and a fingerprint of the value would persist a guessable derivative of a
+   * secret (an SMTP password) in the approval payload. Execution re-resolves the credential.
    */
   private async findConnectionRevision(accountId: string): Promise<string | undefined> {
     const connections = await this.listConnections();

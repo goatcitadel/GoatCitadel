@@ -8,6 +8,8 @@ import {
   fetchCommunicationsDashboard,
   sendMailDraft,
 } from "@goatcitadel/mission-control-shared/api/personal-ops";
+import { describeMailDraftFailure } from "@goatcitadel/mission-control-shared/content/mail-draft-failure";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { NativeCard, NativeDisclosureCard } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import { getErrorMessage, nativeLoad, nativeLoadIssues, useAsyncLoad, type Notice } from "../shared/native-helpers";
@@ -37,6 +39,9 @@ export function LibraryCommunicationsSection({ activeWorkspaceId, activeWorkspac
   const setBodyText = (bodyText: string) => messageDraft.setValue((current) => ({ ...current, bodyText }));
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  // The raw Gateway failure reason, shown only behind technical details; the notice carries operator copy.
+  const [failureDetail, setFailureDetail] = useState<string | undefined>(undefined);
+  const { showTechnicalDetails } = useUiPreferences();
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const dashboard = await nativeLoad("Communications", fetchCommunicationsDashboard(activeWorkspaceId), {
       mailAccounts: [],
@@ -75,6 +80,11 @@ export function LibraryCommunicationsSection({ activeWorkspaceId, activeWorkspac
         bodyText,
       });
       const sendState = await sendMailDraft(draft.draftId, activeWorkspaceId);
+      const failure =
+        sendState.status === "failed" || sendState.status === "send_unavailable"
+          ? describeMailDraftFailure(sendState.failureReason)
+          : undefined;
+      setFailureDetail(failure?.technicalDetail);
       setNotice(
         sendState.status === "outcome_unknown"
           ? {
@@ -82,11 +92,8 @@ export function LibraryCommunicationsSection({ activeWorkspaceId, activeWorkspac
               message:
                 "Outcome unknown: the message may have been delivered. Check the sent mailbox before sending it again.",
             }
-          : sendState.status === "failed" || sendState.status === "send_unavailable"
-            ? {
-                tone: "error",
-                message: `Not sent: ${sendState.failureReason ?? "the Gateway did not record a reason."}`,
-              }
+          : failure
+            ? { tone: "error", message: failure.summary }
             : sendState.status === "sent"
               ? { tone: "success", message: "Sent." }
               : {
@@ -98,6 +105,7 @@ export function LibraryCommunicationsSection({ activeWorkspaceId, activeWorkspac
       if (messageDraft.acceptSaved({ to: "", subject: "", bodyText: "" }, undefined, submitted)) setView("inbox");
       await reload();
     } catch (draftError) {
+      setFailureDetail(undefined);
       setNotice({ tone: "error", message: getErrorMessage(draftError) });
     } finally {
       setSaving(false);
@@ -107,6 +115,12 @@ export function LibraryCommunicationsSection({ activeWorkspaceId, activeWorkspac
   return (
     <LibrarySectionShell loading={loading && !data} error={error} onRetry={reload}>
       {notice ? <LibraryNotice notice={notice} /> : null}
+      {notice && failureDetail && showTechnicalDetails ? (
+        <details className="mc-next-inline-disclosure">
+          <summary>Recorded failure reason</summary>
+          <p>{failureDetail}</p>
+        </details>
+      ) : null}
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       {view !== "compose" ? (
         <div className="mc-next-view-tabs" role="group" aria-label="Communication views">

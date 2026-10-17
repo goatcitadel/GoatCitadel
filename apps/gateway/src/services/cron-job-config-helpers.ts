@@ -118,6 +118,13 @@ export async function loadCronJobsFromConfig(host: CronJobConfigHost): Promise<v
       continue;
     }
     const canonicalAction = BUILT_IN_CRON_ACTIONS.get(normalizedJobId);
+    const configEnabled = sanitized.enabled === undefined ? (existing?.enabled ?? true) : Boolean(sanitized.enabled);
+    const keepDormantNoAgentPaused = configEnabled && isPausedDormantNoAgentJob(existing);
+    if (keepDormantNoAgentPaused) {
+      log.warn("keeping never-run no_agent cron job paused; re-enable it through the cron API", {
+        jobId: normalizedJobId,
+      });
+    }
     await host.cronConfigGenerationOwner.reconcileSpec({
       jobId: normalizedJobId,
       name: normalizedName,
@@ -125,12 +132,27 @@ export async function loadCronJobsFromConfig(host: CronJobConfigHost): Promise<v
       actionConfig: sanitized.actionConfig ?? existing?.actionConfig,
       description: sanitized.description ?? existing?.description,
       schedule: normalizedSchedule,
-      enabled: sanitized.enabled === undefined ? (existing?.enabled ?? true) : Boolean(sanitized.enabled),
+      enabled: keepDormantNoAgentPaused ? false : configEnabled,
       endAt: normalizedEndAt,
       workdir: sanitized.workdir ?? existing?.workdir,
       contextFrom: sanitized.contextFrom ?? existing?.contextFrom,
     });
   }
+}
+
+/**
+ * A stored no_agent job that is disabled and has never run (for example one the
+ * `pause_dormant_no_agent_cron_jobs` migration paused) runs an operator-chosen
+ * host command, so a config file alone may not switch it on: an operator
+ * re-enables it through the cron API.
+ */
+function isPausedDormantNoAgentJob(existing: CronJobRecord | undefined): boolean {
+  return (
+    existing?.action === "no_agent" &&
+    existing.enabled === false &&
+    existing.lastRunAt === undefined &&
+    existing.lastRunId === undefined
+  );
 }
 
 interface SanitizedCronJobRow {

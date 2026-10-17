@@ -218,6 +218,111 @@ describe("smtpSend", () => {
     expect(runtime.markMutationRequestStarted).not.toHaveBeenCalled();
   });
 
+  describe("with several vetted addresses", () => {
+    const SECOND_SMTP_IP = "93.184.216.35";
+    const THIRD_SMTP_IP = "93.184.216.36";
+    const multiLookup: DnsLookupFunction = (_hostname, _options, callback) =>
+      callback(null, [
+        { address: PUBLIC_SMTP_IP, family: 4 },
+        { address: SECOND_SMTP_IP, family: 4 },
+        { address: PUBLIC_SMTP_IP, family: 4 },
+        { address: THIRD_SMTP_IP, family: 4 },
+      ]);
+
+    /** One fake transport per address; `verify` and `sendMail` outcomes are set per address. */
+    function multiRuntime(behavior: Record<string, { verify?: Error; sendMail?: Error }>) {
+      const order: string[] = [];
+      const runtime = fakeRuntime({ dnsLookup: multiLookup });
+      const createTransport = vi.fn((options: { host: string }) => ({
+        verify: vi.fn(async () => {
+          order.push(`verify:${options.host}`);
+          const error = behavior[options.host]?.verify;
+          if (error) throw error;
+          return true;
+        }),
+        sendMail: vi.fn(async () => {
+          order.push(`send:${options.host}`);
+          const error = behavior[options.host]?.sendMail;
+          if (error) throw error;
+          return { messageId: `<m@${options.host}>` };
+        }),
+      }));
+      runtime.markMutationRequestStarted.mockImplementation(async () => {
+        order.push("boundary");
+      });
+      return { runtime: { ...runtime, createTransport }, order, createTransport };
+    }
+
+    it("moves past an address that refuses the connection and sends once through the next", async () => {
+      const { runtime, order, createTransport } = multiRuntime({
+        [PUBLIC_SMTP_IP]: { verify: smtpError("connect ECONNREFUSED", "ESOCKET", "CONN") },
+      });
+
+      const messageId = await smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"], undefined, runtime);
+
+      expect(messageId).toBe(`<m@${SECOND_SMTP_IP}>`);
+      expect(order).toEqual([
+        `verify:${PUBLIC_SMTP_IP}`,
+        `verify:${SECOND_SMTP_IP}`,
+        "boundary",
+        `send:${SECOND_SMTP_IP}`,
+      ]);
+      expect(createTransport.mock.calls.map(([options]) => options)).toEqual([
+        expect.objectContaining({ host: PUBLIC_SMTP_IP, tls: { servername: "smtp.example.com" } }),
+        expect.objectContaining({ host: SECOND_SMTP_IP, tls: { servername: "smtp.example.com" } }),
+      ]);
+    });
+
+    it("never falls back once sendMail has started, keeping the unknown outcome", async () => {
+      const closed = smtpError("Connection closed unexpectedly", "ECONNECTION", "CONN");
+      const { runtime, order } = multiRuntime({ [PUBLIC_SMTP_IP]: { sendMail: closed } });
+
+      const failure = await smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"], undefined, runtime).catch(
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBe(closed);
+      expect(failure).not.toBeInstanceOf(CommsPreBoundaryProviderError);
+      expect(order).toEqual([`verify:${PUBLIC_SMTP_IP}`, "boundary", `send:${PUBLIC_SMTP_IP}`]);
+    });
+
+    it("stops at a probe that fails for a reason other than the connection, before the boundary", async () => {
+      const { runtime, order } = multiRuntime({
+        [PUBLIC_SMTP_IP]: { verify: smtpError("Invalid login: 535", "EAUTH", "AUTH PLAIN") },
+      });
+
+      await expect(smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"], undefined, runtime)).rejects.toSatisfy(
+        (error: unknown) => error instanceof CommsPreBoundaryProviderError && /credentials/u.test(error.message),
+      );
+      expect(order).toEqual([`verify:${PUBLIC_SMTP_IP}`]);
+    });
+
+    it("reports nothing sent when no vetted address accepts a connection", async () => {
+      const refused = smtpError("Connection timeout", "ETIMEDOUT", "CONN");
+      const { runtime, order } = multiRuntime({
+        [PUBLIC_SMTP_IP]: { verify: refused },
+        [SECOND_SMTP_IP]: { verify: refused },
+        [THIRD_SMTP_IP]: { verify: refused },
+      });
+
+      await expect(smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"], undefined, runtime)).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof CommsPreBoundaryProviderError &&
+          /any of the 3 vetted .*nothing was sent/u.test(error.message),
+      );
+      expect(order).toEqual([`verify:${PUBLIC_SMTP_IP}`, `verify:${SECOND_SMTP_IP}`, `verify:${THIRD_SMTP_IP}`]);
+    });
+
+    it("does not probe when the host resolves to a single address", async () => {
+      const { runtime, order } = multiRuntime({});
+      runtime.dnsLookup = fakeLookup(PUBLIC_SMTP_IP);
+
+      await smtpSend(SMTP_CONFIG, SEND_ARGS, ["smtp.example.com"], undefined, runtime);
+
+      expect(order).toEqual(["boundary", `send:${PUBLIC_SMTP_IP}`]);
+    });
+  });
+
   it("throws before transport creation and the boundary when smtpHost is missing", async () => {
     const runtime = fakeRuntime();
 

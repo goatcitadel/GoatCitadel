@@ -28,7 +28,7 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 267,
+        version: 268,
         name: "external_side_effect_replay_record",
       },
     );

@@ -216,6 +216,7 @@ import {
 } from "./chat-turn-agent-runner/artifact-write-helpers.js";
 import { groundResearchPresentationArgs } from "./chat-turn-agent-runner/presentation-research-evidence.js";
 import {
+  buildGovernanceBlockGuidance,
   buildPathBridgeFailureGuidance,
   buildToolFailureAppendixText,
 } from "./chat-turn-agent-runner/tool-failure-messaging.js";
@@ -8338,7 +8339,7 @@ export class ChatTurnAgentRunner {
                 ? "The fallback may already have changed state. Inspect state before retry; automatic replay was suppressed."
                 : buildToolFailureGuidance({
                     toolName: preflight.toolName,
-                    status: "blocked",
+                    status: executorDispatchStarted ? "failed" : "blocked",
                     args: preflight.args,
                     error: fallbackError,
                     result: writeFallback.result.result,
@@ -8381,7 +8382,7 @@ export class ChatTurnAgentRunner {
               ? "Execution may already have changed state. Inspect state before retry; automatic replay was suppressed."
               : buildToolFailureGuidance({
                   toolName: preflight.toolName,
-                  status: "blocked",
+                  status: executorDispatchStarted ? "failed" : "blocked",
                   args: preflight.args,
                   error: result.policyReason,
                   result: persistedToolResult,
@@ -10224,6 +10225,12 @@ function buildToolFailureGuidance(input: {
       return pathBridgeGuidance;
     }
   }
+  // Deny, allow-list, Ward, and write-root blocks name the operator setting to
+  // change; the strict template would ask for an approval that cannot lift them.
+  const governanceGuidance = buildGovernanceBlockGuidance(input);
+  if (governanceGuidance) {
+    return governanceGuidance;
+  }
   const normalizedError = (input.error ?? "").toLowerCase();
   const host = readBlockedSourceHost(input.result ?? {}, input.args);
   const browserFailureClass =
@@ -10314,9 +10321,6 @@ function buildToolFailureGuidanceBase(input: {
     }
   }
 
-  if (normalizedError.includes("write jail") || normalizedError.includes("outside write")) {
-    return "Use a safe fallback path inside the workspace write jail.";
-  }
   if (
     normalizedError.includes("presentation content quality gate") ||
     normalizedError.includes("research presentation content/evidence gate") ||

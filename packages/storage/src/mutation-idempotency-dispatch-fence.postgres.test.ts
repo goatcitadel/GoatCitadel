@@ -42,10 +42,27 @@ test(
            'internal-token', '2026-10-16T00:00:01.000Z', '2026-10-16T00:00:00.000Z', '2026-10-16T00:00:00.000Z')`,
       );
 
+      // v215 pauses enabled no_agent jobs that never ran; others keep their state.
+      await admin.query(
+        `INSERT INTO ${schema}.cron_jobs (job_id, name, action, schedule, enabled, last_run_at, last_run_id, updated_at)
+         VALUES ('dormant-host', 'Dormant', 'no_agent', '0 8 * * *', 1, NULL, NULL, '2026-10-16T00:00:00.000Z'),
+           ('ran-host', 'Ran', 'no_agent', '0 8 * * *', 1, '2026-10-01T00:00:00.000Z', 'run-1', '2026-10-16T00:00:00.000Z'),
+           ('agent-task', 'Agent', 'task', '0 8 * * *', 1, NULL, NULL, '2026-10-16T00:00:00.000Z')`,
+      );
+
       // The full registry (not a canonical prefix) runs the schema-shape gate.
       const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-      assert.deepEqual(migrated.appliedVersions, [212, 213, 214, 215]);
-      assert.equal(migrated.latestVersion, 215);
+      assert.deepEqual(migrated.appliedVersions, [212, 213, 214, 215, 216]);
+      assert.equal(migrated.latestVersion, 216);
+
+      const cronRows = await admin.query<{ job_id: string; enabled: string; revision: string }>(
+        `SELECT job_id, enabled::text AS enabled, revision::text AS revision FROM ${schema}.cron_jobs ORDER BY job_id`,
+      );
+      assert.deepEqual(cronRows.rows, [
+        { job_id: "agent-task", enabled: "1", revision: "1" },
+        { job_id: "dormant-host", enabled: "0", revision: "2" },
+        { job_id: "ran-host", enabled: "1", revision: "1" },
+      ]);
 
       const column = await admin.query<{ data_type: string; is_nullable: string }>(
         `SELECT data_type, is_nullable FROM information_schema.columns
@@ -123,13 +140,13 @@ test(
     try {
       await admin.query(`CREATE SCHEMA ${schema}`);
       // v2 renders from the current SQLite blueprint, so an install that predates
-      // the column is simulated by dropping it before v215.
-      await runPostgresMigrations(migrations, upTo(214));
+      // the column is simulated by dropping it before v216.
+      await runPostgresMigrations(migrations, upTo(215));
       await admin.query(`ALTER TABLE ${schema}.external_side_effect_runs DROP COLUMN replay_record_json`);
 
       const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-      assert.deepEqual(migrated.appliedVersions, [215]);
-      assert.equal(migrated.latestVersion, 215);
+      assert.deepEqual(migrated.appliedVersions, [216]);
+      assert.equal(migrated.latestVersion, 216);
 
       const column = await admin.query<{ data_type: string; is_nullable: string }>(
         `SELECT data_type, is_nullable FROM information_schema.columns

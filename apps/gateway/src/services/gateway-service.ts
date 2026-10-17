@@ -3298,6 +3298,10 @@ export class GatewayService {
           this.llamaCppSetupSelection.resolve(selectionId, workspaceId),
         discardManagedSelection: (selectionId) => this.llamaCppSetupSelection.discard(selectionId),
         refreshLlamaRuntime: () => this.llamaCppRuntime.refresh(),
+        validateSettingsUpdate: async (input) => {
+          const deps = createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort());
+          await settingsAuthService.buildSettingsCandidate(deps, input);
+        },
         hasTemporaryAuthCredential: (planId) =>
           Boolean(this.secretStore.getSecret(runtimeTemporaryAuthAccount(planId))?.trim()),
         consumeTemporaryAuthCredential: (planId) => {

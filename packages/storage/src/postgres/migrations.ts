@@ -2,6 +2,7 @@ import { APPROVAL_EXECUTION_LINKAGE_POSTGRES_SQL } from "../approval-execution-l
 import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_POSTGRES_SQL } from "../approval-execution-linkage-index-repair.js";
 import { CHANNEL_GUIDED_SETUP_POSTGRES_SQL } from "../channel-guided-setup-schema.js";
 import { MAIL_DRAFTS_POSTGRES_SQL, MAIL_DRAFTS_SCHEMA_CONVERGENCE_POSTGRES_SQL } from "../mail-draft-schema.js";
+import { PAUSE_DORMANT_NO_AGENT_CRON_JOBS_POSTGRES_SQL } from "../pause-dormant-no-agent-cron.js";
 import { CHAT_ROUTED_CONTEXT_ADMISSION_POSTGRES_SQL } from "../chat-routed-context-admission-schema.js";
 import { HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL } from "../heartbeat-feature-binding-schema.js";
 import { COMMITMENT_OCCURRENCE_POSTGRES_SQL } from "../commitment-occurrence-schema.js";
@@ -15207,9 +15208,17 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     integritySha256: "17014e5475fc236af54039b995f07f527804e014b8e712fb2ee05f43f1b23cdb",
   },
   {
+    // Data-only parity with SQLite v267: no_agent cron graduated from its env
+    // gate, so enabled jobs that never ran are paused once for re-confirmation.
+    version: 215,
+    name: "pause_dormant_no_agent_cron_jobs",
+    sql: PAUSE_DORMANT_NO_AGENT_CRON_JOBS_POSTGRES_SQL,
+    integritySha256: "a8601087087845ba7deafc8fc55e1d631cb369ba423ab956e700b142ffa6d385",
+  },
+  {
     // Nullable TEXT: sealed (AES-GCM) replay record for crossed external side
     // effects. Opaque to storage; cleared on completion.
-    version: 215,
+    version: 216,
     name: "external_side_effect_replay_record",
     sql: `
       ALTER TABLE external_side_effect_runs ADD COLUMN IF NOT EXISTS replay_record_json TEXT;
