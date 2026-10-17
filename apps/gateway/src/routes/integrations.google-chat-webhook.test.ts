@@ -260,12 +260,104 @@ describe("Google Chat app webhook route", () => {
     });
   });
 
-  it("replies ignored for a disabled connection", async () => {
-    const ctx = await buildApp({ connection: buildConnection({}, { enabled: false }) });
-    const response = await post(ctx.app, validToken());
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ accepted: true, ignored: true, reason: "connection_disabled" });
-    expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
+  it.each([
+    ["disabled", { enabled: false }],
+    ["disconnected", { status: "disconnected" }],
+  ])(
+    "answers exactly {} for a %s connection, so Chat posts no reply, and never dispatches",
+    async (_label, overrides) => {
+      const ctx = await buildApp({ connection: buildConnection({}, overrides) });
+      const response = await post(ctx.app, validToken());
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toBe("{}");
+      expect(response.json()).toEqual({});
+      expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
+      expect(ctx.fetchCerts).not.toHaveBeenCalled();
+    },
+  );
+
+  describe("Workspace add-on Chat app", () => {
+    const ADD_ON_PROJECT = "987654321098";
+    const ENDPOINT = `https://gateway.example.test${webhookUrl}`;
+
+    function addOnToken(email = `service-${ADD_ON_PROJECT}@gcp-sa-gsuiteaddons.iam.gserviceaccount.com`): string {
+      const nowS = Math.floor(Date.now() / 1000);
+      return signToken({
+        iss: "https://accounts.google.com",
+        aud: ENDPOINT,
+        email,
+        email_verified: true,
+        iat: nowS - 10,
+        exp: nowS + 3600,
+      });
+    }
+
+    function addOnEvent() {
+      return {
+        commonEventObject: { hostApp: "CHAT" },
+        chat: {
+          user: { name: "users/123", displayName: "Ada", type: "HUMAN" },
+          eventTime: "2026-10-16T12:00:00.000Z",
+          messagePayload: {
+            space: { name: "spaces/AAA", type: "SPACE" },
+            message: {
+              name: "spaces/AAA/messages/BBB",
+              text: "status",
+              thread: { name: "spaces/AAA/threads/CCC" },
+              sender: { name: "users/123", displayName: "Ada", type: "HUMAN" },
+            },
+          },
+        },
+      };
+    }
+
+    function addOnConnection(config: Record<string, unknown> = {}) {
+      return buildConnection({
+        audienceType: "endpoint_url",
+        audience: ENDPOINT,
+        addOnProjectNumber: ADD_ON_PROJECT,
+        ...config,
+      });
+    }
+
+    it("dispatches an add-on message end to end with a verified add-on token", async () => {
+      const ctx = await buildApp({ connection: addOnConnection() });
+      const response = await post(ctx.app, addOnToken(), addOnEvent());
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({});
+      expect(ctx.acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+      expect(ctx.acceptInboundChannelEvent.mock.calls[0]?.[0]).toMatchObject({
+        channel: "google-chat",
+        idempotencyKey: `google-chat:${connectionId}:spaces/AAA/messages/BBB`,
+        bindingTarget: "spaces/AAA",
+        responseOptions: { deliveryReplyToMessageId: "spaces/AAA/threads/CCC" },
+        message: {
+          eventId: "spaces/AAA/messages/BBB",
+          actorId: "users/123",
+          content: "status",
+          metadata: expect.objectContaining({ eventShape: "workspace_add_on" }),
+        },
+      });
+    });
+
+    it("rejects the add-on token with 401 when no add-on project number is configured", async () => {
+      const ctx = await buildApp({ connection: addOnConnection({ addOnProjectNumber: undefined }) });
+      const response = await post(ctx.app, addOnToken(), addOnEvent());
+      expect(response.statusCode).toBe(401);
+      expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
+    });
+
+    it("rejects an add-on token minted by another project's service account", async () => {
+      const ctx = await buildApp({ connection: addOnConnection() });
+      for (const email of [
+        "service-111111111111@gcp-sa-gsuiteaddons.iam.gserviceaccount.com",
+        "minted@attacker-project.iam.gserviceaccount.com",
+      ]) {
+        const response = await post(ctx.app, addOnToken(email), addOnEvent());
+        expect(response.statusCode).toBe(401);
+      }
+      expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
+    });
   });
 
   it("passes gateway auth and idempotency plugins without operator credentials", async () => {

@@ -37,6 +37,22 @@ export const GOOGLE_CHAT_CERTS_URL =
 export const GOOGLE_OIDC_CERTS_URL = "https://www.googleapis.com/oauth2/v1/certs";
 export const GOOGLE_CHAT_AUDIENCE_TYPES: readonly GoogleChatAudienceType[] = ["project_number", "endpoint_url"];
 
+/**
+ * Workspace add-on Chat apps receive OIDC ID tokens (issuer accounts.google.com, audience = the
+ * HTTP endpoint URL) whose email is the add-on's per-project service account rather than
+ * chat@system. Only the operator-configured project number is ever accepted: any GCP project can
+ * mint an OIDC token for our public URL, so the email pin is the boundary in endpoint_url mode.
+ */
+export const GOOGLE_CHAT_ADD_ON_PROJECT_NUMBER = /^\d{6,20}$/;
+
+export function googleChatAddOnServiceAccountEmail(projectNumber: string): string {
+  return `service-${projectNumber}@gcp-sa-gsuiteaddons.iam.gserviceaccount.com`;
+}
+
+export function isGoogleChatAddOnProjectNumber(value: unknown): value is string {
+  return typeof value === "string" && GOOGLE_CHAT_ADD_ON_PROJECT_NUMBER.test(value);
+}
+
 const GOOGLE_OIDC_ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
 const CLOCK_SKEW_SECONDS = 60;
 /** Upper bound on exp - iat. Google-signed Chat tokens are valid for about one hour. */
@@ -74,6 +90,11 @@ export async function verifyGoogleChatBearer(input: {
   authorizationHeader: string | undefined;
   audienceType: GoogleChatAudienceType;
   audience: string;
+  /**
+   * Workspace add-on deployments only (endpoint_url audience): the Google Cloud project number whose
+   * add-on service account may sign. Anything that is not all digits is ignored (classic only).
+   */
+  addOnProjectNumber?: string;
   fetchCerts: GoogleChatCertFetcher;
   now?: () => number;
 }): Promise<VerificationResult> {
@@ -104,19 +125,34 @@ export async function verifyGoogleChatBearer(input: {
   if (!verifyRs256(decoded, pem)) {
     return { ok: false, reason: "bad_signature" };
   }
-  return checkClaims(decoded.claims, input.audienceType, input.audience, (input.now ?? Date.now)());
+  return checkClaims(decoded.claims, {
+    audienceType: input.audienceType,
+    audience: input.audience,
+    allowedEmails: allowedEndpointEmails(input.addOnProjectNumber),
+    nowMs: (input.now ?? Date.now)(),
+  });
 }
 
 function pickCert(certs: Record<string, string>, kid: string): string | undefined {
   return Object.prototype.hasOwnProperty.call(certs, kid) ? certs[kid] : undefined;
 }
 
+function allowedEndpointEmails(addOnProjectNumber: string | undefined): ReadonlySet<string> {
+  return isGoogleChatAddOnProjectNumber(addOnProjectNumber)
+    ? new Set([GOOGLE_CHAT_ISSUER, googleChatAddOnServiceAccountEmail(addOnProjectNumber)])
+    : new Set([GOOGLE_CHAT_ISSUER]);
+}
+
 function checkClaims(
   claims: JsonRecord,
-  audienceType: GoogleChatAudienceType,
-  audience: string,
-  nowMs: number,
+  expected: {
+    audienceType: GoogleChatAudienceType;
+    audience: string;
+    allowedEmails: ReadonlySet<string>;
+    nowMs: number;
+  },
 ): VerificationResult {
+  const { audienceType, audience, allowedEmails, nowMs } = expected;
   const issuerOk =
     audienceType === "project_number" ? claims.iss === GOOGLE_CHAT_ISSUER : GOOGLE_OIDC_ISSUERS.has(String(claims.iss));
   if (!issuerOk) {
@@ -147,7 +183,10 @@ function checkClaims(
   ) {
     return { ok: false, reason: "expired" };
   }
-  if (audienceType === "endpoint_url" && (claims.email !== GOOGLE_CHAT_ISSUER || claims.email_verified !== true)) {
+  if (
+    audienceType === "endpoint_url" &&
+    (typeof claims.email !== "string" || !allowedEmails.has(claims.email) || claims.email_verified !== true)
+  ) {
     return { ok: false, reason: "bad_email" };
   }
   return { ok: true };

@@ -110,9 +110,16 @@ export function createWebhookHandler<TParsed>(
       context: WebhookHandlerContext,
     ) => ParsePayloadResult<TParsed> | Promise<ParsePayloadResult<TParsed>>;
     dispatch: (context: WebhookHandlerContext & { parsed: TParsed }) => Promise<unknown>;
+    /**
+     * Body for a 200 "ignored" answer the factory itself produces (disabled or disconnected
+     * connection). Defaults to createIgnoredWebhookReply. Channels whose provider reads a
+     * synchronous 2xx body as a reply (Google Chat) override it with an empty body.
+     */
+    ignoredReply?: (eventType: string | undefined, reason: string) => unknown;
   },
 ) {
   const acceptedRateLimit = createAcceptedWebhookRateLimit(fastify, options.source);
+  const ignoredReply = options.ignoredReply ?? createIgnoredWebhookReply;
   return async (request: WebhookRequest, reply: FastifyReply) => {
     if (rejectOversizedWebhookPayload(request, reply)) {
       return reply;
@@ -143,7 +150,7 @@ export function createWebhookHandler<TParsed>(
     // switch. Reply 200-ignored (rather than a non-2xx) so providers such as
     // Slack/Meta do not auto-disable the subscription on repeated failures.
     if (connection.enabled === false || (connection.status !== undefined && connection.status !== "connected")) {
-      return reply.send(createIgnoredWebhookReply(undefined, "connection_disabled"));
+      return reply.send(ignoredReply(undefined, "connection_disabled"));
     }
 
     const rawBody = request[options.rawBodyKey];
