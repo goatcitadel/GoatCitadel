@@ -22,6 +22,12 @@ vi.mock("../../../features/native-routes/ops/RunDetailRoutePage", () => ({
     return <p>Existing run evidence owner</p>;
   },
 }));
+vi.mock("../../data/use-operator-inbox", () => ({
+  useOperatorInbox: () => ({
+    isError: false,
+    data: { workspaceId: "workspace-a", items: [], counts: { needs_decision: { known: 2, complete: true } } },
+  }),
+}));
 vi.mock("../../data/use-workspace-name", () => ({ useActiveWorkspaceLabel: () => "Workspace A" }));
 vi.mock("../../ui/NativeOwnerLink", () => ({
   NativeOwnerLink: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
@@ -46,10 +52,12 @@ it("keeps task operations with the existing owner and its active workspace", () 
     expect.objectContaining({
       activeWorkspaceId: "workspace-a",
       activeWorkspaceName: "Workspace A",
+      pendingApprovals: 2,
       route: expect.objectContaining({ area: "ops", section: "kanban" }),
     }),
   );
   expect(fixture.run).not.toHaveBeenCalled();
+  expect(host.querySelector("h1")?.textContent).toBe("Older Kanban view");
 });
 it.each(["?runId=r%2F1&taskId=t&workspaceId=workspace-a", "?view=run-detail&workspaceId=workspace-a"])(
   "keeps the original Ops run selection and experimental label: %s",

@@ -204,3 +204,43 @@ it("shows a recorded zero provider cost instead of Unknown", async () => {
   await vi.waitFor(() => expect(container.textContent).toContain("Recorded cost"));
   expect(container.textContent).toContain(formatMoney(0, { atLeast: true }));
 });
+it("WK-10: says how much of the run history is shown and offers the rest", async () => {
+  document.body.appendChild(container);
+  root = createRoot(container);
+  const events = Array.from({ length: 15 }, (_, index) => ({
+    eventId: `event-${index}`,
+    eventType: "run.started",
+    createdAt: `2026-10-16T10:${String(index).padStart(2, "0")}:00.000Z`,
+  }));
+  api.fetch.mockResolvedValue({
+    run: {
+      runId: "run-history",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      payload: { workspaceId: "workspace-a" },
+    },
+    durable: { checkpoints: { state: "available", items: [] }, timeline: { state: "available", items: events } },
+    toolCalls: { state: "available", items: [] },
+    providerUsage: { state: "unknown", items: [] },
+    approvals: { state: "available", items: [] },
+    errors: { state: "available", items: [] },
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <WorkRunDetail runId="run-history" />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).toContain("Showing the latest 12 of 15 events."));
+  const history = [...container.querySelectorAll("h2")].find(
+    (item) => item.textContent === "Run history",
+  )!.parentElement!;
+  expect(history.querySelectorAll("li")).toHaveLength(12);
+  const toggle = [...history.querySelectorAll("button")].find((item) => item.textContent === "Show all 15")!;
+  toggle.focus();
+  await act(async () => toggle.click());
+  expect(history.querySelectorAll("li")).toHaveLength(15);
+  expect(container.textContent).toContain("Showing all 15 events.");
+  expect(document.activeElement?.textContent).toBe("Show fewer");
+});

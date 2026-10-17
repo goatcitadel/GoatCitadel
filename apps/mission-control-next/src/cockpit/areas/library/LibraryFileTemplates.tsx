@@ -137,7 +137,9 @@ function LibraryFileTemplatesContent({
   return (
     <>
       <Button onClick={() => setOpen(true)}>Create from template</Button>
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       {open ? (
         <section aria-label="File from template" className="grid gap-3 border-t border-line-subtle pt-4">
           <p className="text-sm text-fg-secondary">

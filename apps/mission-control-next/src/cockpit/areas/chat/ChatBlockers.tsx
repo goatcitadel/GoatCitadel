@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChatApprovalRenderer } from "./ChatApprovalRenderer";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
@@ -24,7 +24,8 @@ type Blockers = Pick<
   | "onDenyPending"
   | "onSubmitUserInput"
   | "onRefreshThread"
->;
+> &
+  Partial<Pick<MissionThreadedActiveSessionSurfaceProps, "composerRef">>;
 
 export function ChatBlockers({ props }: { props: Blockers }) {
   const { activeWorkspaceId } = useUiPreferences();
@@ -35,6 +36,20 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   const [receipt, setReceipt] = useState<{ scope: string; message: string }>();
   const noticeScope = JSON.stringify([workspaceId, props.selectedSessionId, approvalId]);
   const notice = receipt?.scope === noticeScope ? receipt.message : "";
+  // CH-18: a decision replaces its buttons. If focus was inside and fell to <body>, move it once to the
+  // settlement message, or to the composer when the whole card is gone.
+  const focusWithin = useRef(false);
+  const noticeRef = useRef<HTMLParagraphElement>(null);
+  const composerRef = props.composerRef;
+  useEffect(() => {
+    if (!focusWithin.current) return;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    focusWithin.current = false;
+    const composer = composerRef?.current;
+    if (noticeRef.current) noticeRef.current.focus({ preventScroll: true });
+    else if (composer && !composer.disabled) composer.focus({ preventScroll: true });
+  });
   const recordQuery = useQuery({
     // The same key as the Inbox approval detail, so moving between them is a cache hit (IN-11).
     queryKey: ["approvals", "record", workspaceId, approvalId],
@@ -43,6 +58,8 @@ export function ChatBlockers({ props }: { props: Blockers }) {
     enabled: Boolean(approvalId),
     staleTime: 0,
   });
+  // CH-02: a failed read is an error, not "checking"; a missing record is its own state. Both offer a way forward.
+  const recordFailed = recordQuery.isError && !recordQuery.data;
   const reviewedApproval = recordQuery.data?.approvalId === approvalId ? recordQuery.data : undefined;
   // Retained stream signals can omit risk metadata. Hydrate only from the
   // matching pending canonical record; unavailable/settled records stay closed.
@@ -72,7 +89,14 @@ export function ChatBlockers({ props }: { props: Blockers }) {
     return `${destination}?${parameters}${hash}`;
   }
   return (
-    <>
+    <div
+      onFocusCapture={() => {
+        focusWithin.current = true;
+      }}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) focusWithin.current = false;
+      }}
+    >
       {approval ? (
         <section
           aria-label="Pending approval"
@@ -107,14 +131,25 @@ export function ChatBlockers({ props }: { props: Blockers }) {
               </p>
             </TechnicalDetails>
           ) : null}
-          {notice ? <p role="status">{notice}</p> : null}
+          {notice ? (
+            <p ref={noticeRef} role="status" tabIndex={-1} className="outline-none">
+              {notice}
+            </p>
+          ) : null}
           <ChatApprovalRenderer
             approvalId={approval.approvalId}
             approval={reviewedApproval}
             workspaceId={workspaceId}
             sessionId={props.selectedSessionId ?? undefined}
-            recordPending={recordQuery.isPending}
-            checking={recordQuery.isFetching || recordQuery.isError || props.approvalPending}
+            recordPending={recordQuery.isPending && !recordQuery.isError}
+            recovery={{
+              failed: recordFailed,
+              retrying: recordQuery.isFetching,
+              onRetry: () => void recordQuery.refetch(),
+              onDeny: props.onDenyPending,
+              denying: props.approvalPending,
+            }}
+            checking={recordQuery.isFetching || props.approvalPending}
             onResolved={(message) => {
               setReceipt({ scope: noticeScope, message });
               void recordQuery.refetch();
@@ -151,6 +186,6 @@ export function ChatBlockers({ props }: { props: Blockers }) {
           </NativeOwnerLink>
         </>
       ) : null}
-    </>
+    </div>
   );
 }

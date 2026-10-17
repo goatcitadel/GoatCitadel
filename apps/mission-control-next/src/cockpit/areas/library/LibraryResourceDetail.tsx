@@ -19,6 +19,20 @@ import { LibraryArtifactDownload } from "./LibraryArtifactDownload";
 import { readArtifactRunId } from "../../../features/native-routes/library/artifact-run-link";
 import { formatArtifactProvenance } from "../../../features/native-routes/shared/native-helpers";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { Button } from "../../ui/Button";
+import { Callout } from "../../ui/Callout";
+
+/** An object URL for a previewed image, revoked when the image changes or the preview closes. */
+function useObjectUrl(blob: Blob | undefined) {
+  const [url, setUrl] = useState<string>();
+  useEffect(() => {
+    if (!blob || typeof URL.createObjectURL !== "function") return setUrl(undefined);
+    const next = URL.createObjectURL(blob);
+    setUrl(next);
+    return () => URL.revokeObjectURL(next);
+  }, [blob]);
+  return url;
+}
 
 export function LibraryResourceDetail({
   resource,
@@ -60,24 +74,36 @@ export function LibraryResourceDetail({
     binding: string;
     data?: ResourcePreview;
     error?: string;
+    /** The read settled after access changed, so its content was withheld. */
+    accessChanged?: boolean;
   }>();
-  const binding = JSON.stringify([access.identity, workspaceId, citadelId, resourceBinding(resource)]);
+  const [attempt, setAttempt] = useState(0);
+  const binding = JSON.stringify([access.identity, workspaceId, citadelId, resourceBinding(resource), attempt]);
   const generation = useRef(0);
+  const reopenRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const token = ++generation.current;
     void readLibraryResource(resource, workspaceId, citadelId)
       .then((data) => {
-        if (generation.current === token && isCurrent()) setPreview({ binding, data });
+        if (generation.current !== token) return;
+        setPreview(isCurrent() ? { binding, data } : { binding, accessChanged: true });
       })
       .catch((cause: unknown) => {
-        if (generation.current === token && isCurrent())
-          setPreview({ binding, error: describeApiError(cause).summary });
+        if (generation.current !== token) return;
+        setPreview(
+          isCurrent() ? { binding, error: describeApiError(cause).summary } : { binding, accessChanged: true },
+        );
       });
     return () => {
       generation.current += 1;
     };
   }, [binding, resource, workspaceId, citadelId, isCurrent]);
   const active = preview?.binding === binding ? preview : undefined;
+  const accessChanged = Boolean(active?.accessChanged);
+  useEffect(() => {
+    if (accessChanged) reopenRef.current?.focus();
+  }, [accessChanged]);
+  const imageUrl = useObjectUrl(active?.data?.image);
   return (
     <div className="grid min-w-0 gap-3">
       <h3 className="break-words text-base font-semibold text-fg">{resourceTitle(resource)}</h3>
@@ -107,7 +133,23 @@ export function LibraryResourceDetail({
           {active.error}
         </p>
       ) : null}
+      {accessChanged ? (
+        <Callout tone="warning">
+          <p>Access changed while the preview was loading, so it was not shown. Reopen the preview to read it again.</p>
+          <Button ref={reopenRef} size="sm" className="mt-2" onClick={() => setAttempt((value) => value + 1)}>
+            Reopen preview
+          </Button>
+        </Callout>
+      ) : null}
+      {active?.data?.unavailable ? <p className="text-sm text-fg-secondary">{active.data.unavailable}</p> : null}
       {active?.data?.warning ? <p className="text-sm text-fg-muted">{active.data.warning}</p> : null}
+      {imageUrl ? (
+        <img
+          src={imageUrl}
+          alt={`Preview of ${resourceTitle(resource)}`}
+          className="max-h-96 max-w-full rounded-md border border-line object-contain"
+        />
+      ) : null}
       {active?.data?.text !== undefined ? (
         <div className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-sunken p-3 text-sm text-fg-secondary">
           {active.data.text || "No content recorded."}

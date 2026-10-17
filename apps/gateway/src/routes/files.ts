@@ -38,6 +38,10 @@ const previewQuerySchema = z.object({
 const listQuerySchema = z.object({
   dir: z.string().default("."),
   limit: z.coerce.number().int().positive().max(5000).default(1000),
+  // Optional and additive: any of these returns one page ({ items, folders, nextCursor?, complete }).
+  query: z.string().max(200).optional(),
+  cursor: z.string().max(12).optional(),
+  paged: z.enum(["1", "true"]).optional(),
 });
 
 const suggestionsQuerySchema = z.object({
@@ -87,7 +91,11 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const items = await fastify.services.files.listWorkspaceFiles(parsed.data.dir, parsed.data.limit);
+      const { dir, limit, query, cursor, paged } = parsed.data;
+      if (query !== undefined || cursor !== undefined || paged !== undefined) {
+        return reply.send(await fastify.services.files.pageWorkspaceFiles(dir, limit, { query, cursor }));
+      }
+      const items = await fastify.services.files.listWorkspaceFiles(dir, limit);
       return reply.send({ items });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

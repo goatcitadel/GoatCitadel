@@ -2,6 +2,7 @@ import { useId, useRef, type ReactNode } from "react";
 import { useDeferredOverlay } from "../../ui/deferred-overlay-owner";
 import { Dialog } from "../../ui/Dialog";
 import { Button } from "../../ui/Button";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Paperclip, SlidersHorizontal } from "lucide-react";
 import { ChatAttachmentChips } from "./ChatAttachmentChips";
 import type { ChatCompletionReasoningEffort, ChatWebMode, RoutingPreflightRuntimeClass } from "@goatcitadel/contracts";
@@ -63,10 +64,11 @@ const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
   { value: "deep", label: "Deep" },
 ];
 
+/** Plain consequence of sending through the fallback route, by where it runs. */
 const RUNTIME_CLASS_LABELS: Record<RoutingPreflightRuntimeClass, string> = {
-  local: "Runs on this computer",
-  cloud: "Cloud runtime",
-  unknown: "Runtime location unknown",
+  local: "It runs on this computer.",
+  cloud: "It is a cloud model, so this conversation would leave this computer.",
+  unknown: "It is not recorded whether it runs on this computer or in the cloud, so this conversation may leave it.",
 };
 
 type ModelPopover = typeof import("./ChatModelOptionsPopover");
@@ -163,7 +165,7 @@ export function ChatComposerControls({
   );
   return (
     <>
-      {notices ? <ChatComposerNotices props={props} /> : null}
+      {notices ? <ChatComposerNotices props={props} onChooseModel={() => options.request(true)} /> : null}
       <div
         aria-label="Composer controls"
         className="cockpit-chat-controls flex min-w-0 flex-wrap items-center gap-2 pb-1 text-xs text-fg-muted"
@@ -288,7 +290,7 @@ export function ChatComposerControls({
 }
 
 /** Attached files, the route fallback acknowledgement and the file input stay beside the draft at every width. */
-export function ChatComposerNotices({ props }: { props: Controls }) {
+export function ChatComposerNotices({ props, onChooseModel }: { props: Controls; onChooseModel?: () => void }) {
   const route = props.routePreflight;
   const routeLabel = useModelLabel(
     route?.effectiveProviderId,
@@ -303,22 +305,28 @@ export function ChatComposerNotices({ props }: { props: Controls }) {
         onRemove={props.onRemoveAttachment}
       />
       {props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged ? (
-        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-status-waiting bg-sunken p-2 text-xs text-fg-secondary">
-          <span>
-            {"Route: "}
-            {route?.effectiveProviderId || route?.effectiveModel ? routeLabel : "model not recorded"}
-            {" · "}
+        <div className="mb-2 space-y-2 rounded-md border border-status-waiting bg-sunken p-2 text-xs text-fg-secondary">
+          <p>
+            {"This message would go to "}
+            {route?.effectiveProviderId || route?.effectiveModel ? routeLabel : "a fallback model (not recorded)"}
+            {" instead of your chosen model. "}
             {RUNTIME_CLASS_LABELS[route?.runtimeClass ?? "unknown"] ?? RUNTIME_CLASS_LABELS.unknown}
-            {". Fallback may send conversation content to another runtime, including outside this computer. "}
-            {props.routePreflight?.degradedReason ?? props.routePreflight?.normalizationReason}
-          </span>
-          <button
-            type="button"
-            onClick={props.onAcknowledgeRouteBoundary}
-            className="font-semibold text-accent underline-offset-2 hover:underline"
-          >
-            Acknowledge fallback
-          </button>
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="primary" onClick={props.onAcknowledgeRouteBoundary}>
+              Acknowledge fallback
+            </Button>
+            {onChooseModel ? (
+              <Button size="sm" disabled={props.historicalReadOnly || props.sending} onClick={onChooseModel}>
+                Choose another model
+              </Button>
+            ) : null}
+          </div>
+          {route?.degradedReason || route?.normalizationReason ? (
+            <TechnicalDetails label="Fallback technical details">
+              <p className="font-mono wrap-anywhere">{route?.degradedReason ?? route?.normalizationReason}</p>
+            </TechnicalDetails>
+          ) : null}
         </div>
       ) : null}
       <input

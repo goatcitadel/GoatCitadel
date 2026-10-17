@@ -122,7 +122,9 @@ function BrowserSessionsWorkspace({ workspaceId }: { workspaceId: string }) {
                 />
               )}
             </Field>
-            {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+            {operation.locked && operation.attempt?.message ? (
+              <Callout tone="warning">{operation.attempt.message}</Callout>
+            ) : null}
             {operation.locked && pending ? (
               <p className="text-sm wrap-anywhere">
                 Pending request: a session labelled &ldquo;{pending.label}&rdquo; in this workspace.

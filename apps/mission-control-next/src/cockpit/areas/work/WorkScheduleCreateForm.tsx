@@ -104,8 +104,8 @@ export function WorkScheduleCreateForm({
           : " It may skip a run, for example while that built-in job is turned off; the last outcome says why."}
       </p>
       <p className="text-xs text-fg-muted">
-        Applies across workspaces. Times run in UTC unless the expression ends with a timezone name (for example 0 9 * *
-        * America/New_York); check the next run after saving. Creating a schedule does not run it.
+        Applies across workspaces. The time runs in the timezone you choose; an expression that names no timezone runs
+        in UTC. Creating a schedule does not run it.
       </p>
       <ScheduleAdvancedFields value={advanced} locked={locked} onChange={onAdvanced} />
       {createUncertain ? (

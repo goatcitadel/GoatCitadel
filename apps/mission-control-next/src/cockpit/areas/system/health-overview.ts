@@ -75,12 +75,35 @@ export function backupHealthCheck(trust: BackupTrustState | undefined, hasRecord
   }
 }
 
+/** One runtime-service derivation, shared by Health and the saved-board Runtime widget so they never disagree. */
+export function describeRuntimeService(daemon: HealthSummaryResponse["daemonStatus"] | undefined): {
+  label: string;
+  tone: StatusTone;
+  detail: string;
+} {
+  if (!daemon) return { label: "Unknown", tone: "neutral", detail: "The health summary did not report the service." };
+  const issues = daemon.diagnostics?.filter((item) => item.severity === "critical" || item.severity === "warn") ?? [];
+  if (!daemon.supported)
+    return { label: "Unavailable", tone: "neutral", detail: "Service control is unavailable on this host." };
+  if (!daemon.running) return { label: "Problem", tone: "failed", detail: "The managed runtime service is stopped." };
+  if (issues.length) {
+    const critical = issues.some((item) => item.severity === "critical");
+    return {
+      label: critical ? "Problem" : "Needs review",
+      tone: critical ? "failed" : "waiting",
+      detail: `${issues.length} runtime ${issues.length === 1 ? "diagnostic needs" : "diagnostics need"} review.`,
+    };
+  }
+  return {
+    label: "Running",
+    tone: "done",
+    detail: "The managed runtime service is running with no reported warnings.",
+  };
+}
+
 export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: BackupTrustState): HealthCheck[] {
   const database = health.database;
-  const daemon = health.daemonStatus;
-  const diagnosticIssues =
-    daemon.diagnostics?.filter((item) => item.severity === "critical" || item.severity === "warn") ?? [];
-  const hasCriticalDiagnostic = diagnosticIssues.some((item) => item.severity === "critical");
+  const service = describeRuntimeService(health.daemonStatus);
 
   return [
     {
@@ -112,20 +135,8 @@ export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: 
     {
       id: "service",
       title: "Runtime service",
-      detail: !daemon.supported
-        ? "Service control is unavailable on this host."
-        : !daemon.running
-          ? "The managed runtime service is stopped."
-          : diagnosticIssues.length
-            ? `${diagnosticIssues.length} runtime ${diagnosticIssues.length === 1 ? "diagnostic needs" : "diagnostics need"} review.`
-            : "The managed runtime service is running with no reported warnings.",
-      status: !daemon.supported
-        ? { label: "Unavailable", tone: "neutral" }
-        : !daemon.running || hasCriticalDiagnostic
-          ? { label: "Problem", tone: "failed" }
-          : diagnosticIssues.length
-            ? { label: "Needs review", tone: "waiting" }
-            : { label: "Running", tone: "done" },
+      detail: service.detail,
+      status: { label: service.label, tone: service.tone },
       inspectPath: RUNTIME_INSPECT_PATH,
     },
     backupHealthCheck(backupTrust, Boolean(health.backups.latest)),

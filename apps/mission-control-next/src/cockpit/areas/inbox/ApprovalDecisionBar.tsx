@@ -18,6 +18,9 @@ import { RiskApprovalAction } from "../chat/RiskApprovalAction";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { StatusBadge } from "../../ui/StatusBadge";
+import { presentApprovalOutcome } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { useMinuteClock } from "./use-minute-clock";
 import { canResolveInboxApproval, matchesInboxApprovalDecision } from "./inbox-approval-guard";
 import { buildApprovalRequestReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { ApprovalReviewSummary } from "./ApprovalReviewSummary";
@@ -104,13 +107,9 @@ function ApprovalDecisionReview({
     Boolean(approval.mcpElicitation) ||
     approval.kind === "remote_worker.native_runtime" ||
     approval.kind === "code_mode.run";
-  const [, tick] = useState(0);
-  useEffect(() => {
-    if (!approval.expiresAt) return;
-    const timer = setInterval(() => tick((v) => v + 1), 1000);
-    return () => clearInterval(timer);
-  }, [approval.expiresAt]);
-  const expired = Boolean(approval.expiresAt && !(Date.parse(approval.expiresAt) > Date.now()));
+  // One shared minute clock plus a single re-render at the expiry moment, instead of a per-second re-render (IN-05).
+  const now = useMinuteClock(approval.expiresAt);
+  const expired = Boolean(approval.expiresAt && !(Date.parse(approval.expiresAt) > now));
   useLayoutEffect(() => {
     current.current = true;
     return () => {
@@ -297,7 +296,13 @@ function ApprovalDecisionReview({
     );
   if (!hasPreview && !specializedReview)
     return <p role="alert">The exact action preview is unavailable, so this approval can&apos;t be decided yet.</p>;
-  if (expired) return <p className="text-fg-muted">This approval has expired and can no longer be decided.</p>;
+  if (expired)
+    return (
+      <div className="space-y-2">
+        <StatusBadge status={presentApprovalOutcome("expired")} />
+        <p className="text-fg-muted">This approval has expired and can no longer be decided.</p>
+      </div>
+    );
 
   return (
     <div className="space-y-2 border-t border-line-subtle pt-3">

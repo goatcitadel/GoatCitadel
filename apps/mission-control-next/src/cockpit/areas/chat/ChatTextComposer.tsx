@@ -269,7 +269,7 @@ export function ChatTextComposer({
             onCompositionEnd={() => setComposing(false)}
             onPaste={props.onComposerPaste}
             placeholder="Message GoatCitadel…"
-            className={`cockpit-chat-draft block min-h-16 resize-y rounded-md border border-line-control bg-canvas px-3 py-2 text-md text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60 sm:text-sm ${phone ? "min-w-0 flex-1" : "mt-2 w-full"}`}
+            className={`cockpit-chat-draft block min-h-16 resize-none field-sizing-content rounded-md border border-line-control bg-canvas px-3 py-2 text-md text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60 sm:text-sm ${phone ? "min-w-0 flex-1" : "mt-2 w-full"}`}
           />
           {phone ? (
             <ChatComposerPhoneActions

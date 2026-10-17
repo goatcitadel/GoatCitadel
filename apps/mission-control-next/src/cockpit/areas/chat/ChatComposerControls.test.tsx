@@ -185,3 +185,30 @@ it("only offers Off when none is advertised and preserves the saved value across
   expect(select.selectedOptions[0]?.disabled).toBe(true);
   expect(input.onSetThinkingLevel).not.toHaveBeenCalled();
 });
+
+describe("Route fallback notice (CH-13)", () => {
+  it("names the fallback and its location plainly, keeps the raw reason out, and offers another model", async () => {
+    const input = props({
+      routeBoundaryAckRequired: true,
+      routePreflight: {
+        effectiveProviderId: "cloudy",
+        effectiveModel: "cloud-model",
+        runtimeClass: "cloud",
+        degradedReason: "provider_unavailable:local-runtime",
+      } as never,
+    });
+    await act(async () => root.render(<ChatComposerControls props={input} />));
+    expect(container.textContent).toContain("This message would go to cloud-model instead of your chosen model.");
+    expect(container.textContent).toContain("It is a cloud model, so this conversation would leave this computer.");
+    expect(container.textContent).not.toContain("provider_unavailable");
+    const choose = [...container.querySelectorAll("button")].find((b) => b.textContent === "Choose another model")!;
+    expect(choose).toBeDefined();
+    await act(async () => choose.click());
+    await vi.waitFor(() => expect(document.querySelector('select[aria-label="Provider"]')).not.toBeNull());
+    const acknowledge = [...container.querySelectorAll("button")].find(
+      (b) => b.textContent === "Acknowledge fallback",
+    )!;
+    await act(async () => acknowledge.click());
+    expect(input.onAcknowledgeRouteBoundary).toHaveBeenCalledTimes(1);
+  });
+});

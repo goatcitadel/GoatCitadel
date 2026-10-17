@@ -339,3 +339,87 @@ it("keeps a persisted settled decision visible while its canonical record is ref
   expect(container.textContent).not.toContain("Checking the current approval");
   expect(container.textContent).not.toContain("Approve once");
 });
+
+function blockerProps(overrides: Record<string, unknown> = {}) {
+  return {
+    pendingApproval: { approvalId: "approval/1", riskLevel: "safe" },
+    selectedSessionId: "session/1",
+    approvalPending: false,
+    userInputPending: false,
+    pendingUserInput: null,
+    onApprovePending: vi.fn(),
+    onDenyPending: vi.fn(),
+    onRefreshThread: vi.fn(),
+    onSubmitUserInput: vi.fn(),
+    ...overrides,
+  } as unknown as Parameters<typeof ChatBlockers>[0]["props"];
+}
+const findButton = (label: string) =>
+  [...container.querySelectorAll("button")].find((entry) => entry.textContent === label);
+
+it("shows a failed record read as an error with Try again and Deny, not as checking (CH-02)", async () => {
+  api.fetchApproval.mockRejectedValue(new Error("fixture outage"));
+  const onDenyPending = vi.fn();
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers props={blockerProps({ onDenyPending })} />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).toContain("The approval record couldn’t load"));
+  expect(container.textContent).not.toContain("Checking the current approval");
+  expect(findButton("Approve once")).toBeUndefined();
+  api.fetchApproval.mockClear();
+  await act(async () => findButton("Try again")!.click());
+  expect(api.fetchApproval).toHaveBeenCalledTimes(1);
+  await vi.waitFor(() => expect(findButton("Deny")).toBeDefined());
+  await act(async () => findButton("Deny")!.click());
+  expect(onDenyPending).toHaveBeenCalledTimes(1);
+});
+
+it("offers Check again and Deny when the record is missing (CH-02)", async () => {
+  const { ApiRequestError } = await import("@goatcitadel/mission-control-shared/api/http-internal");
+  api.fetchApproval.mockRejectedValue(
+    new ApiRequestError("gone", { kind: "http", method: "GET", path: "/api/approvals/approval-1", status: 404 }),
+  );
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers props={blockerProps()} />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).toContain("The approval record wasn’t found"));
+  expect(findButton("Check again")).toBeDefined();
+  expect(findButton("Deny")).toBeDefined();
+});
+
+it("moves focus to the composer when a decision removes the card it was in (CH-18)", async () => {
+  api.fetchApproval.mockRejectedValue(new Error("fixture outage"));
+  const composer = document.createElement("textarea");
+  document.body.append(composer);
+  const composerRef = { current: composer };
+  try {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChatBlockers props={blockerProps({ composerRef })} />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(findButton("Deny")).toBeDefined());
+    act(() => findButton("Deny")!.focus());
+    expect(document.activeElement?.textContent).toBe("Deny");
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChatBlockers props={blockerProps({ composerRef, pendingApproval: null })} />
+        </QueryClientProvider>,
+      ),
+    );
+    expect(document.activeElement).toBe(composer);
+  } finally {
+    composer.remove();
+  }
+});

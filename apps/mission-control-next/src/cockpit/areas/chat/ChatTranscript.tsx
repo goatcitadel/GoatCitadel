@@ -6,7 +6,8 @@ import {
 } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useDeferredVirtuoso } from "../../ui/DeferredVirtuoso";
-import { type ChatThreadTurnRecord } from "@goatcitadel/contracts";
+import { Button } from "../../ui/Button";
+import { isBackgroundChatUserInputPrompt, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { useChatStreamingPreviewSnapshot } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 import { HistoricalConversationView } from "../../../features/threaded-surface/ThreadHistoricalConversation";
 import { useScrollToBottom } from "@goatcitadel/mission-control-shared/components/chat/useScrollToBottom";
@@ -49,6 +50,9 @@ export function ChatTranscript({
     running: false,
   });
   const [announcement, setAnnouncement] = useState("");
+  const decisionWaiting = Boolean(
+    props.pendingApproval || (props.pendingUserInput && !isBackgroundChatUserInputPrompt(props.pendingUserInput)),
+  );
   useEffect(() => {
     const previous = lifecycle.current;
     if (previous.session !== props.selectedSessionId) setAnnouncement("");
@@ -59,10 +63,12 @@ export function ChatTranscript({
           ? "Response stopped."
           : latestTurn?.trace.status === "failed"
             ? "Response failed. Review the conversation details."
-            : "Response ended. Review the answer and any pending decisions.",
+            : decisionWaiting
+              ? "Response ended. A decision is waiting for you."
+              : "Response ended.",
       );
     lifecycle.current = { session: props.selectedSessionId, running: props.hasActiveStream };
-  }, [props.selectedSessionId, props.hasActiveStream, latestTurn?.trace.status]);
+  }, [props.selectedSessionId, props.hasActiveStream, latestTurn?.trace.status, decisionWaiting]);
   const previewHasText = Boolean(preview?.visibleText);
   const conversationMessageIds = useMemo(
     () =>
@@ -212,9 +218,16 @@ export function ChatTranscript({
     );
   if (!props.thread)
     return (
-      <p role="alert" className="flex-1 p-5 text-sm text-fg-secondary">
-        Conversation unavailable. Choose it again from the list to retry. Session inspection is available in System.
-      </p>
+      <div className="flex-1 space-y-2 p-5 text-sm text-fg-secondary">
+        <p role="alert">
+          {gatewayUnavailable
+            ? "This conversation can’t load while the Gateway is unreachable. Reload it once the Gateway is back."
+            : "This conversation couldn’t load. Reload it, or choose it again from the list."}
+        </p>
+        <Button size="sm" onClick={props.onRefreshThread}>
+          Reload conversation
+        </Button>
+      </div>
     );
 
   const fallbackTurns =
@@ -245,11 +258,16 @@ export function ChatTranscript({
       {!props.followOutput ? (
         <button
           type="button"
-          onClick={jumpToLatest}
+          onClick={() => {
+            jumpToLatest();
+            // CH-18: the button unmounts once the reader is at the end, so focus moves to the composer.
+            const composer = props.composerRef.current;
+            if (composer && !composer.disabled) composer.focus({ preventScroll: true });
+            else scrollRef.current?.focus({ preventScroll: true });
+          }}
           className="absolute bottom-3 right-3 z-10 rounded-md border border-accent bg-overlay px-3 py-2 text-sm text-accent shadow-overlay"
         >
           Jump to latest{unread ? ` · ${plural(unread, "new message")}` : ""}
-          {props.pendingApproval || props.pendingUserInput ? " · Decision waiting" : ""}
         </button>
       ) : null}
       <div

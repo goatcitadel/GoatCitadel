@@ -23,6 +23,7 @@ export function WorkBoardColumn({
   tasks,
   runs,
   empty,
+  filtered = false,
   selecting,
   selectedIds,
   onToggle,
@@ -34,6 +35,8 @@ export function WorkBoardColumn({
   tasks: readonly TaskRecord[];
   runs: readonly DurableRunRecord[];
   empty: boolean;
+  /** A search or record-type filter is on, so an empty column may only be hiding records. */
+  filtered?: boolean;
   selecting: boolean;
   selectedIds: ReadonlySet<string>;
   onToggle: (taskId: string) => void;
@@ -81,7 +84,11 @@ export function WorkBoardColumn({
           }}
         </WindowedRecordList>
       ) : null}
-      {empty ? <p className="text-xs text-fg-muted">No recent work in this state.</p> : null}
+      {empty ? (
+        <p className="text-xs text-fg-muted">
+          {filtered ? "Nothing here matches the filter." : "No recent work in this state."}
+        </p>
+      ) : null}
     </section>
   );
 }

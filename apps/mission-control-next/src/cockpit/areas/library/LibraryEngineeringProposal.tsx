@@ -176,7 +176,9 @@ export function LibraryEngineeringProposal({
         </Field>
       ))}
       {error ? <Callout tone="error">{error}</Callout> : null}
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       <Button
         disabled={busy || operation.locked || !draft.value.runId || TEXT_FIELDS.some((key) => !draft.value[key].trim())}
         onClick={() => void prepare()}
