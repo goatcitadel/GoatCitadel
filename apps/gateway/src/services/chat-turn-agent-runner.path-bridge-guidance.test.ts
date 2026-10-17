@@ -39,6 +39,63 @@ describe("ChatTurnAgentRunner path-bridge block messaging", () => {
   });
 });
 
+describe("ChatTurnAgentRunner governance block messaging", () => {
+  it("names tools.deny for a policy-denied tool instead of inviting a narrower retry", async () => {
+    const { result, createChatCompletion } = await runPolicyDeniedTurn({ blockerStrictness: 8 });
+
+    const blockedRun = result.turnTrace.toolRuns.find((run) => run.toolName === "shell.exec_background");
+    expect(blockedRun?.status).toBe("blocked");
+    expect(blockedRun?.failureGuidance).toContain("tools.deny");
+    expect(blockedRun?.failureGuidance).toMatch(/not a pending approval/i);
+    expect(blockedRun?.failureGuidance).not.toMatch(/narrower, more explicit input|specific approval or capability/i);
+
+    const secondRequest = createChatCompletion.mock.calls[1]?.[0] as
+      | { messages?: Array<{ role?: string; content?: string }> }
+      | undefined;
+    const toolMessage = secondRequest?.messages?.find((message) => message.role === "tool");
+    expect(toolMessage?.content).toContain("tools.deny");
+    expect(toolMessage?.content).not.toContain("narrower, more explicit input");
+  });
+});
+
+async function runPolicyDeniedTurn(options: { blockerStrictness?: number } = {}) {
+  const createChatCompletion = vi
+    .fn<() => Promise<ChatCompletionResponse>>()
+    .mockResolvedValueOnce(namedToolCallCompletion("shell.exec_background", { command: "Remove-Item -Recurse temp" }))
+    .mockResolvedValueOnce(finalCompletion("Background shell commands are denied by policy, so nothing was deleted."));
+  const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+    outcome: "blocked",
+    policyReason: "tool denied by policy",
+    auditEventId: "audit-policy-deny",
+  });
+  const storage = createMockStorage();
+  if (options.blockerStrictness !== undefined) {
+    storage.systemSettings.set(IMPROVEMENT_TUNE_SETTING_KEYS.blockerTemplate, options.blockerStrictness);
+  }
+  const runner = new ChatTurnAgentRunner({
+    storage: storage as never,
+    listToolCatalog: () => createToolCatalog(["shell.exec_background"]),
+    createChatCompletion,
+    invokeTool,
+  });
+  const content = "Delete the temp files in my user folder.";
+  const result = await runner.run({
+    sessionId: "sess-policy-deny",
+    turnId: randomUUID(),
+    userMessageId: "sess-policy-deny-message",
+    content,
+    mode: "code",
+    providerId: "openai",
+    model: "gpt-5.4",
+    webMode: "off",
+    memoryMode: "off",
+    thinkingLevel: "standard",
+    toolAutonomy: "safe_auto",
+    historyMessages: [{ role: "user", content }],
+  });
+  return { result, createChatCompletion };
+}
+
 async function runOutsideJailShellTurn(options: { blockerStrictness?: number } = {}) {
   const createChatCompletion = vi
     .fn<() => Promise<ChatCompletionResponse>>()
