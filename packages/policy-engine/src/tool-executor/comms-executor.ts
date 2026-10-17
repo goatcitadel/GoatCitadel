@@ -2898,7 +2898,15 @@ function normalizeSignalBaseUrl(baseUrl: string | undefined): string | undefined
   return `http://${trimmed}`.replace(/\/+$/, "");
 }
 
-function normalizeBlueBubblesBaseUrl(baseUrl: string | undefined): string | undefined {
+const BLUEBUBBLES_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * BlueBubbles authenticates with a `?password=` query parameter, so a schemeless
+ * bridge URL must never silently become plain http on a remote host: schemeless
+ * loopback hosts use http, every other schemeless host uses https, and an
+ * explicitly configured http:// or https:// URL is kept as written.
+ */
+export function normalizeBlueBubblesBaseUrl(baseUrl: string | undefined): string | undefined {
   const trimmed = asString(baseUrl)?.trim();
   if (!trimmed) {
     return undefined;
@@ -2906,7 +2914,12 @@ function normalizeBlueBubblesBaseUrl(baseUrl: string | undefined): string | unde
   if (/^https?:\/\//i.test(trimmed)) {
     return trimmed.replace(/\/+$/, "");
   }
-  return `http://${trimmed}`.replace(/\/+$/, "");
+  const authority = (trimmed.split(/[/?#]/, 1)[0] ?? "").replace(/^.*@/, "");
+  const hostname = (
+    authority.startsWith("[") ? authority.slice(0, authority.indexOf("]") + 1) : (authority.split(":")[0] ?? "")
+  ).toLowerCase();
+  const scheme = BLUEBUBBLES_LOOPBACK_HOSTS.has(hostname) ? "http" : "https";
+  return `${scheme}://${trimmed}`.replace(/\/+$/, "");
 }
 
 function normalizeSignalTarget(target: string | undefined): string | undefined {

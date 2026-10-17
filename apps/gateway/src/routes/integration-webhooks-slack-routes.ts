@@ -5,7 +5,11 @@ import {
   verifySlackWebhookConnectionBinding,
   verifySlackSignature,
 } from "../services/slack-webhook.js";
-import { createWebhookRouteOptions, readConfigSecret } from "./integration-webhooks-shared.js";
+import {
+  createWebhookRouteOptions,
+  readConfigSecret,
+  readWebhookVoiceInboundEnabled,
+} from "./integration-webhooks-shared.js";
 import { asString } from "../services/webhook-json-helpers.js";
 import {
   createIgnoredWebhookReply,
@@ -87,7 +91,7 @@ export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
           payload: request.body,
           botUserId: asString(connection.config.slackBotUserId),
           appId: asString(connection.config.slackAppId),
-          voiceInboundEnabled: (await fastify.services.integrationWebhooks.isVoiceInboundEnabled?.()) === true,
+          voiceInboundEnabled: await readWebhookVoiceInboundEnabled(fastify, request, "slack"),
         });
         if (normalized.kind === "challenge") {
           return {

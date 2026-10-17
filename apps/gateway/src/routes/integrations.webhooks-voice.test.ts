@@ -246,6 +246,52 @@ describe("inbound voice webhooks (Slack, Nextcloud Talk)", () => {
     expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
   });
 
+  it("Slack: a failed voice flag read is treated as voice disabled and text still dispatches", async () => {
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
+    const built = await buildApp({
+      getIntegrationConnection: vi.fn(() => slackConnection()),
+      isVoiceInboundEnabled: async () => {
+        throw new Error("settings store unavailable");
+      },
+      acceptInboundChannelEvent,
+    });
+
+    const response = await postSlack(
+      built,
+      JSON.stringify({
+        type: "event_callback",
+        event_id: "EvText1",
+        team_id: "T111",
+        api_app_id: "A111",
+        event: {
+          type: "message",
+          user: "U111",
+          text: "hello there",
+          channel: "D111",
+          channel_type: "im",
+          ts: "1712109984.500000",
+        },
+      }),
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ accepted: true, durableAccepted: true });
+    expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        dispatchKind: "agent_turn",
+        message: expect.objectContaining({ content: "hello there" }),
+      }),
+    );
+
+    // The same failed read leaves a voice-only share ignored rather than failing the webhook.
+    const voiceResponse = await postSlack(built, slackVoicePayload());
+    expect(voiceResponse.statusCode).toBe(200);
+    expect(voiceResponse.json()).toMatchObject({ accepted: true, ignored: true });
+    expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+  });
+
   it("Slack: a replayed voice event reuses the same provider-event idempotency key", async () => {
     const acceptInboundChannelEvent = createDurableAcceptanceMock();
     const built = await buildApp({

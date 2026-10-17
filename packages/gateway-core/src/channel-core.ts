@@ -646,6 +646,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       "Attachment sends to brand-new handles require BlueBubbles chat creation support.",
       "Reactions, unsend, and typing indicators require BlueBubbles Private API support.",
       "Typing indicators post to the BlueBubbles chat typing endpoint and need a chat GUID target (chat_guid:iMessage;-;+15551234567); handles and chat ids are not resolved for typing.",
+      "BlueBubbles authenticates with a ?password= URL query parameter, so use an https:// bridge URL or a loopback bridge (127.0.0.1, localhost, [::1]); a schemeless non-loopback bridge URL defaults to https.",
     ],
     requiredAnyOf: [
       ["bridgeUrl", "baseUrl", "serverUrl"],

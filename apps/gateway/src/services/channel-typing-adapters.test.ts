@@ -7,6 +7,7 @@ import {
   emitProviderTyping,
   emitSignalTyping,
   emitWhatsAppTyping,
+  normalizeBlueBubblesBaseUrl,
   resetMattermostTypingUserCache,
   type ChannelTypingAdapterArgs,
 } from "./channel-typing-adapters.js";
@@ -261,6 +262,37 @@ describe("BlueBubbles iMessage typing", () => {
     const [url, init] = a.fetch.mock.calls[0];
     expect(url).toBe("http://127.0.0.1:1234/api/v1/chat/iMessage%3B-%3B%2B15551234567/typing?password=bb-secret");
     expect(init.method).toBe("POST");
+  });
+
+  it("defaults a schemeless remote bridge to https and keeps explicit http as configured", async () => {
+    const remote = args(connection("imessage", { bridgeUrl: "bluebubbles.example:1234", password: "bb-secret" }), {
+      target: "chat_guid:iMessage;-;+15551234567",
+    });
+    remote.fetch.mockResolvedValueOnce(json({}));
+    expect((await emitBlueBubblesTyping(remote)).status).toBe("sent");
+    expect(remote.fetch.mock.calls[0][0]).toMatch(/^https:\/\/bluebubbles\.example:1234\/api\/v1\/chat\//);
+
+    const explicitHttp = args(connection("imessage", { bridgeUrl: "http://bluebubbles.lan:1234", password: "p" }), {
+      target: "chat_guid:iMessage;-;+1",
+    });
+    explicitHttp.fetch.mockResolvedValueOnce(json({}));
+    await emitBlueBubblesTyping(explicitHttp);
+    expect(explicitHttp.fetch.mock.calls[0][0]).toMatch(/^http:\/\/bluebubbles\.lan:1234\//);
+
+    expect(normalizeBlueBubblesBaseUrl("[::1]:1234")).toBe("http://[::1]:1234");
+    expect(normalizeBlueBubblesBaseUrl("localhost:1234/")).toBe("http://localhost:1234");
+    expect(normalizeBlueBubblesBaseUrl("10.0.0.5:1234")).toBe("https://10.0.0.5:1234");
+  });
+
+  it("redacts the password from a thrown fetch error or an echoed response body", async () => {
+    const thrown = args(conn, { target: "chat_guid:iMessage;-;+1555" });
+    thrown.fetch.mockRejectedValueOnce(new Error("connect failed for /typing?password=bb-secret"));
+    const thrownResult = await emitBlueBubblesTyping(thrown);
+    expect(thrownResult.status).toBe("unsupported");
+    expect(thrownResult.reason).not.toContain("bb-secret");
+    const echoed = args(conn, { target: "chat_guid:iMessage;-;+1555" });
+    echoed.fetch.mockResolvedValueOnce(json({ message: "bad request ?password=bb-secret" }, 400));
+    expect((await emitBlueBubblesTyping(echoed)).reason).not.toContain("bb-secret");
   });
 
   it("accepts a raw group chat GUID", async () => {

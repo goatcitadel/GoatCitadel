@@ -14,7 +14,11 @@ import {
   TELEGRAM_APPROVAL_CALLBACK_EVENT_TYPE,
   TELEGRAM_CHANNEL_COMMAND_EVENT_TYPE,
 } from "../services/telegram-inbound-command-service.js";
-import { createWebhookRouteOptions, resolveTelegramWebhookSecret } from "./integration-webhooks-shared.js";
+import {
+  createWebhookRouteOptions,
+  readWebhookVoiceInboundEnabled,
+  resolveTelegramWebhookSecret,
+} from "./integration-webhooks-shared.js";
 import {
   createIgnoredWebhookReply,
   createWebhookHandler,
@@ -61,7 +65,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
         const normalized = normalizeTelegramWebhookPayload({
           connectionId,
           payload: request.body,
-          voiceInboundEnabled: (await fastify.services.integrationWebhooks.isVoiceInboundEnabled?.()) === true,
+          voiceInboundEnabled: await readWebhookVoiceInboundEnabled(fastify, request, "telegram"),
         });
         if (normalized.kind === "ignore") {
           return {

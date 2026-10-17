@@ -153,9 +153,10 @@ export interface FeatureFlagsConfig {
    * Inbound channel voice ingestion (competitive-gap phase B2a): Telegram voice
    * notes, WhatsApp audio messages, Slack audio file shares and Discord voice
    * messages are downloaded, transcribed via the local voice runtime, and
-   * ingested as governed turns. Absent/false (default) ⇒ byte-identical
-   * behavior to today: the WhatsApp parser keeps emitting the "[whatsapp audio]"
-   * placeholder and Telegram/Slack/Discord voice-only messages are dropped.
+   * ingested as governed turns. On by default (absent ⇒ true); only an
+   * explicit false (stored flag or env) keeps the pre-voice behavior: the
+   * WhatsApp parser keeps emitting the "[whatsapp audio]" placeholder and
+   * Telegram/Slack/Discord voice-only messages are dropped.
    * Nextcloud Talk voice is never transcribed (bots cannot download media).
    */
   channelVoiceInboundV1Enabled?: boolean;

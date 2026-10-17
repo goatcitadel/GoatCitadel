@@ -283,6 +283,7 @@ export async function emitDiscordRestTyping(args: ChannelTypingAdapterArgs): Pro
  * The route needs the BlueBubbles Private API, and the target must already be a chat GUID.
  */
 export async function emitBlueBubblesTyping(args: ChannelTypingAdapterArgs): Promise<ChannelTypingResult> {
+  let password: string | undefined;
   try {
     const { connection, input } = args;
     const provider = (
@@ -298,7 +299,7 @@ export async function emitBlueBubblesTyping(args: ChannelTypingAdapterArgs): Pro
       readString(connection.config.baseUrl) ??
       readString(connection.config.serverUrl);
     if (!configured) return unsupported(args, `${connection.label} is missing a BlueBubbles bridge URL.`);
-    const password =
+    password =
       args.resolveSecret(connection.config, "password", "passwordEnv", connection.catalogId) ??
       args.resolveSecret(connection.config, "apiPassword", "apiPasswordEnv", connection.catalogId);
     if (!password) return unsupported(args, `${connection.label} is missing a BlueBubbles password.`);
@@ -309,7 +310,7 @@ export async function emitBlueBubblesTyping(args: ChannelTypingAdapterArgs): Pro
         "BlueBubbles typing needs a chat GUID target (chat_guid:iMessage;-;+15551234567); handles and chat ids are not resolved for typing.",
       );
     }
-    const baseUrl = (/^https?:\/\//i.test(configured) ? configured : `http://${configured}`).replace(/\/+$/, "");
+    const baseUrl = normalizeBlueBubblesBaseUrl(configured);
     const endpoint = new URL(`api/v1/chat/${encodeURIComponent(chatGuid)}/typing`, `${baseUrl}/`);
     if (!args.isAllowlisted(endpoint.toString())) return unsupported(args, allowlistReason(endpoint.toString()));
     endpoint.searchParams.set("password", password);
@@ -318,13 +319,40 @@ export async function emitBlueBubblesTyping(args: ChannelTypingAdapterArgs): Pro
     if (!response.ok) {
       return unsupported(
         args,
-        `${httpReason("BlueBubbles", response.status, body)} (typing needs the BlueBubbles Private API)`,
+        redactSecret(
+          `${httpReason("BlueBubbles", response.status, body)} (typing needs the BlueBubbles Private API)`,
+          password,
+        ),
       );
     }
     return sent(args);
   } catch (error) {
-    return unsupported(args, errorMessage(error));
+    return unsupported(args, redactSecret(errorMessage(error), password));
   }
+}
+
+const BLUEBUBBLES_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * BlueBubbles authenticates with a `?password=` query parameter, so a schemeless
+ * bridge URL must never silently become plain http on a remote host: schemeless
+ * loopback hosts use http, every other schemeless host uses https, and an
+ * explicitly configured http:// or https:// URL is kept as written.
+ */
+export function normalizeBlueBubblesBaseUrl(configured: string): string {
+  const trimmed = configured.trim();
+  if (/^https?:\/\//i.test(trimmed)) return trimmed.replace(/\/+$/, "");
+  const authority = (trimmed.split(/[/?#]/, 1)[0] ?? "").replace(/^.*@/, "");
+  const hostname = (
+    authority.startsWith("[") ? authority.slice(0, authority.indexOf("]") + 1) : (authority.split(":")[0] ?? "")
+  ).toLowerCase();
+  const scheme = BLUEBUBBLES_LOOPBACK_HOSTS.has(hostname) ? "http" : "https";
+  return `${scheme}://${trimmed}`.replace(/\/+$/, "");
+}
+
+function redactSecret(text: string, secret: string | undefined): string {
+  if (!secret) return text;
+  return text.split(secret).join("[redacted]").split(encodeURIComponent(secret)).join("[redacted]");
 }
 
 export function validateWhatsAppBaseUrl(url: string): void {
