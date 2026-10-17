@@ -8339,7 +8339,7 @@ export class ChatTurnAgentRunner {
                 ? "The fallback may already have changed state. Inspect state before retry; automatic replay was suppressed."
                 : buildToolFailureGuidance({
                     toolName: preflight.toolName,
-                    status: "blocked",
+                    status: executorDispatchStarted ? "failed" : "blocked",
                     args: preflight.args,
                     error: fallbackError,
                     result: writeFallback.result.result,
@@ -8382,7 +8382,7 @@ export class ChatTurnAgentRunner {
               ? "Execution may already have changed state. Inspect state before retry; automatic replay was suppressed."
               : buildToolFailureGuidance({
                   toolName: preflight.toolName,
-                  status: "blocked",
+                  status: executorDispatchStarted ? "failed" : "blocked",
                   args: preflight.args,
                   error: result.policyReason,
                   result: persistedToolResult,

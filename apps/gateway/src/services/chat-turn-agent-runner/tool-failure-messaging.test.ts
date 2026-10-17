@@ -138,6 +138,7 @@ describe("buildGovernanceBlockGuidance", () => {
   it("names sandbox.operatorWriteRoots for a write-jail block and does not suggest a fallback path", () => {
     const guidance = buildGovernanceBlockGuidance({
       toolName: "fs.delete",
+      status: "blocked",
       error: "Path is outside write jail: C:\\Users\\example\\AppData\\Local\\Temp\\old.log",
     });
 
@@ -148,7 +149,11 @@ describe("buildGovernanceBlockGuidance", () => {
   });
 
   it("names tools.deny for a policy deny", () => {
-    const guidance = buildGovernanceBlockGuidance({ toolName: "fs.delete", error: "tool denied by policy" });
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "fs.delete",
+      status: "blocked",
+      error: "tool denied by policy",
+    });
 
     expect(guidance).toContain("tools.deny");
     expect(guidance).toContain("fs.delete");
@@ -159,17 +164,20 @@ describe("buildGovernanceBlockGuidance", () => {
   it("names tools.allow and the permission profile when the tool is outside the resolved policy", () => {
     const guidance = buildGovernanceBlockGuidance({
       toolName: "shell.exec_background",
+      status: "blocked",
       error: "tool not available in resolved policy",
     });
 
     expect(guidance).toContain("tools.allow");
-    expect(guidance).toContain("permission profile");
+    expect(guidance).toContain("profile's tool patterns");
+    expect(guidance).toContain("tools.allow cannot lift a profile ceiling");
     expect(guidance).not.toMatch(RETRY_INVITATION);
   });
 
   it("names the Citadel Ward for a Ward deny", () => {
     const guidance = buildGovernanceBlockGuidance({
       toolName: "fs.write",
+      status: "blocked",
       error: "tool fs.write denied by a Citadel Ward",
     });
 
@@ -177,8 +185,33 @@ describe("buildGovernanceBlockGuidance", () => {
     expect(guidance).not.toMatch(RETRY_INVITATION);
   });
 
+  it("keeps write-root guidance for a run that settled as failed", () => {
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "fs.write",
+      status: "failed",
+      error: "Path is outside write jail: /tmp/old.log",
+    });
+
+    expect(guidance).toContain("sandbox.operatorWriteRoots");
+  });
+
+  it("does not give policy-decision guidance to a run that settled as failed", () => {
+    expect(
+      buildGovernanceBlockGuidance({ toolName: "fs.delete", status: "failed", error: "tool denied by policy" }),
+    ).toBeUndefined();
+    expect(
+      buildGovernanceBlockGuidance({
+        toolName: "fs.delete",
+        status: "failed",
+        error: "tool not available in resolved policy",
+      }),
+    ).toBeUndefined();
+  });
+
   it("returns undefined for errors that are not governance blocks", () => {
-    expect(buildGovernanceBlockGuidance({ toolName: "fs.read", error: "ENOENT: no such file" })).toBeUndefined();
-    expect(buildGovernanceBlockGuidance({ toolName: "fs.read" })).toBeUndefined();
+    expect(
+      buildGovernanceBlockGuidance({ toolName: "fs.read", status: "blocked", error: "ENOENT: no such file" }),
+    ).toBeUndefined();
+    expect(buildGovernanceBlockGuidance({ toolName: "fs.read", status: "blocked" })).toBeUndefined();
   });
 });

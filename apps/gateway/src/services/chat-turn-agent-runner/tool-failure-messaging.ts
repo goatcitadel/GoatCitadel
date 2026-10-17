@@ -83,18 +83,29 @@ const OPERATOR_BOUNDARY_NEXT_STEP =
  * tool outside the resolved allow list or permission profile, a Citadel Ward
  * deny, or a target outside the write roots. Only the operator can lift these,
  * so the guidance names the setting to change and never invites a retry.
+ *
+ * Write-root errors are thrown before any write, so they qualify whether the
+ * run settled as blocked or failed. The policy-decision reasons qualify only
+ * for a run that settled as blocked, never one whose dispatch had started.
  */
-export function buildGovernanceBlockGuidance(input: { toolName: string; error?: string }): string | undefined {
+export function buildGovernanceBlockGuidance(input: {
+  toolName: string;
+  status: ChatToolRunRecord["status"];
+  error?: string;
+}): string | undefined {
   const error = (input.error ?? "").toLowerCase();
   const tool = input.toolName;
   if (error.includes("write jail") || error.includes("outside write")) {
     return `The target path is outside the folders GoatCitadel may write to. ${OPERATOR_BOUNDARY_NEXT_STEP} The operator must add that folder to sandbox.operatorWriteRoots (with allowDelete for deletes) before ${tool} can change it; tell the operator that instead of writing somewhere else.`;
   }
+  if (input.status !== "blocked") {
+    return undefined;
+  }
   if (error.includes("tool denied by policy")) {
     return `${tool} is denied by the operator's tool policy. ${OPERATOR_BOUNDARY_NEXT_STEP} The operator must remove ${tool} (or the pattern that matches it) from tools.deny before it can run.`;
   }
   if (error.includes("not available in resolved policy")) {
-    return `${tool} is not allowed by the active tool policy or permission profile. ${OPERATOR_BOUNDARY_NEXT_STEP} The operator must add ${tool} to tools.allow or to the active permission profile before it can run.`;
+    return `${tool} is not allowed by the active tool policy or permission profile. ${OPERATOR_BOUNDARY_NEXT_STEP} When a permission profile is active, the operator must include ${tool} in that profile's tool patterns, because tools.allow cannot lift a profile ceiling. Otherwise the operator must add ${tool} to tools.allow before it can run.`;
   }
   if (error.includes("denied by a citadel ward")) {
     return `${tool} is denied by a Citadel Ward. ${OPERATOR_BOUNDARY_NEXT_STEP} The operator must change that Ward before ${tool} can run.`;
