@@ -357,7 +357,7 @@ CODE-06,Chat-Hosted Code Capability,Execution Backend Truth,,,"Inspect /api/v1/c
 Compare host runner, Docker backend, and Aider adapter availability.
 Try an unavailable required backend.","Action: open /api/v1/code-mode/execution-backends or the Code Mode backend UI. For unavailable-backend edge, require Docker backend while Docker/image config is missing.","Default trusted-code host runner is visible.
 Docker runs only when explicitly configured.
-Aider remains audit-only if enabled.
+Aider remains audit-only if enabled; a pinned `patch_produced` run reaches the workspace only through the separately approved `POST /api/v1/code-mode/runs/:runId/promote` (sha256 and pinned HEAD/state re-checked, applied once via `git apply --check` then apply); unpinned runs cannot be promoted; replay and candidate promotion are not offered; Docker stays configured-only.
 Required isolation fails closed when unavailable.",,,,,,,,,,
 PROJ-01,Projects,Project CRUD And Navigation,,,"Open /projects.
 Create a test project.

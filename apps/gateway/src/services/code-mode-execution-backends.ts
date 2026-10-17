@@ -236,8 +236,8 @@ function buildAiderAdapter(
     ],
     governance: [
       "Must retain explicit approvals and immutable run evidence.",
-      "Runs only in run-temp/artifact space; operator workspace patches are not applied.",
-      "Replay posture remains audit-only and non-replayable.",
+      "Runs only in run-temp/artifact space; the operator workspace changes only through an approved, hash-checked promote.",
+      "Replay posture stays non-replayable; a promoted patch is never re-applied.",
     ],
     evaluation: {
       credentialStorage: "partial",
