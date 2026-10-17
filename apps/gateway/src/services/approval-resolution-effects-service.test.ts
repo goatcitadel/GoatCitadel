@@ -14,11 +14,23 @@ import {
   runWithRequestAttribution,
   Storage,
 } from "@goatcitadel/storage";
+import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   ApprovalEffectsService,
   deriveApprovalResolutionEffectsResult,
 } from "./approval-resolution-effects-service.js";
+import { commsCalendarCreate, commsGmailSend, commsSmtpSend, type CommsHost } from "./comms-service.js";
+import {
+  COMMUNICATIONS_IDEMPOTENCY_PREFIX,
+  computeCommunicationsPayloadHash,
+  type CalendarCreateApprovalInput,
+  type MailSendApprovalInput,
+} from "./communications-approval-payload.js";
+import {
+  CommunicationsApprovalEffectError,
+  CommunicationsApprovalEffectService,
+} from "./communications-approval-effect-service.js";
 import {
   ExternalSourceKnowledgeEffectServiceError,
   deriveExternalSourceKnowledgeSnapshotApprovalId,
@@ -7493,3 +7505,412 @@ function claimEffectForService(service: ApprovalEffectsService, effect: Approval
     claimedBy: effect.effectKind === "approval_observability" ? worker.observabilityWorkerId : worker.workerId,
   };
 }
+
+/** The connection revision every seeded communications approval was requested against. */
+const COMMS_CONNECTION_REVISION = "rev-comms";
+const commsLinkage = (actionType: string, connectorId: string) => ({ actionType, connectorId, workspaceId: "default" });
+
+describe("communications approval effects", () => {
+  function createCommsEffectHarness() {
+    const raw = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    const storage = createSqliteAsyncStorage(raw);
+    const providerInvokes: string[] = [];
+    const host: CommsHost = {
+      // Stands in for the policy engine's approval bypass: settles the approval's pending action.
+      invokeAndUnwrap: async (request) => {
+        providerInvokes.push(request.toolName);
+        const approvalId = request.consentContext?.reason?.replace(/^approval:/, "");
+        if (approvalId) await storage.pendingApprovalActions.markResolved(approvalId, "executed");
+        return { status: "sent", deliveryStatus: "sent", providerMessageId: "provider-message-1" };
+      },
+      readChatAttachmentContent: vi.fn(),
+      getIntegrationConnection: async (connectionId) =>
+        ({
+          connectionId,
+          revision: COMMS_CONNECTION_REVISION,
+          catalogId: "automation.gmail",
+          kind: "automation",
+          key: "gmail",
+          label: "Gmail",
+          enabled: true,
+          status: "connected",
+          config: {},
+        }) as never,
+      emitDiscordTyping: vi.fn(),
+      emitTelegramTyping: vi.fn(),
+      emitChannelActivity: vi.fn(),
+      mutationStore: storage.mutationIdempotency,
+      sideEffectRunStore: storage.externalSideEffectRuns,
+    };
+    const executor = new CommunicationsApprovalEffectService({
+      storage,
+      getIntegrationConnection: (connectionId) => host.getIntegrationConnection(connectionId),
+      commsGmailSend: (input, preApproval) => commsGmailSend(host, input, preApproval),
+      commsSmtpSend: (input, preApproval) => commsSmtpSend(host, input, preApproval),
+      commsCalendarCreate: (input, preApproval) => commsCalendarCreate(host, input, preApproval),
+    });
+    const executeMail = vi.fn((input: { approvalId: string }) => executor.executeApprovedMailSend(input));
+    const recordRejected = vi.fn((input: { approvalId: string }) => executor.recordMailSendRejected(input));
+    const executeCalendar = vi.fn((input: { approvalId: string }) => executor.executeApprovedCalendarCreate(input));
+    const createEffects = () => {
+      const backgroundTasks = new Set<Promise<void>>();
+      const service = new ApprovalEffectsService(
+        { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+        {
+          ...createApprovalEffectDeps(),
+          backgroundTasks,
+          executeApprovedCommunicationsMailSend: executeMail,
+          recordCommunicationsMailSendRejected: recordRejected,
+          executeApprovedCommunicationsCalendarCreate: executeCalendar,
+        } as never,
+      );
+      const drain = async () => {
+        service.requestEffectProcessing();
+        await Promise.all([...backgroundTasks]);
+        service.stopWorker();
+      };
+      return { service, drain };
+    };
+    return { raw, storage, providerInvokes, executor, executeMail, recordRejected, executeCalendar, createEffects };
+  }
+
+  async function seedMailApproval(
+    storage: ReturnType<typeof createSqliteAsyncStorage>,
+    decision: "approve" | "reject",
+  ): Promise<{ approval: ApprovalRequest; draftId: string; payloadHash: string }> {
+    const now = new Date().toISOString();
+    const hashed: MailSendApprovalInput = {
+      draftId: `mail_draft_${randomUUID()}`,
+      accountId: "conn-gmail",
+      to: ["dest@example.test"],
+      cc: [],
+      bcc: [],
+      subject: "Status",
+      bodyText: "All good",
+      connectionRevision: COMMS_CONNECTION_REVISION,
+    };
+    const payloadHash = computeCommunicationsPayloadHash(hashed);
+    await storage.mailDrafts.create({ ...hashed, status: "approval_required", createdAt: now, updatedAt: now });
+    const created = await storage.approvals.create({
+      kind: "communications.mail.send",
+      riskLevel: "danger",
+      payload: { action: "mail_send", ...hashed, payloadHash, idempotencyKeyPrefix: COMMUNICATIONS_IDEMPOTENCY_PREFIX },
+      preview: {},
+      linkage: commsLinkage("communications.mail.send", hashed.accountId),
+    });
+    await storage.mailDrafts.transition(hashed.draftId, ["approval_required"], {
+      status: "approval_required",
+      approvalId: created.approvalId,
+      updatedAt: now,
+    });
+    const approval = await storage.approvals.resolve(created.approvalId, { decision, resolvedBy: "operator" });
+    return { approval, draftId: hashed.draftId, payloadHash };
+  }
+
+  it("enqueues the approved mail send on its draft, executes it once and converges on the same effect", async () => {
+    const harness = createCommsEffectHarness();
+    try {
+      const { approval, draftId, payloadHash } = await seedMailApproval(harness.storage, "approve");
+      const { service, drain } = harness.createEffects();
+      const resolution = { decision: "approve" as const, resolvedBy: "operator" };
+
+      const enqueued = await service.enqueueResolutionEffects(approval, resolution, { deferProcessing: true });
+      const mailEffect = enqueued.find((effect) => effect.effectKind === "communications_mail_send_apply");
+      expect(mailEffect).toMatchObject({
+        targetKind: "mail_draft",
+        targetId: draftId,
+        payload: { draftId, accountId: "conn-gmail", payloadHash },
+      });
+
+      await drain();
+
+      expect(harness.executeMail).toHaveBeenCalledTimes(1);
+      expect(harness.providerInvokes).toEqual(["gmail.send"]);
+      const settled = await harness.storage.approvalEffects.get(mailEffect!.effectId);
+      expect(settled.status).toBe("completed");
+      expect(settled.result).toMatchObject({
+        disposition: "sent",
+        providerMessageId: "provider-message-1",
+        replayed: false,
+      });
+      expect(await harness.storage.mailDrafts.get(draftId)).toMatchObject({ status: "sent" });
+
+      const replayed = await service.enqueueResolutionEffects(approval, resolution, { deferProcessing: true });
+      expect(replayed.find((effect) => effect.effectKind === "communications_mail_send_apply")?.effectId).toBe(
+        mailEffect!.effectId,
+      );
+    } finally {
+      harness.raw.close();
+    }
+  });
+
+  it("replays a send that completed before a worker restart without a second provider invoke", async () => {
+    const harness = createCommsEffectHarness();
+    try {
+      const { approval } = await seedMailApproval(harness.storage, "approve");
+      const first = harness.createEffects();
+      const enqueued = await first.service.enqueueResolutionEffects(
+        approval,
+        { decision: "approve", resolvedBy: "operator" },
+        { deferProcessing: true },
+      );
+      const mailEffect = enqueued.find((effect) => effect.effectKind === "communications_mail_send_apply")!;
+      // The first worker sent the mail and crashed before it settled its effect row.
+      await harness.executor.executeApprovedMailSend({ approvalId: approval.approvalId });
+      expect(harness.providerInvokes).toHaveLength(1);
+
+      const restarted = harness.createEffects();
+      await restarted.drain();
+
+      expect(harness.providerInvokes).toHaveLength(1);
+      const settled = await harness.storage.approvalEffects.get(mailEffect.effectId);
+      expect(settled.status).toBe("completed");
+      expect(settled.result).toMatchObject({ disposition: "sent", replayed: true });
+    } finally {
+      harness.raw.close();
+    }
+  });
+
+  it("fails the effect terminally with the executor's error code", async () => {
+    const harness = createCommsEffectHarness();
+    try {
+      const { approval } = await seedMailApproval(harness.storage, "approve");
+      const message = "This mail account (manual) cannot send; connect Gmail or an SMTP account.";
+      harness.executeMail.mockRejectedValueOnce(new CommunicationsApprovalEffectError("provider_unavailable", message));
+      const { service, drain } = harness.createEffects();
+      const enqueued = await service.enqueueResolutionEffects(
+        approval,
+        { decision: "approve", resolvedBy: "operator" },
+        { deferProcessing: true },
+      );
+      const mailEffect = enqueued.find((effect) => effect.effectKind === "communications_mail_send_apply")!;
+
+      await drain();
+
+      const settled = await harness.storage.approvalEffects.get(mailEffect.effectId);
+      expect(settled.status).toBe("failed");
+      expect(settled.result).toMatchObject({ errorCode: "provider_unavailable" });
+      expect(settled.lastError).toBe(message);
+      expect(harness.executeMail).toHaveBeenCalledTimes(1);
+    } finally {
+      harness.raw.close();
+    }
+  });
+
+  it("fails the effect closed when the communications executor is not composed", async () => {
+    const harness = createCommsEffectHarness();
+    try {
+      const { approval } = await seedMailApproval(harness.storage, "approve");
+      const backgroundTasks = new Set<Promise<void>>();
+      const service = new ApprovalEffectsService(
+        { storage: harness.storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+        { ...createApprovalEffectDeps(), backgroundTasks } as never,
+      );
+      const enqueued = await service.enqueueResolutionEffects(
+        approval,
+        { decision: "approve", resolvedBy: "operator" },
+        { deferProcessing: true },
+      );
+      service.requestEffectProcessing();
+      await Promise.all([...backgroundTasks]);
+      service.stopWorker();
+
+      const mailEffect = enqueued.find((effect) => effect.effectKind === "communications_mail_send_apply")!;
+      const settled = await harness.storage.approvalEffects.get(mailEffect.effectId);
+      expect(settled.status).toBe("failed");
+      expect(settled.lastError).toBe("Communications effect is missing its executor.");
+      expect(harness.providerInvokes).toHaveLength(0);
+    } finally {
+      harness.raw.close();
+    }
+  });
+
+  it("makes a rejected mail send visible on its draft without invoking a provider", async () => {
+    const harness = createCommsEffectHarness();
+    try {
+      const { approval, draftId } = await seedMailApproval(harness.storage, "reject");
+      const { service, drain } = harness.createEffects();
+      const enqueued = await service.enqueueResolutionEffects(
+        approval,
+        { decision: "reject", resolvedBy: "operator" },
+        { deferProcessing: true },
+      );
+      const mailEffects = enqueued.filter((effect) => effect.effectKind === "communications_mail_send_apply");
+      expect(mailEffects).toHaveLength(1);
+      expect(mailEffects[0]).toMatchObject({
+        targetKind: "mail_draft",
+        targetId: draftId,
+        payload: { draftId, decision: "reject" },
+      });
+
+      await drain();
+
+      expect(harness.executeMail).not.toHaveBeenCalled();
+      expect(harness.recordRejected).toHaveBeenCalledTimes(1);
+      expect(harness.providerInvokes).toHaveLength(0);
+      expect(await harness.storage.mailDrafts.get(draftId)).toMatchObject({
+        status: "failed",
+        failureReason: "Send approval was rejected; nothing was sent.",
+      });
+      const settled = await harness.storage.approvalEffects.get(mailEffects[0]!.effectId);
+      expect(settled.status).toBe("completed");
+      expect(settled.result).toMatchObject({ disposition: "rejected" });
+    } finally {
+      harness.raw.close();
+    }
+  });
+
+  it("enqueues an approved calendar create and nothing for a rejected one", async () => {
+    const harness = createCommsEffectHarness();
+    try {
+      const hashed: CalendarCreateApprovalInput = {
+        eventId: `calendar_event_${randomUUID()}`,
+        accountId: "conn-calendar",
+        title: "Planning",
+        startIso: "2026-10-20T15:00:00.000Z",
+        endIso: "2026-10-20T15:30:00.000Z",
+        attendees: [],
+        connectionRevision: COMMS_CONNECTION_REVISION,
+      };
+      const payloadHash = computeCommunicationsPayloadHash(hashed);
+      const createCalendarApproval = () =>
+        harness.storage.approvals.create({
+          kind: "communications.calendar.create",
+          riskLevel: "caution",
+          payload: { action: "calendar_event_create", ...hashed, payloadHash },
+          preview: {},
+          linkage: commsLinkage("communications.calendar.create", hashed.accountId),
+        });
+      const { service, drain } = harness.createEffects();
+
+      const rejected = await createCalendarApproval();
+      const rejectedEffects = await service.enqueueResolutionEffects(
+        rejected,
+        { decision: "reject", resolvedBy: "operator" },
+        { deferProcessing: true },
+      );
+      expect(rejectedEffects.some((effect) => effect.effectKind.startsWith("communications_"))).toBe(false);
+
+      const created = await createCalendarApproval();
+      const approved = await harness.storage.approvals.resolve(created.approvalId, {
+        decision: "approve",
+        resolvedBy: "operator",
+      });
+      const enqueued = await service.enqueueResolutionEffects(
+        approved,
+        { decision: "approve", resolvedBy: "operator" },
+        { deferProcessing: true },
+      );
+      const calendarEffect = enqueued.find((effect) => effect.effectKind === "communications_calendar_create_apply");
+      expect(calendarEffect).toMatchObject({
+        targetKind: "calendar_event",
+        targetId: hashed.eventId,
+        payload: { eventId: hashed.eventId, accountId: "conn-calendar", payloadHash },
+      });
+
+      await drain();
+
+      expect(harness.executeCalendar).toHaveBeenCalledTimes(1);
+      expect(harness.providerInvokes).toEqual(["calendar.create_event"]);
+      const settled = await harness.storage.approvalEffects.get(calendarEffect!.effectId);
+      expect(settled.status).toBe("completed");
+      expect(settled.result).toMatchObject({ disposition: "created", replayed: false });
+    } finally {
+      harness.raw.close();
+    }
+  });
+  it("never enqueues pending_action_execute for a communications approval with a pending tool.invoke row", async () => {
+    const harness = createCommsEffectHarness();
+    try {
+      const { approval } = await seedMailApproval(harness.storage, "approve");
+      // A mid-send crash leaves the comms pre-approval row pending.
+      await harness.storage.pendingApprovalActions.upsertPending({
+        approvalId: approval.approvalId,
+        actionType: "tool.invoke",
+        request: { toolName: "gmail.send", args: {} },
+      });
+      const { service } = harness.createEffects();
+
+      const enqueued = await service.enqueueResolutionEffects(
+        approval,
+        { decision: "approve", resolvedBy: "operator" },
+        { deferProcessing: true },
+      );
+
+      expect(enqueued.map((effect) => effect.effectKind)).not.toContain("pending_action_execute");
+      expect(enqueued.map((effect) => effect.effectKind)).toContain("communications_mail_send_apply");
+    } finally {
+      harness.raw.close();
+    }
+  });
+
+  it("never enqueues pending_action_execute for a calendar create approval with a pending tool.invoke row", async () => {
+    const harness = createCommsEffectHarness();
+    try {
+      const hashed: CalendarCreateApprovalInput = {
+        eventId: `calendar_event_${randomUUID()}`,
+        accountId: "conn-calendar",
+        title: "Planning",
+        startIso: "2026-10-20T15:00:00.000Z",
+        endIso: "2026-10-20T15:30:00.000Z",
+        attendees: [],
+        connectionRevision: COMMS_CONNECTION_REVISION,
+      };
+      const created = await harness.storage.approvals.create({
+        kind: "communications.calendar.create",
+        riskLevel: "caution",
+        payload: { action: "calendar_event_create", ...hashed, payloadHash: computeCommunicationsPayloadHash(hashed) },
+        preview: {},
+        linkage: commsLinkage("communications.calendar.create", hashed.accountId),
+      });
+      const approval = await harness.storage.approvals.resolve(created.approvalId, {
+        decision: "approve",
+        resolvedBy: "operator",
+      });
+      // A mid-create crash leaves the comms pre-approval row pending.
+      await harness.storage.pendingApprovalActions.upsertPending({
+        approvalId: approval.approvalId,
+        actionType: "tool.invoke",
+        request: { toolName: "calendar.create_event", args: {} },
+      });
+      const { service } = harness.createEffects();
+
+      const enqueued = await service.enqueueResolutionEffects(
+        approval,
+        { decision: "approve", resolvedBy: "operator" },
+        { deferProcessing: true },
+      );
+
+      expect(enqueued.map((effect) => effect.effectKind)).not.toContain("pending_action_execute");
+      expect(enqueued.map((effect) => effect.effectKind)).toContain("communications_calendar_create_apply");
+    } finally {
+      harness.raw.close();
+    }
+  });
+
+  it("records an expired mail send approval with the expiry wording", async () => {
+    const harness = createCommsEffectHarness();
+    try {
+      const { approval, draftId } = await seedMailApproval(harness.storage, "reject");
+      const { service, drain } = harness.createEffects();
+
+      const enqueued = await service.enqueueResolutionEffects(
+        approval,
+        { decision: "reject", resolvedBy: "system" },
+        { deferProcessing: true, allowExpired: true, outcome: "expired" },
+      );
+      const mailEffect = enqueued.find((effect) => effect.effectKind === "communications_mail_send_apply");
+      expect(mailEffect?.payload).toEqual({ draftId, decision: "reject", expired: true });
+
+      await drain();
+
+      expect(harness.providerInvokes).toHaveLength(0);
+      expect(await harness.storage.mailDrafts.get(draftId)).toMatchObject({
+        status: "failed",
+        failureReason: "Send approval expired; nothing was sent.",
+      });
+    } finally {
+      harness.raw.close();
+    }
+  });
+});

@@ -11,6 +11,7 @@ import {
 import { ChatConversationsSheet } from "./ChatConversationsSheet";
 import { ChatEmptyState, ChatSessionHeader, ChatSetupBanner } from "./ChatAreaChrome";
 import { ChatTranscript } from "./ChatTranscript";
+import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatTextComposer } from "./ChatTextComposer";
 import { ChatInspector } from "./ChatInspector";
 import { chatSelectionHref } from "./chat-selection-evidence";
@@ -270,9 +271,12 @@ export function ChatAreaView({
           <ChatSetupBanner onReturnToSetup={() => navigate("/settings/first-run")} />
         ) : null}
         {buildOpen && active?.streamError ? (
-          <p role="alert" className="border-b border-status-failed bg-sunken px-3 py-2 text-sm text-fg-secondary">
-            {active.streamError}
-          </p>
+          <ChatStreamErrorNotice
+            error={active.streamError}
+            source={active.streamErrorSource}
+            onReload={active.onRefreshThread}
+            className="mx-3 my-2"
+          />
         ) : null}
         {buildOpen && latestLocalNotice ? (
           <p role="status" className="border-b border-line-subtle bg-sunken px-3 py-2 text-sm text-fg-secondary">

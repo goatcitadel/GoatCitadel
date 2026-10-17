@@ -68,6 +68,26 @@ export function findRefetchHiddenRecords(filePath, contents) {
   return findings;
 }
 
+/*
+ * An alert whose only content is an optional message (`<Callout>{attempt?.message}</Callout>`) renders an empty
+ * coloured box whenever the message is missing. Gate the alert on the message itself (`x?.message ? … : null`).
+ */
+const OPTIONAL_MESSAGE_ALERT = /<(Callout|Alert)\b[^>]*>\s*\{\s*([\w.]+(?:\?\.[\w]+)*\?\.message)\s*\}\s*<\/\1>/;
+
+export function findEmptyMessageAlerts(filePath, contents) {
+  if (isTestFile(filePath)) return [];
+  const findings = [];
+  contents.split(/\r?\n/).forEach((line, index) => {
+    if (isAllowed(line)) return;
+    const match = OPTIONAL_MESSAGE_ALERT.exec(line);
+    if (!match) return;
+    const expression = match[2].replace(/[.?]/g, (char) => `\\${char}`);
+    const guarded = new RegExp(`${expression}\\s*(\\?|&&)`).test(line.slice(0, match.index));
+    if (!guarded) findings.push({ file: filePath, line: index + 1, text: line.trim() });
+  });
+  return findings;
+}
+
 async function walk(dir) {
   const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
   const groups = await Promise.all(
@@ -83,13 +103,23 @@ async function walk(dir) {
 async function main() {
   const files = await walk(cockpitRoot);
   const findings = [];
-  for (const file of files) findings.push(...findRefetchHiddenRecords(file, await fs.readFile(file, "utf8")));
+  const emptyAlerts = [];
+  for (const file of files) {
+    const contents = await fs.readFile(file, "utf8");
+    findings.push(...findRefetchHiddenRecords(file, contents));
+    emptyAlerts.push(...findEmptyMessageAlerts(file, contents));
+  }
   if (findings.length) {
     console.error("[cockpit-refetch] keep the last good record during a refetch (use recordView):");
     for (const item of findings) console.error(`${path.relative(repoRoot, item.file)}:${item.line}: ${item.text}`);
     process.exitCode = 1;
-    return;
   }
+  if (emptyAlerts.length) {
+    console.error("[cockpit-refetch] gate each alert on its message so it never renders empty:");
+    for (const item of emptyAlerts) console.error(`${path.relative(repoRoot, item.file)}:${item.line}: ${item.text}`);
+    process.exitCode = 1;
+  }
+  if (findings.length || emptyAlerts.length) return;
   console.log(`[cockpit-refetch] ${files.length} cockpit files keep their records during refetches`);
 }
 

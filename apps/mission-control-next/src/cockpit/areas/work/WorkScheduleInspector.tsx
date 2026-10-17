@@ -33,7 +33,7 @@ interface WorkScheduleInspectorProps {
   setNotice: Dispatch<SetStateAction<string | null>>;
   refresh: () => Promise<void>;
   pending: ScheduleAction | null;
-  operations: Pick<ReturnType<typeof useScheduleOperations>, "invalidate">;
+  operations: Pick<ReturnType<typeof useScheduleOperations>, "invalidate" | "locked">;
   setPending: Dispatch<SetStateAction<ScheduleAction | null>>;
   reviewMessage: string | undefined;
   reviewSnapshot: CronJobRecordResponse | undefined;
@@ -90,9 +90,10 @@ export function WorkScheduleInspector({
           void refresh();
         }}
       />
-      {actionLocked ? (
+      {/* WK-14: a routine refetch also locks the controls; only a real operation lock with a message is an alert. */}
+      {operations.locked(selected.jobId) && selectedAttempt?.message ? (
         <p role="alert" className="text-sm text-status-failed">
-          {selectedAttempt?.message}
+          {selectedAttempt.message}
         </p>
       ) : null}
       {pending ? (

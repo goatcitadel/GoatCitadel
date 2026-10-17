@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
-import { buildPathBridgeFailureGuidance, buildToolFailureAppendixText } from "./tool-failure-messaging.js";
+import {
+  buildGovernanceBlockGuidance,
+  buildPathBridgeFailureGuidance,
+  buildToolFailureAppendixText,
+} from "./tool-failure-messaging.js";
 
 const PATH_BRIDGE_REASON = "blocked: workspace path was not freshly verified for execution";
 
@@ -125,5 +129,89 @@ describe("buildToolFailureAppendixText", () => {
 
   it("returns undefined when nothing failed", () => {
     expect(buildToolFailureAppendixText([])).toBeUndefined();
+  });
+});
+
+describe("buildGovernanceBlockGuidance", () => {
+  const RETRY_INVITATION = /narrower|more explicit input|safe fallback path|retry .* with/i;
+
+  it("names sandbox.operatorWriteRoots for a write-jail block and does not suggest a fallback path", () => {
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "fs.delete",
+      status: "blocked",
+      error: "Path is outside write jail: C:\\Users\\example\\AppData\\Local\\Temp\\old.log",
+    });
+
+    expect(guidance).toContain("sandbox.operatorWriteRoots");
+    expect(guidance).toContain("allowDelete");
+    expect(guidance).toMatch(/not a pending approval/i);
+    expect(guidance).not.toMatch(RETRY_INVITATION);
+  });
+
+  it("names tools.deny for a policy deny", () => {
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "fs.delete",
+      status: "blocked",
+      error: "tool denied by policy",
+    });
+
+    expect(guidance).toContain("tools.deny");
+    expect(guidance).toContain("fs.delete");
+    expect(guidance).toMatch(/operator must remove/i);
+    expect(guidance).not.toMatch(RETRY_INVITATION);
+  });
+
+  it("names tools.allow and the permission profile when the tool is outside the resolved policy", () => {
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "shell.exec_background",
+      status: "blocked",
+      error: "tool not available in resolved policy",
+    });
+
+    expect(guidance).toContain("tools.allow");
+    expect(guidance).toContain("profile's tool patterns");
+    expect(guidance).toContain("tools.allow cannot lift a profile ceiling");
+    expect(guidance).not.toMatch(RETRY_INVITATION);
+  });
+
+  it("names the Citadel Ward for a Ward deny", () => {
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "fs.write",
+      status: "blocked",
+      error: "tool fs.write denied by a Citadel Ward",
+    });
+
+    expect(guidance).toContain("Citadel Ward");
+    expect(guidance).not.toMatch(RETRY_INVITATION);
+  });
+
+  it("keeps write-root guidance for a run that settled as failed", () => {
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "fs.write",
+      status: "failed",
+      error: "Path is outside write jail: /tmp/old.log",
+    });
+
+    expect(guidance).toContain("sandbox.operatorWriteRoots");
+  });
+
+  it("does not give policy-decision guidance to a run that settled as failed", () => {
+    expect(
+      buildGovernanceBlockGuidance({ toolName: "fs.delete", status: "failed", error: "tool denied by policy" }),
+    ).toBeUndefined();
+    expect(
+      buildGovernanceBlockGuidance({
+        toolName: "fs.delete",
+        status: "failed",
+        error: "tool not available in resolved policy",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for errors that are not governance blocks", () => {
+    expect(
+      buildGovernanceBlockGuidance({ toolName: "fs.read", status: "blocked", error: "ENOENT: no such file" }),
+    ).toBeUndefined();
+    expect(buildGovernanceBlockGuidance({ toolName: "fs.read", status: "blocked" })).toBeUndefined();
   });
 });

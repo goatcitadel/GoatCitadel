@@ -204,6 +204,90 @@ describe("dashboard settings routes", () => {
     });
   });
 
+  it.each([
+    [
+      { operatorWriteRootChange: { action: "add", path: "/srv/scratch", allowDelete: true } },
+      { operation: "operator_write_root", action: "add", path: "/srv/scratch", allowDelete: true },
+    ],
+    [
+      { globalToolAccessChange: { toolName: "fs.delete", posture: "available" } },
+      { operation: "tool_global_access", toolName: "fs.delete", posture: "available" },
+    ],
+  ])("routes write-access Settings save %o through one Change Plan", async (patch, change) => {
+    const updateSettings = vi.fn();
+    const create = vi.fn(async (input: Record<string, unknown>) => ({
+      planId: "plan-write-access",
+      revision: 1,
+      requiredAction: { kind: "confirmation", actionNonce: "nonce-write-access-1234" },
+      ...input,
+    }));
+    const confirm = vi.fn(async () => ({
+      planId: "plan-write-access",
+      revision: 2,
+      status: "awaiting_approval",
+      risk: "danger",
+      summary: "Reviewed write-access change.",
+      requiredAction: { kind: "approval", approvalId: "approval-write-access" },
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      settings: { getSettings: vi.fn(() => ({ revision: 21 })), updateSettings },
+      evolution: { isEnabled: vi.fn(async () => true), create, confirm },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: { expectedRevision: 21, ...patch },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ request: { kind: "runtime_configuration", change } }),
+    );
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed write-access Settings saves before the owner", async () => {
+    const updateSettings = vi.fn();
+    app = Fastify();
+    app.decorate("services", {
+      settings: { updateSettings },
+      evolution: { isEnabled: vi.fn(async () => false) },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    for (const patch of [
+      { operatorWriteRootChange: { action: "add" } },
+      { operatorWriteRootChange: { action: "add", path: "/srv", preset: "os_temp" } },
+      { operatorWriteRootChange: { action: "remove", path: "/srv", allowDelete: true } },
+      { operatorWriteRootChange: { action: "add", path: "relative" } },
+      { operatorWriteRootChange: { action: "add", path: "/srv", extra: 1 } },
+      { globalToolAccessChange: { toolName: "shell.exec", posture: "available" } },
+      { globalToolAccessChange: { toolName: "fs.write", posture: "available", scope: "agent" } },
+    ]) {
+      const response = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        payload: { expectedRevision: 7, ...patch },
+      });
+      expect(response.statusCode).toBe(400);
+    }
+    expect(updateSettings).not.toHaveBeenCalled();
+
+    const accepted = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: { expectedRevision: 7, operatorWriteRootChange: { action: "remove", preset: "os_temp" } },
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(updateSettings).toHaveBeenCalledWith({
+      expectedRevision: 7,
+      operatorWriteRootChange: { action: "remove", preset: "os_temp" },
+    });
+  });
+
   it("fails closed on path-bearing generic Settings saves while the Control Plane is enabled", async () => {
     const updateSettings = vi.fn();
     app = Fastify();
@@ -747,7 +831,11 @@ describe("dashboard settings routes", () => {
     expect(response.statusCode).toBe(200);
     expect(settings.setDefaultPersonality).toHaveBeenCalledWith("none", catalog.revision);
 
-    response = await app.inject({ method: "DELETE", url: "/api/v1/personalities/operator", payload: { expectedRevision: catalog.revision } });
+    response = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/personalities/operator",
+      payload: { expectedRevision: catalog.revision },
+    });
     expect(response.statusCode).toBe(200);
     expect(settings.deletePersonality).toHaveBeenCalledWith("operator", catalog.revision);
   });

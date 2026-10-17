@@ -113,3 +113,50 @@ it("renders native leave actions that cancel or discard without writing a secret
   expect(api.store).not.toHaveBeenCalled();
   expect(api.remove).not.toHaveBeenCalled();
 });
+it("toggles the secret entry between hidden and shown with a pressed Show control (ST-19)", async () => {
+  await mount();
+  await act(async () => button("Store secret").props.onClick());
+  const valueInput = () => renderer!.root.findAllByType("input").find((node) => node.props.id.endsWith("-value"))!;
+  expect(valueInput().props.type).toBe("password");
+  expect(button("Show value").props["aria-pressed"]).toBe(false);
+  await act(async () => button("Show value").props.onClick());
+  expect(valueInput().props.type).toBe("text");
+  expect(button("Show value").props["aria-pressed"]).toBe(true);
+  await act(async () => button("Show value").props.onClick());
+  expect(valueInput().props.type).toBe("password");
+});
+it("copies a revealed value and counts down visibly before hiding it at zero (ST-19)", async () => {
+  owner.items = [
+    { secretId: "secret-1", secretName: "Token", createdAt: "2026-09-30T00:00:00Z", updatedAt: "2026-09-30T00:00:00Z" },
+  ];
+  api.reveal.mockResolvedValue("synthetic-revealed");
+  const writeText = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("denied"));
+  const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  vi.useFakeTimers();
+  try {
+    await mount();
+    await act(async () => button("Inspect Token").props.onClick());
+    await act(async () => button("Reveal secret").props.onClick());
+    expect(text(renderer!.root)).toContain("synthetic-revealed");
+    expect(text(renderer!.root).replace(/\s+/gu, " ")).toContain("Hides in 30 s");
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(text(renderer!.root).replace(/\s+/gu, " ")).toContain("Hides in 29 s");
+    await act(async () => button("Copy value").props.onClick());
+    expect(writeText).toHaveBeenCalledWith("synthetic-revealed");
+    expect(button("Copied")).toBeDefined();
+    await act(async () => button("Copied").props.onClick());
+    expect(text(renderer!.root)).toContain("Copy is unavailable");
+    await act(async () => {
+      vi.advanceTimersByTime(29_000);
+    });
+    expect(text(renderer!.root)).not.toContain("synthetic-revealed");
+    expect(button("Reveal secret")).toBeDefined();
+  } finally {
+    vi.useRealTimers();
+    if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
+    else Reflect.deleteProperty(navigator, "clipboard");
+  }
+});

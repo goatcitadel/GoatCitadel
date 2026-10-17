@@ -1396,7 +1396,9 @@ export class ToolPolicyEngine {
   }
 
   private evaluateShellRisk(request: ToolAccessEvaluateRequest): { risky: true; matchedPattern: string } | undefined {
-    if (request.toolName !== "shell.exec") {
+    // shell.exec_background spawns the same command as shell.exec, so it must
+    // raise the same approval request instead of failing only at execution time.
+    if (!isShellCommandTool(request.toolName)) {
       return undefined;
     }
     const command = typeof request.args?.command === "string" ? request.args.command : "";
@@ -1905,7 +1907,7 @@ export class ToolPolicyEngine {
       preview.target = String(target);
     }
 
-    if (request.toolName === "shell.exec" && request.args.command) {
+    if (isShellCommandTool(request.toolName) && request.args.command) {
       preview.command = String(request.args.command);
     }
 
@@ -2424,6 +2426,10 @@ export class ToolPolicyEngine {
   }
 }
 
+function isShellCommandTool(toolName: string): boolean {
+  return toolName === "shell.exec" || toolName === "shell.exec_background";
+}
+
 function isDeepProcessBoundaryTool(toolName: string): boolean {
   return (
     toolName === "shell.exec" ||
@@ -2671,8 +2677,11 @@ async function extractGrantHostCandidates(
     return { hosts: [], blockedReason: "grant host constraints require a canonical channel connection" };
   }
   const ntfySend = request.toolName === "channel.send" && connection?.key === "ntfy";
-  if (ntfySend && (connection.kind !== "channel" ||
-    (connection.workspaceId !== undefined && connection.workspaceId !== request.workspaceId))) {
+  if (
+    ntfySend &&
+    (connection.kind !== "channel" ||
+      (connection.workspaceId !== undefined && connection.workspaceId !== request.workspaceId))
+  ) {
     return { hosts: [], blockedReason: "grant host constraints rejected the ntfy connection scope" };
   }
   // ntfy encodes target as a topic path; it never selects the network origin.
@@ -2683,7 +2692,9 @@ async function extractGrantHostCandidates(
     const configured = connection.config.baseUrl;
     const baseUrl = typeof configured === "string" && configured.trim() ? configured.trim() : "https://ntfy.sh";
     let endpoint: URL;
-    try { endpoint = new URL(baseUrl); } catch {
+    try {
+      endpoint = new URL(baseUrl);
+    } catch {
       return { hosts: [], blockedReason: "grant host constraints require a valid ntfy endpoint" };
     }
     if (!["http:", "https:"].includes(endpoint.protocol) || !endpoint.hostname) {
@@ -2699,9 +2710,7 @@ async function extractGrantHostCandidates(
   if (readDocsIngestSourceTypeIfValid(request) === "url" && typeof args?.source === "string") {
     candidates.push(...extractHostCandidates({ url: args.source }));
   }
-  candidates.push(
-    ...resolveFixedOutboundHostsForTool(request.toolName, connection?.key),
-  );
+  candidates.push(...resolveFixedOutboundHostsForTool(request.toolName, connection?.key));
   return { hosts: [...new Set(candidates)] };
 }
 

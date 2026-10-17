@@ -28,6 +28,7 @@ import {
 import { scheduleCreateDraftKey } from "../../../features/native-routes/ops/work-form-drafts";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { resetScheduleOperationsForTests } from "../../../features/native-routes/ops/use-schedule-operations";
+import { browserTimeZone, defaultScheduleExpression } from "./schedule-cadence";
 
 vi.mock("../../ui/Dialog", () => ({
   Dialog: ({ open, children }: { open: boolean; children: React.ReactNode }) =>
@@ -225,7 +226,12 @@ describe("Work schedules", () => {
     expect(container.textContent).not.toContain("Schedule deleted.");
   });
   it("retains the verified creation receipt across its own actual URL transition", async () => {
-    const created = job({ jobId: "new-schedule-id", revision: 1, name: "Owned create" });
+    const created = job({
+      jobId: "new-schedule-id",
+      revision: 1,
+      name: "Owned create",
+      schedule: defaultScheduleExpression(),
+    });
     vi.mocked(createCronJob).mockImplementation(async () => {
       vi.mocked(fetchCronJobs).mockResolvedValue({ items: [created] });
       return created;
@@ -345,6 +351,7 @@ describe("Work schedules", () => {
       jobId: "new-schedule-id",
       revision: 1,
       name: "Advanced",
+      schedule: defaultScheduleExpression(),
       workdir: "F:/disposable",
       action: "watchdog",
       actionConfig: { watchdog: { checkId: "runtime_health", severityThreshold: "warning", notifyHomeChannel: false } },
@@ -553,9 +560,25 @@ describe("Work schedules", () => {
     expect(deleteCronJob).not.toHaveBeenCalled();
   });
 
-  it("creates a Gateway schedule and selects its confirmed record", async () => {
-    vi.mocked(createCronJob).mockResolvedValue(job({ jobId: "new-schedule-id", revision: 1, name: "Evening review" }));
-    vi.mocked(fetchCronJob).mockResolvedValue(job({ jobId: "new-schedule-id", revision: 1, name: "Evening review" }));
+  it("WK-14: keeps a routine detail refetch from rendering an empty alert", async () => {
+    await render();
+    await review();
+    let settle!: (value: CronJobRecordResponse) => void;
+    vi.mocked(fetchCronJob).mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+    await click("Refresh");
+    await vi.waitFor(() => expect(container.textContent).toContain("Checking current schedule access"));
+    expect([...container.querySelectorAll('[role="alert"]')].filter((item) => !item.textContent?.trim())).toEqual([]);
+    expect(container.querySelector('[aria-label="Schedule detail"] [role="alert"]')).toBeNull();
+    await act(async () => settle(job()));
+  });
+
+  it("creates a Gateway schedule in the browser timezone and selects its confirmed record", async () => {
+    vi.mocked(createCronJob).mockResolvedValue(
+      job({ jobId: "new-schedule-id", revision: 1, name: "Evening review", schedule: defaultScheduleExpression() }),
+    );
+    vi.mocked(fetchCronJob).mockResolvedValue(
+      job({ jobId: "new-schedule-id", revision: 1, name: "Evening review", schedule: defaultScheduleExpression() }),
+    );
     await render();
     await click("New schedule");
     const input = container.querySelector<HTMLInputElement>('form input[maxlength="100"]');
@@ -569,7 +592,8 @@ describe("Work schedules", () => {
       expect(createCronJob).toHaveBeenCalledWith({
         jobId: "new-schedule-id",
         name: "Evening review",
-        schedule: "0 9 * * *",
+        // WK-02: a new guided schedule names the browser's zone; UTC needs no suffix.
+        schedule: browserTimeZone() === "UTC" ? "0 9 * * *" : `0 9 * * * ${browserTimeZone()}`,
         action: "task",
         enabled: true,
       }),

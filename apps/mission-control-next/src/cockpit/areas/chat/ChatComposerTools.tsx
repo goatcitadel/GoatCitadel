@@ -90,7 +90,7 @@ export function ChatComposerTools({
   return (
     <>
       {queue}
-      <ChatComposerNotices props={controlsProps} />
+      <ChatComposerNotices props={controlsProps} onChooseModel={() => onOptionsOpenChange(true)} />
       <ChatUploadStatus upload={props.attachmentUpload} />
       <Sheet open={optionsOpen} onOpenChange={onOptionsOpenChange} title="Message options">
         <div className="space-y-3">

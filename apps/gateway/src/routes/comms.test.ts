@@ -63,6 +63,28 @@ describe("comms routes", () => {
     );
   });
 
+  it("passes a calendar create idempotency key through to the gateway", async () => {
+    const commsCalendarCreate = vi.fn(async () => ({ eventId: "evt-1" }));
+    app = Fastify();
+    decorateComms(app, { commsCalendarCreate });
+    await app.register(commsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/comms/calendar/create",
+      payload: {
+        connectionId: "11111111-1111-4111-8111-111111111111",
+        title: "Review",
+        startIso: "2026-03-05T10:00:00.000Z",
+        endIso: "2026-03-05T10:30:00.000Z",
+        idempotencyKey: "calendar-key-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(commsCalendarCreate).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: "calendar-key-1" }));
+  });
+
   it("allows attachment-only channel sends", async () => {
     const rawSendResult = {
       deliveryId: "delivery-1",

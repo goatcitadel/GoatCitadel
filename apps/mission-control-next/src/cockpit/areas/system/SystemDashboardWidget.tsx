@@ -10,6 +10,7 @@ import { fetchTasksByView } from "@goatcitadel/mission-control-shared/api/tasks"
 import { projectUsageCostSummary } from "@goatcitadel/mission-control-shared/content/cost-summary";
 import { Button } from "../../ui/Button";
 import { MetricList } from "../../ui/MetricList";
+import { describeRuntimeService } from "./health-overview";
 
 /** Dashboard widgets are summaries; realtime events refresh their sources, so a minute is enough. */
 export const DASHBOARD_REFRESH_MS = 60_000;
@@ -171,7 +172,8 @@ function RuntimeWidget() {
     typeof memoryUsed === "number" && typeof memoryTotal === "number" && memoryTotal > 0
       ? `${Math.round((memoryUsed / memoryTotal) * 100)}% used`
       : "Unknown";
-  const daemon = health ? (health.daemonStatus.running ? "Running" : "Stopped") : "Unknown";
+  // The same derivation as the Health page, so an unsupported host reads "Unavailable" in both places.
+  const service = health ? describeRuntimeService(health.daemonStatus).label : "Unknown";
   return (
     <WidgetFrame
       title="Runtime truth"
@@ -187,7 +189,7 @@ function RuntimeWidget() {
         summary="Host-wide status applies beyond the selected workspace."
         items={[
           ["Gateway host", health?.systemVitals.hostname || "Unknown"],
-          ["Daemon", daemon],
+          ["Runtime service", service],
           ["Memory", memory],
         ]}
       />
@@ -254,7 +256,7 @@ function UsageWidget() {
       <Metrics
         summary={`${coverage}This aggregate is not scoped to the selected workspace.`}
         items={[
-          ["Recorded tokens", projection ? new Intl.NumberFormat().format(projection.tokens) : "Unknown"],
+          ["Recorded tokens", projection?.tokenLabel ?? "Unknown"],
           ["Known cost", projection?.costLabel ?? "Unknown"],
         ]}
       />

@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 265,
+      "expectedCount": 267,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 265,
+      "expectedLastVersion": 267,
       "migrations": [
         {
           "version": 1,
@@ -1863,15 +1863,29 @@
           "groupName": "canonical",
           "definitionSha256": "587263464aff9c087f691203285816a758e960e822d1b871b762d5789697bc9a",
           "implementationSha256": "1bbda5d884693cbf73e29f6d9fdfca8a83b7e3fe9618176a75f8608266f96d48"
+        },
+        {
+          "version": 266,
+          "name": "mail_drafts",
+          "groupName": "canonical",
+          "definitionSha256": "e9c41d9b5c3bc2a5e6dcb9962db6b16edcd975077aa6c86ecfb04f223e3a2b3f",
+          "implementationSha256": "ca7a19462adb85f75963690fdfe6da91a141c3d88621e566201ca0a2a07761ed"
+        },
+        {
+          "version": 267,
+          "name": "pause_dormant_no_agent_cron_jobs",
+          "groupName": "canonical",
+          "definitionSha256": "8b38d50fcbf28bb106a5d08cf02e17c136602d2565d5c53ff4da9f7dc1888d68",
+          "implementationSha256": "a51cfb9ff94b08dceeca9b014909854fc65b37d0badcf0c0b4cd25c746793683"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 212,
+      "expectedCount": 215,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 212,
+      "expectedLastVersion": 215,
       "migrations": [
         {
           "version": 1,
@@ -3149,6 +3163,24 @@
           "definitionSha256": "6636d25470c48f836da92f1a03073aeface0c5c9471b86be2ab793a81fa867c6",
           "sqlPayloadSha256": "5ef401e2046e721707bc1bb337e2e9dbdfa57e128c5a29aba37ded33e8715d6e",
           "runtimeIntegritySha256": "f3fb771dfc2a5c4e4c1517208cb6598bc006e7ef4622a8f689d28a539b20e562"
+        },
+        {
+          "version": 213,
+          "name": "mail_drafts",
+          "definitionSha256": "0dc522cc8e50029e7ebd4e39c15ee4eee7a91f5dcebf2a932d46a9ec7a959065",
+          "runtimeIntegritySha256": "28ee54b9449bc3b136cea4be2767546aea30d108e986c8b542b77b96808072b1"
+        },
+        {
+          "version": 214,
+          "name": "mail_drafts_schema_convergence",
+          "definitionSha256": "fcec1fcd5a0d86a9b34b91b9626e7ba28ca2269fe084f253d044995d2dec181c",
+          "runtimeIntegritySha256": "17014e5475fc236af54039b995f07f527804e014b8e712fb2ee05f43f1b23cdb"
+        },
+        {
+          "version": 215,
+          "name": "pause_dormant_no_agent_cron_jobs",
+          "definitionSha256": "35123b65f168097cdbebc38887ce767b9aca66894d99e77ae67a169aed209c33",
+          "runtimeIntegritySha256": "a8601087087845ba7deafc8fc55e1d631cb369ba423ab956e700b142ffa6d385"
         }
       ]
     }

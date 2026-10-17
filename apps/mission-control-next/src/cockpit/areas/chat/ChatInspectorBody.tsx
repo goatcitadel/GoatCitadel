@@ -25,6 +25,7 @@ import { ThreadedContextConflictNotices } from "../../../features/threaded-surfa
 import { ChatBackgroundTasks } from "./ChatBackgroundTasks";
 import { SessionControlManager } from "./SessionControlManager";
 import { ChatInspectorTurnPanel } from "./ChatInspectorTurnPanel";
+import { ChatOrganizationForm } from "./ChatOrganizationForm";
 
 export function ChatInspector({
   input,
@@ -291,40 +292,7 @@ export function ChatInspector({
               <DetailRow label="Web" value={dock?.prefs ? presentWebMode(dock.prefs.webMode) : "Not available"} />
             </dl>
             <ModelTechnicalDetails providerId={active.selectedProviderId} modelId={active.selectedModel} />
-            {dock ? (
-              <form
-                className="space-y-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void dock.onSaveOrganization();
-                }}
-              >
-                <label className="block">
-                  Folder
-                  <input
-                    className="block w-full rounded-md border border-line-control bg-canvas p-2"
-                    value={dock.folderName}
-                    onChange={(event) => dock.onFolderNameChange(event.target.value)}
-                  />
-                </label>
-                <label className="block">
-                  Tags
-                  <input
-                    className="block w-full rounded-md border border-line-control bg-canvas p-2"
-                    value={dock.tagsValue}
-                    onChange={(event) => dock.onTagsValueChange(event.target.value)}
-                    placeholder="Comma-separated tags"
-                  />
-                </label>
-                <button
-                  type="submit"
-                  disabled={Boolean(dock.sessionControlPending)}
-                  className="rounded-md border border-line-control px-3 py-2 text-accent"
-                >
-                  Save organization
-                </button>
-              </form>
-            ) : null}
+            {dock ? <ChatOrganizationForm key={dock.selectedSessionId} dock={dock} /> : null}
             <p className="text-fg-muted">
               Use the model and effort controls under the composer to change the next message.
             </p>

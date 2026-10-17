@@ -240,7 +240,10 @@ describe("cockpit Diagnostics", () => {
     const originalRevoke = Object.getOwnPropertyDescriptor(URL, "revokeObjectURL");
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createUrl });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeUrl });
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const connectedAtClick: boolean[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      connectedAtClick.push(this.isConnected);
+    });
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -261,7 +264,10 @@ describe("cockpit Diagnostics", () => {
       await act(async () => button?.click());
       expect(createUrl).toHaveBeenCalledOnce();
       expect(click).toHaveBeenCalledOnce();
-      expect(revokeUrl).toHaveBeenCalledWith("blob:recent-diagnostics");
+      // SY-10: the anchor is attached when clicked and the URL is revoked later, so Firefox and Safari keep the download.
+      expect(connectedAtClick).toEqual([true]);
+      expect(revokeUrl).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(revokeUrl).toHaveBeenCalledWith("blob:recent-diagnostics"), { timeout: 3000 });
       const payload = JSON.parse(await exportBlob!.text()) as {
         diagnosticEvents: Array<{ message: string }>;
         sourceStatus: unknown;

@@ -16,6 +16,8 @@ export interface SettingsChangePlanInput {
   readonly deploymentProfile?: RuntimeChangeFor<"deployment_profile">["profile"];
   readonly readAccessMode?: RuntimeChangeFor<"read_access_policy">["mode"];
   readonly networkAllowlist?: readonly string[];
+  readonly operatorWriteRootChange?: Omit<RuntimeChangeFor<"operator_write_root">, "operation">;
+  readonly globalToolAccessChange?: Omit<RuntimeChangeFor<"tool_global_access">, "operation">;
   readonly llm?: {
     readonly activeProviderId?: string;
     readonly activeModel?: string;
@@ -84,6 +86,20 @@ export function settingsChangePlanRequest(input: SettingsChangePlanInput): Chang
     case "networkAllowlist":
       return input.networkAllowlist
         ? { kind: "runtime_configuration", change: { operation: "network_allowlist", entries: input.networkAllowlist } }
+        : null;
+    case "operatorWriteRootChange":
+      return input.operatorWriteRootChange
+        ? {
+            kind: "runtime_configuration",
+            change: { operation: "operator_write_root", ...input.operatorWriteRootChange },
+          }
+        : null;
+    case "globalToolAccessChange":
+      return input.globalToolAccessChange
+        ? {
+            kind: "runtime_configuration",
+            change: { operation: "tool_global_access", ...input.globalToolAccessChange },
+          }
         : null;
     case "llm": {
       const llm = input.llm;

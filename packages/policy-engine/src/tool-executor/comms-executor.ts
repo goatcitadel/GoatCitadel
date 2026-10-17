@@ -18,6 +18,8 @@ import {
   markCommsProviderFailed,
   markCommsProviderSent,
 } from "./channel-delivery-part-execution.js";
+import { CommsPreBoundaryProviderError } from "./comms-provider-errors.js";
+import { smtpSend } from "./smtp-mail-executor.js";
 import {
   GOOGLE_CHAT_MESSAGE_NAME_PATTERN,
   GOOGLE_CHAT_SPACE_NAME_PATTERN,
@@ -142,6 +144,10 @@ async function executeCommsToolWithBoundaryTracking(
   } catch (error) {
     let errorMessage = (error as Error).message;
     const boundaryState = commsRequestBoundaryContext.getStore();
+    // A provider that proves its failure preceded any delivery is pre-boundary even
+    // when the boundary was already marked (SMTP spans connect/auth/data in one call).
+    const mutationRequestStarted =
+      boundaryState?.mutationRequestStarted === true && !(error instanceof CommsPreBoundaryProviderError);
     const initialStatus = classifyChannelDeliveryFailure(errorMessage);
     const failureProviderMessageId = readChannelFailureProviderMessageId(error);
     providerMessageId = failureProviderMessageId ?? providerMessageId;
@@ -151,15 +157,15 @@ async function executeCommsToolWithBoundaryTracking(
         `manual reconciliation required. ${errorMessage}`;
     } else if (
       !isReadOnlyCommsTool(toolName) &&
-      boundaryState?.mutationRequestStarted &&
-      (boundaryState.mutationResponseReceived || (initialStatus !== "blocked" && initialStatus !== "not_available")) &&
+      mutationRequestStarted &&
+      (boundaryState?.mutationResponseReceived || (initialStatus !== "blocked" && initialStatus !== "not_available")) &&
       initialStatus !== "manual_reconciliation_required"
     ) {
       errorMessage = channelUnknownAfterSendError(toolName, errorMessage).message;
     }
     const classifiedStatus = classifyChannelDeliveryFailure(errorMessage);
     const deliveryStatus =
-      !isReadOnlyCommsTool(toolName) && !boundaryState?.mutationRequestStarted && classifiedStatus === "degraded"
+      !isReadOnlyCommsTool(toolName) && !mutationRequestStarted && classifiedStatus === "degraded"
         ? "not_available"
         : classifiedStatus;
     if (protectedApprovalTokenRef && (providerMessageId || deliveryStatus === "manual_reconciliation_required")) {
@@ -423,6 +429,12 @@ async function executeCommsProviderTool(
 ): Promise<string> {
   if (toolName === "gmail.send") {
     return gmailSend(connectionConfig, args, allowlist, grantAllowlist);
+  }
+  if (toolName === "smtp.send") {
+    return smtpSend(connectionConfig, args, allowlist, grantAllowlist, {
+      resolveSecret: secretFrom,
+      markMutationRequestStarted: markCommsMutationRequestStarted,
+    });
   }
   if (toolName === "calendar.create_event") {
     return calendarCreate(connectionConfig, args, allowlist, grantAllowlist);
@@ -4385,6 +4397,7 @@ async function calendarCreate(
   const payload = {
     summary: required(args.title, "title"),
     description: asString(args.description),
+    location: asString(args.location),
     start: { dateTime: required(args.startIso, "startIso"), timeZone: asString(args.timeZone) ?? "UTC" },
     end: { dateTime: required(args.endIso, "endIso"), timeZone: asString(args.timeZone) ?? "UTC" },
     attendees: stringArray(args.attendees).map((email) => ({ email })),
@@ -4405,6 +4418,24 @@ async function calendarCreate(
     throw new Error(`calendar.create_event failed (${res.response.status})`);
   }
   return safeJsonParse<{ id?: string }>(body, {}).id ?? `calendar-${Date.now()}`;
+}
+
+/**
+ * Marks the active comms mutation as started for a non-HTTP provider transport,
+ * awaiting the durable external-boundary hook first exactly as fetchAllowlisted does
+ * before a non-retryable request. A later failure is then classified as an unknown
+ * external outcome instead of a pre-boundary refusal.
+ */
+async function markCommsMutationRequestStarted(): Promise<void> {
+  const boundaryState = commsRequestBoundaryContext.getStore();
+  if (!boundaryState) {
+    return;
+  }
+  if (!boundaryState.externalBoundaryReported) {
+    await boundaryState.beforeExternalSideEffect?.();
+    boundaryState.externalBoundaryReported = true;
+  }
+  boundaryState.mutationRequestStarted = true;
 }
 
 async function fetchAllowlisted(

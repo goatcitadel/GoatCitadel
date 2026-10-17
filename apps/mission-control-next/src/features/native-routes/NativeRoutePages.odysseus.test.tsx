@@ -7,9 +7,21 @@ import { __resetFormDirtyRegistryForTests } from "./library/use-form-dirty";
 import { __resetSessionViewStateForTests } from "../../hooks/use-session-view-state";
 import type { NativeSelectableListItem } from "./primitives/NativeSelectableList";
 const renderers: ReactTestRenderer[] = [];
-function create(...args: Parameters<typeof createRenderer>) { const renderer = createRenderer(...args); renderers.push(renderer); return renderer; }
-beforeEach(() => { __resetSessionDraftsForTests(); __resetFormDirtyRegistryForTests(); __resetSessionViewStateForTests(); });
-afterEach(async () => { await act(async () => { for (const renderer of renderers.splice(0)) renderer.unmount(); }); });
+function create(...args: Parameters<typeof createRenderer>) {
+  const renderer = createRenderer(...args);
+  renderers.push(renderer);
+  return renderer;
+}
+beforeEach(() => {
+  __resetSessionDraftsForTests();
+  __resetFormDirtyRegistryForTests();
+  __resetSessionViewStateForTests();
+});
+afterEach(async () => {
+  await act(async () => {
+    for (const renderer of renderers.splice(0)) renderer.unmount();
+  });
+});
 
 vi.mock("./route-diagnostics", () => ({ recordRouteDiagnostic: vi.fn() }));
 
@@ -17,7 +29,10 @@ vi.mock("./route-diagnostics", () => ({ recordRouteDiagnostic: vi.fn() }));
 // and row callbacks while keeping these search/selection tests independent of
 // whether Virtuoso loads before the list is filtered below its window threshold.
 vi.mock("react-virtuoso", () => ({
-  Virtuoso: ({ data, itemContent }: {
+  Virtuoso: ({
+    data,
+    itemContent,
+  }: {
     data: NativeSelectableListItem[];
     itemContent: (index: number, item: NativeSelectableListItem) => ReactNode;
   }) => <div data-testid="windowed-note-rows">{data.map((item, index) => itemContent(index, item))}</div>,
@@ -258,36 +273,77 @@ describe("NativeRoutePages odysseus library sections", () => {
   it("searches all returned notes and reminders and keeps dismissed details closed after refresh", async () => {
     const note = (await mocks.listNotes()).items[0]!;
     const reminder = (await mocks.listReminders()).items[0]!;
-    mocks.listNotes.mockResolvedValueOnce({ items: Array.from({ length: 55 }, (_, i) => ({ ...note, noteId: "note-" + i, title: "Access note " + i })) });
-    mocks.listReminders.mockResolvedValueOnce({ items: Array.from({ length: 25 }, (_, i) => ({ ...reminder, reminderId: "reminder-" + i, title: "Access reminder " + i })) });
+    mocks.listNotes.mockResolvedValueOnce({
+      items: Array.from({ length: 55 }, (_, i) => ({ ...note, noteId: "note-" + i, title: "Access note " + i })),
+    });
+    mocks.listReminders.mockResolvedValueOnce({
+      items: Array.from({ length: 25 }, (_, i) => ({
+        ...reminder,
+        reminderId: "reminder-" + i,
+        title: "Access reminder " + i,
+      })),
+    });
     let renderer!: ReactTestRenderer;
-    await act(async () => { renderer = renderLibrary("notes"); });
-    await act(async () => { await vi.dynamicImportSettled(); });
+    await act(async () => {
+      renderer = renderLibrary("notes");
+    });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     expect(renderer.root.findByProps({ "data-testid": "windowed-note-rows" }).findAllByType("button")).toHaveLength(55);
-    const search = (label: string) => renderer.root.findAllByType("label").find(node => collectText(node).includes(label))!.findByType("input");
-    await act(async () => { search("Search notes").props.onChange({ target: { value: "Access note 54" } }); search("Search reminders").props.onChange({ target: { value: "Access reminder 24" } }); });
+    const search = (label: string) =>
+      renderer.root
+        .findAllByType("label")
+        .find((node) => collectText(node).includes(label))!
+        .findByType("input");
+    await act(async () => {
+      search("Search notes").props.onChange({ target: { value: "Access note 54" } });
+      search("Search reminders").props.onChange({ target: { value: "Access reminder 24" } });
+    });
     expect(collectText(renderer.root)).toContain("Access note 54");
-    await act(async () => { findButton(renderer.root, "Access reminder 24").props.onClick(); });
+    await act(async () => {
+      findButton(renderer.root, "Access reminder 24").props.onClick();
+    });
     expect(collectText(renderer.root)).toContain("Reminder ID");
-    await act(async () => { renderer.root.findByProps({ "aria-label": "Close details" }).props.onClick(); });
-    await act(async () => { findButton(renderer.root, "Refresh").props.onClick(); });
+    await act(async () => {
+      renderer.root.findByProps({ "aria-label": "Close details" }).props.onClick();
+    });
+    await act(async () => {
+      findButton(renderer.root, "Refresh").props.onClick();
+    });
     expect(renderer.root.findAllByProps({ "aria-label": "Close details" })).toHaveLength(0);
   });
 
   it("does not claim reminder completion for a mismatched response and prevents duplicate requests", async () => {
     let settle!: (value: any) => void;
     mocks.completeReminder.mockClear();
-    mocks.completeReminder.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
+    mocks.completeReminder.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
     let renderer!: ReactTestRenderer;
-    await act(async () => { renderer = renderLibrary("notes"); });
-    await act(async () => { findButton(renderer.root, "Send launch recap").props.onClick(); });
+    await act(async () => {
+      renderer = renderLibrary("notes");
+    });
+    await act(async () => {
+      findButton(renderer.root, "Send launch recap").props.onClick();
+    });
     const complete = findButton(renderer.root, "Mark completed");
-    await act(async () => { complete.props.onClick(); complete.props.onClick(); });
+    await act(async () => {
+      complete.props.onClick();
+      complete.props.onClick();
+    });
     expect(mocks.completeReminder).toHaveBeenCalledTimes(1);
-    await act(async () => { settle({ reminderId: "different", workspaceId: "default", status: "completed" }); });
+    await act(async () => {
+      settle({ reminderId: "different", workspaceId: "default", status: "completed" });
+    });
     expect(collectText(renderer.root)).toContain("Completion is not confirmed");
     expect(collectText(renderer.root)).toContain("Mark completed");
-    expect(renderer.root.findAllByType("button").filter(node => node.props["aria-label"] === "Close details")).toHaveLength(1);
+    expect(
+      renderer.root.findAllByType("button").filter((node) => node.props["aria-label"] === "Close details"),
+    ).toHaveLength(1);
   });
 
   it("renders notes and creates a scoped note", async () => {
@@ -373,8 +429,46 @@ describe("NativeRoutePages odysseus library sections", () => {
     });
 
     expect(mocks.createMailDraft).toHaveBeenCalledWith(
-      expect.objectContaining({ accountId: "mail-1", subject: "Launch window" }),
+      expect.objectContaining({ workspaceId: "default", accountId: "mail-1", subject: "Launch window" }),
     );
+  });
+
+  it("words a failed send for operators and keeps the raw provider reason out of the notice", async () => {
+    const raw = "Mail send failed: 535 5.7.8 Username and Password not accepted";
+    mocks.sendMailDraft.mockImplementationOnce(async (draftId: string) => ({
+      draftId,
+      accountId: "mail-1",
+      to: ["lead@example.test"],
+      cc: [],
+      bcc: [],
+      subject: "Launch",
+      bodyText: "Confirmed.",
+      status: "failed",
+      approvalId: "22222222-2222-4222-8222-222222222222",
+      failureReason: raw,
+      createdAt: "2026-06-01T12:00:00.000Z",
+      updatedAt: "2026-06-01T12:01:00.000Z",
+    }));
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderLibrary("communications");
+    });
+    await act(async () => undefined);
+    await act(async () => findButton(renderer!.root, "New draft").props.onClick());
+    await act(async () => {
+      findInputByPlaceholder(renderer!.root, "client@example.com").props.onChange({
+        target: { value: "lead@example.test" },
+      });
+      findInputByPlaceholder(renderer!.root, "Follow-up").props.onChange({ target: { value: "Launch window" } });
+      findTextareaByPlaceholder(renderer!.root, "Draft body").props.onChange({ target: { value: "Confirmed." } });
+    });
+    await act(async () => {
+      await findButton(renderer!.root, "Queue approval").props.onClick();
+    });
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("The mail provider refused the message. Nothing was sent.");
+    expect(text).not.toContain("535 5.7.8");
   });
 
   it("renders model comparisons under prompt packs and saves a judgment", async () => {

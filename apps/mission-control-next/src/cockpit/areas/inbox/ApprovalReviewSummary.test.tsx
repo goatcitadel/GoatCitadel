@@ -59,7 +59,7 @@ it("shows a mail send approval's exact recipients, open message text and intent-
     preview: {
       title: "Send mail draft",
       ...draft,
-      execution: "Approval records operator intent; this route does not send the message.",
+      execution: "Approving sends this exact message once through the connected account.",
     },
     linkage: { actionType: "communications.mail.send", connectorId: "acct-a", workspaceId: "workspace-mail" },
     createdAt: "2026-01-01",
@@ -70,7 +70,9 @@ it("shows a mail send approval's exact recipients, open message text and intent-
   expect(review.textContent).toContain("To: a@example.test");
   expect(review.textContent).toContain("Bcc: hidden@example.test");
   expect(review.textContent).toContain("Workspace workspace-mail.");
-  expect(review.textContent).toContain("GoatCitadel does not send this message, and delivery is never confirmed.");
+  expect(review.textContent).toContain(
+    "Approving sends this exact message once through the connected account. GoatCitadel records the delivery outcome on the draft.",
+  );
   const message = review.querySelector("details")!;
   expect(message.hasAttribute("open")).toBe(true);
   expect(message.querySelector("pre")?.textContent).toBe("Exact\n  body.");

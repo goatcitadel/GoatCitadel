@@ -273,7 +273,8 @@ it("retains tail streaming, optimistic text and the canonical pending decision o
   expect(host.textContent).toContain("Unshown canonical question");
   expect(host.textContent).toContain("More messages could not be shown");
   expect(host.querySelector('form[aria-label="Pending question"]')?.textContent).toContain("Continue?");
-  expect(host.textContent).toContain("Decision waiting");
+  // CH-10: the decision is signalled by its own card and the composer line, not by the jump button.
+  expect(host.textContent).not.toContain("Decision waiting");
   expect(submit).not.toHaveBeenCalled();
   expect(mutations.resolve).not.toHaveBeenCalled();
   // Pinned fallback displays the actual canonical tail without a duplicate footer preview.

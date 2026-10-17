@@ -31,3 +31,20 @@ describe("work column status", () => {
     expect(workColumnStatus(query({ isPending: true }), undefined, "runs")).toBe("Runs unavailable");
   });
 });
+
+describe("WK-06 work column counts", () => {
+  it("says how many of the counted records the capped list shows", () => {
+    expect(workColumnStatus(query({ data: {} }), 80, "tasks", { shown: 25 })).toBe("25 of 80 tasks shown");
+    expect(workColumnStatus(query({ data: {}, isFetching: true }), 30, "runs", { shown: 25 })).toBe(
+      "25 of 30 runs shown (checking)",
+    );
+    expect(workColumnStatus(query({ data: {} }), 3, "tasks", { shown: 3 })).toBe("3 tasks");
+  });
+
+  it("names a filtered count as matching", () => {
+    expect(workColumnStatus(query({ data: {} }), 1, "tasks", { shown: 1, matching: true })).toBe("1 matching task");
+    expect(workColumnStatus(query({ data: {} }), 40, "runs", { shown: 25, matching: true })).toBe(
+      "25 of 40 matching runs shown",
+    );
+  });
+});

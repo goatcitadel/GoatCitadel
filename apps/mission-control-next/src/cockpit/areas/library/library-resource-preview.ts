@@ -4,10 +4,34 @@ import { downloadFile } from "@goatcitadel/mission-control-shared/api/operators-
 import type { LibraryResource } from "./library-resources";
 
 export const RESOURCE_PREVIEW_BYTES = 128 * 1024;
+/** Raster images preview inline up to this size; larger ones are offered as a download. */
+export const IMAGE_PREVIEW_BYTES = 5 * 1024 * 1024;
+/**
+ * Raster images only. They render in an <img> from an object URL, which runs no script. SVG (which can carry
+ * script) and PDF (which needs a document viewer) are not previewed inline; they are offered as a download.
+ */
+const INLINE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp"]);
+const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  avif: "image/avif",
+  bmp: "image/bmp",
+};
+export const PREVIEW_NOT_AVAILABLE = "Preview not available for this file. Download it to open it.";
 export interface ResourcePreview {
   text?: string;
   artifact?: ChatGeneratedArtifactRecord;
+  /** A raster image to show inline; the viewer owns its object URL. */
+  image?: Blob;
+  /** Neutral: this content has no inline preview, but nothing is wrong with it. */
+  unavailable?: string;
   warning?: string;
+}
+function imageType(relativePath: string) {
+  return IMAGE_EXTENSIONS[relativePath.split(".").at(-1)?.toLowerCase() ?? ""];
 }
 function boundedText(value: string) {
   if (typeof value !== "string" || new TextEncoder().encode(value).byteLength > RESOURCE_PREVIEW_BYTES)
@@ -43,8 +67,9 @@ export async function readLibraryResource(
       };
     case "files": {
       const expected = resource.item;
-      if (expected.size > RESOURCE_PREVIEW_BYTES)
-        throw new Error("This file exceeds the 128 KiB Library preview limit.");
+      const image = imageType(expected.relativePath);
+      if (expected.size > (image ? IMAGE_PREVIEW_BYTES : RESOURCE_PREVIEW_BYTES))
+        return { unavailable: `${PREVIEW_NOT_AVAILABLE} It is larger than the inline preview limit.` };
       const file = await downloadFile(expected.relativePath);
       if (
         file.relativePath !== expected.relativePath ||
@@ -52,9 +77,15 @@ export async function readLibraryResource(
         file.modifiedAt !== expected.modifiedAt
       )
         throw new Error("The shared file changed after listing. Refresh the directory before previewing it again.");
-      if (file.encoding !== "utf8")
-        throw new Error("This file is not a plain text preview. Open file management to download it.");
-      return { text: boundedText(file.content), warning: "Plain text from the installation shared file root." };
+      if (file.encoding === "base64" && INLINE_IMAGE_TYPES.has(file.contentType)) {
+        const bytes = Uint8Array.from(atob(file.content), (character) => character.charCodeAt(0));
+        if (bytes.byteLength !== file.size)
+          throw new Error("The file response is incomplete. Refresh the directory before previewing it again.");
+        return { image: new Blob([bytes], { type: file.contentType }) };
+      }
+      if (file.encoding !== "utf8" || new TextEncoder().encode(file.content).byteLength > RESOURCE_PREVIEW_BYTES)
+        return { unavailable: PREVIEW_NOT_AVAILABLE };
+      return { text: file.content, warning: "Plain text from the installation shared file root." };
     }
     case "artifacts": {
       const expected = resource.item;

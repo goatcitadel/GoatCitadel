@@ -13,7 +13,10 @@ import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
-import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import {
+  presentApprovalOutcome,
+  presentApprovalStatus,
+} from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -21,24 +24,33 @@ import { approvalExpiryLabel, approvalExplanationLine } from "./approval-preview
 import { InboxApprovalActions } from "./InboxApprovalActions";
 import { queryKeys } from "../../data/query-keys";
 import { nullWhenMissing } from "./inbox-record-read";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { hasExpired, useMinuteClock } from "./use-minute-clock";
 
 export function InboxApprovalDetail({
   item,
   workspaceId,
   focusAction,
   ownerChecking = false,
+  onDecision,
 }: {
   item: OperatorInboxItem;
   workspaceId: string;
   focusAction?: "approve" | "deny";
   ownerChecking?: boolean;
+  /**
+   * Inside the Inbox page, the page announces the decision and moves focus once (IN-07). Without it (a linked
+   * approval), focus moves to the notice here instead, so its text is read.
+   */
+  onDecision?: (message: string, settled: boolean) => void;
 }) {
   const access = useProjectAccess(workspaceId);
   const [decisionNotice, setDecisionNotice] = useState("");
   const noticeRef = useRef<HTMLParagraphElement>(null);
+  const pageOwnsFocus = Boolean(onDecision);
   useEffect(() => {
-    if (decisionNotice) noticeRef.current?.focus();
-  }, [decisionNotice]);
+    if (decisionNotice && !pageOwnsFocus) noticeRef.current?.focus();
+  }, [decisionNotice, pageOwnsFocus]);
   const queryClient = useQueryClient();
   const approvalId = item.source.approvalId;
   // The same key as Chat's blocker card, so moving between them is a cache hit (IN-11).
@@ -51,8 +63,9 @@ export function InboxApprovalDetail({
   });
   // Re-read the owner after a decision or stale review; the settled receipt remains reachable
   // through LinkedApproval after the pending projection removes this selection.
-  const rereadSettled = (notice: string) => {
+  const rereadSettled = (notice: string, settled: boolean) => {
     setDecisionNotice(notice);
+    onDecision?.(notice, settled);
     void queryClient.resetQueries({ queryKey, exact: true });
     void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
     const runId = query.data?.linkage?.durableRunId;
@@ -83,6 +96,10 @@ export function InboxApprovalDetail({
     specialistEvidenceMatches(approval, specialistQuery.data)
       ? specialistQuery.data
       : undefined;
+  // Still reading: say so, and raise an alert only once the read has failed or returned something else (IN-16).
+  const specialistChecking = !specialistQuery.isError && (specialistQuery.isPending || specialistQuery.isFetching);
+  const now = useMinuteClock(approval?.expiresAt);
+  const expired = hasExpired(approval?.expiresAt, now);
 
   return (
     <section aria-label="Current approval" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
@@ -115,7 +132,8 @@ export function InboxApprovalDetail({
       ) : null}
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {decisionNotice ? (
-        <p ref={noticeRef} tabIndex={-1} role="status" className="text-fg-secondary">
+        // Not a live region: the page announcer (or focus, for a linked approval) reads it once.
+        <p ref={noticeRef} tabIndex={-1} data-inbox-decision-notice className="text-fg-secondary">
           {decisionNotice}
         </p>
       ) : null}
@@ -158,9 +176,11 @@ export function InboxApprovalDetail({
         <>
           <div className="flex flex-wrap gap-2">
             <RiskBadge risk={approval.riskLevel} />
-            <StatusBadge status={presentApprovalStatus(approval.status)} />
+            <StatusBadge
+              status={expired ? presentApprovalOutcome("expired") : presentApprovalStatus(approval.status)}
+            />
           </div>
-          {approval.expiresAt ? <p className="text-fg-muted">{approvalExpiryLabel(approval.expiresAt)}</p> : null}
+          {approval.expiresAt ? <p className="text-fg-muted">{approvalExpiryLabel(approval.expiresAt, now)}</p> : null}
           <p className="text-fg-secondary">
             {approvalExplanationLine(approval.explanation?.summary, approval.explanationStatus)}
           </p>
@@ -168,7 +188,12 @@ export function InboxApprovalDetail({
             <p className="text-fg-secondary">{approval.explanation.riskExplanation}</p>
           ) : null}
           {approval.explanationError ? (
-            <p role="alert">Approval summary unavailable: {approval.explanationError}</p>
+            <>
+              <p role="alert">Approval summary unavailable. Review the action preview before deciding.</p>
+              <TechnicalDetails>
+                <p>{approval.explanationError}</p>
+              </TechnicalDetails>
+            </>
           ) : null}
           {approval.explanation?.saferAlternative ? (
             <p className="text-fg-secondary">Safer option: {approval.explanation.saferAlternative}</p>
@@ -229,10 +254,12 @@ export function InboxApprovalDetail({
               {specialistEvidence ? (
                 <SpecialistApprovalReview approval={approval} evidence={specialistEvidence} />
               ) : (
-                <p role="alert">
-                  {specialistQuery.error
-                    ? describeApiError(specialistQuery.error).summary
-                    : "Specialist evidence is unavailable or changed. Refresh before approving."}
+                <p role={specialistChecking ? "status" : "alert"} className={specialistChecking ? "text-fg-muted" : ""}>
+                  {specialistChecking
+                    ? "Checking specialist evidence…"
+                    : specialistQuery.error
+                      ? describeApiError(specialistQuery.error).summary
+                      : "Specialist evidence is unavailable or changed. Refresh before approving."}
                 </p>
               )}
             </>
@@ -245,9 +272,9 @@ export function InboxApprovalDetail({
               workspaceId={workspaceId}
               focusAction={focusAction}
               checking={checking || (specialist && specialistQuery.isFetching)}
-              onResolved={rereadSettled}
+              onResolved={(message) => rereadSettled(message, true)}
               onInvalidated={(message) =>
-                rereadSettled(message ?? "The approval changed. Review the refreshed record before deciding.")
+                rereadSettled(message ?? "The approval changed. Review the refreshed record before deciding.", false)
               }
             />
           ) : null}

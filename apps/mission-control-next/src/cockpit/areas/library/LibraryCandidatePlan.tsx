@@ -159,7 +159,9 @@ function CandidatePlan({
       ) : null}
       {message ? <Callout>{message}</Callout> : null}
       {error ? <Callout tone="error">{error}</Callout> : null}
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       <Button disabled={busy || query.isFetching} onClick={() => void refresh()}>
         Refresh candidate change plan
       </Button>

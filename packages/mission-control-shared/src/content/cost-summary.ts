@@ -9,8 +9,57 @@ export function formatCostUsd(value: number | null | undefined): string {
   return formatMoney(value);
 }
 
-/** Cost is an exact total only when the Gateway reports complete coverage. */
-export function projectUsageCostSummary(summary: CostSummaryResponse): {
+/** How many summary groups reported a complete token total, and how many were missing or partial. */
+export interface TokenCoverage {
+  knownGroups: number;
+  missingGroups: number;
+  /** True only when every group (or the Gateway's canonical coverage) reports complete input and output tokens. */
+  complete: boolean;
+}
+
+export interface UsageCostProjection {
+  /** The sum of the finite token values. A lower bound unless `tokenCoverage.complete`; kept for Classic callers. */
+  tokens: number;
+  /** "1,234" when complete, "at least 1,234" when partial, "Unknown" when nothing is known. Never a fake zero. */
+  tokenLabel: string;
+  tokenCoverage: TokenCoverage;
+  costLabel: string;
+  coverageDescription: string;
+}
+
+type CostItem = CostSummaryResponse["items"][number];
+
+function itemTokensKnown(item: CostItem): boolean {
+  if (!Number.isFinite(item.tokenTotal) || item.tokenTotal < 0) return false;
+  const flags = item.metricAvailability;
+  return !flags || (flags.inputTokensComplete && flags.outputTokensComplete);
+}
+
+export function projectTokenCoverage(summary: CostSummaryResponse): TokenCoverage {
+  const knownGroups = summary.items.filter(itemTokensKnown).length;
+  const missingGroups = summary.items.length - knownGroups;
+  const canonical = summary.usageAvailability?.metricAvailability;
+  const canonicalComplete =
+    canonical?.inputTokens && canonical.outputTokens
+      ? canonical.inputTokens.complete && canonical.outputTokens.complete
+      : undefined;
+  return { knownGroups, missingGroups, complete: missingGroups === 0 && canonicalComplete !== false };
+}
+
+function formatTokenLabel(tokens: number, coverage: TokenCoverage): string {
+  const count = new Intl.NumberFormat().format(tokens);
+  if (coverage.complete) return count;
+  return tokens > 0 ? `at least ${count}` : "Unknown";
+}
+
+/** Cost is an exact total only when the Gateway reports complete coverage; tokens follow their own coverage. */
+export function projectUsageCostSummary(summary: CostSummaryResponse): UsageCostProjection {
+  const cost = projectCostTotals(summary);
+  const tokenCoverage = projectTokenCoverage(summary);
+  return { ...cost, tokenCoverage, tokenLabel: formatTokenLabel(cost.tokens, tokenCoverage) };
+}
+
+function projectCostTotals(summary: CostSummaryResponse): {
   tokens: number;
   costLabel: string;
   coverageDescription: string;
@@ -60,29 +109,58 @@ export function projectUsageCostSummary(summary: CostSummaryResponse): {
   };
 }
 
+/**
+ * exact: complete cost (a true $0 day included). lower_bound: some cost known, coverage incomplete.
+ * unknown: usage was recorded but no cost is known. no_data: the Gateway recorded no usage for the day.
+ * Only exact and lower_bound days have a measured amount; the others never count as $0 in the scale.
+ */
+export type DailyCostBarState = "exact" | "lower_bound" | "unknown" | "no_data";
+
 export interface DailyCostBar {
   key: string;
   label: string;
   costLabel: string;
   percent: number;
+  state: DailyCostBarState;
+  /** The known amount in USD; 0 for unknown and no-data days, which are excluded from the scale maximum. */
+  amount: number;
 }
+
+type DailySeriesDay = NonNullable<CostSummaryResponse["dailySeries"]>[number];
+
+function dailyBarState(day: DailySeriesDay): { state: DailyCostBarState; amount: number } {
+  const raw = day.costUsd;
+  const finite = typeof raw === "number" && Number.isFinite(raw) && raw >= 0;
+  const amount = finite ? raw : 0;
+  const complete = day.metricAvailability?.costUsdComplete;
+  // The Gateway emits every day of the window; a day with no provider segments and no cost had no recorded usage.
+  if (day.segments.length === 0 && amount === 0 && complete !== false) return { state: "no_data", amount: 0 };
+  if (!finite) return { state: "unknown", amount: 0 };
+  if (complete === true) return { state: "exact", amount };
+  return amount > 0 ? { state: "lower_bound", amount } : { state: "unknown", amount: 0 };
+}
+
+const DAILY_STATE_LABEL: Record<"unknown" | "no_data", string> = { unknown: "Unknown", no_data: "No usage" };
 
 export function projectDailyCostBars(summary: CostSummaryResponse): DailyCostBar[] {
   const days = (summary.dailySeries ?? []).slice(-7);
-  const amounts = days.map((day) => {
-    const amount = day.costUsd ?? Number.NaN;
-    return Number.isFinite(amount) && amount > 0 ? amount : 0;
-  });
-  const maxAmount = Math.max(0, ...amounts);
+  const states = days.map(dailyBarState);
+  const maxAmount = Math.max(0, ...states.map((entry) => entry.amount));
   return days.map((day, index) => {
-    const known = amounts[index] ?? 0;
-    const complete = day.metricAvailability?.costUsdComplete === true;
+    const { state, amount } = states[index] ?? { state: "unknown" as const, amount: 0 };
     return {
       key: day.isoDate,
       // Daily ledger buckets are UTC; do not relabel aggregates as local days.
       label: `${day.isoDate} UTC`,
-      costLabel: complete ? formatCostUsd(known) : known > 0 ? formatMoneyLowerBound(known) : "Unknown",
-      percent: maxAmount > 0 ? Math.round((known / maxAmount) * 100) : 0,
+      costLabel:
+        state === "exact"
+          ? formatCostUsd(amount)
+          : state === "lower_bound"
+            ? formatMoneyLowerBound(amount)
+            : DAILY_STATE_LABEL[state],
+      percent: maxAmount > 0 ? Math.round((amount / maxAmount) * 100) : 0,
+      state,
+      amount,
     };
   });
 }

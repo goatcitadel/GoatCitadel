@@ -380,4 +380,129 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
       auth: { mode: "token", allowLoopbackBypass: false, token: "private-token-value" },
     });
   });
+
+  describe("runtime write access", () => {
+    const outside = process.platform === "win32" ? "D:\\scratch\\out" : "/srv/scratch/out";
+
+    function writeAccessSettings(overrides: Record<string, unknown> = {}) {
+      return settings({
+        operatorWriteRoots: [],
+        globalToolAccess: { allow: ["fs.read"], deny: ["fs.write", "fs.delete"] },
+        ...overrides,
+      });
+    }
+
+    function writeAccessAdapter(current: () => any, validateSettingsUpdate = vi.fn(async () => undefined)) {
+      const updateSettings = vi.fn(async () => current());
+      const adapter = new RuntimeConfigurationChangePlanAdapter({
+        ...authCredentialDeps,
+        getSettings: vi.fn(async () => current()),
+        updateSettings,
+        validateSettingsUpdate,
+      });
+      return { adapter, updateSettings, validateSettingsUpdate };
+    }
+
+    it.each([
+      [{ action: "add", path: outside, allowDelete: true }, "danger"],
+      [{ action: "add", path: outside }, "caution"],
+      [{ action: "add", preset: "os_temp", allowDelete: false }, "caution"],
+      [{ action: "remove", path: outside }, "caution"],
+    ] as const)("classifies operator write root %o as %s", async (change, risk) => {
+      const { adapter } = writeAccessAdapter(() => writeAccessSettings());
+      const prepared = await adapter.prepare(context, {
+        kind: "runtime_configuration",
+        change: { operation: "operator_write_root", ...change },
+      });
+      expect(prepared.risk).toBe(risk);
+      if (change.action === "add") expect(prepared.impact).toContain("Deny-wins still applies");
+    });
+
+    it.each([
+      ["fs.delete", "available", "danger"],
+      ["fs.write", "available", "danger"],
+      ["fs.write", "unlisted", "danger"],
+      ["fs.copy", "available", "caution"],
+      ["fs.delete", "denied", "safe"],
+    ] as const)("classifies %s -> %s as %s", async (toolName, posture, risk) => {
+      const { adapter } = writeAccessAdapter(() => writeAccessSettings());
+      const prepared = await adapter.prepare(context, {
+        kind: "runtime_configuration",
+        change: { operation: "tool_global_access", toolName, posture },
+      });
+      expect(prepared.risk).toBe(risk);
+      expect(prepared.target.resourceId).toBe(`tool_global_access:${toolName}`);
+    });
+
+    it("says un-denying makes the tool callable with approval in every write root", async () => {
+      const { adapter } = writeAccessAdapter(() => writeAccessSettings());
+      const prepared = await adapter.prepare(context, {
+        kind: "runtime_configuration",
+        change: { operation: "tool_global_access", toolName: "fs.delete", posture: "available" },
+      });
+      expect(prepared.summary).toBe("Change the global posture of fs.delete from denied to available.");
+      expect(prepared.impact).toContain("makes it callable, with approval, in every write root");
+      expect(prepared.impact).toContain("Deny-wins still applies");
+    });
+
+    it("validates through the settings owner before preparing and fails closed without it", async () => {
+      const validateSettingsUpdate = vi.fn(async () => {
+        throw new Error("Folder cannot be an operator write root (runtime_protected_path)");
+      });
+      const { adapter } = writeAccessAdapter(() => writeAccessSettings(), validateSettingsUpdate);
+      const request = {
+        kind: "runtime_configuration" as const,
+        change: { operation: "operator_write_root" as const, action: "add" as const, path: outside },
+      };
+      await expect(adapter.prepare(context, request)).rejects.toThrow(/runtime_protected_path/);
+      expect(validateSettingsUpdate).toHaveBeenCalledWith({
+        expectedRevision: 7,
+        operatorWriteRootChange: { action: "add", path: outside },
+      });
+
+      const withoutOwner = new RuntimeConfigurationChangePlanAdapter({
+        ...authCredentialDeps,
+        getSettings: vi.fn(async () => writeAccessSettings()),
+        updateSettings: vi.fn(),
+      });
+      await expect(withoutOwner.prepare(context, request)).rejects.toThrow(/settings owner is unavailable/);
+    });
+
+    it("applies typed settings patches and verifies the owner state", async () => {
+      let current = writeAccessSettings();
+      const { adapter, updateSettings } = writeAccessAdapter(() => current);
+      const rootRequest = {
+        kind: "runtime_configuration" as const,
+        change: { operation: "operator_write_root" as const, action: "add" as const, path: outside, label: "Out" },
+      };
+      const prepared = await adapter.prepare(context, rootRequest);
+      const plan = { request: rootRequest, target: prepared.target } as ChangePlanRecord;
+      await adapter.apply(context, plan);
+      expect(updateSettings).toHaveBeenCalledWith({
+        expectedRevision: 7,
+        operatorWriteRootChange: { action: "add", path: outside, label: "Out" },
+      });
+      expect((await adapter.verify(context, plan)).status).toBe("manual_required");
+      current = writeAccessSettings({ operatorWriteRoots: [{ path: outside, allowDelete: false }] });
+      expect((await adapter.verify(context, plan)).status).toBe("completed");
+
+      const toolRequest = {
+        kind: "runtime_configuration" as const,
+        change: {
+          operation: "tool_global_access" as const,
+          toolName: "fs.write" as const,
+          posture: "available" as const,
+        },
+      };
+      const toolPlan = { request: toolRequest, target: (await adapter.prepare(context, toolRequest)).target };
+      await adapter.apply(context, toolPlan as ChangePlanRecord);
+      expect(updateSettings).toHaveBeenLastCalledWith({
+        expectedRevision: 7,
+        globalToolAccessChange: { toolName: "fs.write", posture: "available" },
+      });
+      expect((await adapter.verify(context, toolPlan as ChangePlanRecord)).status).toBe("manual_required");
+      current = writeAccessSettings({ globalToolAccess: { allow: ["fs.read", "fs.write"], deny: ["fs.delete"] } });
+      expect((await adapter.verify(context, toolPlan as ChangePlanRecord)).status).toBe("completed");
+    });
+  });
 });

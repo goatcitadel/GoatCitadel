@@ -225,6 +225,7 @@ export interface CalendarCreateEventInput {
   startIso: string;
   endIso: string;
   attendees?: string[];
+  location?: string;
   timeZone?: string;
   sessionId?: string;
   agentId?: string;

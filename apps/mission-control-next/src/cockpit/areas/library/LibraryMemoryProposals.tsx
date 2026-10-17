@@ -111,7 +111,9 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
     >
       {query.isFetching ? <p role="status">Reading memory proposals…</p> : null}
       {query.error ? <Callout tone="error">{describeApiError(query.error).summary}</Callout> : null}
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       {query.data && !proposals.length ? (
         <p className="text-sm text-fg-muted">No proposals waiting for review.</p>
       ) : null}

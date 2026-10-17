@@ -6,9 +6,35 @@ import {
   resolveIntegrationCatalogMaturity,
   resolveIntegrationCatalogRuntimeAvailability,
 } from "./integration-catalog.js";
+import { resolveMailProvider } from "./communications-dashboard-service.js";
 
 describe("integration-catalog", () => {
-  it("requires visible authenticated Zalo User setup and separates Talk server from Gateway callbacks", () => { const zalo = getIntegrationFormSchema("channel.zalouser"); expect(zalo?.description).toContain("authenticated"); const auth = zalo?.fields.find((field) => field.key === "authTokenEnv"); expect(auth).toMatchObject({ required: true }); expect(auth?.advanced).not.toBe(true); const nextcloud = getIntegrationFormSchema("channel.nextcloud-talk"); expect(nextcloud?.fields.find((field) => field.key === "baseUrl")?.description).toContain("different host"); });
+  it("offers an IMAP/SMTP mail setup that sends through SMTP and keeps its password an env reference", () => {
+    const entry = INTEGRATION_CATALOG.find((candidate) => candidate.catalogId === "automation.imap-smtp");
+    expect(entry).toMatchObject({ kind: "automation", key: "imap-smtp", capabilities: ["send"] });
+    // The send executor treats this catalog id as an SMTP sender.
+    expect(resolveMailProvider({ catalogId: entry!.catalogId, key: entry!.key } as never)).toBe("imap");
+    const fields = getIntegrationFormSchema("automation.imap-smtp")?.fields ?? [];
+    expect(fields.map((field) => field.key)).toEqual(
+      expect.arrayContaining(["smtpHost", "smtpPort", "smtpUser", "smtpPasswordEnv", "fromAddress"]),
+    );
+    expect(fields.find((field) => field.key === "smtpPasswordEnv")).toMatchObject({ secretRef: true });
+    expect(fields.find((field) => field.key === "smtpHost")).toMatchObject({ required: true });
+    expect(fields.find((field) => field.key === "fromAddress")).toMatchObject({ required: true });
+    // No field may hold the password itself, and TLS mode follows the port rather than a stored toggle.
+    expect(fields.some((field) => field.key === "smtpPassword" || field.key === "smtpSecure")).toBe(false);
+    expect(getIntegrationFormSchema("automation.imap-smtp")?.description).toContain("not available yet");
+  });
+
+  it("requires visible authenticated Zalo User setup and separates Talk server from Gateway callbacks", () => {
+    const zalo = getIntegrationFormSchema("channel.zalouser");
+    expect(zalo?.description).toContain("authenticated");
+    const auth = zalo?.fields.find((field) => field.key === "authTokenEnv");
+    expect(auth).toMatchObject({ required: true });
+    expect(auth?.advanced).not.toBe(true);
+    const nextcloud = getIntegrationFormSchema("channel.nextcloud-talk");
+    expect(nextcloud?.fields.find((field) => field.key === "baseUrl")?.description).toContain("different host");
+  });
   it("includes OpenClaw-style channel entries with guided setup forms", () => {
     const catalogIds = [
       "channel.line",

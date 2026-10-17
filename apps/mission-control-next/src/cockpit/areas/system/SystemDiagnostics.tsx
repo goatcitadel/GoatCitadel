@@ -16,6 +16,7 @@ import { describeOperatorInboxError } from "../../data/operator-inbox-error";
 import { useOperatorInbox } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { inboxMatchesWorkspace } from "../inbox/inbox-presentation";
+import { saveLibraryDownload } from "../library/library-download";
 import { buildRecentDiagnosticsExport } from "./recent-diagnostics-export";
 import { FirstRunVerification } from "../settings/FirstRunVerification";
 import { RuntimeAuthorityMap } from "./RuntimeAuthorityMap";
@@ -79,17 +80,11 @@ export function SystemDiagnostics() {
         events: { items: diagnostics.data?.items, failed: diagnostics.isError, fetchedAt: diagnostics.dataUpdatedAt },
         logs: { items: logs.data?.items, failed: logs.isError, fetchedAt: logs.dataUpdatedAt },
       });
-      const url = URL.createObjectURL(
+      // The shared helper attaches the anchor and defers revoking the URL, so Firefox and Safari keep the download.
+      saveLibraryDownload(
+        "goatcitadel-recent-diagnostics.json",
         new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8" }),
       );
-      try {
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = "goatcitadel-recent-diagnostics.json";
-        anchor.click();
-      } finally {
-        URL.revokeObjectURL(url);
-      }
       setExportNotice({
         tone: "success",
         message:

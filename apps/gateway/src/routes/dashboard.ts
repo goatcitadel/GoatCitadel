@@ -16,6 +16,7 @@ import {
 } from "@goatcitadel/contracts";
 import { sendRouteError } from "./_error-handler.js";
 import { settingsChangePlanRequest, type SettingsChangePlanInput } from "./dashboard-settings-change-plan.js";
+import { globalToolAccessChangeSchema, operatorWriteRootChangeSchema } from "./operator-write-access-schemas.js";
 import { bindPublicCronCreator } from "./dashboard-cron-authority.js";
 import { CRON_JOBS_LIST_ROUTE_OPTIONS, replyWithCronJobs } from "./dashboard-cron-citadel.js";
 
@@ -178,6 +179,8 @@ export const updateSettingsSchema = z.object({
   budgetMode: z.enum(["saver", "balanced", "power"]).optional(),
   readAccessMode: z.enum(["roots_only", "approval_required", "full_disk"]).optional(),
   networkAllowlist: z.array(z.string().min(1)).optional(),
+  operatorWriteRootChange: operatorWriteRootChangeSchema.optional(),
+  globalToolAccessChange: globalToolAccessChangeSchema.optional(),
   auth: authUpdateSchema.optional(),
   llm: z
     .object({

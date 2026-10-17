@@ -49,8 +49,10 @@ import {
   type DeviceAccessRequestStatus,
   type DeviceAccessRequestStatusResponse,
   type FilesystemReadAccessMode,
+  type GlobalToolAccessChange,
   type LlmProviderConfig,
   type LlmProviderRequestConfig,
+  type OperatorWriteRootChange,
   type RealtimeEvent,
   type ToolApprovalMode,
 } from "@goatcitadel/contracts";
@@ -113,6 +115,12 @@ import {
   type CompanionSessionRecord,
 } from "./companion-auth-helpers.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+import {
+  applyGlobalToolAccessChange,
+  applyOperatorWriteRootChange,
+  projectGlobalToolAccess,
+  projectOperatorWriteRoots,
+} from "./settings-operator-write-access.js";
 import {
   deriveApprovalResolutionEffectsResult,
   type ApprovalObservabilityEffectInput,
@@ -188,20 +196,24 @@ export interface SettingsAuthRuntimeDependencies {
 
 export async function getSettings(deps: SettingsRuntimeDependencies): Promise<RuntimeSettings> {
   const features = await deps.readFeatureFlags();
+  const toolPolicy = deps.config.toolPolicy;
   return {
     chatFeatureAvailability: projectChatFeatureAvailability(
-      deps.config.assistant.durable ?? { enabled: false, executionEnabled: false }, features,
+      deps.config.assistant.durable ?? { enabled: false, executionEnabled: false },
+      features,
     ),
     revision: deps.readSettingsRevision?.() ?? 1,
     environment: deps.config.assistant.environment,
     deploymentProfile: deps.config.assistant.deploymentProfile,
-    toolApprovalMode: deps.config.toolPolicy.tools.approvalMode ?? deps.config.assistant.toolApprovalMode ?? "approve_risky",
+    toolApprovalMode: toolPolicy.tools.approvalMode ?? deps.config.assistant.toolApprovalMode ?? "approve_risky",
     budgetMode: deps.config.budgets.mode,
     workspaceDir: deps.config.assistant.workspaceDir,
-    writeJailRoots: deps.config.toolPolicy.sandbox.writeJailRoots,
-    readOnlyRoots: deps.config.toolPolicy.sandbox.readOnlyRoots,
-    readAccessMode: deps.config.toolPolicy.sandbox.readAccessMode ?? "roots_only",
-    networkAllowlist: deps.config.toolPolicy.sandbox.networkAllowlist,
+    writeJailRoots: toolPolicy.sandbox.writeJailRoots,
+    readOnlyRoots: toolPolicy.sandbox.readOnlyRoots,
+    operatorWriteRoots: projectOperatorWriteRoots(toolPolicy),
+    globalToolAccess: projectGlobalToolAccess(toolPolicy),
+    readAccessMode: toolPolicy.sandbox.readAccessMode ?? "roots_only",
+    networkAllowlist: toolPolicy.sandbox.networkAllowlist,
     approvalExplainer: deps.config.assistant.approvalExplainer,
     memory: {
       enabled: deps.config.assistant.memory.enabled,
@@ -278,6 +290,10 @@ export interface UpdateSettingsInput {
   budgetMode?: "saver" | "balanced" | "power";
   readAccessMode?: FilesystemReadAccessMode;
   networkAllowlist?: string[];
+  /** Add or remove one operator write root; validated against the write-root safety rules. */
+  operatorWriteRootChange?: OperatorWriteRootChange;
+  /** Set the global posture of one curated filesystem mutation tool. */
+  globalToolAccessChange?: GlobalToolAccessChange;
   auth?: AuthSettingsUpdateInput;
   llm?: {
     activeProviderId?: string;
@@ -512,6 +528,12 @@ export async function updateSettings(
     deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
       enforce: true,
     });
+  }
+
+  if (input.operatorWriteRootChange || input.globalToolAccessChange) {
+    const toolPolicy = deps.config.toolPolicy;
+    if (input.operatorWriteRootChange) applyOperatorWriteRootChange(toolPolicy, input.operatorWriteRootChange);
+    if (input.globalToolAccessChange) applyGlobalToolAccessChange(toolPolicy, input.globalToolAccessChange);
   }
 
   if (input.auth) {

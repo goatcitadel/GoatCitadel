@@ -3,7 +3,7 @@ import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { canRetryTurn } from "@goatcitadel/mission-control-shared/components/chat/chat-display-helpers";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { MoreHorizontal } from "lucide-react";
+import { Check, MoreHorizontal } from "lucide-react";
 import { useState } from "react";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
@@ -33,6 +33,7 @@ export function ChatTurnActions({
   streaming,
   readOnly,
   hasAnswer,
+  copied = false,
   onCopy,
 }: {
   turn: ChatThreadTurnRecord;
@@ -40,6 +41,8 @@ export function ChatTurnActions({
   streaming: boolean;
   readOnly: boolean;
   hasAnswer: boolean;
+  /** The answer was just copied; the button briefly reads "Copied". */
+  copied?: boolean;
   onCopy: () => void;
 }) {
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
@@ -100,7 +103,14 @@ export function ChatTurnActions({
       ) : null}
       {hasAnswer ? (
         <button type="button" onClick={onCopy} className={phone ? PHONE : INLINE}>
-          {copyLabel}
+          {copied ? (
+            <>
+              <Check aria-hidden="true" className="size-4" />
+              <span className="ml-1">Copied</span>
+            </>
+          ) : (
+            copyLabel
+          )}
         </button>
       ) : null}
       {secondary.length ? (

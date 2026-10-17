@@ -174,7 +174,9 @@ export function LibraryCurator({ workspaceId }: { workspaceId: string }) {
         }
       />
       <div className="grid min-w-0 gap-2 empty:hidden">
-        {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+        {operation.locked && operation.attempt?.message ? (
+          <Callout tone="warning">{operation.attempt.message}</Callout>
+        ) : null}
         {operation.locked && pending ? (
           <div>
             <Button onClick={() => setReview(pending)}>Review pending archive</Button>

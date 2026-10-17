@@ -17,6 +17,7 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TimeText } from "../../ui/TimeText";
 import { TASK_ACTIVITY_LABELS, TASK_DELIVERABLE_LABELS, TASK_PRIORITY_LABELS } from "./work-vocabulary";
+import { ListLimitFooter, useListLimit } from "./WorkListLimit";
 
 export function WorkTaskDetail({ taskId }: { taskId: string }) {
   const { navigate } = useCockpitRoute();
@@ -46,6 +47,8 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
     enabled: Boolean(task),
     refetchInterval: 30_000,
   });
+  const activityList = useListLimit(activities.data?.items ?? [], 20, "start");
+  const deliverableList = useListLimit(deliverables.data?.items ?? [], 20, "start");
 
   return (
     <section className={AREA_PAGE}>
@@ -159,16 +162,19 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
                 </p>
               ) : null}
               {!activities.isError && activities.data?.items.length ? (
-                <ol className="mt-2 grid gap-2">
-                  {activities.data.items.slice(0, 20).map((item) => (
-                    <li key={item.activityId} className="border-b border-line-subtle py-2 text-sm">
-                      <p className="break-words text-fg">{item.message}</p>
-                      <p className="text-xs text-fg-muted">
-                        {TASK_ACTIVITY_LABELS[item.activityType] ?? "Activity"} · <TimeText value={item.createdAt} />
-                      </p>
-                    </li>
-                  ))}
-                </ol>
+                <>
+                  <ol className="mt-2 grid gap-2">
+                    {activityList.visible.map((item) => (
+                      <li key={item.activityId} className="border-b border-line-subtle py-2 text-sm">
+                        <p className="break-words text-fg">{item.message}</p>
+                        <p className="text-xs text-fg-muted">
+                          {TASK_ACTIVITY_LABELS[item.activityType] ?? "Activity"} · <TimeText value={item.createdAt} />
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                  <ListLimitFooter limit={activityList} noun="activity" nounPlural="activities" latest />
+                </>
               ) : activities.data && !activities.isError ? (
                 <p className="mt-2 text-sm text-fg-muted">No activity was returned.</p>
               ) : null}
@@ -185,18 +191,26 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
                 </p>
               ) : null}
               {!deliverables.isError && deliverables.data?.items.length ? (
-                <ul className="mt-2 grid gap-2">
-                  {deliverables.data.items.slice(0, 20).map((item) => (
-                    <li key={item.deliverableId} className="border-b border-line-subtle py-2 text-sm">
-                      <p className="break-words font-medium text-fg">{item.title}</p>
-                      {item.description ? <p className="break-words text-fg-secondary">{item.description}</p> : null}
-                      <p className="text-xs text-fg-muted">
-                        {TASK_DELIVERABLE_LABELS[item.deliverableType] ?? "Deliverable"} ·{" "}
-                        <TimeText value={item.createdAt} />
-                      </p>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <ul className="mt-2 grid gap-2">
+                    {deliverableList.visible.map((item) => (
+                      <li key={item.deliverableId} className="border-b border-line-subtle py-2 text-sm">
+                        <p className="break-words font-medium text-fg">{item.title}</p>
+                        {item.description ? <p className="break-words text-fg-secondary">{item.description}</p> : null}
+                        <p className="text-xs text-fg-muted">
+                          {TASK_DELIVERABLE_LABELS[item.deliverableType] ?? "Deliverable"} ·{" "}
+                          <TimeText value={item.createdAt} />
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                  <ListLimitFooter
+                    limit={deliverableList}
+                    noun="deliverable"
+                    nounPlural="deliverables"
+                    latest={false}
+                  />
+                </>
               ) : deliverables.data && !deliverables.isError ? (
                 <p className="mt-2 text-sm text-fg-muted">No deliverables were returned.</p>
               ) : null}

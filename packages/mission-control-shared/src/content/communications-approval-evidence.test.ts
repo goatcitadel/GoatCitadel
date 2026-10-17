@@ -20,7 +20,7 @@ const approval: ApprovalRequest = {
   preview: {
     title: "Send mail draft",
     ...draft,
-    execution: "Approval records operator intent; this route does not send the message.",
+    execution: "Approving sends this exact message once through the connected account.",
   },
   linkage: { actionType: "communications.mail.send", connectorId: "acct-a", workspaceId: "workspace-mail" },
   createdAt: "now",
@@ -28,7 +28,7 @@ const approval: ApprovalRequest = {
 };
 
 describe("mail send approval evidence", () => {
-  it("shows exact recipients, the persisted message, scope and the intent-only consequence", () => {
+  it("shows exact recipients, the persisted message, scope and the sending consequence", () => {
     expect(buildApprovalRequestReviewEvidenceModel(approval)).toEqual({
       targets: ["To: a@example.test, b@example.test", "Cc: c@example.test"],
       commands: [],
@@ -36,7 +36,7 @@ describe("mail send approval evidence", () => {
       supporting: ["Attachments: none"],
       scopeSummary: "Workspace workspace-mail.",
       consequence:
-        "Approving records operator intent only. GoatCitadel does not send this message, and delivery is never confirmed.",
+        "Approving sends this exact message once through the connected account. GoatCitadel records the delivery outcome on the draft.",
       technicalDetails: [{ label: "Draft record", content: "Draft ID: mail_draft_1\nAccount ID: acct-a" }],
     });
   });

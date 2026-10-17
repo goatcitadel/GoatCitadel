@@ -38,9 +38,16 @@ import { IntegrationConnectionRepository } from "./integration-connection-repo.j
 import { ChannelSetupDraftRepository } from "./channel-setup-draft-repo.js";
 import { ChannelSetupEvidenceRepository } from "./channel-setup-evidence-repo.js";
 import { ChannelOAuthAttemptRepository } from "./channel-oauth-attempt-repo.js";
+import { MailDraftRepository } from "./mail-draft-repo.js";
 export { ChannelSetupEvidenceRepository } from "./channel-setup-evidence-repo.js";
 export { ChannelOAuthAttemptRepository } from "./channel-oauth-attempt-repo.js";
-export type { ChannelOAuthAttemptRecord, ChannelOAuthAttemptCreate, ChannelOAuthAttemptPatch } from "./channel-oauth-attempt-repo.js";
+export { MailDraftRepository } from "./mail-draft-repo.js";
+export type { MailDraftTransition } from "./mail-draft-repo.js";
+export type {
+  ChannelOAuthAttemptRecord,
+  ChannelOAuthAttemptCreate,
+  ChannelOAuthAttemptPatch,
+} from "./channel-oauth-attempt-repo.js";
 import { MeshRepository } from "./mesh-repo.js";
 import { MeshCapabilityNodeAdmissionRepository } from "./mesh-capability-node-admission-repo.js";
 import { MeshCapabilityPublicationRepository } from "./mesh-capability-publication-repo.js";
@@ -378,6 +385,7 @@ export class Storage {
   public readonly channelSetupDrafts: ChannelSetupDraftRepository;
   public readonly channelSetupEvidence: ChannelSetupEvidenceRepository;
   public readonly channelOAuthAttempts: ChannelOAuthAttemptRepository;
+  public readonly mailDrafts: MailDraftRepository;
   public readonly agentProfiles: AgentProfileRepository;
   public readonly importedAgentCatalog: ImportedAgentCatalogRepository;
   public readonly mesh: MeshRepository;
@@ -572,6 +580,7 @@ export class Storage {
     this.channelSetupDrafts = new ChannelSetupDraftRepository(this.db);
     this.channelSetupEvidence = new ChannelSetupEvidenceRepository(this.db);
     this.channelOAuthAttempts = new ChannelOAuthAttemptRepository(this.db);
+    this.mailDrafts = new MailDraftRepository(this.db);
     this.agentProfiles = new AgentProfileRepository(this.db);
     this.importedAgentCatalog = new ImportedAgentCatalogRepository(this.db);
     this.mesh = new MeshRepository(this.db);

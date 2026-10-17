@@ -105,7 +105,8 @@ export async function runCockpitScheduleLifecycleProof({
           assert.equal(seed.lastRunId, undefined);
           assert.ok(Date.parse(seed.nextRunAt) > Date.now(), "The fixture schedule must be in the future.");
           const theme = variant === "mobile" ? "light" : "dark";
-          browserContext = await browser.newContext({ viewport, colorScheme: theme });
+          // New guided schedules default to the browser timezone; UTC keeps the expected default expression "0 9 * * *".
+          browserContext = await browser.newContext({ viewport, colorScheme: theme, timezoneId: "UTC" });
           await browserContext.addInitScript((value) => {
             window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit");
             window.localStorage.setItem("goatcitadel.ui.theme.v1", value);
