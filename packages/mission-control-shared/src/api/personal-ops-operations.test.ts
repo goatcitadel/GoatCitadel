@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 const api = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("./client-core.js", () => ({ request: api.request }));
-import { getMailDraft, sendMailDraft } from "./personal-ops-operations.js";
+import { getMailDraft, releaseMailDraft, sendMailDraft } from "./personal-ops-operations.js";
 
 describe("mail draft read-back client", () => {
   it("reads one encoded draft fresh in its workspace without posting", async () => {
@@ -23,6 +23,17 @@ describe("mail draft read-back client", () => {
 
     expect(api.request.mock.calls).toEqual([
       ["/api/v1/mail/drafts/d1/send", { method: "POST", body: JSON.stringify({ workspaceId: "workspace-1" }) }],
+    ]);
+  });
+
+  it("posts an interrupted-draft release in the owning workspace", async () => {
+    api.request.mockReset();
+    api.request.mockResolvedValue({ outcome: "released", draft: { draftId: "d/1", status: "draft" } });
+
+    await releaseMailDraft("d/1", "workspace-1");
+
+    expect(api.request.mock.calls).toEqual([
+      ["/api/v1/mail/drafts/d%2F1/release", { method: "POST", body: JSON.stringify({ workspaceId: "workspace-1" }) }],
     ]);
   });
 });
