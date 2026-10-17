@@ -1148,7 +1148,7 @@ describe("CapabilitySystemService", () => {
     await initAiderPinWorktree(harness.rootDir);
     await fs.writeFile(path.join(harness.rootDir, "repo", "scratch.txt"), "untracked\n", "utf8");
     const workbenchGet = attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const warn = vi.spyOn(__internal.log, "warn").mockImplementation(() => undefined);
     try {
       const dirtyRun = await harness.service.createCodeModeRun({
         language: "typescript",
@@ -1194,7 +1194,10 @@ describe("CapabilitySystemService", () => {
         expect((call[0] as ApprovalCreateInput).payload).not.toHaveProperty("aiderWorkspacePin");
       }
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0]?.[0])).toContain("workbench storage offline");
+      expect(warn).toHaveBeenCalledWith("Aider run created without a workspace pin", {
+        runId: brokenReadRun.runId,
+        detail: "workbench storage offline",
+      });
     } finally {
       warn.mockRestore();
     }
@@ -1230,6 +1233,55 @@ describe("CapabilitySystemService", () => {
     expect(() =>
       __internal.readFrozenCodeModeInputBinding(unpinnedSnapshot, {}, undefined, run.codeModeInputHash, true),
     ).toThrow("Code Mode input snapshot hash mismatch");
+  });
+
+  it("refuses an invalid frozen workspace pin", async () => {
+    const harness = await createAiderPinHarness();
+    await initAiderPinWorktree(harness.rootDir);
+    attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      sessionId: "session-pin",
+      aider: { requestMarkdown: "Refactor this file." },
+    });
+    const policySnapshot = JSON.parse(
+      await fs.readFile(path.resolve(harness.rootDir, run.policySnapshotArtifact.relPath), "utf8"),
+    ) as Record<string, unknown>;
+
+    expect(() =>
+      __internal.readFrozenCodeModeInputBinding(
+        { ...policySnapshot, codeModeAiderWorkspacePin: { version: 2 } },
+        {},
+        undefined,
+        run.codeModeInputHash,
+        true,
+      ),
+    ).toThrow("workspace pin snapshot is invalid");
+  });
+
+  it("refuses a frozen workspace pin without a frozen Aider request", async () => {
+    const harness = await createAiderPinHarness();
+    await initAiderPinWorktree(harness.rootDir);
+    attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      sessionId: "session-pin",
+      aider: { requestMarkdown: "Refactor this file." },
+    });
+    const policySnapshot = JSON.parse(
+      await fs.readFile(path.resolve(harness.rootDir, run.policySnapshotArtifact.relPath), "utf8"),
+    ) as Record<string, unknown>;
+    const { codeModeAiderRequest: _request, ...unboundSnapshot } = policySnapshot;
+    void _request;
+    expect(unboundSnapshot).toHaveProperty("codeModeAiderWorkspacePin");
+
+    expect(() => __internal.readFrozenCodeModeInputBinding(unboundSnapshot, {}, undefined)).toThrow(
+      "workspace pin snapshot is invalid",
+    );
   });
 
   it("lists Code Mode execution backends without promoting Docker or Aider as callable", async () => {

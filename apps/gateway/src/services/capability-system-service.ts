@@ -76,6 +76,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { resolveBundledSkillLockEntry, type BundledSkillLockEntry } from "@goatcitadel/skills";
+import { logger } from "@goatcitadel/gateway-core";
 import {
   buildCapabilityLifecycleApprovalBinding,
   buildCapabilityLifecycleApprovalPayload,
@@ -143,6 +144,7 @@ import {
   isSkillCallable,
 } from "./candidate-skill-catalog-service.js";
 
+const log = logger.child("capability-system");
 const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
 const CODE_MODE_WRAPPER_SETTLE_TIMEOUT_MS = 500;
 const CODE_MODE_OUTPUT_CAPTURE_LIMIT_BYTES = 64 * 1024;
@@ -5850,7 +5852,14 @@ function readFrozenCodeModeInputBinding(
   const aiderExecution = hasFrozenAiderExecution
     ? readFrozenCodeModeAiderExecution(policySnapshot.codeModeAiderExecution)
     : undefined;
-  const aiderWorkspacePin = Object.prototype.hasOwnProperty.call(policySnapshot, "codeModeAiderWorkspacePin")
+  const hasFrozenAiderWorkspacePin = Object.prototype.hasOwnProperty.call(policySnapshot, "codeModeAiderWorkspacePin");
+  if (hasFrozenAiderWorkspacePin && !hasFrozenAiderRequest) {
+    throw new ConflictError({
+      message:
+        "Code Mode Aider workspace pin snapshot is invalid; refusing to execute run. The pin is not bound to a frozen Aider request.",
+    });
+  }
+  const aiderWorkspacePin = hasFrozenAiderWorkspacePin
     ? readFrozenCodeModeAiderWorkspacePin(policySnapshot.codeModeAiderWorkspacePin)
     : undefined;
   const inputHash = asOptionalString(policySnapshot.codeModeInputHash);
@@ -5898,8 +5907,7 @@ async function captureAiderWorkspacePinOrNone(
       0,
       AIDER_WORKSPACE_PIN_WARNING_MAX_CHARS,
     );
-    // eslint-disable-next-line no-console -- bounded diagnostic: a broken workbench read must not block an unpinned run.
-    console.warn(`[code-mode] Aider run ${binding.runId} created without a workspace pin: ${detail}`);
+    log.warn("Aider run created without a workspace pin", { runId: binding.runId, detail });
     return undefined;
   }
 }
@@ -6882,6 +6890,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export const __internal = {
+  log,
   createMinimalSyntheticEnv,
   createCodeModeChildStreamError,
   normalizeCodeModeIpcError,
