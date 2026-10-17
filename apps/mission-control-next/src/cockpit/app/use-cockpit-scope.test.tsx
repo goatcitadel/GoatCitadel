@@ -232,7 +232,18 @@ describe("cockpit scope owner", () => {
     width = 390;
     await render();
     await vi.waitFor(() => expect(mocks.currentCitadel).toHaveBeenCalledTimes(1));
-    expect(document.querySelector('[aria-label="Current operating scope"]')?.textContent).not.toContain("Reading Citadel");
+    // SH-22: the scope line lives in the More sheet, not in the bottom chrome.
+    expect(document.querySelector('[aria-label="Current operating scope"]')).toBeNull();
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[aria-label="More areas and settings"]')!.click();
+    });
+    const scopeLine = await vi.waitFor(() => {
+      const line = document.querySelector('[aria-label="Current operating scope"]');
+      expect(line).not.toBeNull();
+      return line!;
+    });
+    expect(scopeLine.textContent).not.toContain("Reading Citadel");
+    expect(scopeLine.textContent).not.toContain("Loading workspace");
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["system", "directory", "active-citadel"] });
     });
@@ -641,11 +652,13 @@ describe("cockpit scope owner", () => {
 });
 
 it("keeps the approval destination through the reviewed directory-checked scope transition", async () => {
-  window.history.replaceState({retained: "yes"}, "", "/inbox?approvalId=a%2Fb&workspaceId=ws-b&extra=keep#review");
+  window.history.replaceState({ retained: "yes" }, "", "/inbox?approvalId=a%2Fb&workspaceId=ws-b&extra=keep#review");
   destination = "/inbox?approvalId=a%2Fb&citadelId=cit-a&workspaceId=ws-b&extra=keep#review";
   await render();
   await vi.waitFor(() => expect(owner.ready).toBe(true));
-  await act(async () => { owner.select("cit-b", "ws-b"); });
+  await act(async () => {
+    owner.select("cit-b", "ws-b");
+  });
   await vi.waitFor(() => expect(prefs.activeWorkspaceId).toBe("ws-b"));
   expect(window.location.pathname).toBe("/inbox");
   expect(new URLSearchParams(window.location.search).get("approvalId")).toBe("a/b");
@@ -653,5 +666,5 @@ it("keeps the approval destination through the reviewed directory-checked scope 
   expect(new URLSearchParams(window.location.search).get("workspaceId")).toBe("ws-b");
   expect(new URLSearchParams(window.location.search).get("citadelId")).toBe("cit-b");
   expect(new URLSearchParams(window.location.search).get("extra")).toBe("keep");
-  expect(window.history.state).toMatchObject({retained: "yes"});
+  expect(window.history.state).toMatchObject({ retained: "yes" });
 });

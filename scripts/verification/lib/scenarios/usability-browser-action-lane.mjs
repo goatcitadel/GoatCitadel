@@ -24,10 +24,12 @@ import {
 import { BROWSER_ACTION_BUNDLES } from "./usability-browser-action-registry.mjs";
 import { assertManagedRuntimeSaved } from "./cockpit-managed-runtime-proof.mjs";
 import { clickTurnAction, countTurnAction } from "./cockpit-turn-actions.mjs";
+import { conversationNavigation, conversationRowName, openConversationList } from "./cockpit-conversation-list.mjs";
 
 const PACKAGE_NAME = "@goatcitadel/mission-control-next";
 const OPERATOR_TOKEN = "verification-usability-browser-actions-operator-token";
 const ACTION_TIMEOUT_MS = 30_000;
+const ACTION_SESSION_TITLE = "Usability browser action session";
 const SSE_RECOVERY_WINDOW_MS = 5_000;
 const NAVIGATION_TEARDOWN_WINDOW_MS = 5_000;
 const SSE_DIAGNOSTIC_LEAD_MS = 1_000;
@@ -679,12 +681,10 @@ export function cockpitChatPersistenceStep({ phone = false } = {}) {
       { kind: "click", name: "Archive conversation", exact: true },
       { kind: "confirm", name: "Archive" },
       { kind: "api", probe: "chat-persistence-archived" },
-      phone
-        ? { kind: "select", label: "Choose conversation", value: "history:archived" }
-        : { kind: "click", name: "Archived", exact: true },
-      phone
-        ? { kind: "select-action-session" }
-        : { kind: "click", name: "Usability browser action session", exact: true },
+      // Phones open the conversation list (filters, Recent/Archived, rows) from the header's Conversations sheet.
+      ...(phone ? [{ kind: "click", name: "Conversations", exact: true }] : []),
+      { kind: "click", name: "Archived", exact: true },
+      { kind: "select-action-session" },
       { kind: "assert-text", value: "Persist this deterministic cockpit conversation." },
       { kind: "click", name: "Conversation actions", exact: true },
       { kind: "click", name: "Restore conversation", exact: true },
@@ -1931,20 +1931,22 @@ async function executeOperation(page, operation, state) {
       };
     }
     case "select-action-session": {
-      const locator = await editableLocator(page, "Choose conversation");
-      const deadline = Date.now() + ACTION_TIMEOUT_MS;
-      while (Date.now() < deadline) {
-        if (
-          await locator
-            .locator("option")
-            .evaluateAll((options, sessionId) => options.some((option) => option.value === sessionId), state.sessionId)
-        ) {
-          await locator.selectOption(state.sessionId);
-          return { kind: "select", accessibleName: "Choose conversation", sessionId: state.sessionId };
-        }
-        await page.waitForTimeout(50);
+      // The desktop rail or the phone Conversations sheet: choose the action session's row by its label,
+      // then require the exact session identity in the URL the shared controller writes.
+      const list = await openConversationList(page, { timeout: ACTION_TIMEOUT_MS });
+      const row = conversationNavigation(list)
+        .getByRole("button", { name: conversationRowName(ACTION_SESSION_TITLE) })
+        .first();
+      try {
+        await row.waitFor({ timeout: ACTION_TIMEOUT_MS });
+      } catch (error) {
+        throw new Error("archived conversation did not appear in the conversation list", { cause: error });
       }
-      throw new Error("archived conversation did not appear in the phone picker");
+      await row.click();
+      await page.waitForURL((url) => url.searchParams.get("sessionId") === state.sessionId, {
+        timeout: ACTION_TIMEOUT_MS,
+      });
+      return { kind: "select", accessibleName: ACTION_SESSION_TITLE, sessionId: state.sessionId };
     }
     case "fixture-session": {
       const fixtureSessionId = state.fixture.sessions?.[operation.sessionKey];
@@ -3973,10 +3975,8 @@ async function apiProbe(probe, state) {
       if (matches.length !== 1) {
         throw new Error(`expected one pending Communications send approval; found ${matches.length}`);
       }
-      if (
-        matches[0]?.preview?.execution !== "Approval records operator intent; this route does not send the message."
-      ) {
-        throw new Error("Communications approval did not retain the no-send execution boundary");
+      if (matches[0]?.preview?.execution !== "Approving sends this exact message once through the connected account.") {
+        throw new Error("Communications approval did not state its exact-once send execution");
       }
       const sideEffects = await checkedRequest(
         state.gatewayUrl,
@@ -4991,7 +4991,7 @@ async function createActionSession(gatewayUrl, workspaceId) {
   const created = await checkedRequest(
     gatewayUrl,
     "/api/v1/chat/sessions",
-    { method: "POST", body: { title: "Usability browser action session", workspaceId } },
+    { method: "POST", body: { title: ACTION_SESSION_TITLE, workspaceId } },
     "create action session",
   );
   if (!created.body?.sessionId) throw new Error("action session returned no sessionId");

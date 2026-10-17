@@ -300,10 +300,10 @@ describe("inspector", () => {
   });
 });
 
-it("uses a modal inspector on tablet widths", async () => {
+it("uses a modal inspector without filler copy below 1024px", async () => {
   vi.stubGlobal("matchMedia", (media: string) => ({
     media,
-    matches: media === "(width < 1280px)",
+    matches: media === "(width < 1280px)" || media === "(width < 1024px)",
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   }));
@@ -316,8 +316,56 @@ it("uses a modal inspector on tablet widths", async () => {
     ),
   );
   await act(async () => api.open({ title: "Run", body: <button type="button">Evidence</button> }));
-  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  const dialog = document.querySelector('[role="dialog"]');
+  expect(dialog).not.toBeNull();
+  expect(dialog?.hasAttribute("aria-describedby")).toBe(false);
+  expect(dialog?.textContent).not.toContain("Review the selected details.");
+  expect(document.querySelector('[aria-label="Restore docked inspector"]')).toBeNull();
   expect(container.querySelector("aside.cockpit-inspector")).toBeNull();
+});
+
+it("overlays a non-modal inspector on 1024–1279px laptops and returns focus on Escape (SH-02)", async () => {
+  vi.stubGlobal("matchMedia", (media: string) => ({
+    media,
+    matches: media === "(width < 1280px)",
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
+  await act(async () =>
+    root.render(
+      <InspectorProvider>
+        <Probe />
+        <button type="button" onClick={() => api.open({ title: "Run", body: <p>Canonical evidence</p> })}>
+          Inspect laptop
+        </button>
+        <button type="button">Page control</button>
+        <InspectorPanel />
+      </InspectorProvider>,
+    ),
+  );
+  const trigger = container.querySelector<HTMLButtonElement>("button")!;
+  trigger.focus();
+  await act(async () => trigger.click());
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  const panel = container.querySelector<HTMLElement>("aside.cockpit-inspector")!;
+  expect(panel.dataset.inspectorMode).toBe("overlay");
+  expect(panel.className).toContain("absolute");
+  expect(document.activeElement).toBe(panel);
+  // No focus trap: the page underneath stays reachable.
+  const pageControl = [...container.querySelectorAll("button")].find((b) => b.textContent === "Page control")!;
+  pageControl.focus();
+  expect(document.activeElement).toBe(pageControl);
+  panel.focus();
+  await act(async () => {
+    panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  expect(container.querySelector("aside.cockpit-inspector")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  // Expand still offers the modal reading view.
+  await act(async () => trigger.click());
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Expand inspector"]')!.click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Canonical evidence");
+  expect(document.querySelector('[aria-label="Restore docked inspector"]')).not.toBeNull();
 });
 it("expands a docked inspector without discarding selection", async () => {
   await act(async () =>

@@ -31,7 +31,8 @@ import { COCKPIT_AREAS } from "./routes";
 import { useCockpitRoute } from "./use-cockpit-route";
 import { useCockpitPreload } from "./use-cockpit-preload";
 import { useHealthDigestStatus } from "./use-health-digest";
-import { HEALTH_TONE_BG, presentCockpitStream } from "./stream-status";
+import { HEALTH_TONE_ICON, presentCockpitStream } from "./stream-status";
+import { Tooltip } from "../ui/Tooltip";
 
 const AREA_ICONS = { chat: MessageSquare, inbox: Inbox, work: LayoutGrid, library: Library, system: Activity } as const;
 
@@ -66,6 +67,9 @@ export function Sidebar({
   const workspaceName =
     workspaces.data?.items.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? "Workspace";
   const stream = presentCockpitStream(streamState, replayRecovery);
+  // SH-01: status icons differ in shape per tone, so the rail never relies on colour alone.
+  const { Icon: HealthIcon, text: healthText } = HEALTH_TONE_ICON[healthStatus.tone];
+  const { Icon: StreamIcon, text: streamText } = stream;
 
   return (
     <aside
@@ -131,7 +135,7 @@ export function Sidebar({
       <div className="flex-1" />
       {healthStatus.phase === "unavailable" ? (
         <div className={`flex items-center gap-2 py-1 text-xs text-fg-muted ${collapsed ? "flex-col" : "px-2"}`}>
-          <span aria-hidden="true" className="size-2 rounded-full bg-status-neutral" />
+          <HealthIcon aria-hidden="true" className={`size-4 shrink-0 ${healthText}`} />
           <span className={collapsed ? "sr-only" : "flex-1"}>{healthStatus.label}</span>
           {collapsed ? (
             <IconButton
@@ -158,7 +162,7 @@ export function Sidebar({
           }}
           className="flex items-center gap-2 px-2 py-1 text-xs text-fg-muted hover:text-fg"
         >
-          <span aria-hidden="true" className={`size-2 rounded-full ${HEALTH_TONE_BG[healthStatus.tone]}`} />
+          <HealthIcon aria-hidden="true" className={`size-4 shrink-0 ${healthText}`} />
           <span className={collapsed ? "sr-only" : ""}>{healthStatus.label}</span>
         </a>
       )}
@@ -167,8 +171,19 @@ export function Sidebar({
         aria-label={stream.ariaLabel}
         className={`flex items-center gap-2 py-1.5 text-xs text-fg-muted ${collapsed ? "flex-col" : "px-2"}`}
       >
-        <span aria-hidden="true" className={`size-2 rounded-full ${stream.tone}`} />
-        <span className={collapsed ? "sr-only" : "flex-1"}>{stream.label}</span>
+        {collapsed ? (
+          // The collapsed rail hides the label, so the icon is focusable and names itself in a tooltip.
+          <Tooltip label={stream.label}>
+            <span tabIndex={0} role="img" aria-label={stream.label} className="inline-flex rounded-sm">
+              <StreamIcon aria-hidden="true" className={`size-4 ${streamText}`} />
+            </span>
+          </Tooltip>
+        ) : (
+          <>
+            <StreamIcon aria-hidden="true" className={`size-4 shrink-0 ${streamText}`} />
+            <span className="flex-1">{stream.label}</span>
+          </>
+        )}
         <Menu scopeKey={JSON.stringify([activeCitadelId, activeWorkspaceId, pathname, search, hash])}>
           <MenuTrigger
             aria-label="Settings and account"

@@ -436,6 +436,10 @@ export interface RuntimeSettingsResponse {
   workspaceDir: string;
   writeJailRoots: string[];
   readOnlyRoots: string[];
+  /** Operator-opened folders outside the write jail, for model-driven filesystem tools only. */
+  operatorWriteRoots?: import("@goatcitadel/contracts").OperatorWriteRootSummary[];
+  /** Global tool allow and deny lists (agent and permission-profile lists are separate). */
+  globalToolAccess?: import("@goatcitadel/contracts").GlobalToolAccessSummary;
   readAccessMode?: "roots_only" | "approval_required" | "full_disk";
   networkAllowlist: string[];
   approvalExplainer: {

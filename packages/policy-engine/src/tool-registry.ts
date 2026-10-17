@@ -1,5 +1,12 @@
 /* eslint-disable max-lines */
-import { CHANGE_PLAN_RUNTIME_FEATURE_FLAGS } from "@goatcitadel/contracts";
+import {
+  CHANGE_PLAN_RUNTIME_FEATURE_FLAGS,
+  CURATED_FS_MUTATION_TOOLS,
+  GLOBAL_TOOL_ACCESS_POSTURES,
+  OPERATOR_WRITE_ROOT_LABEL_MAX,
+  OPERATOR_WRITE_ROOT_PATH_MAX,
+  OPERATOR_WRITE_ROOT_PRESETS,
+} from "@goatcitadel/contracts";
 import type { ToolCatalogEntry, ToolCategory, ToolPack, ToolRiskLevel } from "@goatcitadel/contracts";
 
 export interface ToolDefinition {
@@ -289,6 +296,33 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
                         },
                       },
                       required: ["operation", "entries"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      description:
+                        "Add or remove a folder outside the workspace that filesystem tools may write to. Give exactly one of an absolute path or the os_temp preset. The operator reviews and confirms; delete access stays off unless allowDelete is true.",
+                      properties: {
+                        operation: { const: "operator_write_root" },
+                        action: { type: "string", enum: ["add", "remove"] },
+                        path: { type: "string", minLength: 1, maxLength: OPERATOR_WRITE_ROOT_PATH_MAX },
+                        preset: { type: "string", enum: [...OPERATOR_WRITE_ROOT_PRESETS] },
+                        allowDelete: { type: "boolean" },
+                        label: { type: "string", minLength: 1, maxLength: OPERATOR_WRITE_ROOT_LABEL_MAX },
+                      },
+                      required: ["operation", "action"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      description:
+                        "Set the global posture of one filesystem mutation tool. Deny-wins policy and approvals still apply.",
+                      properties: {
+                        operation: { const: "tool_global_access" },
+                        toolName: { type: "string", enum: [...CURATED_FS_MUTATION_TOOLS] },
+                        posture: { type: "string", enum: [...GLOBAL_TOOL_ACCESS_POSTURES] },
+                      },
+                      required: ["operation", "toolName", "posture"],
                       additionalProperties: false,
                     },
                     {
@@ -2241,6 +2275,14 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     riskLevel: "danger",
     requiresApproval: true,
     description: "Send Gmail message from configured account.",
+    pack: "comms",
+  },
+  {
+    name: "smtp.send",
+    category: "comms",
+    riskLevel: "danger",
+    requiresApproval: true,
+    description: "Send a plain-text email through the configured IMAP/SMTP account's SMTP server.",
     pack: "comms",
   },
   {

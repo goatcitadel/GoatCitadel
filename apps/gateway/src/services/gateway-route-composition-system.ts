@@ -5,6 +5,11 @@ import { createPersonalOpsRouteService } from "./personal-ops-route-service.js";
 import { PersonalOpsService } from "./personal-ops-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
+import type {
+  CommunicationsMailDraftRecovery,
+  CommunicationsMailDraftStore,
+} from "./communications-dashboard-service.js";
+import { COMMUNICATIONS_MAIL_SEND_APPROVAL_KIND } from "./communications-approval-effect-service.js";
 import {
   createSettingsRuntimeDependenciesForGateway,
   createWorkspacesRoutePortForGateway,
@@ -100,5 +105,24 @@ export function composeSystemRouteDependencies(
     tasks: taskLifecycleService,
     voice: mediaVoiceService,
     workspaces: createWorkspacesRoutePortForGateway(gateway),
+  };
+}
+
+/** The durable mail draft store the communications routes persist drafts through. */
+export function composeCommunicationsMailDraftStore(
+  gateway: GatewayRouteCompositionPort,
+): CommunicationsMailDraftStore {
+  return gateway.storage.mailDrafts;
+}
+
+/** The approval lookup and audit stream an interrupted-draft release checks and records through. */
+export function composeCommunicationsMailDraftRecovery(
+  gateway: GatewayRouteCompositionPort,
+): CommunicationsMailDraftRecovery {
+  const { approvals, audit } = gateway.storage;
+  return {
+    findMailSendApprovals: (draftId) =>
+      approvals.listByKindAndPayloadString(COMMUNICATIONS_MAIL_SEND_APPROVAL_KIND, "draftId", draftId),
+    recordAudit: (event) => audit.append("approvals", event),
   };
 }

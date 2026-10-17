@@ -1,6 +1,8 @@
 import { APPROVAL_EXECUTION_LINKAGE_POSTGRES_SQL } from "../approval-execution-linkage-migration.js";
 import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_POSTGRES_SQL } from "../approval-execution-linkage-index-repair.js";
 import { CHANNEL_GUIDED_SETUP_POSTGRES_SQL } from "../channel-guided-setup-schema.js";
+import { MAIL_DRAFTS_POSTGRES_SQL, MAIL_DRAFTS_SCHEMA_CONVERGENCE_POSTGRES_SQL } from "../mail-draft-schema.js";
+import { PAUSE_DORMANT_NO_AGENT_CRON_JOBS_POSTGRES_SQL } from "../pause-dormant-no-agent-cron.js";
 import { CHAT_ROUTED_CONTEXT_ADMISSION_POSTGRES_SQL } from "../chat-routed-context-admission-schema.js";
 import { HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL } from "../heartbeat-feature-binding-schema.js";
 import { COMMITMENT_OCCURRENCE_POSTGRES_SQL } from "../commitment-occurrence-schema.js";
@@ -15189,6 +15191,29 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       UPDATE mutation_idempotency SET dispatched_at = updated_at WHERE status = 'pending' AND dispatched_at IS NULL AND substr(route_path, 1, 21) = 'external_side_effect:';
     `,
     integritySha256: "f3fb771dfc2a5c4e4c1517208cb6598bc006e7ef4622a8f689d28a539b20e562",
+  },
+  {
+    // Parity with SQLite v266.
+    version: 213,
+    name: "mail_drafts",
+    sql: MAIL_DRAFTS_POSTGRES_SQL,
+    integritySha256: "28ee54b9449bc3b136cea4be2767546aea30d108e986c8b542b77b96808072b1",
+  },
+  {
+    // Upgraded installs got v213's additive table while fresh installs get the
+    // v2-rendered shape (no CHECK); converge both for the canonical shape gate.
+    version: 214,
+    name: "mail_drafts_schema_convergence",
+    sql: MAIL_DRAFTS_SCHEMA_CONVERGENCE_POSTGRES_SQL,
+    integritySha256: "17014e5475fc236af54039b995f07f527804e014b8e712fb2ee05f43f1b23cdb",
+  },
+  {
+    // Data-only parity with SQLite v267: no_agent cron graduated from its env
+    // gate, so enabled jobs that never ran are paused once for re-confirmation.
+    version: 215,
+    name: "pause_dormant_no_agent_cron_jobs",
+    sql: PAUSE_DORMANT_NO_AGENT_CRON_JOBS_POSTGRES_SQL,
+    integritySha256: "a8601087087845ba7deafc8fc55e1d631cb369ba423ab956e700b142ffa6d385",
   },
 ];
 

@@ -72,7 +72,10 @@ describe("tool registry", () => {
     const schemaText = JSON.stringify(tool?.argSchema);
     expect(schemaText).toContain("session_model");
     expect(schemaText).toContain("product_source_update");
-    expect(schemaText).not.toMatch(/apiKey|password|filesystemPath|patch|command/iu);
+    expect(schemaText).toContain("operator_write_root");
+    expect(schemaText).toContain("tool_global_access");
+    // "fs.patch" is a curated tool name for tool_global_access, not a source patch field.
+    expect(schemaText.replaceAll('"fs.patch"', "")).not.toMatch(/apiKey|password|filesystemPath|patch|command/iu);
     expect(tool?.description).toContain("never confirms or applies");
   });
 

@@ -2,7 +2,7 @@ import type { ApprovalRequest } from "@goatcitadel/contracts";
 import type { ApprovalEvidenceModel } from "./approval-helpers.js";
 
 const MAIL_SEND_CONSEQUENCE =
-  "Approving records operator intent only. GoatCitadel does not send this message, and delivery is never confirmed.";
+  "Approving sends this exact message once through the connected account. GoatCitadel records the delivery outcome on the draft.";
 
 const isStringList = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === "string");

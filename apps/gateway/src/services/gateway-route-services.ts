@@ -146,6 +146,10 @@ import { createMobileRouteService, type MobileRoutePort, type MobileRouteService
 import { createNpuRouteService, type NpuRoutePort, type NpuRouteService } from "./npu-route-service.js";
 import type { PersonalOpsRouteService } from "./personal-ops-route-service.js";
 import type { OpsSavedBoardService } from "./ops-saved-board-service.js";
+import type {
+  CommunicationsMailDraftRecovery,
+  CommunicationsMailDraftStore,
+} from "./communications-dashboard-service.js";
 import {
   createOnboardingRouteService,
   type OnboardingRoutePort,
@@ -350,6 +354,10 @@ export interface GatewayRouteServices {
    * service over the existing mesh replication transport.
    */
   meshCapabilityInvocation?: MeshCapabilityInvocationService;
+  /** Durable mail drafts for the communications routes. Composed from storage; absent in partial test hosts. */
+  mailDrafts?: CommunicationsMailDraftStore;
+  /** Approval lookup and audit for releasing an interrupted draft. Composed from storage; absent in partial test hosts. */
+  mailDraftRecovery?: CommunicationsMailDraftRecovery;
   mobile: MobileRouteService;
   npu: NpuRouteService;
   personalOps: PersonalOpsRouteService;

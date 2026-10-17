@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from "react";
-import { isModifiedClick } from "../lib/modified-click";
+import { OverflowTabs } from "./OverflowTabs";
 
 export interface AreaTab {
   id: string;
@@ -44,7 +44,8 @@ export function AreaHeader({
   return (
     <header data-area-header="" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
+        {/* basis-64: on a phone the actions wrap under the title instead of squeezing it into a narrow column. */}
+        <div className="min-w-0 flex-1 basis-64">
           <h1 className="font-display text-xl font-semibold text-fg">{title}</h1>
           {description ? <p className="mt-1 max-w-3xl text-sm text-fg-secondary">{description}</p> : null}
           {children}
@@ -52,26 +53,7 @@ export function AreaHeader({
         {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
       {area ? (
-        <nav
-          aria-label={area.label}
-          className="cockpit-area-tabs flex gap-1 overflow-x-auto border-b border-line-subtle"
-        >
-          {area.tabs.map((tab) => (
-            <a
-              key={tab.id}
-              href={tab.href}
-              aria-current={area.current === tab.id ? "page" : undefined}
-              onClick={(event) => {
-                if (isModifiedClick(event)) return;
-                event.preventDefault();
-                area.navigate(tab.href);
-              }}
-              className="shrink-0 border-b-2 border-transparent px-3 py-2 text-sm text-fg-secondary hover:text-fg aria-[current=page]:border-accent aria-[current=page]:text-fg"
-            >
-              {tab.label}
-            </a>
-          ))}
-        </nav>
+        <OverflowTabs label={area.label} tabs={area.tabs} current={area.current} navigate={area.navigate} />
       ) : null}
     </header>
   );

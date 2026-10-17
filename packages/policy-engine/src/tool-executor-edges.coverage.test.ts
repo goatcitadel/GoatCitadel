@@ -649,11 +649,16 @@ describe("tool executor edge coverage", () => {
         startIso: "2026-03-22T17:00:00.000Z",
         endIso: "2026-03-22T17:30:00.000Z",
         attendees: ["ops@example.com"],
+        location: "Room 7",
       }),
       googleConfig,
       commsStorage({ connectionId: "calendar-create", key: "calendar", config: { accessToken: "calendar-token" } }),
     );
     expect(calendarCreate).toMatchObject({ status: "sent", providerMessageId: "calendar-created-1" });
+    const createCall = fetchMock.mock.calls.find(
+      ([, init]) => init?.method === "POST" && String(init.body).includes("Coverage sync"),
+    );
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({ summary: "Coverage sync", location: "Room 7" });
   });
 
   it("covers direct channel suffix routing, Slack webhooks, and unsupported inline webhook attachments", async () => {

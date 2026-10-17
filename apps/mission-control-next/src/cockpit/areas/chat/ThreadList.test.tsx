@@ -3,7 +3,7 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { MissionThreadedSessionRailData } from "@goatcitadel/threaded-surface-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChatMobileConversationSelect } from "./ChatMobileConversationSelect";
+import { ConversationListPanel } from "./ConversationListPanel";
 import { ThreadList } from "./ThreadList";
 
 const viewportContract = vi.hoisted(() => ({ threshold: -1, bounded: false }));
@@ -142,14 +142,19 @@ it("keeps full titles, server previews and exact search targets on desktop and p
       ?.click(),
   );
   expect(rail.onSelectSession).toHaveBeenLastCalledWith("session-1", { searchHit: hit });
-  await act(async () => root.render(<ChatMobileConversationSelect rail={rail} onOpenFilters={vi.fn()} />));
-  const select = container.querySelector("select")!;
-  expect(select.querySelector('optgroup[label="Matching messages"]')?.textContent).toContain(hit.excerpt);
-  await act(async () => {
-    select.value = "match:0";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  // The phone sheet lists the same rows and exact search targets as buttons, and a choice closes the sheet.
+  const onDone = vi.fn();
+  await act(async () => root.render(<ConversationListPanel rail={rail} inSheet onDone={onDone} />));
+  expect(container.querySelector('select[aria-label="Choose conversation"]')).toBeNull();
+  expect(container.querySelector("h2")).toBeNull();
+  const match = [...container.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("Open matching message"),
+  )!;
+  expect(match.textContent).toContain(hit.excerpt);
+  expect(match.className).toContain("min-h-11");
+  await act(async () => match.click());
   expect(rail.onSelectSession).toHaveBeenLastCalledWith("session-1", { searchHit: hit });
+  expect(onDone).toHaveBeenCalledOnce();
 });
 
 it.each([0, 1, 99, 100, 1000])(

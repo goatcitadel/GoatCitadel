@@ -2,9 +2,11 @@ import type {
   AuthRuntimeSettings,
   DeploymentProfile,
   FilesystemReadAccessMode,
+  GlobalToolAccessSummary,
   LlamaCppRuntimeStatus,
   LlmRuntimeConfig,
   NpuRuntimeStatus,
+  OperatorWriteRootSummary,
   ToolApprovalMode,
 } from "@goatcitadel/contracts";
 
@@ -19,6 +21,10 @@ export interface RuntimeSettings {
   workspaceDir: string;
   writeJailRoots: string[];
   readOnlyRoots: string[];
+  /** Operator-opened folders outside the write jail, for model-driven filesystem tools only. */
+  operatorWriteRoots: OperatorWriteRootSummary[];
+  /** The global tool allow and deny lists (agent and permission-profile lists are separate). */
+  globalToolAccess: GlobalToolAccessSummary;
   readAccessMode: FilesystemReadAccessMode;
   networkAllowlist: string[];
   approvalExplainer: {

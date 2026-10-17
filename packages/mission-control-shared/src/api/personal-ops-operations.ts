@@ -2,6 +2,7 @@ import type {
   CalendarEventRecord,
   CommunicationsDashboardResponse,
   MailDraftRecord,
+  MailDraftReleaseResponse,
   NoteMutationInput,
   NoteRecord,
   NoteRevisionRecord,
@@ -78,10 +79,27 @@ export async function createMailDraft(input: {
   });
 }
 
-export async function sendMailDraft(draftId: string): Promise<MailDraftRecord> {
+/** Re-reads a draft inside the workspace that owns it; another workspace's draft answers 404. */
+export async function getMailDraft(draftId: string, workspaceId: string): Promise<MailDraftRecord> {
+  const query = new URLSearchParams({ workspaceId });
+  return request<MailDraftRecord>(`/api/v1/mail/drafts/${encodeURIComponent(draftId)}?${query.toString()}`, {
+    cache: "no-store",
+  });
+}
+
+/** Requests send approval for a draft inside the workspace that owns it; another workspace's draft answers 404. */
+export async function sendMailDraft(draftId: string, workspaceId: string): Promise<MailDraftRecord> {
   return request<MailDraftRecord>(`/api/v1/mail/drafts/${encodeURIComponent(draftId)}/send`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ workspaceId }),
+  });
+}
+
+/** Releases a draft whose send request was interrupted before its approval was recorded; never sends. */
+export async function releaseMailDraft(draftId: string, workspaceId: string): Promise<MailDraftReleaseResponse> {
+  return request<MailDraftReleaseResponse>(`/api/v1/mail/drafts/${encodeURIComponent(draftId)}/release`, {
+    method: "POST",
+    body: JSON.stringify({ workspaceId }),
   });
 }
 

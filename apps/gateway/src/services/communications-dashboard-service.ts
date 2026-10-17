@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { NotFoundError } from "@goatcitadel/contracts";
 import type {
   ApprovalCreateInput,
   ApprovalRequest,
@@ -11,9 +13,39 @@ import type {
   IntegrationKind,
   MailAccountRecord,
   MailDraftRecord,
+  MailDraftReleaseResponse,
   MailMessageSummary,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import type { AsyncStorage } from "@goatcitadel/storage";
+import {
+  COMMUNICATIONS_IDEMPOTENCY_PREFIX,
+  computeCommunicationsPayloadHash,
+  type CalendarCreateApprovalInput,
+  type MailSendApprovalInput,
+} from "./communications-approval-payload.js";
+
+export type CommunicationsMailDraftStore = Pick<AsyncStorage["mailDrafts"], "create" | "find" | "transition">;
+
+export type CreateCalendarEventInput = Omit<CalendarEventRecord, "eventId" | "createdAt" | "updatedAt"> & {
+  workspaceId?: string;
+};
+
+/** Raised (by the caller) when the approval lookup a draft release needs was not composed; releasing then fails closed. */
+export class MailDraftRecoveryUnavailableError extends Error {
+  public constructor() {
+    super("Mail draft recovery is unavailable: send approvals for the draft cannot be checked.");
+    this.name = "MailDraftRecoveryUnavailableError";
+  }
+}
+
+/** Raised when draft persistence was not composed; routes answer 503 rather than keeping drafts in memory. */
+export class MailDraftStoreUnavailableError extends Error {
+  public constructor() {
+    super("Mail draft storage is unavailable.");
+    this.name = "MailDraftStoreUnavailableError";
+  }
+}
 
 export interface CreateMailDraftInput {
   workspaceId?: string;
@@ -41,16 +73,33 @@ export interface CommunicationsDashboardServiceDependencies {
   commsGmailRead?: (input: GmailReadQuery) => Promise<ToolInvokeResult | Record<string, unknown>>;
   commsCalendarList?: (input: CalendarListQuery) => Promise<ToolInvokeResult | Record<string, unknown>>;
   listContacts?: (workspaceId: string) => ContactRecord[];
+  /** Durable draft store; required by the draft methods, which fail closed without it. */
+  mailDrafts?: CommunicationsMailDraftStore;
+}
+
+export interface CommunicationsMailDraftRecovery {
+  /** Every persisted `communications.mail.send` approval whose payload names this draft. */
+  findMailSendApprovals(draftId: string): Promise<ApprovalRequest[]>;
+  /** Appends a bounded audit record for a release or relink; never carries message content. */
+  recordAudit(event: Record<string, unknown>): Promise<void>;
 }
 
 const DEFAULT_WORKSPACE_ID = "default";
+const MAIL_SEND_EXECUTION_COPY = "Approving sends this exact message once through the connected account.";
+const CALENDAR_CREATE_EXECUTION_COPY = "Approving creates this exact event once on the connected calendar.";
+const MAX_FAILURE_DETAIL_LENGTH = 300;
+/**
+ * How long an interrupted send must sit before it can be released. A request still creating its
+ * approval would otherwise race the release; no send request runs anywhere near this long.
+ */
+export const INTERRUPTED_SEND_RELEASE_GRACE_MS = 10 * 60 * 1000;
 const DEFAULT_INBOX_LIMIT = 10;
 const DEFAULT_AGENDA_LIMIT = 20;
 const INTEGRATION_CONNECTION_LIMIT = 200;
 const DEFAULT_AGENDA_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 export class CommunicationsDashboardService {
-  private readonly drafts = new Map<string, MailDraftRecord>();
+  // De-dupes concurrent sends within this process only; the draft store is the durable record.
   private readonly sending = new Map<string, Promise<MailDraftRecord>>();
 
   public constructor(private readonly deps: CommunicationsDashboardServiceDependencies = {}) {}
@@ -75,11 +124,14 @@ export class CommunicationsDashboardService {
     };
   }
 
-  public createDraft(input: CreateMailDraftInput): MailDraftRecord {
+  public async createDraft(input: CreateMailDraftInput): Promise<MailDraftRecord> {
+    const store = this.requireDraftStore();
     const now = this.nowIso();
     const draft: MailDraftRecord = {
-      draftId: createStableDraftId(now, input.accountId, input.to, input.subject),
-      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      draftId: `mail_draft_${randomUUID()}`,
+      // Server-bound: a draft without a workspace belongs to the default one, so its
+      // send approval always carries workspace linkage.
+      workspaceId: normalizeWorkspaceId(input.workspaceId),
       accountId: input.accountId,
       to: input.to,
       cc: input.cc ?? [],
@@ -90,12 +142,16 @@ export class CommunicationsDashboardService {
       createdAt: now,
       updatedAt: now,
     };
-    this.drafts.set(draft.draftId, draft);
-    return draft;
+    return await store.create(draft);
   }
 
-  /** True only when the account is a mail account projected into this workspace's dashboard. */
-  public async isMailAccountVisible(workspaceId: string, accountId: string): Promise<boolean> {
+  /** The persisted draft, or undefined when this Gateway holds no draft with that id. */
+  public async getDraft(draftId: string): Promise<MailDraftRecord | undefined> {
+    return await this.requireDraftStore().find(draftId);
+  }
+
+  /** True only when the account is a mail account projected into this (or, unnamed, the default) workspace's dashboard. */
+  public async isMailAccountVisible(workspaceId: string | undefined, accountId: string): Promise<boolean> {
     const normalized = normalizeWorkspaceId(workspaceId);
     const connections = await this.listWorkspaceConnections(normalized);
     return connections.some((connection) =>
@@ -103,22 +159,33 @@ export class CommunicationsDashboardService {
     );
   }
 
+  /** True only when the account is a calendar account projected into this workspace's dashboard. */
+  public async isCalendarAccountVisible(workspaceId: string | undefined, accountId: string): Promise<boolean> {
+    const normalized = normalizeWorkspaceId(workspaceId);
+    const connections = await this.listWorkspaceConnections(normalized);
+    return connections.some((connection) =>
+      this.toCalendarAccount(connection, normalized).some((account) => account.accountId === accountId),
+    );
+  }
+
   public async sendDraft(draftId: string): Promise<MailDraftRecord> {
+    const store = this.requireDraftStore();
     // A replay that arrives while the original is still in flight shares it.
     const inFlight = this.sending.get(draftId);
     if (inFlight) {
       return inFlight;
     }
-    const pending = this.requestSendApproval(draftId).finally(() => this.sending.delete(draftId));
+    const pending = this.requestSendApproval(store, draftId).finally(() => this.sending.delete(draftId));
     this.sending.set(draftId, pending);
     return pending;
   }
 
-  private async requestSendApproval(draftId: string): Promise<MailDraftRecord> {
-    const existing = this.drafts.get(draftId);
+  private async requestSendApproval(store: CommunicationsMailDraftStore, draftId: string): Promise<MailDraftRecord> {
+    const existing = await store.find(draftId);
     const now = this.nowIso();
     if (!existing) {
-      const failed: MailDraftRecord = {
+      // Transient answer only: an unknown id is never persisted.
+      return {
         draftId,
         accountId: "unknown",
         to: [],
@@ -130,118 +197,211 @@ export class CommunicationsDashboardService {
         createdAt: now,
         updatedAt: now,
       };
-      this.drafts.set(draftId, failed);
-      return failed;
     }
     if (existing.status !== "draft") {
-      // Replaying a send whose response was lost returns the recorded outcome
-      // instead of requesting a second high-risk approval for the same draft.
+      // Replaying a send whose response was lost (or whose request died mid-flight) returns the
+      // recorded outcome instead of requesting a second high-risk approval for the same draft.
       return existing;
+    }
+    // Fence first: claim the draft before the approval exists, so a crash between approval
+    // creation and settlement can never let a replay request a second approval.
+    const claimed = await store.transition(draftId, ["draft"], { status: "approval_required", updatedAt: now });
+    if (!claimed) {
+      return (await store.find(draftId)) ?? existing;
     }
     let approvalId: string;
     try {
-      approvalId = await this.createSendApproval(existing);
+      approvalId = await this.createSendApproval(claimed);
     } catch (error) {
       // The approval may have persisted before the failure. Never request another one for this draft.
-      this.drafts.set(draftId, { ...existing, status: "failed", updatedAt: now });
+      await store.transition(draftId, ["approval_required"], {
+        status: "failed",
+        failureReason: describeSendApprovalFailure(error),
+        updatedAt: this.nowIso(),
+      });
       throw error;
     }
-    const approvalRequired: MailDraftRecord = {
-      ...existing,
-      approvalId,
+    const settled = await store.transition(draftId, ["approval_required"], {
       status: "approval_required",
-      updatedAt: now,
+      approvalId,
+      updatedAt: this.nowIso(),
+    });
+    return settled ?? (await store.find(draftId)) ?? { ...claimed, approvalId };
+  }
+
+  /**
+   * Recovers a draft fenced for sending (`approval_required`) whose approval id was never recorded,
+   * because its send request died between the fence and approval creation. A persisted send approval
+   * that names the draft is re-linked instead, so a draft never gets a second approval; only when none
+   * exists, and the grace period has passed, does the draft return to `draft`. Both are audited.
+   */
+  public async releaseInterruptedDraft(
+    draftId: string,
+    recovery: CommunicationsMailDraftRecovery,
+  ): Promise<MailDraftReleaseResponse> {
+    const store = this.requireDraftStore();
+    const draft = await store.find(draftId);
+    if (!draft) {
+      throw new NotFoundError({ entity: "Mail draft", id: draftId });
+    }
+    if (draft.status !== "approval_required" || draft.approvalId) {
+      return { outcome: "not_interrupted", draft };
+    }
+    // A send still in flight in this process, or one fenced within the grace period, may yet record its approval.
+    const elapsedMs = this.nowDate().getTime() - Date.parse(draft.updatedAt);
+    const waitMs = this.sending.has(draftId)
+      ? INTERRUPTED_SEND_RELEASE_GRACE_MS
+      : INTERRUPTED_SEND_RELEASE_GRACE_MS - elapsedMs;
+    if (waitMs > 0) {
+      return {
+        outcome: "too_recent",
+        draft,
+        retryAfterSeconds: Math.ceil(Math.min(waitMs, INTERRUPTED_SEND_RELEASE_GRACE_MS) / 1000),
+      };
+    }
+    const [approval] = await recovery.findMailSendApprovals(draftId);
+    const audit = { draftId, workspaceId: normalizeWorkspaceId(draft.workspaceId), accountId: draft.accountId };
+    if (approval) {
+      const relinked = await store.transition(draftId, ["approval_required"], {
+        status: "approval_required",
+        approvalId: approval.approvalId,
+        updatedAt: this.nowIso(),
+      });
+      if (!relinked) {
+        return { outcome: "not_interrupted", draft: (await store.find(draftId)) ?? draft };
+      }
+      await recovery.recordAudit({ event: "mail_draft_send_relinked", ...audit, approvalId: approval.approvalId });
+      return { outcome: "relinked", draft: relinked };
+    }
+    const released = await store.transition(draftId, ["approval_required"], {
+      status: "draft",
+      clearFailureReason: true,
+      updatedAt: this.nowIso(),
+    });
+    if (!released) {
+      return { outcome: "not_interrupted", draft: (await store.find(draftId)) ?? draft };
+    }
+    await recovery.recordAudit({ event: "mail_draft_send_released", ...audit, interruptedAt: draft.updatedAt });
+    return { outcome: "released", draft: released };
+  }
+
+  private async createSendApproval(existing: MailDraftRecord): Promise<string> {
+    const connectionRevision = await this.findConnectionRevision(existing.accountId);
+    const hashed: MailSendApprovalInput = {
+      draftId: existing.draftId,
+      accountId: existing.accountId,
+      to: existing.to,
+      cc: existing.cc,
+      bcc: existing.bcc,
+      subject: existing.subject,
+      bodyText: existing.bodyText,
+      ...(connectionRevision === undefined ? {} : { connectionRevision }),
     };
-    this.drafts.set(draftId, approvalRequired);
-    return approvalRequired;
-  }
-
-  private createSendApproval(existing: MailDraftRecord): Promise<string> {
-    return createCommunicationsApproval(
-      this.deps.createApproval,
-      existing.approvalId ?? `approval_required:${existing.draftId}`,
-      {
-        kind: "communications.mail.send",
-        riskLevel: "danger",
-        payload: {
-          action: "mail_send",
-          draftId: existing.draftId,
-          accountId: existing.accountId,
-          to: existing.to,
-          cc: existing.cc,
-          bcc: existing.bcc,
-          subject: existing.subject,
-          bodyText: existing.bodyText,
-        },
-        preview: {
-          title: "Send mail draft",
-          draftId: existing.draftId,
-          accountId: existing.accountId,
-          to: existing.to,
-          cc: existing.cc,
-          bcc: existing.bcc,
-          subject: existing.subject,
-          execution: "Approval records operator intent; this route does not send the message.",
-        },
-        linkage: {
-          actionType: "communications.mail.send",
-          connectorId: existing.accountId,
-          ...(existing.workspaceId ? { workspaceId: existing.workspaceId } : {}),
-        },
+    return this.requestApproval(existing.approvalId ?? `approval_required:${existing.draftId}`, {
+      kind: "communications.mail.send",
+      riskLevel: "danger",
+      payload: {
+        action: "mail_send",
+        ...hashed,
+        payloadHash: computeCommunicationsPayloadHash(hashed),
+        idempotencyKeyPrefix: COMMUNICATIONS_IDEMPOTENCY_PREFIX,
       },
-    );
+      preview: {
+        title: "Send mail draft",
+        draftId: existing.draftId,
+        accountId: existing.accountId,
+        to: existing.to,
+        cc: existing.cc,
+        bcc: existing.bcc,
+        subject: existing.subject,
+        execution: MAIL_SEND_EXECUTION_COPY,
+      },
+      linkage: {
+        actionType: "communications.mail.send",
+        connectorId: existing.accountId,
+        workspaceId: normalizeWorkspaceId(existing.workspaceId),
+      },
+    });
   }
 
-  public async createCalendarEventPlaceholder(
-    input: Omit<CalendarEventRecord, "eventId" | "createdAt" | "updatedAt">,
-  ): Promise<CalendarEventRecord> {
+  public async createCalendarEventPlaceholder(input: CreateCalendarEventInput): Promise<CalendarEventRecord> {
+    const { workspaceId, ...event } = input;
     const now = this.nowIso();
-    const eventId = createStableDraftId(now, input.accountId, input.attendees, input.title).replace(
-      "mail_draft_",
-      "calendar_event_",
-    );
-    const approvalId = await createCommunicationsApproval(
-      this.deps.createApproval,
-      input.approvalId ?? `approval_required:${eventId}`,
-      {
-        kind: "communications.calendar.create",
-        riskLevel: "caution",
-        payload: {
-          action: "calendar_event_create",
-          eventId,
-          accountId: input.accountId,
-          calendarId: input.calendarId,
-          title: input.title,
-          description: input.description,
-          startIso: input.startIso,
-          endIso: input.endIso,
-          attendees: input.attendees,
-          location: input.location,
-        },
-        preview: {
-          title: "Create calendar event",
-          eventId,
-          accountId: input.accountId,
-          calendarId: input.calendarId,
-          summary: input.title,
-          startIso: input.startIso,
-          endIso: input.endIso,
-          attendees: input.attendees,
-          execution: "Approval records operator intent; this route does not mutate the external calendar.",
-        },
-        linkage: {
-          actionType: "communications.calendar.create",
-          connectorId: input.accountId,
-        },
+    const eventId = `calendar_event_${randomUUID()}`;
+    const connectionRevision = await this.findConnectionRevision(event.accountId);
+    const hashed: CalendarCreateApprovalInput = {
+      eventId,
+      accountId: event.accountId,
+      ...(event.calendarId === undefined ? {} : { calendarId: event.calendarId }),
+      title: event.title,
+      ...(event.description === undefined ? {} : { description: event.description }),
+      startIso: event.startIso,
+      endIso: event.endIso,
+      attendees: event.attendees,
+      ...(event.location === undefined ? {} : { location: event.location }),
+      ...(connectionRevision === undefined ? {} : { connectionRevision }),
+    };
+    const approvalId = await this.requestApproval(event.approvalId ?? `approval_required:${eventId}`, {
+      kind: "communications.calendar.create",
+      riskLevel: "caution",
+      payload: {
+        action: "calendar_event_create",
+        ...hashed,
+        payloadHash: computeCommunicationsPayloadHash(hashed),
+        idempotencyKeyPrefix: COMMUNICATIONS_IDEMPOTENCY_PREFIX,
       },
-    );
+      preview: {
+        title: "Create calendar event",
+        eventId,
+        accountId: event.accountId,
+        calendarId: event.calendarId,
+        summary: event.title,
+        startIso: event.startIso,
+        endIso: event.endIso,
+        attendees: event.attendees,
+        ...(event.location === undefined ? {} : { location: event.location }),
+        execution: CALENDAR_CREATE_EXECUTION_COPY,
+      },
+      linkage: {
+        actionType: "communications.calendar.create",
+        connectorId: event.accountId,
+        workspaceId: normalizeWorkspaceId(workspaceId),
+      },
+    });
     return {
-      ...input,
+      ...event,
       eventId,
       approvalId,
       createdAt: now,
       updatedAt: now,
     };
+  }
+
+  /**
+   * The connection's storage revision at approval time, which the approval binds. An
+   * unreadable connection records none, and execution then refuses to act.
+   *
+   * The revision covers every stored setting, including which env var or keychain handle
+   * holds each secret, so re-pointing a credential invalidates the approval. A credential
+   * value rotated behind an unchanged reference deliberately does not: OAuth tokens rotate
+   * on their own, and a fingerprint of the value would persist a guessable derivative of a
+   * secret (an SMTP password) in the approval payload. Execution re-resolves the credential.
+   */
+  private async findConnectionRevision(accountId: string): Promise<string | undefined> {
+    const connections = await this.listConnections();
+    return connections.find((connection) => connection.connectionId === accountId)?.revision || undefined;
+  }
+
+  private requestApproval(fallbackApprovalId: string, input: ApprovalCreateInput): Promise<string> {
+    return createCommunicationsApproval(this.deps.createApproval, fallbackApprovalId, input);
+  }
+
+  private requireDraftStore(): CommunicationsMailDraftStore {
+    const store = this.deps.mailDrafts;
+    if (!store) {
+      throw new MailDraftStoreUnavailableError();
+    }
+    return store;
   }
 
   private async listMessages(accounts: MailAccountRecord[], limit: number): Promise<MailMessageSummary[]> {
@@ -411,7 +571,7 @@ function normalizeWorkspaceId(workspaceId: string | undefined): string {
   return normalized || DEFAULT_WORKSPACE_ID;
 }
 
-function resolveMailProvider(connection: IntegrationConnection): MailAccountRecord["provider"] | undefined {
+export function resolveMailProvider(connection: IntegrationConnection): MailAccountRecord["provider"] | undefined {
   const key = `${connection.catalogId}:${connection.key}`.toLowerCase();
   if (key.includes("gmail")) {
     return "gmail";
@@ -428,7 +588,9 @@ function resolveMailProvider(connection: IntegrationConnection): MailAccountReco
   return undefined;
 }
 
-function resolveCalendarProvider(connection: IntegrationConnection): CalendarAccountRecord["provider"] | undefined {
+export function resolveCalendarProvider(
+  connection: IntegrationConnection,
+): CalendarAccountRecord["provider"] | undefined {
   const key = `${connection.catalogId}:${connection.key}`.toLowerCase();
   if (key.includes("calendar") || key.includes("gmail")) {
     return "google";
@@ -664,13 +826,11 @@ async function createCommunicationsApproval(
   return approval.approvalId;
 }
 
-function createStableDraftId(nowIso: string, accountId: string, recipients: string[], subject: string): string {
-  const seed = `${nowIso}:${accountId}:${recipients.join(",")}:${subject}`;
-  let hash = 0;
-  for (let index = 0; index < seed.length; index += 1) {
-    hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
-  }
-  return `mail_draft_${hash.toString(16)}`;
+/** Readable, bounded failure reason; nothing was sent and the draft never requests another approval. */
+function describeSendApprovalFailure(error: unknown): string {
+  const detail = error instanceof Error && error.message.trim() ? error.message.trim() : "unknown error";
+  const bounded = detail.length > MAX_FAILURE_DETAIL_LENGTH ? `${detail.slice(0, MAX_FAILURE_DETAIL_LENGTH)}…` : detail;
+  return `The send approval request failed (${bounded}); nothing was sent and this draft will not request another approval.`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

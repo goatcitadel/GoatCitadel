@@ -39,11 +39,23 @@ vi.mock("../data/use-operator-inbox", () => ({
   }),
 }));
 
+const status = vi.hoisted(() => ({ tone: "done" as "done" | "failed" }));
+vi.mock("./use-health-digest", () => ({
+  useHealthDigestStatus: () => ({
+    phase: "ready",
+    label: status.tone === "done" ? "All checks passed" : "1 check failing",
+    tone: status.tone,
+    title: "System checks",
+    retry: () => undefined,
+  }),
+}));
+
 let root: Root;
 let container: HTMLDivElement;
 
 beforeEach(() => {
   preload.mockClear();
+  status.tone = "done";
   window.history.replaceState(null, "", "/chat");
   window.localStorage.setItem("goatcitadel.ui.theme.v1", "dark");
   container = document.createElement("div");
@@ -54,6 +66,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.unstubAllGlobals();
 });
 
 function button(label: string): HTMLButtonElement {
@@ -108,6 +121,67 @@ describe("MobileTabBar", () => {
     await act(async () => button("System").click());
     expect(window.location.pathname).toBe("/system");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+  it("keeps the bottom chrome to the tab bar and moves scope and status into More (SH-01, SH-22)", async () => {
+    status.tone = "failed";
+    vi.stubGlobal("matchMedia", (media: string) => ({
+      media,
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <UiPreferencesProvider>
+            <CockpitNavigationProvider>
+              <MobileTabBar onOpenPalette={vi.fn()} streamState="open" />
+            </CockpitNavigationProvider>
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    const chrome = container.querySelector("[data-cockpit-tabbar]")!.parentElement!;
+    expect(chrome.className).toContain("cockpit-safe-bottom");
+    expect(chrome.querySelector('[aria-label="Current operating scope"]')).toBeNull();
+    expect(chrome.querySelector('[aria-label="System status"]')).toBeNull();
+    // A failing check marks More with a shaped icon and a description, not a coloured dot.
+    const more = button("More");
+    expect(more.querySelector("[data-status-attention]")).not.toBeNull();
+    expect(document.getElementById(more.getAttribute("aria-describedby")!)?.textContent).toBe(
+      "System status needs attention",
+    );
+    await act(async () => more.click());
+    const sheet = document.querySelector('[role="dialog"][aria-label="More"]')!;
+    expect(sheet.querySelector('[aria-label="System status"]')?.textContent).toContain("1 check failing");
+    expect(sheet.querySelector('[aria-label="System status"]')?.textContent).toContain("Updates connected");
+    const scope = sheet.querySelector('[aria-label="Current operating scope"]')?.textContent ?? "";
+    expect(scope).not.toContain("Workspace name unavailable");
+    expect(scope).not.toContain("Reading Citadel");
+    await act(async () => button("Open System health").click());
+    expect(window.location.pathname).toBe("/system/health");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+  it("leaves More unmarked while checks pass and updates are connected", async () => {
+    vi.stubGlobal("matchMedia", (media: string) => ({
+      media,
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <UiPreferencesProvider>
+            <CockpitNavigationProvider>
+              <MobileTabBar onOpenPalette={vi.fn()} streamState="open" />
+            </CockpitNavigationProvider>
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    expect(button("More").hasAttribute("aria-describedby")).toBe(false);
+    expect(container.querySelector("[data-status-attention]")).toBeNull();
   });
   it("switches to classic Mission Control as the saved layout, not a visit", async () => {
     shell.switchShell.mockReset();

@@ -960,6 +960,15 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     return null;
   }
 
+  /**
+   * The normalization `invokeTool` applies before policy. It is idempotent on its own
+   * output, so a caller that must persist the exact request policy will see (an approved
+   * pending action) can normalize once and then invoke with the result.
+   */
+  public async normalizeToolInvokeRequest(request: ToolInvokeRequest): Promise<ToolInvokeRequest> {
+    return await this.host.normalizeToolInvokeRequest(request);
+  }
+
   public async invokeTool(
     request: ToolInvokeRequest,
     options: ToolInvocationRuntimeOptions = {},
@@ -1949,7 +1958,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     if (
       nativeBinding &&
       "serverId" in server &&
-      resolveMcpServerConnectionMode(server) !== (nativeBinding.staticBinding || nativeBinding.staticAdmissionBinding ? "static" : "requester_scoped")
+      resolveMcpServerConnectionMode(server) !==
+        (nativeBinding.staticBinding || nativeBinding.staticAdmissionBinding ? "static" : "requester_scoped")
     ) {
       throw new ToolExecutionPreconditionError("Native MCP server connection mode drifted from the frozen binding");
     }

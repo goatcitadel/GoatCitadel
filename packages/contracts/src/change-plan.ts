@@ -1,13 +1,15 @@
 import type { ChatThinkingLevel } from "./chat.js";
 import { LLM_API_STYLES, LLM_PROVIDER_AUTH_MODES } from "./llm.js";
 import type { LlmApiStyle, LlmProviderAuthMode, LlmProviderCapabilities, LlmProviderGoogleCloudConfig } from "./llm.js";
+import { isRuntimeWriteAccessOperation, type RuntimeWriteAccessOperation } from "./operator-write-access.js";
 
 /**
  * Public Change Plan contract for the Gateway-owned Evolution Control Plane.
  *
  * Every request is intentionally bounded and secret-free. A plan may point at
  * an existing owner record, but it can never carry a credential, OAuth token,
- * filesystem path, shell command, source patch, or arbitrary settings object.
+ * shell command, source patch, or arbitrary settings object. Its only path is
+ * an operator write-root folder, which the settings owner canonicalizes.
  */
 export const CHANGE_PLAN_SCHEMA_VERSION = 1 as const;
 
@@ -278,6 +280,7 @@ export type ChangePlanRuntimeConfigurationOperation =
       readonly selectionId?: string;
       readonly autoStart?: boolean;
     }
+  | RuntimeWriteAccessOperation
   | {
       readonly operation: "feature_flags";
       readonly flags: Readonly<Partial<Record<ChangePlanRuntimeFeatureFlag, boolean>>>;
@@ -799,7 +802,8 @@ function isRuntimeConfigurationOperation(value: unknown): value is ChangePlanRun
         )
       );
     default:
-      return false;
+      // operator_write_root and tool_global_access; any other operation is rejected.
+      return isRuntimeWriteAccessOperation(value);
   }
 }
 

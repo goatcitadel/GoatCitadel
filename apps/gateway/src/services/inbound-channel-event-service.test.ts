@@ -45,7 +45,8 @@ describe("InboundChannelEventService", () => {
     expect(
       harness.storage.inboundChannelEvents.get(first.inboundEventId)?.payload[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY],
     ).toBe("a".repeat(64));
-  });
+    // First test in the file pays the cold module and SQLite harness setup (~10s on a loaded host).
+  }, 60_000);
 
   it("returns after durable acceptance while the model turn remains in flight", async () => {
     const response = deferred<ChatSendMessageResponse>();

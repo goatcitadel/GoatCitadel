@@ -11,6 +11,9 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 
 const inputClass =
   "mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg focus-visible:outline-2 focus-visible:outline-accent";
+// Text boxes keep 16px text on phones so iOS does not zoom on focus; desktop keeps the dense mono size.
+const textareaClass =
+  "mt-1 block w-full rounded-md border border-line-control bg-canvas px-3 py-2 font-mono text-md text-fg focus-visible:outline-2 focus-visible:outline-accent sm:text-xs";
 export function PortablePacksSettings() {
   const { activeWorkspaceId } = useUiPreferences();
   return <PortablePacksContent key={activeWorkspaceId} workspaceId={activeWorkspaceId ?? ""} />;
@@ -150,7 +153,7 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
                   <textarea
                     maxLength={owner.inputLimit}
                     rows={8}
-                    className={`${inputClass} font-mono text-xs`}
+                    className={textareaClass}
                     value={owner.draft.value}
                     onChange={(event) => owner.setSource(event.target.value)}
                   />

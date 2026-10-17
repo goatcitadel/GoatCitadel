@@ -300,6 +300,10 @@ describe("CockpitShell", () => {
     expect(sidebar.getAttribute("data-collapsed")).toBe("true");
     expect(sidebar.classList.contains("w-14")).toBe(true);
     expect(sidebar.querySelector('[aria-label="Chat"]')).not.toBeNull();
+    // SH-01: the rail's live-update icon is focusable and named, so its tooltip is reachable without hover.
+    const live = sidebar.querySelector<HTMLElement>('[data-stream-state] [role="img"]')!;
+    expect(live.tabIndex).toBe(0);
+    expect(live.getAttribute("aria-label")).toBe("Updates disconnected");
     expect(window.location.href).toBe(href);
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Expand sidebar"]')!.click());
     expect(sidebar.getAttribute("data-collapsed")).toBe("false");
@@ -417,7 +421,7 @@ describe("CockpitShell", () => {
     client.clear();
   });
 
-  it("renders no sidebar on phones and shows the status strip in the tab bar instead (NV-13)", async () => {
+  it("renders no sidebar on phones and keeps status in the More sheet, not the bottom chrome (NV-13, SH-22)", async () => {
     vi.stubGlobal("matchMedia", (media: string) => ({
       media,
       matches: false,
@@ -435,11 +439,20 @@ describe("CockpitShell", () => {
       );
     });
     expect(container.querySelector('[aria-label="Cockpit sidebar"]')).toBeNull();
-    const strip = container.querySelector('[aria-label="System status"]');
-    expect(strip).not.toBeNull();
-    expect(strip!.textContent).toContain("Updates connected");
-    expect(health.sources).not.toHaveBeenCalled();
+    expect(container.querySelector('[aria-label="System status"]')).toBeNull();
+    expect(container.querySelector("[data-cockpit-tabbar]")?.parentElement?.className).toContain("cockpit-safe-bottom");
+    // The tab bar reads the digest once for its attention marker; the full sources fan-out never runs.
     expect(health.digest).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[aria-label="More areas and settings"]')!.click();
+    });
+    const strip = await vi.waitFor(() => {
+      const found = document.querySelector('[aria-label="System status"]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(strip.textContent).toContain("Updates connected");
+    expect(health.sources).not.toHaveBeenCalled();
     client.clear();
   });
 

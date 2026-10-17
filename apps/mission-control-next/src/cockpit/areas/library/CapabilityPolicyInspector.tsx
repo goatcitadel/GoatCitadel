@@ -265,7 +265,7 @@ function PolicyForm({ workspaceId, toolName }: { workspaceId: string; toolName: 
             <label className="block text-xs text-fg-muted">
               Exact argument object (JSON, up to 16 KiB)
               <textarea
-                className={`${FIELD} min-h-28 font-mono text-sm`}
+                className={`${FIELD} min-h-28 font-mono text-md sm:text-sm`}
                 value={customArgs}
                 maxLength={16 * 1024}
                 spellCheck={false}

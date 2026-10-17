@@ -29,6 +29,7 @@ import { cockpitHref, readCockpitHistory, subscribeCockpitHistory } from "../../
 import { readCockpitLocation } from "../../app/cockpit-back-guard";
 import { CockpitNavigationContext } from "../../app/cockpit-navigation-context";
 import { WorkScheduleListItem, WorkScheduleNotice } from "./WorkScheduleSummary";
+import { useRevealScheduleDetail } from "./use-reveal-schedule-detail";
 
 export function WorkSchedules() {
   const client = useQueryClient();
@@ -97,6 +98,7 @@ export function WorkSchedules() {
   });
   const { name, schedule, action: createAction } = editor.value;
   const selected = !schedules.isError && !detail.isError && detail.data?.jobId === selectedId ? detail.data : undefined;
+  const reveal = useRevealScheduleDetail(selected?.jobId);
   const selectedRecoveryParams = new URLSearchParams(recoveryParams);
   if (selected) selectedRecoveryParams.set("jobId", selected.jobId);
   const selectedRecoveryHref = "/work/schedules?" + selectedRecoveryParams + location.hash;
@@ -324,8 +326,10 @@ export function WorkSchedules() {
                 <WorkScheduleListItem
                   key={job.jobId}
                   job={job}
+                  selected={job.jobId === selectedId}
                   onReview={() => {
                     operations.invalidate();
+                    reveal.reveal(job.jobId);
                     setSelectedId(job.jobId);
                     setPending(null);
                     setNotice(null);
@@ -333,7 +337,7 @@ export function WorkSchedules() {
                 />
               ))}
             </ul>
-            <div aria-label="Schedule detail" className="min-w-0">
+            <div ref={reveal.detail} tabIndex={-1} aria-label="Schedule detail" className="min-w-0 scroll-mt-4">
               {!selectedId ? (
                 <EmptyState
                   title="Select a schedule"
