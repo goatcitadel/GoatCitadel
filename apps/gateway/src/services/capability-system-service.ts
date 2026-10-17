@@ -32,6 +32,7 @@ import type {
   ChatMessageRecord,
   ChatSessionWorkbenchCommandRunRequest,
   ChatSessionWorkbenchCommandRunResponse,
+  ChatSessionWorkbenchPatchApplyResponse,
   ChatSessionWorkbenchRecord,
   ChatTurnTraceRecord,
   CodeModeAiderWorkspacePin,
@@ -105,6 +106,7 @@ import type {
   FeatureFlagsConfig,
 } from "../config.js";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
+import type { ChatSessionWorkbenchPatchApplyInput } from "./chat-workbench-service.js";
 import { trackBackgroundTask } from "./background-scheduler.js";
 import {
   CodeModeExecutionBackendUnavailableError,
@@ -236,6 +238,10 @@ export interface CapabilitySystemServiceOptions {
     sessionId: string,
     input: ChatSessionWorkbenchCommandRunRequest,
   ) => Promise<ChatSessionWorkbenchCommandRunResponse>;
+  applyChatSessionWorkbenchPatch?: (
+    sessionId: string,
+    input: ChatSessionWorkbenchPatchApplyInput,
+  ) => Promise<ChatSessionWorkbenchPatchApplyResponse>;
   flushTranscriptOutbox?: () => Promise<number>;
   onVerifiedCodeModeRun?: (response: CodeModeRunVerificationResponse) => void | Promise<void>;
   /** Durable aggregates using a revoked grant must request child cancellation immediately. */

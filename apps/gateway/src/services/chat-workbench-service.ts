@@ -5,6 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 /* eslint-disable max-lines */
 import { randomUUID } from "node:crypto";
 import {
+  ConflictError,
   GIT_REPOSITORY_ENV_KEYS,
   NotFoundError,
   ValidationError,
@@ -45,6 +46,7 @@ import {
 } from "@goatcitadel/policy-engine";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { serializePathWithinRoot } from "./security-utils.js";
+import { CODE_MODE_GIT_CAPTURE_TIMEOUT_MS, captureCodeModeGitWorktreeState } from "./code-mode-worktree-capture.js";
 import {
   readWorkbenchFileSnapshot,
   withWorkbenchWriteLock,
@@ -168,7 +170,14 @@ export async function getChatSessionWorkbenchFile(
   const state = await (options.preview ? readWorkbenchState(deps, sessionId) : syncWorkbenchState(deps, sessionId));
   const context = await resolveWorkbenchContext(deps, sessionId, state, true);
   if (options.preview) assertPreviewProject(state, context.project.projectId);
-  return await buildWorkbenchFileResponse(deps, sessionId, context, relativePath, undefined, options.preview ? state : undefined);
+  return await buildWorkbenchFileResponse(
+    deps,
+    sessionId,
+    context,
+    relativePath,
+    undefined,
+    options.preview ? state : undefined,
+  );
 }
 
 export async function saveChatSessionWorkbenchFile(
@@ -632,24 +641,50 @@ export async function runChatSessionWorkbenchCommand(
   };
 }
 
+/**
+ * Gateway-internal patch input. The expected-worktree keys select the guarded check-then-apply mode used by
+ * approved Code Mode promotion; the HTTP body schema strips them, so route callers cannot select it.
+ */
+export interface ChatSessionWorkbenchPatchApplyInput extends ChatSessionWorkbenchPatchApplyRequest {
+  expectedWorktreeHead?: string;
+  expectedWorktreeStateHash?: string;
+}
+
+export type ChatWorkbenchPatchRefusalReason = "out_of_scope" | "head_moved" | "state_drift" | "check_failed";
+
+/** A guarded patch apply refused before touching the worktree. */
+export class ChatWorkbenchPatchRefusedError extends ConflictError {
+  readonly reason: ChatWorkbenchPatchRefusalReason;
+
+  constructor(reason: ChatWorkbenchPatchRefusalReason, message: string) {
+    super({ code: "STATE_CONFLICT", message, details: { reason } });
+    this.reason = reason;
+  }
+}
+
 export async function applyChatSessionWorkbenchPatch(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
-  input: ChatSessionWorkbenchPatchApplyRequest,
+  input: ChatSessionWorkbenchPatchApplyInput,
 ): Promise<ChatSessionWorkbenchPatchApplyResponse> {
   await deps.requireChatSession(sessionId);
   const state = await syncWorkbenchState(deps, sessionId);
   const context = await resolveWorkbenchContext(deps, sessionId, state, true);
-  assertWorkbenchMutationScope(deps, context);
+  const guarded = input.expectedWorktreeHead !== undefined;
   const patch = normalizeWorkbenchPatch(input.patch);
-  const patchPaths = extractPatchPaths(patch);
-  assertPatchPathsInWorkbenchScope(context, patchPaths);
+  refuseGuardedPatchOnError(guarded, "out_of_scope", () => {
+    assertWorkbenchMutationScope(deps, context);
+    assertPatchPathsInWorkbenchScope(context, extractPatchPaths(patch));
+  });
   const checkOnly = Boolean(input.checkOnly);
   const startedAt = new Date().toISOString();
   const artifactId = `workbench-patch:${randomUUID()}`;
-  const applyResult = await withWorkbenchWriteLock(context.projectRoot, async () =>
-    applyPatchWithScope(context, patch, checkOnly),
-  );
+  const applyResult = await withWorkbenchWriteLock(context.projectRoot, async () => {
+    if (guarded) {
+      assertGuardedWorkbenchPatchApplies(context, patch, input);
+    }
+    return applyPatchWithScope(context, patch, checkOnly);
+  });
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
   const validation =
     applyResult.exitCode === 0 && !checkOnly
@@ -887,10 +922,14 @@ export async function getChatSessionWorkbenchOutput(
   };
 }
 
-async function readWorkbenchState(deps: ChatWorkbenchDependencies, sessionId: string): Promise<ChatSessionWorkbenchRecord> {
+async function readWorkbenchState(
+  deps: ChatWorkbenchDependencies,
+  sessionId: string,
+): Promise<ChatSessionWorkbenchRecord> {
   const storage = deps.storage;
   const current = await storage.chatSessionWorkbench.get(sessionId);
-  if (!current || current.sessionId !== sessionId) throw new NotFoundError({ entity: "Existing session workbench", id: sessionId });
+  if (!current || current.sessionId !== sessionId)
+    throw new NotFoundError({ entity: "Existing session workbench", id: sessionId });
   const projectId = (await storage.chatSessionProjects.get(sessionId))?.projectId;
   assertPreviewProject(current, projectId);
   return hydrateWorkbenchRecord(deps, { ...current, worktreeStatus: resolveWorkbenchPathStatus(current.worktreePath) });
@@ -898,7 +937,10 @@ async function readWorkbenchState(deps: ChatWorkbenchDependencies, sessionId: st
 
 function assertPreviewProject(state: ChatSessionWorkbenchRecord, projectId: string | undefined): void {
   if (state.projectId !== projectId) {
-    throw new ValidationError({ message: "The conversation project changed since this worktree was recorded. Open its workbench to review the current context." });
+    throw new ValidationError({
+      message:
+        "The conversation project changed since this worktree was recorded. Open its workbench to review the current context.",
+    });
   }
 }
 
@@ -986,10 +1028,12 @@ async function buildWorkbenchFileResponse(
   } = savedSnapshot ?? (await readWorkbenchFilePayload(deps, sessionId, context, relativePath));
   const content = contentBuffer.toString("utf8");
   const changedFiles = new Set(listChangedFiles(context.worktreePath, context.repoScopePath));
-  const nextState = previewState ?? await deps.storage.chatSessionWorkbench.patch(sessionId, {
-    projectId: context.project.projectId,
-    activeFilePath: normalized,
-  });
+  const nextState =
+    previewState ??
+    (await deps.storage.chatSessionWorkbench.patch(sessionId, {
+      projectId: context.project.projectId,
+      activeFilePath: normalized,
+    }));
   return {
     state: previewState ?? hydrateWorkbenchRecord(deps, nextState, context.project.projectId),
     path: normalized,
@@ -1712,6 +1756,59 @@ function runGitWithInput(cwd: string, args: string[], input: string): WorkbenchC
       stdoutTruncated: stdout.truncated,
       stderrTruncated: stderr.truncated,
     };
+  }
+}
+
+function refuseGuardedPatchOnError(
+  guarded: boolean,
+  reason: ChatWorkbenchPatchRefusalReason,
+  assertion: () => void,
+): void {
+  try {
+    assertion();
+  } catch (error) {
+    if (!guarded) {
+      throw error;
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ChatWorkbenchPatchRefusedError(reason, `Patch is outside the workbench scope: ${detail}`);
+  }
+}
+
+/**
+ * Must run inside the workbench write lock: re-captures HEAD and the worktree state with the same formula the
+ * plan-time pin used, then runs `git apply --check`, refusing before any file is written.
+ */
+function assertGuardedWorkbenchPatchApplies(
+  context: { worktreePath: string; repoScopePath: string },
+  patch: string,
+  expected: Pick<ChatSessionWorkbenchPatchApplyInput, "expectedWorktreeHead" | "expectedWorktreeStateHash">,
+): void {
+  let current: { headHash: string; stateHash: string };
+  try {
+    // The write lock this check runs under lives in the project root; leave it out of the status listing.
+    const lockPath = path.posix.join(context.repoScopePath.replaceAll("\\", "/"), WORKBENCH_WRITE_LOCK);
+    current = captureCodeModeGitWorktreeState(
+      fsSync.realpathSync(context.worktreePath),
+      CODE_MODE_GIT_CAPTURE_TIMEOUT_MS,
+      { statusExcludePaths: [lockPath] },
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ChatWorkbenchPatchRefusedError("state_drift", `Workbench state could not be captured: ${detail}`);
+  }
+  if (current.headHash !== expected.expectedWorktreeHead) {
+    throw new ChatWorkbenchPatchRefusedError("head_moved", "Workbench HEAD moved since the patch was pinned.");
+  }
+  if (!expected.expectedWorktreeStateHash || current.stateHash !== expected.expectedWorktreeStateHash) {
+    throw new ChatWorkbenchPatchRefusedError("state_drift", "Workbench files changed since the patch was pinned.");
+  }
+  const check = applyPatchWithScope(context, patch, true);
+  if (check.exitCode !== 0) {
+    throw new ChatWorkbenchPatchRefusedError(
+      "check_failed",
+      check.stderrPreview?.trim() || "git apply --check refused the patch.",
+    );
   }
 }
 

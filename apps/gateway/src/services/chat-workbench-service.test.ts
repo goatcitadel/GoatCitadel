@@ -25,8 +25,10 @@ import {
   runChatSessionWorkbenchFileOperation,
   previewChatSessionWorkbenchFileOperation,
   saveChatSessionWorkbenchFile,
+  ChatWorkbenchPatchRefusedError,
   type ChatWorkbenchDependencies,
 } from "./chat-workbench-service.js";
+import { CODE_MODE_GIT_CAPTURE_TIMEOUT_MS, captureCodeModeGitWorktreeState } from "./code-mode-worktree-capture.js";
 
 async function runReviewedOperation(
   deps: ChatWorkbenchDependencies,
@@ -56,11 +58,17 @@ describe("chat workbench helpers", () => {
     const ensure = vi.spyOn(deps.storage.chatSessionWorkbench, "ensure");
     const patch = vi.spyOn(deps.storage.chatSessionWorkbench, "patch");
     expect((await getChatSessionWorkbench(deps, "sess-1", { preview: true })).activeFilePath).toBe("index.ts");
-    expect((await getChatSessionWorkbenchTree(deps, "sess-1", { preview: true })).items.some((item) => item.path === "other.txt")).toBe(true);
+    expect(
+      (await getChatSessionWorkbenchTree(deps, "sess-1", { preview: true })).items.some(
+        (item) => item.path === "other.txt",
+      ),
+    ).toBe(true);
     const preview = await getChatSessionWorkbenchFile(deps, "sess-1", "other.txt", { preview: true });
     expect(preview.content).toBe("Preview text\n");
     expect(preview.state.activeFilePath).toBe("index.ts");
-    await expect(getChatSessionWorkbenchFile(deps, "sess-1", "../outside.txt", { preview: true })).rejects.toThrow(/Invalid relative path/);
+    await expect(getChatSessionWorkbenchFile(deps, "sess-1", "../outside.txt", { preview: true })).rejects.toThrow(
+      /Invalid relative path/,
+    );
     expect(ensure).not.toHaveBeenCalled();
     expect(patch).not.toHaveBeenCalled();
     expect(await deps.storage.chatSessionWorkbench.get("sess-1")).toEqual(before);
@@ -75,11 +83,19 @@ describe("chat workbench helpers", () => {
     const ensure = vi.spyOn(deps.storage.chatSessionWorkbench, "ensure");
     const patch = vi.spyOn(deps.storage.chatSessionWorkbench, "patch");
     const get = vi.spyOn(deps.storage.chatSessionWorkbench, "get").mockResolvedValueOnce(undefined);
-    await expect(getChatSessionWorkbench(deps, "sess-1", { preview: true })).rejects.toMatchObject({ code: "ENTITY_NOT_FOUND" });
+    await expect(getChatSessionWorkbench(deps, "sess-1", { preview: true })).rejects.toMatchObject({
+      code: "ENTITY_NOT_FOUND",
+    });
     get.mockRestore();
-    vi.spyOn(deps.storage.chatSessionProjects, "get").mockResolvedValue({ sessionId: "sess-1", projectId: "other",
-      createdAt: "2026-09-30T00:00:00.000Z", updatedAt: "2026-09-30T00:00:00.000Z" });
-    await expect(getChatSessionWorkbenchTree(deps, "sess-1", { preview: true })).rejects.toThrow(/conversation project changed/);
+    vi.spyOn(deps.storage.chatSessionProjects, "get").mockResolvedValue({
+      sessionId: "sess-1",
+      projectId: "other",
+      createdAt: "2026-09-30T00:00:00.000Z",
+      updatedAt: "2026-09-30T00:00:00.000Z",
+    });
+    await expect(getChatSessionWorkbenchTree(deps, "sess-1", { preview: true })).rejects.toThrow(
+      /conversation project changed/,
+    );
     expect(ensure).not.toHaveBeenCalled();
     expect(patch).not.toHaveBeenCalled();
   });
@@ -851,6 +867,101 @@ describe("chat workbench helpers", () => {
     expect(deps.storage.chatSessionWorkbench.ensure("sess-1").validationStatus).toBe("failed");
   }, 30_000);
 
+  it("guarded apply refuses when HEAD moved without touching files", async () => {
+    const { deps, projectRoot, rootDir } = await createGitWorkbenchFixture();
+    const { patch, pin, worktreePath } = await preparePinnedWorkbenchPatch(deps, projectRoot, rootDir);
+    run("git", ["commit", "--allow-empty", "-m", "moved"], worktreePath);
+    const before = captureCodeModeGitWorktreeState(worktreePath, CODE_MODE_GIT_CAPTURE_TIMEOUT_MS);
+
+    const refusal = await expectPatchRefusal(applyChatSessionWorkbenchPatch(deps, "sess-1", { patch, ...pin }));
+    expect(refusal.reason).toBe("head_moved");
+    expect(refusal.code).toBe("STATE_CONFLICT");
+    expect(refusal.details).toEqual({ reason: "head_moved" });
+    expect(await readNormalized(path.join(projectRoot, "index.ts"))).toBe("export const demo = true;\n");
+    expect(captureCodeModeGitWorktreeState(worktreePath, CODE_MODE_GIT_CAPTURE_TIMEOUT_MS).stateHash).toBe(
+      before.stateHash,
+    );
+    expect(deps.publishRealtime).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it("guarded apply refuses on dirty-state drift", async () => {
+    const { deps, projectRoot, rootDir } = await createGitWorkbenchFixture();
+    const { patch, pin } = await preparePinnedWorkbenchPatch(deps, projectRoot, rootDir);
+    await fs.writeFile(path.join(projectRoot, "stray.ts"), "export const stray = 1;\n", "utf8");
+
+    const refusal = await expectPatchRefusal(applyChatSessionWorkbenchPatch(deps, "sess-1", { patch, ...pin }));
+    expect(refusal.reason).toBe("state_drift");
+    expect(await readNormalized(path.join(projectRoot, "index.ts"))).toBe("export const demo = true;\n");
+    expect(deps.publishRealtime).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it("guarded apply refuses when the expected state hash is missing", async () => {
+    const { deps, projectRoot, rootDir } = await createGitWorkbenchFixture();
+    const { patch, pin } = await preparePinnedWorkbenchPatch(deps, projectRoot, rootDir);
+
+    const refusal = await expectPatchRefusal(
+      applyChatSessionWorkbenchPatch(deps, "sess-1", { patch, expectedWorktreeHead: pin.expectedWorktreeHead }),
+    );
+    expect(refusal.reason).toBe("state_drift");
+    expect(await readNormalized(path.join(projectRoot, "index.ts"))).toBe("export const demo = true;\n");
+  }, 30_000);
+
+  it("guarded apply runs git apply --check first and refuses a failing check without mutating the worktree", async () => {
+    const { deps, projectRoot, rootDir } = await createGitWorkbenchFixture();
+    const { pin, worktreePath } = await preparePinnedWorkbenchPatch(deps, projectRoot, rootDir);
+    const failingPatch = [
+      "diff --git a/index.ts b/index.ts",
+      "--- a/index.ts",
+      "+++ b/index.ts",
+      "@@ -99,1 +99,1 @@",
+      "-missing line",
+      "+replacement line",
+      "",
+    ].join("\n");
+
+    const refusal = await expectPatchRefusal(
+      applyChatSessionWorkbenchPatch(deps, "sess-1", { patch: failingPatch, ...pin }),
+    );
+    expect(refusal.reason).toBe("check_failed");
+    expect(captureCodeModeGitWorktreeState(worktreePath, CODE_MODE_GIT_CAPTURE_TIMEOUT_MS).stateHash).toBe(
+      pin.expectedWorktreeStateHash,
+    );
+    expect(deps.storage.chatSessionWorkbench.ensure("sess-1").validationStatus).toBe("idle");
+    expect(deps.publishRealtime).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it("guarded apply refuses an out-of-scope patch with a typed refusal", async () => {
+    const { deps, projectRoot, rootDir } = await createGitWorkbenchFixture();
+    const { pin, worktreePath } = await preparePinnedWorkbenchPatch(deps, projectRoot, rootDir);
+    const outOfScopePatch = [
+      "diff --git a/../../escape.ts b/../../escape.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/../../escape.ts",
+      "@@ -0,0 +1 @@",
+      "+export const escaped = true;",
+      "",
+    ].join("\n");
+
+    const refusal = await expectPatchRefusal(
+      applyChatSessionWorkbenchPatch(deps, "sess-1", { patch: outOfScopePatch, ...pin }),
+    );
+    expect(refusal.reason).toBe("out_of_scope");
+    expect(captureCodeModeGitWorktreeState(worktreePath, CODE_MODE_GIT_CAPTURE_TIMEOUT_MS).stateHash).toBe(
+      pin.expectedWorktreeStateHash,
+    );
+  }, 30_000);
+
+  it("guarded apply applies a scoped patch when the pin still holds", async () => {
+    const { deps, projectRoot, rootDir } = await createGitWorkbenchFixture();
+    const { patch, pin } = await preparePinnedWorkbenchPatch(deps, projectRoot, rootDir);
+
+    const applied = await applyChatSessionWorkbenchPatch(deps, "sess-1", { patch, ...pin });
+    expect(applied.applied).toBe(true);
+    expect(applied.changedFiles).toEqual(["index.ts"]);
+    expect(await readNormalized(path.join(projectRoot, "index.ts"))).toBe("export const demo = false;\n");
+  }, 30_000);
+
   it("summarizes helper run output and maps latest helper status onto validation state", async () => {
     const { deps } = await createWorkbenchFixture();
     deps.storage.codeModeRuns.list = vi.fn(() => [
@@ -1212,6 +1323,37 @@ function run(command: string, args: string[], cwd: string): void {
       GIT_TERMINAL_PROMPT: "0",
     },
   });
+}
+
+async function preparePinnedWorkbenchPatch(
+  deps: ChatWorkbenchDependencies,
+  projectRoot: string,
+  rootDir: string,
+): Promise<{
+  patch: string;
+  worktreePath: string;
+  pin: { expectedWorktreeHead: string; expectedWorktreeStateHash: string };
+}> {
+  const worktreePath = path.join(rootDir, ".worktrees", "sess-1");
+  await fs.writeFile(path.join(projectRoot, "index.ts"), "export const demo = false;\n", "utf8");
+  const exported = await exportChatSessionWorkbenchPatch(deps, "sess-1");
+  await revertChatSessionWorkbenchFile(deps, "sess-1", { path: "index.ts" });
+  vi.mocked(deps.publishRealtime).mockClear();
+  const state = captureCodeModeGitWorktreeState(worktreePath, CODE_MODE_GIT_CAPTURE_TIMEOUT_MS);
+  return {
+    patch: exported.patch,
+    worktreePath,
+    pin: { expectedWorktreeHead: state.headHash, expectedWorktreeStateHash: state.stateHash },
+  };
+}
+
+async function expectPatchRefusal(pending: Promise<unknown>): Promise<ChatWorkbenchPatchRefusedError> {
+  const error = await pending.then(
+    () => undefined,
+    (caught: unknown) => caught,
+  );
+  expect(error).toBeInstanceOf(ChatWorkbenchPatchRefusedError);
+  return error as ChatWorkbenchPatchRefusedError;
 }
 
 async function readNormalized(filePath: string): Promise<string> {

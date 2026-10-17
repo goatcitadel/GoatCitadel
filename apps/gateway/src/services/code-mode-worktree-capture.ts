@@ -93,9 +93,20 @@ export async function captureCodeModeWorkbenchWorktree(
   }
 }
 
-export function captureCodeModeGitWorktreeState(worktreePath: string, timeoutMs: number): CodeModeGitWorktreeState {
+/**
+ * `statusExcludePaths` (worktree-root-relative, matched literally) drops paths from the status listing only, so a
+ * caller holding a lock file inside the tree reproduces the hash of the same tree without that file. Without it the
+ * Git argv, and therefore the formula, is unchanged.
+ */
+export function captureCodeModeGitWorktreeState(
+  worktreePath: string,
+  timeoutMs: number,
+  options: { statusExcludePaths?: readonly string[] } = {},
+): CodeModeGitWorktreeState {
   const headHash = runCodeModeGit(["rev-parse", "HEAD"], { cwd: worktreePath, timeoutMs }).trim();
-  const statusRaw = runCodeModeGit(["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+  const statusExcludes = (options.statusExcludePaths ?? []).map((entry) => `:(exclude,literal)${entry}`);
+  const statusPathspec = statusExcludes.length > 0 ? ["--", ".", ...statusExcludes] : [];
+  const statusRaw = runCodeModeGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", ...statusPathspec], {
     cwd: worktreePath,
     timeoutMs,
   });

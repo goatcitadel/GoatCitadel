@@ -1556,6 +1556,8 @@ export class GatewayService {
       }),
       resolvePolicyContext: async (input) => await this.resolveToolPolicyContext(input),
       getChatSessionWorkbench: async (sessionId) => this.routeServices.chatSessions.getChatSessionWorkbench(sessionId),
+      applyChatSessionWorkbenchPatch: (sessionId, input) =>
+        this.routeServices.chatSessions.applyChatSessionWorkbenchPatch(sessionId, input),
       runChatSessionWorkbenchCommand: (sessionId, input) =>
         this.routeServices.chatSessions.runChatSessionWorkbenchCommand(sessionId, input),
       flushTranscriptOutbox: () => this.eventIngestService.flushPendingTranscriptOutbox(),
