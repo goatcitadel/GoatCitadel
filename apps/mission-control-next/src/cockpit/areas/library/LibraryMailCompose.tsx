@@ -12,6 +12,8 @@ import { RiskBadge } from "../../ui/RiskBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { handleEvidenceScrollKeyDown } from "../../ui/evidence-scroll";
 import { LibraryMailSendReceipt, readSendReceiptUpdate, type SendReceipt } from "./LibraryMailSendReceipt";
+import { useInterruptedSend } from "./LibraryMailInterruptedSend";
+import { LibraryMailReviewFields } from "./LibraryMailReviewFields";
 import { useLibraryOperation } from "./use-library-operation";
 import {
   draftMatchesRequest,
@@ -34,8 +36,6 @@ type AccountView = { label: string; address?: string; syncStatus: MailAccountRec
 /** The exact Gateway draft under review, with the compose value and account it was prepared from. */
 type SendReview = { record: MailDraftRecord; compose: MailCompose; account: AccountView };
 type Outcome = { error: boolean; text: string };
-const INTERRUPTED_SEND =
-  "This send request was interrupted before its approval was recorded. Nothing was sent; start a new draft to send this message.";
 
 const NO_ACCOUNTS: MailAccountRecord[] = [];
 
@@ -65,6 +65,21 @@ function LibraryMailComposeContent({
   const readSequence = useRef(0);
   const [errors, setErrors] = useState<MailComposeErrors>({});
   const [busy, setBusy] = useState(false);
+  const interruptedSend = useInterruptedSend<SendReview>({
+    stateKey: operation.key + ":interrupted",
+    workspaceId,
+    available,
+    busy,
+    setBusy,
+    current: () => operation.current(),
+    setOutcome,
+    onReleased: (target, record) => setReview({ ...target, record }),
+    onRelinked: async (target, record) => {
+      setReceipt({ record, replayed: false });
+      draft.acceptSaved(EMPTY_MAIL_COMPOSE, undefined, target.compose);
+      await onRefresh();
+    },
+  });
   const accountId = draft.value.accountId || (accounts.length === 1 ? accounts[0]!.accountId : "");
   const set = (field: keyof MailCompose, value: string) =>
     draft.setValue((current) => ({ ...current, [field]: value }));
@@ -139,7 +154,7 @@ function LibraryMailComposeContent({
       setPending(undefined);
       setReview(undefined);
       if (result.status === "approval_required" && !result.approvalId) {
-        setOutcome({ error: true, text: INTERRUPTED_SEND });
+        interruptedSend.interrupt({ ...target, record: result });
         return;
       }
       setReceipt({ record: result, replayed: replay });
@@ -313,6 +328,7 @@ function LibraryMailComposeContent({
           Discard email draft
         </Button>
       </div>
+      {interruptedSend.panel}
       {outcome && !review ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
       {receipt ? (
         <LibraryMailSendReceipt
@@ -332,40 +348,7 @@ function LibraryMailComposeContent({
       >
         {reviewed && review ? (
           <div className="grid min-w-0 grid-cols-1 gap-3 text-sm wrap-anywhere">
-            <dl className="grid min-w-0 grid-cols-1 gap-2">
-              <div>
-                <dt className="font-medium">From</dt>
-                <dd>
-                  {review.account.label}
-                  {review.account.address ? ` · ${review.account.address}` : ""} · account status{" "}
-                  {review.account.syncStatus === "not_configured" ? "not set up" : review.account.syncStatus}
-                </dd>
-              </div>
-              <div>
-                <dt className="font-medium">To</dt>
-                <dd>{reviewed.to.join(", ")}</dd>
-              </div>
-              <div>
-                <dt className="font-medium">Cc</dt>
-                <dd>{reviewed.cc.length ? reviewed.cc.join(", ") : "None"}</dd>
-              </div>
-              <div>
-                <dt className="font-medium">Bcc</dt>
-                <dd>{reviewed.bcc.length ? reviewed.bcc.join(", ") : "None"}</dd>
-              </div>
-              <div>
-                <dt className="font-medium">Subject</dt>
-                <dd>{reviewed.subject}</dd>
-              </div>
-              <div>
-                <dt className="font-medium">Attachments and context</dt>
-                <dd>No attachments. Only the text below is included; no files or conversation context are attached.</dd>
-              </div>
-              <div>
-                <dt className="font-medium">Scope</dt>
-                <dd>This workspace</dd>
-              </div>
-            </dl>
+            <LibraryMailReviewFields account={review.account} record={reviewed} />
             <pre
               role="region"
               aria-label="Exact message text"

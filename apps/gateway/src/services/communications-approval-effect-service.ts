@@ -1,5 +1,6 @@
 import {
   ConflictError,
+  MAIL_DRAFT_FAILURE_REASONS,
   NotFoundError,
   type ApprovalEffectRecord,
   type ApprovalRequest,
@@ -82,18 +83,17 @@ export interface CommunicationsApprovalEffectDeps {
   now?: () => Date;
 }
 
-export const MAIL_SEND_REJECTED_REASON = "Send approval was rejected; nothing was sent.";
-export const MAIL_SEND_EXPIRED_REASON = "Send approval expired; nothing was sent.";
-const MAIL_OUTCOME_UNKNOWN_REASON = "Delivery outcome is unknown; check the mailbox before retrying.";
+// Mail draft reasons are shared with Mission Control, which maps them to operator copy.
+export const MAIL_SEND_REJECTED_REASON = MAIL_DRAFT_FAILURE_REASONS.rejected;
+export const MAIL_SEND_EXPIRED_REASON = MAIL_DRAFT_FAILURE_REASONS.expired;
+const MAIL_OUTCOME_UNKNOWN_REASON = MAIL_DRAFT_FAILURE_REASONS.outcomeUnknown;
 const CALENDAR_OUTCOME_UNKNOWN_REASON = "Calendar create outcome is unknown; check the calendar before retrying.";
-const PAYLOAD_HASH_MISMATCH_REASON = "The approved message no longer matches its approval; nothing was sent.";
-export const MAIL_CONNECTION_CHANGED_REASON =
-  "The mail account changed after approval; nothing was sent. Request approval again.";
+const PAYLOAD_HASH_MISMATCH_REASON = MAIL_DRAFT_FAILURE_REASONS.payloadChanged;
+export const MAIL_CONNECTION_CHANGED_REASON = MAIL_DRAFT_FAILURE_REASONS.connectionChanged;
 export const CALENDAR_CONNECTION_CHANGED_REASON =
   "The calendar account changed after approval; nothing was created. Request approval again.";
-const MAIL_MISSING_WORKSPACE_REASON = "The mail send approval names no workspace; nothing was sent.";
-const MAIL_FOREIGN_WORKSPACE_REASON =
-  "The mail account belongs to a different workspace than this approval; nothing was sent.";
+const MAIL_MISSING_WORKSPACE_REASON = MAIL_DRAFT_FAILURE_REASONS.approvalMissingWorkspace;
+const MAIL_FOREIGN_WORKSPACE_REASON = MAIL_DRAFT_FAILURE_REASONS.approvalForeignWorkspace;
 const CALENDAR_FOREIGN_WORKSPACE_REASON =
   "The calendar account belongs to a different workspace than this approval; nothing was created.";
 const CALENDAR_MISSING_WORKSPACE_REASON = "The calendar create approval names no workspace; nothing was created.";
@@ -258,10 +258,7 @@ export class CommunicationsApprovalEffectService {
       // Only a deleted connection is terminal; any other read failure is infrastructure,
       // so it propagates and the effect worker defers and retries.
       if (!(error instanceof NotFoundError)) throw error;
-      throw new CommunicationsApprovalEffectError(
-        "provider_unavailable",
-        "The approved account is no longer connected; nothing was sent.",
-      );
+      throw new CommunicationsApprovalEffectError("provider_unavailable", MAIL_DRAFT_FAILURE_REASONS.connectionMissing);
     }
   }
 
@@ -304,7 +301,7 @@ export class CommunicationsApprovalEffectService {
       if (error instanceof CommsPreApprovalSettledError) {
         throw new CommunicationsApprovalEffectError(
           "approval_not_approved",
-          "This approval was already used; nothing was sent again.",
+          MAIL_DRAFT_FAILURE_REASONS.approvalAlreadyUsed,
         );
       }
       throw error;

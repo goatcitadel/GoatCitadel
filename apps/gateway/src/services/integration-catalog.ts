@@ -691,6 +691,34 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       bool("enabled", "Enabled", true),
     ],
   },
+  "automation.imap-smtp": {
+    catalogId: "automation.imap-smtp",
+    title: "IMAP/SMTP Mail Connection",
+    description:
+      "Sends approved mail through your SMTP server. Reading an IMAP inbox is not available yet. Add the SMTP host to the network allowlist; port 587 requires STARTTLS and port 465 uses implicit TLS.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Mail" }),
+      text("smtpHost", "SMTP Host", {
+        placeholder: "smtp.example.com",
+        required: true,
+        description: "Bare hostname or IPv4 address, without port, scheme, or credentials.",
+      }),
+      text("smtpPort", "SMTP Port", { defaultValue: "587", placeholder: "587" }),
+      text("fromAddress", "From Address", { placeholder: "you@example.com", required: true }),
+      text("smtpUser", "SMTP Username", {
+        placeholder: "you@example.com",
+        description: "Leave empty only for a server that accepts unauthenticated submission.",
+      }),
+      text("smtpPasswordEnv", "SMTP Password ENV Var", {
+        placeholder: "SMTP_PASSWORD",
+        secretRef: true,
+        description:
+          "Name of the environment variable that holds the SMTP password. The password itself is never stored in this connection.",
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
   "productivity.apple-notes": localBridgeSchema(
     "productivity.apple-notes",
     "Apple Notes Connection",
@@ -1265,6 +1293,15 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     ["voice"],
   ),
   entry("automation", "gmail", "Gmail", "Gmail read/send integration.", "beta", ["oauth"], ["read", "write"]),
+  entry(
+    "automation",
+    "imap-smtp",
+    "IMAP/SMTP Mail",
+    "Send approved mail through your own SMTP server. IMAP inbox reading is not available yet.",
+    "beta",
+    ["password"],
+    ["send"],
+  ),
   entry("automation", "cron", "Cron Jobs", "Scheduled task orchestration.", "native", ["local"], ["scheduling"]),
   entry(
     "automation",

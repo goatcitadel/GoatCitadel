@@ -1,8 +1,9 @@
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
   createCommunicationsDashboardService,
+  MailDraftRecoveryUnavailableError,
   MailDraftStoreUnavailableError,
   type CreateCalendarEventInput,
 } from "../services/communications-dashboard-service.js";
@@ -92,6 +93,7 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
       return fixture ? { items: fixture.events } : await fastify.services.comms.commsCalendarList(input);
     },
     mailDrafts: fastify.services.mailDrafts,
+    mailDraftRecovery: fastify.services.mailDraftRecovery,
   });
 
   fastify.get("/api/v1/communications", async (request, reply) => {
@@ -107,10 +109,8 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    if (
-      parsed.data.workspaceId &&
-      !(await service.isMailAccountVisible(parsed.data.workspaceId, parsed.data.accountId))
-    ) {
+    // A draft without a workspace is bound to the default one, so the account must be visible there too.
+    if (!(await service.isMailAccountVisible(parsed.data.workspaceId, parsed.data.accountId))) {
       return reply.code(404).send({ error: "This mail account is not connected to the requested workspace." });
     }
     return await withDraftStore(reply, async () => reply.code(201).send(await service.createDraft(parsed.data)));
@@ -134,7 +134,22 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
-  fastify.post("/api/v1/mail/drafts/:draftId/send", async (request, reply) => {
+  fastify.post("/api/v1/mail/drafts/:draftId/send", async (request, reply) =>
+    withScopedDraft(request, reply, async (draftId) => reply.send(await service.sendDraft(draftId))),
+  );
+
+  // Operator recovery for a send interrupted before its approval id was recorded; the outcome
+  // (released, relinked, not_interrupted, too_recent) is always a 200 body, see releaseInterruptedDraft.
+  fastify.post("/api/v1/mail/drafts/:draftId/release", async (request, reply) =>
+    withScopedDraft(request, reply, async (draftId) => reply.send(await service.releaseInterruptedDraft(draftId))),
+  );
+
+  /** Binds the draft to the workspace named in the query or body before `handle` sees it; a mismatch is a 404. */
+  async function withScopedDraft(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    handle: (draftId: string) => Promise<FastifyReply>,
+  ): Promise<FastifyReply> {
     const params = draftParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -151,19 +166,16 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
       if (!draft || draft.workspaceId !== scope.data.workspaceId) {
         return reply.code(404).send(MAIL_DRAFT_NOT_FOUND);
       }
-      return reply.send(await service.sendDraft(params.data.draftId));
+      return await handle(params.data.draftId);
     });
-  });
+  }
 
   fastify.post("/api/v1/calendar/events", async (request, reply) => {
     const parsed = calendarEventSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    if (
-      parsed.data.workspaceId &&
-      !(await service.isCalendarAccountVisible(parsed.data.workspaceId, parsed.data.accountId))
-    ) {
+    if (!(await service.isCalendarAccountVisible(parsed.data.workspaceId, parsed.data.accountId))) {
       return reply.code(404).send({ error: "This calendar account is not connected to the requested workspace." });
     }
     return reply.code(202).send(await service.createCalendarEventPlaceholder(parsed.data as CreateCalendarEventInput));
@@ -176,12 +188,15 @@ function readOptionalRecordString(value: unknown, key: string): unknown {
     : undefined;
 }
 
-/** Draft routes fail closed with 503 when draft persistence is not composed, instead of holding drafts in memory. */
+/**
+ * Draft routes fail closed with 503 when draft persistence (or, for release, the approval lookup) is not
+ * composed, instead of holding drafts in memory or releasing a draft unchecked.
+ */
 async function withDraftStore(reply: FastifyReply, handle: () => Promise<FastifyReply>): Promise<FastifyReply> {
   try {
     return await handle();
   } catch (error) {
-    if (error instanceof MailDraftStoreUnavailableError) {
+    if (error instanceof MailDraftStoreUnavailableError || error instanceof MailDraftRecoveryUnavailableError) {
       return reply.code(503).send({ error: error.message });
     }
     throw error;

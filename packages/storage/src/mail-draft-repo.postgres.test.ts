@@ -8,6 +8,7 @@ import { PostgresSyncDatabaseClient } from "./postgres/sync.js";
 import { runPostgresMigrations } from "./postgres/migrator.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
 import { MailDraftRepository } from "./mail-draft-repo.js";
+import { ApprovalRepository } from "./approval-repo.js";
 
 const connectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
 const skip = connectionString ? false : "Set GOATCITADEL_TEST_POSTGRES_URL to a disposable PostgreSQL instance.";
@@ -97,6 +98,32 @@ function assertRoundTripAndCas(scoped: string): void {
   }
 }
 
+/** Release of an interrupted draft first looks for a persisted send approval naming it. */
+function assertSendApprovalLookup(scoped: string): void {
+  const db = new PostgresSyncDatabaseClient({ connectionString: scoped, database: "postgres", pool: { max: 1 } });
+  try {
+    const approvals = new ApprovalRepository(db);
+    const send = (draftId: string) => ({
+      kind: "communications.mail.send",
+      riskLevel: "danger" as const,
+      payload: { action: "mail_send", draftId },
+      preview: { draftId },
+      linkage: { workspaceId: "default" },
+    });
+    const match = approvals.create(send("mail_draft_pg_1"));
+    approvals.create(send("mailxdraftxpgx1"));
+    approvals.create(send("MAIL_DRAFT_PG_1"));
+    assert.deepEqual(
+      approvals
+        .listByKindAndPayloadString("communications.mail.send", "draftId", "mail_draft_pg_1")
+        .map((a) => a.approvalId),
+      [match.approvalId],
+    );
+  } finally {
+    db.close();
+  }
+}
+
 test("real PostgreSQL fresh installs persist mail drafts with CAS transitions", { skip }, async () => {
   await withSchema("mail_drafts_fresh", async (scoped, admin, schema) => {
     const migrations = new PostgresDatabaseClient({ connectionString: scoped, database: "postgres" });
@@ -107,6 +134,7 @@ test("real PostgreSQL fresh installs persist mail drafts with CAS transitions", 
     }
     await assertSingleNamedStatusCheck(admin, schema);
     assertRoundTripAndCas(scoped);
+    assertSendApprovalLookup(scoped);
   });
 });
 

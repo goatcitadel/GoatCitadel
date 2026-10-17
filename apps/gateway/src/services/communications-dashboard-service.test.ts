@@ -12,6 +12,9 @@ import {
 } from "./communications-approval-payload.js";
 import {
   createCommunicationsDashboardService,
+  INTERRUPTED_SEND_RELEASE_GRACE_MS,
+  MailDraftRecoveryUnavailableError,
+  type CommunicationsMailDraftRecovery,
   type CommunicationsMailDraftStore,
 } from "./communications-dashboard-service.js";
 
@@ -617,6 +620,212 @@ describe("communications dashboard service", () => {
     expect(dashboard.mailAccounts).toHaveLength(1);
     expect(dashboard.mailAccounts[0]).toMatchObject({ provider: "gmail", address: "operator@example.test" });
   });
+
+  it("keeps credential values and references out of the hashed send approval", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const smtp = createConnection({
+      connectionId: "smtp-conn",
+      catalogId: "automation.imap-smtp",
+      key: "imap-smtp",
+      revision: "rev-smtp",
+      config: {
+        smtpHost: "smtp.example.test",
+        smtpUser: "ops@example.test",
+        smtpPassword: "direct-password-value",
+        smtpPasswordEnv: "SMTP_PASSWORD_ENV_NAME",
+        fromAddress: "ops@example.test",
+      },
+    });
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(NOW),
+      createApproval,
+      listIntegrationConnections: () => [smtp],
+      mailDrafts: createMailDraftStore(),
+    });
+    const draft = await service.createDraft({
+      accountId: "smtp-conn",
+      to: ["a@example.test"],
+      subject: "Hi",
+      bodyText: "Body",
+    });
+
+    await service.sendDraft(draft.draftId);
+
+    // The revision is the binding; a stored secret or secret reference never reaches the approval.
+    const request = JSON.stringify(createApproval.mock.calls[0]![0]);
+    expect(createApproval.mock.calls[0]![0].payload.connectionRevision).toBe("rev-smtp");
+    expect(request).not.toContain("direct-password-value");
+    expect(request).not.toContain("SMTP_PASSWORD_ENV_NAME");
+  });
+});
+
+describe("releasing an interrupted send", () => {
+  const AFTER_GRACE = new Date(Date.parse(NOW) + INTERRUPTED_SEND_RELEASE_GRACE_MS + 1_000);
+
+  async function fencedDraft(mailDrafts: CommunicationsMailDraftStore, overrides: Partial<MailDraftRecord> = {}) {
+    return mailDrafts.create({
+      draftId: "mail_draft_fenced",
+      workspaceId: "workspace-1",
+      accountId: "acct-a",
+      to: ["operator@example.test"],
+      cc: [],
+      bcc: ["hidden@example.test"],
+      subject: "Private subject",
+      bodyText: "Private body.",
+      status: "approval_required",
+      createdAt: NOW,
+      updatedAt: NOW,
+      ...overrides,
+    });
+  }
+
+  function recovery(approvals: ApprovalRequest[] = []) {
+    return {
+      findMailSendApprovals: vi.fn(async (_draftId: string) => approvals),
+      recordAudit: vi.fn(async (_event: Record<string, unknown>) => undefined),
+    } satisfies CommunicationsMailDraftRecovery;
+  }
+
+  it("waits out the grace period before checking for an approval", async () => {
+    const mailDrafts = createMailDraftStore();
+    const fenced = await fencedDraft(mailDrafts);
+    const mailDraftRecovery = recovery();
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(Date.parse(NOW) + 60_000),
+      mailDrafts,
+      mailDraftRecovery,
+    });
+
+    const result = await service.releaseInterruptedDraft(fenced.draftId);
+
+    expect(result).toEqual({ outcome: "too_recent", draft: fenced, retryAfterSeconds: 540 });
+    expect(mailDraftRecovery.findMailSendApprovals).not.toHaveBeenCalled();
+    expect(await mailDrafts.find(fenced.draftId)).toEqual(fenced);
+  });
+
+  it("releases a draft no approval names, audits it without content, then allows exactly one approval", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const mailDrafts = createMailDraftStore();
+    const fenced = await fencedDraft(mailDrafts, { failureReason: "stale" });
+    const mailDraftRecovery = recovery();
+    const service = createCommunicationsDashboardService({
+      now: () => AFTER_GRACE,
+      createApproval,
+      mailDrafts,
+      mailDraftRecovery,
+    });
+
+    const result = await service.releaseInterruptedDraft(fenced.draftId);
+
+    expect(result.outcome).toBe("released");
+    expect(result.draft).toMatchObject({ status: "draft", updatedAt: AFTER_GRACE.toISOString() });
+    expect(result.draft.failureReason).toBeUndefined();
+    expect(result.draft.approvalId).toBeUndefined();
+    expect(mailDraftRecovery.findMailSendApprovals).toHaveBeenCalledExactlyOnceWith(fenced.draftId);
+    expect(mailDraftRecovery.recordAudit).toHaveBeenCalledExactlyOnceWith({
+      event: "mail_draft_send_released",
+      draftId: fenced.draftId,
+      workspaceId: "workspace-1",
+      accountId: "acct-a",
+      interruptedAt: NOW,
+    });
+
+    const sent = await service.sendDraft(fenced.draftId);
+    const replay = await service.sendDraft(fenced.draftId);
+    expect(sent).toMatchObject({ status: "approval_required", approvalId: "22222222-2222-4222-8222-222222222222" });
+    expect(replay).toEqual(sent);
+    expect(createApproval).toHaveBeenCalledOnce();
+  });
+
+  it("re-links an approval that did persist instead of releasing, so no second approval is requested", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const mailDrafts = createMailDraftStore();
+    const fenced = await fencedDraft(mailDrafts);
+    const persisted: ApprovalRequest = {
+      ...createApprovalRecord({ kind: "communications.mail.send", riskLevel: "danger", payload: {}, preview: {} }),
+      approvalId: "approval-persisted",
+    };
+    const mailDraftRecovery = recovery([persisted]);
+    const service = createCommunicationsDashboardService({
+      now: () => AFTER_GRACE,
+      createApproval,
+      mailDrafts,
+      mailDraftRecovery,
+    });
+
+    const result = await service.releaseInterruptedDraft(fenced.draftId);
+
+    expect(result).toMatchObject({
+      outcome: "relinked",
+      draft: { status: "approval_required", approvalId: "approval-persisted" },
+    });
+    expect(mailDraftRecovery.recordAudit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ event: "mail_draft_send_relinked", approvalId: "approval-persisted" }),
+    );
+    expect(await service.sendDraft(fenced.draftId)).toMatchObject({ approvalId: "approval-persisted" });
+    expect(createApproval).not.toHaveBeenCalled();
+  });
+
+  it("leaves a draft that is not interrupted unchanged", async () => {
+    const mailDrafts = createMailDraftStore();
+    const linked = await fencedDraft(mailDrafts, { approvalId: "approval-1" });
+    const mailDraftRecovery = recovery();
+    const service = createCommunicationsDashboardService({ now: () => AFTER_GRACE, mailDrafts, mailDraftRecovery });
+
+    expect(await service.releaseInterruptedDraft(linked.draftId)).toEqual({
+      outcome: "not_interrupted",
+      draft: linked,
+    });
+    expect(mailDraftRecovery.findMailSendApprovals).not.toHaveBeenCalled();
+    expect(mailDraftRecovery.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("does not release while this process still has the send request in flight", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let now = new Date(NOW);
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => {
+      await gate;
+      return createApprovalRecord(input);
+    });
+    const mailDrafts = createMailDraftStore();
+    const mailDraftRecovery = recovery();
+    const service = createCommunicationsDashboardService({
+      now: () => now,
+      createApproval,
+      mailDrafts,
+      mailDraftRecovery,
+    });
+    const draft = await service.createDraft({
+      accountId: "acct-a",
+      to: ["a@example.test"],
+      subject: "S",
+      bodyText: "B",
+    });
+
+    const sending = service.sendDraft(draft.draftId);
+    await vi.waitFor(() => expect(createApproval).toHaveBeenCalledOnce());
+    now = AFTER_GRACE;
+    const result = await service.releaseInterruptedDraft(draft.draftId);
+    finish();
+
+    expect(result.outcome).toBe("too_recent");
+    expect(mailDraftRecovery.findMailSendApprovals).not.toHaveBeenCalled();
+    expect(await sending).toMatchObject({ approvalId: "22222222-2222-4222-8222-222222222222" });
+  });
+
+  it("fails closed when the approval lookup is not composed", async () => {
+    const mailDrafts = createMailDraftStore();
+    const fenced = await fencedDraft(mailDrafts);
+    const service = createCommunicationsDashboardService({ now: () => AFTER_GRACE, mailDrafts });
+
+    await expect(service.releaseInterruptedDraft(fenced.draftId)).rejects.toBeInstanceOf(
+      MailDraftRecoveryUnavailableError,
+    );
+    expect(await mailDrafts.find(fenced.draftId)).toEqual(fenced);
+  });
 });
 
 function createApprovalRecord(input: ApprovalCreateInput): ApprovalRequest {
@@ -662,6 +871,7 @@ function createMailDraftStore(): CommunicationsMailDraftStore {
         ...(patch.failureReason === undefined ? {} : { failureReason: patch.failureReason }),
         ...(patch.sentAt === undefined ? {} : { sentAt: patch.sentAt }),
       };
+      if (patch.clearFailureReason) delete next.failureReason;
       rows.set(draftId, next);
       return { ...next };
     },

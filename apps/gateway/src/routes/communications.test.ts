@@ -83,7 +83,9 @@ describe("communications routes", () => {
     }));
     app = Fastify();
     decorateServices(app, {
-      integrations: { listIntegrationConnections: vi.fn(() => []) },
+      integrations: {
+        listIntegrationConnections: vi.fn(() => [mailConnection("11111111-1111-4111-8111-111111111111")]),
+      },
       approvals: { createApproval },
       mailDrafts: createMailDraftStore(),
       comms: {
@@ -270,7 +272,7 @@ describe("communications routes", () => {
     }));
     app = Fastify();
     decorateServices(app, {
-      integrations: { listIntegrationConnections: vi.fn(() => []) },
+      integrations: { listIntegrationConnections: vi.fn(() => [mailConnection("acct-a")]) },
       approvals: { createApproval },
       mailDrafts: createMailDraftStore(),
       comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
@@ -321,7 +323,7 @@ describe("communications routes", () => {
     }));
     app = Fastify();
     decorateServices(app, {
-      integrations: { listIntegrationConnections: vi.fn(() => []) },
+      integrations: { listIntegrationConnections: vi.fn(() => [mailConnection("acct-a")]) },
       approvals: { createApproval },
       mailDrafts: createMailDraftStore(),
       comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
@@ -375,7 +377,7 @@ describe("communications routes", () => {
   it("answers 503 for draft routes when mail draft storage is not composed", async () => {
     app = Fastify();
     decorateServices(app, {
-      integrations: { listIntegrationConnections: vi.fn(() => []) },
+      integrations: { listIntegrationConnections: vi.fn(() => [mailConnection("acct-a")]) },
       approvals: { createApproval: vi.fn() },
       comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
     });
@@ -392,11 +394,173 @@ describe("communications routes", () => {
       url: "/api/v1/mail/drafts/mail_draft_x/send",
       payload: { workspaceId: "default" },
     });
+    const released = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts/mail_draft_x/release",
+      payload: { workspaceId: "default" },
+    });
 
-    for (const response of [created, read, sent]) {
+    for (const response of [created, read, sent, released]) {
       expect(response.statusCode).toBe(503);
       expect(response.json()).toEqual({ error: "Mail draft storage is unavailable." });
     }
+  });
+
+  it("binds a draft or event without a workspace only to an account the default workspace can see", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => ({
+      approvalId: "44444444-4444-4444-8444-444444444444",
+      kind: input.kind,
+      riskLevel: input.riskLevel,
+      status: "pending",
+      payload: input.payload,
+      preview: input.preview,
+      linkage: input.linkage,
+      createdAt: "2026-06-05T12:00:00.000Z",
+      explanationStatus: "not_requested",
+    }));
+    const calendar = (connectionId: string, workspaceId?: string) => ({
+      ...mailConnection(connectionId, workspaceId),
+      catalogId: "automation.google-calendar",
+      key: "google-calendar",
+    });
+    app = Fastify();
+    decorateServices(app, {
+      integrations: {
+        listIntegrationConnections: vi.fn(() => [
+          mailConnection("mail-foreign", "workspace-other"),
+          mailConnection("mail-unbound"),
+          calendar("cal-foreign", "workspace-other"),
+          calendar("cal-unbound"),
+        ]),
+      },
+      approvals: { createApproval },
+      mailDrafts: createMailDraftStore(),
+      comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
+    });
+    await app.register(communicationsRoutes);
+    const draft = { to: ["operator@example.test"], subject: "Status", bodyText: "Ready." };
+    const event = { title: "Planning", startIso: "2026-06-06T10:00:00.000Z", endIso: "2026-06-06T10:30:00.000Z" };
+
+    const foreignDraft = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts",
+      payload: { ...draft, accountId: "mail-foreign" },
+    });
+    const foreignEvent = await app.inject({
+      method: "POST",
+      url: "/api/v1/calendar/events",
+      payload: { ...event, accountId: "cal-foreign" },
+    });
+    for (const refused of [foreignDraft, foreignEvent]) {
+      expect(refused.statusCode).toBe(404);
+      expect(refused.body).not.toContain("draftId");
+    }
+    expect(createApproval).not.toHaveBeenCalled();
+
+    const unboundDraft = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts",
+      payload: { ...draft, accountId: "mail-unbound" },
+    });
+    expect(unboundDraft.statusCode).toBe(201);
+    expect(unboundDraft.json()).toMatchObject({ workspaceId: "default" });
+    const unboundEvent = await app.inject({
+      method: "POST",
+      url: "/api/v1/calendar/events",
+      payload: { ...event, accountId: "cal-unbound" },
+    });
+    expect(unboundEvent.statusCode).toBe(202);
+    expect(createApproval.mock.calls[0]![0].linkage).toMatchObject({ workspaceId: "default" });
+  });
+
+  it("releases an interrupted draft only in its own workspace and only after checking for an approval", async () => {
+    const mailDrafts = createMailDraftStore();
+    const findMailSendApprovals = vi.fn(async () => []);
+    const recordAudit = vi.fn(async () => undefined);
+    app = Fastify();
+    decorateServices(app, {
+      integrations: { listIntegrationConnections: vi.fn(() => [mailConnection("acct-a")]) },
+      approvals: { createApproval: vi.fn() },
+      mailDrafts,
+      mailDraftRecovery: { findMailSendApprovals, recordAudit },
+      comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
+    });
+    await app.register(communicationsRoutes);
+    await mailDrafts.create({
+      draftId: "mail_draft_stuck",
+      workspaceId: "default",
+      accountId: "acct-a",
+      to: ["operator@example.test"],
+      cc: [],
+      bcc: [],
+      subject: "Stuck subject",
+      bodyText: "Stuck body.",
+      status: "approval_required",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const unscoped = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts/mail_draft_stuck/release",
+      payload: {},
+    });
+    const foreign = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts/mail_draft_stuck/release",
+      payload: { workspaceId: "workspace-2" },
+    });
+    expect(unscoped.statusCode).toBe(400);
+    expect(foreign.statusCode).toBe(404);
+    expect(foreign.body).not.toContain("Stuck subject");
+    expect(findMailSendApprovals).not.toHaveBeenCalled();
+
+    const released = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts/mail_draft_stuck/release",
+      payload: { workspaceId: "default" },
+    });
+    expect(released.statusCode).toBe(200);
+    expect(released.json()).toMatchObject({
+      outcome: "released",
+      draft: { draftId: "mail_draft_stuck", status: "draft" },
+    });
+    expect(findMailSendApprovals).toHaveBeenCalledExactlyOnceWith("mail_draft_stuck");
+    expect(recordAudit).toHaveBeenCalledOnce();
+  });
+
+  it("answers 503 for a release when the approval lookup is not composed", async () => {
+    const mailDrafts = createMailDraftStore();
+    app = Fastify();
+    decorateServices(app, {
+      integrations: { listIntegrationConnections: vi.fn(() => []) },
+      approvals: { createApproval: vi.fn() },
+      mailDrafts,
+      comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
+    });
+    await app.register(communicationsRoutes);
+    await mailDrafts.create({
+      draftId: "mail_draft_stuck",
+      workspaceId: "default",
+      accountId: "acct-a",
+      to: ["operator@example.test"],
+      cc: [],
+      bcc: [],
+      subject: "Stuck",
+      bodyText: "Stuck.",
+      status: "approval_required",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const released = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts/mail_draft_stuck/release",
+      payload: { workspaceId: "default" },
+    });
+
+    expect(released.statusCode).toBe(503);
+    expect((await mailDrafts.find("mail_draft_stuck"))?.status).toBe("approval_required");
   });
 
   it("binds a calendar approval to a workspace that can see the calendar account", async () => {
@@ -571,6 +735,23 @@ describe("communications routes", () => {
   });
 });
 
+/** An enabled Gmail connection; unbound unless a workspace is named. */
+function mailConnection(connectionId: string, workspaceId?: string) {
+  return {
+    connectionId,
+    catalogId: "automation.gmail",
+    kind: "automation",
+    key: "gmail",
+    label: connectionId,
+    enabled: true,
+    status: "connected",
+    ...(workspaceId ? { workspaceId } : {}),
+    config: { address: `${connectionId}@example.test` },
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-02T00:00:00.000Z",
+  };
+}
+
 /** In-memory stand-in for `storage.mailDrafts`: duplicate create throws, transition is compare-and-set. */
 function createMailDraftStore() {
   const rows = new Map<string, MailDraftRecord>();
@@ -589,7 +770,8 @@ function createMailDraftStore() {
     transition: async (
       draftId: string,
       from: readonly MailDraftRecord["status"][],
-      patch: Partial<MailDraftRecord> & Pick<MailDraftRecord, "status" | "updatedAt">,
+      patch: Partial<MailDraftRecord> &
+        Pick<MailDraftRecord, "status" | "updatedAt"> & { clearFailureReason?: boolean },
     ) => {
       const row = rows.get(draftId);
       if (!row || !from.includes(row.status)) {
@@ -602,6 +784,7 @@ function createMailDraftStore() {
         ...(patch.approvalId === undefined ? {} : { approvalId: patch.approvalId }),
         ...(patch.failureReason === undefined ? {} : { failureReason: patch.failureReason }),
       };
+      if (patch.clearFailureReason) delete next.failureReason;
       rows.set(draftId, next);
       return { ...next };
     },

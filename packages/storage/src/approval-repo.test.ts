@@ -1043,3 +1043,51 @@ describe("ApprovalRepository", () => {
     assert.equal(repo.setShellExplanations("missing-approval", []), false);
   });
 });
+
+describe("ApprovalRepository.listByKindAndPayloadString", () => {
+  const send = (draftId: string, extra: Record<string, unknown> = {}) => ({
+    kind: "communications.mail.send",
+    riskLevel: "danger" as const,
+    payload: { action: "mail_send", draftId, ...extra },
+    preview: { title: "Send mail draft", draftId },
+    linkage: { workspaceId: "default" },
+  });
+
+  it("finds only approvals of the kind whose payload value matches exactly", () => {
+    const repo = createRepo();
+    const match = repo.create(send("mail_draft_a1"));
+    // `_` is a LIKE wildcard; this id would match an unescaped pattern.
+    repo.create(send("mailxdraftxa1"));
+    repo.create(send("mail_draft_a10"));
+    repo.create({ ...send("mail_draft_a1"), kind: "communications.calendar.create" });
+    repo.create({ ...send("other"), preview: { draftId: "mail_draft_a1" } });
+
+    const found = repo.listByKindAndPayloadString("communications.mail.send", "draftId", "mail_draft_a1");
+
+    assert.deepEqual(
+      found.map((approval) => approval.approvalId),
+      [match.approvalId],
+    );
+    assert.equal(found[0]!.linkage?.workspaceId, "default");
+  });
+
+  it("escapes LIKE metacharacters in the value", () => {
+    const repo = createRepo();
+    const literal = repo.create(send("100%_\\done"));
+    repo.create(send("100xx\\done"));
+
+    const found = repo.listByKindAndPayloadString("communications.mail.send", "draftId", "100%_\\done");
+
+    assert.deepEqual(
+      found.map((approval) => approval.approvalId),
+      [literal.approvalId],
+    );
+  });
+
+  it("returns nothing for an unknown value and rejects an empty lookup", () => {
+    const repo = createRepo();
+    repo.create(send("mail_draft_b"));
+    assert.deepEqual(repo.listByKindAndPayloadString("communications.mail.send", "draftId", "mail_draft_c"), []);
+    assert.throws(() => repo.listByKindAndPayloadString("communications.mail.send", "draftId", ""), /required/u);
+  });
+});
