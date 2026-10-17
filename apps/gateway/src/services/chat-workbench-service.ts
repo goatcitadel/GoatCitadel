@@ -1864,8 +1864,10 @@ function assertGuardedWorkbenchPatchApplies(
       { statusExcludePaths: [lockPath] },
     );
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new ChatWorkbenchPatchRefusedError("state_drift", `Workbench state could not be captured: ${detail}`);
+    throw new ChatWorkbenchPatchRefusedError(
+      "state_drift",
+      `Workbench state could not be captured: ${boundedDetail(error)}`,
+    );
   }
   if (current.headHash !== expected.expectedWorktreeHead) {
     throw new ChatWorkbenchPatchRefusedError("head_moved", "Workbench HEAD moved since the patch was pinned.");
@@ -1877,7 +1879,7 @@ function assertGuardedWorkbenchPatchApplies(
   if (check.exitCode !== 0) {
     throw new ChatWorkbenchPatchRefusedError(
       "check_failed",
-      check.stderrPreview?.trim() || "git apply --check refused the patch.",
+      boundedDetail(check.stderrPreview?.trim() || "git apply --check refused the patch."),
     );
   }
 }

@@ -119,6 +119,7 @@ import {
 } from "./code-mode-aider-result-contract.js";
 import {
   captureCodeModeAiderWorkspacePin,
+  CodeModeAiderWorkspaceRefusal,
   resolveCodeModeAiderWorkspaceSeed,
 } from "./code-mode-aider-workspace-pin.js";
 import {
@@ -4038,6 +4039,10 @@ export class CapabilitySystemService {
         stderr: toCaptureState(execution.stderr),
       };
     } catch (error) {
+      // A deterministic pin/seed refusal would repeat on every retry: rethrow it so the run terminalizes.
+      if (!dispatchBoundaryCrossed && error instanceof CodeModeAiderWorkspaceRefusal) {
+        throw error;
+      }
       if (!dispatchBoundaryCrossed) {
         throw new CodeModeExecutionPreDispatchFailure(
           `Aider Code Mode execution failed before dispatch: ${error instanceof Error ? error.message : String(error)}`,

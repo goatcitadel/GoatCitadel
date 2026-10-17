@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { ConflictError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import { capabilitiesRoutes } from "./capabilities.js";
 
 describe("capabilities routes", () => {
@@ -1127,7 +1127,7 @@ describe("capabilities routes", () => {
     });
   });
 
-  it("maps Aider promotion refusals to 409 and other failures to 400", async () => {
+  it("maps Aider promotion refusals to 409, typed errors to their status, and unexpected failures to 500", async () => {
     const service = await registerCapabilitiesService({
       requestCodeModeAiderPromotion: vi
         .fn()
@@ -1137,7 +1137,8 @@ describe("capabilities routes", () => {
             details: { reason: "not_pinned", runId: "code-run-1" },
           }),
         )
-        .mockRejectedValueOnce(new Error("code mode run code-run-2 was not found")),
+        .mockRejectedValueOnce(new NotFoundError({ entity: "code mode run", id: "code-run-2" }))
+        .mockRejectedValueOnce(new Error("artifact store failed at an internal path")),
     });
 
     const refused = await app!.inject({
@@ -1145,13 +1146,17 @@ describe("capabilities routes", () => {
       url: "/api/v1/code-mode/runs/code-run-1/promote?workspaceId=workspace-1",
     });
     const missing = await app!.inject({ method: "POST", url: "/api/v1/code-mode/runs/code-run-2/promote" });
+    const unexpected = await app!.inject({ method: "POST", url: "/api/v1/code-mode/runs/code-run-3/promote" });
 
     expect(refused.statusCode).toBe(409);
     expect(refused.json()).toEqual({
       error: "Aider run is not pinned.",
       details: { reason: "not_pinned", runId: "code-run-1" },
     });
-    expect(missing.statusCode).toBe(400);
+    expect(missing.statusCode).toBe(404);
+    expect(unexpected.statusCode).toBe(500);
+    expect(unexpected.json()).toEqual({ error: "Internal server error" });
+    expect(unexpected.body).not.toContain("internal path");
     expect(service.requestCodeModeAiderPromotion).toHaveBeenNthCalledWith(
       1,
       "code-run-1",

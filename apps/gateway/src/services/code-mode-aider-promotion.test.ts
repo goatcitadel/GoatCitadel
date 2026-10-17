@@ -33,6 +33,7 @@ const INPUT_HASH = "a".repeat(64);
 const ORIGINAL = "export const value = 1;\n";
 const PROMOTED = "export const value = 2;\n";
 const GIT_TIMEOUT_MS = 60_000;
+const OVERSIZED_PATCH = "+".repeat(4 * 1024 * 1024 + 1);
 let fixtureCount = 0;
 // One migrated in-memory database for the file; every fixture uses its own session, project, run and temp root.
 let shared: { storage: Storage; asyncStorage: ReturnType<typeof createSqliteAsyncStorage>; dir: string } | undefined;
@@ -257,7 +258,7 @@ describe("Aider promotion", { timeout: 60_000 }, () => {
     expect(fx.readWorktreeFile()).toBe(PROMOTED);
   });
 
-  it("refuses a patch artifact above the workbench patch limit before recording an intent", async () => {
+  it("refuses a tampered oversized patch artifact by hash with a bounded error before recording an intent", async () => {
     const fx = await createFixture();
     const approvalId = await fx.requestAndApprove();
     fs.writeFileSync(path.resolve(fx.root, fx.patchArtifact.relPath), "+".repeat(4 * 1024 * 1024 + 1));
@@ -271,6 +272,34 @@ describe("Aider promotion", { timeout: 60_000 }, () => {
     expect(stored.error.length).toBeLessThanOrEqual(243);
     const refused = fx.publishRealtime.mock.calls.find((call) => call[0] === "code_mode_aider_promotion_refused");
     expect(refused?.[2]).toEqual({ runId: fx.runId, approvalId, reason: "patch_hash_mismatch" });
+  });
+
+  it("refuses to request promotion of a hash-consistent patch above the workbench patch limit", async () => {
+    const fx = await createFixture({ patchContent: OVERSIZED_PATCH });
+    expect(fx.patchArtifact.bytes).toBe(Buffer.byteLength(OVERSIZED_PATCH));
+    expect(fx.patchArtifact.sha256).toBe(sha256(OVERSIZED_PATCH));
+
+    const refusal = await requestCodeModeAiderPromotion(fx.deps, await fx.run(), "operator-1").then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(refusal).toBeInstanceOf(ConflictError);
+    expect((refusal as ConflictError).details).toMatchObject({ reason: "patch_too_large", runId: fx.runId });
+    expect(fx.createApproval).not.toHaveBeenCalled();
+  });
+
+  it("refuses to execute an approved hash-consistent patch above the workbench patch limit", async () => {
+    const fx = await createFixture({ patchContent: OVERSIZED_PATCH });
+    const approvalId = await fx.approveWithoutReading();
+
+    const result = await fx.execute(approvalId);
+
+    expect(result).toMatchObject({ outcome: "blocked", result: { reason: "patch_too_large" } });
+    expect(fx.apply).not.toHaveBeenCalled();
+    expect(await fx.promotion()).toBeUndefined();
+    const refused = fx.publishRealtime.mock.calls.find((call) => call[0] === "code_mode_aider_promotion_refused");
+    expect(refused?.[2]).toEqual({ runId: fx.runId, approvalId, reason: "patch_too_large" });
   });
 
   it("refuses when the approval is not an approved promote approval for the same patch hash", async () => {
@@ -343,6 +372,8 @@ interface FixtureOptions {
   pinned?: boolean;
   patch?: "applying" | "non_applying";
   crashAfterApply?: boolean;
+  /** Overrides the recorded patch bytes (persisted hash-consistently). */
+  patchContent?: string;
 }
 
 async function createFixture(options: FixtureOptions = {}) {
@@ -359,7 +390,8 @@ async function createFixture(options: FixtureOptions = {}) {
   git(worktree, ["add", "index.ts"]);
   git(worktree, ["commit", "-q", "-m", "initial"]);
   const patchContent =
-    options.patch === "non_applying" ? buildPatch(worktree, "export const missing = 0;\n") : buildPatch(worktree);
+    options.patchContent ??
+    (options.patch === "non_applying" ? buildPatch(worktree, "export const missing = 0;\n") : buildPatch(worktree));
 
   const { storage, asyncStorage } = sharedStorage();
   fixtureCount += 1;
@@ -504,6 +536,26 @@ async function createFixture(options: FixtureOptions = {}) {
       const response = await requestCodeModeAiderPromotion(deps, await run(), "operator-1");
       storage.approvals.resolve(response.approvalId!, { decision: "approve", resolvedBy: "operator-1" });
       return response.approvalId!;
+    },
+    /** Registers an approved promote approval bound to the recorded patch hash without reading the patch bytes. */
+    async approveWithoutReading(): Promise<string> {
+      const patchArtifact = bundle.patchArtifact!;
+      const payload = { runId, workspaceId: "workspace-a", patchSha256: patchArtifact.sha256 };
+      const approval = storage.approvals.create({
+        kind: CODE_MODE_AIDER_PROMOTE_ACTION_TYPE,
+        riskLevel: "caution",
+        payload,
+        preview: payload,
+        linkage: { workspaceId: "workspace-a", runId, actionType: CODE_MODE_AIDER_PROMOTE_ACTION_TYPE },
+      });
+      storage.pendingApprovalActions.upsertPending({
+        approvalId: approval.approvalId,
+        actionType: CODE_MODE_AIDER_PROMOTE_ACTION_TYPE,
+        request: { runId, patchSha256: patchArtifact.sha256, patchArtifactId: patchArtifact.artifactId },
+        createdAt: "2026-10-16T12:00:00.000Z",
+      });
+      storage.approvals.resolve(approval.approvalId, { decision: "approve", resolvedBy: "operator-1" });
+      return approval.approvalId;
     },
     async execute(approvalId: string) {
       return await executeApprovedCodeModeAiderPromotion(

@@ -1412,6 +1412,84 @@ describe("CapabilitySystemService", () => {
     );
   });
 
+  it("terminalizes a pinned Aider run on a deterministic workspace refusal before dispatch", async () => {
+    const harness = await createAiderPinExecutionHarness();
+    await initAiderPinWorktree(harness.rootDir);
+    const workbenchGet = attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      sessionId: "session-pin",
+      aider: { requestMarkdown: "Refactor this file." },
+    });
+    // The workbench was re-pointed at another project: the frozen pin identity can never match again.
+    workbenchGet.mockImplementation(async () => ({ ...readyAiderPinWorkbench(), projectId: "project-moved" }));
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        error: expect.stringContaining("worktree identity no longer matches its workspace pin"),
+      }),
+    });
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "failed",
+      executionRecovery: expect.objectContaining({ phase: "terminal" }),
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({ error: expect.stringContaining("worktree identity no longer matches") }),
+    );
+    expect(harness.publishRealtime).not.toHaveBeenCalledWith(
+      "code_mode_run_dispatch_deferred",
+      "capabilities",
+      expect.anything(),
+    );
+    expect(harness.publishRealtime).not.toHaveBeenCalledWith(
+      "code_mode_execution_boundary_crossed",
+      "capabilities",
+      expect.anything(),
+    );
+  });
+
+  it("defers a pinned Aider run on a transient workspace failure before dispatch", async () => {
+    const harness = await createAiderPinExecutionHarness();
+    await initAiderPinWorktree(harness.rootDir);
+    const workbenchGet = attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      sessionId: "session-pin",
+      aider: { requestMarkdown: "Refactor this file." },
+    });
+    // A workbench that is not ready yet can become ready again: the claim is released for a later retry.
+    workbenchGet.mockImplementation(async () => ({ ...readyAiderPinWorkbench(), worktreeStatus: "provisioning" }));
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toBeUndefined();
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "approval_pending",
+      executionRecovery: expect.objectContaining({ phase: "not_started", disposition: "retryable" }),
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).not.toHaveBeenCalledWith(
+      "approval-1",
+      expect.any(String),
+      expect.anything(),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_dispatch_deferred",
+      "capabilities",
+      expect.objectContaining({ runId: run.runId, status: "approval_pending" }),
+    );
+  });
+
   it("lists Code Mode execution backends without promoting Docker or Aider as callable", async () => {
     const harness = await createHarness({
       sandboxConfig: {
@@ -7225,6 +7303,25 @@ async function createAiderPinHarness() {
     sandboxConfig: { bestEffortHostEnabled: true },
     dockerBackend: { enabled: true, image: digestPinnedRunnerImage },
     aiderAdapter: { enabled: true, image: digestPinnedAiderImage },
+  });
+}
+
+/** Pin harness whose sandbox probe is stubbed available, so execution reaches the workspace seed on any host. */
+async function createAiderPinExecutionHarness() {
+  return await createHarness({
+    sandboxConfig: { bestEffortHostEnabled: true },
+    dockerBackend: { enabled: true, image: digestPinnedRunnerImage },
+    aiderAdapter: { enabled: true, image: digestPinnedAiderImage },
+    resolveSandboxMetadata: () => ({
+      runnerId: "goatcitadel.best-effort-host",
+      runnerVersion: "0.1.0",
+      platform: "win32",
+      isolationProfile: "best_effort_host/temp_only/no_network",
+      required: true,
+      available: true,
+      checksPassed: ["windows_appcontainer_present"],
+      checksFailed: [],
+    }),
   });
 }
 

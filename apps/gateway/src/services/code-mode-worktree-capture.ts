@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync, type ExecFileException } from "node:child_process";
 import { createHash } from "node:crypto";
 import type { AsyncStorage } from "@goatcitadel/storage";
 
@@ -50,11 +50,15 @@ export interface CodeModeGitRunOptions {
   maxBuffer?: number;
 }
 
+/**
+ * `asyncGit` runs the Git capture without blocking the event loop (same argv, env and hash formula). Verification
+ * keeps the default synchronous capture.
+ */
 export async function captureCodeModeWorkbenchWorktree(
   storage: Pick<AsyncStorage, "chatSessionWorkbench">,
   binding: { sessionId?: string; runId: string },
   timeoutMs: number,
-  options: { rootDir?: string } = {},
+  options: { rootDir?: string; asyncGit?: boolean } = {},
 ): Promise<CodeModeWorktreeCapture> {
   const fallbackIdentity = sha256(JSON.stringify({ sessionId: binding.sessionId ?? null, runId: binding.runId }));
   if (!binding.sessionId) {
@@ -77,7 +81,9 @@ export async function captureCodeModeWorkbenchWorktree(
         path: normalizePath(realWorktreePath),
       }),
     );
-    const state = captureCodeModeGitWorktreeState(realWorktreePath, timeoutMs);
+    const state = options.asyncGit
+      ? await captureCodeModeGitWorktreeStateAsync(realWorktreePath, timeoutMs)
+      : captureCodeModeGitWorktreeState(realWorktreePath, timeoutMs);
     return {
       identityHash,
       stateHash: state.stateHash,
@@ -108,17 +114,45 @@ export function captureCodeModeGitWorktreeState(
   timeoutMs: number,
   options: { statusExcludePaths?: readonly string[] } = {},
 ): CodeModeGitWorktreeState {
-  const headHash = runCodeModeGit(["rev-parse", "HEAD"], { cwd: worktreePath, timeoutMs }).trim();
-  const statusExcludes = (options.statusExcludePaths ?? []).map((entry) => `:(exclude,literal)${entry}`);
+  const commands = buildWorktreeStateCommands(options.statusExcludePaths);
+  const run = (args: string[]) => runCodeModeGit(args, { cwd: worktreePath, timeoutMs });
+  return deriveWorktreeState(worktreePath, run(commands.head).trim(), run(commands.status), run(commands.diff));
+}
+
+/** {@link captureCodeModeGitWorktreeState} on the asynchronous Git runner: identical commands, order and formula. */
+export async function captureCodeModeGitWorktreeStateAsync(
+  worktreePath: string,
+  timeoutMs: number,
+  options: { statusExcludePaths?: readonly string[] } = {},
+): Promise<CodeModeGitWorktreeState> {
+  const commands = buildWorktreeStateCommands(options.statusExcludePaths);
+  const run = async (args: string[]) => await runCodeModeGitAsync(args, { cwd: worktreePath, timeoutMs });
+  const headHash = (await run(commands.head)).trim();
+  const statusRaw = await run(commands.status);
+  const diffRaw = await run(commands.diff);
+  return deriveWorktreeState(worktreePath, headHash, statusRaw, diffRaw);
+}
+
+function buildWorktreeStateCommands(statusExcludePaths: readonly string[] | undefined): {
+  head: string[];
+  status: string[];
+  diff: string[];
+} {
+  const statusExcludes = (statusExcludePaths ?? []).map((entry) => `:(exclude,literal)${entry}`);
   const statusPathspec = statusExcludes.length > 0 ? ["--", ".", ...statusExcludes] : [];
-  const statusRaw = runCodeModeGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", ...statusPathspec], {
-    cwd: worktreePath,
-    timeoutMs,
-  });
-  const diffRaw = runCodeModeGit(
-    ["diff", "--no-ext-diff", "--no-textconv", "--binary", "--full-index", "HEAD", "--", "."],
-    { cwd: worktreePath, timeoutMs },
-  );
+  return {
+    head: ["rev-parse", "HEAD"],
+    status: ["status", "--porcelain=v1", "-z", "--untracked-files=all", ...statusPathspec],
+    diff: ["diff", "--no-ext-diff", "--no-textconv", "--binary", "--full-index", "HEAD", "--", "."],
+  };
+}
+
+function deriveWorktreeState(
+  worktreePath: string,
+  headHash: string,
+  statusRaw: string,
+  diffRaw: string,
+): CodeModeGitWorktreeState {
   const statusEntries = statusRaw.split("\0").filter(Boolean);
   const changedFiles = statusEntries
     .map((entry) => entry.slice(3).replaceAll("\\", "/"))
@@ -169,6 +203,57 @@ export function runCodeModeGitBuffer(args: string[], options: CodeModeGitRunOpti
     killSignal: "SIGKILL",
     env: buildSanitizedGitEnvironment(),
   });
+}
+
+/**
+ * Asynchronous {@link runCodeModeGit}: the same argv, hardening args, sanitized environment, `maxBuffer`, timeout
+ * with SIGKILL and `windowsHide`, without blocking the event loop. A `maxBuffer` overflow rejects with
+ * `code: "ENOBUFS"` and a timeout with `code: "ETIMEDOUT"`, as the synchronous runner does.
+ */
+export async function runCodeModeGitAsync(args: string[], options: CodeModeGitRunOptions): Promise<string> {
+  return (await runCodeModeGitBufferAsync(args, options)).toString("utf8");
+}
+
+/** Asynchronous {@link runCodeModeGitBuffer}; see {@link runCodeModeGitAsync}. */
+export async function runCodeModeGitBufferAsync(args: string[], options: CodeModeGitRunOptions): Promise<Buffer> {
+  const argv = [...resolveGitLocationArgs(options), ...CODE_MODE_GIT_HARDENING_ARGS, ...args];
+  return await new Promise<Buffer>((resolve, reject) => {
+    const child = execFile(
+      "git",
+      argv,
+      {
+        encoding: "buffer",
+        windowsHide: true,
+        maxBuffer: options.maxBuffer ?? MAX_GIT_CAPTURE_BYTES,
+        timeout: options.timeoutMs,
+        killSignal: "SIGKILL",
+        env: buildSanitizedGitEnvironment(),
+      },
+      (error, stdout) => {
+        if (error) {
+          reject(normalizeAsyncGitError(error));
+          return;
+        }
+        resolve(stdout);
+      },
+    );
+    // execFileSync gives the child an empty stdin; close the pipe so Git never waits on input.
+    child.stdin?.end();
+  });
+}
+
+function normalizeAsyncGitError(error: ExecFileException): Error {
+  if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+    return Object.assign(new Error(`Code Mode Git output exceeded maxBuffer: ${error.message}`, { cause: error }), {
+      code: "ENOBUFS",
+    });
+  }
+  if (error.killed && error.signal === "SIGKILL") {
+    return Object.assign(new Error(`Code Mode Git timed out: ${error.message}`, { cause: error }), {
+      code: "ETIMEDOUT",
+    });
+  }
+  return error;
 }
 
 const CODE_MODE_GIT_HARDENING_ARGS: readonly string[] = [

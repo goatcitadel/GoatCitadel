@@ -1,10 +1,10 @@
-import type { CodeModeAiderWorkspacePin } from "@goatcitadel/contracts";
+import { ConflictError, type CodeModeAiderWorkspacePin } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { parseCodeModeAiderWorkspacePin } from "./code-mode-aider-result-contract.js";
 import {
   CODE_MODE_GIT_CAPTURE_TIMEOUT_MS,
   captureCodeModeWorkbenchWorktree,
-  runCodeModeGit,
+  runCodeModeGitAsync,
 } from "./code-mode-worktree-capture.js";
 
 /**
@@ -27,6 +27,18 @@ export interface CodeModeAiderWorkspaceSeed {
 const MAX_GIT_CAPTURE_TIMEOUT_MS = 120_000;
 
 /**
+ * A deterministic pin or seed refusal: the frozen pin, the run binding or the pinned commit itself can never seed,
+ * so retrying the dispatch would repeat the same refusal. Execution rethrows it unchanged to terminalize the run.
+ * Transient failures (storage, Git processes, a workbench that is not ready yet) stay plain errors.
+ */
+export class CodeModeAiderWorkspaceRefusal extends ConflictError {
+  constructor(message: string) {
+    super({ message, details: { reason: "aider_workspace_refused" } });
+    this.name = "CodeModeAiderWorkspaceRefusal";
+  }
+}
+
+/**
  * Returns a pin only for a ready workbench whose worktree captures cleanly with no changed or untracked files.
  * Dirty, not-ready, outside-root or sessionless workbenches get no pin. Storage errors propagate.
  */
@@ -39,7 +51,7 @@ export async function captureCodeModeAiderWorkspacePin(
     deps.storage,
     binding,
     normalizeTimeout(options.gitCaptureTimeoutMs),
-    { rootDir: deps.rootDir },
+    { rootDir: deps.rootDir, asyncGit: true },
   );
   if (!capture.valid || !capture.headHash || capture.changedFiles.length !== 0 || capture.changedFilesTruncated) {
     return undefined;
@@ -65,16 +77,23 @@ export async function resolveCodeModeAiderWorkspaceSeed(
   run: { sessionId?: string; runId: string },
   options: { gitCaptureTimeoutMs?: number } = {},
 ): Promise<CodeModeAiderWorkspaceSeed> {
-  const parsedPin = parseCodeModeAiderWorkspacePin(pin);
+  let parsedPin: CodeModeAiderWorkspacePin;
+  try {
+    parsedPin = parseCodeModeAiderWorkspacePin(pin);
+  } catch (error) {
+    throw new CodeModeAiderWorkspaceRefusal(
+      `Aider run ${run.runId} workspace pin is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   if (!run.sessionId || run.sessionId !== parsedPin.sessionId) {
-    throw new Error(`Aider run ${run.runId} session does not match its workspace pin.`);
+    throw new CodeModeAiderWorkspaceRefusal(`Aider run ${run.runId} session does not match its workspace pin.`);
   }
   const timeoutMs = normalizeTimeout(options.gitCaptureTimeoutMs);
   const capture = await captureCodeModeWorkbenchWorktree(
     deps.storage,
     { sessionId: run.sessionId, runId: run.runId },
     timeoutMs,
-    { rootDir: deps.rootDir },
+    { rootDir: deps.rootDir, asyncGit: true },
   );
   if (!capture.valid || !capture.worktreePath) {
     throw new Error(
@@ -82,15 +101,23 @@ export async function resolveCodeModeAiderWorkspaceSeed(
     );
   }
   if (capture.identityHash !== parsedPin.worktreeIdentityHash) {
-    throw new Error(`Aider run ${run.runId} workbench worktree identity no longer matches its workspace pin.`);
+    // The identity binds session, project and worktree realpath: a re-pointed workbench is a different workspace.
+    throw new CodeModeAiderWorkspaceRefusal(
+      `Aider run ${run.runId} workbench worktree identity no longer matches its workspace pin.`,
+    );
   }
-  assertPinnedCommitPresent(capture.worktreePath, parsedPin.worktreeHead, timeoutMs, run.runId);
+  await assertPinnedCommitPresent(capture.worktreePath, parsedPin.worktreeHead, timeoutMs, run.runId);
   return { worktreePath: capture.worktreePath, baseCommit: parsedPin.worktreeHead, pin: parsedPin };
 }
 
-function assertPinnedCommitPresent(worktreePath: string, commit: string, timeoutMs: number, runId: string): void {
+async function assertPinnedCommitPresent(
+  worktreePath: string,
+  commit: string,
+  timeoutMs: number,
+  runId: string,
+): Promise<void> {
   try {
-    runCodeModeGit(["cat-file", "-e", `${commit}^{commit}`], { cwd: worktreePath, timeoutMs });
+    await runCodeModeGitAsync(["cat-file", "-e", `${commit}^{commit}`], { cwd: worktreePath, timeoutMs });
   } catch (error) {
     throw new Error(`Aider run ${runId} pinned commit is not available in the workbench worktree.`, { cause: error });
   }

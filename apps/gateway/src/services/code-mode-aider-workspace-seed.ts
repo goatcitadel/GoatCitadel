@@ -2,12 +2,12 @@ import { isUtf8 } from "node:buffer";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { CodeModeAiderWorkspaceSeed } from "./code-mode-aider-workspace-pin.js";
+import { CodeModeAiderWorkspaceRefusal, type CodeModeAiderWorkspaceSeed } from "./code-mode-aider-workspace-pin.js";
 import {
   CODE_MODE_GIT_CAPTURE_TIMEOUT_MS,
   CODE_MODE_WORKBENCH_PATCH_MAX_BYTES,
-  runCodeModeGit,
-  runCodeModeGitBuffer,
+  runCodeModeGitAsync,
+  runCodeModeGitBufferAsync,
 } from "./code-mode-worktree-capture.js";
 
 /**
@@ -26,6 +26,9 @@ import {
  * - The diff is captured as bytes and refused unless it is valid UTF-8.
  * - The patch is bounded by the Chat workbench patch limit, so any recorded patch fits the promote path.
  * The baseline is SHA-1 only: SHA-256 repositories are refused.
+ * Deterministic seed refusals (paths, commit id format, tracked-file bound, reserved paths) throw
+ * {@link CodeModeAiderWorkspaceRefusal} so execution terminalizes the run; Git process failures stay retryable.
+ * All Git runs use the asynchronous runner so a long checkout or diff never blocks the gateway event loop.
  *
  * Scope: the seed checks out every tracked file of the workbench repository at the pinned commit, so a pinned run's
  * container sees the whole repository, which can be wider than the session's project scope. Promotion narrows the
@@ -76,10 +79,10 @@ export async function seedCodeModeAiderWorkspace(input: {
   const pathspec = normalizeSeedRelPath(input.pathspec);
   const reservedRelPaths = input.reservedRelPaths.map(normalizeSeedRelPath);
 
-  const operatorObjectsDir = resolveOperatorObjectsDir(input.seed.worktreePath, timeoutMs);
+  const operatorObjectsDir = await resolveOperatorObjectsDir(input.seed.worktreePath, timeoutMs);
   await fs.mkdir(input.runTempRoot, { recursive: true });
   await fs.mkdir(baselineGitDir);
-  runCodeModeGit(["init", "--bare", "--quiet", "--template=", baselineGitDir], {
+  await runCodeModeGitAsync(["init", "--bare", "--quiet", "--template=", baselineGitDir], {
     cwd: input.runTempRoot,
     timeoutMs,
   });
@@ -87,21 +90,23 @@ export async function seedCodeModeAiderWorkspace(input: {
   await fs.writeFile(path.join(baselineGitDir, "objects", "info", "alternates"), `${operatorObjectsDir}\n`, "utf8");
 
   try {
-    runCodeModeGit(["cat-file", "-e", `${baseCommit}^{commit}`], { gitDir: baselineGitDir, timeoutMs });
+    await runCodeModeGitAsync(["cat-file", "-e", `${baseCommit}^{commit}`], { gitDir: baselineGitDir, timeoutMs });
   } catch (error) {
     throw new Error("Aider workspace seed pinned commit is not available in the operator repository.", {
       cause: error,
     });
   }
-  const tracked = runCodeModeGit(["ls-tree", "-r", "--name-only", "-z", baseCommit, "--", toTopPathspec(pathspec)], {
-    gitDir: baselineGitDir,
-    timeoutMs,
-    maxBuffer: SEED_LIST_MAX_BUFFER_BYTES,
-  })
+  const tracked = (
+    await runCodeModeGitAsync(["ls-tree", "-r", "--name-only", "-z", baseCommit, "--", toTopPathspec(pathspec)], {
+      gitDir: baselineGitDir,
+      timeoutMs,
+      maxBuffer: SEED_LIST_MAX_BUFFER_BYTES,
+    })
+  )
     .split("\0")
     .filter(Boolean);
   if (tracked.length > CODE_MODE_AIDER_SEED_MAX_FILES) {
-    throw new Error(
+    throw new CodeModeAiderWorkspaceRefusal(
       `Aider workspace seed refuses a pinned commit with more than ${CODE_MODE_AIDER_SEED_MAX_FILES} tracked files.`,
     );
   }
@@ -109,7 +114,7 @@ export async function seedCodeModeAiderWorkspace(input: {
 
   await fs.mkdir(input.workTreeRoot, { recursive: true });
   if (tracked.length > 0) {
-    runCodeModeGit(["checkout", "--quiet", baseCommit, "--", toTopPathspec(pathspec)], {
+    await runCodeModeGitAsync(["checkout", "--quiet", baseCommit, "--", toTopPathspec(pathspec)], {
       gitDir: baselineGitDir,
       workTree: input.workTreeRoot,
       timeoutMs,
@@ -136,17 +141,20 @@ export async function collectSeededCodeModeAiderPatch(
   const location = { gitDir: seeded.baselineGitDir, workTree: seeded.workTreeRoot };
   const pathspecs = [toTopPathspec(seeded.pathspec), ...seeded.excludePathspecs];
   await assertNoNestedGitEntries(seeded.workTreeRoot, seeded.pathspec);
-  runCodeModeGit(["add", "-A", "-f", "--", ...pathspecs], { ...location, timeoutMs });
+  await runCodeModeGitAsync(["add", "-A", "-f", "--", ...pathspecs], { ...location, timeoutMs });
   assertNoGitlinkOrSymlinkChanges(
-    runCodeModeGit(["diff", "--cached", "--raw", "-z", "--no-renames", seeded.baseCommit, "--", ...pathspecs], {
-      ...location,
-      timeoutMs,
-      maxBuffer: SEED_LIST_MAX_BUFFER_BYTES,
-    }),
+    await runCodeModeGitAsync(
+      ["diff", "--cached", "--raw", "-z", "--no-renames", seeded.baseCommit, "--", ...pathspecs],
+      {
+        ...location,
+        timeoutMs,
+        maxBuffer: SEED_LIST_MAX_BUFFER_BYTES,
+      },
+    ),
   );
   let raw: Buffer;
   try {
-    raw = runCodeModeGitBuffer(
+    raw = await runCodeModeGitBufferAsync(
       [
         "diff",
         "--cached",
@@ -184,11 +192,13 @@ export async function collectSeededCodeModeAiderPatch(
   };
 }
 
-function resolveOperatorObjectsDir(worktreePath: string, timeoutMs: number): string {
-  const commonDir = runCodeModeGit(["rev-parse", "--path-format=absolute", "--git-common-dir"], {
-    cwd: worktreePath,
-    timeoutMs,
-  }).trim();
+async function resolveOperatorObjectsDir(worktreePath: string, timeoutMs: number): Promise<string> {
+  const commonDir = (
+    await runCodeModeGitAsync(["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: worktreePath,
+      timeoutMs,
+    })
+  ).trim();
   if (!commonDir || !path.isAbsolute(commonDir)) {
     throw new Error("Aider workspace seed could not resolve the operator repository object store.");
   }
@@ -207,10 +217,12 @@ function buildExcludePathspecs(pathspec: string, reservedRelPaths: string[]): st
 
 function assertSeedableCommitId(value: string): string {
   if (SHA256_COMMIT_ID_PATTERN.test(value)) {
-    throw new Error("SHA-256 repositories are not supported for Aider seeding.");
+    throw new CodeModeAiderWorkspaceRefusal("SHA-256 repositories are not supported for Aider seeding.");
   }
   if (!SHA1_COMMIT_ID_PATTERN.test(value)) {
-    throw new Error("Aider workspace seed refuses a pinned commit that is not a full object id.");
+    throw new CodeModeAiderWorkspaceRefusal(
+      "Aider workspace seed refuses a pinned commit that is not a full object id.",
+    );
   }
   return value;
 }
@@ -274,7 +286,9 @@ function assertNoTrackedReservedPath(tracked: string[], reservedRelPaths: string
     const segments = reserved.split("/");
     for (let depth = 1; depth <= segments.length; depth += 1) {
       if (trackedSet.has(fold(segments.slice(0, depth).join("/")))) {
-        throw new Error(`Aider workspace seed refuses a pinned commit that tracks the reserved path ${reserved}.`);
+        throw new CodeModeAiderWorkspaceRefusal(
+          `Aider workspace seed refuses a pinned commit that tracks the reserved path ${reserved}.`,
+        );
       }
     }
   }
@@ -282,7 +296,9 @@ function assertNoTrackedReservedPath(tracked: string[], reservedRelPaths: string
 
 function assertDisjoint(baselineGitDir: string, workTreeRoot: string): void {
   if (isPathInside(baselineGitDir, workTreeRoot) || isPathInside(workTreeRoot, baselineGitDir)) {
-    throw new Error("Aider workspace seed refuses a baseline Git directory inside the work tree.");
+    throw new CodeModeAiderWorkspaceRefusal(
+      "Aider workspace seed refuses a baseline Git directory inside the work tree.",
+    );
   }
 }
 
@@ -304,7 +320,7 @@ function normalizeSeedRelPath(value: string): string {
     return ".";
   }
   if (path.posix.isAbsolute(normalized) || normalized.includes("\0") || normalized.split("/").includes("..")) {
-    throw new Error("Aider workspace seed paths must stay inside the run work tree.");
+    throw new CodeModeAiderWorkspaceRefusal("Aider workspace seed paths must stay inside the run work tree.");
   }
   return normalized;
 }

@@ -930,6 +930,30 @@ describe("chat workbench helpers", () => {
     expect(deps.publishRealtime).not.toHaveBeenCalled();
   }, 30_000);
 
+  it("guarded apply bounds a long git apply --check refusal message", async () => {
+    const { deps, projectRoot, rootDir } = await createGitWorkbenchFixture();
+    const { pin } = await preparePinnedWorkbenchPatch(deps, projectRoot, rootDir);
+    const failingPatch = Array.from({ length: 12 }, (_, index) => {
+      const filePath = `workspace/demo/${"missing-".repeat(10)}${index}.ts`;
+      return [
+        `diff --git a/${filePath} b/${filePath}`,
+        `--- a/${filePath}`,
+        `+++ b/${filePath}`,
+        "@@ -1,1 +1,1 @@",
+        "-missing line",
+        "+replacement line",
+      ].join("\n");
+    })
+      .join("\n")
+      .concat("\n");
+
+    const refusal = await expectPatchRefusal(
+      applyChatSessionWorkbenchPatch(deps, "sess-1", { patch: failingPatch, ...pin }),
+    );
+    expect(refusal.reason).toBe("check_failed");
+    expect(refusal.message.length).toBeLessThanOrEqual(243);
+  }, 30_000);
+
   it("guarded apply refuses an out-of-scope patch with a typed refusal", async () => {
     const { deps, projectRoot, rootDir } = await createGitWorkbenchFixture();
     const { pin, worktreePath } = await preparePinnedWorkbenchPatch(deps, projectRoot, rootDir);

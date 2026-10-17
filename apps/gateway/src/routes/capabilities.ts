@@ -771,7 +771,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       if (error instanceof ConflictError) {
         return reply.code(409).send({ error: error.message, details: error.details });
       }
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 

@@ -51,6 +51,7 @@ export type CodeModeAiderPromotionRefusalReason =
   | "pin_binding_mismatch"
   | "session_mismatch"
   | "patch_hash_mismatch"
+  | "patch_too_large"
   | "worktree_not_ready"
   | "worktree_identity_changed"
   | "worktree_head_moved"
@@ -370,6 +371,13 @@ function readVerifiedPatch(
   deps: CodeModeAiderPromotionDeps,
   artifact: PromotableRun["patchArtifact"]["artifact"],
 ): string {
+  // The recorded size is hash-bound evidence: a patch recorded above the workbench limit can never be applied.
+  if (artifact.bytes > MAX_PROMOTED_PATCH_BYTES) {
+    throw new PromotionRefusal(
+      "patch_too_large",
+      `Aider patch artifact is ${artifact.bytes} bytes; the workbench patch limit is ${MAX_PROMOTED_PATCH_BYTES} bytes.`,
+    );
+  }
   let bytes: Buffer;
   try {
     bytes = readContainedRegularFile(
@@ -397,7 +405,7 @@ async function assertWorktreeMatchesPin(deps: CodeModeAiderPromotionDeps, promot
     deps.storage,
     { sessionId: promotable.sessionId, runId: promotable.run.runId },
     deps.gitCaptureTimeoutMs ?? CODE_MODE_GIT_CAPTURE_TIMEOUT_MS,
-    { rootDir: deps.rootDir },
+    { rootDir: deps.rootDir, asyncGit: true },
   );
   if (!capture.valid) {
     throw new PromotionRefusal(

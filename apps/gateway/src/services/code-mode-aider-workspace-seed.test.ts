@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CodeModeAiderWorkspacePin } from "@goatcitadel/contracts";
-import type { CodeModeAiderWorkspaceSeed } from "./code-mode-aider-workspace-pin.js";
+import { CodeModeAiderWorkspaceRefusal, type CodeModeAiderWorkspaceSeed } from "./code-mode-aider-workspace-pin.js";
 import {
   CODE_MODE_AIDER_BASELINE_GIT_DIR,
   CODE_MODE_AIDER_SEED_MAX_FILES,
@@ -12,6 +12,14 @@ import {
   collectSeededCodeModeAiderPatch,
   seedCodeModeAiderWorkspace,
 } from "./code-mode-aider-workspace-seed.js";
+import {
+  captureCodeModeGitWorktreeState,
+  captureCodeModeGitWorktreeStateAsync,
+  runCodeModeGit,
+  runCodeModeGitAsync,
+  runCodeModeGitBuffer,
+  runCodeModeGitBufferAsync,
+} from "./code-mode-worktree-capture.js";
 
 const roots: string[] = [];
 const CAN_CREATE_SYMLINKS = probeSymlinkSupport();
@@ -144,6 +152,16 @@ describe("Aider workspace seed", () => {
         reservedRelPaths: [],
       }),
     ).rejects.toThrow(/pinned commit.*not available/iu);
+    // A missing commit may be a Git process failure: it stays a retryable plain error, not a terminal refusal.
+    await expect(
+      seedCodeModeAiderWorkspace({
+        seed: fixture.seed({ baseCommit: "e".repeat(40) }),
+        runTempRoot: path.join(fixture.root, "run-temp-3"),
+        workTreeRoot: path.join(fixture.root, "run-temp-3", "aider-live"),
+        pathspec: ".",
+        reservedRelPaths: [],
+      }).catch((error: unknown) => error instanceof CodeModeAiderWorkspaceRefusal),
+    ).resolves.toBe(false);
     await expect(
       seedCodeModeAiderWorkspace({
         seed: fixture.seed({ baseCommit: "--output=evil" }),
@@ -169,6 +187,9 @@ describe("Aider workspace seed", () => {
       }),
     ).rejects.toThrow(/reserved path aider\/request\.md/iu);
     expect(fs.readdirSync(fixture.workTreeRoot)).toEqual([]);
+    await expect(seedInFreshRunTemp(fixture, "run-temp-reserved")).rejects.toBeInstanceOf(
+      CodeModeAiderWorkspaceRefusal,
+    );
   });
 
   it("refuses to seed a pinned commit with more tracked files than the bound", async () => {
@@ -191,6 +212,9 @@ describe("Aider workspace seed", () => {
       }),
     ).rejects.toThrow(/more than 20000 tracked files/iu);
     expect(fs.readdirSync(fixture.workTreeRoot)).toEqual([]);
+    await expect(seedInFreshRunTemp(fixture, "run-temp-huge", { baseCommit: commit })).rejects.toBeInstanceOf(
+      CodeModeAiderWorkspaceRefusal,
+    );
   });
 
   it("refuses a seeded patch over the byte bound", async () => {
@@ -287,6 +311,9 @@ describe("Aider workspace seed", () => {
     await expect(seedDefault(fixture, { baseCommit: "a".repeat(64) })).rejects.toThrow(
       "SHA-256 repositories are not supported for Aider seeding.",
     );
+    await expect(seedDefault(fixture, { baseCommit: "a".repeat(64) })).rejects.toBeInstanceOf(
+      CodeModeAiderWorkspaceRefusal,
+    );
   });
 
   it.skipIf(process.platform !== "win32")(
@@ -296,6 +323,55 @@ describe("Aider workspace seed", () => {
       await expect(seedDefault(fixture)).rejects.toThrow(/reserved path aider\/request\.md/iu);
     },
   );
+});
+
+describe("Code Mode async Git runner", () => {
+  it("matches the synchronous runner's argv, hardening and output", async () => {
+    const fixture = createFixture({ "a.ts": "export {};\n" });
+    writeFile(fixture.repo, "a.ts", "export const changed = true;\n");
+    writeFile(fixture.repo, "untracked.txt", "untracked\n");
+    const options = { cwd: fixture.repo, timeoutMs: 15_000 };
+    const savedGitDir = process.env.GIT_DIR;
+    // The sanitized environment drops GIT_* variables for both runners, so a hostile GIT_DIR changes nothing.
+    process.env.GIT_DIR = path.join(fixture.root, "not-a-repo");
+    try {
+      for (const args of [
+        ["rev-parse", "HEAD"],
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      ]) {
+        expect(await runCodeModeGitAsync(args, options)).toBe(runCodeModeGit(args, options));
+      }
+      const diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--binary", "--full-index", "HEAD", "--", "."];
+      const asyncDiff = await runCodeModeGitBufferAsync(diffArgs, options);
+      expect(asyncDiff.equals(runCodeModeGitBuffer(diffArgs, options))).toBe(true);
+      // core.fsmonitor is forced off by the shared hardening args.
+      expect(await runCodeModeGitAsync(["config", "--get", "core.fsmonitor"], options)).toBe("false\n");
+      expect(await captureCodeModeGitWorktreeStateAsync(fixture.repo, 15_000)).toEqual(
+        captureCodeModeGitWorktreeState(fixture.repo, 15_000),
+      );
+    } finally {
+      if (savedGitDir === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = savedGitDir;
+    }
+  });
+
+  it("maps a maxBuffer overflow to ENOBUFS like the synchronous runner", async () => {
+    const fixture = createFixture({ "a.ts": "export {};\n" });
+    const options = { cwd: fixture.repo, timeoutMs: 15_000, maxBuffer: 8 };
+    expect(() => runCodeModeGitBuffer(["cat-file", "-p", "HEAD"], options)).toThrow(
+      expect.objectContaining({ code: "ENOBUFS" }),
+    );
+    await expect(runCodeModeGitBufferAsync(["cat-file", "-p", "HEAD"], options)).rejects.toMatchObject({
+      code: "ENOBUFS",
+    });
+  });
+
+  it("kills a Git process that outlives its timeout", async () => {
+    // Runs outside any fixture root: a shell alias's orphaned child can keep its cwd busy after Git is killed.
+    await expect(
+      runCodeModeGitAsync(["-c", "alias.stall=!sleep 2", "stall"], { cwd: os.tmpdir(), timeoutMs: 200 }),
+    ).rejects.toMatchObject({ code: "ETIMEDOUT" });
+  });
 });
 
 function probeSymlinkSupport(): boolean {
@@ -309,6 +385,21 @@ function probeSymlinkSupport(): boolean {
   } finally {
     fs.rmSync(probeRoot, { recursive: true, force: true });
   }
+}
+
+function seedInFreshRunTemp(
+  fixture: ReturnType<typeof createFixture>,
+  runTempName: string,
+  overrides: { baseCommit?: string } = {},
+) {
+  const runTempRoot = path.join(fixture.root, runTempName);
+  return seedCodeModeAiderWorkspace({
+    seed: fixture.seed(overrides),
+    runTempRoot,
+    workTreeRoot: path.join(runTempRoot, "aider-live"),
+    pathspec: ".",
+    reservedRelPaths: ["aider/request.md"],
+  });
 }
 
 function seedDefault(fixture: ReturnType<typeof createFixture>, overrides: { baseCommit?: string } = {}) {
