@@ -12,6 +12,8 @@ export const MAX_INLINE_FILE_DOWNLOAD_BYTES = resolvePositiveIntEnv(
 export const MAX_HTML_PREVIEW_BYTES = resolvePositiveIntEnv("GOATCITADEL_MAX_HTML_PREVIEW_BYTES", 1_000_000);
 export const MAX_WORKSPACE_FILE_LIST_DEPTH = resolvePositiveIntEnv("GOATCITADEL_MAX_FILE_LIST_DEPTH", 8);
 export const MAX_WORKSPACE_FILE_STAT_CALLS = resolvePositiveIntEnv("GOATCITADEL_MAX_FILE_LIST_STAT_CALLS", 10_000);
+/** Most files a paged listing scans before it filters, sorts and slices; a capped scan reports `complete: false`. */
+export const MAX_WORKSPACE_FILE_PAGE_SCAN = resolvePositiveIntEnv("GOATCITADEL_MAX_FILE_PAGE_SCAN", 5_000);
 export const DEFAULT_WORKSPACE_FILE_LIST_IGNORES = new Set([
   ".git",
   ".next",
@@ -59,12 +61,33 @@ export interface MemoryFileEntry {
   modifiedAt: string;
 }
 
+/** Optional search and continuation for a paged listing. Both are additive; plain listings ignore them. */
+export interface WorkspaceFilePageOptions {
+  /** Case-insensitive substring matched against each path relative to the listed folder. */
+  query?: string;
+  /** Opaque continuation from a previous page with the same folder and query. */
+  cursor?: string;
+}
+
+/**
+ * One page of a folder listing, newest first. Paths stay relative to the listed folder, as in a plain listing.
+ * `folders` names the folder's direct, non-ignored subfolders. `complete` is false when the scan stopped at a
+ * depth, stat or scan cap, so a search may have missed files.
+ */
+export interface WorkspaceFilePage {
+  items: MemoryFileEntry[];
+  folders: string[];
+  nextCursor?: string;
+  complete: boolean;
+}
+
 export const filesRouteMethods = [
   "createWorkspaceFileFromTemplate",
   "downloadWorkspaceFile",
   "listFileTemplates",
   "listWorkspaceFiles",
   "listWorkspacePathSuggestions",
+  "pageWorkspaceFiles",
   "uploadWorkspaceFile",
 ] as const;
 
@@ -129,14 +152,18 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
     return result;
   };
 
-  const listWorkspaceFiles = async (relativeDir = ".", maxItems = 1000): Promise<MemoryFileEntry[]> => {
+  const resolveListDir = (relativeDir: string): string => {
     const normalized = relativeDir === "." ? "." : normalizeRelativePath(relativeDir);
     const baseDir =
       normalized === "."
         ? path.resolve(deps.rootDir, deps.workspaceDir)
         : path.resolve(deps.rootDir, deps.workspaceDir, normalized);
-
     assertWritePathInJail(baseDir, deps.writeJailRoots);
+    return baseDir;
+  };
+
+  const listWorkspaceFiles = async (relativeDir = ".", maxItems = 1000): Promise<MemoryFileEntry[]> => {
+    const baseDir = resolveListDir(relativeDir);
 
     const out: MemoryFileEntry[] = [];
     await walkFiles(
@@ -151,6 +178,42 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
     );
     out.sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt));
     return out;
+  };
+
+  const pageWorkspaceFiles = async (
+    relativeDir = ".",
+    limit = 100,
+    options: WorkspaceFilePageOptions = {},
+  ): Promise<WorkspaceFilePage> => {
+    const offset = parseFilePageCursor(options.cursor);
+    const baseDir = resolveListDir(relativeDir);
+    const needle = options.query?.trim().toLowerCase() ?? "";
+    const scanned: MemoryFileEntry[] = [];
+    const state: WorkspaceFileWalkState = { statCalls: 0, truncated: false };
+    await walkFiles(baseDir, baseDir, scanned, MAX_WORKSPACE_FILE_PAGE_SCAN, state, 0);
+    const matches = (
+      needle ? scanned.filter((item) => item.relativePath.toLowerCase().includes(needle)) : scanned
+    ).sort(
+      (left, right) =>
+        Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt) ||
+        left.relativePath.localeCompare(right.relativePath),
+    );
+    const end = offset + limit;
+    const folders = await fs
+      .readdir(baseDir, { withFileTypes: true, encoding: "utf8" })
+      .then((entries) =>
+        entries
+          .filter((entry) => entry.isDirectory() && !DEFAULT_WORKSPACE_FILE_LIST_IGNORES.has(entry.name.toLowerCase()))
+          .map((entry) => entry.name)
+          .sort((left, right) => left.localeCompare(right)),
+      )
+      .catch((): string[] => []);
+    return {
+      items: matches.slice(offset, end),
+      folders,
+      ...(end < matches.length ? { nextCursor: String(end) } : {}),
+      complete: !state.truncated,
+    };
   };
 
   return {
@@ -212,6 +275,7 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
       }));
     },
     listWorkspaceFiles,
+    pageWorkspaceFiles,
     listWorkspacePathSuggestions: async (root = ".", limit = 150): Promise<string[]> => {
       const maxItems = Math.max(limit * 3, 200);
       const files = await listWorkspaceFiles(root, maxItems);
@@ -423,6 +487,16 @@ const FILE_TEMPLATES: FileTemplateRecord[] = [
 
 interface WorkspaceFileWalkState {
   statCalls: number;
+  /** Set when the walk stopped early at a depth, stat or item cap. */
+  truncated?: boolean;
+}
+
+function parseFilePageCursor(cursor: string | undefined): number {
+  if (cursor === undefined) return 0;
+  if (!/^\d{1,9}$/u.test(cursor)) {
+    throw new ValidationError({ message: "File list cursor is not valid. Start the listing again." });
+  }
+  return Number(cursor);
 }
 
 async function walkFiles(
@@ -437,6 +511,7 @@ async function walkFiles(
     return;
   }
   if (depth > MAX_WORKSPACE_FILE_LIST_DEPTH) {
+    state.truncated = true;
     return;
   }
 
@@ -449,6 +524,7 @@ async function walkFiles(
 
   for (const entry of entries) {
     if (out.length >= maxItems) {
+      state.truncated = true;
       return;
     }
 
@@ -465,6 +541,7 @@ async function walkFiles(
     }
 
     if (state.statCalls >= MAX_WORKSPACE_FILE_STAT_CALLS) {
+      state.truncated = true;
       return;
     }
     state.statCalls += 1;

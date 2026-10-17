@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import { useEffect, useRef, type FormEvent } from "react";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
@@ -49,6 +49,11 @@ export function WorkTaskCreate({
     onRecorded: (_task, submitted) => (editor.acceptSaved(empty, undefined, submitted) ? empty : undefined),
   });
   const { locked, uncertain, message } = control;
+  const titleField = useRef<HTMLInputElement>(null);
+  // WK-12: "New task" disables itself when the form opens, so focus moves to the form's first field, not <body>.
+  useEffect(() => {
+    titleField.current?.focus();
+  }, []);
   const edit: typeof editor.setValue = (update) => {
     control.invalidate();
     editor.setValue(update);
@@ -95,6 +100,7 @@ export function WorkTaskCreate({
         <label className="grid gap-1 text-sm text-fg-secondary">
           Title
           <input
+            ref={titleField}
             required
             maxLength={160}
             value={title}

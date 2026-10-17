@@ -208,6 +208,49 @@ describe("files route service limits", () => {
   });
 });
 
+describe("paged workspace file listing (LB-08)", () => {
+  const tempRoots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(tempRoots.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  });
+
+  it("searches the whole scanned folder, pages newest first with a cursor, and names direct subfolders", async () => {
+    const { createFilesRoutePort } = await import("./files-route-service.js");
+    const rootDir = await createTempWorkspace(tempRoots);
+    const workspace = path.join(rootDir, "workspace");
+    await fs.mkdir(path.join(workspace, "docs", "deep"), { recursive: true });
+    await fs.mkdir(path.join(workspace, "node_modules"), { recursive: true });
+    const files = ["docs/readme-1.md", "docs/deep/readme-2.md", "docs/other.md", "readme-3.md"];
+    for (const [index, file] of files.entries()) {
+      const full = path.join(workspace, file);
+      await fs.writeFile(full, file, "utf8");
+      const time = new Date(Date.UTC(2026, 0, 1 + index));
+      await fs.utimes(full, time, time);
+    }
+    const port = createPort(createFilesRoutePort, rootDir);
+
+    const first = await port.pageWorkspaceFiles(".", 2, { query: "README" });
+    expect(first.items.map((item: { relativePath: string }) => item.relativePath)).toEqual([
+      "readme-3.md",
+      "docs/deep/readme-2.md",
+    ]);
+    expect(first).toMatchObject({ folders: ["docs"], nextCursor: "2", complete: true });
+    const second = await port.pageWorkspaceFiles(".", 2, { query: "readme", cursor: first.nextCursor });
+    expect(second.items.map((item: { relativePath: string }) => item.relativePath)).toEqual(["docs/readme-1.md"]);
+    expect(second.nextCursor).toBeUndefined();
+
+    const folder = await port.pageWorkspaceFiles("docs", 10);
+    expect(folder.items.map((item: { relativePath: string }) => item.relativePath)).toEqual([
+      "other.md",
+      "deep/readme-2.md",
+      "readme-1.md",
+    ]);
+    expect(folder.folders).toEqual(["deep"]);
+    await expect(port.pageWorkspaceFiles(".", 2, { cursor: "-1" })).rejects.toMatchObject({ code: "FIELD_INVALID" });
+    await expect(port.pageWorkspaceFiles("../outside", 2)).rejects.toThrow();
+  }, 30_000);
+});
+
 async function createTempWorkspace(tempRoots: string[]): Promise<string> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-files-route-"));
   tempRoots.push(rootDir);

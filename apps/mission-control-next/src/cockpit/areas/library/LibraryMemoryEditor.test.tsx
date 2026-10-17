@@ -520,14 +520,22 @@ it("uses the real Library decision portal then replaces its pending decision rec
   __resetInboxApprovalAttemptsForTests();
 });
 
-it("captures reviewed TTL seconds in the governed patch", async () => {
+function setControl(element: HTMLInputElement | HTMLSelectElement, value: string) {
+  const prototype = element instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(element, value);
+  element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+}
+const labelled = <T extends HTMLElement>(label: string) =>
+  document.getElementById(
+    [...container.querySelectorAll("label")].find((item) => item.textContent === label)!.htmlFor,
+  ) as T;
+it("captures a custom expiry duration as reviewed TTL seconds in the governed patch (LB-11)", async () => {
   vi.mocked(patchMemoryItem).mockResolvedValue({ pendingApproval });
   await render();
-  const input = container.querySelector<HTMLInputElement>('input[type="number"]')!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "7200");
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  await act(async () => setControl(labelled<HTMLSelectElement>("Memory expiry"), "custom"));
+  await act(async () => setControl(labelled<HTMLInputElement>("Custom expiry amount"), "2"));
+  expect(labelled<HTMLSelectElement>("Custom expiry unit").value).toBe("hours");
+  expect(container.textContent).toContain("Expires 2 h after it is saved.");
   await click("Review memory changes");
   expect(document.querySelector('[aria-label="Proposed memory changes"]')?.textContent).toContain(
     "Requested expiry: 2 h",
@@ -540,15 +548,59 @@ it("captures reviewed TTL seconds in the governed patch", async () => {
     ttlOverrideSeconds: 7200,
   });
 });
-it("withholds an invalid TTL before the mutation owner", async () => {
+it("offers expiry presets instead of raw seconds (LB-11)", async () => {
   await render();
-  const input = container.querySelector<HTMLInputElement>('input[type="number"]')!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "-1");
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  const select = labelled<HTMLSelectElement>("Memory expiry");
+  expect([...select.options].map((option) => option.textContent)).toEqual([
+    "Use the default expiry",
+    "1 hour",
+    "1 day",
+    "7 days",
+    "30 days",
+    "Custom…",
+  ]);
+  expect(container.textContent).not.toContain("seconds");
+  await act(async () => setControl(select, "604800"));
+  await click("Review memory changes");
+  expect(document.querySelector('[aria-label="Proposed memory changes"]')?.textContent).toContain(
+    "Requested expiry: 7 d",
+  );
+});
+it("withholds an out-of-range expiry before the mutation owner", async () => {
+  await render();
+  await act(async () => setControl(labelled<HTMLSelectElement>("Memory expiry"), "custom"));
+  await act(async () => setControl(labelled<HTMLSelectElement>("Custom expiry unit"), "days"));
+  await act(async () => setControl(labelled<HTMLInputElement>("Custom expiry amount"), "400"));
+  expect(container.textContent).toContain("Choose an expiry between 1 minute and 365 days.");
   await click("Review memory changes");
   await click("Request edit approval");
   expect(patchMemoryItem).not.toHaveBeenCalled();
-  expect(document.body.textContent).toContain("TTL must be empty");
+  expect(document.body.textContent).toContain("Choose the default expiry or a duration between 1 minute and 365 days.");
+});
+it("says what a response without an approval means for each action (LB-11)", async () => {
+  vi.mocked(patchMemoryItem).mockResolvedValue({ pendingApproval: null } as never);
+  await render();
+  await click("Review memory changes");
+  await click("Request edit approval");
+  expect(document.body.textContent).toContain("No approval request came back for these changes");
+  expect(document.body.textContent).not.toContain("already forgotten");
+});
+it("summarises which fields each history event changed (LB-11)", async () => {
+  vi.mocked(fetchMemoryItemHistory).mockResolvedValue({
+    items: [
+      {
+        changeId: "c1",
+        itemId: "m-a",
+        changeType: "updated",
+        actorId: "operator",
+        createdAt: "2026-10-01T00:00:00.000Z",
+        payload: { approvalId: "approval-1", fieldCodes: ["content", "title", "ttlOverrideSeconds"] },
+      },
+    ],
+  });
+  await render();
+  await click("Memory history");
+  await vi.waitFor(() => expect(container.textContent).toContain("Changed: content, title and expiry."));
+  expect(container.textContent).toContain("Approved change");
+  expect(container.textContent).toContain("does not keep earlier text");
 });

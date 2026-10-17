@@ -172,7 +172,9 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
           />
         </Suspense>
       ) : null}
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       <Field label="Learning status">
         {(props) => (
           <select

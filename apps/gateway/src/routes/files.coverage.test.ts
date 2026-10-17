@@ -168,6 +168,35 @@ describe("files routes additional coverage", () => {
   });
 });
 
+describe("files list paging (LB-08)", () => {
+  it("keeps plain listings unchanged and pages only when query, cursor or paged is sent", async () => {
+    const page = { items: [{ relativePath: "a.md" }], folders: ["docs"], nextCursor: "1", complete: true };
+    const files = {
+      listWorkspaceFiles: vi.fn(async () => [{ relativePath: "a.md" }]),
+      pageWorkspaceFiles: vi.fn(async () => page),
+    };
+    const app = buildApp(files);
+    try {
+      const plain = await app.inject({ method: "GET", url: "/api/v1/files/list?dir=docs&limit=5" });
+      expect(plain.json()).toEqual({ items: [{ relativePath: "a.md" }] });
+      expect(files.pageWorkspaceFiles).not.toHaveBeenCalled();
+
+      const searched = await app.inject({ method: "GET", url: "/api/v1/files/list?dir=docs&limit=5&query=read" });
+      expect(searched.json()).toEqual(page);
+      expect(files.pageWorkspaceFiles).toHaveBeenLastCalledWith("docs", 5, { query: "read", cursor: undefined });
+
+      await app.inject({ method: "GET", url: "/api/v1/files/list?paged=1&cursor=5&limit=5" });
+      expect(files.pageWorkspaceFiles).toHaveBeenLastCalledWith(".", 5, { query: undefined, cursor: "5" });
+      expect(files.listWorkspaceFiles).toHaveBeenCalledTimes(1);
+
+      const tooLong = await app.inject({ method: "GET", url: `/api/v1/files/list?query=${"x".repeat(201)}` });
+      expect(tooLong.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 function buildApp(files: Record<string, unknown>): FastifyInstance {
   const next = Fastify();
   next.decorate("services", { files } as never);

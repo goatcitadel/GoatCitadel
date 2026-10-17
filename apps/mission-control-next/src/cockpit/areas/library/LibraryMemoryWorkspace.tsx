@@ -11,7 +11,13 @@ import { loadLibraryResources } from "./library-resources";
 import { LibraryMemoryEditor } from "./LibraryMemoryEditor";
 import { LibraryMemoryProposals } from "./LibraryMemoryProposals";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { memoryNamespaceLabel, memoryScopeLabel, presentMemoryLifecycle } from "./library-vocabulary";
+import {
+  KNOWN_MEMORY_NAMESPACES,
+  memoryNamespaceLabel,
+  memoryScopeLabel,
+  presentMemoryLifecycle,
+} from "./library-vocabulary";
+import { Sheet } from "../../ui/Sheet";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
@@ -28,7 +34,6 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
   const access = useLibraryOperation(JSON.stringify(["memory-directory", workspaceId, citadelId]));
   const route = useCockpitRoute();
   const [namespace, setNamespace] = useState("");
-  const [lifecycle, setLifecycle] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [diagnostics, setDiagnostics] = useState(false);
   const params = new URLSearchParams(route.search),
@@ -38,26 +43,37 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
     [status, setStatus] = useState("active");
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
   const list = useQuery({
-    queryKey: ["library", "memory", workspaceId, citadelId, query, status, cursors.at(-1), access.identity],
+    queryKey: ["library", "memory", workspaceId, citadelId, query, status, namespace, cursors.at(-1), access.identity],
     queryFn: () =>
-      loadLibraryResources({ kind: "memory", workspaceId, citadelId, query, status, cursor: cursors.at(-1) }),
+      loadLibraryResources({
+        kind: "memory",
+        workspaceId,
+        citadelId,
+        query,
+        status,
+        namespace,
+        cursor: cursors.at(-1),
+      }),
     staleTime: 0,
   });
-  const rows =
-    list.data?.items.filter(
-      (resource) =>
-        resource.kind === "memory" &&
-        (!namespace || resource.item.namespace === namespace) &&
-        (!lifecycle || resource.item.lifecycleState === lifecycle),
-    ) ?? [];
+  // Status and namespace are both filtered by the Gateway, so paging and counts match what is shown.
+  const rows = list.data?.items.filter((resource) => resource.kind === "memory") ?? [];
+  const namespaces = [
+    ...new Set([
+      ...KNOWN_MEMORY_NAMESPACES,
+      ...rows.flatMap((resource) => (resource.kind === "memory" ? [resource.item.namespace] : [])),
+      ...(namespace ? [namespace] : []),
+    ]),
+  ];
   const stalePage = Boolean(list.error && describeApiError(list.error).category === "conflict");
   function reloadDirectory() {
     if (cursors.length > 1) setCursors([undefined]);
     else void list.refetch();
   }
-  function select(id: string) {
+  function select(id?: string) {
     const next = new URLSearchParams(route.search);
-    next.set("itemId", id);
+    if (id) next.set("itemId", id);
+    else next.delete("itemId");
     next.delete("memoryItemId");
     next.set("shell", "cockpit");
     route.navigate(`/library/memory?${next}`);
@@ -65,7 +81,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
   const listed = list.data?.items.length ?? 0;
   // A first, unfiltered read with nothing in it is one empty state: no filters, bulk actions or paging to operate yet.
   const nothingRemembered = Boolean(
-    list.data && !listed && !list.isError && !query && status === "active" && cursors.length < 2,
+    list.data && !listed && !list.isError && !query && !namespace && status === "active" && cursors.length < 2,
   );
   const paged = cursors.length > 1 || Boolean(list.data?.nextCursor);
   return (
@@ -128,54 +144,32 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
                 >
                   <option value="active">Active</option>
                   <option value="forgotten">Forgotten</option>
-                  <option value="all">All statuses</option>
+                  <option value="all">All statuses, including expired</option>
+                </select>
+              )}
+            </Field>
+            <Field label="Memory namespace">
+              {(props) => (
+                <select
+                  {...props}
+                  className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
+                  value={namespace}
+                  onChange={(event) => {
+                    setNamespace(event.target.value);
+                    setCursors([undefined]);
+                  }}
+                >
+                  <option value="">All namespaces</option>
+                  {namespaces.map((value) => (
+                    <option key={value} value={value}>
+                      {memoryNamespaceLabel(value)}
+                    </option>
+                  ))}
                 </select>
               )}
             </Field>
             <Button type="submit">Apply memory filter</Button>
           </form>
-          {listed ? (
-            <div className="flex min-w-0 flex-wrap items-end gap-2">
-              <Field label="Memory namespace on this page">
-                {(props) => (
-                  <select
-                    {...props}
-                    className="min-h-11 min-w-0 w-full max-w-full rounded-md border border-line bg-canvas p-2"
-                    value={namespace}
-                    onChange={(event) => setNamespace(event.target.value)}
-                  >
-                    <option value="">All namespaces</option>
-                    {[
-                      ...new Set(
-                        list.data?.items.flatMap((resource) =>
-                          resource.kind === "memory" ? [resource.item.namespace] : [],
-                        ) ?? [],
-                      ),
-                    ].map((value) => (
-                      <option key={value} value={value}>
-                        {memoryNamespaceLabel(value)}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </Field>
-              <Field label="Memory lifecycle on this page">
-                {(props) => (
-                  <select
-                    {...props}
-                    className="min-h-11 min-w-0 w-full max-w-full rounded-md border border-line bg-canvas p-2"
-                    value={lifecycle}
-                    onChange={(event) => setLifecycle(event.target.value)}
-                  >
-                    <option value="">All lifecycle states</option>
-                    <option value="active">Active</option>
-                    <option value="expired">Expired</option>
-                    <option value="forgotten">Forgotten</option>
-                  </select>
-                )}
-              </Field>
-            </div>
-          ) : null}
           {rows.length || selected.length ? (
             <LibraryMemoryBatch
               key={access.identity}
@@ -198,9 +192,19 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
             : describeApiError(list.error).summary}
         </Callout>
       ) : null}
-      {itemId ? (
-        <LibraryMemoryEditor key={`${workspaceId}:${itemId}`} itemId={itemId} workspaceId={workspaceId} />
-      ) : null}
+      <Sheet
+        open={Boolean(itemId)}
+        onOpenChange={(open) => {
+          if (!open) select();
+        }}
+        title="Memory item"
+        closeLabel="Close memory item"
+        sideOnDesktop
+      >
+        {itemId ? (
+          <LibraryMemoryEditor key={`${workspaceId}:${itemId}`} itemId={itemId} workspaceId={workspaceId} />
+        ) : null}
+      </Sheet>
       {nothingRemembered ? null : <p className="text-sm text-fg-muted">{list.data?.coverage}</p>}
       <ul className="min-w-0 divide-y divide-line-subtle">
         {rows.map((resource) =>

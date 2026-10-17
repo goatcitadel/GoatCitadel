@@ -123,7 +123,9 @@ export function LibraryMemoryBatch({
           Clear memory selection
         </Button>
       </div>
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       {error ? <Callout tone="error">{error}</Callout> : null}
       <Dialog
         open={Boolean(review)}

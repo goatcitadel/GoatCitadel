@@ -8,15 +8,16 @@ import { WorkSchedules } from "./WorkSchedules";
 import { WorkTaskDetail } from "./WorkTaskDetail";
 import { WorkKanban, WorkArchive } from "./WorkKanban";
 import { WorkAutomation } from "./WorkAutomation";
+import { OLDER_KANBAN_VIEW } from "./WorkMoreViews";
 
 const VIEWS = [
   { id: "board", label: "Board", href: "/work" },
   { id: "history", label: "History", href: "/work/history" },
   { id: "schedules", label: "Schedules", href: "/work/schedules" },
-  { id: "kanban", label: "Classic Kanban", href: "/work/kanban" },
   { id: "archive", label: "Archived tasks", href: "/work/archive" },
   { id: "automation", label: "Automation designer", href: "/work/automation" },
 ] as const;
+const ROUTED_VIEWS: readonly string[] = [...VIEWS.map((item) => item.id), OLDER_KANBAN_VIEW.id];
 
 export function WorkArea() {
   const { rest, navigate } = useCockpitRoute();
@@ -34,10 +35,12 @@ export function WorkArea() {
       return <EmptyState title="Run link unavailable" description="This run link could not be read." />;
     }
   }
-  const view = rest[0] && VIEWS.some((item) => item.id === rest[0]) ? rest[0] : "board";
+  const view = rest[0] && ROUTED_VIEWS.includes(rest[0]) ? rest[0] : "board";
+  // WK-01: the older Kanban opens from the Board's "More" menu; while it is open its tab names the current page.
+  const tabs = view === OLDER_KANBAN_VIEW.id ? [...VIEWS, OLDER_KANBAN_VIEW] : VIEWS;
   // Each view draws these tabs in its own AreaHeader, under its title, in every load state.
   return (
-    <AreaTabsProvider label="Work views" tabs={VIEWS} current={view} navigate={(href) => navigate(href)}>
+    <AreaTabsProvider label="Work views" tabs={tabs} current={view} navigate={(href) => navigate(href)}>
       {view === "history" ? (
         <WorkHistory />
       ) : view === "schedules" ? (

@@ -177,3 +177,25 @@ describe("Work task detail", () => {
     expect(updateTask).not.toHaveBeenCalled();
   });
 });
+
+describe("WK-10 task activity count", () => {
+  it("says how much activity is shown and offers the rest", async () => {
+    vi.mocked(fetchTask).mockResolvedValue(task());
+    vi.mocked(fetchTaskActivities).mockResolvedValue({
+      items: Array.from({ length: 25 }, (_, index) => ({
+        activityId: `activity-${index}`,
+        taskId: "task-a",
+        activityType: "comment",
+        message: `Note ${index}`,
+        createdAt: "2026-09-29T01:00:00.000Z",
+      })),
+    } as never);
+    await render();
+    await vi.waitFor(() => expect(container.textContent).toContain("Showing the latest 20 of 25 activities."));
+    expect(container.textContent).not.toContain("Note 24");
+    const toggle = [...container.querySelectorAll("button")].find((item) => item.textContent === "Show all 25")!;
+    await act(async () => toggle.click());
+    expect(container.textContent).toContain("Note 24");
+    expect(container.textContent).toContain("Showing all 25 activities.");
+  });
+});

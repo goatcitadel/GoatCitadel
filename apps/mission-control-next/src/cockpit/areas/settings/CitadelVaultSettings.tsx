@@ -7,6 +7,7 @@ import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
 import { TimeText } from "../../ui/TimeText";
+import { RevealedSecret, SecretValueInput } from "./CitadelVaultSecretControls";
 
 const inputClass =
   "mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 py-2 text-sm text-fg";
@@ -150,17 +151,10 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
               onChange={(event) => editor.setDraft((value) => ({ ...value, name: event.target.value }))}
             />
           </label>
-          <label htmlFor={`${id}-value`} className="block text-sm text-fg-secondary">
-            Secret value
-            <input
-              id={`${id}-value`}
-              type="password"
-              className={inputClass}
-              value={editor.draft.value}
-              autoComplete="new-password"
-              onChange={(event) => editor.setDraft((value) => ({ ...value, value: event.target.value }))}
-            />
-          </label>
+          <SecretValueInput
+            value={editor.draft.value}
+            onChange={(event) => editor.setDraft((value) => ({ ...value, value: event.target.value }))}
+          />
           <p className="text-xs text-fg-muted">
             The value is sent only to the Vault when you seal and store. Replacing an existing name requires
             confirmation.
@@ -222,9 +216,11 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
               </Button>
             </div>
             {editor.revealed[selectedSecret.secretId] !== undefined ? (
-              <code className="block whitespace-pre-wrap break-all rounded-md bg-sunken p-3 font-mono text-sm text-fg">
-                {editor.revealed[selectedSecret.secretId]}
-              </code>
+              <RevealedSecret
+                key={selectedSecret.secretId}
+                value={editor.revealed[selectedSecret.secretId] ?? ""}
+                onHide={editor.clearReveals}
+              />
             ) : null}
             {editor.revealErrors[selectedSecret.secretId] ? (
               <p role="alert" className="text-sm text-status-failed">

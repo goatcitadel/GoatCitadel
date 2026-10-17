@@ -31,6 +31,7 @@ import { RunLineage } from "./RunLineage";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { EVIDENCE_STATE_WORDS, RUN_ERROR_SOURCES } from "./work-vocabulary";
+import { ListLimitFooter, useListLimit } from "./WorkListLimit";
 
 export function WorkRunDetail({ runId }: { runId: string }) {
   const { navigate, search, hash } = useCockpitRoute();
@@ -52,6 +53,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
       ? formatMoney(recordedCost, { atLeast: true })
       : "Unknown";
   const ownerScope = JSON.stringify([workspaceId, runId]);
+  const history = useListLimit(data?.durable?.timeline?.items ?? [], 12, "end");
   const runContextParams = new URLSearchParams(search);
   runContextParams.set("workspaceId", workspaceId);
   runContextParams.set("runId", runId);
@@ -170,17 +172,20 @@ export function WorkRunDetail({ runId }: { runId: string }) {
             <h2 className="text-base font-semibold text-fg">Run history</h2>
             {data.durable.timeline.state === "available" ? (
               data.durable.timeline.items.length > 0 ? (
-                <ol className="mt-3 grid gap-2">
-                  {data.durable.timeline.items.slice(-12).map((event) => (
-                    <li
-                      key={event.eventId}
-                      className="flex justify-between gap-3 border-b border-line-subtle py-2 text-sm"
-                    >
-                      <span className="text-fg">{presentEventType(event.eventType)}</span>
-                      <TimeText value={event.createdAt} className="shrink-0 text-xs text-fg-muted" />
-                    </li>
-                  ))}
-                </ol>
+                <>
+                  <ol className="mt-3 grid gap-2">
+                    {history.visible.map((event) => (
+                      <li
+                        key={event.eventId}
+                        className="flex justify-between gap-3 border-b border-line-subtle py-2 text-sm"
+                      >
+                        <span className="text-fg">{presentEventType(event.eventType)}</span>
+                        <TimeText value={event.createdAt} className="shrink-0 text-xs text-fg-muted" />
+                      </li>
+                    ))}
+                  </ol>
+                  <ListLimitFooter limit={history} noun="event" nounPlural="events" latest />
+                </>
               ) : (
                 <p className="mt-2 text-sm text-fg-muted">No timeline events were returned.</p>
               )

@@ -87,4 +87,73 @@ describe("cockpit Spend", () => {
       window.history.replaceState(null, "", originalHref);
     }
   });
+
+  it("shows missing tokens as a lower bound and draws no-usage and unknown days as dashed, unscaled bars (SY-02)", async () => {
+    const partialTokens = {
+      inputTokensComplete: false,
+      outputTokensComplete: true,
+      cachedInputTokensComplete: true,
+      costUsdComplete: false,
+    };
+    const complete = { ...partialTokens, inputTokensComplete: true, costUsdComplete: true };
+    api.fetchModelUsageEvents.mockResolvedValue({ items: [], summary: { attemptCount: 0, uncertainDispatchCount: 0 } });
+    api.fetchCostSummary.mockResolvedValue({
+      scope: "day",
+      from: "2026-09-26T00:00:00.000Z",
+      to: "2026-09-28T00:00:00.000Z",
+      items: [
+        { key: "2026-09-27", tokenTotal: 0, costUsd: 0, metricAvailability: partialTokens },
+        { key: "2026-09-28", tokenTotal: 500, costUsd: 2, metricAvailability: complete },
+      ],
+      dailySeries: [
+        { isoDate: "2026-09-26", costUsd: 0, segments: [], metricAvailability: complete },
+        {
+          isoDate: "2026-09-27",
+          costUsd: 0,
+          segments: [{ providerKey: "beta", label: "Beta", costUsd: 0 }],
+          metricAvailability: partialTokens,
+        },
+        {
+          isoDate: "2026-09-28",
+          costUsd: 2,
+          segments: [{ providerKey: "alpha", label: "Alpha", costUsd: 2 }],
+          metricAvailability: complete,
+        },
+      ],
+    });
+    api.fetchSettings.mockResolvedValue({ budgetMode: "balanced" });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    try {
+      await act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <SpendOverview />
+          </QueryClientProvider>,
+        ),
+      );
+      await vi.waitFor(() => expect(container.textContent).toContain("Recorded tokens"));
+      expect(container.textContent).toContain("at least 500");
+      expect(container.textContent).not.toContain("Recorded tokens0");
+      expect(container.textContent).toContain("Token counts are missing or partial for 1 day");
+      const states = [...container.querySelectorAll("li[data-day-state]")].map((item) =>
+        item.getAttribute("data-day-state"),
+      );
+      expect(states).toEqual(["no_data", "unknown", "exact"]);
+      const noData = container.querySelector('li[data-day-state="no_data"]')!;
+      expect(noData.textContent).toContain("No usage");
+      expect(noData.textContent).toContain("no usage recorded");
+      expect(noData.querySelector(".border-dashed")).not.toBeNull();
+      expect(noData.querySelector(".bg-accent")).toBeNull();
+      expect(container.querySelector('li[data-day-state="unknown"]')!.textContent).toContain("Unknown");
+      expect(container.textContent).toContain("highest day $2.00");
+      expect(container.textContent).toContain("2 days without a known amount");
+    } finally {
+      act(() => root.unmount());
+      client.clear();
+      container.remove();
+    }
+  });
 });

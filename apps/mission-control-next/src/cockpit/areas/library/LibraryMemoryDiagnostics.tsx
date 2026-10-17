@@ -117,7 +117,9 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
         ))}
       {receipt ? <Callout>{receipt}</Callout> : null}
       {error ? <Callout tone="error">{error}</Callout> : null}
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       {view === "quality" ? (
         <MemoryQualityView
           workspaceId={workspaceId}

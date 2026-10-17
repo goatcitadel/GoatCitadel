@@ -14,6 +14,14 @@ vi.mock("./WorkTaskBulkActions", () => ({
     <p data-testid="bulk-targets">{selected.map((task) => task.taskId).join(",") || "none"}</p>
   ),
 }));
+// The create owner is covered by its own tests (it focuses its Title field); here it only offers Close.
+vi.mock("./WorkTaskCreate", () => ({
+  WorkTaskCreate: ({ onClose }: { onClose: () => void }) => (
+    <button type="button" onClick={onClose}>
+      Close new task
+    </button>
+  ),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({ fetchDurableRunHistory: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/tasks", () => ({ fetchTasks: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
@@ -161,5 +169,61 @@ describe("Work board on narrow widths", () => {
     expect(container.querySelector('[aria-label="Board column"]')).toBeNull();
     for (const title of ["Active", "Needs attention", "Failed runs", "Done"])
       expect(container.querySelector(`section[aria-label="${title}"]`)).not.toBeNull();
+  });
+});
+
+describe("WK-06 Work board counts", () => {
+  const countOf = (title: string) =>
+    container.querySelector(`section[aria-label="${title}"]`)!.querySelector("h2 + span")!.textContent;
+
+  it("counts what the filters leave and says when the Done list is capped", async () => {
+    vi.mocked(fetchTasks).mockResolvedValue({
+      items: [
+        task("a", "Outline release"),
+        task("b", "Draft notes"),
+        ...Array.from({ length: 30 }, (_, index) => ({ ...task(`d${index}`, `Shipped ${index}`), status: "done" })),
+      ],
+    } as never);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <WorkBoard />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(countOf("Active")).toBe("2 tasks · 0 runs"));
+    expect(countOf("Done")).toBe("25 of 30 tasks shown · 0 runs");
+
+    await setValue("Search loaded work", "notes");
+    expect(countOf("Active")).toBe("1 matching task · 0 matching runs");
+    expect(countOf("Done")).toBe("0 matching tasks · 0 matching runs");
+    expect(container.querySelector('section[aria-label="Done"]')!.textContent).toContain(
+      "Nothing here matches the filter.",
+    );
+
+    await setValue("Search loaded work", "");
+    await setValue("Record type", "run");
+    expect(countOf("Active")).toBe("0 runs");
+  });
+});
+
+describe("WK-12 New task focus", () => {
+  it("returns focus to New task when the form closes", async () => {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <WorkBoard />
+        </QueryClientProvider>,
+      ),
+    );
+    const newTask = () =>
+      [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "New task")!;
+    await vi.waitFor(() => expect(newTask().disabled).toBe(false));
+    await act(async () => newTask().click());
+    const close = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Close new task",
+    )!;
+    await act(async () => close.click());
+    expect(document.activeElement).toBe(newTask());
   });
 });

@@ -30,7 +30,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
   fetchChatGeneratedArtifact: api.artifact,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/operators-agents-files", () => ({
-  fetchFilesList: api.files,
+  fetchFilesPage: api.files,
   downloadFile: api.file,
 }));
 const query: ResourceQuery = {
@@ -151,9 +151,11 @@ describe("scoped native Library owner reads", () => {
   it("never labels installation files as workspace-owned or sends ignored scope parameters", async () => {
     api.files.mockResolvedValue({
       items: [{ relativePath: "notes/test.md", size: 3, modifiedAt: "now" }],
+      folders: ["notes"],
+      complete: true,
     });
     const page = await loadLibraryResources({ ...query, kind: "files" });
-    expect(api.files).toHaveBeenCalledExactlyOnceWith(".", 100);
+    expect(api.files).toHaveBeenCalledExactlyOnceWith({ dir: ".", limit: 100, query: "" });
     expect(page.coverage).toContain("shared across workspaces");
     expect(resourceDescription(page.items[0]!)).toBe("In notes · 3 B · Installation shared files");
     expect(resourceTitle(page.items[0]!)).toBe("test.md");
@@ -173,7 +175,7 @@ describe("scoped native Library owner reads", () => {
       limit: 100,
     });
     expect(page.items.map(resourceId)).toEqual(["artifact"]);
-    expect(page.coverage).toContain("Older records may not be shown");
+    expect(page.coverage).toContain("Records without this workspace binding were withheld");
   });
 });
 
@@ -195,13 +197,15 @@ describe("explicit bounded Library previews", () => {
     );
     expect(api.file).toHaveBeenCalledExactlyOnceWith("notes/test.md");
   });
-  it("never downloads a known oversized file and refuses binary content", async () => {
+  it("never downloads a known oversized file and offers binary content as a download, not an error (LB-10)", async () => {
     const item = {
       relativePath: "large.txt",
       size: RESOURCE_PREVIEW_BYTES + 1,
       modifiedAt: "now",
     };
-    await expect(readLibraryResource({ kind: "files", item }, "mine", "personal")).rejects.toThrow("128 KiB");
+    await expect(readLibraryResource({ kind: "files", item }, "mine", "personal")).resolves.toEqual({
+      unavailable: expect.stringContaining("Preview not available"),
+    });
     expect(api.file).not.toHaveBeenCalled();
     api.file.mockResolvedValue({
       ...item,
@@ -211,7 +215,7 @@ describe("explicit bounded Library previews", () => {
     });
     await expect(
       readLibraryResource({ kind: "files", item: { ...item, size: 4 } }, "mine", "personal"),
-    ).rejects.toThrow("plain text");
+    ).resolves.toEqual({ unavailable: expect.stringContaining("Download it") });
   });
   it("uses exact artifact identity and scope, retains redaction truth, and refuses a changed version", async () => {
     const item = artifact();
@@ -296,8 +300,8 @@ it("preserves historical source filtering without normalizing records through an
     citadelId: "personal",
     limit: 100,
   });
-  expect(page.coverage).toContain("filtering applies to this returned window");
-  expect(page.coverage).toContain("Older records may not be shown");
+  expect(page.coverage).toContain("cover the 4 most recent artifacts loaded");
+  expect(page.coverage).toContain("There are no older artifacts");
 });
 it.each(["session", "turn", "project", "hash"] as const)(
   "finds artifact %s provenance within the scoped returned window",
@@ -324,3 +328,58 @@ it.each(["session", "turn", "project", "hash"] as const)(
     expect(page.items.map(resourceId)).toEqual(["artifact"]);
   },
 );
+
+describe("paged shared files and artifact windows (LB-08)", () => {
+  it("lists a folder through the Gateway search and keeps paths relative to the shared root", async () => {
+    api.files.mockResolvedValue({
+      items: [{ relativePath: "deep/readme.md", size: 3, modifiedAt: "now" }],
+      folders: ["deep"],
+      nextCursor: "50",
+      complete: false,
+    });
+    const page = await loadLibraryResources({ ...query, kind: "files", dir: "docs", limit: 50, query: "read" });
+    expect(api.files).toHaveBeenCalledExactlyOnceWith({ dir: "docs", limit: 50, query: "read" });
+    expect(resourceId(page.items[0]!)).toBe("docs/deep/readme.md");
+    expect(page).toMatchObject({ folders: ["deep"], hasMore: true });
+    expect(page.coverage).toContain("1 newest matching files in docs and its subfolders");
+    expect(page.coverage).toContain("some files may be missing");
+  });
+  it("grows the artifact window for Load more and says when the owner's maximum is reached", async () => {
+    api.artifacts.mockResolvedValue({
+      items: Array.from({ length: 200 }, (_, index) => ({ ...artifact(), artifactId: `a${index}` })),
+    });
+    const page = await loadLibraryResources({ ...query, kind: "artifacts", limit: 200 });
+    expect(api.artifacts).toHaveBeenCalledWith(expect.objectContaining({ limit: 200 }));
+    expect(page.hasMore).toBe(true);
+    expect(page.coverage).toContain("load more to include them");
+    api.artifacts.mockResolvedValue({
+      items: Array.from({ length: 1000 }, (_, index) => ({ ...artifact(), artifactId: `b${index}` })),
+    });
+    const capped = await loadLibraryResources({ ...query, kind: "artifacts", limit: 5000 });
+    expect(api.artifacts).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 1000 }));
+    expect(capped.hasMore).toBe(false);
+    expect(capped.coverage).toContain("older ones are not shown");
+  });
+  it("forwards a memory namespace to the Gateway only when one is chosen (LB-12)", async () => {
+    api.memory.mockResolvedValue({ items: [], total: 0 });
+    await loadLibraryResources({ ...query, namespace: "facts" });
+    expect(api.memory).toHaveBeenLastCalledWith(expect.objectContaining({ namespace: "facts" }));
+    await loadLibraryResources(query);
+    expect(api.memory.mock.lastCall?.[0]).not.toHaveProperty("namespace");
+  });
+});
+
+describe("inline image previews (LB-10)", () => {
+  it("previews a raster image inline and never inlines SVG", async () => {
+    const item = { relativePath: "pics/logo.png", size: 3, modifiedAt: "now" };
+    api.file.mockResolvedValue({ ...item, contentType: "image/png", encoding: "base64", content: btoa("abc") });
+    const preview = await readLibraryResource({ kind: "files", item }, "mine", "personal");
+    expect(preview.image).toBeInstanceOf(Blob);
+    expect(preview.image?.type).toBe("image/png");
+    const svg = { relativePath: "pics/logo.svg", size: 3, modifiedAt: "now" };
+    api.file.mockResolvedValue({ ...svg, contentType: "image/svg+xml", encoding: "base64", content: btoa("abc") });
+    await expect(readLibraryResource({ kind: "files", item: svg }, "mine", "personal")).resolves.toEqual({
+      unavailable: expect.stringContaining("Preview not available"),
+    });
+  });
+});

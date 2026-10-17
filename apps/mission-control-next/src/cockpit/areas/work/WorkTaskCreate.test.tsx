@@ -113,6 +113,11 @@ async function click(label: string): Promise<void> {
 }
 
 describe("cockpit task creation", () => {
+  it("WK-12: moves focus to the Title field when the form opens", async () => {
+    await render();
+    expect(document.activeElement).toBe(container.querySelector('input[maxlength="160"]'));
+  });
+
   it("creates directly through the guarded owner in the selected workspace", async () => {
     vi.mocked(createTask).mockResolvedValue(task());
     await render();

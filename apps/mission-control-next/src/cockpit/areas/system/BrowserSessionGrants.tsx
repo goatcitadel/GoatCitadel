@@ -190,7 +190,9 @@ export function BrowserSessionGrants({
         Grants let one actor use this session within its scopes and hosts. Tools still pass policy checks and
         guardrails; a grant does not open, bind or control a browser.
       </p>
-      {operation.locked ? <Callout tone="warning">{operation.attempt?.message}</Callout> : null}
+      {operation.locked && operation.attempt?.message ? (
+        <Callout tone="warning">{operation.attempt.message}</Callout>
+      ) : null}
       {operation.locked && pending ? (
         <Button onClick={() => setReview(pending)}>Review pending grant change</Button>
       ) : null}
