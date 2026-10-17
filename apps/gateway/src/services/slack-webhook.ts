@@ -5,6 +5,18 @@ const SLACK_WEBHOOK_PATH = /^\/api\/v1\/integrations\/connections\/[^/]+\/slack\
 const SLACK_SIGNATURE_PREFIX = "v0=";
 const SLACK_SIGNATURE_VERSION = "v0";
 const SLACK_MAX_TIMESTAMP_SKEW_MS = 5 * 60 * 1000;
+const SLACK_FILE_SHARE_SUBTYPE = "file_share";
+const SLACK_AUDIO_FILE_SUBTYPE = "slack_audio";
+
+/** Fallback/marker content for an inbound Slack voice message. */
+export const SLACK_VOICE_MESSAGE_PLACEHOLDER = "[voice message]";
+
+/** Secret-free reference to a Slack audio file (download needs the bot token). */
+export type SlackVoiceMediaRef = {
+  fileId: string;
+  downloadUrl: string;
+  mimeType?: string;
+};
 
 export type SlackWebhookNormalization =
   | {
@@ -24,6 +36,10 @@ export type SlackWebhookNormalization =
       threadId?: string;
       deliveryReplyToMessageId: string;
       metadata: Record<string, unknown>;
+      /** Present only when channelVoiceInboundV1Enabled and the message shares an audio file. */
+      voiceMedia?: SlackVoiceMediaRef;
+      /** The typed text sent with the audio, kept so a successful transcript does not drop it. */
+      voiceCaption?: string;
     }
   | {
       kind: "ignore";
@@ -108,6 +124,11 @@ export function normalizeSlackWebhookPayload(input: {
   payload: unknown;
   botUserId?: string;
   appId?: string;
+  /**
+   * channelVoiceInboundV1Enabled gate. Callers pass the resolved flag (on by default). Absent/false ⇒ every
+   * file_share message stays ignored, exactly as before voice inbound existed.
+   */
+  voiceInboundEnabled?: boolean;
 }): SlackWebhookNormalization {
   const root = asRecord(input.payload);
   const envelopeType = asString(root.type);
@@ -144,7 +165,11 @@ export function normalizeSlackWebhookPayload(input: {
   }
 
   const subtype = asString(event.subtype);
-  if (subtype) {
+  // `file_share` is the subtype Slack uses for a message carrying uploaded
+  // files. It stays ignored exactly as before unless voice inbound is enabled
+  // AND the share carries an audio file; image/PDF shares are never routed.
+  const voiceMedia = input.voiceInboundEnabled === true ? readSlackVoiceMedia(event) : undefined;
+  if (subtype && !(subtype === SLACK_FILE_SHARE_SUBTYPE && voiceMedia)) {
     return {
       kind: "ignore",
       eventType,
@@ -182,7 +207,8 @@ export function normalizeSlackWebhookPayload(input: {
     };
   }
 
-  const content = asString(event.text);
+  const text = asString(event.text);
+  const content = voiceMedia ? buildSlackVoiceFallbackContent(text) : text;
   const channel = asString(event.channel);
   const channelType = asString(event.channel_type);
   const messageTs = asString(event.ts) ?? asString(event.event_ts);
@@ -210,6 +236,7 @@ export function normalizeSlackWebhookPayload(input: {
     peer: isDirectMessage ? channel : undefined,
     threadId: threadTs,
     deliveryReplyToMessageId: threadTs ?? messageTs,
+    ...(voiceMedia ? { voiceMedia, ...(text ? { voiceCaption: text } : {}) } : {}),
     metadata: {
       teamId,
       channel,
@@ -220,4 +247,30 @@ export function normalizeSlackWebhookPayload(input: {
       eventTime: root.event_time,
     },
   };
+}
+
+/**
+ * First shared file that is audio: a `slack_audio` clip or any `audio/*`
+ * mimetype. Only the file id and its private download URL are kept; the URL
+ * host is re-validated (files.slack.com only) before the worker attaches the
+ * bot token to it.
+ */
+function readSlackVoiceMedia(event: Record<string, unknown>): SlackVoiceMediaRef | undefined {
+  const files = Array.isArray(event.files) ? event.files : [];
+  for (const entry of files) {
+    const file = asRecord(entry);
+    const mimeType = asString(file.mimetype);
+    const isAudio =
+      asString(file.subtype) === SLACK_AUDIO_FILE_SUBTYPE || mimeType?.toLowerCase().startsWith("audio/") === true;
+    const fileId = asString(file.id);
+    const downloadUrl = asString(file.url_private_download) ?? asString(file.url_private);
+    if (isAudio && fileId && downloadUrl) {
+      return { fileId, downloadUrl, ...(mimeType ? { mimeType } : {}) };
+    }
+  }
+  return undefined;
+}
+
+function buildSlackVoiceFallbackContent(text: string | undefined): string {
+  return text ? `${SLACK_VOICE_MESSAGE_PLACEHOLDER} ${text}` : SLACK_VOICE_MESSAGE_PLACEHOLDER;
 }

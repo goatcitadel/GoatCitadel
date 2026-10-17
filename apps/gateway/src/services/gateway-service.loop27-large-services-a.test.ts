@@ -115,8 +115,10 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   if (!gateway.mcpServerStore) {
     // Real store over the harness's map-backed systemSettings (B5a): MCP
     // read/write behavior assertions keep flowing through `settings`.
-    gateway.mcpServerStore = new McpServerStore({ systemSettings: gateway.storage.systemSettings,
-      runImmediateTransaction: async (callback) => await callback() });
+    gateway.mcpServerStore = new McpServerStore({
+      systemSettings: gateway.storage.systemSettings,
+      runImmediateTransaction: async (callback) => await callback(),
+    });
   }
   return { gateway, settings };
 }
@@ -423,9 +425,7 @@ describe("GatewayService loop 27 large service coverage", () => {
         }),
       ]),
     );
-    expect(
-      await gateway.mcpServerStore.patchServerState("server-1", { status: "connected" }),
-    ).toMatchObject({
+    expect(await gateway.mcpServerStore.patchServerState("server-1", { status: "connected" })).toMatchObject({
       serverId: "server-1",
       status: "connected",
     });
@@ -651,7 +651,7 @@ describe("GatewayService loop 27 large service coverage", () => {
       buildCommsHost: vi.fn(() => ({
         emitChannelActivity: vi.fn(),
         emitDiscordTyping: vi.fn(),
-        emitTelegramTyping: vi.fn(),
+        emitProviderTyping: vi.fn(),
         getIntegrationConnection: vi.fn(() => ({ connectionId: "conn-1", key: "discord" })),
         invokeAndUnwrap,
         readChatAttachmentContent: vi.fn(),
@@ -891,7 +891,7 @@ describe("GatewayService loop 27 large service coverage", () => {
       buildCommsHost: vi.fn(() => ({
         emitChannelActivity: vi.fn(),
         emitDiscordTyping: vi.fn(),
-        emitTelegramTyping: vi.fn(),
+        emitProviderTyping: vi.fn(),
         getIntegrationConnection: vi.fn(() => ({ connectionId: "conn-1", key: "slack" })),
         invokeAndUnwrap,
         readChatAttachmentContent: vi.fn(),
@@ -934,7 +934,7 @@ describe("GatewayService loop 27 large service coverage", () => {
       buildCommsHost: vi.fn(() => ({
         emitChannelActivity: vi.fn(),
         emitDiscordTyping: vi.fn(),
-        emitTelegramTyping: vi.fn(),
+        emitProviderTyping: vi.fn(),
         getIntegrationConnection: vi.fn(() => ({ connectionId: "conn-1", key: "slack" })),
         invokeAndUnwrap,
         readChatAttachmentContent: vi.fn(),

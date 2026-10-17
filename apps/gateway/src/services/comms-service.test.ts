@@ -19,6 +19,7 @@ import {
   commsReact,
   commsSend,
   commsSmtpSend,
+  commsTyping,
   commsUnsend,
   type CommsHost,
   type CommsPreApproval,
@@ -54,7 +55,7 @@ function createHost(): CommsHost & { invokeAndUnwrap: ReturnType<typeof vi.fn> }
         }) as IntegrationConnection,
     ),
     emitDiscordTyping: vi.fn(),
-    emitTelegramTyping: vi.fn(),
+    emitProviderTyping: vi.fn(),
     emitChannelActivity: vi.fn(async () => [{ effect: "mission_control", supported: true, status: "sent" }]),
   };
 }
@@ -526,7 +527,7 @@ function createGmailHost(overrides: Partial<CommsHost & { invokeAndUnwrap: Retur
         }) as IntegrationConnection,
     ),
     emitDiscordTyping: vi.fn(),
-    emitTelegramTyping: vi.fn(),
+    emitProviderTyping: vi.fn(),
     emitChannelActivity: vi.fn(),
     mutationStore,
     sideEffectRunStore,
@@ -1187,5 +1188,94 @@ describe("buildCommsPreApproval", () => {
 
     await expect(preApproval.recordPendingAction(request)).rejects.toBeInstanceOf(CommsPreApprovalSettledError);
     expect(fake.rows.get("ap-1")).toMatchObject({ resolutionStatus: "executed" });
+  });
+});
+
+describe("comms typing platform limits", () => {
+  it("reports Slack typing as a platform limit instead of a generic gap", async () => {
+    const host = createHost();
+    host.getIntegrationConnection = vi.fn(
+      () =>
+        ({
+          connectionId: "slack-1",
+          kind: "channel",
+          key: "slack",
+          label: "Slack",
+          config: { botTokenEnv: "SLACK_BOT_TOKEN" },
+        }) as IntegrationConnection,
+    );
+    const result = await commsTyping(host, { connectionId: "slack-1", target: "C1" } as never);
+    expect(result.status).toBe("unsupported");
+    expect(result.reason).toMatch(/^Platform does not support this: Slack has no typing indicator for bot messages/);
+  });
+
+  it.each(["telegram", "mattermost", "signal", "whatsapp", "imessage"])(
+    "routes %s typing to the provider host method",
+    async (key) => {
+      const host = createHost();
+      host.getIntegrationConnection = vi.fn(
+        () =>
+          ({ connectionId: "p-1", kind: "channel", key, label: key, config: {} }) as unknown as IntegrationConnection,
+      );
+      host.emitProviderTyping = vi.fn(async () => ({
+        channelKey: key,
+        connectionId: "p-1",
+        target: "t",
+        supported: true,
+        status: "sent" as const,
+      }));
+      const input = { connectionId: "p-1", target: "t", messageId: "m-1" } as never;
+      const result = await commsTyping(host, input);
+      expect(result.status).toBe("sent");
+      expect(host.emitProviderTyping).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(host.emitProviderTyping).mock.calls[0][1]).toMatchObject({ messageId: "m-1" });
+    },
+  );
+
+  it("routes Discord typing by runtime mode and declares the webhook limit", async () => {
+    const host = createHost();
+    const discord = (config: Record<string, unknown>) =>
+      ({ connectionId: "d-1", kind: "channel", key: "discord", label: "Discord", config }) as IntegrationConnection;
+    const sent = {
+      channelKey: "discord",
+      connectionId: "d-1",
+      target: "1",
+      supported: true,
+      status: "sent" as const,
+    };
+    host.emitDiscordTyping = vi.fn(async () => sent);
+    host.emitProviderTyping = vi.fn(async () => sent);
+
+    host.getIntegrationConnection = vi.fn(() => discord({ runtimeMode: "gateway", botTokenEnv: "DISCORD_BOT_TOKEN" }));
+    await commsTyping(host, { connectionId: "d-1", target: "1" } as never);
+    expect(host.emitDiscordTyping).toHaveBeenCalledTimes(1);
+    expect(host.emitProviderTyping).not.toHaveBeenCalled();
+
+    host.getIntegrationConnection = vi.fn(() => discord({ runtimeMode: "bridge", botTokenEnv: "DISCORD_BOT_TOKEN" }));
+    await commsTyping(host, { connectionId: "d-1", target: "1" } as never);
+    expect(host.emitProviderTyping).toHaveBeenCalledTimes(1);
+    expect(host.emitDiscordTyping).toHaveBeenCalledTimes(1);
+
+    host.getIntegrationConnection = vi.fn(() => discord({ webhookUrl: "https://discord.com/api/webhooks/1/x" }));
+    const webhook = await commsTyping(host, { connectionId: "d-1", target: "1" } as never);
+    expect(webhook.reason).toBe("Platform does not support this: Discord webhooks cannot send typing indicators.");
+  });
+
+  it("keeps the generic text for actions that are merely not configured", async () => {
+    const host = createHost();
+    host.getIntegrationConnection = vi.fn(
+      () =>
+        ({
+          connectionId: "d-1",
+          kind: "channel",
+          key: "discord",
+          label: "Discord",
+          config: {},
+        }) as IntegrationConnection,
+    );
+    const result = await commsTyping(host, { connectionId: "d-1", target: "1" } as never);
+    expect(result.status).toBe("unsupported");
+    expect(result.reason).toMatch(/does not advertise typing support in the current runtime mode/);
+    expect(result.reason).not.toMatch(/^Platform does not support this/);
   });
 });

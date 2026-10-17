@@ -68,6 +68,7 @@ async function verify(
   options: {
     audienceType?: "project_number" | "endpoint_url";
     audience?: string;
+    addOnProjectNumber?: string;
     fetchCerts?: GoogleChatCertFetcher;
   } = {},
 ) {
@@ -75,6 +76,7 @@ async function verify(
     authorizationHeader,
     audienceType: options.audienceType ?? "project_number",
     audience: options.audience ?? PROJECT_NUMBER,
+    addOnProjectNumber: options.addOnProjectNumber,
     fetchCerts: options.fetchCerts ?? certFetcher(),
     now: () => NOW_MS,
   });
@@ -197,6 +199,66 @@ describe("verifyGoogleChatBearer", () => {
         audience: ENDPOINT_URL,
       }),
     ).resolves.toEqual({ ok: false, reason: "bad_email" });
+  });
+
+  describe("Workspace add-on tokens", () => {
+    const ADD_ON_PROJECT = "987654321098";
+    const addOnEmail = (project: string) => `service-${project}@gcp-sa-gsuiteaddons.iam.gserviceaccount.com`;
+    const endpoint = (addOnProjectNumber?: string) => ({
+      audienceType: "endpoint_url" as const,
+      audience: ENDPOINT_URL,
+      addOnProjectNumber,
+    });
+
+    it("accepts the configured add-on project's service account", async () => {
+      await expect(
+        verify(`Bearer ${signToken(endpointClaims({ email: addOnEmail(ADD_ON_PROJECT) }))}`, endpoint(ADD_ON_PROJECT)),
+      ).resolves.toEqual({ ok: true });
+    });
+
+    it("rejects an add-on token when no add-on project number is configured", async () => {
+      await expect(
+        verify(`Bearer ${signToken(endpointClaims({ email: addOnEmail(ADD_ON_PROJECT) }))}`, endpoint()),
+      ).resolves.toEqual({ ok: false, reason: "bad_email" });
+    });
+
+    it("rejects an add-on token for a different project number", async () => {
+      await expect(
+        verify(`Bearer ${signToken(endpointClaims({ email: addOnEmail("111111111111") }))}`, endpoint(ADD_ON_PROJECT)),
+      ).resolves.toEqual({ ok: false, reason: "bad_email" });
+    });
+
+    it("rejects arbitrary gsuiteaddons and other service-account emails even when configured", async () => {
+      for (const email of [
+        `service-${ADD_ON_PROJECT}@gcp-sa-gsuiteaddons.iam.gserviceaccount.com.evil.test`,
+        `x-service-${ADD_ON_PROJECT}@gcp-sa-gsuiteaddons.iam.gserviceaccount.com`,
+        "attacker@gcp-sa-gsuiteaddons.iam.gserviceaccount.com",
+        `service-${ADD_ON_PROJECT}@gcp-sa-other.iam.gserviceaccount.com`,
+        "minted@attacker-project.iam.gserviceaccount.com",
+      ]) {
+        await expect(
+          verify(`Bearer ${signToken(endpointClaims({ email }))}`, endpoint(ADD_ON_PROJECT)),
+        ).resolves.toEqual({ ok: false, reason: "bad_email" });
+      }
+    });
+
+    it("rejects an unverified add-on email and ignores a non-numeric project number", async () => {
+      await expect(
+        verify(
+          `Bearer ${signToken(endpointClaims({ email: addOnEmail(ADD_ON_PROJECT), email_verified: false }))}`,
+          endpoint(ADD_ON_PROJECT),
+        ),
+      ).resolves.toEqual({ ok: false, reason: "bad_email" });
+      await expect(
+        verify(`Bearer ${signToken(endpointClaims({ email: addOnEmail("my-project") }))}`, endpoint("my-project")),
+      ).resolves.toEqual({ ok: false, reason: "bad_email" });
+    });
+
+    it("keeps classic chat@system tokens valid when an add-on project is configured", async () => {
+      await expect(verify(`Bearer ${signToken(endpointClaims())}`, endpoint(ADD_ON_PROJECT))).resolves.toEqual({
+        ok: true,
+      });
+    });
   });
 
   it("rejects a missing header or a non-bearer header", async () => {

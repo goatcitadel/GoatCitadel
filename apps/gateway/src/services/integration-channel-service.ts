@@ -23,6 +23,7 @@ import type {
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { INTEGRATION_CATALOG } from "./integration-catalog.js";
+import { emitProviderTypingWithDeps } from "./channel-typing-adapters.js";
 import type { ChannelStreamRuntimeStatus } from "./channel-stream-runtime-service.js";
 import {
   buildInstalledIntegrationPluginRecord,
@@ -209,6 +210,16 @@ export class IntegrationChannelService {
     input: ChannelTypingInput,
   ): Promise<ChannelTypingResult> {
     return emitTelegramTypingImpl(this.deps, connection, input);
+  }
+
+  public emitProviderTyping(
+    connection: IntegrationConnection,
+    input: ChannelTypingInput,
+  ): Promise<ChannelTypingResult> {
+    if (connection.key === "telegram") {
+      return emitTelegramTypingImpl(this.deps, connection, input);
+    }
+    return emitProviderTypingWithDeps(this.deps, connection, input);
   }
 
   public emitChannelActivity(

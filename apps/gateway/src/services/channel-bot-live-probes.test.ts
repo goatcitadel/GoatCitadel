@@ -15,9 +15,62 @@ import {
 } from "./channel-bot-live-probes.js";
 
 describe("channel bot live probes", () => {
-  it("keeps an implicitly skipped required send blocking rather than fabricating a deferred pass", async () => { const result = await runDiscordBotLiveChecks({ runtimeMode: "bridge", webhookUrl: "https://discord.example.test/webhook", includeSandboxSend: true, fetcher: vi.fn() }); expect(result.probe.steps.find((step) => step.key === "discord_sandbox_send")).toMatchObject({ status: "skipped", disposition: "blocking" }); const test: ChannelSetupTestResult = { draftId: "draft", draftRevision: 1, status: "ok", levels: [], issues: [], checkedAt: new Date().toISOString(), probe: result.probe }; expect(evaluateChannelSetupEligibility(test, { key: "discord", config: {} } as IntegrationConnection).allowed).toBe(false); });
-  it("does not dispatch an unauthenticated Zalo User bridge probe", async () => { const fetcher = vi.fn(); const result = await runZaloUserBridgeLiveChecks({ baseUrl: "http://127.0.0.1:56789", defaultTarget: "user:operator", includeSandboxSend: true, fetcher }); expect(fetcher).not.toHaveBeenCalled(); expect(result.probe.steps[0]).toMatchObject({ key: "zalouser_auth", status: "fail", disposition: "blocking" }); });
-  it("authenticates DM-only Discord while deferring destination and delivery proof", async () => { const fetcher = vi.fn(async () => new Response(JSON.stringify({ id: "bot", username: "bot" }))); const result = await runDiscordBotLiveChecks({ token: "test-token", runtimeMode: "gateway", runtimeReadiness: "deferred", deferDestination: true, includeSandboxSend: true, fetcher }); expect(fetcher).toHaveBeenCalledOnce(); expect(result.probe.steps.find((step) => step.key === "discord_token_auth")?.status).toBe("pass"); expect(result.probe.steps.find((step) => step.key === "discord_sandbox_send")).toMatchObject({ status: "skipped", disposition: "deferred" }); expect(result.probe.steps.find((step) => step.key === "discord_channel_access")).toMatchObject({ status: "skipped", disposition: "deferred" }); });
+  it("keeps an implicitly skipped required send blocking rather than fabricating a deferred pass", async () => {
+    const result = await runDiscordBotLiveChecks({
+      runtimeMode: "bridge",
+      webhookUrl: "https://discord.example.test/webhook",
+      includeSandboxSend: true,
+      fetcher: vi.fn(),
+    });
+    expect(result.probe.steps.find((step) => step.key === "discord_sandbox_send")).toMatchObject({
+      status: "skipped",
+      disposition: "blocking",
+    });
+    const test: ChannelSetupTestResult = {
+      draftId: "draft",
+      draftRevision: 1,
+      status: "ok",
+      levels: [],
+      issues: [],
+      checkedAt: new Date().toISOString(),
+      probe: result.probe,
+    };
+    expect(evaluateChannelSetupEligibility(test, { key: "discord", config: {} } as IntegrationConnection).allowed).toBe(
+      false,
+    );
+  });
+  it("does not dispatch an unauthenticated Zalo User bridge probe", async () => {
+    const fetcher = vi.fn();
+    const result = await runZaloUserBridgeLiveChecks({
+      baseUrl: "http://127.0.0.1:56789",
+      defaultTarget: "user:operator",
+      includeSandboxSend: true,
+      fetcher,
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(result.probe.steps[0]).toMatchObject({ key: "zalouser_auth", status: "fail", disposition: "blocking" });
+  });
+  it("authenticates DM-only Discord while deferring destination and delivery proof", async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ id: "bot", username: "bot" })));
+    const result = await runDiscordBotLiveChecks({
+      token: "test-token",
+      runtimeMode: "gateway",
+      runtimeReadiness: "deferred",
+      deferDestination: true,
+      includeSandboxSend: true,
+      fetcher,
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(result.probe.steps.find((step) => step.key === "discord_token_auth")?.status).toBe("pass");
+    expect(result.probe.steps.find((step) => step.key === "discord_sandbox_send")).toMatchObject({
+      status: "skipped",
+      disposition: "deferred",
+    });
+    expect(result.probe.steps.find((step) => step.key === "discord_channel_access")).toMatchObject({
+      status: "skipped",
+      disposition: "deferred",
+    });
+  });
   it("runs Slack auth, send, and cleanup probes", async () => {
     const fetcher = vi.fn(async (url: string) => {
       if (url === "https://slack.com/api/auth.test") {
@@ -702,6 +755,23 @@ describe("channel bot live probes", () => {
     expect(sendBody).toMatchObject({
       chatGuid: "chat-ABC",
     });
+  });
+
+  it("probes a schemeless remote BlueBubbles bridge over https (the password is a query parameter)", async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 }));
+
+    await runIMessageBridgeLiveChecks({
+      bridgeUrl: "bluebubbles.example:1234",
+      password: "bb-password",
+      defaultHandle: "bluebubbles:chat_guid:chat-ABC",
+      includeSandboxSend: false,
+      fetcher,
+    });
+
+    expect(fetcher).toHaveBeenCalled();
+    for (const call of fetcher.mock.calls as unknown as Array<[string]>) {
+      expect(call[0]).toMatch(/^https:\/\/bluebubbles\.example:1234\//);
+    }
   });
 
   it("resolves Mattermost direct-message and team fallback targets before sandbox send", async () => {

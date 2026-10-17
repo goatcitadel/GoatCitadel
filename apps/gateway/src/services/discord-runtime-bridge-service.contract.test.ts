@@ -148,6 +148,7 @@ function createHost(): DiscordRuntimeBridgeHost & {
     cancelLatestActiveChatTurnForSession: vi.fn(async () => ({ status: "no_active_run" })),
     getPersonalityCatalog: () => ({ items: [], defaultPersonalityId: "default" }),
     hasRunningTurn: () => false,
+    isFeatureEnabled: vi.fn(async (_flag: string) => false),
     parseChatCommand: vi.fn(async () => ({
       ok: true,
       command: "/noop",
@@ -523,6 +524,108 @@ describe("discord-runtime-bridge-service contract behavior", () => {
     );
     expect(host.ingestChannelMessage).not.toHaveBeenCalled();
     expect(host.respondMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a Discord audio attachment as a secret-free voice_agent_turn when voice inbound is enabled", async () => {
+    const host = createHost();
+    vi.mocked(host.isFeatureEnabled).mockImplementation(async (flag) => flag === "channelVoiceInboundV1Enabled");
+    const voiceAttachment = {
+      attachmentId: "222333444555",
+      url: "https://cdn.discordapp.com/attachments/111/222333444555/voice-message.ogg?ex=1",
+      mimeType: "audio/ogg",
+    };
+    const input = {
+      connectionId: "discord-1",
+      target: "dm_1",
+      actorId: "user-1",
+      content: "",
+      sourceMessageId: "msg-voice-1",
+      peer: "user-1",
+      room: "dm_1",
+      metadata: { runtimeMode: "gateway" },
+      voiceAttachment,
+    };
+
+    await handleDiscordRuntimeInbound(host, input);
+    await handleDiscordRuntimeInbound(host, input);
+
+    expect(host.isFeatureEnabled).toHaveBeenCalledWith("channelVoiceInboundV1Enabled");
+    expect(host.acceptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        // Same key the text path derives for this provider message id, so replays dedupe.
+        idempotencyKey: "discord:discord-1:msg-voice-1",
+        eventType: "discord-gateway-message",
+        dispatchKind: "voice_agent_turn",
+        voiceRequest: {
+          channel: "discord",
+          connectionConfig: {},
+          attachmentId: "222333444555",
+          url: voiceAttachment.url,
+          mimeType: "audio/ogg",
+        },
+        voiceFallbackContent: "[voice message]",
+        message: expect.objectContaining({ eventId: "msg-voice-1", content: "[voice message]" }),
+      }),
+    );
+    const keys = host.acceptMock.mock.calls.map((call) => (call[0] as { idempotencyKey: string }).idempotencyKey);
+    expect(keys).toEqual(["discord:discord-1:msg-voice-1", "discord:discord-1:msg-voice-1"]);
+  });
+
+  it("keeps typed text in the Discord voice fallback and sends text-only turns when voice inbound is disabled", async () => {
+    const enabledHost = createHost();
+    vi.mocked(enabledHost.isFeatureEnabled).mockResolvedValue(true);
+    const voiceAttachment = {
+      attachmentId: "222333444555",
+      url: "https://cdn.discordapp.com/attachments/111/222333444555/voice-message.ogg",
+      mimeType: "audio/ogg",
+    };
+    await handleDiscordRuntimeInbound(enabledHost, {
+      connectionId: "discord-1",
+      target: "dm_1",
+      actorId: "user-1",
+      content: "listen",
+      sourceMessageId: "msg-voice-2",
+      voiceAttachment,
+    });
+    expect(enabledHost.acceptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatchKind: "voice_agent_turn",
+        voiceFallbackContent: "[voice message] listen",
+        voiceCaption: "listen",
+      }),
+    );
+
+    const disabledHost = createHost();
+    await handleDiscordRuntimeInbound(disabledHost, {
+      connectionId: "discord-1",
+      target: "dm_1",
+      actorId: "user-1",
+      content: "listen",
+      sourceMessageId: "msg-voice-3",
+      voiceAttachment,
+    });
+    const disabledInput = disabledHost.acceptMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(disabledInput).toEqual(
+      expect.objectContaining({
+        dispatchKind: "agent_turn",
+        idempotencyKey: "discord:discord-1:msg-voice-3",
+        message: expect.objectContaining({ content: "listen" }),
+      }),
+    );
+    expect(disabledInput.voiceRequest).toBeUndefined();
+
+    const voiceOnlyDisabledHost = createHost();
+    const accepted = await handleDiscordRuntimeInbound(voiceOnlyDisabledHost, {
+      connectionId: "discord-1",
+      target: "dm_1",
+      actorId: "user-1",
+      content: "",
+      sourceMessageId: "msg-voice-4",
+      voiceAttachment,
+    });
+    expect(accepted).toBe(false);
+    expect(voiceOnlyDisabledHost.acceptMock).not.toHaveBeenCalled();
   });
 
   it("propagates Discord durable acceptance failures before any legacy dispatch", async () => {

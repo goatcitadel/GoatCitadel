@@ -619,6 +619,49 @@ describe("channel setup definitions", () => {
     );
   });
 
+  it("collects and validates the optional Workspace add-on project number", () => {
+    const definition = requireChannelSetupDefinition("channel.google-chat");
+    const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
+    expect(fieldKeys).toContain("addOnProjectNumber");
+    const endpointApp = {
+      serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+      audienceType: "endpoint_url",
+      audience: "https://gateway.example.test/api/v1/integrations/connections/c/google-chat/webhook",
+    };
+
+    const addOnDraft = createDraft("channel.google-chat", { ...endpointApp, addOnProjectNumber: "987654321098" });
+    expect(definition.validate(addOnDraft)).toEqual([]);
+    expect(definition.normalize(addOnDraft)).toMatchObject({ addOnProjectNumber: "987654321098" });
+    expect(
+      definition.hydrate({ config: { ...endpointApp, addOnProjectNumber: "987654321098" } } as never).draft,
+    ).toMatchObject({ addOnProjectNumber: "987654321098" });
+
+    // A project ID (name) instead of the numeric project number is malformed.
+    expect(
+      definition.validate(createDraft("channel.google-chat", { ...endpointApp, addOnProjectNumber: "my-project" })),
+    ).toEqual([expect.objectContaining({ fieldKey: "addOnProjectNumber", failureCategory: "malformed_value" })]);
+    // Add-on Chat apps use the endpoint URL audience only.
+    expect(
+      definition.validate(
+        createDraft("channel.google-chat", {
+          serviceAccountKeyEnv: "GOOGLE_CHAT_SA_KEY",
+          audienceType: "project_number",
+          audience: "123456789012",
+          addOnProjectNumber: "987654321098",
+        }),
+      ),
+    ).toEqual([expect.objectContaining({ fieldKey: "addOnProjectNumber", failureCategory: "malformed_value" })]);
+    // Webhook mode never carries the add-on field.
+    expect(
+      definition.normalize(
+        createDraft("channel.google-chat", {
+          webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=k&token=t",
+          addOnProjectNumber: "987654321098",
+        }),
+      ),
+    ).not.toHaveProperty("addOnProjectNumber");
+  });
+
   it("rejects malformed Teams webhook URLs", () => {
     const definition = requireChannelSetupDefinition("channel.teams");
     const issues = definition.validate(

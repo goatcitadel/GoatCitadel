@@ -644,7 +644,7 @@ export function createCommsHostForGateway(
     getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
     emitDiscordTyping: (connection, input) =>
       gateway.discordRuntimeService.sendTyping(connection.connectionId, input.target, input.durationMs, input.signal),
-    emitTelegramTyping: (connection, input) => integrationChannel.emitTelegramTyping(connection, input),
+    emitProviderTyping: (connection, input) => integrationChannel.emitProviderTyping(connection, input),
     emitChannelActivity: (connection, input, options) =>
       integrationChannel.emitChannelActivity(connection, input, options),
     mutationStore: gateway.mutationIdempotencyStore,

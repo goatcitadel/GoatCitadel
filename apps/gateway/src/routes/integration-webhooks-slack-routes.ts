@@ -5,11 +5,16 @@ import {
   verifySlackWebhookConnectionBinding,
   verifySlackSignature,
 } from "../services/slack-webhook.js";
-import { createWebhookRouteOptions, readConfigSecret } from "./integration-webhooks-shared.js";
+import {
+  createWebhookRouteOptions,
+  readConfigSecret,
+  readWebhookVoiceInboundEnabled,
+} from "./integration-webhooks-shared.js";
 import { asString } from "../services/webhook-json-helpers.js";
 import {
   createIgnoredWebhookReply,
   createWebhookHandler,
+  dispatchInboundVoiceWebhookMessage,
   dispatchInboundWebhookMessage,
   readHeaderValue,
 } from "./webhook-handler-factory.js";
@@ -80,12 +85,13 @@ export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
         }
         return { ok: true as const };
       },
-      parsePayload: ({ connectionId, connection, request }) => {
+      parsePayload: async ({ connectionId, connection, request }) => {
         const normalized = normalizeSlackWebhookPayload({
           connectionId,
           payload: request.body,
           botUserId: asString(connection.config.slackBotUserId),
           appId: asString(connection.config.slackAppId),
+          voiceInboundEnabled: await readWebhookVoiceInboundEnabled(fastify, request, "slack"),
         });
         if (normalized.kind === "challenge") {
           return {
@@ -104,10 +110,11 @@ export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
           parsed: normalized,
         };
       },
-      dispatch: async ({ connectionId, connection, request, rawBody, parsed }) =>
-        dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
+      dispatch: async ({ connectionId, connection, request, rawBody, parsed }) => {
+        const dispatchOptions = {
           channel: "slack",
           connectionId,
+          // Voice and text share the provider event-id key, so replays dedupe.
           idempotencyKey: deriveSlackWebhookIdempotencyKey(connectionId, request.body, rawBody),
           eventType: parsed.eventType,
           bindingTarget: parsed.room ?? parsed.peer,
@@ -127,7 +134,28 @@ export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
           responseOptions: {
             deliveryReplyToMessageId: parsed.deliveryReplyToMessageId,
           },
-        }),
+        };
+        const voiceMedia = parsed.voiceMedia;
+        if (voiceMedia) {
+          // Accept the secret-free file reference before ACK; the durable worker
+          // resolves the current bot token and owns download/transcription.
+          return dispatchInboundVoiceWebhookMessage(fastify.services.integrationWebhooks, {
+            ...dispatchOptions,
+            voice: {
+              request: {
+                channel: "slack",
+                connectionConfig: {},
+                fileId: voiceMedia.fileId,
+                downloadUrl: voiceMedia.downloadUrl,
+                mimeType: voiceMedia.mimeType,
+              },
+              fallbackContent: parsed.content,
+              caption: parsed.voiceCaption,
+            },
+          });
+        }
+        return dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, dispatchOptions);
+      },
     }),
   );
 }

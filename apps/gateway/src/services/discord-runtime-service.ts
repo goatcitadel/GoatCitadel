@@ -45,9 +45,18 @@ type DiscordInboundEnvelope = {
   room?: string;
   threadId?: string;
   metadata?: Record<string, unknown>;
+  /** Audio attachment reference; the bridge decides (voice flag) whether it becomes a voice turn. */
+  voiceAttachment?: DiscordVoiceAttachmentRef;
 };
 
-type DiscordSlashCommandEnvelope = Omit<DiscordInboundEnvelope, "content" | "sourceMessageId"> & {
+/** Secret-free reference to a Discord audio attachment (pre-signed CDN URL, no credential). */
+export type DiscordVoiceAttachmentRef = {
+  attachmentId: string;
+  url: string;
+  mimeType?: string;
+};
+
+type DiscordSlashCommandEnvelope = Omit<DiscordInboundEnvelope, "content" | "sourceMessageId" | "voiceAttachment"> & {
   commandText: string;
   sourceCommandId: string;
 };
@@ -57,7 +66,8 @@ interface DiscordRuntimeCallbacks {
   findApprovedPairing: (connectionId: string, userId: string) => Promise<DiscordPairingRecord | undefined>;
   ensurePendingPairing: (connectionId: string, userId: string, displayName?: string) => Promise<DiscordPairingRecord>;
   touchPairing: (pairingId: string) => Promise<void>;
-  onInboundMessage: (input: DiscordInboundEnvelope) => Promise<void>;
+  /** Resolves false when the inbound owner declined the message (no provider-visible reaction then). */
+  onInboundMessage: (input: DiscordInboundEnvelope) => Promise<boolean | void>;
   /** Commits the command envelope before the interaction is acknowledged. */
   acceptSlashCommand: (input: DiscordSlashCommandEnvelope) => Promise<{ inboundEventId: string }>;
   /** Waits for the durable command owner, including replay of a prior terminal result. */
@@ -106,8 +116,26 @@ export class DiscordRuntimeService {
   private readonly lifecycleTasks = new Set<Promise<void>>();
   private closeState: "open" | "closing" | "closed" = "open";
   private closePromise?: Promise<void>;
+  /**
+   * channelVoiceInboundV1Enabled read, installed by the runtime composition.
+   * Unset (or failing) means off: voice-only messages are dropped before any
+   * pairing or allowlist side effect, exactly as before voice inbound existed.
+   */
+  private voiceInboundGate: () => Promise<boolean> = async () => false;
 
   public constructor(private readonly callbacks: DiscordRuntimeCallbacks) {}
+
+  public setVoiceInboundGate(gate: () => Promise<boolean>): void {
+    this.voiceInboundGate = gate;
+  }
+
+  private async isVoiceInboundEnabled(): Promise<boolean> {
+    try {
+      return (await this.voiceInboundGate()) === true;
+    } catch {
+      return false;
+    }
+  }
 
   public async sync(): Promise<void> {
     if (this.closeState !== "open") return;
@@ -615,7 +643,7 @@ export class DiscordRuntimeService {
     if (message.author.bot) {
       return;
     }
-    if (!message.content.trim()) {
+    if (!message.content.trim() && !(readDiscordVoiceAttachment(message) && (await this.isVoiceInboundEnabled()))) {
       return;
     }
     const connections = (await this.callbacks.listConnections()).filter((connection) =>
@@ -802,11 +830,12 @@ export class DiscordRuntimeService {
     const normalizedContent = runtime.connectedBotId
       ? message.content.replace(new RegExp(`<@!?${runtime.connectedBotId}>`, "g"), "").trim()
       : message.content.trim();
-    if (!normalizedContent) {
+    const voiceAttachment = readDiscordVoiceAttachment(message);
+    if (!normalizedContent && !voiceAttachment) {
       return false;
     }
     await this.handleAcceptedMessage(message, async () => {
-      await this.callbacks.onInboundMessage({
+      return await this.callbacks.onInboundMessage({
         connectionId: connection.connectionId,
         acceptedConnectionRevision: connection.revision,
         target: message.channelId,
@@ -822,6 +851,7 @@ export class DiscordRuntimeService {
           channelId: message.channelId,
           runtimeMode: "gateway",
         },
+        ...(voiceAttachment ? { voiceAttachment } : {}),
       });
     });
     return true;
@@ -908,11 +938,12 @@ export class DiscordRuntimeService {
     if (dmPolicy === "disabled") {
       return false;
     }
+    const voiceAttachment = readDiscordVoiceAttachment(message);
     const approved = await this.callbacks.findApprovedPairing(connection.connectionId, message.author.id);
     if (approved) {
       await this.callbacks.touchPairing(approved.pairingId);
       await this.handleAcceptedMessage(message, async () => {
-        await this.callbacks.onInboundMessage({
+        return await this.callbacks.onInboundMessage({
           connectionId: connection.connectionId,
           acceptedConnectionRevision: connection.revision,
           target: message.channelId,
@@ -926,13 +957,14 @@ export class DiscordRuntimeService {
             dm: true,
             runtimeMode: "gateway",
           },
+          ...(voiceAttachment ? { voiceAttachment } : {}),
         });
       });
       return true;
     }
     if (dmPolicy === "open") {
       await this.handleAcceptedMessage(message, async () => {
-        await this.callbacks.onInboundMessage({
+        return await this.callbacks.onInboundMessage({
           connectionId: connection.connectionId,
           acceptedConnectionRevision: connection.revision,
           target: message.channelId,
@@ -946,6 +978,7 @@ export class DiscordRuntimeService {
             dm: true,
             runtimeMode: "gateway",
           },
+          ...(voiceAttachment ? { voiceAttachment } : {}),
         });
       });
       return true;
@@ -1028,10 +1061,15 @@ export class DiscordRuntimeService {
     return true;
   }
 
-  private async handleAcceptedMessage(message: Message, task: () => Promise<void>): Promise<void> {
+  private async handleAcceptedMessage(message: Message, task: () => Promise<boolean | void>): Promise<void> {
     // The callback is the durable acceptance boundary in production. Do not
-    // emit a reaction or typing side effect until that local commit succeeds.
-    await task();
+    // emit a reaction or typing side effect until that local commit succeeds,
+    // and never for a message the owner declined (e.g. voice-only while the
+    // voice inbound flag is off).
+    const accepted = await task();
+    if (accepted === false) {
+      return;
+    }
     await this.markMessageSeen(message);
   }
 
@@ -1755,6 +1793,32 @@ function buildSharedDiscordSlashCommandDefinition(
   return builder.toJSON();
 }
 
+/**
+ * First audio attachment on a message (Discord voice messages carry one
+ * audio/ogg attachment and the IsVoiceMessage flag). Only the attachment id,
+ * its pre-signed CDN URL and declared content type are kept; the voice service
+ * re-validates the CDN host before downloading.
+ */
+function readDiscordVoiceAttachment(message: Pick<Message, "attachments">): DiscordVoiceAttachmentRef | undefined {
+  const attachments = message.attachments as unknown as
+    | { values?: () => Iterable<{ id?: unknown; url?: unknown; contentType?: unknown }> }
+    | undefined;
+  if (typeof attachments?.values !== "function") {
+    return undefined;
+  }
+  for (const attachment of attachments.values()) {
+    const contentType = typeof attachment.contentType === "string" ? attachment.contentType : undefined;
+    if (
+      contentType?.toLowerCase().startsWith("audio/") &&
+      typeof attachment.id === "string" &&
+      typeof attachment.url === "string"
+    ) {
+      return { attachmentId: attachment.id, url: attachment.url, mimeType: contentType };
+    }
+  }
+  return undefined;
+}
+
 export const __discordRuntimeServiceInternals = {
   buildCommandTextFromInteraction,
   buildDiscordSlashCommandDefinitions,
@@ -1768,6 +1832,7 @@ export const __discordRuntimeServiceInternals = {
   readDiscordApprovalToken,
   readDiscordSecret,
   readDiscordSubcommand,
+  readDiscordVoiceAttachment,
   readGuildRuleMap,
   resolveDiscordGuildRule,
   sanitizeGuildRules,

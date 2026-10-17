@@ -7,7 +7,9 @@ import { detectAttachmentMediaType, sniffAttachmentBytes } from "./media-voice-s
 
 /**
  * Channel voice inbound (competitive-gap phase B2a): per-channel media download
- * + transcription for inbound Telegram voice notes and WhatsApp audio messages.
+ * + transcription for inbound Telegram voice notes, WhatsApp audio messages,
+ * Slack audio file shares (bot-token Bearer, files.slack.com only) and Discord
+ * audio attachments (pre-signed Discord CDN URLs, no credential).
  *
  * Security posture (this service pulls bytes from provider-controlled URLs):
  * - Media references are validated against strict shape allowlists before any
@@ -41,7 +43,19 @@ const TELEGRAM_FILE_ID_PATTERN = /^[A-Za-z0-9_-]{1,256}$/;
 const TELEGRAM_FILE_PATH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$/;
 /** WhatsApp Cloud API media ids are opaque tokens (usually numeric). */
 const WHATSAPP_MEDIA_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+/** Slack file ids ("F" + uppercase alphanumerics). */
+const SLACK_FILE_ID_PATTERN = /^F[A-Z0-9]{6,20}$/;
+/** Discord attachment ids are snowflakes. */
+const DISCORD_ATTACHMENT_ID_PATTERN = /^\d{5,25}$/;
+const SLACK_FILE_HOSTS: readonly string[] = ["files.slack.com"];
+const DISCORD_ATTACHMENT_HOSTS: readonly string[] = ["cdn.discordapp.com", "media.discordapp.net"];
 
+/**
+ * Nextcloud Talk has no download variant on purpose: a Talk bot only holds the
+ * HMAC shared secret and the bot API (send message / reactions) has no file
+ * endpoint, so shared voice files cannot be fetched. The webhook dispatches an
+ * honest "not transcribed" agent turn instead (nextcloud-talk-webhook.ts).
+ */
 export type ChannelVoiceInboundRequest =
   | {
       channel: "telegram";
@@ -53,6 +67,22 @@ export type ChannelVoiceInboundRequest =
       channel: "whatsapp";
       connectionConfig: Record<string, unknown>;
       mediaId: string;
+      mimeType?: string;
+    }
+  | {
+      channel: "slack";
+      connectionConfig: Record<string, unknown>;
+      fileId: string;
+      /** Slack `url_private_download`; must be https://files.slack.com/... */
+      downloadUrl: string;
+      mimeType?: string;
+    }
+  | {
+      channel: "discord";
+      connectionConfig: Record<string, unknown>;
+      attachmentId: string;
+      /** Discord attachment CDN URL; host must be cdn.discordapp.com or media.discordapp.net. */
+      url: string;
       mimeType?: string;
     };
 
@@ -91,10 +121,7 @@ export class ChannelVoiceInboundService {
 
   public async transcribe(request: ChannelVoiceInboundRequest): Promise<ChannelVoiceTranscriptionResult> {
     try {
-      const media =
-        request.channel === "telegram"
-          ? await this.downloadTelegramVoiceMedia(request)
-          : await this.downloadWhatsAppVoiceMedia(request);
+      const media = await this.downloadVoiceMedia(request);
       if (!media.ok) {
         return media;
       }
@@ -104,10 +131,76 @@ export class ChannelVoiceInboundService {
     }
   }
 
+  private async downloadVoiceMedia(request: ChannelVoiceInboundRequest) {
+    switch (request.channel) {
+      case "telegram":
+        return await this.downloadTelegramVoiceMedia(request);
+      case "whatsapp":
+        return await this.downloadWhatsAppVoiceMedia(request);
+      case "slack":
+        return await this.downloadSlackVoiceMedia(request);
+      case "discord":
+        return await this.downloadDiscordVoiceMedia(request);
+    }
+  }
+
+  /** Bot-token / access-token lookup: direct key first, then the generic token key. */
+  private resolveTokenSecret(
+    config: Record<string, unknown>,
+    directKey: string,
+    catalogId: string,
+  ): string | undefined {
+    const resolve = this.deps.resolveConnectionSecret;
+    return resolve(config, directKey, `${directKey}Env`, catalogId) ?? resolve(config, "token", "tokenEnv", catalogId);
+  }
+
+  private isUrlAllowlisted(urlValue: string): boolean {
+    return this.deps.isConnectionUrlAllowlisted(urlValue);
+  }
+
+  private async downloadSlackVoiceMedia(request: Extract<ChannelVoiceInboundRequest, { channel: "slack" }>) {
+    if (!SLACK_FILE_ID_PATTERN.test(request.fileId)) {
+      return failure("invalid_media_reference", "Slack voice file id has an unexpected shape.");
+    }
+    // Host gate before credentials are even resolved: the bot token is only
+    // ever attached to an https request for files.slack.com.
+    if (!isHttpsUrlOnHosts(request.downloadUrl, SLACK_FILE_HOSTS)) {
+      return failure("url_not_allowlisted", "Slack voice download URL is not an https://files.slack.com URL.");
+    }
+    const botToken = this.resolveTokenSecret(request.connectionConfig, "botToken", "channel.slack");
+    if (!botToken) {
+      return failure("missing_credentials", "Slack connection is missing a bot token.");
+    }
+    if (!this.isUrlAllowlisted(request.downloadUrl)) {
+      return failure("url_not_allowlisted", "Slack file host is not in the current outbound allowlist.");
+    }
+    const bytes = await this.downloadBoundedBytes(request.downloadUrl, botToken, "Slack voice media");
+    if (!bytes.ok) {
+      return bytes;
+    }
+    return { ok: true as const, bytes: bytes.bytes, mimeType: request.mimeType ?? "audio/webm" };
+  }
+
+  private async downloadDiscordVoiceMedia(request: Extract<ChannelVoiceInboundRequest, { channel: "discord" }>) {
+    if (!DISCORD_ATTACHMENT_ID_PATTERN.test(request.attachmentId)) {
+      return failure("invalid_media_reference", "Discord voice attachment id has an unexpected shape.");
+    }
+    if (!isHttpsUrlOnHosts(request.url, DISCORD_ATTACHMENT_HOSTS)) {
+      return failure("url_not_allowlisted", "Discord voice attachment URL is not on a Discord CDN host.");
+    }
+    if (!this.isUrlAllowlisted(request.url)) {
+      return failure("url_not_allowlisted", "Discord CDN host is not in the current outbound allowlist.");
+    }
+    // Discord attachment URLs are pre-signed; no credential is attached.
+    const bytes = await this.downloadBoundedBytes(request.url, undefined, "Discord voice media");
+    if (!bytes.ok) {
+      return bytes;
+    }
+    return { ok: true as const, bytes: bytes.bytes, mimeType: request.mimeType ?? "audio/ogg" };
+  }
+
   private async downloadTelegramVoiceMedia(request: Extract<ChannelVoiceInboundRequest, { channel: "telegram" }>) {
-    const botToken =
-      this.deps.resolveConnectionSecret(request.connectionConfig, "botToken", "botTokenEnv", "channel.telegram") ??
-      this.deps.resolveConnectionSecret(request.connectionConfig, "token", "tokenEnv", "channel.telegram");
+    const botToken = this.resolveTokenSecret(request.connectionConfig, "botToken", "channel.telegram");
     if (!botToken) {
       return failure("missing_credentials", "Telegram connection is missing a bot token.");
     }
@@ -116,7 +209,7 @@ export class ChannelVoiceInboundService {
     }
 
     const getFileUrl = `${TELEGRAM_API_HOST}/bot${botToken}/getFile?file_id=${encodeURIComponent(request.fileId)}`;
-    if (!this.deps.isConnectionUrlAllowlisted(getFileUrl)) {
+    if (!this.isUrlAllowlisted(getFileUrl)) {
       return failure("url_not_allowlisted", "Telegram API host is not in the current outbound allowlist.");
     }
     const metadataResponse = await this.deps.fetchWithTimeout(getFileUrl, { redirect: "error" });
@@ -144,7 +237,7 @@ export class ChannelVoiceInboundService {
     }
 
     const downloadUrl = `${TELEGRAM_API_HOST}/file/bot${botToken}/${filePath}`;
-    if (!this.deps.isConnectionUrlAllowlisted(downloadUrl)) {
+    if (!this.isUrlAllowlisted(downloadUrl)) {
       return failure("url_not_allowlisted", "Telegram file host is not in the current outbound allowlist.");
     }
     const bytes = await this.downloadBoundedBytes(downloadUrl, undefined, "Telegram voice media");
@@ -155,13 +248,7 @@ export class ChannelVoiceInboundService {
   }
 
   private async downloadWhatsAppVoiceMedia(request: Extract<ChannelVoiceInboundRequest, { channel: "whatsapp" }>) {
-    const accessToken =
-      this.deps.resolveConnectionSecret(
-        request.connectionConfig,
-        "accessToken",
-        "accessTokenEnv",
-        "channel.whatsapp",
-      ) ?? this.deps.resolveConnectionSecret(request.connectionConfig, "token", "tokenEnv", "channel.whatsapp");
+    const accessToken = this.resolveTokenSecret(request.connectionConfig, "accessToken", "channel.whatsapp");
     if (!accessToken) {
       return failure("missing_credentials", "WhatsApp connection is missing an access token.");
     }
@@ -174,7 +261,7 @@ export class ChannelVoiceInboundService {
       return baseUrl;
     }
     const metadataUrl = `${baseUrl.url}/${encodeURIComponent(request.mediaId)}`;
-    if (!this.deps.isConnectionUrlAllowlisted(metadataUrl)) {
+    if (!this.isUrlAllowlisted(metadataUrl)) {
       return failure("url_not_allowlisted", "WhatsApp API host is not in the current outbound allowlist.");
     }
     const metadataResponse = await this.deps.fetchWithTimeout(metadataUrl, {
@@ -321,6 +408,24 @@ export function isAllowedWhatsAppMediaUrl(urlValue: string): boolean {
     hostname.endsWith(".fbsbx.com") ||
     hostname.endsWith(".whatsapp.net")
   );
+}
+
+/**
+ * Exact-host https gate for provider media URLs (no subdomain or lookalike
+ * matching, no userinfo, default port only). Applied before any credential is
+ * resolved, in addition to the connection outbound allowlist.
+ */
+export function isHttpsUrlOnHosts(urlValue: string, hosts: readonly string[]): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlValue);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port) {
+    return false;
+  }
+  return hosts.includes(parsed.hostname.toLowerCase());
 }
 
 function readConfigString(config: Record<string, unknown>, key: string): string | undefined {

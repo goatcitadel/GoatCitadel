@@ -85,7 +85,7 @@ export function normalizeTelegramWebhookPayload(input: {
   connectionId: string;
   payload: unknown;
   /**
-   * channelVoiceInboundV1Enabled gate. Absent/false (default) ⇒ voice/audio
+   * channelVoiceInboundV1Enabled gate. Callers pass the resolved flag (on by default). Absent/false ⇒ voice/audio
    * updates keep today's behavior: no content, so they are silently ignored.
    */
   voiceInboundEnabled?: boolean;

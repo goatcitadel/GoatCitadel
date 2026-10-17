@@ -37,6 +37,8 @@ export function registerGoogleChatWebhookRoutes(
       connectorLabel: "Google Chat",
       rawBodyKey: "googleChatRawBody",
       missingRawBodyError: "Missing Google Chat raw request body",
+      // A disabled/disconnected connection must answer `{}` too, never a body Chat would post as a reply.
+      ignoredReply: () => EMPTY_CHAT_REPLY,
       verifySignature: async ({ request, connection }) => {
         // Mirrors channel-core capability truth: inbound exists only in Chat app (service-account) mode.
         if (
@@ -65,6 +67,8 @@ export function registerGoogleChatWebhookRoutes(
             authorizationHeader: readHeaderValue(request.headers.authorization),
             audienceType,
             audience,
+            // Workspace add-on deployments: the add-on project's service account may also sign (endpoint_url only).
+            addOnProjectNumber: readConfigString(connection.config.addOnProjectNumber),
             fetchCerts,
           });
         } catch {

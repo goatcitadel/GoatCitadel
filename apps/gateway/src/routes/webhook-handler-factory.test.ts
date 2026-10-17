@@ -248,6 +248,46 @@ describe("webhook-handler-factory contract behavior", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  it("uses a channel's ignoredReply override for a disabled connection, keeping the default elsewhere", async () => {
+    const build = (ignoredReply?: (eventType: string | undefined, reason: string) => unknown) =>
+      createWebhookHandler(
+        {
+          services: {
+            integrationWebhooks: {
+              getIntegrationConnection: vi.fn(() => ({ key: "google-chat", enabled: false, config: {} })),
+            },
+          },
+        } as any,
+        {
+          source: "google-chat",
+          connectorKey: "google-chat",
+          connectorLabel: "Google Chat",
+          rawBodyKey: "googleChatRawBody",
+          missingRawBodyError: "raw body missing",
+          verifySignature: () => ({ ok: true as const }),
+          parsePayload: () => ({ kind: "dispatch" as const, parsed: { ok: true } }),
+          dispatch: vi.fn(),
+          ...(ignoredReply ? { ignoredReply } : {}),
+        },
+      );
+
+    const ignoredReply = vi.fn(() => ({}));
+    const overridden = createReply();
+    await build(ignoredReply)(createRequest(), overridden as any);
+    expect(overridden.statusCode).toBe(200);
+    expect(overridden.payload).toEqual({});
+    expect(ignoredReply).toHaveBeenCalledWith(undefined, "connection_disabled");
+
+    const defaulted = createReply();
+    await build()(createRequest(), defaulted as any);
+    expect(defaulted.payload).toEqual({
+      accepted: true,
+      ignored: true,
+      eventType: undefined,
+      reason: "connection_disabled",
+    });
+  });
+
   it("delegates every allowed message to durable acceptance without inline side effects", async () => {
     const acceptInboundChannelEvent = vi.fn(async (input: { eventType: string; message: { eventId: string } }) => ({
       accepted: true as const,

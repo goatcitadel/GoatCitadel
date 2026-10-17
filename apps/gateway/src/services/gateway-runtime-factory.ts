@@ -165,6 +165,12 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
       await gateway.stopExternalAdmission();
     },
     startDeferredInit: async (signal) => {
+      // Serving path only, installed before deferred init connects Discord:
+      // voice-only Discord messages are dropped before pairing/allowlist side
+      // effects unless inbound channel voice is on (the bridge re-checks).
+      gateway.discordRuntimeService.setVoiceInboundGate(
+        async () => await gateway.isFeatureEnabled("channelVoiceInboundV1Enabled"),
+      );
       await gateway.startDeferredInit(signal);
       // Persistent channel streams start only on the serving path, never for admin/cron CLIs that call init().
       if (!signal?.aborted) await channelStreams().sync();

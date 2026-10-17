@@ -334,6 +334,12 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         placeholder: "123456789012",
         description: "Chat app mode. The project number, or this connection's public HTTPS webhook URL.",
       }),
+      text("addOnProjectNumber", "Workspace Add-on Project Number", {
+        placeholder: "123456789012",
+        advanced: true,
+        description:
+          "Only for Chat apps built as Google Workspace add-ons, with the endpoint URL audience. The add-on's numeric Google Cloud project number; leave empty for a regular Chat app.",
+      }),
       text("defaultSpace", "Default Space", {
         placeholder: "spaces/AAAAxxxx",
         advanced: true,

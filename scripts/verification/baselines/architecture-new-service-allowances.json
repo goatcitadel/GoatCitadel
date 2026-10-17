@@ -2395,6 +2395,14 @@
     },
     {
       "planStep": "C0",
+      "path": "apps/gateway/src/services/channel-typing-adapters.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 3,
+      "reason": "WS5 channel-parity program: provider typing indicators for Mattermost, Signal and WhatsApp. The adapters take explicit secret, allowlist and fetch functions; the single deps adapter reads the three gateway-owned ports (resolveConnectionSecret, isConnectionUrlAllowlisted, fetchWithDiagnosticsTimeout) once each and has no host callbacks. GatewayService gains nothing.",
+      "evidence": "apps/gateway/src/services/channel-typing-adapters.test.ts covers the Mattermost user-id lookup and cache, typing request shape, Signal sendTyping recipient and group params, WhatsApp read receipt with typing indicator and its missing-message-id refusal, allowlist denial, 4xx statuses and non-Meta WhatsApp base URLs; apps/gateway/src/services/comms-service.test.ts covers host routing; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
       "path": "apps/gateway/src/services/tool-path-session-scope.ts",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 10,

@@ -136,7 +136,7 @@ export interface RuntimeSettings {
     chatTimersV1Enabled?: boolean;
     typedRunVariablesV1Enabled?: boolean;
     documentEditingV1Enabled?: boolean;
-    /** Inbound channel voice ingestion (B2a). Absent/false (default) ⇒ Telegram/WhatsApp voice keeps today's placeholder/drop behavior. */
+    /** Inbound channel voice ingestion (B2a). On by default; an explicit false restores the pre-voice placeholder/drop behavior for Telegram/WhatsApp/Slack/Discord. */
     channelVoiceInboundV1Enabled?: boolean;
     /** Round-3 kill switch: planner triviality-skip + speed-model drafting. Absent/false ⇒ feature ON. */
     plannerFastPathV1Disabled?: boolean;
