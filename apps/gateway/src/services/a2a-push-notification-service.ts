@@ -6,6 +6,8 @@ import type {
   A2ATaskPushDeliveryResult,
   A2ATaskPushEventKind,
   A2ATaskPushNotificationConfig,
+  ApprovalCreateInput,
+  ApprovalRequest,
 } from "@goatcitadel/contracts";
 import { fetchAllowlisted } from "@goatcitadel/policy-engine";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
@@ -19,7 +21,31 @@ import type { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
 import { projectA2AExternalValue } from "./a2a-public-projection.js";
 import { buildA2AOutboundWardAction, resolveWardEffectForExternalAction } from "./citadel-ward-gate.js";
+import {
+  buildCitadelWardApprovalPayload,
+  CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
+  type CitadelWardApprovalRef,
+} from "./citadel-ward-approval.js";
+import { DRY_RUN_APPROVAL_TTL_MS } from "./integration-dry-run-gate.js";
 import { projectPublicSecretValue } from "./public-secret-projection.js";
+
+type StoredPushConfig = A2ATaskPushNotificationConfig & { authToken?: string };
+
+export interface A2AApprovedPushInput {
+  approvalId: string;
+  wardAction: string;
+  taskId: string;
+  peerId: string;
+  eventSequence: number;
+}
+
+export interface A2ARefusedPushApprovalInput {
+  approvalId: string;
+  taskId: string;
+  peerId: string;
+  eventSequence: number;
+  disposition: "rejected" | "expired";
+}
 
 export interface A2APeerAuthContext {
   peerId: string;
@@ -39,6 +65,8 @@ export interface A2APushNotificationServiceDependencies {
     since: number,
     checkedAt: string,
   ) => A2ABridgeTaskEvent[] | Promise<A2ABridgeTaskEvent[]>;
+  /** Opens Citadel Ward approvals; without it a ward `require_approval` stays a blocked delivery. */
+  createApproval?: (input: ApprovalCreateInput) => Promise<ApprovalRequest>;
 }
 
 export class A2APushNotificationService {
@@ -62,7 +90,8 @@ export class A2APushNotificationService {
       readString(auth?.bearerToken) ??
       readString(configInput.token) ??
       readString(configInput.bearerToken);
-    const config = await this.deps.storage.a2aTaskPushConfigs.upsert(
+    const pushConfigs = this.deps.storage.a2aTaskPushConfigs;
+    const config = await pushConfigs.upsert(
       {
         taskId: binding.a2aTaskId,
         peerId: peer.peerId,
@@ -91,7 +120,7 @@ export class A2APushNotificationService {
       const task = await this.deps.buildTaskFromBinding(binding, checkedAt);
       await this.deliverForTask(peer, binding, task, checkedAt);
     }
-    return this.sanitizePushConfig(await this.deps.storage.a2aTaskPushConfigs.get(binding.a2aTaskId, peer.peerId));
+    return this.sanitizePushConfig(await pushConfigs.get(binding.a2aTaskId, peer.peerId));
   }
 
   public async getTaskPushNotificationConfig(
@@ -107,13 +136,14 @@ export class A2APushNotificationService {
     params: Record<string, unknown> = {},
   ): Promise<A2ATaskPushNotificationConfig[]> {
     const taskId = readString(params.taskId) ?? readString(params.id);
+    const pushConfigs = this.deps.storage.a2aTaskPushConfigs;
     if (taskId) {
       const binding = await this.requirePeerTaskBinding(peer, { taskId });
-      const config = await this.deps.storage.a2aTaskPushConfigs.find(binding.a2aTaskId, peer.peerId);
+      const config = await pushConfigs.find(binding.a2aTaskId, peer.peerId);
       return config ? [this.sanitizePushConfig(config)] : [];
     }
-    return (await this.deps.storage.a2aTaskPushConfigs.listByPeer(peer.peerId, readNumber(params.limit) ?? 100)).map(
-      (config) => this.sanitizePushConfig(config),
+    return (await pushConfigs.listByPeer(peer.peerId, readNumber(params.limit) ?? 100)).map((config) =>
+      this.sanitizePushConfig(config),
     );
   }
 
@@ -144,16 +174,92 @@ export class A2APushNotificationService {
     task: A2ABridgeTask,
     checkedAt: string,
   ): Promise<A2ATaskPushDeliveryResult[]> {
-    const config = await this.deps.storage.a2aTaskPushConfigs.find(binding.a2aTaskId, peer.peerId);
-    if (!config?.enabled) {
+    return await this.deliverPendingEvents(peer.peerId, binding, task, checkedAt);
+  }
+
+  /**
+   * Deliver the one event an operator approved, re-checking the ward at execution time (deny
+   * still wins), then resume delivery of later events. Refuses quietly (`[]`) when the config,
+   * binding or event is gone, or the event was already delivered or refused.
+   */
+  public async deliverApprovedPush(
+    input: A2AApprovedPushInput,
+    checkedAt = new Date().toISOString(),
+  ): Promise<A2ATaskPushDeliveryResult[]> {
+    let binding: A2ATaskBindingRecord;
+    try {
+      binding = await this.requirePeerTaskBinding({ peerId: input.peerId, scopes: [] }, { taskId: input.taskId });
+    } catch (error) {
+      if (error instanceof A2AJsonRpcServiceError) {
+        return [];
+      }
+      throw error;
+    }
+    const task = await this.deps.buildTaskFromBinding(binding, checkedAt);
+    return await this.deliverPendingEvents(input.peerId, binding, task, checkedAt, {
+      wardApproval: { approvalId: input.approvalId, wardAction: input.wardAction },
+      eventSequence: input.eventSequence,
+    });
+  }
+
+  /** Record a rejected or expired push approval as a blocked delivery of that event. */
+  public async recordRefusedPushApproval(
+    input: A2ARefusedPushApprovalInput,
+    checkedAt = new Date().toISOString(),
+  ): Promise<void> {
+    const pushConfigs = this.deps.storage.a2aTaskPushConfigs;
+    const config = await pushConfigs.find(input.taskId, input.peerId);
+    if (!config || config.lastEventSequence >= input.eventSequence) {
+      return;
+    }
+    await pushConfigs.recordDelivery(
+      input.taskId,
+      input.peerId,
+      {
+        status: "blocked",
+        attemptCount: config.attemptCount + 1,
+        error: `Citadel Ward approval ${input.approvalId} for a2a.outbound.push was ${input.disposition}, so delivery is blocked.`,
+        lastEventSequence: input.eventSequence,
+      },
+      checkedAt,
+    );
+  }
+
+  /**
+   * Deliver every subscribed event after the config's last sequence, in order. A deferred event
+   * waits on its Citadel Ward approval and later events queue behind it instead of opening more
+   * approvals. `approved` names the deferred event an operator approved: it must be the next
+   * pending event, and only that event carries the ward approval.
+   */
+  private async deliverPendingEvents(
+    peerId: string,
+    binding: A2ATaskBindingRecord,
+    task: A2ABridgeTask,
+    checkedAt: string,
+    approved?: { wardApproval: CitadelWardApprovalRef; eventSequence: number },
+  ): Promise<A2ATaskPushDeliveryResult[]> {
+    const config = await this.deps.storage.a2aTaskPushConfigs.find(binding.a2aTaskId, peerId);
+    if (!config?.enabled || (config.lastDeliveryStatus === "deferred_pending_approval" && !approved)) {
       return [];
     }
     const events = (await this.deps.buildEventsForTask(task, config.lastEventSequence, checkedAt)).filter((event) =>
       config.events.includes(event.kind),
     );
+    if (approved && events[0]?.sequence !== approved.eventSequence) {
+      return [];
+    }
     const results: A2ATaskPushDeliveryResult[] = [];
-    for (const event of events) {
-      results.push(await this.deliverPushEvent(config, binding, task, event, checkedAt));
+    let lastEventSequence = config.lastEventSequence;
+    for (const [index, event] of events.entries()) {
+      const wardApproval = index === 0 ? approved?.wardApproval : undefined;
+      const result = await this.deliverPushEvent({ ...config, lastEventSequence }, binding, task, event, checkedAt, {
+        wardApproval,
+      });
+      results.push(result);
+      if (result.status === "deferred_pending_approval" || (wardApproval && result.status !== "delivered")) {
+        break;
+      }
+      lastEventSequence = event.sequence;
     }
     return results;
   }
@@ -195,24 +301,35 @@ export class A2APushNotificationService {
     task: A2ABridgeTask,
     event: A2ABridgeTaskEvent,
     checkedAt: string,
+    options: { wardApproval?: CitadelWardApprovalRef } = {},
   ): Promise<A2ATaskPushDeliveryResult> {
     const attemptCount = config.attemptCount + 1;
+    const pushConfigs = this.deps.storage.a2aTaskPushConfigs;
 
     // Citadel Ward gate (Stage 1): the push binding is workspace-scoped, so it
-    // evaluates against that workspace's citadel. deny/require_approval block
-    // here (recorded as a blocked delivery — retrying cannot change a ward);
-    // require_dry_run threads to the runner, which refuses pre-boundary.
-    const ward = await resolveWardEffectForExternalAction({
+    // evaluates against that workspace's citadel. deny blocks here (recorded as a
+    // blocked delivery — retrying cannot change a ward); require_approval defers the
+    // event behind an operator approval; require_dry_run threads to the runner,
+    // which refuses pre-boundary.
+    const wardAction = buildA2AOutboundWardAction("push");
+    const resolvedWard = await resolveWardEffectForExternalAction({
       storage: this.deps.storage,
       workspaceId: binding.workspaceId,
-      action: buildA2AOutboundWardAction("push"),
+      action: wardAction,
     });
+    // A matching approved ward replay satisfies require_approval (and only that).
+    const wardApproved = resolvedWard.effect === "require_approval" && options.wardApproval?.wardAction === wardAction;
+    const ward = wardApproved ? { ...resolvedWard, effect: undefined } : resolvedWard;
     if (ward.effect === "deny" || ward.effect === "require_approval") {
-      const wardError =
+      const approval =
         ward.effect === "deny"
-          ? `A Citadel Ward denies a2a.outbound.push (citadel ${ward.citadelId}).`
-          : `A Citadel Ward requires approval for a2a.outbound.push (citadel ${ward.citadelId}); approval-gated push delivery is not wired, so delivery is blocked.`;
-      const updated = await this.deps.storage.a2aTaskPushConfigs.recordDelivery(
+          ? { warning: `A Citadel Ward denies a2a.outbound.push (citadel ${ward.citadelId}).` }
+          : await this.openPushWardApproval(config, binding, task, event, ward.citadelId, checkedAt);
+      if ("approvalId" in approval) {
+        return await this.recordDeferredPush(pushConfigs, config, binding, task, event, approval.approvalId, checkedAt);
+      }
+      const wardError = approval.warning;
+      const updated = await pushConfigs.recordDelivery(
         task.id,
         binding.peerId,
         {
@@ -260,7 +377,7 @@ export class A2APushNotificationService {
     });
 
     if (run.status === "executed" || run.claim.replayOutcome === "duplicate") {
-      const updated = await this.deps.storage.a2aTaskPushConfigs.recordDelivery(
+      const updated = await pushConfigs.recordDelivery(
         task.id,
         binding.peerId,
         {
@@ -302,7 +419,7 @@ export class A2APushNotificationService {
           : "retry_scheduled";
     const nextRetryAt =
       status === "retry_scheduled" ? addMinutesIso(checkedAt, Math.min(30, 2 ** attemptCount)) : undefined;
-    const updated = await this.deps.storage.a2aTaskPushConfigs.recordDelivery(
+    const updated = await pushConfigs.recordDelivery(
       task.id,
       binding.peerId,
       {
@@ -326,6 +443,96 @@ export class A2APushNotificationService {
       nextRetryAt,
       error,
       auditRef: run.claim.sideEffectRunId,
+    });
+  }
+
+  /**
+   * Open an operator approval for a ward `require_approval` push. The approval names the exact
+   * event (task, peer, sequence, kind, url hash); executing it is the approval effect's job
+   * (`deliverApprovedPush`). Hosts without `createApproval` keep the blocked delivery.
+   */
+  private async openPushWardApproval(
+    config: StoredPushConfig,
+    binding: A2ATaskBindingRecord,
+    task: A2ABridgeTask,
+    event: A2ABridgeTaskEvent,
+    citadelId: string,
+    checkedAt: string,
+  ): Promise<{ approvalId: string } | { warning: string }> {
+    const wardAction = buildA2AOutboundWardAction("push");
+    const createApproval = this.deps.createApproval;
+    if (!createApproval) {
+      return {
+        warning: `A Citadel Ward requires approval for ${wardAction} (citadel ${citadelId}), but no approval loop is available on this host, so delivery is blocked.`,
+      };
+    }
+    const payload = buildCitadelWardApprovalPayload({
+      wardAction,
+      citadelId,
+      workspaceId: binding.workspaceId,
+      request: {
+        taskId: task.id,
+        peerId: binding.peerId,
+        eventSequence: event.sequence,
+        eventKind: event.kind,
+        urlHash: hashStableJson(config.url),
+      },
+    });
+    try {
+      const approval = await createApproval({
+        kind: CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
+        riskLevel: "caution",
+        payload: { ...payload },
+        preview: {
+          title: `A2A push ${event.kind} to ${binding.peerId} — Citadel Ward approval`,
+          route: wardAction,
+          target: binding.peerId,
+        },
+        linkage: { actionType: CITADEL_WARD_A2A_PUSH_APPROVAL_KIND },
+        expiresAt: new Date(Date.parse(checkedAt) + DRY_RUN_APPROVAL_TTL_MS).toISOString(),
+      });
+      return { approvalId: approval.approvalId };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "citadel_ward_approval_create_failed";
+      return {
+        warning: `A Citadel Ward requires approval for ${wardAction}; the approval could not be opened (${reason}), so delivery is blocked.`,
+      };
+    }
+  }
+
+  /** A deferral is not an attempt: attemptCount and lastEventSequence stay where they were. */
+  private async recordDeferredPush(
+    pushConfigs: Storage["a2aTaskPushConfigs"],
+    config: StoredPushConfig,
+    binding: A2ATaskBindingRecord,
+    task: A2ABridgeTask,
+    event: A2ABridgeTaskEvent,
+    approvalId: string,
+    checkedAt: string,
+  ): Promise<A2ATaskPushDeliveryResult> {
+    const error = `A Citadel Ward requires operator approval for a2a.outbound.push; approval ${approvalId} is pending.`;
+    const updated = await pushConfigs.recordDelivery(
+      task.id,
+      binding.peerId,
+      {
+        status: "deferred_pending_approval",
+        attemptCount: config.attemptCount,
+        error,
+        lastEventSequence: config.lastEventSequence,
+      },
+      checkedAt,
+    );
+    return projectPushDeliveryResult({
+      taskId: task.id,
+      peerId: binding.peerId,
+      url: updated.url,
+      eventSequence: event.sequence,
+      eventKind: event.kind,
+      status: "deferred_pending_approval",
+      attemptCount: updated.attemptCount,
+      checkedAt,
+      error,
+      approvalId,
     });
   }
 

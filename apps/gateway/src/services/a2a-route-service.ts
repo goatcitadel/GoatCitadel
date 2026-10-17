@@ -14,6 +14,7 @@ import type {
   A2AOutboundPreviewResponse,
   A2AOutboundSendResponse,
   A2AOutboundTransport,
+  A2ATaskPushDeliveryResult,
   A2ATaskPushNotificationConfig,
   A2ATaskBindingRecord,
   A2ATaskExportPreviewRequest,
@@ -48,7 +49,11 @@ import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 import type { TaskLifecycleService } from "./task-lifecycle-service.js";
 import type { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
 import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
-import { A2APushNotificationService } from "./a2a-push-notification-service.js";
+import {
+  A2APushNotificationService,
+  type A2AApprovedPushInput,
+  type A2ARefusedPushApprovalInput,
+} from "./a2a-push-notification-service.js";
 import { A2AGrpcClient, type A2AGrpcClientPort } from "./a2a-grpc-client.js";
 import { sendOutboundGrpc } from "./a2a-grpc-outbound-service.js";
 import { buildA2AOutboundWardAction, resolveWardEffectForExternalAction } from "./citadel-ward-gate.js";
@@ -190,6 +195,7 @@ export class A2ARouteService {
       tasks: deps.tasks,
       mutationIdempotencyStore: deps.mutationIdempotencyStore,
       pushDeliveryFetch: deps.pushDeliveryFetch,
+      createApproval: deps.createApproval,
       buildTaskFromBinding: async (binding, checkedAt) => await this.buildTaskFromBinding(binding, checkedAt),
       buildEventsForTask: async (task, since, checkedAt) => await this.buildEventsForTask(task, since, checkedAt),
     });
@@ -523,6 +529,19 @@ export class A2ARouteService {
     checkedAt = new Date().toISOString(),
   ): Promise<{ taskId: string; peerId: string; deleted: boolean }> {
     return await this.pushNotifications.deleteTaskPushNotificationConfig(peer, params, checkedAt);
+  }
+
+  /** Citadel Ward approval effect: deliver the approved deferred push event (ward re-checked). */
+  public async deliverApprovedPush(
+    input: A2AApprovedPushInput,
+    checkedAt?: string,
+  ): Promise<A2ATaskPushDeliveryResult[]> {
+    return await this.pushNotifications.deliverApprovedPush(input, checkedAt);
+  }
+
+  /** Citadel Ward approval effect: record a rejected or expired push approval as blocked. */
+  public async recordRefusedPushApproval(input: A2ARefusedPushApprovalInput, checkedAt?: string): Promise<void> {
+    await this.pushNotifications.recordRefusedPushApproval(input, checkedAt);
   }
 
   public async setGrpcTaskPushNotificationConfig(
@@ -1331,7 +1350,8 @@ export class A2ARouteService {
     workspaceId: string;
   }): Promise<{ task: TaskRecord; created: boolean }> {
     const validate = (task: TaskRecord): TaskRecord => this.validateA2ALocalTask(task, input);
-    const existing = await this.deps.storage.tasks.find(input.localTaskId);
+    const taskStore = this.deps.storage.tasks;
+    const existing = await taskStore.find(input.localTaskId);
     if (existing) {
       return { task: validate(existing), created: false };
     }
@@ -1357,7 +1377,7 @@ export class A2ARouteService {
       );
       return { task: validate(task), created: true };
     } catch (error) {
-      const raced = await this.deps.storage.tasks.find(input.localTaskId);
+      const raced = await taskStore.find(input.localTaskId);
       if (!raced) {
         throw error;
       }
@@ -1370,8 +1390,9 @@ export class A2ARouteService {
     identity: StableA2ADispatchIdentity,
   ): Promise<A2ADispatchClaimResult> {
     return await this.deps.storage.runImmediateTransaction(async () => {
-      const current = await this.deps.storage.a2aTaskBindings.getForUpdate(a2aTaskId);
-      const databaseNow = await this.deps.storage.a2aTaskBindings.readDatabaseNow();
+      const bindings = this.deps.storage.a2aTaskBindings;
+      const current = await bindings.getForUpdate(a2aTaskId);
+      const databaseNow = await bindings.readDatabaseNow();
       const dispatch = readA2ADispatchState(current);
       if (current.durableRunId || dispatch.status === "applied") {
         return { binding: current, owned: false as const };
@@ -1391,7 +1412,7 @@ export class A2ARouteService {
       const turnIdentity = dispatch.turnIdentity ?? identity.turnIdentity;
       const claimToken = randomUUID();
       const claimExpiresAt = new Date(Date.parse(databaseNow) + A2A_DISPATCH_LEASE_MS).toISOString();
-      const claimed = await this.deps.storage.a2aTaskBindings.update(
+      const claimed = await bindings.update(
         a2aTaskId,
         {
           state: current.state === "failed" ? "working" : current.state,
