@@ -673,6 +673,34 @@ describe("code-mode-aider-execution", () => {
       expect(persisted.map((item) => item.filename)).not.toContain("aider.git.patch");
     });
 
+    it("fails closed when Aider plants a nested .git entry in a seeded run", async () => {
+      const operator = await createOperatorRepo({ "src/a.ts": "export const a = 1;\n" });
+      const persisted: Array<{ filename: string; content: string }> = [];
+      const before = operatorSnapshot(operator.repo);
+
+      const result = await executeCodeModeAiderAdapter({
+        ...seededInput(operator, persisted),
+        spawnCommand: vi.fn(() =>
+          fakeChild({
+            exitCode: 0,
+            beforeClose: async () => {
+              await fs.writeFile(path.join(operator.runTempRoot, "aider-live", "src", "a.ts"), "changed\n", "utf8");
+              await fs.writeFile(
+                path.join(operator.runTempRoot, "aider-live", "src", ".git"),
+                `gitdir: ${path.join(operator.repo, ".git")}\n`,
+                "utf8",
+              );
+            },
+          }),
+        ) as never,
+      });
+
+      expect(result).toMatchObject({ failed: true, outcome: "failed", errorCode: "AIDER_PATCH_CAPTURE_FAILED" });
+      expect(result.error).toContain("nested Git entry at src/.git");
+      expect(persisted.map((item) => item.filename)).not.toContain("aider.git.patch");
+      expect(operatorSnapshot(operator.repo)).toEqual(before);
+    });
+
     it("unpinned runs keep the synthetic input workspace", async () => {
       const runTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-unpinned-"));
       tempRoots.push(runTempRoot);

@@ -14,6 +14,7 @@ import {
 } from "./code-mode-aider-workspace-seed.js";
 
 const roots: string[] = [];
+const CAN_CREATE_SYMLINKS = probeSymlinkSupport();
 
 afterEach(() => {
   for (const root of roots.splice(0)) {
@@ -210,7 +211,115 @@ describe("Aider workspace seed", () => {
 
     await expect(collectSeededCodeModeAiderPatch(seeded)).rejects.toThrow(/exceeds/iu);
   });
+
+  it("stages changes an Aider-written .gitignore would hide", async () => {
+    const fixture = createFixture({ "src/a.ts": "export const a = 1;\n" });
+    const seeded = await seedDefault(fixture);
+    writeFile(fixture.workTreeRoot, ".gitignore", "src/\n");
+    writeFile(fixture.workTreeRoot, "src/a.ts", "export const a = 2;\n");
+    writeFile(fixture.workTreeRoot, "src/new.ts", "export const fresh = true;\n");
+
+    const patch = await collectSeededCodeModeAiderPatch(seeded);
+
+    expect(patch?.content).toContain("diff --git a/src/a.ts b/src/a.ts");
+    expect(patch?.content).toContain("diff --git a/src/new.ts b/src/new.ts");
+  });
+
+  it("refuses a nested .git directory in the work tree", async () => {
+    const fixture = createFixture({ "a.ts": "export {};\n" });
+    const seeded = await seedDefault(fixture);
+    writeFile(fixture.workTreeRoot, "vendor/x/.git/HEAD", "ref: refs/heads/main\n");
+    writeFile(fixture.workTreeRoot, "vendor/x/y.ts", "export {};\n");
+
+    await expect(collectSeededCodeModeAiderPatch(seeded)).rejects.toThrow(/nested Git entry at vendor\/x\/\.git/u);
+  });
+
+  it("refuses a gitfile pointing at a host repository", async () => {
+    const fixture = createFixture({ "a.ts": "export {};\n" });
+    const seeded = await seedDefault(fixture);
+    writeFile(fixture.workTreeRoot, "sub/.git", `gitdir: ${path.join(fixture.repo, ".git")}\n`);
+
+    await expect(collectSeededCodeModeAiderPatch(seeded)).rejects.toThrow(/nested Git entry at sub\/\.git/u);
+  });
+
+  it("refuses a gitlink change", async () => {
+    const fixture = createFixture({ "a.ts": "export {};\n" });
+    const blob = git(fixture.repo, ["rev-parse", "HEAD:a.ts"]).trim();
+    const tree = git(
+      fixture.repo,
+      ["mktree"],
+      `100644 blob ${blob}\ta.ts\n160000 commit ${fixture.head}\tsub\n`,
+    ).trim();
+    const commit = git(fixture.repo, ["commit-tree", tree, "-m", "with gitlink"]).trim();
+    const seeded = await seedCodeModeAiderWorkspace({
+      seed: fixture.seed({ baseCommit: commit }),
+      runTempRoot: fixture.runTempRoot,
+      workTreeRoot: fixture.workTreeRoot,
+      pathspec: ".",
+      reservedRelPaths: [],
+    });
+    fs.rmSync(path.join(fixture.workTreeRoot, "sub"), { recursive: true, force: true });
+
+    await expect(collectSeededCodeModeAiderPatch(seeded)).rejects.toThrow(/gitlink change at sub/u);
+  });
+
+  it.skipIf(!CAN_CREATE_SYMLINKS)(
+    "refuses a symbolic link addition (skipped where this platform cannot create symlinks)",
+    async () => {
+      const fixture = createFixture({ "a.ts": "export {};\n" });
+      const seeded = await seedDefault(fixture);
+      fs.symlinkSync("a.ts", path.join(fixture.workTreeRoot, "link.ts"), "file");
+
+      await expect(collectSeededCodeModeAiderPatch(seeded)).rejects.toThrow(/symbolic link at link\.ts/u);
+    },
+  );
+
+  it("refuses a patch that is not valid UTF-8", async () => {
+    const fixture = createFixture({ "a.ts": "export {};\n" });
+    const seeded = await seedDefault(fixture);
+    fs.writeFileSync(path.join(fixture.workTreeRoot, "latin1.txt"), Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]));
+
+    await expect(collectSeededCodeModeAiderPatch(seeded)).rejects.toThrow(/not valid UTF-8/u);
+  });
+
+  it("refuses SHA-256 pinned commits", async () => {
+    const fixture = createFixture({ "a.ts": "export {};\n" });
+    await expect(seedDefault(fixture, { baseCommit: "a".repeat(64) })).rejects.toThrow(
+      "SHA-256 repositories are not supported for Aider seeding.",
+    );
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "compares reserved paths case-insensitively on Windows (skipped off win32)",
+    async () => {
+      const fixture = createFixture({ "Aider/Request.md": "tracked\n", "a.ts": "export {};\n" });
+      await expect(seedDefault(fixture)).rejects.toThrow(/reserved path aider\/request\.md/iu);
+    },
+  );
 });
+
+function probeSymlinkSupport(): boolean {
+  const probeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goat-aider-seed-symlink-probe-"));
+  try {
+    fs.writeFileSync(path.join(probeRoot, "target"), "x");
+    fs.symlinkSync("target", path.join(probeRoot, "link"), "file");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeRoot, { recursive: true, force: true });
+  }
+}
+
+function seedDefault(fixture: ReturnType<typeof createFixture>, overrides: { baseCommit?: string } = {}) {
+  return seedCodeModeAiderWorkspace({
+    seed: fixture.seed(overrides),
+    runTempRoot: fixture.runTempRoot,
+    workTreeRoot: fixture.workTreeRoot,
+    pathspec: ".",
+    reservedRelPaths: ["aider/request.md"],
+  });
+}
 
 function createFixture(files: Record<string, string>) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "goat-aider-seed-"));

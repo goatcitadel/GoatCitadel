@@ -15,6 +15,7 @@ import {
 } from "./code-mode-aider-artifacts.js";
 import type { CodeModeAiderWorkspaceSeed } from "./code-mode-aider-workspace-pin.js";
 import {
+  CODE_MODE_AIDER_SEED_TIMEOUT_MS,
   collectSeededCodeModeAiderPatch,
   seedCodeModeAiderWorkspace,
   type SeededCodeModeAiderWorkspace,
@@ -91,6 +92,7 @@ export async function executeCodeModeAiderAdapter(
         workTreeRoot: runRoot,
         pathspec: repositoryRootRelPath,
         reservedRelPaths: [path.posix.join(repositoryRootRelPath, CODE_MODE_AIDER_MESSAGE_FILE)],
+        timeoutMs: CODE_MODE_AIDER_SEED_TIMEOUT_MS,
       })
     : undefined;
   await fs.mkdir(path.dirname(requestPath), { recursive: true });
@@ -220,7 +222,7 @@ async function captureSeededAiderPatch(
 ): Promise<{ patch?: AiderPatchEvidence; failure?: AiderPatchCaptureFailure }> {
   // F5: for seeded runs the computed diff against the pinned commit wins; explicit patch files are ignored.
   try {
-    return { patch: await collectSeededCodeModeAiderPatch(seeded) };
+    return { patch: await collectSeededCodeModeAiderPatch(seeded, { timeoutMs: CODE_MODE_AIDER_SEED_TIMEOUT_MS }) };
   } catch (error) {
     return {
       failure: {

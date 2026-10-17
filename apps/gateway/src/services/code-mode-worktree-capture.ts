@@ -143,6 +143,18 @@ export function runCodeModeGit(args: string[], options: CodeModeGitRunOptions): 
   });
 }
 
+/** Same hardened invocation as {@link runCodeModeGit}, returning raw stdout bytes for callers that must not decode. */
+export function runCodeModeGitBuffer(args: string[], options: CodeModeGitRunOptions): Buffer {
+  return execFileSync("git", [...resolveGitLocationArgs(options), ...CODE_MODE_GIT_HARDENING_ARGS, ...args], {
+    encoding: "buffer",
+    windowsHide: true,
+    maxBuffer: options.maxBuffer ?? MAX_GIT_CAPTURE_BYTES,
+    timeout: options.timeoutMs,
+    killSignal: "SIGKILL",
+    env: buildSanitizedGitEnvironment(),
+  });
+}
+
 const CODE_MODE_GIT_HARDENING_ARGS: readonly string[] = [
   "--no-optional-locks",
   "-c",
