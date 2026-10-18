@@ -160,6 +160,35 @@ describe("integration diagnostics live-check routing", () => {
     );
   });
 
+  it("routes Matrix live checks with the access token and gates on the network allowlist", async () => {
+    const port = createPort();
+    const fetchMock = vi.mocked(port.fetchWithDiagnosticsTimeout);
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).endsWith("/account/whoami")
+        ? new Response(JSON.stringify({ user_id: "@bot:example.test" }))
+        : new Response(JSON.stringify({ joined_rooms: ["!room:example.test"] })),
+    );
+    const connection = createConnection("matrix", {
+      homeserverUrl: "https://matrix.example.test",
+      accessToken: "matrix-token",
+      defaultRoomId: "!room:example.test",
+    });
+
+    const result = await runIntegrationConnectionLiveChecks(port, connection, { includeSandboxSend: false });
+    expect(result.checks.map((check) => [check.key, check.status])).toEqual([
+      ["matrix_auth", "pass"],
+      ["matrix_room", "pass"],
+    ]);
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer matrix-token");
+
+    fetchMock.mockClear();
+    vi.mocked(port.isConnectionUrlAllowlisted).mockReturnValue(false);
+    const blocked = await runIntegrationConnectionLiveChecks(port, connection, { includeSandboxSend: true });
+    expect(blocked.checks[0]).toMatchObject({ key: "matrix_network", status: "fail" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("routes webhook live checks and skips incomplete channel credentials", async () => {
     const port = createPort();
 

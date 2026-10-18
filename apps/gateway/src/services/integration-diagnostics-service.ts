@@ -311,7 +311,7 @@ export function buildIntegrationConnectionChecks(
           key: "delivery_posture",
           status: "pass",
           message:
-            "Matrix outbound is text-only. Inbound is a separate opt-in /sync long-poll (inboundStreamEnabled); anyone who can post in a joined room can start turns unless the sender allowlist restricts them.",
+            "Matrix outbound is text-only. Inbound is a separate opt-in /sync long-poll (inboundStreamEnabled); inbound is default-deny and only allowlisted Matrix user ids can start turns. If the homeserver rejects the stored sync token the runtime re-primes and messages in that gap are skipped.",
         });
         break;
       case "imessage":

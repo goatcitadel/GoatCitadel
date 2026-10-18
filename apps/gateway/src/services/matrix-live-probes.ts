@@ -66,7 +66,6 @@ export async function runMatrixLiveChecks(input: {
 
   try {
     const whoami = await input.fetcher(`${api}/account/whoami`, { method: "GET", headers });
-    const body = record(await readBoundedResponseJson(whoami, { ...READ_LIMITS, label: "Matrix whoami probe" }));
     if (!whoami.ok) {
       const rejected = whoami.status === 401 || whoami.status === 403;
       probe.steps.push({
@@ -81,6 +80,7 @@ export async function runMatrixLiveChecks(input: {
       });
       return finish(probe);
     }
+    const body = record(await readBoundedResponseJson(whoami, { ...READ_LIMITS, label: "Matrix whoami probe" }));
     const userId = typeof body.user_id === "string" ? body.user_id : "the bot account";
     probe.steps.push({
       key: "matrix_auth",
@@ -137,8 +137,6 @@ async function checkJoinedRoom(
 ): Promise<void> {
   try {
     const joined = await input.fetcher(`${api}/joined_rooms`, { method: "GET", headers });
-    const body = record(await readBoundedResponseJson(joined, { ...READ_LIMITS, label: "Matrix joined_rooms probe" }));
-    const rooms = Array.isArray(body.joined_rooms) ? body.joined_rooms : [];
     if (!joined.ok) {
       probe.steps.push({
         key: "matrix_room",
@@ -148,7 +146,11 @@ async function checkJoinedRoom(
         message: `Matrix returned HTTP ${joined.status} when listing joined rooms.`,
         failureCategory: "platform_unavailable",
       });
-    } else if (!rooms.includes(input.roomId)) {
+      return;
+    }
+    const body = record(await readBoundedResponseJson(joined, { ...READ_LIMITS, label: "Matrix joined_rooms probe" }));
+    const rooms = Array.isArray(body.joined_rooms) ? body.joined_rooms : [];
+    if (!rooms.includes(input.roomId)) {
       probe.steps.push({
         key: "matrix_room",
         label: "Room membership",
@@ -194,7 +196,6 @@ async function sandboxSend(
         body: JSON.stringify({ msgtype: "m.notice", body: "GoatCitadel channel setup verification." }),
       },
     );
-    const body = record(await readBoundedResponseJson(response, { ...READ_LIMITS, label: "Matrix send probe" }));
     if (!response.ok) {
       probe.steps.push({
         key: "matrix_sandbox_send",
@@ -207,6 +208,7 @@ async function sandboxSend(
       });
       return;
     }
+    const body = record(await readBoundedResponseJson(response, { ...READ_LIMITS, label: "Matrix send probe" }));
     probe.steps.push({
       key: "matrix_sandbox_send",
       label: "Sandbox send",

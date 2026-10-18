@@ -477,8 +477,8 @@ describe("structured field interaction", () => {
   });
 });
 
-describe("current all14 guided definitions in both shells", () => {
-  it("shows immutable history, severity, deferred checks, cleanup, and acknowledgements for all14 without treating them as current proof", async () => {
+describe("current all15 guided definitions in both shells", () => {
+  it("shows immutable history, severity, deferred checks, cleanup, and acknowledgements for all15 without treating them as current proof", async () => {
     for (const definition of definitions)
       for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
         const draft = makeDraft(definition),

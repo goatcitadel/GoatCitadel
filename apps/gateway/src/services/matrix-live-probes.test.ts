@@ -43,6 +43,23 @@ describe("Matrix live probes", () => {
     expect(JSON.stringify(result)).not.toContain(TOKEN);
   });
 
+  it("reports token rejected for a 401 with a non-JSON body", async () => {
+    const fetcher = routedFetcher({ whoami: new Response("<html>denied</html>", { status: 401 }) });
+    const result = await runMatrixLiveChecks({ ...base, includeSandboxSend: false, fetcher });
+    expect(result.checks[0]).toMatchObject({ key: "matrix_auth", status: "fail" });
+    expect(result.checks[0]?.message).toContain("token rejected");
+  });
+
+  it("reports an HTTP rejection for joined_rooms and send without reading a non-JSON body", async () => {
+    const fetcher = routedFetcher({
+      joined: new Response("", { status: 403 }),
+      send: new Response("<html>no</html>", { status: 403 }),
+    });
+    const result = await runMatrixLiveChecks({ ...base, includeSandboxSend: true, fetcher });
+    expect(result.checks.find((c) => c.key === "matrix_room")?.message).toContain("HTTP 403");
+    expect(result.checks.find((c) => c.key === "matrix_sandbox_send")).toMatchObject({ status: "fail" });
+  });
+
   it("warns when the default room is not joined", async () => {
     const fetcher = routedFetcher({ joined: json({ joined_rooms: ["!other:example.test"] }) });
     const result = await runMatrixLiveChecks({ ...base, includeSandboxSend: false, fetcher });

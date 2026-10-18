@@ -42,7 +42,7 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
               "GoatCitadel uses the Matrix client-server API with a bot access token for text sends, replies, reactions, redactions and typing notices.",
             ),
             paragraph(
-              "Optionally, GoatCitadel long-polls /sync so messages in rooms the bot has joined can start conversations. Inbound is opt-in and default-deny: only the Matrix user ids you allow (for example @alice:example.com) can start turns. The sync position is saved, so a restart resumes where it stopped.",
+              "Optionally, GoatCitadel long-polls /sync so messages in rooms the bot has joined can start conversations. Inbound is opt-in and default-deny: only the Matrix user ids you allow (for example @alice:example.com) can start turns. The sync position is saved, so a restart resumes where it stopped (if the homeserver rejects the stored token, GoatCitadel re-primes and messages in that gap are skipped).",
             ),
             note(
               "warning",

@@ -268,7 +268,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       inboundOptInField(
         "inboundStreamEnabled",
         "Receive Inbound Messages",
-        "Opt in to a persistent /sync long-poll of the rooms the bot has joined. Anyone who can post in those rooms can start turns, so keep the bot only in trusted rooms.",
+        "Opt in to a persistent /sync long-poll of the rooms the bot has joined. Inbound is default-deny: only the Matrix user ids you allowlist can start turns, so allow only people you trust and keep the bot only in rooms you control.",
       ),
       ...forcedAllowlistInboundFields('Allow Matrix user ids such as "@alice:example.com".'),
       bool("enabled", "Enabled", false),

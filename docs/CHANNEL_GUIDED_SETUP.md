@@ -55,7 +55,7 @@ form controls.
 | Google Chat | Space/thread incoming webhook and reviewed card delivery; provider acceptance and human receipt are separate. |
 | Teams | Signed Workflows webhook with Anyone trigger authentication, explicit flow owner/co-owner and reviewed Adaptive Card delivery. Tenant-authenticated triggers need bearer support that this adapter does not provide. Retired connector URLs require migration; provider acceptance and visible destination receipt remain separate. |
 | Mattermost | Server, bot, team/channel and permissions; action-specific outbound receipts. |
-| Matrix | Homeserver URL, bot account access token and joined room; whoami and joined-room checks plus a sandbox notice. Opt-in `/sync` inbound stays allowlist-only and resumes from a persisted sync token. Outbound is text-only. |
+| Matrix | Homeserver URL, bot account access token and joined room; whoami and joined-room checks plus a sandbox notice. Opt-in `/sync` inbound stays allowlist-only and resumes from a persisted sync token (a homeserver-rejected token re-primes and skips the gap). Outbound is text-only. |
 | Signal | Existing bridge/account/recipient and outbound receipt. Receive remains prohibited until the bridge provides durable acknowledgement and replay. |
 | iMessage | Callable BlueBubbles bridge, chat/handle and action-specific Private API requirements. Photon/Spectrum remains diagnostics-only. |
 | Zalo OA | Official Account token and eligible recipient; narrow outbound receipt and separate human confirmation. |
