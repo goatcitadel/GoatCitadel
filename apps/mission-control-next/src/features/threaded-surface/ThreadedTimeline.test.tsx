@@ -12,6 +12,8 @@ import {
   resolveFocusedActiveTurn,
   countVisibleLines,
   resolveStreamingPreviewScrollSignal,
+  advanceStreamPhase,
+  INITIAL_STREAM_PHASE,
 } from "./ThreadedTimeline";
 import {
   publishChannelActivityFromRealtimeEvent,
@@ -616,6 +618,56 @@ describe("ThreadedTimeline", () => {
     expect(renderer.root.findAllByType("a").map((link) => link.props.href)).toEqual([
       "https://example.test/launch-notes",
     ]);
+  });
+
+  it("announces streamed reasoning once through the single live region, then the answer stream", () => {
+    const props = buildProps({ streamStatus: "streaming", activeStreamingTurnId: "turn-1" });
+    const turn = props.thread.turns[0];
+    turn.assistantMessage = undefined;
+    turn.trace.status = "running";
+    turn.thinking = "Weighing the menu";
+    const liveRegionText = (renderer: TestRenderer.ReactTestRenderer) =>
+      renderer.root.findByProps({ className: "mc-next-thread-live-region" }).children.join("");
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    expect(liveRegionText(renderer)).toBe("Cowork model is thinking.");
+    expect(
+      renderer.root.findByProps({ className: "mc-next-thread-thinking" }).findByType("summary").children.join(""),
+    ).toBe("Thinking…");
+
+    // Further reasoning deltas do not change the announcement, so it is not repeated.
+    turn.thinking = "Weighing the menu, then the playlist";
+    act(() => renderer.update(<ThreadedTimeline props={{ ...props } as any} />));
+    expect(liveRegionText(renderer)).toBe("Cowork model is thinking.");
+
+    // Once answer text arrives the region moves on to the ordinary streaming status.
+    const answering = {
+      ...props,
+      streamingPreview: { turnId: "turn-1", visibleText: "Here is the plan" },
+    };
+    act(() => renderer.update(<ThreadedTimeline props={answering as any} />));
+    expect(liveRegionText(renderer)).toBe("Cowork response streaming.");
+
+    // A later reasoning pass after intermediate answer text (multi-pass tool turn) is announced again.
+    turn.thinking = "Weighing the menu, then the playlist, then the lights";
+    act(() => renderer.update(<ThreadedTimeline props={{ ...answering } as any} />));
+    expect(liveRegionText(renderer)).toBe("Cowork model is thinking.");
+
+    // A message queued while the model is thinking is still announced.
+    act(() => renderer.update(<ThreadedTimeline props={{ ...answering, queuedCount: 1 } as any} />));
+    expect(liveRegionText(renderer)).toBe("Cowork model is thinking with 1 queued.");
+  });
+
+  it("advances the stream phase by whichever text grew last", () => {
+    let state = advanceStreamPhase(INITIAL_STREAM_PHASE, "turn-1", 5, 0);
+    expect(state.phase).toBe("thinking");
+    expect(advanceStreamPhase(state, "turn-1", 5, 0)).toBe(state);
+    state = advanceStreamPhase(state, "turn-1", 5, 12);
+    expect(state.phase).toBe("answering");
+    state = advanceStreamPhase(state, "turn-1", 9, 12);
+    expect(state.phase).toBe("thinking");
+    expect(advanceStreamPhase(state, "turn-1", 12, 20).phase).toBe("answering");
+    expect(advanceStreamPhase(state, "turn-2", 0, 0).phase).toBe("idle");
   });
 
   it("shows why memory citations were used without adding why-used copy to ordinary citations", () => {
