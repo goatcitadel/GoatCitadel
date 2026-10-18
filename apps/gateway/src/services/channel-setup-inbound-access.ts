@@ -13,6 +13,7 @@ export const GUIDED_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   "nextcloud-talk",
   "ntfy",
   "mattermost",
+  "matrix",
   "signal",
   "google-chat",
 ]);
@@ -25,6 +26,7 @@ export const GUIDED_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
 export const FORCED_ALLOWLIST_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   "ntfy",
   "mattermost",
+  "matrix",
   "signal",
   "google-chat",
 ]);

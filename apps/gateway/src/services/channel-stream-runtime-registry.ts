@@ -1,9 +1,12 @@
 import type { IntegrationConnection } from "@goatcitadel/contracts";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import {
   dispatchInboundWebhookMessage,
   type DurableInboundChannelAcceptInput,
   type DurableInboundChannelAcceptResult,
 } from "./channel-inbound-dispatch.js";
+import { createSystemSettingsChannelStreamCursorStore } from "./channel-stream-cursor-store.js";
+import { createMatrixStreamAdapter } from "./channel-stream-adapters/matrix-stream-adapter.js";
 import { createMattermostStreamAdapter } from "./channel-stream-adapters/mattermost-stream-adapter.js";
 import { createNtfyStreamAdapter } from "./channel-stream-adapters/ntfy-stream-adapter.js";
 import { createSignalStreamAdapter } from "./channel-stream-adapters/signal-stream-adapter.js";
@@ -11,7 +14,10 @@ import { ChannelStreamRuntimeService, type ChannelStreamEvent } from "./channel-
 
 /** The narrow Gateway surface the stream runtime needs. All members are read lazily, at call time. */
 export interface ChannelStreamRuntimeHost {
-  storage: { integrationConnections: { list(workspaceId?: string, limit?: number): Promise<IntegrationConnection[]> } };
+  storage: {
+    integrationConnections: { list(workspaceId?: string, limit?: number): Promise<IntegrationConnection[]> };
+    systemSettings: Pick<AsyncStorage["systemSettings"], "get" | "set">;
+  };
   acceptInboundChannelEvent(input: DurableInboundChannelAcceptInput): Promise<DurableInboundChannelAcceptResult>;
   recordDevDiagnostic(input: {
     level: "info" | "warn" | "error";
@@ -70,6 +76,8 @@ function createStreamRuntime(host: ChannelStreamRuntimeHost): ChannelStreamRunti
         ...(event.responseOptions ? { responseOptions: event.responseOptions } : {}),
       },
     );
+  // Read host.storage.systemSettings at call time, like every other host member.
+  const systemSettings = () => host.storage.systemSettings;
   const sharedDeps = {
     // Plain fetch: a persistent stream must not inherit the diagnostics request timeout.
     fetch: ((input, init) => fetch(input, init)) as typeof fetch,
@@ -82,6 +90,13 @@ function createStreamRuntime(host: ChannelStreamRuntimeHost): ChannelStreamRunti
     adapters: [
       createNtfyStreamAdapter(sharedDeps),
       createMattermostStreamAdapter({ ...sharedDeps, createWebSocket: (url) => new WebSocket(url) }),
+      createMatrixStreamAdapter({
+        ...sharedDeps,
+        cursorStore: createSystemSettingsChannelStreamCursorStore({
+          get: (key) => systemSettings().get(key),
+          set: (key, value, now) => systemSettings().set(key, value, now),
+        }),
+      }),
       createSignalStreamAdapter({ fetch: sharedDeps.fetch, isUrlAllowlisted: sharedDeps.isUrlAllowlisted }),
     ],
     dispatch,

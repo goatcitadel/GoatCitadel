@@ -35,7 +35,8 @@ export interface ChannelStreamRunContext {
   touch(): void;
   /** Resolves only after durable acceptance (or a gate drop); the cursor advances only after this resolves. */
   emit(event: ChannelStreamEvent, cursor?: string): Promise<void>;
-  diagnostic(event: string, message: string, context?: Record<string, unknown>): void;
+  /** `event` is a bare name; the runtime prefixes `<channelKey>.stream.`. Level defaults to info. */
+  diagnostic(event: string, message: string, context?: Record<string, unknown>, level?: "info" | "warn"): void;
 }
 
 /** 401/403: stop retrying until the next sync() sees a new connection revision. */
@@ -347,8 +348,8 @@ export class ChannelStreamRuntimeService {
           update({ lastInboundAt: this.now().toISOString() });
           clearError();
         },
-        diagnostic: (event, message, context) => {
-          diagnostic("info", event, message, context);
+        diagnostic: (event, message, context, level) => {
+          diagnostic(level ?? "info", event, message, context);
         },
       };
       try {

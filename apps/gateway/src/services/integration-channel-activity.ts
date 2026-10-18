@@ -185,6 +185,7 @@ async function sendActivityTyping(
   if (
     connection.key === "discord" ||
     connection.key === "mattermost" ||
+    connection.key === "matrix" ||
     connection.key === "signal" ||
     connection.key === "imessage"
   ) {

@@ -1,5 +1,5 @@
 // Test-only fixtures: build DurableInboundChannelAcceptInput values from the REAL
-// ntfy / Mattermost / Signal adapter output and the real Google Chat normalizer,
+// ntfy / Mattermost / Signal / Matrix adapter output and the real Google Chat normalizer,
 // mirroring exactly what the stream runtime and the Google Chat route hand to the
 // durable acceptance boundary (acceptance input is secret-free).
 import type { IntegrationConnection } from "@goatcitadel/contracts";
@@ -9,6 +9,7 @@ import {
   createMattermostStreamAdapter,
   type MattermostWebSocketLike,
 } from "./channel-stream-adapters/mattermost-stream-adapter.js";
+import { createMatrixStreamAdapter } from "./channel-stream-adapters/matrix-stream-adapter.js";
 import { createNtfyStreamAdapter } from "./channel-stream-adapters/ntfy-stream-adapter.js";
 import { createSignalStreamAdapter } from "./channel-stream-adapters/signal-stream-adapter.js";
 import { normalizeGoogleChatEvent } from "./google-chat-webhook.js";
@@ -207,6 +208,47 @@ async function buildSignal(): Promise<NewAdapterCase> {
   };
 }
 
+async function buildMatrix(): Promise<NewAdapterCase> {
+  const conn = connection("matrix", "conn-matrix", {
+    homeserverUrl: "https://matrix.example.test",
+    accessTokenEnv: "MATRIX_ACCESS_TOKEN",
+    inboundStreamEnabled: true,
+  });
+  const controller = new AbortController();
+  const message = {
+    type: "m.room.message",
+    event_id: "$evt1",
+    sender: "@alice:example.test",
+    origin_server_ts: 1760000000000,
+    content: { msgtype: "m.text", body: "hello bot" },
+  };
+  let polled = false;
+  const adapter = createMatrixStreamAdapter({
+    fetch: (async (input: string | URL | Request) => {
+      const url = String(input);
+      const reply = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+      if (url.includes("/account/whoami")) return reply({ user_id: "@bot:example.test" });
+      if (url.includes("timeout=0")) return reply({ next_batch: "prime-1" });
+      if (polled) {
+        controller.abort();
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      }
+      polled = true;
+      return reply({
+        next_batch: "s2",
+        rooms: { join: { "!room:example.test": { timeline: { events: [message] } } } },
+      });
+    }) as unknown as typeof fetch,
+    resolveSecret: () => "matrix-secret",
+    isUrlAllowlisted: () => true,
+    cursorStore: { read: async () => undefined, write: async () => undefined },
+    longPollTimeoutMs: 1000,
+  });
+  const emitted: ChannelStreamEvent[] = [];
+  await adapter.run({ ...recordingCtx(conn, emitted), signal: controller.signal });
+  return { name: "matrix", input: toAcceptInput(conn, emitted[0]!), expectedKey: "matrix:conn-matrix:$evt1" };
+}
+
 function buildGoogleChat(): NewAdapterCase {
   const connectionId = "conn-gchat";
   const parsed = normalizeGoogleChatEvent({
@@ -252,5 +294,5 @@ function buildGoogleChat(): NewAdapterCase {
 }
 
 export async function buildNewAdapterCases(): Promise<NewAdapterCase[]> {
-  return [await buildNtfy(), await buildMattermost(), await buildSignal(), buildGoogleChat()];
+  return [await buildNtfy(), await buildMattermost(), await buildSignal(), await buildMatrix(), buildGoogleChat()];
 }

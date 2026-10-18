@@ -57,9 +57,16 @@ const DISCORD_TYPING_TTL_MS = 10_000;
 const DISCORD_SNOWFLAKE_PATTERN = /^[0-9]{5,25}$/;
 
 const mattermostUserIdCache = new Map<string, string>();
+const matrixUserIdCache = new Map<string, string>();
+const MATRIX_TYPING_TIMEOUT_MS = 10_000;
+const MATRIX_ROOM_ID_PATTERN = /^![^\s:]+(?::\S+)?$/;
 
 export function resetMattermostTypingUserCache(): void {
   mattermostUserIdCache.clear();
+}
+
+export function resetMatrixTypingUserCache(): void {
+  matrixUserIdCache.clear();
 }
 
 /** Discord gateway-mode connections type through the persistent runtime; everything else uses REST. */
@@ -72,6 +79,8 @@ export async function emitProviderTyping(args: ChannelTypingAdapterArgs): Promis
     switch (args.connection.key) {
       case "mattermost":
         return await emitMattermostTyping(args);
+      case "matrix":
+        return await emitMatrixTyping(args);
       case "signal":
         return await emitSignalTyping(args);
       case "whatsapp":
@@ -86,6 +95,58 @@ export async function emitProviderTyping(args: ChannelTypingAdapterArgs): Promis
   } catch (error) {
     return unsupported(args, errorMessage(error));
   }
+}
+
+export async function emitMatrixTyping(args: ChannelTypingAdapterArgs): Promise<ChannelTypingResult> {
+  try {
+    const { connection, input } = args;
+    const homeserver = readString(connection.config.homeserverUrl);
+    const token = args.resolveSecret(connection.config, "accessToken", "accessTokenEnv", connection.catalogId);
+    if (!homeserver) return unsupported(args, `${connection.label} is missing a Matrix homeserver URL.`);
+    if (!token) return unsupported(args, `${connection.label} is missing a Matrix access token.`);
+    const roomId = input.target.trim().replace(/^(?:matrix|room):/i, "");
+    if (!MATRIX_ROOM_ID_PATTERN.test(roomId)) {
+      return unsupported(args, "Matrix typing needs a room id target such as !room or !room:example.com.");
+    }
+    const apiBase = `${homeserver.replace(/\/+$/, "")}/_matrix/client/v3`;
+    const authHeaders = { Authorization: `Bearer ${token}` };
+
+    const cacheKey = `${connection.connectionId}:${createHash("sha256").update(token).digest("hex")}`;
+    let userId = matrixUserIdCache.get(cacheKey);
+    if (!userId) {
+      const whoamiUrl = `${apiBase}/account/whoami`;
+      if (!args.isAllowlisted(whoamiUrl)) return unsupported(args, allowlistReason(whoamiUrl));
+      const whoami = await args.fetch(whoamiUrl, { method: "GET", headers: authHeaders, signal: input.signal });
+      const whoamiBody = await readBody(whoami, "Matrix typing");
+      if (!whoami.ok) return unsupported(args, matrixHttpReason(whoami.status, whoamiBody, token));
+      userId = readString(parseJsonRecord(whoamiBody).user_id);
+      if (!userId) return unsupported(args, "Matrix did not return the bot user id.");
+      matrixUserIdCache.set(cacheKey, userId);
+    }
+
+    const url = `${apiBase}/rooms/${encodeURIComponent(roomId)}/typing/${encodeURIComponent(userId)}`;
+    if (!args.isAllowlisted(url)) return unsupported(args, allowlistReason(url));
+    const response = await args.fetch(url, {
+      method: "PUT",
+      headers: { ...authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ typing: true, timeout: MATRIX_TYPING_TIMEOUT_MS }),
+      signal: input.signal,
+    });
+    const body = await readBody(response, "Matrix typing");
+    if (!response.ok) {
+      if (response.status === 401) matrixUserIdCache.delete(cacheKey);
+      return unsupported(args, matrixHttpReason(response.status, body, token));
+    }
+    return sent(args);
+  } catch (error) {
+    return unsupported(args, errorMessage(error));
+  }
+}
+
+function matrixHttpReason(status: number, body: string, token: string): string {
+  const record = parseJsonRecord(body);
+  const detail = [readString(record.errcode), readString(record.error)].filter(Boolean).join(": ");
+  return `Matrix typing failed (${status})${detail ? `: ${detail.split(token).join("[redacted]")}` : ""}`;
 }
 
 export async function emitMattermostTyping(args: ChannelTypingAdapterArgs): Promise<ChannelTypingResult> {
