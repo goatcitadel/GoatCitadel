@@ -185,6 +185,25 @@ Notes:
 - Realtime Change Plan events are refresh signals. The plan, event, owner, approval, and artifact repositories remain canonical.
 - Legacy Chat plan records are compatibility projections and are backfilled into the canonical owner. The `applied` state is compatibility-only for one window.
 
+### Filesystem Write Authority
+
+Definition:
+The set of folders model-driven filesystem, artifact and browser-output tools may write to or delete in: the runtime write jail plus operator write roots.
+
+Authority:
+- Config: `toolPolicy.sandbox.writeJailRoots` (hand-edited runtime jail) and `toolPolicy.sandbox.operatorWriteRoots` (persisted through config generations)
+- Runtime write protection: `toolPolicy.sandbox.runtimeWriteProtection`, derived at every config load from the runtime root and never persisted
+- Validation: `packages/policy-engine/src/sandbox/write-root-safety.ts`
+- Enforcement: `packages/policy-engine/src/sandbox/tool-write-gate.ts` (engine structural check and executor re-check); Gateway path scope in `apps/gateway/src/services/tool-path-session-scope.ts`
+- Mutation: Settings and the `operator_write_root` / `tool_global_access` Change Plan operations (`apps/gateway/src/services/runtime-write-access-change.ts`)
+- Detailed contract: [docs/FILESYSTEM_WRITE_AUTHORITY.md](./FILESYSTEM_WRITE_AUTHORITY.md)
+
+Notes:
+- Operator write roots widen only model-driven filesystem tools. Workbench, worktrees, memory exports and git tools keep the runtime jail.
+- Delete-shaped operations need the folder's `allowDelete`; deleting a write root itself, or any folder that contains a protected runtime path, is refused.
+- Without runtime write protection, operator roots are ignored (fail closed).
+- Approvals do not mint path-scoped write grants; only the governed config owners above change write scope.
+
 ### Chat Workspace Exploration and Delegated Scope
 
 Definition:

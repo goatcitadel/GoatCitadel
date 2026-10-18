@@ -427,7 +427,14 @@ Inbound webhook routes and the canonical gateway event-ingest route keep their r
 Policy engine enforcement includes:
 
 - Path jail (`assertWritePathInJail`) for write scope.
-- Read allowlist combining write roots and read-only roots.
+- Central tool write gate (`sandbox/tool-write-gate.ts`), run in both the engine structural check and the executor:
+  - writes may land in the runtime write jail or in operator write roots;
+  - deletes may land only in the jail or in roots that opted into `allowDelete`;
+  - write roots themselves, and folders containing protected runtime paths, can never be deleted;
+  - hard-forbidden targets (system, credential and profile locations; runtime config, secrets, Postgres and audit paths) are refused everywhere.
+
+  See [Filesystem Write Authority](./FILESYSTEM_WRITE_AUTHORITY.md).
+- Read allowlist combining write roots (including operator write roots) and read-only roots.
 - Existing-path realpath check to reduce symlink escape risks.
 - Network allowlist using wildcard host pattern matching.
 - Risky shell pattern classification and approval gate.
