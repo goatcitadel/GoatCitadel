@@ -1932,6 +1932,41 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     ).toBe(true);
   });
 
+  it("keeps risky background shell commands approval-gated with a command preview under bypass mode", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: { ...policyConfig.tools, approvalMode: "bypass" },
+        sandbox: {
+          ...policyConfig.sandbox,
+          requireApprovalForRiskyShell: true,
+          riskyShellPatterns: ["rm -rf"],
+        },
+      },
+      storage,
+    );
+    const request = {
+      toolName: "shell.exec_background",
+      args: { command: "rm -rf ./build" },
+      agentId: "agent",
+      sessionId: "session",
+      taskId: "task-bypass-background",
+    };
+
+    const evaluation = await engine.evaluateAccess(request);
+    expect(evaluation.requiresApproval).toBe(true);
+    expect(evaluation.reasonCodes).toContain("shell_risky_requires_approval");
+
+    await engine.invoke(request);
+    expect(storage.approvals.createWithTtlDuration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preview: expect.objectContaining({ command: "rm -rf ./build" }),
+      }),
+      15 * 60_000,
+    );
+  });
+
   it("filters inactive grants before selecting the active scoped fallback", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-21T00:05:00.000Z"));
