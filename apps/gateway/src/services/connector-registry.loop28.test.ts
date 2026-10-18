@@ -146,6 +146,8 @@ describe("connector registry loop28 coverage", () => {
       ["imessage", "Set config.defaultHandle or config.defaultTarget to enable approval delivery."],
       ["mattermost", "Set config.defaultChannel or config.defaultTarget to enable approval delivery."],
       ["matrix", "Set config.defaultRoomId or config.defaultTarget to enable approval delivery."],
+      ["qqbot", "Set config.defaultTarget to enable approval delivery."],
+      ["wecom", "Set config.defaultTarget to enable approval delivery."],
       ["nextcloud-talk", "Set config.defaultRoomId or config.defaultConversationId to enable approval delivery."],
       [
         "line",

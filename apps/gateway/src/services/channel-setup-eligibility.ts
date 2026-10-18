@@ -5,6 +5,16 @@ import type {
   ChannelProbeStepRecord,
 } from "@goatcitadel/contracts";
 
+/** Optional default-target config key per channel: its absence only defers the target warning. */
+const OPTIONAL_DEFAULT_TARGET_KEYS: Readonly<Record<string, string>> = {
+  matrix: "defaultRoomId",
+  qqbot: "defaultTarget",
+  wecom: "defaultTarget",
+};
+
+/** Advisory probe warnings that describe an optional capability (WeCom inbound) and never gate setup. */
+const NON_BLOCKING_ADVISORY_WARN_STEPS: ReadonlySet<string> = new Set(["wecom_callback"]);
+
 /** The Gateway classifies exceptions; warning text and UI actions cannot waive required checks. */
 export function evaluateChannelSetupEligibility(
   result: ChannelSetupTestResult,
@@ -48,16 +58,21 @@ export function evaluateChannelSetupEligibility(
       issue.disposition = "deferred";
       continue;
     }
+    const optionalTargetKey = OPTIONAL_DEFAULT_TARGET_KEYS[connection.key];
     if (
       issue.key === "target" &&
-      connection.key === "matrix" &&
-      !connection.config.defaultRoomId &&
+      optionalTargetKey !== undefined &&
+      !connection.config[optionalTargetKey] &&
       issue.level !== "error"
     ) {
       issue.disposition = "deferred";
       continue;
     }
     const step = result.probe?.steps.find((candidate) => candidate.key === issue.key);
+    if (issue.level !== "error" && isNonBlockingAdvisoryWarn(step)) {
+      issue.disposition = "advisory";
+      continue;
+    }
     if (issue.level !== "error" && optionalCleanup(step)) {
       issue.disposition = "advisory";
       requireCleanup();
@@ -70,6 +85,7 @@ export function evaluateChannelSetupEligibility(
   for (const step of result.probe?.steps ?? []) {
     if (step.status === "fail") blockingReasons.push(step.message || step.label + " failed.");
     else if (step.status === "warn") {
+      if (isNonBlockingAdvisoryWarn(step)) continue;
       if (optionalCleanup(step)) requireCleanup();
       else blockingReasons.push(step.message || step.label + " remains unverified.");
     } else if (step.status === "skipped" && step.disposition !== "deferred")
@@ -87,4 +103,8 @@ export function evaluateChannelSetupEligibility(
     ...(result.evidenceId ? { evidenceId: result.evidenceId } : {}),
     ...(requiresAcknowledgement ? { requiresAcknowledgement: true } : {}),
   };
+}
+
+function isNonBlockingAdvisoryWarn(step: ChannelProbeStepRecord | undefined): boolean {
+  return step?.status === "warn" && step.disposition === "advisory" && NON_BLOCKING_ADVISORY_WARN_STEPS.has(step.key);
 }

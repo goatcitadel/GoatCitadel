@@ -52,6 +52,17 @@ describe("isPermittedIntegrationSecretEnvVarName (codex #13, #23)", () => {
     expect(isPermitted("INTEGRATION_MATTERMOST_TOKEN", "channel.mattermost")).toBe(true);
   });
 
+  it("scopes QQBot and WeCom secret env names to their own catalog entries", () => {
+    expect(isPermitted("QQBOT_APP_SECRET", "channel.qqbot")).toBe(true);
+    expect(isPermitted("INTEGRATION_QQBOT_APP_SECRET", "channel.qqbot")).toBe(true);
+    expect(isPermitted("CHANNEL_QQBOT_APP_SECRET", "channel.qqbot")).toBe(true);
+    expect(isPermitted("WECOM_SECRET", "channel.wecom")).toBe(true);
+    expect(isPermitted("WECOM_ENCODING_AES_KEY", "channel.wecom")).toBe(true);
+    expect(isPermitted("WECOM_SECRET", "channel.qqbot")).toBe(false);
+    expect(isPermitted("QQBOT_APP_SECRET", "channel.wecom")).toBe(false);
+    expect(isPermitted("OPENAI_API_KEY", "channel.qqbot")).toBe(false);
+  });
+
   it("rejects unscoped and cross-catalog integration secret names", () => {
     expect(isPermitted("SLACK_BOT_TOKEN")).toBe(false);
     expect(isPermitted("SLACK_BOT_TOKEN", "productivity.apple-notes")).toBe(false);

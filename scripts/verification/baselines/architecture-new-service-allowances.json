@@ -2419,6 +2419,22 @@
     },
     {
       "planStep": "C0",
+      "path": "apps/gateway/src/services/qqbot-live-probes.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 25,
+      "reason": "WS6 new-integrations program: QQBot setup/diagnostics probe owner kept out of the Gateway facade. It reads the injected diagnostics port (config value, secret resolution, allowlist, bounded fetch) once per probe, owns the QQBot structural checks the diagnostics service delegates to, and has no host callbacks.",
+      "evidence": "apps/gateway/src/services/qqbot-live-probes.test.ts covers token mint, bot identity, status-before-body rejection handling, the sandbox-host active send only when requested, no-fetch allowlist and missing-input refusals, and that neither the secret nor the token is emitted; apps/gateway/src/services/integration-diagnostics-service.contract.test.ts covers the structural checks; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/wecom-live-probes.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 20,
+      "reason": "WS6 new-integrations program: WeCom setup/diagnostics probe owner kept out of the Gateway facade. It reads the injected diagnostics port (config value, secret resolution, allowlist, bounded fetch) once per probe, owns the WeCom structural checks the diagnostics service delegates to, and has no host callbacks.",
+      "evidence": "apps/gateway/src/services/wecom-live-probes.test.ts covers gettoken, application lookup, the trusted-IP hint, the advisory callback warning, the sandbox send only when requested, no-fetch allowlist and missing-input refusals, and that neither the secret nor the access token is emitted; apps/gateway/src/services/integration-diagnostics-service.contract.test.ts covers the structural checks; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
       "path": "apps/gateway/src/services/qqbot-webhook.ts",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 0,

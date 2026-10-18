@@ -7,7 +7,7 @@ implementation handoff preceded publication; its evidence is recorded below.
 
 ## Delivered behavior
 
-- All fifteen existing adapters use prerequisite, identity, destination/access,
+- All seventeen existing adapters use prerequisite, identity, destination/access,
   reviewed-check, governed-activation and first-message guidance. Both Cockpit
   and the Classic rollback owner consume the shared definitions and controls.
 - Telegram and Slack use destination cards that preserve canonical targets,

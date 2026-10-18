@@ -1,6 +1,8 @@
 import { runDiscordConnectionLiveChecks } from "./discord-connection-diagnostics.js";
 import { runConfiguredMatrixChecks } from "./matrix-live-probes.js";
 import { runConfiguredNextcloudTalkChecks } from "./nextcloud-talk-live-probes.js";
+import { appendQqbotStructuralChecks, runConfiguredQqbotChecks } from "./qqbot-live-probes.js";
+import { appendWecomStructuralChecks, runConfiguredWecomChecks } from "./wecom-live-probes.js";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import { evaluateChannelInboundAccess } from "@goatcitadel/contracts";
 import type {
@@ -39,6 +41,8 @@ const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set([
   "matrix",
   "signal",
   "google-chat",
+  "qqbot",
+  "wecom",
 ]);
 
 export interface IntegrationDiagnosticsPort {
@@ -312,6 +316,26 @@ export function buildIntegrationConnectionChecks(
           status: "pass",
           message:
             "Matrix outbound is text-only. Inbound is a separate opt-in /sync long-poll (inboundStreamEnabled); inbound is default-deny and only allowlisted Matrix user ids can start turns. If the homeserver rejects the stored sync token the runtime re-primes and messages in that gap are skipped.",
+        });
+        break;
+      case "qqbot":
+        appendQqbotStructuralChecks({
+          deps,
+          config,
+          target: resolveChannelConfigTarget(connection.key, config),
+          checks,
+          requireText,
+          requireSecretRef,
+        });
+        break;
+      case "wecom":
+        appendWecomStructuralChecks({
+          deps,
+          config,
+          target: resolveChannelConfigTarget(connection.key, config),
+          checks,
+          requireText,
+          requireSecretRef,
         });
         break;
       case "imessage":
@@ -784,6 +808,10 @@ export async function runIntegrationConnectionLiveChecks(
     }
     case "matrix":
       return runConfiguredMatrixChecks(deps, connection, options.includeSandboxSend);
+    case "qqbot":
+      return runConfiguredQqbotChecks(deps, connection, options.includeSandboxSend);
+    case "wecom":
+      return runConfiguredWecomChecks(deps, connection, options.includeSandboxSend);
     case "nextcloud-talk": {
       return runConfiguredNextcloudTalkChecks(deps, connection, options.includeSandboxSend);
     }

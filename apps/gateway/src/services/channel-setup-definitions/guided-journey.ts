@@ -114,6 +114,30 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     firstMessage:
       "Confirm the sandbox notice arrives in the chosen room. For inbound, allow your Matrix user id, post in a room the bot has joined, and confirm its reply; messages from users who are not allowed are dropped. Outbound is text-only.",
   },
+  qqbot: {
+    summary:
+      "Send QQ group, C2C, channel and direct-message text through a QQ Bot Open Platform app and receive messages on a signed webhook.",
+    prerequisites: [
+      "A QQ Bot Open Platform app with its AppID and its AppSecret in a gateway environment variable (for example QQBOT_APP_SECRET).",
+      "The QQ hosts (bots.qq.com and api.sgroup.qq.com, or sandbox.api.sgroup.qq.com for the sandbox) added to the network allowlist.",
+      "A public HTTPS Gateway URL registered as the callback URL in the QQ console.",
+      "For inbound, the QQ openids allowed to start conversations; a dropped message's sender_not_allowlisted diagnostic shows the id.",
+    ],
+    firstMessage:
+      "Register the connection webhook URL in the QQ console and pass its validation. Allow your QQ openid, message the bot, and confirm its reply; messages from openids that are not allowed are dropped. Outbound is text-only, and QQ limits active (unprompted) messages to platform quotas.",
+  },
+  wecom: {
+    summary:
+      "Send WeCom application text to users, departments and tags and receive messages on an encrypted callback.",
+    prerequisites: [
+      "A WeCom self-built application with its CorpID, AgentId and Secret (the Secret in a gateway environment variable such as WECOM_SECRET).",
+      "qyapi.weixin.qq.com in the network allowlist and the gateway host's public IP on the application's trusted IP list.",
+      "For inbound, the callback Token and EncodingAESKey in gateway environment variables and a public HTTPS Gateway URL for the callback.",
+      "For inbound, the WeCom userids allowed to start conversations; a dropped message's sender_not_allowlisted diagnostic shows the id.",
+    ],
+    firstMessage:
+      "Confirm the sandbox message arrives in WeCom. For inbound, save the connection webhook URL, Token and EncodingAESKey in the application's message-receiving settings, allow your WeCom userid, message the application, and confirm its reply; messages from users who are not allowed are dropped. Outbound is text-only.",
+  },
   imessage: {
     summary: "Use a reachable BlueBubbles Mac bridge for outbound iMessage delivery.",
     prerequisites: [
@@ -193,7 +217,10 @@ const ADVANCED_KEYS = new Set([
   "profile",
   "photonSidecarUrl",
   "photonAuthEnv",
+  "sandbox",
 ]);
+/** Webhook inbound that is always default-deny: the runtime ignores a stored open_legacy mode for these. */
+const FORCED_WEBHOOK_INBOUND_KEYS = new Set(["qqbot", "wecom"]);
 
 export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): ChannelSetupRuntimeDefinition {
   const key = runtime.definition.catalog.key;
@@ -297,7 +324,11 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
               ? "Telegram pairing approval adds the approved user here. A destination chat ID is not permission to message the bot."
               : key === "google-chat"
                 ? "Chat app mode only: add Google Chat user resource names such as users/123456789. Webhook mode never receives messages. Empty means every inbound sender is denied."
-                : "Add trusted platform actor IDs. Empty means every inbound sender is denied.",
+                : key === "qqbot"
+                  ? "Add the QQ openids (the ids QQ assigns to senders, not QQ numbers) that may start conversations. Inbound is default-deny; empty means every inbound sender is denied."
+                  : key === "wecom"
+                    ? "Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied."
+                    : "Add trusted platform actor IDs. Empty means every inbound sender is denied.",
           visibleWhenFieldEquals: { fieldKey: "inboundAccessMode", value: "allowlist" },
         },
       ],
@@ -337,6 +368,7 @@ export function withGuidedJourney(runtime: ChannelSetupRuntimeDefinition): Chann
       // Stream and Google Chat app inbound are new for a connection, so a hydrated open_legacy mode must not carry over.
       return normalized.inboundStreamEnabled === true ||
         normalized.receiveEvents === true ||
+        FORCED_WEBHOOK_INBOUND_KEYS.has(key) ||
         (key === "google-chat" && Boolean(normalized.serviceAccountKeyEnv ?? normalized.serviceAccountKey))
         ? { ...normalized, inboundAccessMode: "allowlist" }
         : normalized;

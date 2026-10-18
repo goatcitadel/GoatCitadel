@@ -9,6 +9,8 @@ const CHANNEL_TARGET_KEYS: Record<string, string[]> = {
   imessage: ["defaultHandle", "defaultTarget", "target"],
   mattermost: ["defaultChannel", "defaultTarget", "target"],
   matrix: ["defaultRoomId", "defaultTarget", "target"],
+  qqbot: ["defaultTarget", "target"],
+  wecom: ["defaultTarget", "target"],
   "nextcloud-talk": ["defaultRoomId", "defaultConversationId", "defaultTarget", "target"],
   line: ["defaultTarget", "defaultUserId", "defaultGroupId", "defaultRoomId", "target"],
   zalo: ["defaultRecipientId", "defaultTarget", "target"],
