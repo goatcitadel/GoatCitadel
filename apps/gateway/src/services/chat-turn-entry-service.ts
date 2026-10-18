@@ -947,8 +947,16 @@ async function runAgentSendChatMessageLlmPath(
         sourceTurnId: turnId,
         content: retryPrompt,
         mode,
-        providerId: input.providerId ?? prepared.prefs.providerId,
-        model: input.model ?? prepared.prefs.model,
+        providerId:
+          prepared.capabilityProfile?.selection.effectiveProviderId ??
+          prepared.featureAdmission?.references.providerRoute?.primary.providerId ??
+          input.providerId ??
+          prepared.prefs.providerId,
+        model:
+          prepared.capabilityProfile?.selection.effectiveModel ??
+          prepared.featureAdmission?.references.providerRoute?.primary.model ??
+          input.model ??
+          prepared.prefs.model,
         webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
         memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
         retrievalMode: prepared.autonomy.retrievalMode,
