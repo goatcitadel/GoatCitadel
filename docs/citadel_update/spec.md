@@ -614,6 +614,8 @@ GitHub: issues/PR read and draft only
 Figma: selected file access
 ```
 
+> Note (2026-10-18): the 2026-10-15 gap-closure decision adds governed GitHub issue create and comment (ward-gated, idempotent, approval-previewed) beyond the "read and draft only" posture shown above.
+
 #### Step 7: Activate the Citadel
 
 The user lands in the Citadel Overview with modes:

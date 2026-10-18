@@ -482,10 +482,12 @@ export async function runNotionLiveChecks(
 }
 
 async function settleWrite(response: Response, failurePrefix: string): Promise<ParsedProviderResponse> {
-  const parsed = await parseProviderResponse(response);
+  // Auth statuses are decided before the body is read so an unparseable 401 page still maps to a
+  // proven-not-dispatched credential failure.
   if (response.status === 401 || response.status === 403) {
     throw new ProviderAuthRejectedError("Notion", response.status);
   }
+  const parsed = await parseProviderResponse(response);
   if (!response.ok) {
     throw new Error(parsed.message ?? `${failurePrefix} (${response.status}).`);
   }

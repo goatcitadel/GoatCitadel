@@ -343,6 +343,19 @@ describe("notion-integration-action", () => {
     expect(failureStatuses).not.toContain("unknown_external_outcome");
   });
 
+  it("maps an unparseable 401 on a write to notion_auth_rejected", async () => {
+    stubBase();
+    const connection = createConnection({ token: TOKEN, defaultParentPageId: "parent-default" });
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(async () => new Response("<html>unauthorized</html>", { status: 401 })),
+    });
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "page_create", {
+      idempotencyKey: "op-key",
+      input: { title: "Status" },
+    });
+    expect(result).toMatchObject({ status: "blocked", blockedReason: "notion_auth_rejected" });
+  });
+
   it("appends text with a PATCH carrying the content and the marker", async () => {
     stubBase();
     const connection = createConnection();

@@ -2039,6 +2039,8 @@ Connections to test when configured:
 
 - Activepieces
 - Trello
+- Notion page create and block append
+- GitHub issue create and comment
 - Gmail send
 - local bridge writes
 - generic external writeback
@@ -2050,6 +2052,7 @@ Steps:
 3. Test failed-before-boundary case.
 4. Test unknown-post-boundary/manual reconciliation case.
 5. Run explicit Activepieces `check_run_status` if configured.
+6. For Notion and GitHub, run a read action first (`search`, `issue_list`), then a write against a scratch page or repository: confirm the write opens a dry-run preview and approval when a ward requires one, that a repeated idempotency key sends nothing a second time, and that the sent body ends with the idempotency marker (a marker paragraph in Notion, a trailing HTML comment in GitHub).
 
 Expected:
 
@@ -2057,6 +2060,7 @@ Expected:
 - Replay only retries eligible failed-before-boundary/stale claimed-not-sent states.
 - Unknown post-boundary outcomes stay manual.
 - Activepieces status is explicit operator read, not background polling.
+- Notion and GitHub writes are not replayed by the worker; a rejected token (401/403) reports `notion_auth_rejected` or `github_auth_rejected` and never an unknown external outcome.
 
 Result:
 

@@ -1871,7 +1871,7 @@
       "maxHostCallbacks": 29,
       "maxDependencyMemberAccesses": 29,
       "reason": "Reviewed new explicit-context admission and dispatch guard owner. Verifies canonical durable identity, immutable admitted bytes and source visibility under the existing live write fence. Current source revalidation and admission-bound replay validation move verbatim from the source resolver and durable executor into this same owner. Historical frozen-profile replay remains in the durable executor; no new storage, transaction or execution owner is introduced. Original baseline and existing-owner limits remain unchanged.",
-      "evidence": "architecture-guard-tests.log passes175 tests with13 skips; durable-context-guard-tests.log passes147 tests. Context composition also moves here through a typed internal preparation port, keeping historical callback hosts compatible. context-preparation-tests.log passes89 with13 skips, and the actual owned-port path passes within9 current cases/13 historical skips in context-preparation-port-tests.log. Gateway typecheck passes; owner measures29/29, preparation returns to55/58 and two Gateway façade methods become private. No original cap changes."
+      "evidence": "architecture-guard-tests.log passes175 tests with13 skips; durable-context-guard-tests.log passes147 tests. Context composition also moves here through a typed internal preparation port, keeping historical callback hosts compatible. context-preparation-tests.log passes89 with13 skips, and the actual owned-port path passes within9 current cases/13 historical skips in context-preparation-port-tests.log. Gateway typecheck passes; owner measures29/29, preparation returns to55/58 and two Gateway fa\u00e7ade methods become private. No original cap changes."
     },
     {
       "planStep": "C1",
@@ -2480,6 +2480,14 @@
       "maxDependencyMemberAccesses": 11,
       "reason": "WS6 gap-closure program: the Notion search, page read, page create and block append operator actions plus the users/me diagnostics probe live in their own module so integration-action-service keeps its 19-access budget and integration-writeback-run-inputs stays at 21. Its accesses are the connection token and config reads, the host fetch, the durable stores threaded into the shared idempotent runner input, and the diagnostics fetch/secret pair.",
       "evidence": "2026-10-18: notion-integration-action.test.ts covers the exact search, page read, page create and block append requests and headers, the idempotency marker paragraph, 401 mapping to notion_auth_rejected without a token leak and without an unknown external outcome, ward deny, require_dry_run preview plus approval, duplicate replay without a fetch, the paged reconcile probe, and missing parent and token blocks; integration-catalog, integration-diagnostics and integration-action-service suites pass; Gateway typecheck passes; repository counter measures 11 dependency accesses and 9 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/github-integration-action.ts",
+      "maxHostCallbacks": 10,
+      "maxDependencyMemberAccesses": 13,
+      "reason": "WS6 gap-closure program: the GitHub issue and pull request list and read actions, the governed issue create and comment writes, and the repository diagnostics probe live in their own module so integration-action-service keeps its 19-access budget and integration-writeback-run-inputs stays at 21. Its accesses are the connection token and config reads, the host fetch, the durable stores threaded into the shared idempotent runner input, and the diagnostics fetch, secret and config reads.",
+      "evidence": "2026-10-18: github-integration-action.test.ts covers the exact list, read, issue create and comment requests and headers, pull-request filtering, the trailing idempotency marker comment, 401 and non-rate-limit 403 (including an unparseable 401 body) mapping to github_auth_rejected without a token leak and without an unknown external outcome, rate-limit and not-found failures, ward deny, require_dry_run preview plus approval, duplicate replay without a fetch, the issue create reconcile probe, and invalid repo and number blocks; integration-catalog, integration-diagnostics and integration-action-service suites pass; Gateway typecheck passes; repository counter measures 13 dependency accesses and 10 host callbacks."
     }
   ]
 }

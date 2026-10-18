@@ -820,6 +820,26 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       bool("enabled", "Enabled", true),
     ],
   },
+  "productivity.github": {
+    catalogId: "productivity.github",
+    title: "GitHub Connection",
+    description:
+      "Configure a GitHub fine-grained token (referenced by ENV var name) and the default repository. GITHUB_TOKEN and GH_TOKEN are refused; use a dedicated variable such as GITHUB_INTEGRATION_TOKEN.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "GitHub" }),
+      text("tokenEnv", "Fine-grained Token ENV Var", {
+        placeholder: "GITHUB_INTEGRATION_TOKEN",
+        required: true,
+        secretRef: true,
+      }),
+      text("defaultRepo", "Default Repository", {
+        placeholder: "owner/name",
+        required: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
   "automation.gif-search": {
     catalogId: "automation.gif-search",
     title: "GIF Search Connection",
@@ -1284,10 +1304,10 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "productivity",
     "github",
     "GitHub",
-    "GitHub issue/pr/repo automation integration.",
-    "planned",
+    "GitHub issues and pull requests: list, read, create issues and comment through a fine-grained token.",
+    "beta",
     ["token"],
-    ["repo-link"],
+    ["read", "write"],
   ),
 
   // Automation tools

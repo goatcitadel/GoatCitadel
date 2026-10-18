@@ -1,4 +1,5 @@
 import { runDiscordConnectionLiveChecks } from "./discord-connection-diagnostics.js";
+import { runGitHubLiveChecks } from "./github-integration-action.js";
 import { runNotionLiveChecks } from "./notion-integration-action.js";
 import { runConfiguredNextcloudTalkChecks } from "./nextcloud-talk-live-probes.js";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
@@ -470,6 +471,15 @@ export function buildIntegrationConnectionChecks(
         "warn",
       );
     }
+    if (connection.key === "github") {
+      const hasToken = hasConnectionEnvValue(deps, config, "tokenEnv");
+      checks.push({
+        key: "auth",
+        status: hasToken ? "pass" : "fail",
+        message: hasToken ? "GitHub token is configured." : "GitHub token is missing.",
+      });
+      requireText("target", "Default GitHub repository", deps.readConnectionConfigValue(config, "defaultRepo"));
+    }
     if (["apple-notes", "apple-reminders", "things3", "bear"].includes(connection.key)) {
       const bridgeUrl =
         deps.readConnectionConfigValue(config, "bridgeUrl") ?? deps.readConnectionConfigValue(config, "baseUrl");
@@ -607,6 +617,9 @@ export async function runIntegrationConnectionLiveChecks(
 ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe?: ChannelProbeReport }> {
   if (connection.catalogId === "productivity.notion") {
     return { checks: await runNotionLiveChecks(deps, connection) };
+  }
+  if (connection.catalogId === "productivity.github") {
+    return { checks: await runGitHubLiveChecks(deps, connection) };
   }
   if (connection.kind !== "channel") {
     return { checks: [] };

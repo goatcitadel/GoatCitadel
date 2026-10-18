@@ -146,6 +146,88 @@ const OPERATOR_ACTIONS_BY_CATALOG_ID: Record<string, IntegrationOperatorAction[]
       ]),
     ),
   ],
+  "productivity.github": [
+    action(
+      "issue_list",
+      "List Issues",
+      "List recent GitHub issues (pull requests are excluded).",
+      "read",
+      formSchema("action:productivity.github.issue_list", "List GitHub issues", [
+        text("repo", "Repository", {
+          placeholder: "owner/name (defaults to the connection repository)",
+          advanced: true,
+        }),
+        text("state", "State", { placeholder: "open, closed or all (default open)", advanced: true }),
+      ]),
+    ),
+    action(
+      "issue_read",
+      "Read Issue",
+      "Read a GitHub issue and its first comments.",
+      "read",
+      formSchema("action:productivity.github.issue_read", "Read GitHub issue", [
+        text("number", "Issue Number", { placeholder: "123", required: true }),
+        text("repo", "Repository", {
+          placeholder: "owner/name (defaults to the connection repository)",
+          advanced: true,
+        }),
+      ]),
+    ),
+    action(
+      "pr_list",
+      "List Pull Requests",
+      "List recent GitHub pull requests.",
+      "read",
+      formSchema("action:productivity.github.pr_list", "List GitHub pull requests", [
+        text("repo", "Repository", {
+          placeholder: "owner/name (defaults to the connection repository)",
+          advanced: true,
+        }),
+        text("state", "State", { placeholder: "open, closed or all (default open)", advanced: true }),
+      ]),
+    ),
+    action(
+      "pr_read",
+      "Read Pull Request",
+      "Read a GitHub pull request summary.",
+      "read",
+      formSchema("action:productivity.github.pr_read", "Read GitHub pull request", [
+        text("number", "Pull Request Number", { placeholder: "123", required: true }),
+        text("repo", "Repository", {
+          placeholder: "owner/name (defaults to the connection repository)",
+          advanced: true,
+        }),
+      ]),
+    ),
+    action(
+      "issue_create",
+      "Create Issue",
+      "Create a GitHub issue in the chosen repository.",
+      "write",
+      formSchema("action:productivity.github.issue_create", "Create GitHub issue", [
+        text("title", "Title", { placeholder: "Short issue title", required: true }),
+        textarea("body", "Body", { placeholder: "Issue details." }),
+        text("repo", "Repository", {
+          placeholder: "owner/name (defaults to the connection repository)",
+          advanced: true,
+        }),
+      ]),
+    ),
+    action(
+      "issue_comment",
+      "Comment on Issue",
+      "Add a comment to a GitHub issue or pull request.",
+      "write",
+      formSchema("action:productivity.github.issue_comment", "Comment on GitHub issue", [
+        text("number", "Issue or PR Number", { placeholder: "123", required: true }),
+        textarea("body", "Comment", { placeholder: "Comment text.", required: true }),
+        text("repo", "Repository", {
+          placeholder: "owner/name (defaults to the connection repository)",
+          advanced: true,
+        }),
+      ]),
+    ),
+  ],
   "automation.gif-search": [
     action(
       "search",

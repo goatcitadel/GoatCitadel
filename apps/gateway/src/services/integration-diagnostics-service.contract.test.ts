@@ -367,6 +367,47 @@ describe("integration-diagnostics-service contract behavior", () => {
     }
   });
 
+  it("checks the GitHub token and default repository structurally and with a live repo probe", async () => {
+    vi.stubEnv("GITHUB_INTEGRATION_TOKEN", "github-secret");
+    vi.stubEnv("GOATCITADEL_GITHUB_API_BASE_URL", "http://github.test");
+    try {
+      const configured = createIntegrationConnection("github", "productivity", {
+        tokenEnv: "GITHUB_INTEGRATION_TOKEN",
+        token: "github-secret",
+        defaultRepo: "octo/widgets",
+      });
+      expect(buildIntegrationConnectionChecks(createPort(), configured)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ key: "auth", status: "pass" }),
+          expect.objectContaining({ key: "target", status: "pass" }),
+        ]),
+      );
+      const missing = createIntegrationConnection("github", "productivity", {});
+      expect(buildIntegrationConnectionChecks(createPort(), missing)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ key: "auth", status: "fail" }),
+          expect.objectContaining({ key: "target", status: "fail" }),
+        ]),
+      );
+
+      const port = createPort();
+      vi.mocked(port.fetchWithDiagnosticsTimeout).mockResolvedValueOnce(
+        new Response('{"full_name":"octo/widgets"}', { status: 200 }),
+      );
+      const live = await runIntegrationConnectionLiveChecks(port, configured, { includeSandboxSend: false });
+      expect(live.checks).toEqual([expect.objectContaining({ key: "auth_live", status: "pass" })]);
+      expect(vi.mocked(port.fetchWithDiagnosticsTimeout).mock.calls[0]![0]).toBe(
+        "http://github.test/repos/octo/widgets",
+      );
+
+      vi.mocked(port.fetchWithDiagnosticsTimeout).mockResolvedValueOnce(new Response("{}", { status: 401 }));
+      const rejected = await runIntegrationConnectionLiveChecks(port, configured, { includeSandboxSend: false });
+      expect(rejected.checks).toEqual([expect.objectContaining({ key: "auth_live", status: "fail" })]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("uses the service wrapper while checking local model-provider and platform readiness", async () => {
     const host = createPort();
     host.isConnectionUrlAllowlisted = vi.fn(() => true);

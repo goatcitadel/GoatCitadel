@@ -23,10 +23,12 @@ export async function runCatalogParityLane(context, _options = {}, deps) {
         GOATCITADEL_TENOR_API_BASE_URL: fixture.baseUrl,
         GOATCITADEL_GMAIL_API_BASE_URL: fixture.baseUrl,
         GOATCITADEL_NOTION_API_BASE_URL: fixture.baseUrl,
+        GOATCITADEL_GITHUB_API_BASE_URL: fixture.baseUrl,
         // Credentials reach the gateway as environment variables; connection config carries only the names.
         TRELLO_API_KEY: "trello-key",
         TRELLO_TOKEN: "trello-token",
         NOTION_INTEGRATION_TOKEN: "notion-token",
+        GITHUB_INTEGRATION_TOKEN: "github-token",
         GMAIL_ACCESS_TOKEN: "gmail-token",
         GIF_SEARCH_API_KEY: "tenor-key",
       },
@@ -63,6 +65,7 @@ export async function runCatalogParityLane(context, _options = {}, deps) {
           "productivity.bear",
           "productivity.trello",
           "productivity.notion",
+          "productivity.github",
           "automation.gmail",
           "automation.gif-search",
           "automation.peekaboo-screen",
@@ -77,6 +80,7 @@ export async function runCatalogParityLane(context, _options = {}, deps) {
           "productivity.bear",
           "productivity.trello",
           "productivity.notion",
+          "productivity.github",
           "automation.gmail",
           "automation.gif-search",
           "automation.peekaboo-screen",
@@ -254,6 +258,15 @@ async function startCatalogParityFixtureServer() {
       );
       return;
     }
+    if (url.pathname === "/repos/octo/widgets/issues" && method === "GET") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify([
+          { number: 1, title: "Verification issue", state: "open", html_url: "https://github.test/1", user: { login: "ada" } },
+        ]),
+      );
+      return;
+    }
     if (url.pathname === "/v2/search" && method === "GET") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
@@ -316,6 +329,11 @@ function buildCatalogParityConnectionConfig(catalogId, fixtureBaseUrl) {
         tokenEnv: "NOTION_INTEGRATION_TOKEN",
         defaultParentPageId: "notion-parent-1",
       };
+    case "productivity.github":
+      return {
+        tokenEnv: "GITHUB_INTEGRATION_TOKEN",
+        defaultRepo: "octo/widgets",
+      };
     case "automation.gmail":
       return {
         accessTokenEnv: "GMAIL_ACCESS_TOKEN",
@@ -348,6 +366,11 @@ function buildCatalogParityActionInput(catalogId, actionId) {
   if (catalogId === "productivity.notion" && actionId === "search") {
     return {
       query: "verification",
+    };
+  }
+  if (catalogId === "productivity.github" && actionId === "issue_list") {
+    return {
+      state: "open",
     };
   }
   if (catalogId === "automation.gif-search" && actionId === "search") {
