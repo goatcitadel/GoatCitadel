@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatCompletionRequest } from "@goatcitadel/contracts";
+import { PolicyViolationError, type ChatCompletionRequest } from "@goatcitadel/contracts";
 import { composeChatCompletionMemoryContext } from "./llm-completion-memory-context.js";
 import type { LlmCompletionHost } from "./llm-completion-host.js";
+import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 
 // Review Finding 1 regression guard: the chat-completion memory path MUST scope
 // DB memory-item collection to the turn's workspace. The bug was that this caller
@@ -95,5 +96,32 @@ describe("composeChatCompletionMemoryContext workspace scoping (Finding 1)", () 
     const passed = composeContext.mock.calls[0][0] as { workspaceId?: string };
     expect(passed.workspaceId).toBeDefined();
     expect(passed.workspaceId).toBe("default");
+  });
+});
+
+describe("composeChatCompletionMemoryContext Citadel Ward refusal", () => {
+  it("drops memory context instead of failing the turn when a ward refuses the distiller dispatch", async () => {
+    const wardRejection = new LlmDispatchGuardRejectedError(
+      new PolicyViolationError({
+        message: "A Citadel Ward requires this chat to stay on a local model.",
+        details: { reason: "citadel_ward_route_local_unavailable", citadelId: "citadel-ops" },
+      }),
+    );
+    const composeContext = vi.fn(async () => {
+      throw wardRejection;
+    });
+    const host = buildHost({ composeContext, resolveWorkspaceId: () => "workspace-a" });
+    const request = buildRequest("session-a");
+    await expect(composeChatCompletionMemoryContext(host, request, request.memory)).resolves.toBeUndefined();
+  });
+
+  it("still fails closed on a non-ward dispatch authority rejection", async () => {
+    const rejection = new LlmDispatchGuardRejectedError(new Error("budget exhausted"));
+    const composeContext = vi.fn(async () => {
+      throw rejection;
+    });
+    const host = buildHost({ composeContext, resolveWorkspaceId: () => "workspace-a" });
+    const request = buildRequest("session-a");
+    await expect(composeChatCompletionMemoryContext(host, request, request.memory)).rejects.toBe(rejection);
   });
 });

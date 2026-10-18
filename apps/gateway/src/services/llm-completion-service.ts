@@ -22,7 +22,7 @@ import {
   readAuthorizedChatProviderFallback,
 } from "./chat-provider-fallback-authority.js";
 import { shouldAllowCrossProviderFallback } from "./chat-session-utils.js";
-import { filterWardAdmittedFallbackTargets } from "./chat-route-local-ward.js";
+import { filterWardAdmittedFallbackTargets, readCitadelWardDispatchReason } from "./chat-route-local-ward.js";
 import { ChatTurnCancelledError, isChatTurnCancelledError } from "./chat-turn-helpers.js";
 import {
   CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT,
@@ -350,6 +350,7 @@ export async function createChatCompletion(
             remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
             emittedOutput: false,
             failureClass: classifyProviderFailure(lastError),
+            wardReasonCode: readCitadelWardDispatchReason(lastError),
             sessionId: memoryInput?.sessionId,
             turnId: memoryInput?.turnId,
             durableRunId: memoryInput?.runId,
@@ -529,6 +530,7 @@ export async function createChatCompletion(
         remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
         emittedOutput: false,
         failureClass: finalError ? classifyProviderFailure(finalError) : "unknown",
+        wardReasonCode: readCitadelWardDispatchReason(finalError),
         sessionId: memoryInput?.sessionId,
         turnId: memoryInput?.turnId,
         durableRunId: memoryInput?.runId,
@@ -926,6 +928,7 @@ export async function* createChatCompletionStream(
             emittedOutput: attemptStreamed,
             remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
             failureClass: classifyProviderFailure(lastError),
+            wardReasonCode: readCitadelWardDispatchReason(lastError),
             sessionId: memoryInput?.sessionId,
             turnId: memoryInput?.turnId,
             durableRunId: memoryInput?.runId,
@@ -994,6 +997,7 @@ export async function* createChatCompletionStream(
         remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
         emittedOutput: true,
         failureClass: lastError ? classifyProviderFailure(lastError) : "unknown",
+        wardReasonCode: readCitadelWardDispatchReason(lastError),
         sessionId: memoryInput?.sessionId,
         turnId: memoryInput?.turnId,
         durableRunId: memoryInput?.runId,
@@ -1150,6 +1154,7 @@ export async function* createChatCompletionStream(
               emittedOutput: attemptStreamed,
               remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
               failureClass: classifyProviderFailure(lastError),
+              wardReasonCode: readCitadelWardDispatchReason(lastError),
               sessionId: memoryInput?.sessionId,
               turnId: memoryInput?.turnId,
               durableRunId: memoryInput?.runId,
@@ -1211,6 +1216,7 @@ export async function* createChatCompletionStream(
         remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
         emittedOutput: true,
         failureClass: lastError ? classifyProviderFailure(lastError) : "unknown",
+        wardReasonCode: readCitadelWardDispatchReason(lastError),
         sessionId: memoryInput?.sessionId,
         turnId: memoryInput?.turnId,
         durableRunId: memoryInput?.runId,
@@ -1265,6 +1271,7 @@ export async function* createChatCompletionStream(
         remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
         emittedOutput: false,
         failureClass: finalError ? classifyProviderFailure(finalError) : "unknown",
+        wardReasonCode: readCitadelWardDispatchReason(finalError),
         sessionId: memoryInput?.sessionId,
         turnId: memoryInput?.turnId,
         durableRunId: memoryInput?.runId,

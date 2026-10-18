@@ -11,7 +11,6 @@ import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { resolveWardEffectForExternalAction, type CitadelWardGateStorage } from "./citadel-ward-gate.js";
 import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 import type { LlmDispatchWardGuard, LlmService } from "./llm-service.js";
-import { inferRuntimeEngineKind } from "./llm-runtime-truth-service.js";
 import type { ResolvedChatRouteDescriptor } from "./chat-route-resolution.js";
 
 /**
@@ -24,11 +23,14 @@ import type { ResolvedChatRouteDescriptor } from "./chat-route-resolution.js";
  * Other effects (`require_approval`, `require_dry_run`, `redact`) are not
  * enforced for model routing, so they are filtered out before the deny-wins
  * evaluation instead of hiding a matching `route_local` ward. The same ward is
- * re-checked before every Chat model dispatch (`createModelChatWardDispatchGuard`),
- * including fallbacks and turns that reuse a frozen route.
+ * re-checked before every model dispatch that carries Chat content
+ * (`createModelChatWardDispatchGuard`): turns, their tool loops, repairs and
+ * fallbacks, delegation workers, assembly calls, and utility calls with a
+ * session or turn lineage.
  *
- * `model.tool.<toolName>` is not wired here: there is no single model-backed
- * tool boundary to gate yet.
+ * Not ward-gated: utility calls without a session or turn lineage, embedding
+ * and image-generation calls, and `model.tool.<toolName>` actions (there is no
+ * single model-backed tool boundary to gate yet).
  */
 
 type LlmRuntimeConfig = ReturnType<LlmService["getRuntimeConfig"]>;
@@ -68,21 +70,12 @@ export function isLoopbackUrl(url?: string): boolean {
 }
 
 /**
- * A provider is route-local only when it is an Ollama, llama.cpp or generic
- * OpenAI-compatible engine on a loopback host. `route_local` means "kept on
- * this machine", so a LAN host never counts, and named proxy or hosted engines
- * (LiteLLM, remote APIs) never count, even on loopback.
+ * A provider is route-local only when its endpoint is a loopback host, whatever
+ * its engine: `route_local` promises "kept on this machine", so a LAN or remote
+ * host never counts and a loopback host always does.
  */
 export function isRouteLocalProvider(provider: RouteLocalProviderShape): boolean {
-  const engineKind = inferRuntimeEngineKind(provider);
-  // Engine inference reports an unrecognized loopback host (127.0.0.2, [::1]) as
-  // remote_api, so that kind is the generic OpenAI-compatible case here.
-  const localEngine =
-    engineKind === "ollama" ||
-    engineKind === "llama_cpp" ||
-    engineKind === "openai_compatible" ||
-    engineKind === "remote_api";
-  return localEngine && isLoopbackUrl(provider.baseUrl);
+  return isLoopbackUrl(provider.baseUrl);
 }
 
 export function selectRouteLocalProvider<TProvider extends RouteLocalProviderShape & { defaultModel?: string }>(input: {
@@ -120,24 +113,41 @@ export function admitChatRouteWard<
   return descriptor;
 }
 
-const CHAT_TURN_CALL_KINDS: ReadonlySet<ModelUsageCallKind> = new Set([
+/** Call kinds that always carry Chat content: turns and the work they spawn. */
+const CHAT_CONTENT_CALL_KINDS: ReadonlySet<ModelUsageCallKind> = new Set([
   "chat_initial",
   "chat_tool_loop",
   "chat_repair",
   "chat_fallback",
+  "delegation_worker",
+  "assembly_participant",
+  "assembly_synthesis",
 ]);
+
+/**
+ * Whether a dispatch carries Chat content and is therefore ward-gated. Utility
+ * calls (plan drafts, memory distillation, compaction, titles, classifiers)
+ * count when they carry a session or turn lineage; utility calls without one,
+ * embeddings and image generation do not.
+ */
+function isWardGatedDispatch(attribution: ModelUsageAttributionContext): boolean {
+  const callKind = attribution.callKind;
+  if (!callKind) return false;
+  if (CHAT_CONTENT_CALL_KINDS.has(callKind)) return true;
+  return callKind === "utility" && Boolean(attribution.sessionId?.trim() || attribution.turnId?.trim());
+}
 
 /**
  * Dispatch backstop for the `model.chat.<providerId>` ward. Route resolution
  * already keeps a turn local, but durable resumes, bound capability profiles,
- * inbound, autonomous and fallback dispatches can reach a provider without a
- * fresh resolution, so the ward is re-evaluated before every Chat model
- * dispatch: `deny` rejects, and `route_local` rejects any provider that is not
- * route-local. Non-chat calls (utility, embedding, delegation) are not gated.
+ * inbound, autonomous, delegated, assembly, fallback and session-scoped utility
+ * dispatches can reach a provider without a fresh resolution, so the ward is
+ * re-evaluated before each of them: `deny` rejects, and `route_local` rejects
+ * any endpoint that is not on this machine.
  */
 export function createModelChatWardDispatchGuard(deps: RouteLocalWardDependencies): LlmDispatchWardGuard {
   return async ({ attribution, route, providerBaseUrl }) => {
-    if (!attribution.callKind || !CHAT_TURN_CALL_KINDS.has(attribution.callKind)) return;
+    if (!isWardGatedDispatch(attribution)) return;
     const wardStorage = buildModelChatWardStorage(deps.storage);
     if (!wardStorage) return;
     const ward = await resolveWardEffectForExternalAction({
@@ -171,6 +181,18 @@ export async function filterWardAdmittedFallbackTargets<TTarget extends { provid
     if (await llmService.admitsDispatchWard(attribution, target.providerId)) admitted.push(target);
   }
   return admitted;
+}
+
+/**
+ * The ward reason code of a dispatch-time Citadel Ward rejection, so a turn
+ * failure or diagnostic can name it. Other authority rejections return undefined.
+ */
+export function readCitadelWardDispatchReason(error: unknown): RoutingWardReasonCode | undefined {
+  if (!(error instanceof LlmDispatchGuardRejectedError)) return undefined;
+  const cause = error.cause;
+  if (!(cause instanceof PolicyViolationError)) return undefined;
+  const reason = cause.details?.reason;
+  return reason === "citadel_ward_route_local_unavailable" || reason === "citadel_ward_deny" ? reason : undefined;
 }
 
 function rejectWardDispatch(

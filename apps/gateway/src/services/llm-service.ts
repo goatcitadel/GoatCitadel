@@ -1278,9 +1278,10 @@ export class LlmService {
     const requestedOutputTokenCap = outputCapField
       ? (input.outputCapRecovery?.requestedOutputTokenCap ?? outputCapField.value)
       : undefined;
-    const { attribution, resolved } = input;
-    // The ward backstop runs before any usage intent or network attempt.
-    await this.authorizeDispatchWard(attribution, resolved.provider.providerId, resolved.provider.baseUrl);
+    const { attribution, resolved, target } = input;
+    // The ward backstop runs before any usage intent or network attempt, and it
+    // judges locality by the exact URL this attempt will fetch.
+    await this.authorizeDispatchWard(attribution, resolved.provider.providerId, target.url);
     const reservation = await this.modelUsageAccounting?.prepareDispatch({
       source: "llm_service",
       attribution: input.attribution,

@@ -20,10 +20,13 @@ import { DEFAULT_CITADEL_ID, evaluateWards } from "@goatcitadel/contracts";
  *
  * Chat model routing also evaluates through this gate, with the action
  * `model.chat.<providerId>` (see `chat-route-local-ward.ts`). There, `deny`
- * blocks the turn and `route_local` keeps it on a strictly local backend or
- * fails it closed, and every Chat model dispatch re-checks the same ward
- * (`createModelChatWardDispatchGuard`); the other effects pass through for
- * model routing.
+ * blocks the turn and `route_local` keeps it on a loopback-host model or fails
+ * it closed. Every model dispatch that carries Chat content re-checks the same
+ * ward (`createModelChatWardDispatchGuard`): turns and their tool loops,
+ * repairs and fallbacks, delegation workers, assembly calls, and utility calls
+ * with a session or turn lineage. Utility calls without that lineage,
+ * embeddings, image generation and `model.tool.*` actions are not ward-gated;
+ * the other effects pass through for model routing.
  */
 export interface CitadelWardGateStorage {
   workspaces?: {

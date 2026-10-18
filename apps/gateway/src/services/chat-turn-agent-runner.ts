@@ -4462,6 +4462,7 @@ export class ChatTurnAgentRunner {
                   fallback: fallbackDisposition,
                   emittedOutput: providerEmittedOutput,
                   providerFailureClass: failureClass,
+                  wardReasonCode: failureContext?.wardReasonCode,
                   remainingBudgetMs: getRemainingChatCompletionBudgetMs(fallbackDeadlineAt),
                   toolProtocolError,
                   error: error instanceof Error ? { name: error.name, message: error.message } : String(error),

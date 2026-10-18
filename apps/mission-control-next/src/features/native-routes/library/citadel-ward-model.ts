@@ -15,7 +15,8 @@ export const WARD_EFFECT_META: Record<WardEffect, { label: string; detail: strin
   redact: { label: "Redact", detail: "Apply redaction to matching action data." },
   route_local: {
     label: "Route local",
-    detail: "Keep matching Chat model work on a model on this machine, or block the turn when none is available.",
+    detail:
+      "Keep matching Chat model work, including delegated, assembly and session helper calls, on a model on this machine, or block it when none is available.",
   },
 };
 export interface WardDraft {

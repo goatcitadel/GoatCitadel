@@ -82,6 +82,23 @@ describe("LlmService Citadel Ward dispatch backstop", () => {
     await expect(service.admitsDispatchWard(durableTurnAttribution, "moonshot")).resolves.toBe(false);
   });
 
+  it("rejects a streamed route_local turn bound to a cloud provider before any network call", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => completionResponse());
+    const service = createService();
+    service.setDispatchWardGuard(createModelChatWardDispatchGuard({ storage: routeLocalWardStorage() as never }));
+
+    const consume = async () => {
+      for await (const _chunk of service.chatCompletionsStream(
+        { providerId: "moonshot", model: "kimi-k2", messages: [{ role: "user", content: "hello" }] },
+        { ...durableTurnAttribution, callKind: "chat_tool_loop" },
+      )) {
+        // never reached
+      }
+    };
+    await expect(consume()).rejects.toBeInstanceOf(LlmDispatchGuardRejectedError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("dispatches the same turn when no ward applies", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => completionResponse());
     const service = createService();

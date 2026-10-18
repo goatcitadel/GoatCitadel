@@ -7,6 +7,7 @@ import type {
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { LlmCompletionHost } from "./llm-completion-host.js";
 import { buildMemoryContextSystemMessage, extractPromptFromMessages } from "./llm-completion-helpers.js";
+import { readCitadelWardDispatchReason } from "./chat-route-local-ward.js";
 
 export async function composeChatCompletionMemoryContext(
   host: LlmCompletionHost,
@@ -36,19 +37,30 @@ export async function composeChatCompletionMemoryContext(
     maxContextTokens: memoryInput?.maxContextTokens,
     forceRefresh: memoryInput?.forceRefresh,
   };
-  const attributionArgs = attribution ? [{
-    workspaceId: input.workspaceId,
-    sessionId: input.sessionId,
-    turnId: attribution.turnId ?? memoryInput?.turnId,
-    durableRunId: input.runId,
-    taskId: input.taskId,
-    workerId: attribution.workerId,
-    parentOperationId: attribution.operationId,
-    contextIntentHash: attribution.contextIntentHash,
-    contextEntryRefId: attribution.contextEntryRefId,
-    routeDecisionId: attribution.routeDecisionId,
-  }] as const : [] as const;
-  return await host.memoryLifecycleService.composeContext(input, ...attributionArgs);
+  const attributionArgs = attribution
+    ? ([
+        {
+          workspaceId: input.workspaceId,
+          sessionId: input.sessionId,
+          turnId: attribution.turnId ?? memoryInput?.turnId,
+          durableRunId: input.runId,
+          taskId: input.taskId,
+          workerId: attribution.workerId,
+          parentOperationId: attribution.operationId,
+          contextIntentHash: attribution.contextIntentHash,
+          contextEntryRefId: attribution.contextEntryRefId,
+          routeDecisionId: attribution.routeDecisionId,
+        },
+      ] as const)
+    : ([] as const);
+  try {
+    return await host.memoryLifecycleService.composeContext(input, ...attributionArgs);
+  } catch (error) {
+    // A Citadel Ward refusal of the memory distiller dispatch drops memory
+    // context for this turn instead of failing it; other refusals stay authoritative.
+    if (readCitadelWardDispatchReason(error)) return undefined;
+    throw error;
+  }
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   filterWardAdmittedFallbackTargets,
   isLoopbackUrl,
   isRouteLocalProvider,
+  readCitadelWardDispatchReason,
   selectRouteLocalProvider,
 } from "./chat-route-local-ward.js";
 import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
@@ -27,7 +28,7 @@ describe("chat-route-local-ward", () => {
     expect(isLoopbackUrl(undefined)).toBe(false);
   });
 
-  it("isRouteLocalProvider is strict about the engine and the host", () => {
+  it("isRouteLocalProvider means a loopback host for any engine kind", () => {
     expect(isRouteLocalProvider(provider("ollama", "http://127.0.0.1:11434"))).toBe(true);
     expect(isRouteLocalProvider(provider("openai_compatible", "http://10.0.0.5:8000"))).toBe(false);
     expect(isRouteLocalProvider(provider("ollama", "https://ollama.com"))).toBe(false);
@@ -36,7 +37,11 @@ describe("chat-route-local-ward", () => {
     expect(isRouteLocalProvider(provider("llamacpp", "http://10.0.0.7:8080"))).toBe(false);
     expect(isRouteLocalProvider(provider("llamacpp", "http://localhost:8080"))).toBe(true);
     expect(isRouteLocalProvider(provider("my-endpoint", "http://127.0.0.1:8000/v1"))).toBe(true);
-    expect(isRouteLocalProvider(provider("litellm", "http://127.0.0.1:4000"))).toBe(false);
+    // No engine-kind inference: LM Studio and a loopback port that merely contains
+    // "11434" are judged by the host alone.
+    expect(isRouteLocalProvider(provider("lmstudio", "http://127.0.0.1:1234/v1"))).toBe(true);
+    expect(isRouteLocalProvider(provider("cloud-proxy", "https://proxy.example.com:11234/v1"))).toBe(false);
+    expect(isRouteLocalProvider(provider("vllm", "http://[::1]:8000/v1"))).toBe(true);
   });
 
   it("buildModelChatWardAction names the per-provider chat action", () => {
@@ -169,7 +174,7 @@ describe("model.chat ward dispatch backstop", () => {
     }
   });
 
-  it("checks every chat call kind, resolves an unattributed workspace from the session, and skips non-chat calls", async () => {
+  it("checks every chat call kind and resolves an unattributed workspace from the session", async () => {
     const deps = wardDeps("route_local");
     const guard = createModelChatWardDispatchGuard(deps as never);
     for (const callKind of ["chat_tool_loop", "chat_repair", "chat_fallback"] as const) {
@@ -182,9 +187,63 @@ describe("model.chat ward dispatch backstop", () => {
     ).rejects.toBeInstanceOf(LlmDispatchGuardRejectedError);
     expect(deps.storage.chatSessionMeta.get).toHaveBeenCalledWith("session-1");
     expect(deps.storage.workspaces.find).toHaveBeenCalledWith("workspace-from-session");
-    await expect(
-      guard({ attribution: { ...chatAttribution, callKind: "utility" }, route: { providerId: "moonshot" } }),
-    ).resolves.toBeUndefined();
+  });
+
+  it.each(["delegation_worker", "assembly_participant", "assembly_synthesis"] as const)(
+    "route_local rejects a %s dispatch to a cloud provider",
+    async (callKind) => {
+      const guard = createModelChatWardDispatchGuard(wardDeps("route_local") as never);
+      const error = await rejection(
+        guard({
+          attribution: { ...chatAttribution, callKind },
+          route: { providerId: "moonshot" },
+          providerBaseUrl: "https://api.moonshot.ai/v1",
+        }),
+      );
+      expect(error).toBeInstanceOf(LlmDispatchGuardRejectedError);
+      expect(readCitadelWardDispatchReason(error)).toBe("citadel_ward_route_local_unavailable");
+    },
+  );
+
+  it("gates a utility call that carries session or turn lineage and passes one without it", async () => {
+    const deps = wardDeps("route_local");
+    const guard = createModelChatWardDispatchGuard(deps as never);
+    for (const lineage of [{ sessionId: "session-1" }, { turnId: "turn-1", workspaceId: "workspace-ops" }]) {
+      await expect(
+        guard({
+          attribution: { callKind: "utility", utilityKind: "chat_execution_plan_draft", ...lineage },
+          route: { providerId: "moonshot" },
+          providerBaseUrl: "https://api.moonshot.ai/v1",
+        }),
+      ).rejects.toBeInstanceOf(LlmDispatchGuardRejectedError);
+    }
+    deps.storage.citadels.listWards.mockClear();
+    for (const callKind of ["utility", "embedding", "image_generation"] as const) {
+      await expect(
+        guard({
+          attribution: { callKind, workspaceId: "workspace-ops" },
+          route: { providerId: "moonshot" },
+          providerBaseUrl: "https://api.moonshot.ai/v1",
+        }),
+      ).resolves.toBeUndefined();
+    }
+    expect(deps.storage.citadels.listWards).not.toHaveBeenCalled();
+  });
+
+  it("readCitadelWardDispatchReason reads only ward dispatch rejections", () => {
+    const ward = new LlmDispatchGuardRejectedError(
+      new PolicyViolationError({ message: "blocked", details: { reason: "citadel_ward_deny", citadelId: "c" } }),
+    );
+    expect(readCitadelWardDispatchReason(ward)).toBe("citadel_ward_deny");
+    expect(readCitadelWardDispatchReason(new LlmDispatchGuardRejectedError(new Error("budget")))).toBeUndefined();
+    expect(
+      readCitadelWardDispatchReason(
+        new LlmDispatchGuardRejectedError(
+          new PolicyViolationError({ message: "other", details: { reason: "something_else" } }),
+        ),
+      ),
+    ).toBeUndefined();
+    expect(readCitadelWardDispatchReason(new Error("plain"))).toBeUndefined();
   });
 
   it("passes when no ward matches or ward storage is not wired", async () => {
