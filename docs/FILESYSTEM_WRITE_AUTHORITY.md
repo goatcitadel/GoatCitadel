@@ -44,7 +44,7 @@ Operator write roots also count as readable roots, so filesystem tools can list 
 
 1. In Settings › Safety › Tools › Filesystem write roots, choose **Add OS temp folder** and turn on **Allow delete**.
 2. In the same panel, set `fs.delete` to **Available** (danger-risk review).
-3. Chat can now delete files inside the temp folder. Deletes still go through the effective approval policy: under the default approval modes each delete asks first, but a `bypass` approval mode or a matching allow grant skips that prompt. Chat cannot delete the temp folder itself, and nothing outside it is affected.
+3. Chat can now delete files inside the temp folder. Deletes still go through the effective approval policy: under the default approval modes each delete asks first, but a `bypass` approval mode or a matching allow grant skips that prompt. Chat cannot delete the temp folder itself. Making `fs.delete` available is global, though: deletes also become possible in the runtime write jail and in any other operator write root with `allowDelete`, under the same approval policy.
 
 ## Not implemented
 
