@@ -86,7 +86,10 @@ export function resolveIntegrationPluginInstallMetadata(
       packageVersion: resolved.manifest?.version,
       integrityStatus,
       expectedIntegrity,
-      ...integrityEvidence(integrity, Boolean(expectedIntegrity)),
+      ...integrityEvidence(
+        integrity,
+        options.expectedIntegrity ? "operator" : expectedIntegrity ? "manifest" : undefined,
+      ),
     },
     trustWarnings,
     descriptorHealth,
@@ -180,7 +183,7 @@ function integrityStatusFromResult(
 
 function integrityEvidence(
   result: PluginPackageIntegrityResult | undefined,
-  pinned: boolean,
+  evidenceSource: "operator" | "manifest" | undefined,
 ): Partial<IntegrationPluginSourceMetadata> {
   if (!result) {
     return {};
@@ -192,7 +195,7 @@ function integrityEvidence(
       ...(result.expectedIntegrity
         ? {
             expectedIntegrity: result.expectedIntegrity,
-            integritySource: pinned ? ("operator" as const) : ("registry" as const),
+            integritySource: evidenceSource ?? ("registry" as const),
           }
         : {}),
     };
@@ -201,14 +204,18 @@ function integrityEvidence(
     return {
       actualIntegrity: result.actualIntegrity,
       verifiedAt: result.verifiedAt,
-      integritySource: result.integritySource,
+      integritySource: evidenceSource ?? result.integritySource,
       artifactPath: result.artifactPath,
     };
   }
   if (result.status === "not_applicable") {
-    return result.actualIntegrity ? { actualIntegrity: result.actualIntegrity } : {};
+    return {
+      ...(result.actualIntegrity ? { actualIntegrity: result.actualIntegrity } : {}),
+      ...(evidenceSource ? { integritySource: evidenceSource } : {}),
+    };
   }
-  return {};
+  // unknown: keep who supplied the pin so a later reinstall without one can still inherit the operator pin.
+  return evidenceSource ? { integritySource: evidenceSource } : {};
 }
 
 function buildPluginDescriptorHealth(

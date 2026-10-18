@@ -794,7 +794,9 @@ export async function installIntegrationPlugin(
   const inheritedPin =
     input.expectedIntegrity === undefined &&
     prior?.sourceMetadata?.integritySource === "operator" &&
-    prior.sourceMetadata.type === first.sourceMetadata.type
+    prior.sourceMetadata.type === first.sourceMetadata.type &&
+    // A changed source (e.g. a version bump or moved folder) needs its own pin; the old digest cannot match.
+    prior.source === first.source
       ? prior.sourceMetadata.expectedIntegrity
       : undefined;
   const expectedIntegrity = input.expectedIntegrity ?? inheritedPin;

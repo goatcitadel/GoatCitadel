@@ -761,4 +761,42 @@ describe("integration plugin package integrity at install", () => {
     });
     expect(record.enabled).toBe(false);
   });
+
+  it("does not inherit the previous pin when the source changed (version bump)", async () => {
+    const deps = createDeps();
+    withPluginStore(deps);
+    const pin = `sha512-${"A".repeat(86)}==`;
+    vi.mocked(deps.verifyIntegrationPluginPackage).mockResolvedValue({
+      status: "verified",
+      actualIntegrity: pin,
+      integritySource: "operator",
+      verifiedAt: "2026-10-18T00:00:00.000Z",
+      warnings: [],
+    });
+    await installIntegrationPlugin(deps, {
+      source: "npm:goat-plugin@1.0.0",
+      pluginId: "goat-plugin",
+      expectedIntegrity: pin,
+    });
+    await installIntegrationPlugin(deps, { source: "npm:goat-plugin@2.0.0", pluginId: "goat-plugin" });
+    expect(vi.mocked(deps.verifyIntegrationPluginPackage).mock.calls[1]![0].expectedIntegrity).toBeUndefined();
+  });
+
+  it("keeps the operator pin as evidence when verification is unknown, so a retry inherits it", async () => {
+    const deps = createDeps();
+    withPluginStore(deps);
+    const pin = `sha512-${"A".repeat(86)}==`;
+    vi.mocked(deps.verifyIntegrationPluginPackage).mockResolvedValue({
+      status: "unknown",
+      warnings: [{ code: "integrity_unverifiable", severity: "critical", message: "blocked" }],
+    });
+    const first = await installIntegrationPlugin(deps, {
+      source: "npm:goat-plugin",
+      pluginId: "goat-plugin",
+      expectedIntegrity: pin,
+    });
+    expect(first.sourceMetadata).toMatchObject({ expectedIntegrity: pin, integritySource: "operator" });
+    await installIntegrationPlugin(deps, { source: "npm:goat-plugin", pluginId: "goat-plugin" });
+    expect(vi.mocked(deps.verifyIntegrationPluginPackage).mock.calls[1]![0].expectedIntegrity).toBe(pin);
+  });
 });

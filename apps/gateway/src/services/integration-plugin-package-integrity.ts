@@ -84,7 +84,11 @@ export async function computeLocalPluginManifestIntegrity(root: string): Promise
   let total = 0;
   const visit = async (relative: string, depth: number): Promise<void> => {
     if (depth > MAX_DEPTH) throw new Error("Plugin manifest directory depth exceeds the limit.");
-    for (const item of await readdir(path.join(base, relative))) {
+    // No-follow re-check immediately before listing: a directory swapped for a link must not be traversed.
+    const dir = path.join(base, relative);
+    const dirStat = await lstat(dir);
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) throw new Error("Plugin manifest contains a symlink.");
+    for (const item of await readdir(dir)) {
       const name = relative ? `${relative}/${item}` : item;
       const filename = path.join(base, name);
       const stat = await lstat(filename);
@@ -374,12 +378,18 @@ async function storeTarball(
   bytes: Uint8Array,
 ): Promise<string> {
   assertSafePluginId(pluginId);
-  const root = path.resolve(storeRoot);
-  await mkdir(root, { recursive: true });
-  await assertOrdinaryPath(root);
+  // Ancestors of the configured store may legitimately be links (/var, /home, volumes); only the
+  // directories the gateway creates (the store root and the plugin directory) must be ordinary.
+  const configured = path.resolve(storeRoot);
+  await mkdir(configured, { recursive: true });
+  await assertOrdinaryDirectory(configured);
+  const root = await realpath(configured);
   const pluginDir = path.join(root, pluginId);
   await mkdir(pluginDir, { recursive: true });
-  await assertOrdinaryPath(pluginDir);
+  await assertOrdinaryDirectory(pluginDir);
+  if (normalizeFsPath(await realpath(pluginDir)) !== normalizeFsPath(pluginDir)) {
+    throw new Error("Plugin package storage path changed during resolution.");
+  }
   const staging = await mkdtemp(path.join(pluginDir, ".install-"));
   if (path.dirname(staging) !== pluginDir || !path.basename(staging).startsWith(".install-")) {
     throw new Error("Plugin package staging ownership could not be established.");
@@ -395,17 +405,13 @@ async function storeTarball(
   }
 }
 
-async function assertOrdinaryPath(target: string): Promise<void> {
-  for (let current = path.resolve(target); ; current = path.dirname(current)) {
-    const stat = await lstat(current);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      throw new Error("Plugin package storage must use ordinary directories.");
-    }
-    if (path.dirname(current) === current) break;
+async function assertOrdinaryDirectory(target: string): Promise<void> {
+  const stat = await lstat(target);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error("Plugin package storage must use ordinary directories.");
   }
-  const normalize = (value: string) =>
-    process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value);
-  if (normalize(await realpath(target)) !== normalize(target)) {
-    throw new Error("Plugin package storage path changed during resolution.");
-  }
+}
+
+function normalizeFsPath(value: string): string {
+  return process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value);
 }

@@ -186,6 +186,44 @@ describe("verifyIntegrationPluginPackage review carry-overs", () => {
   });
 });
 
+describe("plugin store location", () => {
+  it("stores when an ANCESTOR of the store root is a link (/var, /home, volumes)", async (ctx) => {
+    const base = await tmp();
+    await mkdir(path.join(base, "real"));
+    try {
+      await symlink(path.join(base, "real"), path.join(base, "link"), "junction");
+    } catch {
+      ctx.skip();
+      return;
+    }
+    const input = await npmInput({
+      fetchOnce: fakeFetch({}),
+      pluginStoreRoot: path.join(base, "link", "data", "integration-plugins"),
+    });
+    const result = await verifyIntegrationPluginPackage(input);
+    expect(result.status).toBe("verified");
+    if (result.status === "verified")
+      expect(result.artifactPath).toMatch(/^integration-plugins\/demo-plugin\/[0-9a-f]{16}\.tgz$/u);
+  });
+
+  it("still refuses a plugin directory that is itself a link", async (ctx) => {
+    const base = await tmp();
+    const store = path.join(base, "integration-plugins");
+    await mkdir(store, { recursive: true });
+    await mkdir(path.join(base, "elsewhere"));
+    try {
+      await symlink(path.join(base, "elsewhere"), path.join(store, "demo-plugin"), "junction");
+    } catch {
+      ctx.skip();
+      return;
+    }
+    await expect(
+      verifyIntegrationPluginPackage(await npmInput({ fetchOnce: fakeFetch({}), pluginStoreRoot: store })),
+    ).rejects.toThrow(/ordinary directories/u);
+    expect(await readdir(path.join(base, "elsewhere"))).toEqual([]);
+  });
+});
+
 describe("local source classification", () => {
   it("a missing path is unknown/critical with manifest_path_missing, not quarantined", async () => {
     const result = await verifyIntegrationPluginPackage({

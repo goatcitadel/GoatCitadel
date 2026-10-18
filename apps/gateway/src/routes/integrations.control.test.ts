@@ -891,6 +891,31 @@ describe("integrations control routes", () => {
     expect(validation.statusCode).toBe(400);
   });
 
+  it("logs a redacted cause for an install storage 503", async () => {
+    const lines: string[] = [];
+    const installIntegrationPlugin = vi.fn(() => {
+      throw new PluginPackageStorageError({
+        cause: new Error("EACCES: permission denied, mkdir 'C:\\Users\\alice\\secret-store\\p' and /home/alice/data"),
+      });
+    });
+    app = Fastify({ logger: { level: "warn", stream: { write: (line: string) => void lines.push(line) } } });
+    decorateIntegrationServices(app, { installIntegrationPlugin });
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/plugins/install",
+      payload: { source: "npm:p" },
+    });
+
+    expect(response.statusCode).toBe(503);
+    const logged = lines.join("");
+    expect(logged).toContain("integration plugin package storage failed");
+    expect(logged).toContain("EACCES");
+    expect(logged).not.toContain("alice");
+    expect(logged).not.toContain("secret-store");
+  });
+
   it("refuses to enable a quarantined plugin with a 400 and the reason", async () => {
     const setIntegrationPluginEnabled = vi.fn(() => {
       throw new ValidationError({

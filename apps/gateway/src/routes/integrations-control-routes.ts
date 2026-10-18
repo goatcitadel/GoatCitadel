@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
-import { ValidationError } from "@goatcitadel/contracts";
+import { ValidationError, redactStructuredSecrets } from "@goatcitadel/contracts";
 import { PluginPackageStorageError } from "../services/integration-channel-service.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { sendRouteError } from "./_error-handler.js";
@@ -41,6 +41,9 @@ import {
 const RATE_LIMIT_READ_MAX = 500;
 const RATE_LIMIT_MUTATION_MAX = 180;
 const RATE_LIMIT_AUTH_MAX = 60;
+
+// Absolute filesystem paths (Windows drive or POSIX) are scrubbed from logged causes.
+const ABSOLUTE_PATH_PATTERN = /(?:[A-Za-z]:[\\/]|\/)[^\s'"`]+/g;
 
 export function registerIntegrationControlRoutes(fastify: FastifyInstance): void {
   const pairingReadRoute = {
@@ -484,9 +487,19 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
         .code(201)
         .send(projectPublicSecretValue(await fastify.services.integrations.installIntegrationPlugin(parsed.data)));
     } catch (error) {
-      return reply
-        .code(error instanceof PluginPackageStorageError ? 503 : 400)
-        .send({ error: (error as Error).message });
+      if (error instanceof PluginPackageStorageError) {
+        // Leave bounded, redacted server-side evidence for the generic 503.
+        const cause =
+          error.cause instanceof Error
+            ? {
+                name: error.cause.name,
+                message: error.cause.message.replace(ABSOLUTE_PATH_PATTERN, "[path]").slice(0, 300),
+              }
+            : {};
+        request.log.warn({ err: redactStructuredSecrets(cause).value }, "integration plugin package storage failed");
+        return reply.code(503).send({ error: error.message });
+      }
+      return reply.code(400).send({ error: (error as Error).message });
     }
   });
 
