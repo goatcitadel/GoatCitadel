@@ -2,6 +2,7 @@ import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { isMatrixInboundEnabled } from "@goatcitadel/gateway-core";
 import { readBoundedResponseJson } from "../bounded-response-reader.js";
 import type { ChannelStreamCursorStore } from "../channel-stream-cursor-store.js";
+import { isConnectionUrlRemoteSafe } from "../connection-url-helpers.js";
 import {
   ChannelStreamAuthError,
   type ChannelStreamAdapter,
@@ -71,25 +72,34 @@ function readString(config: Record<string, unknown>, key: string): string | unde
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-/** A non-auth HTTP failure; carries the Matrix errcode enum (never body text). */
+/**
+ * A non-auth HTTP failure; carries the Matrix errcode enum (never body text).
+ * `rejectsSyncPosition` is derived from the homeserver's error text for matching only.
+ */
 class MatrixRequestError extends Error {
   public constructor(
     public readonly status: number,
     public readonly errcode: string | undefined,
     label: string,
+    public readonly rejectsSyncPosition: boolean = false,
   ) {
     super(`Matrix ${label} request failed (${status}${errcode ? ` ${errcode}` : ""})`);
   }
 }
 
-function isRejectedSince(error: unknown): boolean {
+/** True only when the homeserver says the sync position itself was rejected (not a filter or request problem). */
+function identifiesRejectedSyncPosition(status: number, errcode: string | undefined, errorText: unknown): boolean {
+  if (errcode === "M_UNKNOWN_POS") return true;
   return (
-    error instanceof MatrixRequestError &&
-    error.status >= 400 &&
-    error.status < 500 &&
-    error.status !== 429 &&
-    error.status !== 408
+    status === 400 &&
+    (errcode === "M_UNKNOWN" || errcode === "M_INVALID_PARAM") &&
+    typeof errorText === "string" &&
+    /token|since|stream|position/i.test(errorText)
   );
+}
+
+function isRejectedSince(error: unknown): boolean {
+  return error instanceof MatrixRequestError && error.rejectsSyncPosition;
 }
 
 function isAbortLike(error: unknown): boolean {
@@ -108,6 +118,9 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
     label: string,
   ): Promise<T> {
     const url = `${base}${path}`;
+    if (!isConnectionUrlRemoteSafe(url)) {
+      throw new ChannelStreamAuthError("Matrix homeserver must use HTTPS (plain HTTP is only allowed for localhost)");
+    }
     if (!deps.isUrlAllowlisted(url)) {
       throw new ChannelStreamAuthError("Matrix homeserver is not in the outbound allowlist");
     }
@@ -119,9 +132,9 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
       // A redirect could leave the allowlisted host; surface it as an error instead.
       redirect: "error",
     });
-    let body: (T & { errcode?: unknown }) | undefined;
+    let body: (T & { errcode?: unknown; error?: unknown }) | undefined;
     try {
-      body = await readBoundedResponseJson<T & { errcode?: unknown }>(response, {
+      body = await readBoundedResponseJson<T & { errcode?: unknown; error?: unknown }>(response, {
         maxBytes: MATRIX_MAX_RESPONSE_BYTES,
         timeoutMs,
         label: `matrix-${label}`,
@@ -144,6 +157,7 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
         response.status,
         errcode && /^M_[A-Z_]+$/.test(errcode) ? errcode : undefined,
         label,
+        identifiesRejectedSyncPosition(response.status, errcode, body?.error),
       );
     }
     return body;

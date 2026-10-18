@@ -59,7 +59,7 @@ const DISCORD_SNOWFLAKE_PATTERN = /^[0-9]{5,25}$/;
 const mattermostUserIdCache = new Map<string, string>();
 const matrixUserIdCache = new Map<string, string>();
 const MATRIX_TYPING_TIMEOUT_MS = 10_000;
-const MATRIX_ROOM_ID_PATTERN = /^![^\s:]+:\S+$/;
+const MATRIX_ROOM_ID_PATTERN = /^![^\s:]+(?::\S+)?$/;
 
 export function resetMattermostTypingUserCache(): void {
   mattermostUserIdCache.clear();
@@ -106,7 +106,7 @@ export async function emitMatrixTyping(args: ChannelTypingAdapterArgs): Promise<
     if (!token) return unsupported(args, `${connection.label} is missing a Matrix access token.`);
     const roomId = input.target.trim().replace(/^(?:matrix|room):/i, "");
     if (!MATRIX_ROOM_ID_PATTERN.test(roomId)) {
-      return unsupported(args, "Matrix typing needs a room id target such as !room:example.com.");
+      return unsupported(args, "Matrix typing needs a room id target such as !room or !room:example.com.");
     }
     const apiBase = `${homeserver.replace(/\/+$/, "")}/_matrix/client/v3`;
     const authHeaders = { Authorization: `Bearer ${token}` };

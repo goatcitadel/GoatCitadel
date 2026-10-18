@@ -471,7 +471,8 @@ End-to-end encrypted rooms are not supported: inbound ignores encrypted events a
 - `token rejected`: the homeserver refused the access token; generate a new one and update the env var
 - bot has not joined the default room: invite the bot account and accept the invite
 - host outside the network allowlist: add the homeserver host before probing or sending
-- messages missing after a long outage: if the homeserver rejects the stored sync token the runtime re-primes from the present, so messages in that gap are skipped
+- messages missing after a long outage: if the homeserver reports the stored sync token as unknown or invalid (`M_UNKNOWN_POS`, or a 400 whose error names the token or stream position) the runtime re-primes from the present, so messages in that gap are skipped; other request errors are retried with backoff and never skip messages
+- replies to threaded messages are posted as rich replies in the main timeline (inbound thread roots are not carried through the shared reply routing), and outbound delivery is text-only, so a send with attachments fails with a clear error
 - inbound messages are ignored: the sender is not on the allowlist (a dropped message's `sender_not_allowlisted` diagnostic shows the id)
 - messages from an encrypted room never arrive: end-to-end encrypted rooms are not supported; an `encrypted_event_ignored` diagnostic records the count, so move the bot to an unencrypted room
 - messages missing after a busy period: if a room produces more than 100 messages in one sync, the older ones are skipped and a warn `timeline_limited` diagnostic records how many rooms were affected

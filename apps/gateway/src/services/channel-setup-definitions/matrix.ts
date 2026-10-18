@@ -91,7 +91,7 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
               required: false,
               explanation:
                 "Optional room used for the guided sandbox test and as a fallback target. Sends normally take the room from the target.",
-              looksLike: "!roomid:example.com",
+              looksLike: "!roomid",
               canChangeLater: true,
             },
             {
@@ -241,9 +241,12 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
         });
       }
       const roomId = readString(draft.draft, "defaultRoomId");
-      if (roomId && !/^![^\s:]+:\S+$/.test(roomId)) {
+      if (roomId && !/^![^\s:]+(?::\S+)?$/.test(roomId)) {
         issues.push(
-          malformedFieldIssue("defaultRoomId", "Room ids look like !opaque:example.com (not a #alias:example.com)."),
+          malformedFieldIssue(
+            "defaultRoomId",
+            "Room ids start with !, for example !opaque or !opaque:example.com; #alias:example.com is not accepted.",
+          ),
         );
       }
       return issues;

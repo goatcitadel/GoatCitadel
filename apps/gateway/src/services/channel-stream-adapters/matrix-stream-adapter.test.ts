@@ -452,6 +452,52 @@ describe("matrix stream adapter", () => {
     expect(prime).toHaveBeenCalledTimes(2);
   });
 
+  it("re-primes on a 400 M_UNKNOWN whose error text names the stream token", async () => {
+    const prime = vi.fn(() => json({ next_batch: "fresh" }));
+    const h = harness({
+      store: memoryStore({ cursor: "c", scope: SELF }),
+      prime,
+      syncs: [
+        () => json({ errcode: "M_UNKNOWN", error: "Invalid stream token" }, 400),
+        () => json(syncBody("after", [msg("$n")])),
+      ],
+    });
+    await h.adapter.run(h.ctx());
+    expect(prime).toHaveBeenCalledTimes(1);
+    expect(h.emitted.map((e) => e.message.eventId)).toEqual(["$n"]);
+  });
+
+  it("rethrows other 4xx without re-priming and never leaks the error text", async () => {
+    const cases: Array<[number, Record<string, unknown>]> = [
+      [400, { errcode: "M_BAD_JSON", error: "bad since filter secret" }],
+      [400, { errcode: "M_INVALID_PARAM", error: "Invalid filter secret" }],
+      [413, { errcode: "M_TOO_LARGE", error: "since too large" }],
+      [404, { errcode: "M_NOT_FOUND", error: "no such stream" }],
+    ];
+    for (const [status, body] of cases) {
+      const prime = vi.fn(() => json({ next_batch: "fresh" }));
+      const h = harness({
+        store: memoryStore({ cursor: "c", scope: SELF }),
+        prime,
+        syncs: [() => json(body, status)],
+      });
+      const error = (await h.adapter.run(h.ctx()).catch((e: unknown) => e)) as Error;
+      expect(error.message).toBe(`Matrix sync request failed (${status} ${String(body.errcode)})`);
+      expect(prime).not.toHaveBeenCalled();
+      expect(h.diagnostic).not.toHaveBeenCalled();
+    }
+  });
+
+  it("refuses plain-HTTP non-local homeservers before sending the token", async () => {
+    const h = harness();
+    const error = (await h.adapter
+      .run(h.ctx({ config: { homeserverUrl: "http://matrix.example.test" } }))
+      .catch((e: unknown) => e)) as Error;
+    expect(error).toBeInstanceOf(ChannelStreamAuthError);
+    expect(error.message).toBe("Matrix homeserver must use HTTPS (plain HTTP is only allowed for localhost)");
+    expect(h.urls).toHaveLength(0);
+  });
+
   it("408 is rethrown, not re-primed", async () => {
     const prime = vi.fn(() => json({ next_batch: "fresh" }));
     const h = harness({

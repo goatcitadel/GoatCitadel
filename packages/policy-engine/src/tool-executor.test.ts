@@ -4353,6 +4353,31 @@ describe("executeTool", () => {
       delete process.env.MATRIX_OUTBOUND_TOKEN;
     });
 
+    it("matrix rejects attachments instead of reporting a text-only send as sent", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      process.env.MATRIX_OUTBOUND_TOKEN = "syt_outbound";
+      const fetchMock = vi.fn(async (..._args: unknown[]) => new Response("{}", { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.send",
+          args: {
+            connectionId: "conn-matrix",
+            message: "see file",
+            attachments: [{ url: "https://matrix.example.com/f.png", title: "f.png" }],
+          },
+          agentId: "operator",
+          sessionId: "sess-matrix-attach",
+        },
+        matrixPolicy,
+        matrixStorage(matrixConfig),
+      );
+      expect(result).toMatchObject({ status: "failed" });
+      expect(JSON.stringify(result)).toContain("Matrix channel delivery is text-only; attachments are not supported.");
+      expect(fetchMock).not.toHaveBeenCalled();
+      delete process.env.MATRIX_OUTBOUND_TOKEN;
+    });
+
     it("matrix channel.react and channel.unsend use the message's room and event id", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
       process.env.MATRIX_OUTBOUND_TOKEN = "syt_outbound";

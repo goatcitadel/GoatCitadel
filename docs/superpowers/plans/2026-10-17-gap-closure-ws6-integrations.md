@@ -36,7 +36,7 @@ Each PR body says `Refs #341`. It uses `Closes #N` only when every "Done when" b
 
 ## Global Constraints
 
-- Work only in this worktree (`.claude/worktrees/gap-ws6-integrations-519a82`). Never edit the main checkout `C:\personal-ai`. Never `git stash`.
+- Work only in the dedicated WS6 worktree. Never edit the main checkout. Never `git stash`.
 - Gateway focused test: `pnpm --filter @goatcitadel/gateway exec vitest run <file> --maxWorkers=2`. Policy-engine: `pnpm --filter @goatcitadel/policy-engine exec vitest run <file> --maxWorkers=2`. gateway-core: `pnpm --filter @goatcitadel/gateway-core exec vitest run src/channel-core.test.ts --maxWorkers=2`.
 - Run one heavy job at a time, at low priority. A file that fails under load is re-run alone before it is treated as a real failure.
 - Package tests resolve `@goatcitadel/contracts` and `@goatcitadel/gateway-core` from `dist`. Rebuild after editing: `pnpm --filter @goatcitadel/contracts build`, `pnpm --filter @goatcitadel/gateway-core build`.

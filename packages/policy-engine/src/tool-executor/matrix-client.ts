@@ -45,7 +45,7 @@ export async function matrixSendText(
     content["m.relates_to"] = {
       rel_type: "m.thread",
       event_id: input.threadRootId,
-      is_falling_back: true,
+      is_falling_back: input.replyToEventId === undefined,
       "m.in_reply_to": { event_id: input.replyToEventId ?? input.threadRootId },
     };
   } else if (input.replyToEventId) {
@@ -129,6 +129,10 @@ async function matrixRequest(
   const base = ctx.homeserverUrl.trim().replace(/\/+$/, "");
   if (!/^https?:\/\//i.test(base)) {
     throw new Error("Matrix homeserver URL must use http or https");
+  }
+  const parsedBase = new URL(base);
+  if (parsedBase.protocol !== "https:" && parsedBase.hostname !== "localhost" && parsedBase.hostname !== "127.0.0.1") {
+    throw new Error("Matrix homeserver URL must use https unless it targets localhost");
   }
   const url = `${base}/_matrix/client/v3${apiPath}`;
   const headers: Record<string, string> = { Authorization: `Bearer ${ctx.accessToken}` };

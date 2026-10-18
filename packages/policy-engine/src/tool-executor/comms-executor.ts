@@ -473,6 +473,9 @@ async function executeCommsProviderTool(
     case "mattermost":
       return mattermostSend(connectionConfig, args, allowlist, target, sanitizedMessage, attachments, grantAllowlist);
     case "matrix":
+      if (attachments.length > 0) {
+        throw new Error("Matrix channel delivery is text-only; attachments are not supported.");
+      }
       return matrixSend(connectionConfig, args, allowlist, target, sanitizedMessage, grantAllowlist);
     case "nextcloud-talk":
       return nextcloudTalkSend(
@@ -2219,7 +2222,7 @@ async function mattermostUnsend(
   return postId;
 }
 
-const MATRIX_ROOM_ID_PATTERN = /^![^\s:]+:\S+$/;
+const MATRIX_ROOM_ID_PATTERN = /^![^\s:]+(?::\S+)?$/;
 const MATRIX_EVENT_ID_PATTERN = /^\$\S+$/;
 
 function resolveMatrixClient(
@@ -2255,7 +2258,7 @@ function resolveMatrixRoomId(config: Record<string, unknown>, args: Record<strin
   }
   const roomId = raw.replace(/^(?:matrix|room):/i, "");
   if (!MATRIX_ROOM_ID_PATTERN.test(roomId)) {
-    throw new Error("Matrix target must be a room id like !room:example.com");
+    throw new Error("Matrix target must be a room id like !room or !room:example.com");
   }
   return roomId;
 }

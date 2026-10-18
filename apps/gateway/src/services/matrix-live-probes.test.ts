@@ -80,6 +80,26 @@ describe("Matrix live probes", () => {
     });
   });
 
+  it("refuses a non-local plain-HTTP homeserver without any fetch", async () => {
+    const fetchWithDiagnosticsTimeout = vi.fn();
+    const deps = {
+      readConnectionConfigValue: (config: Record<string, unknown>, key: string) =>
+        typeof config[key] === "string" ? (config[key] as string) : undefined,
+      resolveConnectionSecret: () => TOKEN,
+      isConnectionUrlAllowlisted: () => true,
+      fetchWithDiagnosticsTimeout,
+    } as unknown as IntegrationDiagnosticsPort;
+    const connection = {
+      key: "matrix",
+      kind: "channel",
+      catalogId: "channel.matrix",
+      config: { homeserverUrl: "http://matrix.example.test", accessTokenEnv: "MATRIX_ACCESS_TOKEN" },
+    } as unknown as IntegrationConnection;
+    const result = await runConfiguredMatrixChecks(deps, connection, true);
+    expect(result.checks[0]).toMatchObject({ key: "matrix_network", status: "fail" });
+    expect(fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+  });
+
   it("refuses a disallowed homeserver host without any fetch", async () => {
     const fetchWithDiagnosticsTimeout = vi.fn();
     const deps = {

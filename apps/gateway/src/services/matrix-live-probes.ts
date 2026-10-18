@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { redactSecretText, type ChannelProbeReport, type IntegrationConnection } from "@goatcitadel/contracts";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
+import { isConnectionUrlRemoteSafe } from "./connection-url-helpers.js";
 import { mapProbeStepsToChecks } from "./channel-probe-result.js";
 import type { IntegrationDiagnosticsPort } from "./integration-diagnostics-service.js";
 
@@ -23,6 +24,18 @@ export async function runConfiguredMatrixChecks(
           key: "matrix_input",
           status: "fail" as const,
           message: "Matrix requires a homeserver URL and an access token before probing.",
+        },
+      ],
+    };
+  }
+  if (!isConnectionUrlRemoteSafe(homeserverUrl)) {
+    return {
+      checks: [
+        {
+          key: "matrix_network",
+          status: "fail" as const,
+          message:
+            "The Matrix homeserver URL uses non-local plain HTTP; use https:// so the access token is not sent in cleartext.",
         },
       ],
     };

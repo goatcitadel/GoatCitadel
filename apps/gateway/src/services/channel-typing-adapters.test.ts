@@ -147,6 +147,11 @@ describe("Matrix typing", () => {
     expect(await emitMatrixTyping(denied)).toMatchObject({ status: "unsupported" });
     expect(denied.fetch).not.toHaveBeenCalled();
 
+    const serverless = args(conn, { target: "!opaqueRoomV12" });
+    serverless.fetch.mockResolvedValueOnce(json({ user_id: "@bot:example.com" })).mockResolvedValueOnce(json({}));
+    expect((await emitMatrixTyping(serverless)).status).toBe("sent");
+    resetMatrixTypingUserCache();
+
     expect((await emitMatrixTyping(args(conn, { target: "general" }))).status).toBe("unsupported");
 
     resetMatrixTypingUserCache();

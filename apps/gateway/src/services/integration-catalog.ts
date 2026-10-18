@@ -262,7 +262,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         secretRef: true,
       }),
       text("defaultRoomId", "Default Room ID", {
-        placeholder: "!roomid:example.com",
+        placeholder: "!roomid",
         description: "Optional default room. Sends normally take the room from the target.",
       }),
       inboundOptInField(

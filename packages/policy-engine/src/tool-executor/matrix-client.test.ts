@@ -72,6 +72,29 @@ describe("matrix client", () => {
     expect(call(fetchMock).body["m.relates_to"]["m.in_reply_to"]).toEqual({ event_id: "$latest" });
   });
 
+  it("marks the thread in_reply_to as a fallback only when there is no explicit reply", async () => {
+    const fetchMock = stubFetch(200, { event_id: "$e" });
+    await matrixSendText(ctx, {
+      roomId: "!r:x.com",
+      body: "b",
+      txnId: "t",
+      threadRootId: "$root",
+      replyToEventId: "$latest",
+    });
+    expect(call(fetchMock).body["m.relates_to"].is_falling_back).toBe(false);
+  });
+
+  it("refuses non-local plain-HTTP homeservers before any fetch", async () => {
+    const fetchMock = stubFetch(200, { event_id: "$e" });
+    await expect(
+      matrixSendText(
+        { ...ctx, homeserverUrl: "http://matrix.example.com" },
+        { roomId: "!r:x.com", body: "b", txnId: "t" },
+      ),
+    ).rejects.toThrow(/https unless it targets localhost/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("reacts with an m.annotation relation", async () => {
     const fetchMock = stubFetch(200, { event_id: "$react" });
     const result = await matrixReact(ctx, { roomId: "!r:x.com", eventId: "$target", key: "👍", txnId: "t2" });
