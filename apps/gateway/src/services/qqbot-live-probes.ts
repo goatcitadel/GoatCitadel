@@ -6,6 +6,7 @@ import {
 } from "@goatcitadel/contracts";
 import { isExplicitTrue } from "@goatcitadel/gateway-core";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
+import { resolveChannelConfigTarget } from "./channel-config.js";
 import { mapProbeStepsToChecks } from "./channel-probe-result.js";
 import type { IntegrationDiagnosticsPort } from "./integration-diagnostics-service.js";
 
@@ -83,7 +84,7 @@ export async function runConfiguredQqbotChecks(
     appId,
     appSecret,
     sandbox,
-    target: read("defaultTarget"),
+    target: resolveChannelConfigTarget("qqbot", config),
     includeSandboxSend,
     fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
   });

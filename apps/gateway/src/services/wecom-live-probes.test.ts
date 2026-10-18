@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import type { IntegrationDiagnosticsPort } from "./integration-diagnostics-service.js";
-import { runConfiguredWecomChecks, runWecomLiveChecks } from "./wecom-live-probes.js";
+import { appendWecomStructuralChecks, runConfiguredWecomChecks, runWecomLiveChecks } from "./wecom-live-probes.js";
 
 const SECRET = "wecom-probe-secret";
 const TOKEN = "wecom-probe-access-token";
@@ -169,6 +169,45 @@ const connection = {
   catalogId: "channel.wecom",
   config: { corpId: "ww1", agentId: "1000002", secretEnv: "WECOM_SECRET" },
 } as unknown as IntegrationConnection;
+
+describe("WeCom structural callback readiness", () => {
+  const structuralConfig = {
+    corpId: "ww1",
+    agentId: "1000002",
+    secretEnv: "WECOM_SECRET",
+    callbackTokenEnv: "WECOM_TEST_CB_TOKEN_UNSET",
+    encodingAesKeyEnv: "WECOM_TEST_CB_KEY_UNSET",
+  };
+  function callbackMessage(config: Record<string, unknown>): string | undefined {
+    const checks: Array<{ key: string; status: string; message: string }> = [];
+    appendWecomStructuralChecks({
+      deps: {
+        readConnectionConfigValue: (c: Record<string, unknown>, key: string) =>
+          typeof c[key] === "string" ? (c[key] as string) : undefined,
+      },
+      config,
+      target: undefined,
+      checks: checks as never,
+      requireText: () => undefined,
+      requireSecretRef: () => undefined,
+    });
+    return checks.find((c) => c.key === "inbound_callback")?.message;
+  }
+
+  it("is not ready when the callback env names are set but unresolved", () => {
+    expect(callbackMessage(structuralConfig)).toContain("is not configured");
+  });
+
+  it("is ready when the callback env values resolve", () => {
+    vi.stubEnv("WECOM_TEST_CB_TOKEN_UNSET", "t");
+    vi.stubEnv("WECOM_TEST_CB_KEY_UNSET", "k");
+    try {
+      expect(callbackMessage(structuralConfig)).toContain("are configured");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
 
 describe("WeCom configured probe gates", () => {
   it("requires corp id, agent id and secret before probing", async () => {

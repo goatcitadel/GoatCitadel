@@ -2,6 +2,7 @@ import { redactSecretText, type ChannelProbeReport, type IntegrationConnection }
 import { parseWecomTarget } from "@goatcitadel/policy-engine";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
 import { mapProbeStepsToChecks } from "./channel-probe-result.js";
+import { resolveChannelConfigTarget } from "./channel-config.js";
 import type { StructuralCheckContext } from "./qqbot-live-probes.js";
 import type { IntegrationDiagnosticsPort } from "./integration-diagnostics-service.js";
 
@@ -18,9 +19,14 @@ export function appendWecomStructuralChecks(context: StructuralCheckContext): vo
   context.requireText("agent_id", "WeCom agent id", read("agentId"));
   context.requireSecretRef("auth", "WeCom application secret", "secret", "secretEnv");
   context.requireText("target", "Default WeCom target", context.target, "warn");
+  // The env names must resolve to non-empty values, not merely be set.
+  const resolved = (directKey: string, envKey: string) => {
+    if (read(directKey)) return true;
+    const envName = read(envKey);
+    return Boolean(envName && process.env[envName]);
+  };
   const callbackReady =
-    Boolean(read("callbackToken") ?? read("callbackTokenEnv")) &&
-    Boolean(read("encodingAesKey") ?? read("encodingAesKeyEnv"));
+    resolved("callbackToken", "callbackTokenEnv") && resolved("encodingAesKey", "encodingAesKeyEnv");
   checks.push({
     key: "inbound_callback",
     status: "pass",
@@ -79,7 +85,7 @@ export async function runConfiguredWecomChecks(
     agentId,
     secret,
     callbackConfigured: Boolean(callbackToken && encodingAesKey),
-    target: read("defaultTarget"),
+    target: resolveChannelConfigTarget("wecom", config),
     includeSandboxSend,
     fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
   });
@@ -253,30 +259,27 @@ async function sandboxSend(
   token: string,
   probe: ChannelProbeReport,
 ): Promise<void> {
-  const recipient = input.target ? parseRecipient(input.target) : undefined;
-  if (!recipient) {
+  if (!input.target?.trim()) {
     probe.steps.push({
       key: "wecom_sandbox_send",
       label: "Sandbox send",
       status: "skipped",
       disposition: "deferred",
-      message: input.target
-        ? "Sandbox send skipped because the default target has no recipient id."
-        : "Sandbox send skipped because no default target is configured.",
+      message: "Sandbox send skipped because no default target is configured.",
     });
     return;
   }
   // Same single-recipient rule as the runtime client: never broadcast (@all) or fan out (a|b) from a test send.
+  let recipient: Record<string, string>;
   try {
-    parseWecomTarget(input.target ?? "");
+    recipient = parseWecomTarget(input.target).field;
   } catch (error) {
     probe.steps.push({
       key: "wecom_sandbox_send",
       label: "Sandbox send",
       status: "fail",
       disposition: "blocking",
-      message:
-        `Sandbox send refused: the default target must be a single recipient id (no @all, no | lists). ${error instanceof Error ? error.message : ""}`.trim(),
+      message: `Sandbox send refused: ${error instanceof Error ? error.message : "invalid default target."}`,
       failureCategory: "destination_mismatch",
     });
     return;
@@ -346,21 +349,6 @@ async function sandboxSend(
       message: "WeCom send outcome is uncertain. Inspect the conversation before running another send.",
       failureCategory: "platform_unavailable",
     });
-  }
-}
-
-function parseRecipient(target: string): Record<string, string> | undefined {
-  const trimmed = target.trim();
-  const match = /^(user|party|tag):(.*)$/s.exec(trimmed);
-  const id = (match ? match[2] : trimmed)?.trim() ?? "";
-  if (!id) return undefined;
-  switch (match?.[1]) {
-    case "party":
-      return { toparty: id };
-    case "tag":
-      return { totag: id };
-    default:
-      return { touser: id };
   }
 }
 

@@ -271,10 +271,16 @@ export function createWecomDefinition(): ChannelSetupRuntimeDefinition {
       };
     },
     normalize(draft) {
-      const value = (direct: string, env: string) => ({
-        [env]: readString(draft.draft, env) ?? readLegacyString(draft, env),
-        [direct]: readString(draft.draft, direct) ?? readLegacyString(draft, direct),
-      });
+      const value = (direct: string, env: string) => {
+        const draftDirect = readString(draft.draft, direct);
+        const draftEnv = readString(draft.draft, env);
+        // Per pair: keep the legacy value only when the draft supplies neither form.
+        const keepLegacy = !draftDirect && !draftEnv;
+        return {
+          [env]: draftEnv ?? (keepLegacy ? readLegacyString(draft, env) : undefined),
+          [direct]: draftDirect ?? (keepLegacy ? readLegacyString(draft, direct) : undefined),
+        };
+      };
       return compactRecord({
         corpId: readString(draft.draft, "corpId"),
         agentId: readString(draft.draft, "agentId"),

@@ -172,7 +172,7 @@ describe("wecom send", () => {
     const fetcher = sendFetcher();
     for (const target of ["@all", "user:@all", "party:@all", "tag:@all", "user:a|b|c", "a|b", "party:1|2", "tag:1|2"]) {
       await expect(wecomSendText({ token: "t", agentId: "1", target, content: "x", fetcher })).rejects.toThrow(
-        /@all|single|multiple||/i,
+        /^WeCom target must be a single id: @all and multiple ids separated by \| are not allowed$/,
       );
     }
     expect(fetcher).not.toHaveBeenCalled();

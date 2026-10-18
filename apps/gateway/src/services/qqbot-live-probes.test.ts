@@ -125,6 +125,25 @@ const connection = {
   config: { appId: "102000", appSecretEnv: "QQBOT_APP_SECRET" },
 } as unknown as IntegrationConnection;
 
+describe("QQBot configured probe target", () => {
+  it("resolves the target through the channel config resolver (target key, not only defaultTarget)", async () => {
+    const fetcher = routedFetcher({});
+    const deps = {
+      readConnectionConfigValue: (config: Record<string, unknown>, key: string) =>
+        typeof config[key] === "string" ? (config[key] as string) : undefined,
+      resolveConnectionSecret: () => SECRET,
+      isConnectionUrlAllowlisted: () => true,
+      fetchWithDiagnosticsTimeout: fetcher,
+    } as unknown as IntegrationDiagnosticsPort;
+    const withTarget = {
+      ...connection,
+      config: { ...connection.config, sandbox: true, target: "user:USER_OPENID" },
+    } as IntegrationConnection;
+    await runConfiguredQqbotChecks(deps, withTarget, true);
+    expect(fetcher.mock.calls.some(([url]) => String(url).includes("/messages"))).toBe(true);
+  });
+});
+
 describe("QQBot configured probe gates", () => {
   it("requires an app id and secret before probing", async () => {
     const { deps, fetchWithDiagnosticsTimeout } = depsFor({ allowlisted: () => true, secret: undefined });

@@ -1064,6 +1064,46 @@ describe("channel setup definitions", () => {
     expect(normalized).not.toHaveProperty("tokenEnv");
   });
 
+  it("drops the legacy QQBot direct secret when the draft rotates to an env reference", () => {
+    const definition = requireChannelSetupDefinition("channel.qqbot");
+    const hydration = definition.hydrate(
+      createConnection({
+        catalogId: "channel.qqbot",
+        key: "qqbot",
+        label: "QQBot Primary",
+        config: { appId: "102000", appSecret: "old-direct-secret" },
+      }),
+    ).hydration;
+    const rotated = {
+      ...createDraft("channel.qqbot", { appId: "102000", appSecretEnv: "QQBOT_NEW" }, "edit"),
+      hydration,
+    };
+    const normalized = definition.normalize(rotated);
+    expect(normalized).toMatchObject({ appSecretEnv: "QQBOT_NEW" });
+    expect(normalized).not.toHaveProperty("appSecret");
+    const untouched = { ...createDraft("channel.qqbot", { appId: "102000" }, "edit"), hydration };
+    expect(definition.normalize(untouched)).toMatchObject({ appSecret: "old-direct-secret" });
+  });
+
+  it("drops a legacy WeCom direct value per pair when the draft supplies the env form", () => {
+    const definition = requireChannelSetupDefinition("channel.wecom");
+    const hydration = definition.hydrate(
+      createConnection({
+        catalogId: "channel.wecom",
+        key: "wecom",
+        label: "WeCom Primary",
+        config: { corpId: "ww1", agentId: "1000002", secret: "old-direct", encodingAesKey: "k".repeat(43) },
+      }),
+    ).hydration;
+    const rotated = {
+      ...createDraft("channel.wecom", { corpId: "ww1", agentId: "1000002", secretEnv: "WECOM_NEW" }, "edit"),
+      hydration,
+    };
+    const normalized = definition.normalize(rotated);
+    expect(normalized).toMatchObject({ secretEnv: "WECOM_NEW", encodingAesKey: "k".repeat(43) });
+    expect(normalized).not.toHaveProperty("secret");
+  });
+
   it("collects QQBot values, requires an app id and secret, and validates the target prefix", () => {
     const definition = requireChannelSetupDefinition("channel.qqbot");
     const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));

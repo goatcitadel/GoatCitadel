@@ -23,6 +23,7 @@ export function registerQqbotWebhookRoutes(fastify: FastifyInstance): void {
       connectorKey: "qqbot",
       connectorLabel: "QQBot",
       rawBodyKey: "qqbotRawBody",
+      ignoredReply: () => QQBOT_ACK,
       missingRawBodyError: "Missing QQBot raw request body",
       verifySignature: ({ request, connection, rawBody }) => {
         const appSecret = resolveQqbotSecret(connection.config);

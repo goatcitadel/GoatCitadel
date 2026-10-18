@@ -218,12 +218,15 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
       };
     },
     normalize(draft) {
-      const preservedSecret = readLegacyString(draft, "appSecret");
-      const preservedSecretEnv = readLegacyString(draft, "appSecretEnv", "tokenEnv");
+      const draftSecret = readString(draft.draft, "appSecret");
+      const draftSecretEnv = readString(draft.draft, "appSecretEnv");
+      // Keep the legacy credential only when the draft supplies neither form, so a direct-to-env
+      // rotation does not leave the old secret behind.
+      const keepLegacy = !draftSecret && !draftSecretEnv;
       return compactRecord({
         appId: readString(draft.draft, "appId"),
-        appSecretEnv: readString(draft.draft, "appSecretEnv") ?? preservedSecretEnv,
-        appSecret: readString(draft.draft, "appSecret") ?? preservedSecret,
+        appSecretEnv: draftSecretEnv ?? (keepLegacy ? readLegacyString(draft, "appSecretEnv", "tokenEnv") : undefined),
+        appSecret: draftSecret ?? (keepLegacy ? readLegacyString(draft, "appSecret") : undefined),
         defaultTarget: readString(draft.draft, "defaultTarget"),
         sandbox: isTruthyFlag(draft.draft.sandbox) ? true : undefined,
       });

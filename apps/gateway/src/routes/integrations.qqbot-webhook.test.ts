@@ -333,6 +333,14 @@ describe("QQBot webhook route", () => {
     expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
   });
 
+  it("acks op 12 for a disabled connection instead of the generic ignored reply", async () => {
+    const ctx = await buildApp({ connection: buildConnection({}, { enabled: false }) });
+    const response = await post(ctx.app, groupEvent());
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ op: 12 });
+    expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
+  });
+
   it("returns 503 without leaking error text when durable acceptance fails, so QQ retries", async () => {
     const accept = vi.fn(async () => {
       throw new Error("storage path C:/secret/inbound.db is locked");
