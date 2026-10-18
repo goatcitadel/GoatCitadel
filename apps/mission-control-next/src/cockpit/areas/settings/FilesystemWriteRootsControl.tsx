@@ -1,16 +1,14 @@
 import { useState } from "react";
 import { isOperatorWriteRootPathText, type OperatorWriteRootSummary } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { Field } from "../../ui/Field";
-import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { FilesystemToolAccessPanel, type ToolAccessReviewRequest } from "./FilesystemToolAccessPanel";
 import {
   ConfiguredFolders,
-  WriteAccessChangeStatus,
+  WriteAccessOutcomeStatus,
   WriteAccessReviewDialog,
   type WriteAccessReview,
 } from "./FilesystemWriteAccessParts";
@@ -30,13 +28,8 @@ import { useFilesystemWriteAccess, type WriteAccessOutcome } from "./use-filesys
 const PATH_HINT = "Enter an absolute folder path, for example D:\\Scratch or /srv/scratch.";
 
 export function FilesystemWriteRootsControl() {
-  const route = useCockpitRoute();
-  const parameters = new URLSearchParams(route.search);
-  parameters.delete("shell");
-  parameters.delete("shellScope");
-  const recoveryHref = `/settings/safety${parameters.size ? `?${parameters}` : ""}#filesystem-write-roots`;
   const control = useFilesystemWriteAccess();
-  const { settings, ready, addDraft, toolDraft, change, busy, uncertain, notice, setNotice, locked, submit } = control;
+  const { settings, ready, addDraft, toolDraft, change, busy, setNotice, locked, submit } = control;
   const [review, setReview] = useState<WriteAccessReview | null>(null);
   const [pathError, setPathError] = useState<string | null>(null);
   const revision = settings.data?.revision ?? 0;
@@ -76,7 +69,7 @@ export function FilesystemWriteRootsControl() {
     }
     setReview({
       title: "Add a folder Chat can delete in?",
-      description: `Add ${draft.path.trim()} as an operator write root with delete allowed. Chat can create, change, move and delete files inside it, each with approval. ${DENY_WINS_COPY}`,
+      description: `Add ${draft.path.trim()} as an operator write root with delete allowed. Chat can create, change, move and delete files inside it, under your approval rule. ${DENY_WINS_COPY}`,
       confirmLabel: "Add folder with delete allowed",
       danger: true,
       revision,
@@ -137,7 +130,7 @@ export function FilesystemWriteRootsControl() {
     setReview({
       title: allowDelete ? `Allow delete in ${name}?` : `Turn off delete in ${name}?`,
       description: allowDelete
-        ? `Chat can delete files and move them out of ${root.path}, each with approval. GoatCitadel saves this by removing the folder and adding it back with delete allowed. ${DENY_WINS_COPY}`
+        ? `Chat can delete files and move them out of ${root.path}, under your approval rule. GoatCitadel saves this by removing the folder and adding it back with delete allowed. ${DENY_WINS_COPY}`
         : `Delete and move-out stay blocked in ${root.path}. GoatCitadel saves this by removing the folder and adding it back with delete off.`,
       confirmLabel: allowDelete ? "Allow delete" : "Turn off delete",
       danger: allowDelete,
@@ -204,18 +197,12 @@ export function FilesystemWriteRootsControl() {
           Refresh
         </Button>
       </div>
-      {settings.isLoading ? (
-        <p role="status" className="mt-3 text-sm text-fg-muted">
-          Loading filesystem access…
-        </p>
-      ) : null}
+      {settings.isLoading ? <p className="mt-3 text-sm text-fg-muted">Loading filesystem access…</p> : null}
       {settings.isError ? (
-        <p role="alert" className="mt-3 text-sm text-status-failed">
-          {describeApiError(settings.error).summary}
-        </p>
+        <p className="mt-3 text-sm text-status-failed">{describeApiError(settings.error).summary}</p>
       ) : null}
       {settings.data && !settings.isError && !ready ? (
-        <p role="alert" className="mt-3 text-sm text-status-failed">
+        <p className="mt-3 text-sm text-status-failed">
           The gateway did not report write roots or tool access. Update or restart the gateway, then refresh before
           changing these settings.
         </p>
@@ -343,24 +330,7 @@ export function FilesystemWriteRootsControl() {
           <FilesystemToolAccessPanel control={control} onApply={applyTool} />
         </>
       ) : null}
-      <WriteAccessChangeStatus change={change} />
-      {notice ? (
-        <p
-          role={notice.tone === "failed" ? "alert" : "status"}
-          className={`mt-3 text-sm ${notice.tone === "failed" ? "text-status-failed" : notice.tone === "waiting" ? "text-status-waiting" : "text-status-done"}`}
-        >
-          {notice.message}
-        </p>
-      ) : null}
-      {uncertain ? (
-        <NativeOwnerLink
-          href={recoveryHref}
-          scope={[addDraft.key, change.change?.receipt.planId, change.change?.receipt.revision]}
-          className="mt-3 inline-block text-sm font-medium text-accent hover:underline"
-        >
-          Inspect filesystem settings activity
-        </NativeOwnerLink>
-      ) : null}
+      <WriteAccessOutcomeStatus control={control} />
       <WriteAccessReviewDialog review={review} current={reviewCurrent} busy={busy} onClose={() => setReview(null)} />
     </section>
   );

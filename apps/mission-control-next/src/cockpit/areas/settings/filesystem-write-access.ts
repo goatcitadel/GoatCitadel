@@ -59,7 +59,7 @@ export const TOOL_DESCRIPTIONS: Readonly<Record<CuratedFsMutationTool, string>> 
 };
 
 export const DENY_WINS_COPY =
-  "Deny-wins and approvals still apply: agent, permission-profile and wildcard deny rules keep blocking a tool, risky calls still ask for approval, and GoatCitadel's own runtime files stay unwritable.";
+  "Deny-wins and approvals still apply: agent, permission-profile and wildcard deny rules keep blocking a tool, GoatCitadel's own runtime files stay unwritable, and whether a call asks first follows your tool approval rule and grants. With Skip normal prompts or a matching grant, allowed calls may run without asking.";
 
 export function operatorWriteRoots(settings: RuntimeSettingsResponse | undefined): readonly OperatorWriteRootSummary[] {
   return settings?.operatorWriteRoots ?? [];
@@ -116,10 +116,10 @@ export function toolAccessConsequence(tool: CuratedFsMutationTool, next: GlobalT
       return `${tool} is denied for every agent and session. No permission profile or grant can turn it back on.`;
     case "available":
       return tool === "fs.delete"
-        ? "Making fs.delete available lets Chat delete, with approval, in every write root: the workspace write folders and each operator write root that has Allow delete on."
-        : `Chat can call ${tool}, with approval, in every write root: the workspace write folders and each operator write root.`;
+        ? "Making fs.delete available lets Chat delete, under your approval rule, in every write root: the workspace write folders and each operator write root that has Allow delete on."
+        : `Chat can call ${tool}, under your approval rule, in every write root: the workspace write folders and each operator write root.`;
     case "unlisted":
-      return `${tool} leaves the global allow and deny lists, so permission profiles and agent policy decide. Where they allow it, Chat can call it, with approval, in every write root.`;
+      return `${tool} leaves the global allow and deny lists, so permission profiles and agent policy decide. Where they allow it, Chat can call it, under your approval rule, in every write root.`;
   }
 }
 

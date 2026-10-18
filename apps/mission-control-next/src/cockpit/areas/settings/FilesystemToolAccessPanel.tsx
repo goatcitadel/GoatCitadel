@@ -40,13 +40,13 @@ export function FilesystemToolAccessPanel({
         to permission profiles and agent policy.
       </p>
       {wildcards.length ? (
-        <p role="status" className="mt-2 text-sm text-status-waiting">
+        <p className="mt-2 text-sm text-status-waiting">
           A wildcard deny rule ({wildcards.join(", ")}) still blocks matching tools. Edit it in the config file; these
           controls change exact entries only.
         </p>
       ) : null}
       {toolDraft.hasRemoteChanges ? (
-        <div role="status" className="mt-2 space-y-2 text-sm text-fg-secondary">
+        <div className="mt-2 space-y-2 text-sm text-fg-secondary">
           <p>Tool access changed after this draft began. Review the current values before applying your draft.</p>
           <Button size="sm" disabled={locked} onClick={toolDraft.rebaseToCurrent}>
             Apply draft to latest version
@@ -100,7 +100,7 @@ export function FilesystemToolAccessPanel({
                 </div>
               </div>
               {changed ? (
-                <p role="status" className="mt-2 text-sm text-status-waiting">
+                <p className="mt-2 text-sm text-status-waiting">
                   Unsaved: {TOOL_ACCESS_LABELS[current]} to {TOOL_ACCESS_LABELS[next]}.{" "}
                   {toolAccessConsequence(tool, next)}
                 </p>

@@ -221,9 +221,12 @@ describe("global filesystem tool access", () => {
     expect(toolSelect("fs.delete").value).toBe("denied");
     expect(toolSelect("fs.copy").value).toBe("unlisted");
     await choose(toolSelect("fs.delete"), "available");
-    expect(text()).toContain("Making fs.delete available lets Chat delete, with approval, in every write root");
+    expect(text()).toContain(
+      "Making fs.delete available lets Chat delete, under your approval rule, in every write root",
+    );
     await click(button("Review fs.delete change"));
     expect(dialog()?.textContent).toContain("Deny-wins and approvals still apply");
+    expect(dialog()?.textContent).toContain("may run without asking");
     await click(button("Keep current setting"));
     expect(api.patchSettings).not.toHaveBeenCalled();
     expect(toolSelect("fs.delete").value).toBe("available");
@@ -310,21 +313,42 @@ describe("global filesystem tool access", () => {
     expect(toolSelect("fs.copy").disabled).toBe(true);
   });
 
-  it("locks every control and offers inspection after an uncertain write", async () => {
+  it("locks every control after an uncertain write until the operator re-reads the settings", async () => {
     api.fetchSettings.mockResolvedValue(settingsAt(4));
     api.patchSettings.mockRejectedValue(new Error("Lost response"));
     await render();
     await choose(toolSelect("fs.copy"), "available");
     await click(button("Apply fs.copy"));
     await vi.waitFor(() => expect(text()).toContain("Save outcome is uncertain"));
-    const link = [...container.querySelectorAll("a")].find(
-      (item) => item.textContent === "Inspect filesystem settings activity",
-    )!;
-    expect(new URL(link.href).hash).toBe("#filesystem-write-roots");
+    expect(container.querySelector("[role=alert]")?.textContent).toContain("Save outcome is uncertain");
     expect(toolSelect("fs.copy").disabled).toBe(true);
     expect(pathInput().disabled).toBe(true);
     expect(button("Add OS temp folder").disabled).toBe(true);
+    await click(button("Refresh"));
+    expect(toolSelect("fs.copy").disabled).toBe(true);
+    api.fetchSettings.mockResolvedValue(settingsAt(5, { deny: ["fs.delete"], allow: ["fs.copy"] }));
+    await click(button("Re-read settings and unlock"));
+    await vi.waitFor(() => expect(toolSelect("fs.copy").disabled).toBe(false));
+    expect(toolSelect("fs.copy").value).toBe("available");
+    expect(text()).toContain("Current settings re-read.");
+    expect(button("Re-read settings and unlock")).toBeUndefined();
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps another row's unsaved edit when one row saves", async () => {
+    api.fetchSettings.mockResolvedValue(settingsAt(4));
+    await render();
+    await choose(toolSelect("fs.copy"), "available");
+    await choose(toolSelect("fs.move"), "denied");
+    const saved = settingsAt(5, { deny: ["fs.delete"], allow: ["fs.copy"] });
+    api.patchSettings.mockResolvedValue(saved);
+    api.fetchSettings.mockResolvedValueOnce(settingsAt(4)).mockResolvedValue(saved);
+    await click(button("Apply fs.copy"));
+    await vi.waitFor(() => expect(text()).toContain("fs.copy is now Available."));
+    expect(toolSelect("fs.copy").value).toBe("available");
+    expect(button("Apply fs.copy")).toBeUndefined();
+    expect(toolSelect("fs.move").value).toBe("denied");
+    expect(button("Apply fs.move")).toBeDefined();
   });
 
   it("refuses to offer changes when the gateway omits write-access settings", async () => {

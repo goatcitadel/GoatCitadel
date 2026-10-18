@@ -118,7 +118,7 @@ export function SettingsSectionTabs({
               }
             >
               {entry.releaseStatus !== "ship" ? (
-                <p role="status" className="py-2 text-sm text-fg-secondary">
+                <p className="py-2 text-sm text-fg-secondary">
                   {describeReleaseSurfaceStatus(entry.releaseStatus)}. {entry.releaseNote}
                 </p>
               ) : null}

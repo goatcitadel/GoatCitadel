@@ -4,6 +4,7 @@ import { fetchSettings, isApiRequestError, patchSettings } from "@goatcitadel/mi
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
+import { CURATED_FS_MUTATION_TOOLS } from "@goatcitadel/contracts";
 import { useSettingsChange } from "../../../features/native-routes/settings/use-settings-change";
 import {
   EMPTY_ADD_ROOT_DRAFT,
@@ -50,11 +51,24 @@ export function useFilesystemWriteAccess() {
     available: ready,
   });
   const change = useSettingsChange<WriteAccessSubmission>({
-    key: WRITE_ACCESS_CHANGE_KEY,
+    // The session-draft key carries the caller scope, so another sign-in or Gateway never inherits this receipt.
+    key: `${WRITE_ACCESS_CHANGE_KEY}:${addDraft.key}`,
     matchesPlan: matchesWriteAccessPlan,
     matches: writeAccessSaved,
     acceptSaved: (_value, revision, submitted) => {
-      if (submitted.kind === "tool") return toolDraft.acceptSaved(submitted.saved, revision, submitted.draft);
+      if (submitted.kind === "tool") {
+        // Rows edited but not applied stay as unsaved edits on top of the newly saved values.
+        const pending = CURATED_FS_MUTATION_TOOLS.filter(
+          (tool) => tool !== submitted.change.toolName && submitted.draft[tool] !== submitted.saved[tool],
+        );
+        const clean = toolDraft.acceptSaved(submitted.saved, revision, submitted.draft);
+        if (clean && pending.length)
+          toolDraft.setValue({
+            ...submitted.saved,
+            ...Object.fromEntries(pending.map((tool) => [tool, submitted.draft[tool]])),
+          });
+        return clean;
+      }
       if (submitted.draft) return addDraft.acceptSaved(EMPTY_ADD_ROOT_DRAFT, revision, submitted.draft);
       return true;
     },
@@ -108,7 +122,7 @@ export function useFilesystemWriteAccess() {
       setNotice({
         tone: "failed",
         message: mutationAttempted
-          ? `Save outcome is uncertain. Inspect Settings activity before another request. ${describeApiError(error).summary}`
+          ? `Save outcome is uncertain. Re-read the current settings and check them before another change. ${describeApiError(error).summary}`
           : `Could not confirm current settings. ${describeApiError(error).summary}`,
       });
       return { kind: "failed" };
@@ -118,7 +132,24 @@ export function useFilesystemWriteAccess() {
     }
   }
 
+  /** Clears the uncertain-outcome lock only after a successful canonical re-read the operator asked for. */
+  async function reconcile(): Promise<void> {
+    const reread = await settings.refetch();
+    if (reread.isError || !isWriteAccessProjection(reread.data)) {
+      setNotice({ tone: "failed", message: "Could not re-read the current settings. Changes stay locked; try again." });
+      return;
+    }
+    if (change.change) await change.refresh();
+    setUncertain(false);
+    setNotice({
+      tone: "waiting",
+      message:
+        "Current settings re-read. Check the folders and tool access above match what you expect before another change.",
+    });
+  }
+
   return {
+    reconcile,
     settings,
     ready,
     currentTools,

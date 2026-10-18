@@ -16,40 +16,69 @@ export interface WriteAccessReview {
   run: () => Promise<void>;
 }
 
-/** The Change Plan receipt for the latest save, with its approval link and approved-change continuation. */
-export function WriteAccessChangeStatus({ change }: { change: FilesystemWriteAccess["change"] }) {
-  if (!change.change) return null;
-  const confirmed = settingsChangeIsConfirmed(change.change);
+/**
+ * The one announced region for this control: the latest Change Plan receipt and the latest save notice.
+ * Actions sit outside it so a status change never re-reads buttons.
+ */
+export function WriteAccessOutcomeStatus({
+  control,
+}: {
+  control: Pick<FilesystemWriteAccess, "change" | "notice" | "uncertain" | "busy" | "reconcile">;
+}) {
+  const { change, notice, uncertain, busy, reconcile } = control;
+  const pending = change.change;
+  const confirmed = settingsChangeIsConfirmed(pending);
+  const failed = notice?.tone === "failed" || Boolean(pending?.error);
   return (
-    <div className="mt-3 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
-      <p role="status">
-        <strong className="text-fg">{presentChangeStatusLabel(change.change.receipt.status)}</strong> ·{" "}
-        {change.change.message}
-      </p>
-      {change.change.error ? (
-        <p role="alert" className="mt-1 text-status-failed">
-          {change.change.error}
-        </p>
-      ) : null}
-      {change.change.blocking ? (
-        <p className="mt-1">Other filesystem access changes wait until the gateway confirms this one.</p>
-      ) : null}
-      <div className="mt-2 flex flex-wrap gap-2">
-        <Button size="sm" onClick={() => void change.refresh()}>
-          Refresh change status
-        </Button>
-        {change.change.receipt.requiredAction?.kind === "approval" && !confirmed ? (
-          <SettingsApprovalOwnerAction
-            plan={change.change.plan}
-            receipt={change.change.receipt}
-            owner="filesystem-write-access"
-            workspaceId="default"
-            viewIdentity={change.change.receipt.planId}
-            label="Review approval"
-          />
+    <div className="mt-3 space-y-2 text-sm text-fg-secondary">
+      <div role={failed ? "alert" : "status"} className="space-y-1">
+        {pending ? (
+          <p>
+            <strong className="text-fg">{presentChangeStatusLabel(pending.receipt.status)}</strong> · {pending.message}
+          </p>
+        ) : null}
+        {pending?.error ? <p className="text-status-failed">{pending.error}</p> : null}
+        {pending?.blocking ? <p>Other filesystem access changes wait until the gateway confirms this one.</p> : null}
+        {notice ? (
+          <p
+            className={
+              notice.tone === "failed"
+                ? "text-status-failed"
+                : notice.tone === "waiting"
+                  ? "text-status-waiting"
+                  : "text-status-done"
+            }
+          >
+            {notice.message}
+          </p>
         ) : null}
       </div>
-      {!confirmed ? <ApprovedSettingsContinuation plan={change.change.plan} onSettled={change.refresh} /> : null}
+      {pending ? (
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" onClick={() => void change.refresh()}>
+            Refresh change status
+          </Button>
+          {pending.receipt.requiredAction?.kind === "approval" && !confirmed ? (
+            <SettingsApprovalOwnerAction
+              plan={pending.plan}
+              receipt={pending.receipt}
+              owner="filesystem-write-access"
+              workspaceId="default"
+              viewIdentity={pending.receipt.planId}
+              label="Review approval"
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {pending && !confirmed ? <ApprovedSettingsContinuation plan={pending.plan} onSettled={change.refresh} /> : null}
+      {uncertain ? (
+        <div className="space-y-2">
+          <p>Changes stay locked until you re-read the current settings and check that they match what you expect.</p>
+          <Button size="sm" disabled={busy} onClick={() => void reconcile()}>
+            Re-read settings and unlock
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -76,7 +105,7 @@ export function WriteAccessReviewDialog({
       }}
     >
       {review && !current ? (
-        <p role="alert" className="mb-3 text-sm text-status-failed">
+        <p className="mb-3 text-sm text-status-failed">
           Filesystem access changed after this review opened. Close it and review the current settings.
         </p>
       ) : null}
