@@ -79,8 +79,18 @@ function integrationApproval(overrides: Partial<ApprovalRequest> & { citadelId?:
 }
 
 function approvalStore(...approvals: ApprovalRequest[]) {
+  return approvalAndPushStore(approvals, {});
+}
+
+function approvalAndPushStore(
+  approvals: ApprovalRequest[],
+  pushConfigs: Record<string, { lastEventSequence: number }>,
+) {
   const byId = new Map(approvals.map((approval) => [approval.approvalId, approval]));
   return {
+    a2aTaskPushConfigs: {
+      find: vi.fn(async (taskId: string, peerId: string) => pushConfigs[`${taskId}:${peerId}`] as never),
+    },
     approvals: {
       get: vi.fn(async (approvalId: string) => {
         const approval = byId.get(approvalId);
@@ -470,5 +480,87 @@ describe("citadel ward approval effects", () => {
       1,
       expect.objectContaining({ lastError: "Citadel Ward effect is missing its executor." }),
     );
+  });
+
+  function approvedPush() {
+    return wardApproval(
+      CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
+      { taskId: "task-1", peerId: "peer-1", eventSequence: 3, eventKind: "status", urlHash: "hash-1" },
+      { wardAction: "a2a.outbound.push" },
+    );
+  }
+
+  it("an empty push result is settled only when the config already moved past the event", async () => {
+    const push = approvedPush();
+    const settledA2A = fakeA2A();
+    settledA2A.deliverApprovedPush.mockResolvedValue([]);
+    const settled = buildCitadelWardApprovalEffectDeps({
+      storage: approvalAndPushStore([push], { "task-1:peer-1": { lastEventSequence: 3 } }),
+      integrationHost: vi.fn() as never,
+      a2a: () => settledA2A,
+    });
+    await expect(settled.executeApprovedCitadelWardAction({ approvalId: "approval-ward-1" })).resolves.toEqual({
+      disposition: "already_settled",
+      eventSequence: 3,
+    });
+
+    for (const pushConfigs of [{}, { "task-1:peer-1": { lastEventSequence: 2 } }]) {
+      const goneA2A = fakeA2A();
+      goneA2A.deliverApprovedPush.mockResolvedValue([]);
+      const gone = buildCitadelWardApprovalEffectDeps({
+        storage: approvalAndPushStore([push], pushConfigs),
+        integrationHost: vi.fn() as never,
+        a2a: () => goneA2A,
+      });
+      const settlement = fakeSettlement();
+      await runCitadelWardApprovalEffect(claimedEffect(push, "approve"), gone, settlement);
+      expect(settlement.approvalEffects.completeEffect).not.toHaveBeenCalled();
+      expect(settlement.approvalEffects.failEffect).toHaveBeenCalledWith(
+        "effect-1",
+        "worker-1",
+        1,
+        expect.objectContaining({
+          lastError: expect.stringMatching(/gone, disabled or no longer at event 3; nothing was delivered/),
+          result: { errorCode: "blocked" },
+        }),
+      );
+    }
+  });
+
+  it("a push ward tightened to deny fails the effect with ward_denied and delivers nothing", async () => {
+    const push = approvedPush();
+    const a2a = fakeA2A();
+    a2a.deliverApprovedPush.mockResolvedValue([
+      {
+        taskId: "task-1",
+        peerId: "peer-1",
+        url: "https://peer.example.test/push",
+        eventSequence: 3,
+        eventKind: "status",
+        status: "blocked",
+        attemptCount: 1,
+        checkedAt: "2026-07-07T00:00:00.000Z",
+        error: "A Citadel Ward denies a2a.outbound.push (citadel citadel-guarded).",
+      } as A2ATaskPushDeliveryResult,
+    ]);
+    const executors = buildCitadelWardApprovalEffectDeps({
+      storage: approvalStore(push),
+      integrationHost: vi.fn() as never,
+      a2a: () => a2a,
+    });
+    const settlement = fakeSettlement();
+
+    await runCitadelWardApprovalEffect(claimedEffect(push, "approve"), executors, settlement);
+
+    expect(settlement.approvalEffects.failEffect).toHaveBeenCalledWith(
+      "effect-1",
+      "worker-1",
+      1,
+      expect.objectContaining({ result: { errorCode: "ward_denied" } }),
+    );
+    expect(settlement.approvalEffects.completeEffect).not.toHaveBeenCalled();
+    expect(settlement.deferForRetry).not.toHaveBeenCalled();
+    expect(a2a.sendOutbound).not.toHaveBeenCalled();
+    expect(a2a.recordRefusedPushApproval).not.toHaveBeenCalled();
   });
 });

@@ -90,6 +90,7 @@ import {
   type CommunicationsApprovalEffectExecutors,
   type CommunicationsApprovalEffectSettlement,
 } from "./communications-approval-effect-service.js";
+import { isCitadelWardApprovalKind } from "./citadel-ward-approval.js";
 import {
   CITADEL_WARD_A2A_OUTBOUND_EFFECT_KIND,
   CITADEL_WARD_A2A_PUSH_EFFECT_KIND,
@@ -832,10 +833,12 @@ export class ApprovalEffectsService {
     );
     const pendingAction = await this.ctx.storage.pendingApprovalActions.find(approval.approvalId);
     if (
-      // A communications tool.invoke row only ever runs through the comms ledger effect.
+      // A communications tool.invoke row only ever runs through the comms ledger effect, and a
+      // Citadel Ward approval only ever runs through its ward apply effect.
       (input.decision === "approve" &&
         pendingAction?.resolutionStatus === "pending" &&
-        !isCommunicationsApprovalKind(approval.kind)) ||
+        !isCommunicationsApprovalKind(approval.kind) &&
+        !isCitadelWardApprovalKind(approval.kind)) ||
       (approval.kind === "code_mode.run" &&
         (input.decision === "approve" || input.decision === "reject") &&
         !pendingAction)

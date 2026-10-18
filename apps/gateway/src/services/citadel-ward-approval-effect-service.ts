@@ -86,13 +86,18 @@ export type CitadelWardApprovalEffectA2APort = Pick<
 >;
 
 export interface CitadelWardApprovalEffectDeps {
-  storage: Pick<AsyncStorage, "approvals">;
+  storage: Pick<AsyncStorage, "approvals" | "a2aTaskPushConfigs">;
   integrationHost: () => IntegrationActionHost;
   a2a: () => CitadelWardApprovalEffectA2APort;
 }
 
-/** A ward approval is refused with a deny ward or a deny warning from the owner. */
-const DENY_WARNING = /\bdenies\b/;
+/**
+ * The A2A owners return no structured deny field, so a deny is read from their message text:
+ * `sendOutboundRaw` in a2a-route-service.ts warns "A Citadel Ward denies <action> (citadel …)."
+ * and `deliverPushEvent` in a2a-push-notification-service.ts records "A Citadel Ward denies
+ * a2a.outbound.push (citadel …)." as the blocked delivery error. Keep this in step with both.
+ */
+const DENY_WARNING = /\bA Citadel Ward denies\b/;
 /** The runner reports a completed run for the same idempotency key as a duplicate. */
 const INTEGRATION_DUPLICATE_REASON = "external_side_effect_duplicate";
 /** A concurrent claim of the same key is transient; the retry converges on duplicate or unknown. */
@@ -205,7 +210,28 @@ export class CitadelWardApprovalEffectService {
       eventSequence: push.eventSequence,
       urlHash: push.urlHash,
     });
-    return mapPushResult(results, push.eventSequence);
+    const [first] = results;
+    return first ? mapPushResult(first) : this.readSettledPush(push, wardApproval.approvalId);
+  }
+
+  /**
+   * The push owner returns no result both when the approved event already settled (a retry
+   * after delivery or refusal) and when its config or binding is gone or the event is no longer
+   * next. Only a config that already moved past the event is settled; anything else delivered
+   * nothing and fails closed.
+   */
+  private async readSettledPush(
+    push: { taskId: string; peerId: string; eventSequence: number },
+    approvalId: string,
+  ): Promise<Record<string, unknown>> {
+    const config = await this.deps.storage.a2aTaskPushConfigs.find(push.taskId, push.peerId);
+    if (config && config.lastEventSequence >= push.eventSequence) {
+      return { disposition: "already_settled", eventSequence: push.eventSequence };
+    }
+    throw new CitadelWardApprovalEffectError(
+      "blocked",
+      `The push config or task binding approved by ${approvalId} is gone, disabled or no longer at event ${push.eventSequence}; nothing was delivered.`,
+    );
   }
 
   private async readApproval(
@@ -333,13 +359,7 @@ function mapOutboundResult(result: A2AOutboundSendResponse): Record<string, unkn
   );
 }
 
-function mapPushResult(results: A2ATaskPushDeliveryResult[], eventSequence: number): Record<string, unknown> {
-  const [first] = results;
-  if (!first) {
-    // The owner refuses quietly when the event was already delivered or refused, or its config
-    // or binding is gone; a retry after a delivery lands here too, so this is not an error.
-    return { disposition: "already_settled", eventSequence };
-  }
+function mapPushResult(first: A2ATaskPushDeliveryResult): Record<string, unknown> {
   if (first.status === "delivered") {
     return {
       disposition: "delivered",
