@@ -128,6 +128,7 @@ An add-on author should currently assume the following minimum contract:
 - `runtimeType = "separate_repo_app"`
 - declared `webEntryMode`
 - optional `launchUrl`
+- optional `launch` contract (data only): `command` and `args` run in the install directory with a secret-free environment plus static `env`; `dataFiles` keep durable files under the add-ons data root and pass their paths in named env vars; `health` is a loopback `http` JSON probe whose `readyWhen` fields must all match within `readyTimeoutMs`. An add-on without `launch` cannot be launched from GoatCitadel. The SDK validator and the Gateway both enforce this shape.
 
 ### Install UX
 

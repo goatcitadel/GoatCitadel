@@ -29,6 +29,15 @@
     ],
     "webEntryMode": "external_local_url",
     "launchUrl": "http://127.0.0.1:3100/",
+    "launch": {
+      "command": "corepack",
+      "args": ["pnpm", "run", "start"],
+      "env": { "REFERENCE_ADDON_PORT": "3100" },
+      "dataFiles": [
+        { "envVar": "REFERENCE_ADDON_DB_PATH", "fileName": "reference.db", "companionSuffixes": ["-wal", "-shm"] }
+      ],
+      "health": { "url": "http://127.0.0.1:3100/health", "readyWhen": { "status": "ok" }, "readyTimeoutMs": 10000 }
+    },
     "requiresSeparateRepoDownload": true,
     "healthChecks": [
       {

@@ -27,6 +27,8 @@ interface CronJobRow {
   next_run_at: string | null;
   workdir: string | null;
   context_from: string | null;
+  /** Read leniently: older fixtures may omit it; not part of the strict row-shape check. */
+  citadel_id?: string | null;
   last_run_output: string | null;
   last_run_id: string | null;
   last_run_status: string | null;
@@ -50,6 +52,7 @@ export type CronJobSpecInput = Pick<
   | "endAt"
   | "workdir"
   | "contextFrom"
+  | "citadelId"
 >;
 
 export interface CronJobSpecPatch {
@@ -62,6 +65,7 @@ export interface CronJobSpecPatch {
   endAt?: string | null;
   workdir?: string | null;
   contextFrom?: string | null;
+  citadelId?: string | null;
 }
 
 export interface CronJobRuntimeTelemetryPatch {
@@ -96,9 +100,9 @@ export class CronJobRepository {
   ) {
     this.insertStmt = db.prepare(`
       INSERT INTO cron_jobs (
-        job_id, revision, name, action, action_config_json, description, schedule, enabled, end_at, last_run_at, next_run_at, workdir, context_from, last_run_output, last_run_id, last_run_status, last_run_evidence_envelope_id, last_failure_at, last_failure_json, failure_count, backoff_until, updated_at
+        job_id, revision, name, action, action_config_json, description, schedule, enabled, end_at, last_run_at, next_run_at, workdir, context_from, citadel_id, last_run_output, last_run_id, last_run_status, last_run_evidence_envelope_id, last_failure_at, last_failure_json, failure_count, backoff_until, updated_at
       ) VALUES (
-        @jobId, 1, @name, @action, @actionConfigJson, @description, @schedule, @enabled, @endAt, @lastRunAt, @nextRunAt, @workdir, @contextFrom, @lastRunOutput, @lastRunId, @lastRunStatus, @lastRunEvidenceEnvelopeId, @lastFailureAt, @lastFailureJson, @failureCount, @backoffUntil, @updatedAt
+        @jobId, 1, @name, @action, @actionConfigJson, @description, @schedule, @enabled, @endAt, @lastRunAt, @nextRunAt, @workdir, @contextFrom, @citadelId, @lastRunOutput, @lastRunId, @lastRunStatus, @lastRunEvidenceEnvelopeId, @lastFailureAt, @lastFailureJson, @failureCount, @backoffUntil, @updatedAt
       )
       ON CONFLICT(job_id) DO NOTHING
     `);
@@ -121,6 +125,7 @@ export class CronJobRepository {
           end_at = @endAt,
           workdir = @workdir,
           context_from = @contextFrom,
+          citadel_id = @citadelId,
           updated_at = @updatedAt
       WHERE job_id = @jobId
         AND revision = @expectedRevision
@@ -446,6 +451,7 @@ export class CronJobRepository {
       nextRunAt: row.next_run_at ?? undefined,
       workdir: row.workdir ?? undefined,
       contextFrom: row.context_from ?? undefined,
+      ...(typeof row.citadel_id === "string" && row.citadel_id ? { citadelId: row.citadel_id } : {}),
       lastRunOutput: row.last_run_output ?? undefined,
       lastRunId: row.last_run_id ?? undefined,
       lastRunStatus:
@@ -526,6 +532,7 @@ function applySpecPatch(current: CronJobRecord, patch: CronJobSpecPatch): CronJo
     endAt: hasOwn(patch, "endAt") ? (patch.endAt ?? undefined) : current.endAt,
     workdir: hasOwn(patch, "workdir") ? (patch.workdir ?? undefined) : current.workdir,
     contextFrom: hasOwn(patch, "contextFrom") ? (patch.contextFrom ?? undefined) : current.contextFrom,
+    citadelId: hasOwn(patch, "citadelId") ? (patch.citadelId ?? undefined) : current.citadelId,
   };
 }
 
@@ -540,6 +547,8 @@ function toFullSpecPatch(job: CronJobSpecInput): CronJobSpecPatch {
     endAt: job.endAt ?? null,
     workdir: job.workdir ?? null,
     contextFrom: job.contextFrom ?? null,
+    // A full-record upsert that does not name citadelId (e.g. a config import) keeps the stored scope.
+    ...(hasOwn(job, "citadelId") ? { citadelId: job.citadelId ?? null } : {}),
   };
 }
 
@@ -555,6 +564,7 @@ function projectCronJobSpec(job: CronJobSpecInput): CronJobSpecInput {
     endAt: job.endAt,
     workdir: job.workdir,
     contextFrom: job.contextFrom,
+    citadelId: job.citadelId,
   };
 }
 
@@ -569,6 +579,7 @@ function toSpecParams(job: CronJobSpecInput): Record<string, unknown> {
     endAt: job.endAt ?? null,
     workdir: job.workdir ?? null,
     contextFrom: job.contextFrom ?? null,
+    citadelId: job.citadelId?.trim() || null,
   };
 }
 
@@ -706,7 +717,8 @@ function cronJobSpecsMatch(existing: CronJobRecord, next: CronJobSpecInput): boo
     existing.enabled === next.enabled &&
     existing.endAt === next.endAt &&
     existing.workdir === next.workdir &&
-    existing.contextFrom === next.contextFrom
+    existing.contextFrom === next.contextFrom &&
+    existing.citadelId === next.citadelId
   );
 }
 

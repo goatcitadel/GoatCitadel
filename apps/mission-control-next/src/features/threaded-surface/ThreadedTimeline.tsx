@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkflowSkillCaptureControl } from "./WorkflowSkillCaptureControl";
-import {
-  type ChatThreadSystemNoticeRecord,
-  type ChatThreadTurnRecord,
-} from "@goatcitadel/contracts";
+import { type ChatThreadSystemNoticeRecord, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatOptimisticUserMessage } from "@goatcitadel/mission-control-shared/components/chat/ChatOptimisticUserMessage";
 import { SurfaceReconnectBanner } from "@goatcitadel/mission-control-shared/components/chat/SurfaceReconnectBanner";
@@ -151,6 +148,43 @@ export function resolveStreamingPreviewScrollSignal(
   const visibleLineCount = countVisibleLines(preview.visibleText);
   const visibleCharacterBucket = Math.floor(preview.visibleText.length / STREAM_SCROLL_CHARACTER_BUCKET);
   return [preview.turnId, visibleLineCount, visibleCharacterBucket].join(":");
+}
+
+export interface StreamPhaseState {
+  turnId: string | null;
+  thinkingLength: number;
+  textLength: number;
+  phase: "thinking" | "answering" | "idle";
+}
+
+export const INITIAL_STREAM_PHASE: StreamPhaseState = { turnId: null, thinkingLength: 0, textLength: 0, phase: "idle" };
+
+/**
+ * Advances the streaming turn's current phase from how its reasoning and answer text grew.
+ * Whichever grew last decides the phase, so a later reasoning pass after intermediate answer
+ * text (multi-pass tool turns) is announced again. Same inputs return the same state.
+ */
+export function advanceStreamPhase(
+  previous: StreamPhaseState,
+  turnId: string | null,
+  thinkingLength: number,
+  textLength: number,
+): StreamPhaseState {
+  if (turnId !== previous.turnId) {
+    const phase = textLength > 0 ? "answering" : thinkingLength > 0 ? "thinking" : "idle";
+    return { turnId, thinkingLength, textLength, phase };
+  }
+  if (thinkingLength === previous.thinkingLength && textLength === previous.textLength) {
+    return previous;
+  }
+  // When both grew in one update the order is unknown; answer text is the safer announcement.
+  const phase =
+    textLength > previous.textLength
+      ? "answering"
+      : thinkingLength > previous.thinkingLength
+        ? "thinking"
+        : previous.phase;
+  return { turnId, thinkingLength, textLength, phase };
 }
 
 export type ThreadedTimelineItem =
@@ -428,17 +462,41 @@ export function ThreadedTimeline({
   const effectiveStreamStatus =
     hasExplicitNonStreamError && props.streamStatus === "error" ? "idle" : props.streamStatus;
   const hasStreamError = effectiveStreamStatus === "error" || Boolean(streamTransportError?.trim());
+  // Streamed reasoning gets one stable phase announcement in this single live
+  // region (the thinking disclosure itself stays non-live): the string only
+  // changes when the phase does, never per reasoning delta.
+  const streamingTurnId = props.activeStreamingTurnId ?? streamingPreview?.turnId ?? null;
+  const streamingTurn = streamingTurnId
+    ? props.thread?.turns.find((turn) => turn.turnId === streamingTurnId)
+    : undefined;
+  // "Adjust state while rendering": the phase depends on how the previous render's lengths grew.
+  const [streamPhase, setStreamPhase] = useState(INITIAL_STREAM_PHASE);
+  const nextStreamPhase = advanceStreamPhase(
+    streamPhase,
+    streamingTurnId,
+    streamingTurn?.thinking?.length ?? 0,
+    streamingPreview?.turnId === streamingTurnId && streamingPreview?.visibleText
+      ? streamingPreview.visibleText.length
+      : (streamingTurn?.assistantMessage?.content?.length ?? 0),
+  );
+  if (nextStreamPhase !== streamPhase) {
+    setStreamPhase(nextStreamPhase);
+  }
+  const streamingTurnIsThinking = nextStreamPhase.phase === "thinking";
+  const queuedSuffix = props.queuedCount > 0 ? ` with ${props.queuedCount} queued` : "";
   const liveStatus = props.isStopPending
     ? "Stopping response. Waiting for confirmation."
     : hasStreamError
       ? "Chat response could not be completed. Use the composer to try again or open Activity for details."
-      : effectiveStreamStatus === "streaming"
-        ? `${toTitleCase(props.mode)} response streaming${props.queuedCount > 0 ? ` with ${props.queuedCount} queued` : ""}.`
-        : effectiveStreamStatus === "queued"
-          ? `${toTitleCase(props.mode)} turn queued.`
-          : effectiveStreamStatus === "connecting"
-            ? `${toTitleCase(props.mode)} stream connecting.`
-            : "";
+      : effectiveStreamStatus === "streaming" && streamingTurnIsThinking
+        ? `${toTitleCase(props.mode)} model is thinking${queuedSuffix}.`
+        : effectiveStreamStatus === "streaming"
+          ? `${toTitleCase(props.mode)} response streaming${queuedSuffix}.`
+          : effectiveStreamStatus === "queued"
+            ? `${toTitleCase(props.mode)} turn queued.`
+            : effectiveStreamStatus === "connecting"
+              ? `${toTitleCase(props.mode)} stream connecting.`
+              : "";
   const streamingPreviewSignal = resolveStreamingPreviewScrollSignal(streamingPreview, props.activeStreamingTurnId);
   const activeWorkState = deriveFocusedActiveWorkState({
     // A locally submitted message is new work; a previous terminal turn must
@@ -571,7 +629,11 @@ export function ThreadedTimeline({
       </div>
       <div ref={scrollRef} className="mc-next-thread-scroll" onScroll={handleThreadScroll}>
         <div className="mc-next-thread-status-lane">
-          <SurfaceReconnectBanner mode={props.mode} status={props.eventStreamStatus} onRefresh={props.onRefreshThread} />
+          <SurfaceReconnectBanner
+            mode={props.mode}
+            status={props.eventStreamStatus}
+            onRefresh={props.onRefreshThread}
+          />
           <FocusedActiveWorkSummary
             state={displayActiveWorkState}
             approvalActionsInComposer={Boolean(props.pendingApproval)}

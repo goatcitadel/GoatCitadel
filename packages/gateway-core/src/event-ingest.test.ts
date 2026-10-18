@@ -560,6 +560,45 @@ describe("EventIngestService", () => {
     childSpy.mockRestore();
   });
 
+  it("replays a delivery that crashed after appending without writing the transcript twice", async () => {
+    const unique = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const root = path.join(os.tmpdir(), `goatcitadel-outbox-crash-${unique}`);
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    try {
+      const event = {
+        eventId: "evt-crash",
+        sessionId: "sess_crash",
+        sessionKey: "chat:local:operator",
+        timestamp: "2026-10-18T00:00:00.000Z",
+        actionId: "action-crash",
+        idempotencyKey: "idem-crash",
+        type: "message.user",
+        actorType: "user",
+        actorId: "operator",
+        payload: { message: { role: "user", content: "survive the crash" } },
+      } as TranscriptEvent;
+      // Crash window: the drain marked its attempt and appended, then died before markDelivered.
+      storage.transcriptOutbox.enqueue(event, event.timestamp);
+      storage.transcriptOutbox.markAttemptStarted(event.eventId, { attemptedAt: "2026-10-18T00:00:01.000Z" });
+      const appendedOffset = await storage.transcripts.append(event);
+
+      const delivered = await new EventIngestService(asAsyncStorage(storage)).flushPendingTranscriptOutbox();
+
+      expect(delivered).toBe(1);
+      const transcript = await storage.transcripts.read(event.sessionId);
+      expect(transcript.filter((entry) => entry.eventId === event.eventId)).toHaveLength(1);
+      expect(storage.transcriptOutbox.listPending(10, event.sessionId)).toEqual([]);
+      expect(storage.transcriptOutbox.get(event.eventId)?.transcriptOffset).toBe(appendedOffset);
+    } finally {
+      storage.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   it("flushes pending transcript outbox items on demand", async () => {
     const sessionEvent = {
       eventId: "evt-2",

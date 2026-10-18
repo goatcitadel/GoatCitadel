@@ -437,6 +437,33 @@ describe("loadGatewayConfig", () => {
     });
   });
 
+  describe("chatThinkingStreamV1Enabled default", () => {
+    const ENV_KEY = "GOATCITADEL_FEATURE_CHAT_THINKING_STREAM_V1_ENABLED";
+    let previous: string | undefined;
+
+    afterEach(() => {
+      if (previous === undefined) {
+        delete process.env[ENV_KEY];
+      } else {
+        process.env[ENV_KEY] = previous;
+      }
+    });
+
+    it("stays off (decided default, #343) when neither the env var nor a stored value is present", async () => {
+      const { rootDir } = await createConfigFixture();
+      previous = process.env[ENV_KEY];
+      delete process.env[ENV_KEY];
+      expect((await loadGatewayConfig(rootDir)).assistant.features.chatThinkingStreamV1Enabled).toBe(false);
+    });
+
+    it("turns on when the operator opts in through the env var", async () => {
+      const { rootDir } = await createConfigFixture();
+      previous = process.env[ENV_KEY];
+      process.env[ENV_KEY] = "true";
+      expect((await loadGatewayConfig(rootDir)).assistant.features.chatThinkingStreamV1Enabled).toBe(true);
+    });
+  });
+
   describe("channelVoiceInboundV1Enabled default", () => {
     const ENV_KEY = "GOATCITADEL_FEATURE_CHANNEL_VOICE_INBOUND_V1_ENABLED";
     let previous: string | undefined;

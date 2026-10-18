@@ -8573,12 +8573,19 @@ export class GatewayService {
    * `task` handler and the `agent_turn` autonomy-disabled / inertInboxFallback
    * path so the fallback behavior stays byte-identical to today's `task` cron.
    */
-  private async createCronInboxTask(job: CronJobRecord, options: { taskId?: string } = {}): Promise<TaskRecord> {
+  private async createCronInboxTask(
+    job: CronJobRecord,
+    options: { taskId?: string; workspaceId?: string } = {},
+  ): Promise<TaskRecord> {
     const deterministicTaskId = options.taskId?.trim();
     if (deterministicTaskId) {
       const existing = await this.storage.tasks.find(deterministicTaskId);
       if (existing) {
-        if (existing.createdBy !== "scheduler" || !existing.description?.includes(`Cron job: ${job.jobId}`)) {
+        if (
+          existing.createdBy !== "scheduler" ||
+          !existing.description?.includes(`Cron job: ${job.jobId}`) ||
+          (options.workspaceId !== undefined && existing.workspaceId !== options.workspaceId)
+        ) {
           throw new ConflictError({
             message: `Deterministic cron inbox task ${deterministicTaskId} is owned by a different occurrence.`,
           });
@@ -8598,6 +8605,7 @@ export class GatewayService {
         status: "inbox",
         priority: "normal",
         createdBy: "scheduler",
+        ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
       },
       deterministicTaskId ? { taskId: deterministicTaskId } : undefined,
     );

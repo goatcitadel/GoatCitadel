@@ -70,7 +70,11 @@ export interface CronConfigGenerationOwnerHooks {
 }
 
 export interface CronSpecMutationOwner {
-  createSpec(spec: CronJobSpecInput, telemetry?: CronJobRuntimeTelemetryPatch, creatorAuthority?: CronJobCreatorAuthorityInput): Promise<CronJobRecord>;
+  createSpec(
+    spec: CronJobSpecInput,
+    telemetry?: CronJobRuntimeTelemetryPatch,
+    creatorAuthority?: CronJobCreatorAuthorityInput,
+  ): Promise<CronJobRecord>;
   updateSpec(
     spec: CronJobSpecInput,
     expectedRevision: number,
@@ -122,7 +126,11 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
     private readonly hooks: CronConfigGenerationOwnerHooks = {},
   ) {}
 
-  public async createSpec(spec: CronJobSpecInput, telemetry?: CronJobRuntimeTelemetryPatch, creatorAuthority?: CronJobCreatorAuthorityInput): Promise<CronJobRecord> {
+  public async createSpec(
+    spec: CronJobSpecInput,
+    telemetry?: CronJobRuntimeTelemetryPatch,
+    creatorAuthority?: CronJobCreatorAuthorityInput,
+  ): Promise<CronJobRecord> {
     const desired = projectCanonicalCronSpec(spec);
     return await this.commitMutation<CronJobRecord>(async () => {
       const existing = await this.storage.cronJobs.get(desired.jobId);
@@ -139,7 +147,12 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
         });
       }
       return {
-        mutation: { kind: "create", spec: desired, ...(telemetry ? { telemetry } : {}), ...(creatorAuthority ? { creatorAuthority } : {}) },
+        mutation: {
+          kind: "create",
+          spec: desired,
+          ...(telemetry ? { telemetry } : {}),
+          ...(creatorAuthority ? { creatorAuthority } : {}),
+        },
         updateSpecs: (specs) => upsertCanonicalSpec(specs, desired),
       };
     });
@@ -180,15 +193,21 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
   }
 
   public async reconcileSpec(spec: CronJobSpecInput): Promise<CronJobRecord> {
-    const desired = projectCanonicalCronSpec(spec);
+    const requested = projectCanonicalCronSpec(spec);
     return await this.commitMutation<CronJobRecord>(async () => {
-      const current = await this.storage.cronJobs.get(desired.jobId);
+      const current = await this.storage.cronJobs.get(requested.jobId);
       if (!current) {
         return {
-          mutation: { kind: "create", spec: desired },
-          updateSpecs: (specs) => upsertCanonicalSpec(specs, desired),
+          mutation: { kind: "create", spec: requested },
+          updateSpecs: (specs) => upsertCanonicalSpec(specs, requested),
         };
       }
+      // Reconcilers that do not own the scope (startup built-in helpers, the legacy loader)
+      // omit citadelId; keep the stored scope. Only an explicit citadelId changes it here.
+      const desired =
+        Object.prototype.hasOwnProperty.call(spec, "citadelId") || !current.citadelId
+          ? requested
+          : projectCanonicalCronSpec({ ...requested, citadelId: current.citadelId });
       // A changed schedule (e.g. a built-in re-zoned on startup) invalidates the
       // persisted nextRunAt; re-project it as startup reconciliation does.
       const scheduleChanged = current.schedule !== desired.schedule;
@@ -404,6 +423,7 @@ export function projectCanonicalCronSpec(spec: CronJobSpecInput): CronJobSpecInp
   const endAt = normalizeCronEndAt(spec.endAt);
   const workdir = normalizeCronWorkdir(spec.workdir);
   const contextFrom = normalizeCronContextFrom(spec.contextFrom);
+  const citadelId = spec.citadelId?.trim();
   return {
     jobId,
     name: normalizeCronJobName(spec.name),
@@ -415,6 +435,7 @@ export function projectCanonicalCronSpec(spec: CronJobSpecInput): CronJobSpecInp
     ...(endAt ? { endAt } : {}),
     ...(workdir ? { workdir } : {}),
     ...(contextFrom ? { contextFrom } : {}),
+    ...(citadelId ? { citadelId } : {}),
   };
 }
 
@@ -455,6 +476,7 @@ export function readCanonicalCronSpecs(section: unknown): CronJobSpecInput[] {
       ...(typeof value.endAt === "string" ? { endAt: value.endAt } : {}),
       ...(typeof value.workdir === "string" ? { workdir: value.workdir } : {}),
       ...(typeof value.contextFrom === "string" ? { contextFrom: value.contextFrom } : {}),
+      ...(typeof value.citadelId === "string" ? { citadelId: value.citadelId } : {}),
     });
     if (seen.has(spec.jobId)) {
       throw new ValidationError({ message: `Canonical cronJobs contains duplicate jobId ${spec.jobId}.` });
@@ -526,6 +548,7 @@ function toFullSpecPatch(spec: CronJobSpecInput): CronJobSpecPatch {
     endAt: spec.endAt ?? null,
     workdir: spec.workdir ?? null,
     contextFrom: spec.contextFrom ?? null,
+    citadelId: spec.citadelId ?? null,
   };
 }
 

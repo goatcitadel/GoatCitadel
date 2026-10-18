@@ -1,14 +1,23 @@
 import fs from "node:fs/promises";
-import fsSync, { type Stats } from "node:fs";
+import fsSync from "node:fs";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { z } from "zod";
 import { buildAddonChildEnv } from "./addon-child-env.js";
+import {
+  describeReadyWhen,
+  lstatIfPresent,
+  parseAddonLaunchContract,
+  prepareAddonDataFiles,
+  readAddonHealth,
+  waitForAddonReady,
+} from "./addon-launch-contract.js";
 import type {
   AddonActionResponse,
   AddonCatalogEntry,
+  AddonLaunchContract,
   AddonHealthCheckRecord,
   AddonInstalledRecord,
   AddonInstallRequest,
@@ -16,10 +25,11 @@ import type {
   AddonUninstallResponse,
 } from "@goatcitadel/contracts";
 import { AddonSlotService } from "./addon-slot-service.js";
-import { readBoundedResponseJson } from "./bounded-response-reader.js";
 
 export interface AddonsServiceOptions {
   slotService?: AddonSlotService;
+  /** Replaces the built-in catalog (tests, future manifest sources); launch contracts are re-validated at launch. */
+  catalog?: AddonCatalogEntry[];
 }
 
 interface AddonManifestFile {
@@ -56,8 +66,6 @@ const ARENA_REPO_URL = "https://github.com/spurnout/goatcitadel-arena";
 // source revision so a moving default branch cannot change between operator
 // consent and execution. Updates move only when GoatCitadel ships a new pin.
 const ARENA_REPO_REF = "afce1692c9504aee816423fbb0dcb6bd24496053";
-const ARENA_DATABASE_FILE = "arena.db";
-const ARENA_DATABASE_COMPANION_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const ARENA_SERVER_PORT = 3099;
 const ARENA_SERVER_HEALTH_URL = `http://127.0.0.1:${ARENA_SERVER_PORT}/health`;
 const ARENA_LAUNCH_URL = `http://127.0.0.1:${ARENA_SERVER_PORT}/`;
@@ -66,52 +74,18 @@ const MANIFEST_VERSION: AddonManifestFile = {
   items: {},
 };
 
-interface ArenaHealthProbe {
-  ready: boolean;
-  statusOk: boolean;
-  uiReady: boolean;
-  uiEntryPath?: string;
-}
-
-const ArenaHealthPayloadSchema = z.object({
-  status: z.string().optional(),
-  uiReady: z.boolean().optional(),
-  uiEntryPath: z.string().optional(),
-});
-
-interface AddonLaunchSpec {
-  command: string;
-  args: string[];
-  healthUrl: string;
-  readyTimeoutMs: number;
-  buildEnv(context: { installedPath: string; addonsRootDir: string }): Promise<Record<string, string>>;
-  probeReady(healthUrl: string, timeoutMs: number): Promise<{ ready: boolean } | undefined>;
-}
-
-const ADDON_LAUNCH_SPECS: Record<string, AddonLaunchSpec> = {
-  arena: {
-    command: "corepack",
-    args: ["pnpm", "--filter", "@arena/server", "start"],
-    healthUrl: ARENA_SERVER_HEALTH_URL,
-    readyTimeoutMs: 12_000,
-    buildEnv: async ({ installedPath, addonsRootDir }) => ({
-      ARENA_HOST: "127.0.0.1",
-      ARENA_PORT: String(ARENA_SERVER_PORT),
-      CORS_ORIGIN: ARENA_LAUNCH_URL.replace(/\/$/, ""),
-      GOATCITADEL_BASE_URL: "http://127.0.0.1:8787",
-      ARENA_DB_PATH: await prepareArenaDataPath(installedPath, addonsRootDir),
-    }),
-    probeReady: async (healthUrl, timeoutMs) => (await waitForArenaReady(healthUrl, timeoutMs)) ?? undefined,
+const ARENA_LAUNCH: AddonLaunchContract = {
+  command: "corepack",
+  args: ["pnpm", "--filter", "@arena/server", "start"],
+  env: {
+    ARENA_HOST: "127.0.0.1",
+    ARENA_PORT: String(ARENA_SERVER_PORT),
+    CORS_ORIGIN: ARENA_LAUNCH_URL.replace(/\/$/, ""),
+    GOATCITADEL_BASE_URL: "http://127.0.0.1:8787",
   },
+  dataFiles: [{ envVar: "ARENA_DB_PATH", fileName: "arena.db", companionSuffixes: ["-wal", "-shm", "-journal"] }],
+  health: { url: ARENA_SERVER_HEALTH_URL, readyWhen: { status: "ok", uiReady: true }, readyTimeoutMs: 12_000 },
 };
-
-export function listAddonLaunchSpecIds(): string[] {
-  return Object.keys(ADDON_LAUNCH_SPECS);
-}
-
-export function listAddonCatalogIds(): string[] {
-  return ADDON_CATALOG.map((entry) => entry.addonId);
-}
 
 const ADDON_CATALOG: AddonCatalogEntry[] = [
   {
@@ -153,6 +127,7 @@ const ADDON_CATALOG: AddonCatalogEntry[] = [
     ],
     webEntryMode: "external_local_url",
     launchUrl: ARENA_LAUNCH_URL,
+    launch: ARENA_LAUNCH,
     requiresSeparateRepoDownload: true,
     healthChecks: [
       {
@@ -174,6 +149,7 @@ export class AddonsService {
   private readonly addonsRootDir: string;
   private readonly manifestPath: string;
   private readonly slotService?: AddonSlotService;
+  private readonly catalog: readonly AddonCatalogEntry[];
 
   public constructor(
     private readonly rootDir: string,
@@ -183,10 +159,11 @@ export class AddonsService {
     this.addonsRootDir = path.join(this.goatHomeDir, "addons");
     this.manifestPath = path.join(this.addonsRootDir, "manifest.json");
     this.slotService = options.slotService;
+    this.catalog = (options.catalog ?? ADDON_CATALOG).map((item) => structuredClone(item));
   }
 
   public listCatalog(): AddonCatalogEntry[] {
-    return ADDON_CATALOG.map((item) => structuredClone(item));
+    return this.catalog.map((item) => structuredClone(item));
   }
 
   public async listInstalled(): Promise<AddonInstalledRecord[]> {
@@ -334,8 +311,8 @@ export class AddonsService {
     if (typeof current.pid === "number" && isProcessRunning(current.pid)) {
       throw new Error(`Stop add-on ${addonId} before updating it.`);
     }
-    if (addonId === "arena") {
-      await prepareArenaDataPath(installedPath, this.addonsRootDir);
+    if (addon.launch?.dataFiles?.length) {
+      await this.prepareDataFiles(addonId, installedPath, parseAddonLaunchContract(addonId, addon.launch));
     }
     let stagingDir: string | undefined;
     let oldMoved = false;
@@ -420,10 +397,10 @@ export class AddonsService {
     if (current.enabled === false || current.runtimeStatus === "disabled") {
       throw new Error(`Add-on ${addonId} is disabled. Enable it before launch.`);
     }
-    const spec = ADDON_LAUNCH_SPECS[addonId];
-    if (!spec) {
-      throw new Error(`Add-on ${addonId} does not declare a launch spec.`);
+    if (!addon.launch) {
+      throw new Error(`Add-on ${addonId} does not declare a launch contract.`);
     }
+    const contract = parseAddonLaunchContract(addonId, addon.launch);
     const installedPath = assertAddonPathWithinRoot(current.installedPath, this.addonsRootDir);
     if (!fsSync.existsSync(installedPath)) {
       throw new Error(`Installed add-on path is missing: ${installedPath}`);
@@ -431,11 +408,11 @@ export class AddonsService {
     const alreadyRunning = typeof current.pid === "number" && isProcessRunning(current.pid);
     let pid = current.pid;
     if (!alreadyRunning) {
-      const env = await spec.buildEnv({ installedPath, addonsRootDir: this.addonsRootDir });
-      pid = spawnDetachedCommand(spec.command, spec.args, installedPath, env).pid;
+      const env = { ...contract.env, ...(await this.prepareDataFiles(addonId, installedPath, contract)) };
+      pid = spawnDetachedCommand(contract.command, contract.args, installedPath, env).pid;
     }
 
-    const probe = await spec.probeReady(spec.healthUrl, spec.readyTimeoutMs);
+    const probe = await waitForAddonReady(contract.health);
     const ready = probe?.ready ?? false;
     const updated: AddonInstalledRecord = {
       ...current,
@@ -446,7 +423,9 @@ export class AddonsService {
       launchUrl: current.launchUrl ?? addon.launchUrl,
       runtimeStatus: ready ? "running" : "error",
       updatedAt: new Date().toISOString(),
-      lastError: ready ? undefined : `${addon.label} health check did not report ready at ${spec.healthUrl}.`,
+      lastError: ready
+        ? undefined
+        : `${addon.label} health check did not report ready (${describeReadyWhen(contract.health)}) at ${contract.health.url}.`,
     };
     manifest.items[addonId] = updated;
     await this.writeManifest(manifest);
@@ -455,8 +434,22 @@ export class AddonsService {
     };
   }
 
+  private async prepareDataFiles(
+    addonId: string,
+    installedPath: string,
+    contract: AddonLaunchContract,
+  ): Promise<Record<string, string>> {
+    return await prepareAddonDataFiles({
+      addonId,
+      installedPath,
+      addonsRootDir: this.addonsRootDir,
+      dataFiles: contract.dataFiles ?? [],
+      assertWithinRoot: assertAddonPathWithinRoot,
+    });
+  }
+
   public async stop(addonId: string): Promise<AddonActionResponse> {
-    this.requireCatalogEntry(addonId);
+    const addon = this.requireCatalogEntry(addonId);
     const manifest = await this.readManifest();
     const current = this.requireInstalledRecord(addonId, manifest);
     const installedPath = assertAddonPathWithinRoot(current.installedPath, this.addonsRootDir);
@@ -468,7 +461,7 @@ export class AddonsService {
       installedPath,
       enabled: current.enabled ?? true,
       pid: undefined,
-      launchUrl: current.launchUrl ?? ARENA_LAUNCH_URL,
+      launchUrl: current.launchUrl ?? addon.launchUrl,
       runtimeStatus: current.enabled === false ? "disabled" : "stopped",
       updatedAt: new Date().toISOString(),
       lastError: undefined,
@@ -535,32 +528,20 @@ export class AddonsService {
         : `Installed path is missing: ${installedPath}.`,
     });
 
-    const arenaServerEntry = path.join(installedPath, "apps", "server", "dist", "index.js");
-    const arenaWebEntry = path.join(installedPath, "apps", "web", "dist", "index.html");
-    checks.push({
-      key: "build_output",
-      status: fsSync.existsSync(arenaServerEntry) ? "pass" : "warn",
-      message: fsSync.existsSync(arenaServerEntry)
-        ? "Arena server build output exists."
-        : "Arena build output is missing; rerun update/build if launch fails.",
-    });
-    checks.push({
-      key: "web_build",
-      status: fsSync.existsSync(arenaWebEntry) ? "pass" : "warn",
-      message: fsSync.existsSync(arenaWebEntry)
-        ? "Arena web build output exists."
-        : "Arena web build output is missing; rebuild Arena before trying to open it from GoatCitadel.",
-    });
+    if (addon.addonId === "arena") {
+      checks.push(...arenaBuildOutputChecks(installedPath));
+    }
 
-    if (installed.runtimeStatus === "running") {
-      const probe = await readArenaHealth(ARENA_SERVER_HEALTH_URL, 1_500);
+    if (installed.runtimeStatus === "running" && addon.launch) {
+      const health = parseAddonLaunchContract(addon.addonId, addon.launch).health;
+      const probe = await readAddonHealth(health, 1_500);
       const healthy = probe?.ready ?? false;
       checks.push({
         key: "health",
         status: healthy ? "pass" : "fail",
         message: healthy
-          ? `Health check passed at ${ARENA_SERVER_HEALTH_URL} and Arena reported uiReady.`
-          : `Health check failed or Arena did not report uiReady at ${ARENA_SERVER_HEALTH_URL}.`,
+          ? `Health check passed at ${health.url} (${describeReadyWhen(health)}).`
+          : `Health check failed or ${addon.label} did not report ready (${describeReadyWhen(health)}) at ${health.url}.`,
       });
     } else {
       checks.push({
@@ -610,13 +591,14 @@ export class AddonsService {
         updatedAt: new Date().toISOString(),
       };
     }
-    if (addon.addonId === "arena" && hasRunningPid) {
-      const probe = await readArenaHealth(ARENA_SERVER_HEALTH_URL, 1_500);
+    if (addon.launch && hasRunningPid) {
+      const health = parseAddonLaunchContract(addon.addonId, addon.launch).health;
+      const probe = await readAddonHealth(health, 1_500);
       if (!(probe?.ready ?? false)) {
         return {
           ...normalizedRecord,
           runtimeStatus: "error",
-          lastError: `Arena process is running but the health check did not report uiReady at ${ARENA_SERVER_HEALTH_URL}.`,
+          lastError: `${addon.label} process is running but the health check did not report ready (${describeReadyWhen(health)}) at ${health.url}.`,
           updatedAt: new Date().toISOString(),
         };
       }
@@ -625,7 +607,7 @@ export class AddonsService {
   }
 
   private requireCatalogEntry(addonId: string): AddonCatalogEntry {
-    const addon = ADDON_CATALOG.find((item) => item.addonId === addonId);
+    const addon = this.catalog.find((item) => item.addonId === addonId);
     if (!addon) {
       throw new Error(`Unknown add-on: ${addonId}`);
     }
@@ -761,9 +743,12 @@ function spawnDetachedCommand(
     stdio: "ignore",
     env: buildAddonChildEnv(extraEnv),
   });
+  // A missing or non-executable manifest command emits `error` asynchronously; without a
+  // listener that event would crash the Gateway instead of failing this launch.
+  child.once("error", () => undefined);
   child.unref();
   if (typeof child.pid !== "number") {
-    throw new Error("Failed to start add-on process.");
+    throw new Error(`Failed to start add-on process: ${command}`);
   }
   return { pid: child.pid };
 }
@@ -853,46 +838,25 @@ function killProcessTree(pid: number): void {
   }
 }
 
-async function readArenaHealth(url: string, timeoutMs: number): Promise<ArenaHealthProbe | null> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    const response = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
-    if (!response.ok) {
-      return null;
-    }
-    const payload = ArenaHealthPayloadSchema.safeParse(
-      await readBoundedResponseJson(response, {
-        maxBytes: 32 * 1024,
-        timeoutMs,
-        label: "Arena health",
-      }),
-    );
-    if (!payload.success) {
-      return null;
-    }
-    return {
-      ready: payload.data.status === "ok" && payload.data.uiReady === true,
-      statusOk: payload.data.status === "ok",
-      uiReady: payload.data.uiReady === true,
-      uiEntryPath: payload.data.uiEntryPath,
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function waitForArenaReady(url: string, timeoutMs: number): Promise<ArenaHealthProbe | null> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const probe = await readArenaHealth(url, 1_000);
-    if (probe?.ready) {
-      return probe;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 400));
-  }
-  return null;
+function arenaBuildOutputChecks(installedPath: string): AddonHealthCheckRecord[] {
+  const serverEntry = path.join(installedPath, "apps", "server", "dist", "index.js");
+  const webEntry = path.join(installedPath, "apps", "web", "dist", "index.html");
+  return [
+    {
+      key: "build_output",
+      status: fsSync.existsSync(serverEntry) ? "pass" : "warn",
+      message: fsSync.existsSync(serverEntry)
+        ? "Arena server build output exists."
+        : "Arena build output is missing; rerun update/build if launch fails.",
+    },
+    {
+      key: "web_build",
+      status: fsSync.existsSync(webEntry) ? "pass" : "warn",
+      message: fsSync.existsSync(webEntry)
+        ? "Arena web build output exists."
+        : "Arena web build output is missing; rebuild Arena before trying to open it from GoatCitadel.",
+    },
+  ];
 }
 
 function assertAddonPathWithinRoot(installedPath: string, addonsRootDir: string): string {
@@ -931,30 +895,6 @@ async function removeManagedAddonTempDirectory(targetDir: string, addonsRootDir:
     throw new Error(`Refusing to remove an unmanaged add-on directory: ${resolved}`);
   }
   await fs.rm(resolved, { recursive: true, force: true });
-}
-
-async function prepareArenaDataPath(installedPath: string, addonsRootDir: string): Promise<string> {
-  const safeInstalledPath = assertAddonPathWithinRoot(installedPath, addonsRootDir);
-  const dataDirectory = path.join(addonsRootDir, "data", "arena");
-  await ensureAddonDirectoryWithoutLinks(dataDirectory, addonsRootDir);
-
-  for (const suffix of ARENA_DATABASE_COMPANION_SUFFIXES) {
-    const fileName = `${ARENA_DATABASE_FILE}${suffix}`;
-    const legacyPath = path.join(safeInstalledPath, fileName);
-    const durablePath = path.join(dataDirectory, fileName);
-    const legacyStats = await lstatIfPresent(legacyPath);
-    const durableStats = await lstatIfPresent(durablePath);
-    assertRegularAddonDataFile(legacyPath, legacyStats);
-    assertRegularAddonDataFile(durablePath, durableStats);
-    if (legacyStats && durableStats) {
-      throw new Error(`Arena database migration is ambiguous because both ${legacyPath} and ${durablePath} exist.`);
-    }
-    if (legacyStats) {
-      await fs.rename(legacyPath, durablePath);
-    }
-  }
-
-  return path.join(dataDirectory, ARENA_DATABASE_FILE);
 }
 
 async function recoverInterruptedAddonUpdate(input: {
@@ -1009,45 +949,6 @@ async function recoverInterruptedAddonUpdate(input: {
   );
 }
 
-async function ensureAddonDirectoryWithoutLinks(directory: string, addonsRootDir: string): Promise<void> {
-  const root = path.resolve(addonsRootDir);
-  const target = path.resolve(directory);
-  const relative = path.relative(root, target);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Add-on data path escapes add-ons root: ${directory}`);
-  }
-  await fs.mkdir(root, { recursive: true });
-  let current = root;
-  for (const segment of relative.split(path.sep).filter(Boolean)) {
-    current = path.join(current, segment);
-    const existing = await lstatIfPresent(current);
-    if (!existing) {
-      await fs.mkdir(current);
-    }
-    const stats = await fs.lstat(current);
-    if (!stats.isDirectory() || stats.isSymbolicLink()) {
-      throw new Error(`Refusing to use a linked or non-directory add-on data path: ${current}`);
-    }
-  }
-}
-
-async function lstatIfPresent(targetPath: string): Promise<Stats | undefined> {
-  try {
-    return await fs.lstat(targetPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-function assertRegularAddonDataFile(targetPath: string, stats: Stats | undefined): void {
-  if (stats && (!stats.isFile() || stats.isSymbolicLink())) {
-    throw new Error(`Refusing to use a linked or non-file Arena database path: ${targetPath}`);
-  }
-}
-
 async function removeNewAddonInstall(targetDir: string, addonsRootDir: string, addonId: string): Promise<void> {
   const resolved = assertAddonPathWithinRoot(targetDir, addonsRootDir);
   const expected = path.resolve(addonsRootDir, addonId);
@@ -1063,7 +964,6 @@ export const __internal = {
   assertAddonPathWithinRoot,
   buildAddonChildEnv,
   checkoutPinnedAddonRevision,
-  prepareArenaDataPath,
   recoverInterruptedAddonUpdate,
   resolveCommandInvocation,
 };
