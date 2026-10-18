@@ -567,7 +567,8 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
   toolPolicy.tools.approvalMode = assistant.toolApprovalMode ?? toolPolicy.tools.approvalMode;
   toolPolicy.sandbox.writeJailRoots = resolveSandboxRoots(rootDir, toolPolicy.sandbox.writeJailRoots, "writeJailRoots");
   toolPolicy.sandbox.readOnlyRoots = resolveSandboxRoots(rootDir, toolPolicy.sandbox.readOnlyRoots, "readOnlyRoots");
-  const runtimeWriteProtection = buildRuntimeWriteProtection(rootDir, assistant);
+  const dbPath = path.join(rootDir, assistant.dataDir, "index.db");
+  const runtimeWriteProtection = buildRuntimeWriteProtection(rootDir, assistant, dbPath);
   toolPolicy.sandbox.runtimeWriteProtection = runtimeWriteProtection;
   toolPolicy.sandbox.operatorWriteRoots = resolveOperatorWriteRoots(
     toolPolicy.sandbox.operatorWriteRoots ?? [],
@@ -580,7 +581,7 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
     budgets,
     llm,
     rootDir,
-    dbPath: path.join(rootDir, assistant.dataDir, "index.db"),
+    dbPath,
   };
 
   // Capture mtimes AFTER load so any side-effects from the sync/materialize

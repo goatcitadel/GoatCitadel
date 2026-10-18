@@ -483,6 +483,85 @@ describe("resolveToolRequestPaths write roots", () => {
   });
 });
 
+describe("resolveToolRequestPaths artifact, patch, and browser outputs", () => {
+  function outputRequest(toolName: string, args: Record<string, unknown>): ToolInvokeRequest {
+    return { toolName, args, agentId: "agent", sessionId: "session" };
+  }
+
+  it("resolves relative output paths against the workspace instead of the process directory", async () => {
+    const { workspaceRoot } = await createWorkspaceFixture();
+    for (const toolName of ["fs.patch", "artifacts.create", "documents.create", "presentations.create"]) {
+      const resolved = resolveToolRequestPaths(outputRequest(toolName, { path: "reports/out.md" }), {
+        workspaceRoot,
+      });
+      expect(resolved.args.path, toolName).toBe(path.join(workspaceRoot, "reports", "out.md"));
+    }
+    for (const toolName of ["browser.screenshot", "browser.interact"]) {
+      const resolved = resolveToolRequestPaths(
+        outputRequest(toolName, { url: "https://example.com", outputPath: "shots/a.png", path: "shots/b.png" }),
+        { workspaceRoot },
+      );
+      expect(resolved.args.outputPath, toolName).toBe(path.join(workspaceRoot, "shots", "a.png"));
+      expect(resolved.args.path, toolName).toBe(path.join(workspaceRoot, "shots", "b.png"));
+    }
+  });
+
+  it("keeps the documented ./workspace/artifacts form inside the workspace, with or without a project", async () => {
+    const { workspaceRoot, projectRoot } = await createWorkspaceFixture();
+    const expected = path.join(workspaceRoot, "artifacts", "report.docx");
+    for (const context of [
+      { workspaceRoot },
+      { workspaceRoot, projectRoot, projectWorkspacePath: "fixtures/prompt-pack-workspace" },
+    ]) {
+      const document = resolveToolRequestPaths(
+        outputRequest("documents.create", { path: "./workspace/artifacts/report.docx", title: "Report" }),
+        context,
+      );
+      expect(document.args.path).toBe(expected);
+      const shot = resolveToolRequestPaths(
+        outputRequest("browser.screenshot", {
+          url: "https://example.com",
+          outputPath: "workspace/artifacts/report.docx",
+        }),
+        context,
+      );
+      expect(shot.args.outputPath).toBe(expected);
+    }
+  });
+
+  it("leaves a browser screenshot without an output path to its default location", async () => {
+    const { workspaceRoot } = await createWorkspaceFixture();
+    const request = outputRequest("browser.screenshot", { url: "https://example.com" });
+    expect(resolveToolRequestPaths(request, { workspaceRoot })).toBe(request);
+  });
+
+  it("routes a relative fs.patch target into the assigned project root", async () => {
+    const { workspaceRoot, projectRoot } = await createWorkspaceFixture();
+    const resolved = resolveToolRequestPaths(outputRequest("fs.patch", { path: "src/utils.ts" }), {
+      workspaceRoot,
+      projectRoot,
+      projectWorkspacePath: "fixtures/prompt-pack-workspace",
+    });
+    expect(resolved.args.path).toBe(path.join(projectRoot, "src", "utils.ts"));
+  });
+
+  it("rejects relative output paths that climb out of the workspace", async () => {
+    const { workspaceRoot } = await createWorkspaceFixture();
+    for (const [toolName, key] of [
+      ["artifacts.create", "path"],
+      ["browser.interact", "outputPath"],
+      ["documents.create", "path"],
+    ] as const) {
+      expect(() =>
+        resolveToolRequestPaths(outputRequest(toolName, { [key]: "../outside/escape.md" }), { workspaceRoot }),
+      ).toThrow(ValidationError);
+      expect(() =>
+        resolveToolRequestPaths(outputRequest(toolName, { [key]: "workspace/../../escape.md" }), { workspaceRoot }),
+      ).toThrow(ValidationError);
+    }
+  });
+});
+
 describe("resolveToolRequestPathsForSessionScope", () => {
   function sandboxFor(jailRoot: string, operatorRoot: string): ToolPolicyConfig["sandbox"] {
     return {

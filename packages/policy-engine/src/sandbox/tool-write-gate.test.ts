@@ -106,9 +106,9 @@ describe("assertToolWritePath", () => {
   });
 
   it("refuses deletes in operator roots that did not opt into delete", () => {
-    expect(() =>
-      assertToolWritePath(path.join(fixture.writeOnlyRoot, "a.txt"), fixture.sandbox, "delete"),
-    ).toThrow(/outside write jail/i);
+    expect(() => assertToolWritePath(path.join(fixture.writeOnlyRoot, "a.txt"), fixture.sandbox, "delete")).toThrow(
+      /outside write jail/i,
+    );
     expect(() =>
       assertToolWritePath(path.join(fixture.deletableRoot, "a.txt"), fixture.sandbox, "delete"),
     ).not.toThrow();
@@ -128,9 +128,28 @@ describe("assertToolWritePath", () => {
     expect(() => assertToolWritePath(path.join(fixture.secretsDir, "vault.bin"), fixture.sandbox)).toThrow(
       /protected and cannot be written.*runtime_protected_path/i,
     );
-    expect(() =>
-      assertToolWritePath(path.join(fixture.secretsDir, "vault.bin"), fixture.sandbox, "delete"),
-    ).toThrow(/runtime_protected_path/i);
+    expect(() => assertToolWritePath(path.join(fixture.secretsDir, "vault.bin"), fixture.sandbox, "delete")).toThrow(
+      /runtime_protected_path/i,
+    );
+  });
+
+  it("refuses writing or deleting the SQLite database and its sidecars inside the data jail", () => {
+    const dbFiles = ["index.db", "index.db-wal", "index.db-shm", "index.db-journal"].map((name) =>
+      path.join(fixture.jailRoot, name),
+    );
+    const sandbox: Sandbox = {
+      ...fixture.sandbox,
+      runtimeWriteProtection: {
+        rootDir: fixture.runtimeRoot,
+        protectedPaths: [path.join(fixture.runtimeRoot, "config"), fixture.secretsDir, ...dbFiles],
+      },
+    };
+    for (const dbFile of dbFiles) {
+      expect(() => assertToolWritePath(dbFile, sandbox, "write")).toThrow(/runtime_protected_path/i);
+      expect(() => assertToolWritePath(dbFile, sandbox, "delete")).toThrow(/runtime_protected_path/i);
+    }
+    expect(() => assertToolWritePath(path.join(fixture.jailRoot, "index.db.bak"), sandbox, "write")).not.toThrow();
+    expect(() => assertToolWritePath(path.join(fixture.jailRoot, "notes.txt"), sandbox, "delete")).not.toThrow();
   });
 
   it("refuses deleting or moving away a folder that contains a protected path", () => {

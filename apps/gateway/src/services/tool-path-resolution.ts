@@ -24,8 +24,21 @@ interface ToolPathSpec {
   key: string;
   kind: PathResolutionKind;
   injectDefault?: boolean;
+  /**
+   * A relative path that starts with the workspace folder's own name (the
+   * documented `./workspace/artifacts/...` form for artifact and browser
+   * outputs) resolves against the runtime root, so it lands inside the
+   * workspace instead of in a nested `workspace/workspace` folder.
+   */
+  workspaceDirPrefix?: boolean;
   when?: (request: ToolPathRequest) => boolean;
 }
+
+const OUTPUT_PATH_SPEC: ToolPathSpec = { key: "path", kind: "write", workspaceDirPrefix: true };
+const BROWSER_OUTPUT_PATH_SPECS: ToolPathSpec[] = [
+  { key: "outputPath", kind: "write", workspaceDirPrefix: true },
+  OUTPUT_PATH_SPEC,
+];
 
 export type ToolPathRequest = ToolInvokeRequest | ToolAccessEvaluateRequest;
 
@@ -36,6 +49,12 @@ const TOOL_PATH_SPECS: Record<string, ToolPathSpec[]> = {
   "code.search": [{ key: "path", kind: "read" }],
   "code.search_files": [{ key: "path", kind: "read" }],
   "fs.write": [{ key: "path", kind: "write" }],
+  "fs.patch": [{ key: "path", kind: "write" }],
+  "artifacts.create": [OUTPUT_PATH_SPEC],
+  "documents.create": [OUTPUT_PATH_SPEC],
+  "presentations.create": [OUTPUT_PATH_SPEC],
+  "browser.screenshot": BROWSER_OUTPUT_PATH_SPECS,
+  "browser.interact": BROWSER_OUTPUT_PATH_SPECS,
   "fs.list": [{ key: "path", kind: "read", injectDefault: true }],
   "fs.stat": [{ key: "path", kind: "read", injectDefault: true }],
   "fs.copy": [
@@ -80,7 +99,15 @@ export function resolveToolRequestPaths<TRequest extends ToolPathRequest>(
       }
       continue;
     }
-    const resolvedValue = resolveRelativeToolPath(rawValue, context, spec.kind);
+    const resolvedValue =
+      spec.workspaceDirPrefix && startsWithWorkspaceDirName(rawValue, context)
+        ? finalizeResolvedToolPath(
+            path.resolve(path.dirname(path.resolve(context.workspaceRoot)), rawValue.trim()),
+            rawValue.trim(),
+            context,
+            spec.kind,
+          )
+        : resolveRelativeToolPath(rawValue, context, spec.kind);
     if (resolvedValue === rawValue) {
       continue;
     }
@@ -271,6 +298,16 @@ function normalizeRelativePath(value: string): string {
     .replaceAll("\\", "/")
     .replace(/^\.\/+/, "")
     .replace(/\/+$/, "");
+}
+
+function startsWithWorkspaceDirName(rawPath: string, context: ToolPathResolutionContext): boolean {
+  const trimmed = rawPath.trim();
+  if (!trimmed || path.isAbsolute(trimmed)) {
+    return false;
+  }
+  const workspaceDirName = path.basename(path.resolve(context.workspaceRoot));
+  const firstSegment = normalizeRelativePath(trimmed).split("/")[0];
+  return Boolean(workspaceDirName) && firstSegment === workspaceDirName;
 }
 
 function isDotPath(value: string): boolean {

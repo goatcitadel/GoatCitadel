@@ -72,14 +72,31 @@ const SENSITIVE_WIN32_HOME_SUBPATHS = [
 const SENSITIVE_POSIX_HOME_SUBPATHS = ["Library/Keychains"];
 const WIN32_DRIVE_SYSTEM_FOLDERS = ["system volume information", "$recycle.bin"];
 const POSIX_SYSTEM_DIRECTORIES = [
-  "/bin", "/sbin", "/usr", "/etc", "/boot", "/dev", "/proc", "/sys",
-  "/lib", "/lib32", "/lib64", "/libx32", "/System", "/Library", "/private/etc",
+  "/bin",
+  "/sbin",
+  "/usr",
+  "/etc",
+  "/boot",
+  "/dev",
+  "/proc",
+  "/sys",
+  "/lib",
+  "/lib32",
+  "/lib64",
+  "/libx32",
+  "/System",
+  "/Library",
+  "/private/etc",
 ];
 const DEFAULT_PROTECTED_RUNTIME_SUBPATHS: readonly (readonly string[])[] = [
   ["config"],
   ["data", "secrets"],
   ["data", "postgres"],
   ["data", "audit"],
+  ["data", "index.db"],
+  ["data", "index.db-wal"],
+  ["data", "index.db-shm"],
+  ["data", "index.db-journal"],
 ];
 
 /**
@@ -262,7 +279,8 @@ function describeRejection(rejection: WriteRootRejection, target: string): strin
     user_profile_root: "The whole user profile cannot be opened to writes; choose a folder inside it.",
     sensitive_user_directory: "Credential and key folders cannot be opened to writes.",
     contains_runtime_root: "A folder containing the GoatCitadel runtime cannot be opened to writes.",
-    runtime_protected_path: "GoatCitadel configuration, secrets, database, and audit folders cannot be opened to writes.",
+    runtime_protected_path:
+      "GoatCitadel configuration, secrets, database, and audit folders cannot be opened to writes.",
     not_a_directory: "Path is not an existing folder.",
     symlink_escape: "Folder resolves through a link to a protected location.",
   };
