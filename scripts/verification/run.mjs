@@ -467,6 +467,7 @@ async function runLockedVerification(lane, options) {
       await runFastLane(context, fastOptions);
       await runCodeModeSandboxRequiredLane(context);
       await runCodeModeHostileSandboxLane(context);
+      await runCodeModeDockerProofLane(context);
       await runMeshReadinessLane(context, { profile });
       await runAgenticProofSuite(context);
       await runOrchestrationPerformanceLane(context);

@@ -265,6 +265,17 @@ jobs:
       # runs an approved Code Mode run through the Docker backend with hash-checked artifacts.
       - name: Prove the digest-pinned Docker backend
         run: pnpm verify:code-mode:docker
+
+      - name: Show Docker proof diagnostics
+        if: failure()
+        run: |
+          for summary in artifacts/verification/*/summary.md; do
+            [ -f "$summary" ] && cat "$summary"
+          done
+          for log in artifacts/verification/*/diagnostics/code-mode-docker.*; do
+            [ -f "$log" ] && { echo "== $log"; tail -n 120 "$log"; }
+          done
+
   gate:
     # Keep this exact name aligned with the protected-branch required context.
     # `always()` is required because a skipped required job reports success on
