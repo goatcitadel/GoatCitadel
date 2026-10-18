@@ -27,7 +27,7 @@ import type { IntegrationActionHost } from "./integration-action-service.js";
  */
 
 /** How long a dry-run approval stays actionable (matches the code-mode pending-approval TTL). */
-const DRY_RUN_APPROVAL_TTL_MS = 15 * 60_000;
+export const DRY_RUN_APPROVAL_TTL_MS = 15 * 60_000;
 
 export const INTEGRATION_DRY_RUN_COMMIT_ACTION_TYPE = "integration.dry_run_commit" as const;
 

@@ -151,7 +151,7 @@ export interface IntegrationActionInvokeInput {
   idempotencyKey?: string;
 }
 
-export type IntegrationActionInvokeStatus = "executed" | "blocked" | "failed";
+export type IntegrationActionInvokeStatus = "executed" | "blocked" | "failed" | "approval_required";
 export type OperatorActionReversibilityStatus =
   | "reversible"
   | "replay_audit_only"

@@ -26,7 +26,7 @@ export interface ApprovalEvidenceModel {
   consequence?: string;
   technicalDetails?: ApprovalEvidenceBlock[];
   targets: string[];
-  /** The same targets as label/value pairs, when the generic builder labelled them. Absent for purpose-specific models. */
+  /** The same targets as label/value pairs, when they carry labels (generic and Citadel Ward models). Absent otherwise. */
   targetEntries?: ApprovalTargetEntry[];
   commands: string[];
   changes: ApprovalEvidenceBlock[];
@@ -159,7 +159,11 @@ function pushEvidenceBlock(
 }
 
 /** Records a target both as its labelled line and as a label/value pair, so a renderer never re-labels it. */
-function addTarget(collector: { targets: Set<string>; targetEntries: Map<string, ApprovalTargetEntry> }, label: string, value: string): void {
+function addTarget(
+  collector: { targets: Set<string>; targetEntries: Map<string, ApprovalTargetEntry> },
+  label: string,
+  value: string,
+): void {
   const line = `${label}: ${value}`;
   collector.targets.add(line);
   if (!collector.targetEntries.has(line)) collector.targetEntries.set(line, { label, value });
@@ -207,25 +211,71 @@ function collectApprovalEvidence(
       record.reviewedItems.forEach((item, index) => {
         if (!item || typeof item !== "object") return;
         const row = item as Record<string, unknown>;
-        const lines = ["target", "scopeSummary", "consequence", "requestedTitle", "requestedContent", "pinnedSummary", "ttlSummary", "withheldSummary"]
-          .filter(key => typeof row[key] === "string")
-          .map(key => isMemoryLifecycleSummaryKey(record.reviewKind, key) ? String(row[key]) : humanizeKey(key) + ": " + String(row[key]));
-        pushEvidenceBlock(collector.changes, collector.seenBlocks, "Memory target " + (index + 1), lines.join("\n"), collector.exact, true);
+        const lines = [
+          "target",
+          "scopeSummary",
+          "consequence",
+          "requestedTitle",
+          "requestedContent",
+          "pinnedSummary",
+          "ttlSummary",
+          "withheldSummary",
+        ]
+          .filter((key) => typeof row[key] === "string")
+          .map((key) =>
+            isMemoryLifecycleSummaryKey(record.reviewKind, key)
+              ? String(row[key])
+              : humanizeKey(key) + ": " + String(row[key]),
+          );
+        pushEvidenceBlock(
+          collector.changes,
+          collector.seenBlocks,
+          "Memory target " + (index + 1),
+          lines.join("\n"),
+          collector.exact,
+          true,
+        );
       });
       continue;
     }
     for (const [key, value] of Object.entries(record)) {
-      if (typeof record.reviewKind === "string" && record.reviewKind.startsWith("memory.lifecycle.") && ["fieldCodes", "subjectKind", "subjectId", "action"].includes(key)) continue;
-      if (collector.exact && /hash|staging|candidate|remaining|outputIntent/i.test(key) && ["string", "number", "boolean"].includes(typeof value)) {
+      if (
+        typeof record.reviewKind === "string" &&
+        record.reviewKind.startsWith("memory.lifecycle.") &&
+        ["fieldCodes", "subjectKind", "subjectId", "action"].includes(key)
+      )
+        continue;
+      if (
+        collector.exact &&
+        /hash|staging|candidate|remaining|outputIntent/i.test(key) &&
+        ["string", "number", "boolean"].includes(typeof value)
+      ) {
         collector.supporting.add(`${humanizeKey(key)}: ${String(value)}`);
       }
       if (typeof value === "string") {
         if (isMemoryLifecycleSummaryKey(record.reviewKind, key)) {
           collector.supporting.add(collector.exact ? value : truncateEvidence(value, 180));
-        } else if (record.reviewKind === "memory.lifecycle.patch" && (key === "requestedContent" || key === "requestedTitle")) {
-          pushEvidenceBlock(collector.changes, collector.seenBlocks, key === "requestedContent" ? "Requested memory content" : "Requested memory title", value, collector.exact, true);
+        } else if (
+          record.reviewKind === "memory.lifecycle.patch" &&
+          (key === "requestedContent" || key === "requestedTitle")
+        ) {
+          pushEvidenceBlock(
+            collector.changes,
+            collector.seenBlocks,
+            key === "requestedContent" ? "Requested memory content" : "Requested memory title",
+            value,
+            collector.exact,
+            true,
+          );
         } else if (record.reviewKind === "knowledge.operation" && (key === "query" || key === "source")) {
-          pushEvidenceBlock(collector.changes, collector.seenBlocks, key === "query" ? "Knowledge query" : "Knowledge source", value, collector.exact, true);
+          pushEvidenceBlock(
+            collector.changes,
+            collector.seenBlocks,
+            key === "query" ? "Knowledge query" : "Knowledge source",
+            value,
+            collector.exact,
+            true,
+          );
         } else if (isFilesystemKey(key) || /^(candidateId|versionId|subjectId|subjectKind|scopeKind)$/.test(key)) {
           addTarget(collector, humanizeKey(key), value);
         } else if (isLikelyCommandKey(key) && value.trim()) {
@@ -282,7 +332,52 @@ export function buildApprovalReviewEvidenceModel(...sources: Array<unknown>): Ap
 export function buildApprovalRequestReviewEvidenceModel(approval: ApprovalRequest): ApprovalEvidenceModel | null {
   if (approval.kind === "external_source.knowledge_snapshot") return externalSourceKnowledgeApprovalEvidence(approval);
   if (approval.kind === "communications.mail.send") return communicationsMailSendApprovalEvidence(approval);
-  return buildApprovalReviewEvidenceModel(approval.preview);
+  return citadelWardApprovalEvidence(approval) ?? buildApprovalReviewEvidenceModel(approval.preview);
+}
+
+const CITADEL_WARD_CONSEQUENCES: Readonly<Record<string, string>> = {
+  "citadel_ward.integration_action":
+    "Approving runs this exact integration action once. GoatCitadel re-checks the Citadel Ward first, so a ward that now denies still wins.",
+  "citadel_ward.a2a_outbound":
+    "Approving sends this exact A2A call to the peer once. GoatCitadel re-checks the Citadel Ward first, so a ward that now denies still wins.",
+  "citadel_ward.a2a_push":
+    "Approving delivers this one push event to the peer once, only if its push URL and citadel are unchanged. GoatCitadel re-checks the Citadel Ward first.",
+};
+
+/**
+ * Citadel Ward approvals carry a bounded, redacted `preview.requestSummary` of the gated request; the gateway
+ * executes the hash-bound payload, never this summary. Without a well-formed summary the generic model applies.
+ */
+export function citadelWardApprovalEvidence(approval: ApprovalRequest): ApprovalEvidenceModel | null {
+  const consequence = CITADEL_WARD_CONSEQUENCES[approval.kind];
+  const summary = (approval.preview as Record<string, unknown> | undefined)?.requestSummary;
+  if (!consequence || !Array.isArray(summary) || summary.length === 0) return null;
+  const entries = summary.filter(
+    (entry): entry is ApprovalTargetEntry =>
+      !!entry && typeof entry.label === "string" && typeof entry.value === "string",
+  );
+  if (entries.length !== summary.length) return null;
+  const payload = approval.payload as Record<string, unknown> | undefined;
+  const citadelId = typeof payload?.citadelId === "string" ? payload.citadelId : undefined;
+  const wardAction = typeof payload?.wardAction === "string" ? payload.wardAction : undefined;
+  const workspaceId =
+    approval.linkage?.workspaceId ?? (typeof payload?.workspaceId === "string" ? payload.workspaceId : undefined);
+  const citadel = citadelId ? `citadel ${citadelId}` : "an unrecorded citadel";
+  return {
+    targets: entries.map((entry) => `${entry.label}: ${entry.value}`),
+    targetEntries: entries.map((entry) => ({ label: entry.label, value: entry.value })),
+    commands: [],
+    changes: [],
+    supporting: [],
+    scopeSummary: workspaceId ? `Workspace ${workspaceId}, ${citadel}.` : `No workspace binding; ${citadel}.`,
+    consequence,
+    technicalDetails: [
+      {
+        label: "Citadel Ward",
+        content: `Ward action: ${wardAction ?? "not recorded"}\nCitadel ID: ${citadelId ?? "not recorded"}`,
+      },
+    ],
+  };
 }
 function buildEvidence(sources: Array<unknown>, exact: boolean): ApprovalEvidenceModel | null {
   const targets = new Set<string>();

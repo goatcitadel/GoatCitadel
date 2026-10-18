@@ -154,6 +154,9 @@ export type ApprovalEffectKind =
   | "engineering_learning_lifecycle_apply"
   | "communications_mail_send_apply"
   | "communications_calendar_create_apply"
+  | "citadel_ward_integration_action_apply"
+  | "citadel_ward_a2a_outbound_apply"
+  | "citadel_ward_a2a_push_apply"
   | "approval_observability";
 
 export type ApprovalObservabilityAuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
@@ -219,7 +222,8 @@ export type ApprovalEffectTargetKind =
   | "delegation_step"
   | "engineering_learning"
   | "mail_draft"
-  | "calendar_event";
+  | "calendar_event"
+  | "citadel_ward_action";
 
 export interface ApprovalEffectRecord {
   effectId: string;

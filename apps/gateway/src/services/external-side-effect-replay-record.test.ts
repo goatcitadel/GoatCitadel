@@ -5,6 +5,7 @@ import {
   createExternalSideEffectReplayRecords,
   resolveExternalSideEffectReplayKey,
   sharedExternalSideEffectReplayKeyResolver,
+  sharedExternalSideEffectReplayKeyResolverOrThrow,
 } from "./external-side-effect-replay-record.js";
 
 function createRuns() {
@@ -228,6 +229,46 @@ describe("external-side-effect replay records", () => {
     await sharedExternalSideEffectReplayKeyResolver(store, noRecords)();
     expect(gets).toBe(1);
     expect(await sharedExternalSideEffectReplayKeyResolver(undefined, noRecords)()).toBeUndefined();
+  });
+
+  it("the throwing shared resolver surfaces key-store and guard failures and shares the memoized key", async () => {
+    let gets = 0;
+    let locked = true;
+    const store = {
+      isAvailable: () => true,
+      getSecret: () => {
+        gets += 1;
+        if (locked) throw new Error("keychain locked");
+        return key.toString("base64");
+      },
+      setSecret: () => undefined,
+    };
+    const strict = sharedExternalSideEffectReplayKeyResolverOrThrow(store, noRecords);
+    await expect(strict()).rejects.toThrow("keychain locked");
+    // The swallowing resolver over the same store still reports the failure as no key.
+    expect(await sharedExternalSideEffectReplayKeyResolver(store, noRecords)()).toBeUndefined();
+    locked = false;
+    expect((await strict())?.equals(key)).toBe(true);
+    // Both share one memoized key per store: no further keychain lookup.
+    expect((await sharedExternalSideEffectReplayKeyResolver(store, noRecords)())?.equals(key)).toBe(true);
+    expect(gets).toBe(3);
+
+    const guardDown = { isAvailable: () => true, getSecret: () => undefined, setSecret: () => undefined };
+    await expect(
+      sharedExternalSideEffectReplayKeyResolverOrThrow(guardDown, {
+        hasReplayRecords: () => {
+          throw new Error("storage offline");
+        },
+      })(),
+    ).rejects.toThrow("storage offline");
+    // A plain miss (no store, unavailable store, a miss while sealed records exist) is not a failure.
+    expect(await sharedExternalSideEffectReplayKeyResolverOrThrow(undefined, noRecords)()).toBeUndefined();
+    const unavailable = { isAvailable: () => false, getSecret: () => undefined, setSecret: () => undefined };
+    expect(await sharedExternalSideEffectReplayKeyResolverOrThrow(unavailable, noRecords)()).toBeUndefined();
+    const sealedMiss = { isAvailable: () => true, getSecret: () => undefined, setSecret: () => undefined };
+    expect(
+      await sharedExternalSideEffectReplayKeyResolverOrThrow(sealedMiss, { hasReplayRecords: () => true })(),
+    ).toBeUndefined();
   });
 
   it("does not generate a key when secret-store write custody is unsafe", async () => {

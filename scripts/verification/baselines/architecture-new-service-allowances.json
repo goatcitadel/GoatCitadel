@@ -2323,11 +2323,27 @@
     },
     {
       "planStep": "C0",
+      "path": "apps/gateway/src/services/citadel-ward-approval.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS3 gap-closure program: pure helper that defines the Citadel Ward approval payload contract (ward action, citadel id, the exact request sealed with AES-256-GCM under the replay key for integration and outbound kinds and plaintext for push, SHA-256 payloadHash over canonical JSON, and the citadel-ward:<approvalId> replay idempotency key) shared by the ward gates that create approvals and the later executor that verifies them; it reaches no host or dependency.",
+      "evidence": "apps/gateway/src/services/citadel-ward-approval.test.ts covers hash stability under key reordering, hash change on content change, push build/read round-trip, sealed payloads that hold no plaintext secret and open only for their kind, hash and key, a keyless or throwing vault failing closed, malformed payload rejection, the replay key and kind recognition; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
       "path": "apps/gateway/src/services/communications-approval-effect-service.ts",
       "maxHostCallbacks": 1,
       "maxDependencyMemberAccesses": 16,
       "reason": "WS2 gap-closure program: executor for approved communications.mail.send / communications.calendar.create approvals plus the effect-row glue the approval effects worker delegates to. The accesses cover approval, mail-draft and side-effect-run reads, the draft compare-and-set transitions, the injected comms send/create ports, and completing or failing the claimed effect row; the single host callback is the integration-connection read when composing over the route CommsHost. Moving the glue here keeps approval-resolution-effects-service.ts below its baseline (259 -> 258).",
       "evidence": "apps/gateway/src/services/communications-approval-effect-service.test.ts covers send-once with approval consent, second-run replay with one provider invoke, SMTP routing, tampered payload, a non-sending account, outcome-unknown after the boundary, pre-boundary refusal, a settled pending action, a non-approved approval, rejection and calendar create-once; approval-resolution-effects-service.test.ts covers enqueue targets, completion, duplicate resolution, restart replay, terminal error codes, a missing executor and rejection; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/citadel-ward-approval-effect-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 7,
+      "reason": "WS3 gap-closure program: executor for approved Citadel Ward require_approval actions (integration operator actions, A2A outbound sends, A2A push deliveries) plus the effect-row glue the approval effects worker delegates to. The accesses cover the approval re-read, the push-config read that tells a settled push from a gone one, the lazily composed integration host, A2A route-service and request-vault ports (the vault opens sealed integration and outbound requests), and the injected storage; the glue lives here so approval-resolution-effects-service.ts stays at 258 (below its 259 baseline) by sharing one settlement builder with the communications runner.",
+      "evidence": "apps/gateway/src/services/citadel-ward-approval-effect-service.test.ts covers enqueue identity for approved/rejected/expired ward approvals and none for other kinds, an approved integration action executed once across two runs over a real in-memory runner store (second run replayed), a ward tightened to deny, a citadel changed after approval, a connection moved to another workspace, a tampered request, a sealed request that cannot be opened (rotated key, no vault, plaintext request), non-approved and missing approvals, rejection and expiry recording the refused push, A2A outbound and push dispatch with the ward approval reference, an empty push result settled only when the config moved past the event, a push deny, and retry/missing-executor settlement; approval-resolution-effects-service.test.ts covers resolution enqueue + completion and an expired push approval; Gateway typecheck passes."
     },
     {
       "planStep": "C0",

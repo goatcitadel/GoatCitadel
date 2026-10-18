@@ -153,6 +153,9 @@ const actionKinds: Record<string, string> = {
   "remote_worker.native_runtime": "Run on a remote worker",
   change_plan_effect: "Apply a change plan",
   tool_invoke: "Use a tool",
+  "citadel_ward.integration_action": "Citadel Ward: integration action",
+  "citadel_ward.a2a_outbound": "Citadel Ward: outbound A2A call",
+  "citadel_ward.a2a_push": "Citadel Ward: A2A push delivery",
 };
 
 /**

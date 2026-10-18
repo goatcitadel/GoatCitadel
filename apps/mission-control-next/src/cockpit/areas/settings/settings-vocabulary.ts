@@ -98,6 +98,7 @@ export const INTEGRATION_ACTION_STATUS_LABELS: Record<IntegrationActionInvokeSta
   executed: "Done",
   blocked: "Blocked",
   failed: "Failed",
+  approval_required: "Waiting for approval",
 };
 export const WRITEBACK_STATUS_LABELS: Record<IntegrationExternalWritebackEnvelopeStatus, string> = {
   recorded: "Recorded",
