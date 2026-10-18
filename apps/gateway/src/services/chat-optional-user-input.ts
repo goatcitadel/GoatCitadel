@@ -1,23 +1,38 @@
-import { ConflictError, type ChatUserInputPromptRecord } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, type ChatUserInputPromptRecord } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
 import { parseDurableChatTurnPayload } from "./durable-execution-service.js";
 
-/** Uses the same admitted run and repository as blocking input; this adds no steer queue. */
-async function readBoundRun(storage: AsyncStorage, input: ChatTurnAgentRunnerInput) {
+/**
+ * Uses the same admitted run and repository as blocking input; this adds no steer queue.
+ * With `allowNonOperator` (mailbox reads), a system or channel turn bound to this run, or a turn whose
+ * policy run is not a durable Chat run, resolves to `null`: those turns never expose
+ * `user_input.request`, so their mailbox is empty, not an error.
+ */
+async function readBoundRun(storage: AsyncStorage, input: ChatTurnAgentRunnerInput, allowNonOperator = false) {
   if (!input.policyRunId || !input.canonicalWriteFence || input.parentDelegationStepId || input.mode !== "chat") {
     throw new ConflictError({ message: "Optional input requires an interactive durable Chat turn." });
   }
-  const run = await storage.durableRuns.getRun(input.policyRunId);
+  let run: Awaited<ReturnType<AsyncStorage["durableRuns"]["getRun"]>> | undefined;
+  try {
+    run = await storage.durableRuns.getRun(input.policyRunId);
+  } catch (error) {
+    // Orchestration phase turns carry a policy run id that is not a durable Chat run.
+    if (allowNonOperator && error instanceof NotFoundError) return null;
+    throw error;
+  }
   const payload = run && parseDurableChatTurnPayload(run);
   if (
     !run ||
     !payload ||
     payload.sessionId !== input.sessionId ||
     payload.turnId !== input.turnId ||
-    payload.requestActor.actorKind !== "operator"
+    (payload.requestActor.actorKind !== "operator" && !allowNonOperator)
   ) {
     throw new ConflictError({ message: "Optional input has no exact operator turn binding." });
+  }
+  if (payload.requestActor.actorKind !== "operator") {
+    return null;
   }
   const admissionIdentity = {
     admissionId: payload.admissionId,
@@ -41,7 +56,11 @@ export async function registerChatOptionalInput(
   input: ChatTurnAgentRunnerInput,
   prompt: ChatUserInputPromptRecord,
 ) {
-  const { run, admissionIdentity } = await readBoundRun(storage, input);
+  const bound = await readBoundRun(storage, input);
+  if (!bound) {
+    throw new ConflictError({ message: "Optional input has no exact operator turn binding." });
+  }
+  const { run, admissionIdentity } = bound;
   return await storage.sessionMutationAdmissions.registerDurableChatOptionalInput({
     admissionIdentity,
     durableRunId: run.runId,
@@ -51,7 +70,11 @@ export async function registerChatOptionalInput(
 }
 
 export async function readChatOptionalInput(storage: AsyncStorage, input: ChatTurnAgentRunnerInput) {
-  const { run, admissionIdentity } = await readBoundRun(storage, input);
+  const bound = await readBoundRun(storage, input, true);
+  if (!bound) {
+    return { prompts: [], replies: [] };
+  }
+  const { run, admissionIdentity } = bound;
   return await storage.sessionMutationAdmissions.projectDurableChatOptionalInput({
     admissionIdentity,
     durableRunId: run.runId,
