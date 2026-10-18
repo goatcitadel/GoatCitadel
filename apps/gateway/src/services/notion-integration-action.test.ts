@@ -356,6 +356,27 @@ describe("notion-integration-action", () => {
     expect(result).toMatchObject({ status: "blocked", blockedReason: "notion_auth_rejected" });
   });
 
+  it("records a Notion 400 validation error on a write as failed before the boundary", async () => {
+    stubBase();
+    const connection = createConnection({ token: TOKEN, defaultParentPageId: "parent-default" });
+    const sideEffectRunStore = createSideEffectRunStore();
+    const host = createHost(connection, {
+      sideEffectRunStore: sideEffectRunStore as never,
+      fetchWithDiagnosticsTimeout: vi.fn(async () => jsonResponse({ message: "body failed validation" }, 400)),
+    });
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "page_create", {
+      idempotencyKey: "op-key",
+      input: { title: "Status" },
+    });
+    expect(result).toMatchObject({ status: "failed", message: "body failed validation" });
+    const failureStatuses = [
+      ...sideEffectRunStore.markFailure.mock.calls.map((call) => (call[1] as { status: string }).status),
+      ...sideEffectRunStore.markFailureIfStatus.mock.calls.map((call) => (call[2] as { status: string }).status),
+    ];
+    expect(failureStatuses.length).toBeGreaterThan(0);
+    expect(failureStatuses).not.toContain("unknown_external_outcome");
+  });
+
   it("appends text with a PATCH carrying the content and the marker", async () => {
     stubBase();
     const connection = createConnection();

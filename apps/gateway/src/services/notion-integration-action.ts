@@ -15,6 +15,8 @@ import type { IntegrationActionHost } from "./integration-action-service.js";
 import { runWardGatedExternalSideEffect, type IntegrationWardContext } from "./integration-dry-run-gate.js";
 import {
   baseInput,
+  isProviderPreDispatchRejection,
+  ProviderRequestRejectedError,
   buildDedupedExecute,
   buildReconcile,
   digestScope,
@@ -38,6 +40,11 @@ import {
  * marker paragraph. `page_create` has NO reconcile probe: Notion cannot be searched for the
  * marker reliably (search is eventually consistent and title-only), so an unknown outcome stays
  * in manual review instead of risking a duplicate page.
+ *
+ * The `block_append` probe is NOT reached at runtime today: reconcileExternalOutcome only runs from
+ * the replay worker, and productivity.notion is not on its allowlist, so the worker neither resends
+ * nor reconciles Notion writes and an unknown outcome stays in manual review. The probe exists for
+ * a future reconcile-only path.
  */
 
 const NOTION_VERSION = "2022-06-28";
@@ -372,7 +379,7 @@ export function buildNotionPageCreateRunInput(
       label: "Notion page create",
       output: { provider: "notion", parentPageId: payload.parentPageId, title: payload.title },
       execute: buildDedupedExecute(host, payload, false, probe, send),
-      isExternalCallProvenNotDispatched: (error) => error instanceof ProviderAuthRejectedError,
+      isExternalCallProvenNotDispatched: isProviderPreDispatchRejection,
     },
   };
 }
@@ -439,7 +446,7 @@ export function buildNotionBlockAppendRunInput(
         liveDedupeScope(connection, options, OPERATOR_ACTION_BOUNDARY, "block_append"),
         probe,
       ),
-      isExternalCallProvenNotDispatched: (error) => error instanceof ProviderAuthRejectedError,
+      isExternalCallProvenNotDispatched: isProviderPreDispatchRejection,
     },
   };
 }
@@ -488,6 +495,14 @@ async function settleWrite(response: Response, failurePrefix: string): Promise<P
     throw new ProviderAuthRejectedError("Notion", response.status);
   }
   const parsed = await parseProviderResponse(response);
+  if (response.status === 400 || response.status === 404) {
+    // validation_error / object_not_found are definitive: Notion did not apply the write.
+    throw new ProviderRequestRejectedError(
+      "Notion",
+      response.status,
+      parsed.message ?? `${failurePrefix} (${response.status}).`,
+    );
+  }
   if (!response.ok) {
     throw new Error(parsed.message ?? `${failurePrefix} (${response.status}).`);
   }

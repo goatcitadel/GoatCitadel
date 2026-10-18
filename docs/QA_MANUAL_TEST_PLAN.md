@@ -2060,7 +2060,7 @@ Expected:
 - Replay only retries eligible failed-before-boundary/stale claimed-not-sent states.
 - Unknown post-boundary outcomes stay manual.
 - Activepieces status is explicit operator read, not background polling.
-- Notion and GitHub writes are not replayed by the worker; a rejected token (401/403) reports `notion_auth_rejected` or `github_auth_rejected` and never an unknown external outcome.
+- Notion and GitHub writes are neither replayed nor reconciled by the worker (unknown outcomes stay manual); a rejected token (401/403) reports `notion_auth_rejected` or `github_auth_rejected` and never an unknown external outcome.
 
 Result:
 

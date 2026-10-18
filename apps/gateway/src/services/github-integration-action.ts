@@ -15,6 +15,8 @@ import type { IntegrationActionHost } from "./integration-action-service.js";
 import { runWardGatedExternalSideEffect, type IntegrationWardContext } from "./integration-dry-run-gate.js";
 import {
   baseInput,
+  isProviderPreDispatchRejection,
+  ProviderRequestRejectedError,
   buildDedupedExecute,
   buildReconcile,
   digestScope,
@@ -35,18 +37,25 @@ import {
  * side-effect runner behind the Citadel Ward gate.
  *
  * Reconciliation: both writes embed an HTML-comment marker derived from the run scope in the body
- * and probe the newest 30 issues (or comments) for it. Items beyond that window are not searched,
- * so an unknown outcome on a very busy repository can still need manual review.
+ * and carry a probe that looks for it (newest 30 issues; comments updated since just before the
+ * run). These probes are NOT reached at runtime today: reconcileExternalOutcome only runs from the
+ * replay worker, and productivity.github is not on its allowlist, so the worker neither resends
+ * nor reconciles these writes and an unknown outcome stays in manual review. The probes exist for
+ * a future reconcile-only path; a replay rebuild of issue_comment must pass the run's createdAt
+ * as the probe's `checkedAt` so the `since` window covers the original send.
  */
 
 const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_MARKER_DOMAIN = "goatcitadel:github-marker:v1";
 const GITHUB_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const COMMENT_PROBE_LOOKBACK_MS = 5 * 60 * 1000;
 const PR_BODY_LIMIT = 4000;
 const COMMENT_BODY_LIMIT = 1000;
 const AUTH_REJECTED_MESSAGE = "GitHub rejected the token. Check the token and that it can access the repository.";
 const NOT_FOUND_MESSAGE = "GitHub repository or item not found, or the token cannot see it.";
 
+// The override must be an origin: URL resolution drops any path, so GitHub Enterprise `/api/v3`
+// bases are not supported.
 export const githubApiBaseUrl = () => resolveApiBaseUrl("GOATCITADEL_GITHUB_API_BASE_URL", "https://api.github.com");
 
 export function deriveGitHubIdempotencyMarker(scope: WritebackDedupeScope): string {
@@ -434,7 +443,7 @@ export function buildGitHubIssueCreateRunInput(
         liveDedupeScope(connection, options, OPERATOR_ACTION_BOUNDARY, "issue_create"),
         probe,
       ),
-      isExternalCallProvenNotDispatched: (error) => error instanceof ProviderAuthRejectedError,
+      isExternalCallProvenNotDispatched: isProviderPreDispatchRejection,
     },
   };
 }
@@ -455,10 +464,11 @@ export function buildGitHubIssueCommentRunInput(
   const target = new URL(`/repos/${payload.repo}/issues/${payload.number}/comments`, githubApiBaseUrl()).toString();
   const probe = async (scope: WritebackDedupeScope): Promise<ExternalSideEffectProbeResult> => {
     const marker = deriveGitHubIdempotencyMarker(scope);
+    // The comments endpoint ignores sort/direction and lists oldest first, so bound the window with
+    // `since` (updated_at >= creation, so the marker comment is always inside it) and take a full page.
     const url = new URL(target);
-    url.searchParams.set("sort", "created");
-    url.searchParams.set("direction", "desc");
-    url.searchParams.set("per_page", "30");
+    url.searchParams.set("since", new Date(Date.parse(options.checkedAt) - COMMENT_PROBE_LOOKBACK_MS).toISOString());
+    url.searchParams.set("per_page", "100");
     const items = await readProbeJson(host, url.toString(), { method: "GET", headers: githubHeaders(token) });
     const match = (Array.isArray(items) ? items : [])
       .filter(isRecord)
@@ -492,7 +502,7 @@ export function buildGitHubIssueCommentRunInput(
         liveDedupeScope(connection, options, OPERATOR_ACTION_BOUNDARY, "issue_comment"),
         probe,
       ),
-      isExternalCallProvenNotDispatched: (error) => error instanceof ProviderAuthRejectedError,
+      isExternalCallProvenNotDispatched: isProviderPreDispatchRejection,
     },
   };
 }
@@ -550,13 +560,20 @@ async function settleWrite(response: Response, failurePrefix: string): Promise<P
   if (response.status === 403) {
     const limited = rateLimitMessage(response);
     if (limited) {
-      throw new Error(limited);
+      throw new ProviderRequestRejectedError("GitHub", 403, limited);
     }
     throw new ProviderAuthRejectedError("GitHub", 403);
   }
   const parsed = await parseProviderResponse(response);
   if (response.status === 404) {
-    throw new Error(NOT_FOUND_MESSAGE);
+    throw new ProviderRequestRejectedError("GitHub", 404, NOT_FOUND_MESSAGE);
+  }
+  if (response.status === 422) {
+    throw new ProviderRequestRejectedError(
+      "GitHub",
+      422,
+      parsed.message ? `GitHub rejected the request: ${parsed.message}` : `${failurePrefix} (422).`,
+    );
   }
   if (!response.ok) {
     throw new Error(parsed.message ?? `${failurePrefix} (${response.status}).`);

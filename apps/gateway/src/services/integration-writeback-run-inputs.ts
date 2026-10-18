@@ -76,6 +76,28 @@ export class ProviderAuthRejectedError extends Error {
   }
 }
 
+/**
+ * Thrown by a provider `send` for a definitive pre-dispatch rejection other than bad credentials
+ * (rate limit, not found, validation): the provider proved it did not apply the write, so the run
+ * records failed-before-boundary instead of an unknown external outcome. The message is the
+ * operator-facing text and never carries the credential.
+ */
+export class ProviderRequestRejectedError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ProviderRequestRejectedError";
+  }
+}
+
+/** True for errors that prove the provider did not apply the write. */
+export function isProviderPreDispatchRejection(error: unknown): boolean {
+  return error instanceof ProviderAuthRejectedError || error instanceof ProviderRequestRejectedError;
+}
+
 export interface WritebackRunInputBlocked {
   blockedReason: string;
   message: string;

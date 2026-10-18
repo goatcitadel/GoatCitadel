@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalCreateInput, ApprovalRequest, IntegrationConnection } from "@goatcitadel/contracts";
 import { createInMemoryDryRunCommitStore } from "./dry-run-commit-service.js";
 import type { ExternalSideEffectRunStore } from "./external-side-effect-runner-service.js";
-import { buildGitHubIssueCreateRunInput, runGitHubLiveChecks } from "./github-integration-action.js";
+import {
+  buildGitHubIssueCommentRunInput,
+  buildGitHubIssueCreateRunInput,
+  runGitHubLiveChecks,
+} from "./github-integration-action.js";
 import { invokeIntegrationConnectionAction, type IntegrationActionHost } from "./integration-action-service.js";
 
 const BASE = "http://github.test";
@@ -489,6 +493,66 @@ describe("github-integration-action", () => {
     ];
     expect(failureStatuses.length).toBeGreaterThan(0);
     expect(failureStatuses).not.toContain("unknown_external_outcome");
+  });
+
+  it.each([
+    [
+      "a rate-limited 403",
+      () => jsonResponse({ message: "rate" }, 403, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1792000000" }),
+      "GitHub rate limit reached; retry after",
+    ],
+    ["a 404", () => jsonResponse({ message: "Not Found" }, 404), "GitHub repository or item not found"],
+    ["a 422", () => jsonResponse({ message: "Validation Failed" }, 422), "Validation Failed"],
+  ])("records %s on a write as failed before the boundary, not an unknown outcome", async (_label, make, text) => {
+    stubBase();
+    const connection = createConnection();
+    const sideEffectRunStore = createSideEffectRunStore();
+    const host = createHost(connection, {
+      sideEffectRunStore: sideEffectRunStore as never,
+      fetchWithDiagnosticsTimeout: vi.fn(async () => make()),
+    });
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "issue_create", {
+      idempotencyKey: "op-key",
+      input: { title: "t" },
+    });
+    expect(result.status).toBe("failed");
+    expect(result.message).toContain(text);
+    const failureStatuses = [
+      ...sideEffectRunStore.markFailure.mock.calls.map((call) => (call[1] as { status: string }).status),
+      ...sideEffectRunStore.markFailureIfStatus.mock.calls.map((call) => (call[2] as { status: string }).status),
+    ];
+    expect(failureStatuses.length).toBeGreaterThan(0);
+    expect(failureStatuses).not.toContain("unknown_external_outcome");
+  });
+
+  it("issue_comment reconcile probe bounds the window with since and finds the marker among more than 30 comments", async () => {
+    stubBase();
+    const connection = createConnection();
+    const sendHost = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(async () => jsonResponse({ id: 99, html_url: "c99" }, 201)),
+    });
+    await invokeIntegrationConnectionAction(sendHost, connection.connectionId, "issue_comment", {
+      idempotencyKey: "op-key",
+      input: { number: 5, body: "Thanks" },
+    });
+    const sentBody = (JSON.parse(fetchCalls(sendHost)[0]![1].body as string) as { body: string }).body;
+    const filler = Array.from({ length: 40 }, (_, i) => ({ id: i, body: `c${i}`, html_url: `u${i}` }));
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(async () =>
+        jsonResponse([...filler, { id: 99, body: sentBody, html_url: "c99" }]),
+      ),
+    });
+    const parts = buildGitHubIssueCommentRunInput(host, connection, {
+      checkedAt: "2026-10-18T12:00:00.000Z",
+      idempotencyKey: "op-key",
+      payload: { provider: "github", repo: "octo/widgets", number: 5, body: "Thanks" },
+    });
+    if ("blockedReason" in parts) throw new Error("unexpected block");
+    const probed = await parts.input.reconcileExternalOutcome!();
+    expect(probed).toMatchObject({ found: true, externalReferenceId: "comment:99" });
+    expect(fetchCalls(host).map(([url, init]) => [init.method, url])).toEqual([
+      ["GET", `${BASE}/repos/octo/widgets/issues/5/comments?since=2026-10-18T11%3A55%3A00.000Z&per_page=100`],
+    ]);
   });
 
   it("opens a dry-run preview and approval for a require_dry_run issue_create without calling GitHub", async () => {
