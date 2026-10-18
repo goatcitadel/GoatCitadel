@@ -2435,6 +2435,38 @@
     },
     {
       "planStep": "C0",
+      "path": "apps/gateway/src/services/qqbot-live-probes.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 25,
+      "reason": "WS6 new-integrations program: QQBot setup/diagnostics probe owner kept out of the Gateway facade. It reads the injected diagnostics port (config value, secret resolution, allowlist, bounded fetch) once per probe, owns the QQBot structural checks the diagnostics service delegates to, and has no host callbacks.",
+      "evidence": "apps/gateway/src/services/qqbot-live-probes.test.ts covers token mint, bot identity, status-before-body rejection handling, the sandbox-host active send only when requested, no-fetch allowlist and missing-input refusals, and that neither the secret nor the token is emitted; apps/gateway/src/services/integration-diagnostics-service.contract.test.ts covers the structural checks; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/wecom-live-probes.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 21,
+      "reason": "WS6 new-integrations program: WeCom setup/diagnostics probe owner kept out of the Gateway facade. It reads the injected diagnostics port (config value, secret resolution, allowlist, bounded fetch) once per probe, owns the WeCom structural checks the diagnostics service delegates to, and has no host callbacks.",
+      "evidence": "apps/gateway/src/services/wecom-live-probes.test.ts covers gettoken, application lookup, the trusted-IP hint, the advisory callback warning, the sandbox send only when requested, no-fetch allowlist and missing-input refusals, and that neither the secret nor the access token is emitted; apps/gateway/src/services/integration-diagnostics-service.contract.test.ts covers the structural checks; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/qqbot-webhook.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS6 new-integrations program: QQBot webhook inbound helpers: ed25519 key derivation from the bot secret, request signature verification, the op 13 callback-validation signer with its token format guard, and normalization of the four message event types. Pure functions with no adapter host or injected dependency members; the route owns the HTTP boundary and GatewayService gains nothing.",
+      "evidence": "apps/gateway/src/services/qqbot-webhook.test.ts covers the pinned seed-derivation vector, good/flipped-byte/wrong-timestamp/wrong-secret/missing-header signatures, validation signing and token format refusal, and the four event types plus ignore cases; apps/gateway/src/routes/integrations.qqbot-webhook.test.ts covers the route, signed op 13, replay idempotency and the forced default-deny sender gate; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/wecom-webhook.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS6 new-integrations program: WeCom callback inbound helpers: SHA-1 callback signature, AES-256-CBC message decryption with PKCS#7 (block size 32) validation and CorpID receive-id check, a flat DTD-free XML field reader, and text message normalization. Pure functions with no adapter host or injected dependency members; the route owns the HTTP boundary and GatewayService gains nothing.",
+      "evidence": "apps/gateway/src/services/wecom-webhook.test.ts covers the hand-computed SHA-1 vector, fixed-key round trip, block-size-32 padding, receive-id mismatch, bad padding, length overrun, malformed key without echo, DTD/entity rejection, the 256 KiB cap and text/event normalization; apps/gateway/src/routes/integrations.wecom-webhook.test.ts covers GET verification, POST signature and CorpID refusal, replay idempotency and the forced default-deny sender gate; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
       "path": "apps/gateway/src/services/channel-typing-adapters.ts",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 3,

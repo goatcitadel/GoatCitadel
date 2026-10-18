@@ -47,6 +47,8 @@ export interface ChannelSendInput extends ChannelGovernanceInput {
   };
   replyToMessageId?: string;
   replyToPartIndex?: number;
+  /** The original reply target, repeated on every chunk of a split delivery (replyToMessageId chains to the previous chunk). Only channels that need the original anchor (QQBot passive replies) read it. */
+  replyAnchorMessageId?: string;
   effectId?: string;
   subject?: string;
   /** Optional autonomous commitment linkage used to update delivery lifecycle truth. */

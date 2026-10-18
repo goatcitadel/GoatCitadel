@@ -7,9 +7,9 @@ This guide walks through GoatCitadel channel setup in the order that makes the m
 
 For parity status and tranche tracking, see [OPENCLAW_PARITY_STATUS.md](./OPENCLAW_PARITY_STATUS.md).
 
-Guided Mission Control setup is currently available for `channel.discord`, `channel.slack`, `channel.telegram`, `channel.google-chat`, `channel.teams`, `channel.whatsapp`, `channel.signal`, `channel.mattermost`, `channel.matrix`, `channel.imessage`, `channel.nextcloud-talk`, `channel.line`, `channel.zalo`, and `channel.zalouser`.
+Guided Mission Control setup is currently available for `channel.discord`, `channel.slack`, `channel.telegram`, `channel.google-chat`, `channel.teams`, `channel.whatsapp`, `channel.signal`, `channel.mattermost`, `channel.matrix`, `channel.qqbot`, `channel.wecom`, `channel.imessage`, `channel.nextcloud-talk`, `channel.line`, `channel.zalo`, and `channel.zalouser`.
 
-Discord, Slack, Telegram, Google Chat, Teams, Mattermost, Matrix, WhatsApp, Signal, LINE, iMessage, Zalo OA, and Zalo Personal guided test/retest flows now run live probe coverage before finalize. WhatsApp, Signal, Zalo OA, and Zalo Personal still rely on operator-controlled sandbox targets or bridge-native delivery confirmation for pre-finalize send checks.
+Discord, Slack, Telegram, Google Chat, Teams, Mattermost, Matrix, QQBot, WeCom, WhatsApp, Signal, LINE, iMessage, Zalo OA, and Zalo Personal guided test/retest flows now run live probe coverage before finalize. WhatsApp, Signal, Zalo OA, and Zalo Personal still rely on operator-controlled sandbox targets or bridge-native delivery confirmation for pre-finalize send checks.
 
 ## Guided Channel Setup At A Glance
 
@@ -22,6 +22,8 @@ Discord, Slack, Telegram, Google Chat, Teams, Mattermost, Matrix, WhatsApp, Sign
 | `channel.teams` | Incoming webhook | sandbox webhook probe | yes |
 | `channel.mattermost` | Bot token | auth, channel resolution, sandbox send/delete; opt-in bot WebSocket inbound (`inboundStreamEnabled`) | yes |
 | `channel.matrix` | Bot access token | whoami auth, joined-room check, sandbox `m.notice` send; opt-in `/sync` inbound (`inboundStreamEnabled`) | yes |
+| `channel.qqbot` | AppID + AppSecret | token mint, bot identity (`/users/@me`), optional active sandbox message; ed25519-signed webhook inbound | yes |
+| `channel.wecom` | CorpID + AgentId + application Secret | `gettoken`, application lookup, callback-credential check, sandbox text; encrypted callback inbound when the Token and EncodingAESKey are set | yes |
 | `channel.whatsapp` | Cloud API access token + phone-number id | sender auth plus sandbox send; signed inbound webhook runtime when app secret + verify token are configured | yes |
 | `channel.signal` | Bridge URL | sandbox send through the Signal bridge JSON-RPC path; opt-in signal-cli daemon event-stream inbound (`receiveEvents`) | yes |
 | `channel.imessage` | BlueBubbles bridge URL + password | bridge query plus sandbox send/unsend | yes |
@@ -34,7 +36,7 @@ Discord, Slack, Telegram, Google Chat, Teams, Mattermost, Matrix, WhatsApp, Sign
 
 Inbound capability is derived from the runtime capability rules (`packages/gateway-core/src/channel-core.ts`), not from this doc:
 
-- **Bidirectional (inbound available when configured):** Telegram, Slack, Discord, WhatsApp (app secret + verify token), LINE (channel secret), Nextcloud Talk (webhook), ntfy (opt-in persistent subscription to a topic's JSON stream; the topic is the sender, so allow `ntfy-topic:<topic>`, and GoatCitadel's own publishes are tagged and ignored on the way back in. The token gates reading the topic; anyone able to publish to the subscribed topic can start turns, so use a topic whose write access is limited to trusted publishers. Messages published while the gateway is disconnected or restarting are skipped: no history is fetched on reconnect after a restart or a connection edit. A stream silent for 2 minutes is reconnected), Mattermost (opt-in persistent bot WebSocket for `posted` events; allow the Mattermost user ids that may start turns, and the bot's own and system posts are ignored; Mattermost has no replay, so posts sent while the socket is disconnected or that fail acceptance are not recovered; the bot pings the socket every 30 seconds and reconnects one that answers nothing for 90 seconds), Matrix (opt-in `/sync` long-poll; allow the Matrix user ids such as `@alice:example.com` that may start turns; the bot's own messages are ignored and the `since` token is persisted, so a restart resumes where it stopped; if the homeserver rejects the stored token the runtime re-primes and messages in that gap are skipped; see below), Signal (opt-in `receiveEvents` subscription to a `signal-cli daemon --http` event stream; see below), Google Chat (Chat app mode only: a service-account key plus `audienceType`/`audience`; see below).
+- **Bidirectional (inbound available when configured):** Telegram, Slack, Discord, WhatsApp (app secret + verify token), LINE (channel secret), Nextcloud Talk (webhook), ntfy (opt-in persistent subscription to a topic's JSON stream; the topic is the sender, so allow `ntfy-topic:<topic>`, and GoatCitadel's own publishes are tagged and ignored on the way back in. The token gates reading the topic; anyone able to publish to the subscribed topic can start turns, so use a topic whose write access is limited to trusted publishers. Messages published while the gateway is disconnected or restarting are skipped: no history is fetched on reconnect after a restart or a connection edit. A stream silent for 2 minutes is reconnected), Mattermost (opt-in persistent bot WebSocket for `posted` events; allow the Mattermost user ids that may start turns, and the bot's own and system posts are ignored; Mattermost has no replay, so posts sent while the socket is disconnected or that fail acceptance are not recovered; the bot pings the socket every 30 seconds and reconnects one that answers nothing for 90 seconds), QQBot (signed webhook; the app secret verifies every request, and you allow the QQ openids that may start turns; see below), WeCom (encrypted callback when the Token and EncodingAESKey are set; you allow the WeCom userids that may start turns; see below), Matrix (opt-in `/sync` long-poll; allow the Matrix user ids such as `@alice:example.com` that may start turns; the bot's own messages are ignored and the `since` token is persisted, so a restart resumes where it stopped; if the homeserver rejects the stored token the runtime re-primes and messages in that gap are skipped; see below), Signal (opt-in `receiveEvents` subscription to a `signal-cli daemon --http` event stream; see below), Google Chat (Chat app mode only: a service-account key plus `audienceType`/`audience`; see below).
 - **Outbound delivery today:** iMessage (bridge), Microsoft Teams, Google Chat webhook mode, Zalo OA, Zalo Personal.
 
 The BlueBubbles server authenticates every iMessage bridge request with a `?password=` URL query parameter, so the password travels inside the request URL. Use an `https://` bridge URL, or a bridge on the same machine (`127.0.0.1`, `localhost`, or `[::1]`). A bridge URL without a scheme uses `http://` only for those loopback hosts and `https://` for every other host. Plain `http://` to a remote host is used only when you enter it explicitly, and it exposes the password to anyone who can observe that network path.
@@ -478,6 +480,77 @@ End-to-end encrypted rooms are not supported: inbound ignores encrypted events a
 - messages missing after a busy period: if a room produces more than 100 messages in one sync, the older ones are skipped and a warn `timeline_limited` diagnostic records how many rooms were affected
 - edited messages do not start a new turn: Matrix edits are ignored on inbound
 - room ids look like `!opaque:example.com`; a `#alias:example.com` is not accepted as a send target
+
+## QQBot
+
+Official reference:
+
+- https://bot.q.qq.com/wiki/develop/api-v2/
+
+QQBot sends text to group (`group:<openid>`), C2C (`user:<openid>`), guild channel (`channel:<id>`) and guild direct-message (`dm:<guild id>`) targets through the QQ Bot Open Platform. Outbound is text-only: a send with attachments fails with a clear error. Reactions and unsend are not supported by this adapter, and QQ has no typing indicator for bot messages.
+
+QQ allows active (unprompted) group and C2C messages only within platform quotas, so a reply sent soon after an inbound message (within about 5 minutes) is a passive reply that carries the inbound message id. A reply carries the inbound message id and fails once QQ's passive window has passed; it does not fall back to an active send. Every chunk of a split reply is a passive reply to the same inbound message id with an increasing `msg_seq` (each send starts from a random base so a second send to the same message does not collide with an earlier one). QQ allows about 5 replies per message, so a reply that would need more than 5 chunks is refused before anything is sent: shorten it. QQ openids differ by scope (a group `member_openid` is not the C2C `user_openid`), so allowlist each scope's id. Replies are split at 2,000 characters as a conservative guess because the exact QQ text limit is unverified.
+
+Inbound is a signed webhook. GoatCitadel verifies the ed25519 signature (keyed from the AppSecret) on every request, including QQ's callback validation, before accepting anything. Inbound is default-deny: only the QQ openids in `allowedSenders` can start turns, and an empty list drops everything. A dropped message's `sender_not_allowlisted` diagnostic shows the openid to add.
+
+### Step-by-step
+
+1. Create a QQ Bot Open Platform application and note the AppID and AppSecret.
+2. Export the AppSecret in the gateway environment, for example `QQBOT_APP_SECRET`.
+3. Add `bots.qq.com` and `api.bot.qq.com` (and `sandbox.api.sgroup.qq.com` if you use the sandbox) to the network allowlist.
+4. In GoatCitadel `Connections`, add `channel.qqbot` and set:
+   - `appId=<AppID>`
+   - `appSecretEnv=QQBOT_APP_SECRET` (an earlier `tokenEnv` value is shown here as `appSecretEnv` when you edit)
+   - `defaultTarget=user:<openid>` (optional)
+   - `sandbox=true` while the application is unpublished
+5. Save and enable the connection, then in the QQ console set the callback URL to `https://<your-gateway>/api/v1/integrations/connections/<connectionId>/qqbot/webhook` and subscribe to the events you need. QQ sends a validation request (op 13) that GoatCitadel answers with an AppSecret signature; QQ may send it without signature headers, and if it includes them they must verify. Every other event must be signed.
+6. Add the QQ openids that may start turns to `allowedSenders`.
+7. Run the guided test: it mints a token, reads the bot identity and, when you run the explicit send, sends one active sandbox message to the default target. A rejection of that message can be a quota, not a credential problem.
+
+### QQBot troubleshooting
+
+- `credentials rejected`: QQ refused the AppID and AppSecret; copy them again from the console
+- host outside the network allowlist: add the QQ hosts before probing or sending
+- the callback URL fails validation in the console: the connection must be enabled with a resolvable AppSecret, and the URL must be reachable over public HTTPS
+- inbound messages are ignored: the sender is not on the allowlist, or the event is not one of the supported message types (group at-message, C2C, guild at-message, guild direct message)
+- sends fail after a few minutes: the passive-reply window passed; message the bot again (replies do not fall back to active sends)
+- `QQBot target must be group:, user:, channel: or dm:`: fix the target prefix
+
+## WeCom
+
+Official reference:
+
+- https://developer.work.weixin.qq.com/document/path/90664
+
+WeCom sends application text messages to a user (`user:<userid>` or a bare userid), department (`party:<id>`) or tag (`tag:<id>`). Outbound is text-only: a send with attachments fails with a clear error, and text above 2,048 bytes is refused (WeCom would silently truncate it), so replies are split into chunks of at most 680 characters. Reactions and unsend are not supported by this adapter, and WeCom has no typing indicator for application messages.
+
+The application secret mints an access token that is cached and refreshed; if WeCom reports it invalid or expired (errcode 40014 or 42001) the send retries once with a fresh token. The token travels in the request URL, so GoatCitadel never writes that URL into errors or diagnostics. The gateway host's public IP must be on the application's trusted IP list, otherwise sends fail with errcode 60020.
+
+Inbound is an encrypted callback and stays off until the callback Token and EncodingAESKey are configured. GoatCitadel verifies the SHA-1 signature, decrypts with AES-256-CBC and checks the CorpID before accepting anything. Only plain text messages start turns. Inbound is default-deny: only the WeCom userids in `allowedSenders` can start turns, and an empty list drops everything. A dropped message's `sender_not_allowlisted` diagnostic shows the userid to add.
+
+### Step-by-step
+
+1. Create a WeCom self-built application and note the CorpID, AgentId and Secret.
+2. Export the Secret in the gateway environment, for example `WECOM_SECRET`, and add `qyapi.weixin.qq.com` to the network allowlist.
+3. Add the gateway host's public IP to the application's trusted IP list.
+4. In GoatCitadel `Connections`, add `channel.wecom` and set:
+   - `corpId=<CorpID>`
+   - `agentId=<AgentId>`
+   - `secretEnv=WECOM_SECRET`
+   - `defaultTarget=user:<userid>` (optional)
+5. For inbound, choose a Token and generate an EncodingAESKey in the application's message-receiving settings, export them (for example `WECOM_CALLBACK_TOKEN` and `WECOM_ENCODING_AES_KEY`) and set `callbackTokenEnv` and `encodingAesKeyEnv`.
+6. Save and enable the connection, then set the callback URL in WeCom to `https://<your-gateway>/api/v1/integrations/connections/<connectionId>/wecom/webhook`. WeCom sends an encrypted `echostr` that GoatCitadel verifies and answers.
+7. Add the WeCom userids that may start turns to `allowedSenders`.
+8. Run the guided test: it mints a token, reads the application, reports whether the callback credentials are set (a missing Token or EncodingAESKey only disables inbound) and, when you run the explicit send, sends one sandbox text.
+
+### WeCom troubleshooting
+
+- `errcode 40013` or `40001`: the CorpID or Secret is wrong
+- `errcode 60020`: the gateway host's public IP is not on the application's trusted IP list
+- `errcode 81013` or an invalid-recipient error: the user, department or tag does not exist or cannot see the application
+- URL verification fails: the connection must be enabled, and the Token and EncodingAESKey in WeCom must match the stored values exactly
+- inbound messages are ignored: the sender is not on the allowlist, or the message is not plain text (events and media are acknowledged and dropped)
+- host outside the network allowlist: add `qyapi.weixin.qq.com` before probing or sending
 
 ## Validation Checklist Per Channel
 

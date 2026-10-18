@@ -240,17 +240,30 @@ describe("integration-catalog", () => {
     expect(fields.find((field) => field.key === "defaultRoomId")?.required).toBeFalsy();
   });
 
-  it("keeps catalog-only channels blocked until adapter probes exist", () => {
+  it("promotes QQBot and WeCom to beta runnable channels with forced-allowlist inbound and no catalog-only copy", () => {
     for (const catalogId of ["channel.qqbot", "channel.wecom"]) {
       const entry = requireCatalogEntry(catalogId);
-      expect(entry.maturity).toBe("planned");
-      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("disabled");
-      expect(resolveIntegrationCatalogRuntimeAvailability(entry, new Set())).toBe("blocked");
-      expect(entry.description).toMatch(/probes are not wired/i);
-      expect(getIntegrationFormSchema(catalogId)?.fields.find((field) => field.key === "enabled")).toMatchObject({
-        defaultValue: false,
-      });
+      expect(entry.maturity).toBe("beta");
+      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("beta");
+      expect(resolveIntegrationCatalogRuntimeAvailability(entry, new Set())).toBe("runnable");
+      expect(entry.capabilities).toContain("inbound");
+      expect(entry.description).not.toMatch(/catalog|probes are not wired/i);
+      const schema = getIntegrationFormSchema(catalogId);
+      expect(schema?.description).not.toMatch(/catalog-only/i);
+      expect(schema?.fields.find((field) => field.key === "enabled")).toMatchObject({ defaultValue: false });
+      expect(schema?.fields.find((field) => field.key === "allowedSenders")).toBeDefined();
+      expect(schema?.fields.find((field) => field.key === "defaultTarget")?.required).toBeFalsy();
     }
+    const qq = getIntegrationFormSchema("channel.qqbot")?.fields ?? [];
+    expect(qq.find((field) => field.key === "appSecretEnv")).toMatchObject({ secretRef: true });
+    expect(qq.find((field) => field.key === "appId")?.required).toBe(true);
+    expect(qq.some((field) => field.key === "tokenEnv")).toBe(false);
+    const wecom = getIntegrationFormSchema("channel.wecom")?.fields ?? [];
+    for (const key of ["secretEnv", "callbackTokenEnv", "encodingAesKeyEnv"]) {
+      expect(wecom.find((field) => field.key === key)).toMatchObject({ secretRef: true });
+    }
+    expect(wecom.find((field) => field.key === "corpId")?.required).toBe(true);
+    expect(wecom.find((field) => field.key === "agentId")?.required).toBe(true);
   });
 
   it("only treats explicitly beta, native, or plugin entries as runnable", () => {

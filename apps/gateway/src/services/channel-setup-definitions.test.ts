@@ -54,6 +54,8 @@ describe("channel setup definitions", () => {
         "channel.signal",
         "channel.mattermost",
         "channel.matrix",
+        "channel.qqbot",
+        "channel.wecom",
         "channel.imessage",
         "channel.nextcloud-talk",
         "channel.line",
@@ -1032,6 +1034,123 @@ describe("channel setup definitions", () => {
     );
   });
 
+  it("hydrates a legacy QQBot tokenEnv as appSecretEnv and forces a default-deny allowlist", () => {
+    const definition = requireChannelSetupDefinition("channel.qqbot");
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.qqbot",
+        key: "qqbot",
+        label: "QQBot Primary",
+        config: {
+          appId: "102000",
+          tokenEnv: "QQBOT_TOKEN",
+          defaultTarget: "user:U1",
+          inboundAccessMode: "open_legacy",
+        },
+      }),
+    );
+    expect(hydrated.draft).toMatchObject({ appId: "102000", appSecretEnv: "QQBOT_TOKEN", defaultTarget: "user:U1" });
+    expect(hydrated.draft).not.toHaveProperty("tokenEnv");
+    expect(hydrated.draft.inboundAccessMode).toBe("allowlist");
+    const draft = { ...createDraft("channel.qqbot", hydrated.draft, "edit"), hydration: hydrated.hydration };
+    expect(definition.validate(draft)).toEqual([]);
+    const normalized = definition.normalize(draft);
+    expect(normalized).toMatchObject({
+      appId: "102000",
+      appSecretEnv: "QQBOT_TOKEN",
+      defaultTarget: "user:U1",
+      inboundAccessMode: "allowlist",
+    });
+    expect(normalized).not.toHaveProperty("tokenEnv");
+  });
+
+  it("collects QQBot values, requires an app id and secret, and validates the target prefix", () => {
+    const definition = requireChannelSetupDefinition("channel.qqbot");
+    const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
+    expect(fieldKeys).toEqual(
+      expect.arrayContaining(["appId", "appSecretEnv", "defaultTarget", "sandbox", "allowedSenders"]),
+    );
+    const ok = createDraft("channel.qqbot", { appId: "102000", appSecretEnv: "QQBOT_APP_SECRET", sandbox: true });
+    expect(definition.validate(ok)).toEqual([]);
+    expect(definition.normalize(ok)).toMatchObject({
+      appId: "102000",
+      appSecretEnv: "QQBOT_APP_SECRET",
+      sandbox: true,
+      inboundAccessMode: "allowlist",
+    });
+    const empty = definition.validate(createDraft("channel.qqbot", {}));
+    expect(empty.map((issue) => issue.key)).toEqual(expect.arrayContaining(["appId_required", "qqbot_auth_missing"]));
+    const badTarget = definition.validate(
+      createDraft("channel.qqbot", { appId: "1", appSecretEnv: "QQBOT_APP_SECRET", defaultTarget: "guild:1" }),
+    );
+    expect(badTarget.map((issue) => issue.key)).toContain("defaultTarget_malformed");
+    const copy = JSON.stringify(definition.definition.wizard);
+    expect(copy).toContain("/qqbot/webhook");
+    expect(copy).toMatch(/default-deny/);
+    expect(copy).not.toMatch(/anyone can/i);
+  });
+
+  it("collects WeCom values, keeps callback credentials opaque, and forces a default-deny allowlist", () => {
+    const definition = requireChannelSetupDefinition("channel.wecom");
+    const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
+    expect(fieldKeys).toEqual(
+      expect.arrayContaining([
+        "corpId",
+        "agentId",
+        "secretEnv",
+        "callbackTokenEnv",
+        "encodingAesKeyEnv",
+        "allowedSenders",
+      ]),
+    );
+    const ok = createDraft("channel.wecom", {
+      corpId: "ww1",
+      agentId: "1000002",
+      secretEnv: "WECOM_SECRET",
+      callbackTokenEnv: "WECOM_CALLBACK_TOKEN",
+      encodingAesKeyEnv: "WECOM_ENCODING_AES_KEY",
+    });
+    expect(definition.validate(ok)).toEqual([]);
+    expect(definition.normalize(ok)).toMatchObject({
+      corpId: "ww1",
+      agentId: "1000002",
+      secretEnv: "WECOM_SECRET",
+      callbackTokenEnv: "WECOM_CALLBACK_TOKEN",
+      encodingAesKeyEnv: "WECOM_ENCODING_AES_KEY",
+      inboundAccessMode: "allowlist",
+    });
+    const empty = definition.validate(createDraft("channel.wecom", { agentId: "abc" }));
+    expect(empty.map((issue) => issue.key)).toEqual(
+      expect.arrayContaining(["corpId_required", "agentId_malformed", "wecom_auth_missing"]),
+    );
+
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.wecom",
+        key: "wecom",
+        label: "WeCom Primary",
+        config: {
+          corpId: "ww1",
+          agentId: 1000002,
+          secretEnv: "WECOM_SECRET",
+          encodingAesKey: "k".repeat(43),
+          inboundAccessMode: "open_legacy",
+        },
+      }),
+    );
+    expect(hydrated.draft).toMatchObject({ corpId: "ww1", agentId: "1000002", secretEnv: "WECOM_SECRET" });
+    expect(JSON.stringify(hydrated.draft)).not.toContain("kkkk");
+    expect(hydrated.hydration.fieldState.encodingAesKey).toBe("configured");
+    const draft = { ...createDraft("channel.wecom", hydrated.draft, "edit"), hydration: hydrated.hydration };
+    expect(definition.validate(draft)).toEqual([]);
+    const normalized = definition.normalize(draft);
+    expect(normalized).toMatchObject({ encodingAesKey: "k".repeat(43), inboundAccessMode: "allowlist" });
+    const copy = JSON.stringify(definition.definition.wizard);
+    expect(copy).toContain("/wecom/webhook");
+    expect(copy).toMatch(/default-deny/);
+    expect(copy).not.toMatch(/anyone can/i);
+  });
+
   it("preserves env-backed iMessage bridge auth during edit flows", () => {
     const definition = requireChannelSetupDefinition("channel.imessage");
     const hydrated = definition.hydrate(
@@ -1384,6 +1503,8 @@ describe("channel setup definitions", () => {
       "channel.signal",
       "channel.mattermost",
       "channel.matrix",
+      "channel.qqbot",
+      "channel.wecom",
       "channel.imessage",
       "channel.line",
       "channel.zalo",
@@ -1402,6 +1523,8 @@ describe("channel setup definitions", () => {
       "channel.whatsapp",
       "channel.mattermost",
       "channel.matrix",
+      "channel.qqbot",
+      "channel.wecom",
       "channel.imessage",
       "channel.line",
     ] as const;
@@ -1413,7 +1536,14 @@ describe("channel setup definitions", () => {
   });
 
   it("keeps guided channel copy out of the old planned-parity wording for visible built-in channels", () => {
-    const channels = ["channel.whatsapp", "channel.mattermost", "channel.matrix", "channel.line"] as const;
+    const channels = [
+      "channel.whatsapp",
+      "channel.mattermost",
+      "channel.matrix",
+      "channel.qqbot",
+      "channel.wecom",
+      "channel.line",
+    ] as const;
 
     for (const catalogId of channels) {
       const definition = requireChannelSetupDefinition(catalogId);

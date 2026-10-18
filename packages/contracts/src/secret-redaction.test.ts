@@ -805,6 +805,26 @@ describe("redactStructuredSecrets", () => {
     });
   });
 
+  it("redacts AES keys such as the WeCom EncodingAESKey while keeping env names visible", () => {
+    const input = {
+      encodingAesKey: "plain-aes-key-value",
+      ENCODING_AES_KEY: "plain-aes-key-value",
+      aesKey: "plain-aes-key-value",
+      encodingAesKeyEnv: "WECOM_ENCODING_AES_KEY",
+      encodingAesKeyRef: "keychain:wecom-aes",
+      corpId: "wx5823bf96d3bd56c7",
+    };
+
+    expect(redactStructuredSecrets(input).value).toEqual({
+      encodingAesKey: "[REDACTED]",
+      ENCODING_AES_KEY: "[REDACTED]",
+      aesKey: "[REDACTED]",
+      encodingAesKeyEnv: "WECOM_ENCODING_AES_KEY",
+      encodingAesKeyRef: "keychain:wecom-aes",
+      corpId: "wx5823bf96d3bd56c7",
+    });
+  });
+
   it("reports and safely projects circular references", () => {
     const input: Record<string, unknown> = { visible: "ok" };
     input.self = input;

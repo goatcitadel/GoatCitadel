@@ -189,6 +189,58 @@ describe("integration diagnostics live-check routing", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("routes QQBot live checks with the app secret and gates on the network allowlist", async () => {
+    const port = createPort();
+    const fetchMock = vi.mocked(port.fetchWithDiagnosticsTimeout);
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).includes("getAppAccessToken")
+        ? new Response(JSON.stringify({ access_token: "qq-token", expires_in: "7200" }))
+        : new Response(JSON.stringify({ id: "BOT1", username: "GoatBot" })),
+    );
+    const connection = createConnection("qqbot", { appId: "102000", appSecret: "qq-secret" });
+
+    const result = await runIntegrationConnectionLiveChecks(port, connection, { includeSandboxSend: false });
+    expect(result.checks.map((check) => [check.key, check.status])).toEqual([
+      ["qqbot_auth", "pass"],
+      ["qqbot_bot", "pass"],
+    ]);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://bots.qq.com/app/getAppAccessToken");
+    expect(JSON.parse(String(init.body))).toEqual({ appId: "102000", clientSecret: "qq-secret" });
+
+    fetchMock.mockClear();
+    vi.mocked(port.isConnectionUrlAllowlisted).mockReturnValue(false);
+    const blocked = await runIntegrationConnectionLiveChecks(port, connection, { includeSandboxSend: true });
+    expect(blocked.checks[0]).toMatchObject({ key: "qqbot_network", status: "fail" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("routes WeCom live checks with the application secret and gates on the network allowlist", async () => {
+    const port = createPort();
+    const fetchMock = vi.mocked(port.fetchWithDiagnosticsTimeout);
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).includes("/cgi-bin/gettoken")
+        ? new Response(JSON.stringify({ errcode: 0, access_token: "wecom-token", expires_in: 7200 }))
+        : new Response(JSON.stringify({ errcode: 0, name: "GoatCitadel" })),
+    );
+    const connection = createConnection("wecom", { corpId: "ww1", agentId: "1000002", secret: "wecom-secret" });
+
+    const result = await runIntegrationConnectionLiveChecks(port, connection, { includeSandboxSend: false });
+    expect(result.checks.map((check) => [check.key, check.status])).toEqual([
+      ["wecom_auth", "pass"],
+      ["wecom_agent", "pass"],
+      ["wecom_callback", "warn"],
+    ]);
+    const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=ww1&corpsecret=wecom-secret");
+
+    fetchMock.mockClear();
+    vi.mocked(port.isConnectionUrlAllowlisted).mockReturnValue(false);
+    const blocked = await runIntegrationConnectionLiveChecks(port, connection, { includeSandboxSend: true });
+    expect(blocked.checks[0]).toMatchObject({ key: "wecom_network", status: "fail" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("routes webhook live checks and skips incomplete channel credentials", async () => {
     const port = createPort();
 

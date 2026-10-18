@@ -10,6 +10,8 @@ import { createWhatsAppDefinition } from "./channel-setup-definitions/whatsapp.j
 import { createSignalDefinition } from "./channel-setup-definitions/signal.js";
 import { createMattermostDefinition } from "./channel-setup-definitions/mattermost.js";
 import { createMatrixDefinition } from "./channel-setup-definitions/matrix.js";
+import { createQqbotDefinition } from "./channel-setup-definitions/qqbot.js";
+import { createWecomDefinition } from "./channel-setup-definitions/wecom.js";
 import { createIMessageDefinition } from "./channel-setup-definitions/imessage.js";
 import { createNextcloudTalkDefinition } from "./channel-setup-definitions/nextcloud-talk.js";
 import { createLineDefinition } from "./channel-setup-definitions/line.js";
@@ -30,6 +32,8 @@ const RUNTIME_DEFINITIONS: Record<string, ChannelSetupRuntimeDefinition> = {
   "channel.signal": withGuidedJourney(createSignalDefinition()),
   "channel.mattermost": withGuidedJourney(createMattermostDefinition()),
   "channel.matrix": withGuidedJourney(createMatrixDefinition()),
+  "channel.qqbot": withGuidedJourney(createQqbotDefinition()),
+  "channel.wecom": withGuidedJourney(createWecomDefinition()),
   "channel.imessage": withGuidedJourney(createIMessageDefinition()),
   "channel.nextcloud-talk": withGuidedJourney(createNextcloudTalkDefinition()),
   "channel.line": withGuidedJourney(createLineDefinition()),

@@ -26,8 +26,15 @@ const CHANNEL_DELIVERY_CHUNK_LIMITS: Record<string, number> = {
   whatsapp: 3_500,
   line: 4_500,
   "nextcloud-talk": 3_900,
+  // WeCom truncates text above 2048 UTF-8 bytes while reporting success; 680 UTF-16 units is at most 2040 bytes.
+  wecom: 680,
+  // QQ text length limit is unverified; stay conservative so chunks are small.
+  qqbot: 2_000,
   slack: 32_000,
 };
+
+/** QQ accepts about five passive replies per inbound msg_id; active (anchor-less) sends are not bound by this. */
+const QQBOT_MAX_PASSIVE_REPLY_PARTS = 5;
 
 type ToolInvokeResultLike = Omit<ToolInvokeResult, "outcome"> & {
   outcome: ToolInvokeResult["outcome"] | "failed";
@@ -198,6 +205,17 @@ export async function sendQueuedChannelDelivery(
 ): Promise<{ providerMessageId?: string; deliveryDiagnostics?: ChannelDeliveryDiagnostics }> {
   const baseInput = channelDeliveryPayloadToSendInput(input);
   const messageParts = readChannelDeliveryMessageParts(input.payload);
+  // Refuse before any chunk leaves so a too-long passive reply is never sent truncated.
+  if (
+    input.channelKey.toLowerCase() === "qqbot" &&
+    baseInput.replyToMessageId &&
+    messageParts.length > QQBOT_MAX_PASSIVE_REPLY_PARTS
+  ) {
+    throw createChannelDeliveryFailureError(
+      `QQ allows at most ${QQBOT_MAX_PASSIVE_REPLY_PARTS} passive replies per message; this reply needs ${messageParts.length} parts. Shorten the reply. Nothing was sent.`,
+      "blocked",
+    );
+  }
   if (messageParts.length <= 1) {
     let result: Awaited<ReturnType<ChannelDeliverySender>>;
     try {
@@ -232,6 +250,7 @@ export async function sendQueuedChannelDelivery(
         interactiveActionTemplate: index === messageParts.length - 1 ? baseInput.interactiveActionTemplate : undefined,
         replyToMessageId: index === 0 ? baseInput.replyToMessageId : (providerMessageId ?? baseInput.replyToMessageId),
         replyToPartIndex: index,
+        replyAnchorMessageId: baseInput.replyToMessageId,
       });
       unwrapped = extractCommsSendResult(result);
       assertChannelSendOutcome(unwrapped);
@@ -334,7 +353,11 @@ export function mapPersistedChannelDeliveryRuntimeStatus(
     }
     return "failed";
   }
-  return deliveryStatus === "waiting_approval" ? "waiting_approval" : deliveryStatus === "retrying" ? "retrying" : "queued";
+  return deliveryStatus === "waiting_approval"
+    ? "waiting_approval"
+    : deliveryStatus === "retrying"
+      ? "retrying"
+      : "queued";
 }
 
 function assertChannelSendOutcome(result: Record<string, unknown>): void {
