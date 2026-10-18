@@ -228,6 +228,7 @@ export async function commsSend(
         replyToMessageId: input.replyToMessageId,
         replyToMessageGuid: input.replyToMessageId,
         replyToPartIndex: input.replyToPartIndex,
+        replyAnchorMessageId: input.replyAnchorMessageId,
         effectId: input.effectId,
         subject: input.subject,
       },

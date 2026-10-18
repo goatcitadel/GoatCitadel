@@ -8,6 +8,7 @@ import type {
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import { sanitizeChannelOutboundMessage } from "@goatcitadel/contracts";
+import { qqbotPassiveReplyLimit } from "@goatcitadel/policy-engine";
 import type {
   ChannelDeliveryRuntimeRecord,
   ChannelDeliveryRuntimeSendInput,
@@ -26,8 +27,14 @@ const CHANNEL_DELIVERY_CHUNK_LIMITS: Record<string, number> = {
   whatsapp: 3_500,
   line: 4_500,
   "nextcloud-talk": 3_900,
+  // WeCom truncates text above 2048 UTF-8 bytes while reporting success; 680 UTF-16 units is at most 2040 bytes.
+  wecom: 680,
+  // QQ text length limit is unverified; stay conservative so chunks are small.
+  qqbot: 2_000,
   slack: 32_000,
 };
+
+/** QQ passive-reply caps (4 per C2C message, 5 per group message) come from qqbotPassiveReplyLimit; active sends are not bound. */
 
 type ToolInvokeResultLike = Omit<ToolInvokeResult, "outcome"> & {
   outcome: ToolInvokeResult["outcome"] | "failed";
@@ -198,6 +205,18 @@ export async function sendQueuedChannelDelivery(
 ): Promise<{ providerMessageId?: string; deliveryDiagnostics?: ChannelDeliveryDiagnostics }> {
   const baseInput = channelDeliveryPayloadToSendInput(input);
   const messageParts = readChannelDeliveryMessageParts(input.payload);
+  // Refuse before any chunk leaves so a too-long passive reply is never sent truncated.
+  const qqbotPassiveLimit = qqbotPassiveReplyLimit(baseInput.target);
+  if (
+    input.channelKey.toLowerCase() === "qqbot" &&
+    baseInput.replyToMessageId &&
+    messageParts.length > qqbotPassiveLimit
+  ) {
+    throw createChannelDeliveryFailureError(
+      `QQ allows at most ${qqbotPassiveLimit} passive replies per message; this reply needs ${messageParts.length} parts. Shorten the reply. Nothing was sent.`,
+      "blocked",
+    );
+  }
   if (messageParts.length <= 1) {
     let result: Awaited<ReturnType<ChannelDeliverySender>>;
     try {
@@ -232,6 +251,7 @@ export async function sendQueuedChannelDelivery(
         interactiveActionTemplate: index === messageParts.length - 1 ? baseInput.interactiveActionTemplate : undefined,
         replyToMessageId: index === 0 ? baseInput.replyToMessageId : (providerMessageId ?? baseInput.replyToMessageId),
         replyToPartIndex: index,
+        replyAnchorMessageId: baseInput.replyToMessageId,
       });
       unwrapped = extractCommsSendResult(result);
       assertChannelSendOutcome(unwrapped);
@@ -334,7 +354,11 @@ export function mapPersistedChannelDeliveryRuntimeStatus(
     }
     return "failed";
   }
-  return deliveryStatus === "waiting_approval" ? "waiting_approval" : deliveryStatus === "retrying" ? "retrying" : "queued";
+  return deliveryStatus === "waiting_approval"
+    ? "waiting_approval"
+    : deliveryStatus === "retrying"
+      ? "retrying"
+      : "queued";
 }
 
 function assertChannelSendOutcome(result: Record<string, unknown>): void {

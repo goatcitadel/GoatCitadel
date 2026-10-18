@@ -277,39 +277,62 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.qqbot": {
     catalogId: "channel.qqbot",
     title: "QQBot Connection",
-    description: "Catalog-only QQBot setup entry. Live send/read probes are not enabled until an adapter is wired.",
+    description:
+      "Connect a QQ Bot Open Platform app for text sends and replies, with a signed webhook for inbound messages. Inbound is default-deny by sender openid.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "QQBot" }),
-      text("appId", "App ID", { required: true }),
-      text("tokenEnv", "Token ENV Var", {
-        placeholder: "QQBOT_TOKEN",
+      text("appId", "App ID", { required: true, placeholder: "102000000" }),
+      text("appSecretEnv", "App Secret ENV Var", {
+        placeholder: "QQBOT_APP_SECRET",
         secretRef: true,
+        description:
+          "Name of the environment variable that stores the bot's AppSecret. It mints send tokens and verifies signed webhook events.",
       }),
       text("defaultTarget", "Default Target", {
-        placeholder: "guild/channel/user id",
-        required: true,
+        placeholder: "group:<openid>, user:<openid>, channel:<id> or dm:<guild id>",
+        description: "Optional fallback destination. Replies to inbound messages use the sender's own target.",
       }),
+      bool("sandbox", "Use Sandbox API", false),
+      ...forcedAllowlistInboundFields(
+        'Allow QQ openids (the id QQ assigns the sender), for example "E4F2...". Add the webhook URL shown in guided setup to the QQ Bot console.',
+      ),
       bool("enabled", "Enabled", false),
     ],
   },
   "channel.wecom": {
     catalogId: "channel.wecom",
     title: "WeCom Connection",
-    description: "Catalog-only WeCom setup entry. Live send/read probes are not enabled until an adapter is wired.",
+    description:
+      "Connect a WeCom (WeChat Work) self-built application for text sends, with an encrypted callback for inbound messages. Inbound is default-deny by sender userid.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "WeCom" }),
-      text("corpId", "Corp ID", { required: true }),
-      text("agentId", "Agent ID", { required: true }),
-      text("secretEnv", "Secret ENV Var", {
+      text("corpId", "Corp ID", { required: true, placeholder: "ww1234567890abcdef" }),
+      text("agentId", "Agent ID", { required: true, placeholder: "1000002" }),
+      text("secretEnv", "Application Secret ENV Var", {
         placeholder: "WECOM_SECRET",
         secretRef: true,
+        description: "Name of the environment variable that stores the application's Secret, used to mint send tokens.",
+      }),
+      text("callbackTokenEnv", "Callback Token ENV Var", {
+        placeholder: "WECOM_CALLBACK_TOKEN",
+        secretRef: true,
+        description:
+          "Name of the environment variable that stores the callback Token. Without it and the EncodingAESKey, inbound stays off.",
+      }),
+      text("encodingAesKeyEnv", "EncodingAESKey ENV Var", {
+        placeholder: "WECOM_ENCODING_AES_KEY",
+        secretRef: true,
+        description: "Name of the environment variable that stores the callback's 43-character EncodingAESKey.",
       }),
       text("defaultTarget", "Default Target", {
-        placeholder: "user id, party id, or chat id",
-        required: true,
+        placeholder: "user:<userid>, party:<id>, tag:<id> or a userid",
+        description: "Optional fallback recipient. Replies to inbound messages go to the sender.",
       }),
+      ...forcedAllowlistInboundFields(
+        'Allow WeCom userids such as "zhangsan". Add the webhook URL shown in guided setup to the message-receiving settings of the WeCom application.',
+      ),
       bool("enabled", "Enabled", false),
     ],
   },
@@ -1048,19 +1071,19 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "channel",
     "qqbot",
     "QQBot",
-    "QQBot catalog/setup entry. Runtime adapter probes are not wired yet.",
-    "planned",
+    "QQBot text sends and replies, with signed webhook inbound.",
+    "beta",
     ["token"],
-    ["catalog", "setup"],
+    ["chat", "reply", "inbound"],
   ),
   entry(
     "channel",
     "wecom",
     "WeCom",
-    "WeCom catalog/setup entry. Runtime adapter probes are not wired yet.",
-    "planned",
+    "WeCom application text sends, with encrypted callback inbound.",
+    "beta",
     ["token"],
-    ["catalog", "setup"],
+    ["chat", "inbound"],
   ),
   entry(
     "channel",

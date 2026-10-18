@@ -477,8 +477,8 @@ describe("structured field interaction", () => {
   });
 });
 
-describe("current all15 guided definitions in both shells", () => {
-  it("shows immutable history, severity, deferred checks, cleanup, and acknowledgements for all15 without treating them as current proof", async () => {
+describe("current all17 guided definitions in both shells", () => {
+  it("shows immutable history, severity, deferred checks, cleanup, and acknowledgements for all17 without treating them as current proof", async () => {
     for (const definition of definitions)
       for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
         const draft = makeDraft(definition),
@@ -555,8 +555,10 @@ describe("current all15 guided definitions in both shells", () => {
       }
   });
   it("renders every visible adapter step through shared fields with string destinations", async () => {
-    expect(definitions).toHaveLength(15);
-    expect(definitions.map((definition) => definition.catalog.catalogId)).toContain("channel.matrix");
+    expect(definitions).toHaveLength(17);
+    expect(definitions.map((definition) => definition.catalog.catalogId)).toEqual(
+      expect.arrayContaining(["channel.matrix", "channel.qqbot", "channel.wecom"]),
+    );
     for (const definition of definitions) {
       const draft = makeDraft(definition);
       const values = {

@@ -13,6 +13,8 @@ import { createMatrixStreamAdapter } from "./channel-stream-adapters/matrix-stre
 import { createNtfyStreamAdapter } from "./channel-stream-adapters/ntfy-stream-adapter.js";
 import { createSignalStreamAdapter } from "./channel-stream-adapters/signal-stream-adapter.js";
 import { normalizeGoogleChatEvent } from "./google-chat-webhook.js";
+import { normalizeQqbotWebhookPayload } from "./qqbot-webhook.js";
+import { normalizeWecomMessage } from "./wecom-webhook.js";
 
 export interface NewAdapterCase {
   name: string;
@@ -293,6 +295,88 @@ function buildGoogleChat(): NewAdapterCase {
   };
 }
 
+/** Mirrors integration-webhooks-qqbot-routes.ts: the real normalizer output, minus the secret-bearing access config. */
+function buildQqbot(): NewAdapterCase {
+  const connectionId = "conn-qqbot";
+  const parsed = normalizeQqbotWebhookPayload({
+    connectionId,
+    payload: {
+      op: 0,
+      id: "DISPATCH:1",
+      t: "GROUP_AT_MESSAGE_CREATE",
+      d: {
+        id: "ROBOT1.0_evt-1",
+        group_openid: "GROUP_OPENID",
+        content: " hello bot",
+        author: { member_openid: "MEMBER_OPENID" },
+      },
+    },
+  });
+  if (parsed.kind !== "message") throw new Error(`QQBot fixture was ignored: ${parsed.kind}`);
+  return {
+    name: "qqbot",
+    expectedKey: `qqbot:${connectionId}:ROBOT1.0_evt-1`,
+    input: {
+      channel: "qqbot",
+      connectionId,
+      idempotencyKey: `qqbot:${connectionId}:${parsed.eventId}`,
+      eventType: parsed.eventType,
+      bindingTarget: parsed.target,
+      acceptedConnectionRevision: "rev-1",
+      dispatchKind: "agent_turn",
+      message: {
+        eventId: parsed.eventId,
+        account: connectionId,
+        room: parsed.target,
+        actorId: parsed.actorId,
+        content: parsed.content,
+        metadata: { ...parsed.metadata, qqReplyMsgId: parsed.eventId },
+      },
+      responseOptions: { deliveryReplyToMessageId: parsed.eventId },
+    },
+  };
+}
+
+/** Mirrors integration-webhooks-wecom-routes.ts dispatchWecomMessage over the real XML normalizer. */
+function buildWecom(): NewAdapterCase {
+  const connectionId = "conn-wecom";
+  const parsed = normalizeWecomMessage({
+    connectionId,
+    xml: "<xml><ToUserName><![CDATA[ww1]]></ToUserName><FromUserName><![CDATA[zhangsan]]></FromUserName><CreateTime>1760000000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[hello bot]]></Content><MsgId>1234567890</MsgId><AgentID>1000002</AgentID></xml>",
+  });
+  if (parsed.kind !== "message") throw new Error(`WeCom fixture was ignored: ${parsed.reason}`);
+  const target = `user:${parsed.actorId}`;
+  return {
+    name: "wecom",
+    expectedKey: `wecom:${connectionId}:1234567890`,
+    input: {
+      channel: "wecom",
+      connectionId,
+      idempotencyKey: `wecom:${connectionId}:${parsed.eventId}`,
+      eventType: "wecom.message",
+      bindingTarget: target,
+      acceptedConnectionRevision: "rev-1",
+      dispatchKind: "agent_turn",
+      message: {
+        eventId: parsed.eventId,
+        account: connectionId,
+        room: target,
+        actorId: parsed.actorId,
+        content: parsed.content,
+        metadata: parsed.metadata,
+      },
+    },
+  };
+}
+
 export async function buildNewAdapterCases(): Promise<NewAdapterCase[]> {
-  return [await buildNtfy(), await buildMattermost(), await buildSignal(), await buildMatrix(), buildGoogleChat()];
+  return [
+    await buildNtfy(),
+    await buildMattermost(),
+    await buildSignal(),
+    await buildMatrix(),
+    buildGoogleChat(),
+    buildQqbot(),
+    buildWecom(),
+  ];
 }

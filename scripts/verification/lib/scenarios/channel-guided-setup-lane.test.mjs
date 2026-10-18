@@ -18,7 +18,7 @@ describe("Guided Channels browser proof assertions", () => {
     assert.throws(() => assertGuidedChannelCatalog([...definitions.slice(1), { ...definitions[0], catalog: { catalogId: "channel.fake" } }]));
     assert.throws(() => assertGuidedChannelCatalog(definitions.map((item, index) => index ? item : { ...item, wizard: { ...item.wizard, steps: [] } })));
   });
-  it("requires real 390-pixel coverage for all fifteen unique adapters", () => {
+  it("requires real 390-pixel coverage for all seventeen unique adapters", () => {
     const records = GUIDED_CHANNEL_CATALOG_IDS.map(catalogId => ({ catalogId, width: 390, stepId: "identity", title: "Account identity" }));
     assert.doesNotThrow(() => assertGuidedNarrowCoverage(records));
     assert.throws(() => assertGuidedNarrowCoverage(records.slice(1)));

@@ -16,6 +16,8 @@ export const GUIDED_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   "matrix",
   "signal",
   "google-chat",
+  "qqbot",
+  "wecom",
 ]);
 
 /**
@@ -29,6 +31,8 @@ export const FORCED_ALLOWLIST_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   "matrix",
   "signal",
   "google-chat",
+  "qqbot",
+  "wecom",
 ]);
 
 /** Keep sender policy in its shared owner rather than provider-specific normalizers. */

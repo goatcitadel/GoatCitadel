@@ -233,6 +233,76 @@ describe("integration-diagnostics-service contract behavior", () => {
     expect(result.probe).toMatchObject({ kind: "ntfy_publish", mode: "dry_run" });
   });
 
+  it("reports QQBot and WeCom structural checks with default-deny inbound copy", () => {
+    const host = createPort();
+    const qq = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("qqbot", "channel", {
+        appId: "102000",
+        appSecret: "qq-secret",
+        defaultTarget: "group:G1",
+      }),
+    );
+    expect(qq).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "auth", status: "pass" }),
+        expect.objectContaining({ key: "target", status: "pass" }),
+        expect.objectContaining({
+          key: "delivery_posture",
+          status: "pass",
+          message: expect.stringContaining("default-deny"),
+        }),
+        expect.objectContaining({ key: "inbound_access_allowlist_empty", status: "warn" }),
+      ]),
+    );
+    expect(JSON.stringify(qq)).not.toMatch(/anyone can/i);
+
+    const noTarget = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("qqbot", "channel", { appId: "102000", appSecret: "qq-secret" }),
+    );
+    expect(noTarget.find((check) => check.key === "target")).toMatchObject({ status: "warn" });
+
+    const missingId = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("qqbot", "channel", { appSecret: "qq-secret" }),
+    );
+    expect(missingId.find((check) => check.key === "app_id")).toMatchObject({ status: "fail" });
+
+    const wecom = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("wecom", "channel", {
+        corpId: "ww1",
+        agentId: "1000002",
+        secret: "wecom-secret",
+        callbackTokenEnv: "WECOM_CALLBACK_TOKEN",
+        encodingAesKeyEnv: "WECOM_ENCODING_AES_KEY",
+        allowedSenders: ["zhangsan"],
+      }),
+    );
+    expect(wecom).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "auth", status: "pass" }),
+        expect.objectContaining({
+          key: "delivery_posture",
+          status: "pass",
+          message: expect.stringContaining("default-deny"),
+        }),
+        expect.objectContaining({ key: "inbound_access", status: "pass" }),
+      ]),
+    );
+
+    const outboundOnly = buildIntegrationConnectionChecks(
+      host,
+      createIntegrationConnection("wecom", "channel", { corpId: "ww1", agentId: "1", secret: "wecom-secret" }),
+    );
+    expect(outboundOnly.find((check) => check.key === "inbound_callback")).toMatchObject({
+      status: "pass",
+      message: expect.stringContaining("inbound is disabled"),
+    });
+    expect(outboundOnly.some((check) => check.key.startsWith("inbound_access"))).toBe(false);
+  });
+
   it("blocks Photon iMessage live checks before BlueBubbles probes", async () => {
     const host = createPort();
     const connection = createIntegrationConnection("imessage", "channel", {

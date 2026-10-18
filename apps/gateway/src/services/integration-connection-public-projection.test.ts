@@ -122,6 +122,39 @@ describe("integration connection public projection", () => {
     expect(update.config).toMatchObject({ serviceAccountKey: inlineKey, audience: "999999999999" });
   });
 
+  it("redacts an inline WeCom encodingAesKey and callbackToken and restores them on an unchanged update", () => {
+    const encodingAesKey = "plain-aes-key-value";
+    const connection: IntegrationConnection = {
+      ...createConnection(),
+      catalogId: "channel.wecom",
+      key: "wecom",
+      config: {
+        corpId: "wx5823bf96d3bd56c7",
+        agentId: "1000002",
+        encodingAesKey,
+        encodingAesKeyEnv: "WECOM_ENCODING_AES_KEY",
+        callbackToken: "callback-token-1",
+        callbackTokenEnv: "WECOM_CALLBACK_TOKEN",
+      },
+    };
+
+    const projected = projectIntegrationConnectionForPublicResponse(connection);
+
+    expect(projected.config).toEqual({
+      corpId: "wx5823bf96d3bd56c7",
+      agentId: "1000002",
+      encodingAesKey: "[REDACTED]",
+      encodingAesKeyEnv: "WECOM_ENCODING_AES_KEY",
+      callbackToken: "[REDACTED]",
+      callbackTokenEnv: "WECOM_CALLBACK_TOKEN",
+    });
+    expect(JSON.stringify(projected)).not.toContain(encodingAesKey);
+    const update = preserveIntegrationConnectionSecretsForPublicUpdate(connection, {
+      config: { ...projected.config, agentId: "1000003" },
+    });
+    expect(update.config).toMatchObject({ encodingAesKey, callbackToken: "callback-token-1", agentId: "1000003" });
+  });
+
   it("restores unchanged redacted and omitted secrets for guided and advanced updates", () => {
     const connection = createConnection();
     const publicConfig = projectIntegrationConnectionForPublicResponse(connection).config;

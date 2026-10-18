@@ -207,6 +207,7 @@ async function dispatchIntegrationChannelAction(
       interactiveActionTemplate: normalizeInteractiveActionTemplate(actionPayload.interactiveActionTemplate),
       replyToMessageId: requireNonEmptyString(actionPayload.replyToMessageId, "payload.replyToMessageId"),
       replyToPartIndex: optionalInteger(actionPayload.replyToPartIndex),
+      replyAnchorMessageId: optionalString(actionPayload.replyAnchorMessageId),
       commitmentId: optionalString(actionPayload.commitmentId),
       effectId: deps.deliveryEffectId,
       ...governance,
