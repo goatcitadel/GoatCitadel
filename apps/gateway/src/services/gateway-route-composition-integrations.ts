@@ -64,6 +64,7 @@ import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js
 import {
   createExternalSideEffectReplayRecords,
   sharedExternalSideEffectReplayKeyResolver,
+  sharedExternalSideEffectReplayKeyResolverOrThrow,
 } from "./external-side-effect-replay-record.js";
 import { createCitadelWardRequestVault, type CitadelWardRequestVault } from "./citadel-ward-approval.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
@@ -689,11 +690,12 @@ export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompos
  * The single construction site for the Citadel Ward request vault: it seals ward approval
  * requests under the same replay key custody (secret store + sealed-record guard) as the
  * integration host's replay records, for the integration host, the A2A route service and
- * the approval executor alike.
+ * the approval executor alike. Its key resolver rethrows a key-store failure, so opening an
+ * approved request retries a transient outage instead of failing the approval.
  */
 export function buildCitadelWardRequestVaultForGateway(gateway: GatewayRouteCompositionPort): CitadelWardRequestVault {
   const { storage, secretStore } = gateway;
   return createCitadelWardRequestVault(
-    sharedExternalSideEffectReplayKeyResolver(secretStore, storage.externalSideEffectRuns),
+    sharedExternalSideEffectReplayKeyResolverOrThrow(secretStore, storage.externalSideEffectRuns),
   );
 }

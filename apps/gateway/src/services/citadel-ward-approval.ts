@@ -123,9 +123,21 @@ export function openCitadelWardApprovalRequest(
 }
 
 /**
+ * The key store (or its sealed-record guard) threw while opening a ward request. This is
+ * transient infrastructure, not a refusal: the approval effect retries rather than failing.
+ */
+export class CitadelWardRequestVaultUnavailableError extends Error {
+  public constructor(cause: unknown) {
+    super("The Citadel Ward request key store is unavailable; the sealed request was not opened.", { cause });
+    this.name = "CitadelWardRequestVaultUnavailableError";
+  }
+}
+
+/**
  * Seals and opens ward approval requests under the shared external side-effect replay key.
- * Neither method throws: without a key (no keychain, unsafe write custody, a lookup miss) or
- * on any cipher failure, `seal` and `open` return undefined, and callers fail closed.
+ * Without a key (no keychain, unsafe write custody, a lookup miss) or on any cipher failure,
+ * `seal` and `open` return undefined, and callers fail closed. `seal` never throws; `open`
+ * throws `CitadelWardRequestVaultUnavailableError` only when resolving the key throws.
  */
 export interface CitadelWardRequestVault {
   seal(kind: string, input: CitadelWardApprovalPayloadInput): Promise<CitadelWardSealedApprovalPayload | undefined>;
@@ -135,18 +147,54 @@ export interface CitadelWardRequestVault {
 export function createCitadelWardRequestVault(
   resolveKey: () => Buffer | undefined | Promise<Buffer | undefined>,
 ): CitadelWardRequestVault {
-  const withKey = async <T>(use: (key: Buffer) => T): Promise<T | undefined> => {
-    try {
-      const key = await resolveKey();
-      return key ? use(key) : undefined;
-    } catch {
-      return undefined;
-    }
-  };
   return {
-    seal: (kind, input) => withKey((key) => sealCitadelWardApprovalPayload(key, kind, input)),
-    open: (kind, payload) => withKey((key) => openCitadelWardApprovalRequest(key, kind, payload)),
+    seal: async (kind, input) => {
+      try {
+        const key = await resolveKey();
+        return key ? sealCitadelWardApprovalPayload(key, kind, input) : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    open: async (kind, payload) => {
+      let key: Buffer | undefined;
+      try {
+        key = await resolveKey();
+      } catch (error) {
+        throw new CitadelWardRequestVaultUnavailableError(error);
+      }
+      return key ? openCitadelWardApprovalRequest(key, kind, payload) : undefined;
+    },
   };
+}
+
+function hashJson(value: unknown): string {
+  return createHash("sha256").update(canonicalJsonString(value)).digest("hex");
+}
+
+/** Replaces every secret-looking key's value with its SHA-256, recursively. */
+function hashSecretValues(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(hashSecretValues);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      SECRET_LOOKING_KEY.test(key) ? hashJson(item ?? null) : hashSecretValues(item),
+    ]),
+  );
+}
+
+/**
+ * SHA-256 of the canonical JSON of an integration action's effective target: the catalog, the
+ * action and the connection config (where every destination, such as an Activepieces
+ * `webhookUrl` or a bridge URL, lives), with secret-looking values replaced by their own hash.
+ * An approval binds it so a replay never reaches a target the operator did not approve.
+ */
+export function computeCitadelWardIntegrationTargetFingerprint(
+  connection: { catalogId: string; config: Record<string, unknown> },
+  actionId: string,
+): string {
+  return hashJson({ catalogId: connection.catalogId, actionId, config: hashSecretValues(connection.config) });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

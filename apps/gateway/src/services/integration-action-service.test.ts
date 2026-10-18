@@ -15,6 +15,7 @@ import { approveDryRun, createInMemoryDryRunCommitStore } from "./dry-run-commit
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import {
   CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,
+  computeCitadelWardIntegrationTargetFingerprint,
   createCitadelWardRequestVault,
   readCitadelWardApprovalPayload,
   type CitadelWardSealedApprovalPayload,
@@ -1927,6 +1928,8 @@ describe("integration-action-service", () => {
         connectionId: connection.connectionId,
         actionId: "trigger_webhook",
         invokeRequest: { input: {} },
+        // The approval binds the connection's target (a hash only), so a later config change blocks the replay.
+        targetFingerprint: computeCitadelWardIntegrationTargetFingerprint(connection, "trigger_webhook"),
       });
       expect(approvalInput.linkage?.workspaceId).toBe("ws-guarded");
       expect(approvalInput.preview).toMatchObject({

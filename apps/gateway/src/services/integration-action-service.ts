@@ -38,6 +38,7 @@ import {
   buildCitadelWardRequestSummary,
   CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,
   citadelWardInputSummaryFields,
+  computeCitadelWardIntegrationTargetFingerprint,
   type CitadelWardApprovalRef,
   type CitadelWardRequestVault,
 } from "./citadel-ward-approval.js";
@@ -729,6 +730,8 @@ async function openIntegrationWardApproval(
         input: request.input ?? {},
         ...(request.idempotencyKey ? { idempotencyKey: request.idempotencyKey } : {}),
       },
+      // A hash only: the replay refuses a connection whose target changed after approval.
+      targetFingerprint: computeCitadelWardIntegrationTargetFingerprint(connection, action.actionId),
     },
   });
   if (!payload) {

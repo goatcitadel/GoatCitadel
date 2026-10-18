@@ -48,28 +48,69 @@ export async function resolveExternalSideEffectReplayKey(
   guard?: ReplayKeyGenerationGuard,
 ): Promise<Buffer | undefined> {
   try {
-    if (!secretStore || !secretStore.isAvailable()) {
-      return undefined;
-    }
-    let keyBase64 = secretStore.getSecret(REPLAY_KEY_ACCOUNT);
-    if (!keyBase64) {
-      if (secretStore.isWriteCustodySafe?.() === false) {
-        return undefined;
-      }
-      if (!guard || (await guard.hasReplayRecords())) {
-        log.warn(
-          "External side-effect replay key lookup missed while sealed records may exist; no replacement key generated",
-        );
-        return undefined;
-      }
-      keyBase64 = randomBytes(KEY_BYTES).toString("base64");
-      secretStore.setSecret(REPLAY_KEY_ACCOUNT, keyBase64);
-    }
-    const key = Buffer.from(keyBase64, "base64");
-    return key.length === KEY_BYTES ? key : undefined;
+    return await resolveReplayKeyOrThrow(secretStore, guard);
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The same lookup as `resolveExternalSideEffectReplayKey`, but a thrown secret-store or guard
+ * failure propagates instead of reading as "no key", so a caller can tell a transient key-store
+ * outage apart from a missing key.
+ */
+async function resolveReplayKeyOrThrow(
+  secretStore: ReplayKeySecretStore | undefined,
+  guard?: ReplayKeyGenerationGuard,
+): Promise<Buffer | undefined> {
+  if (!secretStore || !secretStore.isAvailable()) {
+    return undefined;
+  }
+  let keyBase64 = secretStore.getSecret(REPLAY_KEY_ACCOUNT);
+  if (!keyBase64) {
+    if (secretStore.isWriteCustodySafe?.() === false) {
+      return undefined;
+    }
+    if (!guard || (await guard.hasReplayRecords())) {
+      log.warn(
+        "External side-effect replay key lookup missed while sealed records may exist; no replacement key generated",
+      );
+      return undefined;
+    }
+    keyBase64 = randomBytes(KEY_BYTES).toString("base64");
+    secretStore.setSecret(REPLAY_KEY_ACCOUNT, keyBase64);
+  }
+  const key = Buffer.from(keyBase64, "base64");
+  return key.length === KEY_BYTES ? key : undefined;
+}
+
+interface ReplayKeyResolvers {
+  /** Reports a thrown key-store or guard failure as undefined. */
+  swallowing: () => Promise<Buffer | undefined>;
+  /** Rethrows a key-store or guard failure; a missing key is still undefined. */
+  throwing: () => Promise<Buffer | undefined>;
+}
+
+/** Both resolver flavours over one memoized key, so neither can ever generate a second key. */
+function createReplayKeyResolvers(
+  secretStore: ReplayKeySecretStore | undefined,
+  guard?: ReplayKeyGenerationGuard,
+): ReplayKeyResolvers {
+  let resolved: Buffer | undefined;
+  const throwing = async () => {
+    if (!resolved) {
+      resolved = await resolveReplayKeyOrThrow(secretStore, guard);
+    }
+    return resolved;
+  };
+  const swallowing = async () => {
+    try {
+      return await throwing();
+    } catch {
+      return undefined;
+    }
+  };
+  return { swallowing, throwing };
 }
 
 /**
@@ -81,31 +122,38 @@ export function createExternalSideEffectReplayKeyResolver(
   secretStore: ReplayKeySecretStore | undefined,
   guard?: ReplayKeyGenerationGuard,
 ): () => Promise<Buffer | undefined> {
-  let resolved: Buffer | undefined;
-  return async () => {
-    if (!resolved) {
-      resolved = await resolveExternalSideEffectReplayKey(secretStore, guard);
-    }
-    return resolved;
-  };
+  return createReplayKeyResolvers(secretStore, guard).swallowing;
 }
 
-const sharedResolvers = new WeakMap<object, () => Promise<Buffer | undefined>>();
+const sharedResolvers = new WeakMap<object, ReplayKeyResolvers>();
+
+function sharedReplayKeyResolvers(secretStore: ReplayKeySecretStore, guard: ReplayKeyGenerationGuard) {
+  let resolvers = sharedResolvers.get(secretStore);
+  if (!resolvers) {
+    resolvers = createReplayKeyResolvers(secretStore, guard);
+    sharedResolvers.set(secretStore, resolvers);
+  }
+  return resolvers;
+}
 
 /** Process-wide memoized resolver per secret store, shared by every action host built on it. */
 export function sharedExternalSideEffectReplayKeyResolver(
   secretStore: ReplayKeySecretStore | undefined,
   guard: ReplayKeyGenerationGuard,
 ): () => Promise<Buffer | undefined> {
-  if (!secretStore) {
-    return async () => undefined;
-  }
-  let resolver = sharedResolvers.get(secretStore);
-  if (!resolver) {
-    resolver = createExternalSideEffectReplayKeyResolver(secretStore, guard);
-    sharedResolvers.set(secretStore, resolver);
-  }
-  return resolver;
+  return secretStore ? sharedReplayKeyResolvers(secretStore, guard).swallowing : async () => undefined;
+}
+
+/**
+ * The shared resolver's throwing flavour: the same key account, guard and per-store memoized key,
+ * but a thrown key-store or guard failure propagates. Only the Citadel Ward request vault uses
+ * it, so an approved effect retries a transient outage instead of failing terminally.
+ */
+export function sharedExternalSideEffectReplayKeyResolverOrThrow(
+  secretStore: ReplayKeySecretStore | undefined,
+  guard: ReplayKeyGenerationGuard,
+): () => Promise<Buffer | undefined> {
+  return secretStore ? sharedReplayKeyResolvers(secretStore, guard).throwing : async () => undefined;
 }
 
 /** The sealed form of a replay payload: AES-256-GCM over `{"payload": …}` JSON, base64 fields. */

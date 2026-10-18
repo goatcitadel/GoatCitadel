@@ -18,6 +18,8 @@ import {
   CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
   CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,
   citadelWardKindSealsRequest,
+  CitadelWardRequestVaultUnavailableError,
+  computeCitadelWardIntegrationTargetFingerprint,
   createCitadelWardRequestVault,
   sealCitadelWardApprovalPayload,
 } from "./citadel-ward-approval.js";
@@ -86,14 +88,20 @@ function wardApproval(
   };
 }
 
+/** The approved activepieces trigger request, bound to the connection's target at approval time. */
+function integrationRequest(invokeRequest: Record<string, unknown> = { input: {} }): Record<string, unknown> {
+  return {
+    connectionId: CONNECTION_ID,
+    actionId: "trigger_webhook",
+    invokeRequest,
+    targetFingerprint: computeCitadelWardIntegrationTargetFingerprint(activepiecesConnection(), "trigger_webhook"),
+  };
+}
+
 function integrationApproval(
   overrides: Partial<ApprovalRequest> & { citadelId?: string; workspaceId?: string } = {},
 ): ApprovalRequest {
-  return wardApproval(
-    CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,
-    { connectionId: CONNECTION_ID, actionId: "trigger_webhook", invokeRequest: { input: {} } },
-    overrides,
-  );
+  return wardApproval(CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND, integrationRequest(), overrides);
 }
 
 function approvalStore(...approvals: ApprovalRequest[]) {
@@ -753,11 +761,7 @@ describe("citadel ward approval effects", () => {
       { actionPattern: "integration.*", effect: "require_approval" },
     ]);
     cleanups.push(real.cleanup);
-    const keyed = {
-      connectionId: CONNECTION_ID,
-      actionId: "trigger_webhook",
-      invokeRequest: { input: {}, idempotencyKey: "client-key-1" },
-    };
+    const keyed = integrationRequest({ input: {}, idempotencyKey: "client-key-1" });
     const first = wardApproval(CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND, keyed);
     const second = wardApproval(CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND, keyed, {
       approvalId: "approval-ward-2",
@@ -802,5 +806,113 @@ describe("citadel ward approval effects", () => {
     expect(a2a.sendOutbound).toHaveBeenCalledWith(outboundRequest, "operator-1", undefined, {
       wardApproval: { approvalId: "approval-ward-1", wardAction: "a2a.outbound.jsonrpc.SendMessage" },
     });
+  });
+
+  it("a key-store failure while opening a sealed request defers for retry; a missing key fails invalid_payload", async () => {
+    const approval = integrationApproval();
+    const integrationHost = vi.fn();
+    const unavailable = buildCitadelWardApprovalEffectDeps({
+      requestVault: () =>
+        createCitadelWardRequestVault(async () => {
+          throw new Error("keychain locked");
+        }),
+      storage: approvalStore(approval),
+      integrationHost: integrationHost as never,
+      a2a: () => fakeA2A(),
+    });
+    const deferred = fakeSettlement();
+    await runCitadelWardApprovalEffect(claimedEffect(approval, "approve"), unavailable, deferred);
+    expect(deferred.deferForRetry).toHaveBeenCalledWith(expect.any(CitadelWardRequestVaultUnavailableError));
+    expect(deferred.approvalEffects.failEffect).not.toHaveBeenCalled();
+    expect(deferred.approvalEffects.completeEffect).not.toHaveBeenCalled();
+
+    const keyless = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => createCitadelWardRequestVault(async () => undefined),
+      storage: approvalStore(approval),
+      integrationHost: integrationHost as never,
+      a2a: () => fakeA2A(),
+    });
+    const failed = fakeSettlement();
+    await runCitadelWardApprovalEffect(claimedEffect(approval, "approve"), keyless, failed);
+    expect(failed.approvalEffects.failEffect).toHaveBeenCalledWith(
+      "effect-1",
+      "worker-1",
+      1,
+      expect.objectContaining({ result: { errorCode: "invalid_payload" } }),
+    );
+    expect(failed.deferForRetry).not.toHaveBeenCalled();
+    expect(integrationHost).not.toHaveBeenCalled();
+  });
+
+  it("a refused push whose request no longer matches its hash fails and never moves the config", async () => {
+    const push = wardApproval(
+      CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
+      { taskId: "task-1", peerId: "peer-1", eventSequence: 3, eventKind: "status", urlHash: "hash-1" },
+      { status: "rejected", wardAction: "a2a.outbound.push" },
+    );
+    const tampered: ApprovalRequest = {
+      ...push,
+      payload: { ...push.payload, request: { ...(push.payload.request as object), eventSequence: 99 } },
+    };
+    const a2a = fakeA2A();
+    const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
+      storage: approvalStore(tampered),
+      integrationHost: vi.fn() as never,
+      a2a: () => a2a,
+    });
+    const settlement = fakeSettlement();
+
+    await runCitadelWardApprovalEffect(claimedEffect(push, "reject"), executors, settlement);
+
+    expect(settlement.approvalEffects.failEffect).toHaveBeenCalledWith(
+      "effect-1",
+      "worker-1",
+      1,
+      expect.objectContaining({ result: { errorCode: "payload_hash_mismatch" } }),
+    );
+    expect(settlement.approvalEffects.completeEffect).not.toHaveBeenCalled();
+    expect(a2a.recordRefusedPushApproval).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the connection's target changed after approval and sends nothing", async () => {
+    const real = createRealIntegrationHost(
+      activepiecesConnection({ config: { webhookUrl: "https://elsewhere.example.test/hook" } }),
+      [{ actionPattern: "integration.*", effect: "require_approval" }],
+    );
+    cleanups.push(real.cleanup);
+    const approval = integrationApproval();
+    const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
+      storage: approvalStore(approval),
+      integrationHost: () => real.host,
+      a2a: () => fakeA2A(),
+    });
+    const settlement = fakeSettlement();
+
+    await runCitadelWardApprovalEffect(claimedEffect(approval, "approve"), executors, settlement);
+
+    expect(settlement.approvalEffects.failEffect).toHaveBeenCalledWith(
+      "effect-1",
+      "worker-1",
+      1,
+      expect.objectContaining({
+        lastError: expect.stringMatching(/target changed after approval; nothing was sent/),
+        result: { errorCode: "blocked" },
+      }),
+    );
+    expect(real.fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("the target fingerprint never holds a config secret in clear and ignores key order", () => {
+    const fingerprint = (config: Record<string, unknown>, actionId = "trigger_webhook") =>
+      computeCitadelWardIntegrationTargetFingerprint(activepiecesConnection({ config }), actionId);
+    const approved = fingerprint({ webhookUrl: "https://flows.example.test/hook", token: "tok-1" });
+    expect(approved).toMatch(/^[0-9a-f]{64}$/);
+    expect(fingerprint({ token: "tok-1", webhookUrl: "https://flows.example.test/hook" })).toBe(approved);
+    expect(fingerprint({ webhookUrl: "https://flows.example.test/hook", token: "tok-1" }, "check_run_status")).not.toBe(
+      approved,
+    );
+    expect(fingerprint({ webhookUrl: "https://flows.example.test/other", token: "tok-1" })).not.toBe(approved);
   });
 });

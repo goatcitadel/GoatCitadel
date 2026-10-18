@@ -15,6 +15,7 @@ import {
   CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
   CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,
   citadelWardReplayIdempotencyKey,
+  computeCitadelWardIntegrationTargetFingerprint,
   computeCitadelWardPayloadHash,
   isCitadelWardApprovalKind,
   readCitadelWardApprovalPayload,
@@ -149,6 +150,8 @@ export class CitadelWardApprovalEffectService {
   /**
    * The plaintext push request, or the opened sealed request. An envelope that does not open
    * (no vault, a missing or rotated key, a tampered envelope) is terminal: nothing is executed.
+   * A key store that throws raises `CitadelWardRequestVaultUnavailableError`, which is not a
+   * refusal, so the effect defers and retries.
    */
   private async openRequest(
     approval: ApprovalRequest,
@@ -167,12 +170,24 @@ export class CitadelWardApprovalEffectService {
     return opened;
   }
 
-  /** Records a rejected or expired approval. Never executes; a deferred push resumes later events. */
+  /**
+   * Records a rejected or expired approval. Never executes; a deferred push resumes later events.
+   * The push is recorded only from a request that still matches its approved hash, so a changed
+   * request can never move the config past events it did not name.
+   */
   public async recordRefused(input: { approvalId: string; expired: boolean }): Promise<Record<string, unknown>> {
     const approval = await this.readApproval(input.approvalId, ["rejected", "edited"]);
     const disposition = input.expired ? "expired" : "rejected";
     if (approval.kind === CITADEL_WARD_A2A_PUSH_APPROVAL_KIND) {
-      await this.recordPushRefusal(input.approvalId, readPushRequest(readPlainRequest(approval)), disposition);
+      const payload = readWardPayload(approval);
+      const request = readPlainRequest(approval);
+      if (computeCitadelWardPayloadHash(request) !== payload.payloadHash) {
+        throw new CitadelWardApprovalEffectError(
+          "payload_hash_mismatch",
+          `The refused push request no longer matches approval ${input.approvalId}; the push config was not advanced.`,
+        );
+      }
+      await this.recordPushRefusal(input.approvalId, readPushRequest(request), disposition);
     }
     return { disposition, kind: approval.kind };
   }
@@ -224,6 +239,12 @@ export class CitadelWardApprovalEffectService {
       throw new CitadelWardApprovalEffectError(
         "blocked",
         `The connection moved to another workspace after approval ${wardApproval.approvalId}; nothing was run. Request approval again.`,
+      );
+    }
+    if (computeCitadelWardIntegrationTargetFingerprint(connection, request.actionId) !== request.targetFingerprint) {
+      throw new CitadelWardApprovalEffectError(
+        "blocked",
+        `The connection's target changed after approval; nothing was sent. Approval ${wardApproval.approvalId} must be requested again.`,
       );
     }
     const wardAction = buildIntegrationWardAction(connection.catalogId, request.actionId);
@@ -375,6 +396,7 @@ function readIntegrationRequest(request: Record<string, unknown>): {
   actionId: string;
   input: Record<string, unknown>;
   idempotencyKey?: string;
+  targetFingerprint: string;
 } {
   const invokeRequest = request.invokeRequest;
   if (!isRecord(invokeRequest) || (invokeRequest.input !== undefined && !isRecord(invokeRequest.input))) {
@@ -384,6 +406,7 @@ function readIntegrationRequest(request: Record<string, unknown>): {
   return {
     connectionId: readString(request.connectionId),
     actionId: readString(request.actionId),
+    targetFingerprint: readString(request.targetFingerprint),
     input: (invokeRequest.input as Record<string, unknown> | undefined) ?? {},
     ...(typeof idempotencyKey === "string" ? { idempotencyKey } : {}),
   };
