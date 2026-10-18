@@ -52,7 +52,12 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalJsonString } from "@goatcitadel/contracts";
 import { isVerboseLoggingEnabled } from "../runtime-ux.js";
-import { EventIngestService, logger, ModelUsageAccountingService } from "@goatcitadel/gateway-core";
+import {
+  decodeSessionKeySegment,
+  EventIngestService,
+  logger,
+  ModelUsageAccountingService,
+} from "@goatcitadel/gateway-core";
 import { traceInitStep, toLogContext } from "./gateway/bootstrap-tracing.js";
 
 const log = logger.child("gateway-service");
@@ -12721,7 +12726,7 @@ export class GatewayService {
     room?: string;
     threadId?: string;
   } {
-    const parts = session.sessionKey.split(":");
+    const parts = session.sessionKey.split(":").map(decodeSessionKeySegment);
     const third = parts[2];
     const fourth = parts[3];
     if (session.kind === "dm") {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveSessionRoute } from "./session-key.js";
+import { decodeSessionKeySegment, resolveSessionRoute } from "./session-key.js";
 
 describe("resolveSessionRoute", () => {
   it("builds deterministic DM key", () => {
@@ -78,5 +78,38 @@ describe("resolveSessionRoute", () => {
     expect(literalPercent.sessionKey).toBe("xmpp:me:a%253Ab");
     expect(literalPercent.sessionKey).not.toBe(encodedColon.sessionKey);
     expect(literalPercent.sessionId).not.toBe(encodedColon.sessionId);
+  });
+});
+
+describe("decodeSessionKeySegment", () => {
+  function routeFromKey(kind: "dm" | "group" | "thread", sessionKey: string, channel: string, account: string) {
+    const [, , third, fourth] = sessionKey.split(":").map(decodeSessionKeySegment);
+    if (kind === "dm") return { channel, account, peer: third };
+    if (kind === "group") return { channel, account, room: third };
+    return { channel, account, room: third, threadId: fourth };
+  }
+
+  it.each([
+    { kind: "dm" as const, route: { channel: "xmpp", account: "me", peer: "alice:example.org" } },
+    { kind: "dm" as const, route: { channel: "xmpp", account: "me", peer: "a%3Ab" } },
+    { kind: "group" as const, route: { channel: "matrix", account: "conn", room: "!room:example.org" } },
+    { kind: "group" as const, route: { channel: "matrix", account: "conn", room: "100%:literal%25" } },
+    {
+      kind: "thread" as const,
+      route: { channel: "matrix", account: "conn", room: "!room:example.org", threadId: "$evt:example.org" },
+    },
+  ])("round-trips a $kind session key back to the same session id ($route)", ({ kind, route }) => {
+    const first = resolveSessionRoute(route);
+    expect(first.kind).toBe(kind);
+
+    const rebuilt = routeFromKey(kind, first.sessionKey, route.channel, route.account);
+    expect(rebuilt).toEqual(route);
+    expect(resolveSessionRoute(rebuilt).sessionId).toBe(first.sessionId);
+  });
+
+  it("decodes colon escapes before percent escapes", () => {
+    expect(decodeSessionKeySegment("!room%3Aexample.org")).toBe("!room:example.org");
+    expect(decodeSessionKeySegment("a%253Ab")).toBe("a%3Ab");
+    expect(decodeSessionKeySegment("plain")).toBe("plain");
   });
 });
