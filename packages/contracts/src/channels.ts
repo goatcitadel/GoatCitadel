@@ -17,6 +17,11 @@ export interface IntegrationPluginSourceMetadata {
   packageVersion?: string;
   integrityStatus: IntegrationPluginIntegrityStatus;
   expectedIntegrity?: string;
+  actualIntegrity?: string;
+  verifiedAt?: string;
+  integritySource?: "operator" | "registry" | "manifest";
+  /** Stored package artifact path, relative to the Gateway data directory. */
+  artifactPath?: string;
 }
 
 export interface IntegrationPluginTrustWarning {
