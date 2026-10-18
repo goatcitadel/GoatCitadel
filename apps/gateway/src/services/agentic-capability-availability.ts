@@ -198,7 +198,8 @@ function integrationPluginToRuntimeStatus(
     label: plugin.label,
     manifestSource: plugin.sourceMetadata?.display ?? plugin.source,
     integrityStatus,
-    runtimeAvailable: plugin.enabled && integrityStatus !== "corrupt" && !hasCriticalWarning,
+    runtimeAvailable:
+      plugin.enabled && integrityStatus !== "corrupt" && integrityStatus !== "quarantined" && !hasCriticalWarning,
     approvedForCallableUse: plugin.enabled && !hasCriticalWarning,
     healthOk: plugin.enabled && integrityStatus === "verified" && !hasCriticalWarning,
     permissions: plugin.capabilities,
@@ -217,8 +218,9 @@ function mapPluginIntegrityStatus(
     case "verified":
       return "verified";
     case "not_applicable":
-      return "unverified";
     case "missing":
+      // `missing` = a value was given but this source cannot be verified; it is not corrupt bytes.
+      return "unverified";
     case "mismatch":
       return "corrupt";
     case "quarantined":

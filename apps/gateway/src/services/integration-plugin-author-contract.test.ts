@@ -12,19 +12,48 @@ import {
 describe("integration plugin author contract", () => {
   it("retains versioned configuration metadata under the descriptor hash and clears it on legacy replacement", () => {
     const source = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-plugin-configuration-"));
-    const manifest = { pluginId: "form-plugin", label: "Form Plugin", version: "1.0.0", capabilities: ["fixture.read"] };
-    const configurationForm = { version: "goatcitadel.extension-configuration.v1", fields: [{ key: "credential", label: "Credential reference", kind: "secret_ref", referenceKind: "credential", required: true }] };
+    const manifest = {
+      pluginId: "form-plugin",
+      label: "Form Plugin",
+      version: "1.0.0",
+      capabilities: ["fixture.read"],
+    };
+    const configurationForm = {
+      version: "goatcitadel.extension-configuration.v1",
+      fields: [
+        {
+          key: "credential",
+          label: "Credential reference",
+          kind: "secret_ref",
+          referenceKind: "credential",
+          required: true,
+        },
+      ],
+    };
     try {
       const filename = path.join(source, INTEGRATION_PLUGIN_MANIFEST_FILENAME);
       fs.writeFileSync(filename, JSON.stringify({ ...manifest, configurationForm }), "utf8");
-      const created = buildInstalledIntegrationPluginRecord({ now: "2026-10-11T00:00:00.000Z", pluginId: manifest.pluginId, source });
+      const created = buildInstalledIntegrationPluginRecord({
+        now: "2026-10-11T00:00:00.000Z",
+        pluginId: manifest.pluginId,
+        source,
+      });
       expect(created.configurationForm).toEqual(configurationForm);
       expect(created.descriptorHealth?.status).toBe("healthy");
       fs.writeFileSync(filename, JSON.stringify(manifest), "utf8");
-      const replacement = buildInstalledIntegrationPluginRecord({ now: "2026-10-11T01:00:00.000Z", pluginId: manifest.pluginId, source, existing: created });
+      const replacement = buildInstalledIntegrationPluginRecord({
+        now: "2026-10-11T01:00:00.000Z",
+        pluginId: manifest.pluginId,
+        source,
+        existing: created,
+      });
       expect(replacement.configurationForm).toBeUndefined();
-      expect(replacement.descriptorHealth?.evidence.descriptorHash).not.toBe(created.descriptorHealth?.evidence.descriptorHash);
-    } finally { fs.rmSync(source, { recursive: true, force: true }); }
+      expect(replacement.descriptorHealth?.evidence.descriptorHash).not.toBe(
+        created.descriptorHealth?.evidence.descriptorHash,
+      );
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true });
+    }
   });
   it("validates the reference manifest shape", () => {
     expect(() =>
@@ -164,10 +193,10 @@ describe("integration plugin author contract", () => {
       sourceMetadata: {
         type: "url",
         display: "URL: example.com",
-        integrityStatus: "missing",
+        integrityStatus: "unknown",
         expectedIntegrity: "sha256-example",
       },
-      integrityStatus: "missing",
+      integrityStatus: "unknown",
       enabled: true,
     });
     expect(created.trustWarnings?.map((warning) => warning.code)).toEqual([
@@ -179,6 +208,98 @@ describe("integration plugin author contract", () => {
       status: "warning",
       issues: [expect.objectContaining({ code: "descriptor.missing" })],
     });
+  });
+
+  it("infers npm for scoped, prefixed and versioned package specs", () => {
+    for (const spec of ["npm:@s/n", "@s/n", "n@1.2.3", "@s/n@1.2.3", "npm:n@1.2.3"]) {
+      expect(resolveIntegrationPluginInstallMetadata(spec).sourceMetadata.type, spec).toBe("npm");
+    }
+    expect(resolveIntegrationPluginInstallMetadata("https://example.test/a@1.2.3").sourceMetadata.type).toBe("url");
+    expect(resolveIntegrationPluginInstallMetadata("git@github.com:goat/plugin.git").sourceMetadata.type).toBe("git");
+  });
+
+  it("uses the verifier result for integrity, warnings and quarantine", () => {
+    const verified = buildInstalledIntegrationPluginRecord({
+      now: "2026-03-30T10:00:00.000Z",
+      pluginId: "npm-plugin",
+      source: "npm:@s/n",
+      integrity: {
+        status: "verified",
+        actualIntegrity: "sha512-actual",
+        integritySource: "registry",
+        verifiedAt: "2026-03-30T09:59:00.000Z",
+        artifactPath: "integration-plugins/npm-plugin/abc.tgz",
+        warnings: [{ code: "integrity_not_pinned", severity: "warning", message: "pin" }],
+      },
+    });
+    expect(verified).toMatchObject({
+      enabled: true,
+      integrityStatus: "verified",
+      sourceMetadata: {
+        type: "npm",
+        integrityStatus: "verified",
+        actualIntegrity: "sha512-actual",
+        integritySource: "registry",
+        verifiedAt: "2026-03-30T09:59:00.000Z",
+        artifactPath: "integration-plugins/npm-plugin/abc.tgz",
+      },
+    });
+    expect(verified.trustWarnings?.map((warning) => warning.code)).toContain("integrity_not_pinned");
+    expect(verified.trustWarnings?.map((warning) => warning.code)).not.toContain("integrity_not_verified");
+
+    const quarantined = buildInstalledIntegrationPluginRecord({
+      now: "2026-03-30T10:00:00.000Z",
+      pluginId: "npm-plugin",
+      source: "npm:@s/n",
+      existing: verified,
+      integrity: {
+        status: "quarantined",
+        actualIntegrity: "sha512-other",
+        expectedIntegrity: "sha512-wanted",
+        warnings: [{ code: "integrity_mismatch", severity: "critical", message: "mismatch" }],
+      },
+    });
+    expect(quarantined.enabled).toBe(false);
+    expect(quarantined.integrityStatus).toBe("quarantined");
+    expect(quarantined.sourceMetadata?.integrityStatus).toBe("quarantined");
+    // the value the bytes failed against is kept, attributed to the registry when unpinned
+    expect(quarantined.sourceMetadata).toMatchObject({
+      expectedIntegrity: "sha512-wanted",
+      integritySource: "registry",
+      actualIntegrity: "sha512-other",
+    });
+    expect(quarantined.trustWarnings?.map((warning) => warning.code)).toContain("integrity_mismatch");
+  });
+
+  it("does not infer npm for uppercase names", () => {
+    expect(resolveIntegrationPluginInstallMetadata("MyPlugin").sourceMetadata.type).toBe("manual");
+  });
+
+  it("ignores the descriptor integrity.expected as a local pin and says so", () => {
+    const source = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-plugin-pin-"));
+    try {
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(referencePluginSource(), INTEGRATION_PLUGIN_MANIFEST_FILENAME), "utf8"),
+      ) as Record<string, unknown>;
+      fs.writeFileSync(
+        path.join(source, INTEGRATION_PLUGIN_MANIFEST_FILENAME),
+        JSON.stringify({ ...manifest, integrity: { expected: `sha512-${"A".repeat(86)}==` } }),
+      );
+      const metadata = resolveIntegrationPluginInstallMetadata(source, { sourceType: "local" });
+      expect(metadata.sourceMetadata.expectedIntegrity).toBeUndefined();
+      expect(metadata.trustWarnings.map((warning) => warning.code)).toContain("integrity_manifest_pin_ignored");
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true });
+    }
+  });
+
+  it("does not claim runtime verification is pending for unverifiable sources", () => {
+    const metadata = resolveIntegrationPluginInstallMetadata("https://example.com/plugin.js", {
+      expectedIntegrity: "sha256-example",
+    });
+    expect(metadata.trustWarnings.find((warning) => warning.code === "integrity_not_verified")?.message).toBe(
+      "An expected integrity value was supplied, but this source type cannot be verified.",
+    );
   });
 
   it("quarantines malformed local plugin descriptors with readable evidence", () => {

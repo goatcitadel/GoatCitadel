@@ -2512,6 +2512,14 @@
       "maxDependencyMemberAccesses": 1,
       "reason": "WS8 gap-closure replay program: the per-provider replay reconstruction for the sealed-record allowlist entries (Gmail send, Trello card create, Apple Notes/Reminders, Things 3 and Bear local-bridge writes) lives beside the replay job builder so that builder stays at its four-access baseline. Its single access is the host replay-record open; it validates the decrypted payload shape, rebuilds through the shared live writeback builders in replay mode with the run's idempotency key and actor scope, and refuses unless the rebuilt payload hashes to the run with the live destination fingerprint.",
       "evidence": "2026-10-16: external-side-effect-replay-job-service.writeback.test.ts drives the live invocation path against real SQLite storage and sealed replay records, then the replay worker: Gmail and Trello timeouts reconcile with exactly one provider send, an enforcing local bridge reconciles with the same Idempotency-Key and one effect, a non-enforcing bridge stays in manual review, a Gmail pre-boundary failure replays once, and tampered records, destination drift, lost credentials and a host without replay records are refused; replay-job, runner, reconciliation, integration-action and writeback-input suites pass; Gateway typecheck passes; repository counter measures 1 dependency access and 1 host callback."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/integration-plugin-package-integrity.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS6 integrations program: standalone integration plugin package integrity verifier (npm sha512 SRI against registry dist.integrity and operator pin, deterministic local manifest sha256) with ordinary-path artifact storage; it takes every dependency as an argument and reads no host.",
+      "evidence": "apps/gateway/src/services/integration-plugin-package-integrity.test.ts covers registry and operator verification, mismatch quarantine with nothing stored, allowlist-blocked no-fetch, off-host tarball refusal, spec and SRI parsing, deterministic local manifest hashing, symlink and hardlink rejection and git/url unknown status; Gateway typecheck passes."
     }
   ]
 }

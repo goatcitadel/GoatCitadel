@@ -233,6 +233,34 @@ describe("buildAgenticRuntimeAvailability", () => {
     );
   });
 
+  it("maps integrity statuses: missing is unverified, quarantined is never runtime-available", () => {
+    const base = {
+      label: "Plugin",
+      version: "1.0.0",
+      enabled: true,
+      installedAt: "2026-05-05T00:00:00.000Z",
+      updatedAt: "2026-05-05T00:00:00.000Z",
+      capabilities: ["channel.send"],
+      source: "manual",
+    };
+    const response = buildAgenticRuntimeAvailability({
+      generatedAt: "2026-05-05T00:00:00.000Z",
+      providers: [],
+      plugins: [
+        { ...base, pluginId: "pinned-url", integrityStatus: "missing" },
+        { ...base, pluginId: "bad-bytes", integrityStatus: "quarantined" },
+      ],
+      channelCatalog: [],
+      channelConnections: [],
+    });
+    const byId = new Map(response.items.map((item) => [item.capabilityId, item]));
+    expect(byId.get("plugin:pinned-url")?.reasons).toContain("Integrity: unverified");
+    const quarantined = byId.get("plugin:bad-bytes");
+    expect(quarantined?.callable).toBe(false);
+    expect(quarantined?.reasons).toContain("Integrity: quarantined");
+    expect(quarantined?.status).toBe("unavailable");
+  });
+
   it("preserves callable OAuth providers, plugin trust posture, and blocked channel reasons", () => {
     const response = buildAgenticRuntimeAvailability({
       generatedAt: "2026-05-05T00:00:00.000Z",
