@@ -65,6 +65,7 @@ import {
   createExternalSideEffectReplayRecords,
   sharedExternalSideEffectReplayKeyResolver,
 } from "./external-side-effect-replay-record.js";
+import { createCitadelWardRequestVault, type CitadelWardRequestVault } from "./citadel-ward-approval.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { readChatAttachmentContentForGateway } from "./gateway-route-composition-shared.js";
 import { getChannelStreamRuntime } from "./channel-stream-runtime-registry.js";
@@ -680,5 +681,19 @@ export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompos
       runs: storage.externalSideEffectRuns,
     }),
     createApproval: (input) => gateway.createApproval(input),
+    citadelWardRequests: buildCitadelWardRequestVaultForGateway(gateway),
   };
+}
+
+/**
+ * The single construction site for the Citadel Ward request vault: it seals ward approval
+ * requests under the same replay key custody (secret store + sealed-record guard) as the
+ * integration host's replay records, for the integration host, the A2A route service and
+ * the approval executor alike.
+ */
+export function buildCitadelWardRequestVaultForGateway(gateway: GatewayRouteCompositionPort): CitadelWardRequestVault {
+  const { storage, secretStore } = gateway;
+  return createCitadelWardRequestVault(
+    sharedExternalSideEffectReplayKeyResolver(secretStore, storage.externalSideEffectRuns),
+  );
 }

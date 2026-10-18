@@ -23,6 +23,7 @@ export {
   createSettingsRuntimeDependenciesForGateway,
 } from "./gateway-route-composition-shared.js";
 export {
+  buildCitadelWardRequestVaultForGateway,
   buildIntegrationActionHostForGateway,
   createCommsHostForGateway,
   createIntegrationChannelServiceForGateway,

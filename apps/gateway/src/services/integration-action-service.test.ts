@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +13,12 @@ import { invokeIntegrationConnectionAction, type IntegrationActionHost } from ".
 import type { ExternalSideEffectRunStore } from "./external-side-effect-runner-service.js";
 import { approveDryRun, createInMemoryDryRunCommitStore } from "./dry-run-commit-service.js";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
+import {
+  CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,
+  createCitadelWardRequestVault,
+  readCitadelWardApprovalPayload,
+  type CitadelWardSealedApprovalPayload,
+} from "./citadel-ward-approval.js";
 
 function createConnection(overrides: Partial<IntegrationConnection> = {}): IntegrationConnection {
   return {
@@ -163,6 +170,8 @@ function createSideEffectRunStore(): ExternalSideEffectRunStore & {
     })),
   };
 }
+
+const WARD_KEY = randomBytes(32);
 
 describe("integration-action-service", () => {
   afterEach(() => {
@@ -1775,12 +1784,13 @@ describe("integration-action-service", () => {
   });
 
   describe("citadel ward gate (Stage 1)", () => {
+    const WARD_VAULT = createCitadelWardRequestVault(async () => WARD_KEY);
     function wardHost(
       connection: IntegrationConnection,
       wards: Array<{ actionPattern: string; effect: string }>,
       overrides: Partial<IntegrationActionHost> = {},
     ): IntegrationActionHost {
-      const base = createHost(connection, overrides);
+      const base = createHost(connection, { citadelWardRequests: WARD_VAULT, ...overrides });
       return {
         ...base,
         storage: {
@@ -1903,12 +1913,20 @@ describe("integration-action-service", () => {
       expect(approvalInput.riskLevel).toBe("caution");
       const payload = approvalInput.payload as Record<string, unknown>;
       expect(payload.payloadHash).toMatch(/^[0-9a-f]{64}$/);
-      expect((payload.request as Record<string, unknown>).connectionId).toBe(connection.connectionId);
+      expect(Object.keys(payload).sort()).toEqual(
+        ["citadelId", "payloadHash", "sealedRequest", "wardAction", "workspaceId"].sort(),
+      );
       expect(payload).toMatchObject({
         wardAction: activepiecesWardAction,
         citadelId: "citadel-guarded",
         workspaceId: "ws-guarded",
-        request: { actionId: "trigger_webhook", invokeRequest: { input: {} } },
+        sealedRequest: { v: 1, alg: "aes-256-gcm" },
+      });
+      const sealed = readCitadelWardApprovalPayload(approvalInput.kind, payload) as CitadelWardSealedApprovalPayload;
+      expect(await WARD_VAULT.open(CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND, sealed)).toEqual({
+        connectionId: connection.connectionId,
+        actionId: "trigger_webhook",
+        invokeRequest: { input: {} },
       });
       expect(approvalInput.linkage?.workspaceId).toBe("ws-guarded");
       expect(approvalInput.preview).toMatchObject({
@@ -1948,6 +1966,50 @@ describe("integration-action-service", () => {
       expect(payload).toHaveLength(200);
       expect(payload.endsWith("…")).toBe(true);
       expect(JSON.stringify(summary)).not.toContain("tok-test-not-real");
+    });
+
+    it("keeps secret action input out of the whole approval record", async () => {
+      const connection = guardedActivepiecesConnection();
+      const createApproval = wardApprovalCreate();
+      const host = wardHost(connection, [{ actionPattern: "integration.*", effect: "require_approval" }], {
+        createApproval,
+      });
+
+      const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "trigger_webhook", {
+        input: { apiToken: "secret-xyz", note: "hello" },
+      });
+
+      expect(result.status).toBe("approval_required");
+      const approvalInput = createApproval.mock.calls[0]![0];
+      expect(JSON.stringify(approvalInput)).not.toContain("secret-xyz");
+      const sealed = readCitadelWardApprovalPayload(
+        approvalInput.kind,
+        approvalInput.payload,
+      ) as CitadelWardSealedApprovalPayload;
+      expect(await WARD_VAULT.open(approvalInput.kind, sealed)).toMatchObject({
+        invokeRequest: { input: { apiToken: "secret-xyz", note: "hello" } },
+      });
+    });
+
+    it("stays blocked and opens no approval when the request cannot be sealed", async () => {
+      const connection = guardedActivepiecesConnection();
+      const createApproval = wardApprovalCreate();
+      for (const citadelWardRequests of [undefined, createCitadelWardRequestVault(async () => undefined)]) {
+        const host = wardHost(connection, [{ actionPattern: "integration.*", effect: "require_approval" }], {
+          createApproval,
+          citadelWardRequests,
+        });
+
+        const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "trigger_webhook", {
+          input: { apiToken: "secret-xyz" },
+        });
+
+        expect(result.status).toBe("blocked");
+        expect(result.blockedReason).toBe("citadel_ward_approval_required");
+        expect(result.message).toMatch(/could not be sealed.*approval loop is unavailable/);
+        expect(JSON.stringify(result)).not.toContain("secret-xyz");
+      }
+      expect(createApproval).not.toHaveBeenCalled();
     });
 
     it("executes an approved ward replay through the idempotent runner", async () => {

@@ -38,6 +38,7 @@ interface ApprovedPendingEvent {
   eventSequence: number;
   urlHash: string;
   citadelId: string;
+  workspaceId?: string;
 }
 
 export interface A2AApprovedPushInput {
@@ -50,6 +51,8 @@ export interface A2AApprovedPushInput {
   urlHash: string;
   /** The citadel the approval was minted under; the task's live citadel must still match it. */
   citadelId: string;
+  /** The workspace the approval was minted under (absent = unbound); the binding must still match it. */
+  workspaceId?: string;
 }
 
 export interface A2ARefusedPushApprovalInput {
@@ -207,6 +210,7 @@ export class A2APushNotificationService {
       eventSequence: input.eventSequence,
       urlHash: input.urlHash,
       citadelId: input.citadelId,
+      ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
     });
   }
 
@@ -555,7 +559,7 @@ export class A2APushNotificationService {
             ["Push URL origin", citadelWardUrlOrigin(config.url)],
           ]),
         },
-        linkage: { actionType: CITADEL_WARD_A2A_PUSH_APPROVAL_KIND },
+        linkage: { workspaceId: binding.workspaceId, actionType: CITADEL_WARD_A2A_PUSH_APPROVAL_KIND },
         expiresAt: new Date(Date.parse(checkedAt) + DRY_RUN_APPROVAL_TTL_MS).toISOString(),
       });
       return { approvalId: approval.approvalId };
@@ -639,6 +643,9 @@ async function approvedPushDrift(
   if (hashStableJson(config.url) !== approved.urlHash) {
     return `The push URL changed after Citadel Ward approval ${approvalId}, so delivery is blocked.`;
   }
+  if (normalizeWorkspaceId(binding.workspaceId) !== normalizeWorkspaceId(approved.workspaceId)) {
+    return `The task moved to another workspace after Citadel Ward approval ${approvalId}, so delivery is blocked.`;
+  }
   const live = await resolveWardEffectForExternalAction({
     storage,
     workspaceId: binding.workspaceId,
@@ -647,6 +654,11 @@ async function approvedPushDrift(
   return live.citadelId === approved.citadelId
     ? undefined
     : `The task's citadel changed after approval ${approvalId}, so delivery is blocked.`;
+}
+
+/** A blank or missing workspace id means unbound. */
+function normalizeWorkspaceId(workspaceId: string | undefined): string | undefined {
+  return workspaceId?.trim() || undefined;
 }
 
 function buildPushPayload(

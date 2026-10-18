@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +17,11 @@ import {
   CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
   CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
   CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,
+  citadelWardKindSealsRequest,
+  createCitadelWardRequestVault,
+  sealCitadelWardApprovalPayload,
 } from "./citadel-ward-approval.js";
+import { sealReplayEnvelope } from "./external-side-effect-replay-record.js";
 import {
   buildCitadelWardApprovalEffectDeps,
   buildCitadelWardApprovalEffectUpsert,
@@ -32,6 +37,8 @@ import type { IntegrationActionHost } from "./integration-action-service.js";
 
 const ACTIVEPIECES_WARD_ACTION = "integration.automation.activepieces.trigger_webhook";
 const CONNECTION_ID = "11111111-1111-1111-1111-111111111111";
+const TEST_KEY = randomBytes(32);
+const TEST_VAULT = createCitadelWardRequestVault(async () => TEST_KEY);
 
 function activepiecesConnection(overrides: Partial<IntegrationConnection> = {}): IntegrationConnection {
   return {
@@ -53,10 +60,19 @@ function activepiecesConnection(overrides: Partial<IntegrationConnection> = {}):
 function wardApproval(
   kind: string,
   request: Record<string, unknown>,
-  overrides: Partial<ApprovalRequest> & { wardAction?: string; citadelId?: string } = {},
+  overrides: Partial<ApprovalRequest> & { wardAction?: string; citadelId?: string; workspaceId?: string } = {},
 ): ApprovalRequest {
-  const { wardAction = ACTIVEPIECES_WARD_ACTION, citadelId = "citadel-guarded", ...rest } = overrides;
-  const payload = buildCitadelWardApprovalPayload({ wardAction, citadelId, request });
+  const {
+    wardAction = ACTIVEPIECES_WARD_ACTION,
+    citadelId = "citadel-guarded",
+    workspaceId = "ws-guarded",
+    ...rest
+  } = overrides;
+  const input = { wardAction, citadelId, workspaceId, request };
+  // Integration and outbound requests are sealed exactly as the live gates seal them.
+  const payload = citadelWardKindSealsRequest(kind)
+    ? sealCitadelWardApprovalPayload(TEST_KEY, kind, input)
+    : buildCitadelWardApprovalPayload(input);
   return {
     approvalId: "approval-ward-1",
     kind,
@@ -70,7 +86,9 @@ function wardApproval(
   };
 }
 
-function integrationApproval(overrides: Partial<ApprovalRequest> & { citadelId?: string } = {}): ApprovalRequest {
+function integrationApproval(
+  overrides: Partial<ApprovalRequest> & { citadelId?: string; workspaceId?: string } = {},
+): ApprovalRequest {
   return wardApproval(
     CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,
     { connectionId: CONNECTION_ID, actionId: "trigger_webhook", invokeRequest: { input: {} } },
@@ -253,6 +271,7 @@ describe("citadel ward approval effects", () => {
     ]);
     cleanups.push(real.cleanup);
     const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalStore(integrationApproval()),
       integrationHost: () => real.host,
       a2a: () => fakeA2A(),
@@ -274,6 +293,7 @@ describe("citadel ward approval effects", () => {
     cleanups.push(real.cleanup);
     const approval = integrationApproval();
     const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalStore(approval),
       integrationHost: () => real.host,
       a2a: () => fakeA2A(),
@@ -294,11 +314,14 @@ describe("citadel ward approval effects", () => {
   });
 
   it("refuses when the connection's citadel changed after approval", async () => {
-    const real = createRealIntegrationHost(activepiecesConnection({ workspaceId: "ws-moved" }), [
-      { actionPattern: "integration.*", effect: "require_approval" },
-    ]);
+    const real = createRealIntegrationHost(
+      activepiecesConnection(),
+      [{ actionPattern: "integration.*", effect: "require_approval" }],
+      { "ws-guarded": "citadel-other" },
+    );
     cleanups.push(real.cleanup);
     const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalStore(integrationApproval()),
       integrationHost: () => real.host,
       a2a: () => fakeA2A(),
@@ -311,18 +334,104 @@ describe("citadel ward approval effects", () => {
     expect(real.fetchMock).not.toHaveBeenCalled();
   });
 
+  it("refuses when the connection moved to another workspace in the same citadel", async () => {
+    const real = createRealIntegrationHost(
+      activepiecesConnection({ workspaceId: "ws-moved" }),
+      [{ actionPattern: "integration.*", effect: "require_approval" }],
+      { "ws-guarded": "citadel-guarded", "ws-moved": "citadel-guarded" },
+    );
+    cleanups.push(real.cleanup);
+    const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
+      storage: approvalStore(integrationApproval()),
+      integrationHost: () => real.host,
+      a2a: () => fakeA2A(),
+    });
+
+    await expect(executors.executeApprovedCitadelWardAction({ approvalId: "approval-ward-1" })).rejects.toMatchObject({
+      code: "blocked",
+      message: expect.stringMatching(/moved to another workspace after approval/),
+    });
+    // An unbound approval is drift too once the connection is bound to a workspace.
+    await expect(
+      buildCitadelWardApprovalEffectDeps({
+        requestVault: () => TEST_VAULT,
+        storage: approvalStore(integrationApproval({ workspaceId: " " })),
+        integrationHost: () => real.host,
+        a2a: () => fakeA2A(),
+      }).executeApprovedCitadelWardAction({ approvalId: "approval-ward-1" }),
+    ).rejects.toMatchObject({ code: "blocked" });
+    expect(real.fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a sealed request that cannot be opened fails invalid_payload and sends nothing", async () => {
+    const integration = integrationApproval();
+    const outbound = wardApproval(
+      CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
+      { outbound: { peerId: "peer-1", method: "SendMessage", params: {} }, actorId: "a" },
+      { approvalId: "approval-out-1" },
+    );
+    const plaintext: ApprovalRequest = {
+      ...integration,
+      approvalId: "approval-plain-1",
+      payload: { ...integration.payload, sealedRequest: undefined, request: { connectionId: CONNECTION_ID } },
+    };
+    const integrationHost = vi.fn();
+    const a2a = fakeA2A();
+    const storage = approvalStore(integration, outbound, plaintext);
+    const rotated = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => createCitadelWardRequestVault(async () => randomBytes(32)),
+      storage,
+      integrationHost: integrationHost as never,
+      a2a: () => a2a,
+    });
+    const vaultless = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => undefined,
+      storage,
+      integrationHost: integrationHost as never,
+      a2a: () => a2a,
+    });
+    const keyed = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
+      storage,
+      integrationHost: integrationHost as never,
+      a2a: () => a2a,
+    });
+
+    for (const [executors, approvalId] of [
+      [rotated, "approval-ward-1"],
+      [rotated, "approval-out-1"],
+      [vaultless, "approval-ward-1"],
+      [keyed, "approval-plain-1"],
+    ] as const) {
+      await expect(executors.executeApprovedCitadelWardAction({ approvalId })).rejects.toMatchObject({
+        code: "invalid_payload",
+      });
+    }
+    expect(integrationHost).not.toHaveBeenCalled();
+    expect(a2a.sendOutbound).not.toHaveBeenCalled();
+    expect(a2a.recordRefusedPushApproval).not.toHaveBeenCalled();
+  });
+
   it("tampered request fails with payload_hash_mismatch and executes nothing", async () => {
     const integration = integrationApproval();
+    const hash = integration.payload.payloadHash as string;
+    // Only a key holder could do this: a different request sealed under the approved hash.
     const tampered: ApprovalRequest = {
       ...integration,
       payload: {
         ...integration.payload,
-        request: { connectionId: CONNECTION_ID, actionId: "trigger_webhook", invokeRequest: { input: { x: 1 } } },
+        sealedRequest: sealReplayEnvelope(
+          TEST_KEY,
+          `goatcitadel:citadel-ward-approval:v1 ${CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND} ${hash}`,
+          { connectionId: CONNECTION_ID, actionId: "trigger_webhook", invokeRequest: { input: { x: 1 } } },
+        ),
       },
     };
     const integrationHost = vi.fn();
     const a2a = fakeA2A();
     const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalStore(tampered),
       integrationHost: integrationHost as never,
       a2a: () => a2a,
@@ -338,6 +447,7 @@ describe("citadel ward approval effects", () => {
   it("non-approved approval fails with approval_not_approved", async () => {
     const a2a = fakeA2A();
     const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalStore(integrationApproval({ status: "pending" }), {
         ...integrationApproval(),
         approvalId: "approval-other",
@@ -363,6 +473,7 @@ describe("citadel ward approval effects", () => {
     );
     const a2a = fakeA2A();
     const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalStore(push),
       integrationHost: vi.fn() as never,
       a2a: () => a2a,
@@ -390,6 +501,7 @@ describe("citadel ward approval effects", () => {
 
     const integration = integrationApproval({ status: "rejected" });
     const integrationExecutors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalStore(integration),
       integrationHost: vi.fn() as never,
       a2a: () => a2a,
@@ -414,6 +526,7 @@ describe("citadel ward approval effects", () => {
     );
     const a2a = fakeA2A();
     const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalStore(outbound, push),
       integrationHost: vi.fn() as never,
       a2a: () => a2a,
@@ -442,6 +555,7 @@ describe("citadel ward approval effects", () => {
       eventSequence: 3,
       urlHash: "hash-1",
       citadelId: "citadel-guarded",
+      workspaceId: "ws-guarded",
     });
 
     a2a.sendOutbound.mockResolvedValueOnce({
@@ -496,6 +610,7 @@ describe("citadel ward approval effects", () => {
     const settledA2A = fakeA2A();
     settledA2A.deliverApprovedPush.mockResolvedValue([]);
     const settled = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalAndPushStore([push], { "task-1:peer-1": { lastEventSequence: 3 } }),
       integrationHost: vi.fn() as never,
       a2a: () => settledA2A,
@@ -509,6 +624,7 @@ describe("citadel ward approval effects", () => {
       const goneA2A = fakeA2A();
       goneA2A.deliverApprovedPush.mockResolvedValue([]);
       const gone = buildCitadelWardApprovalEffectDeps({
+        requestVault: () => TEST_VAULT,
         storage: approvalAndPushStore([push], pushConfigs),
         integrationHost: vi.fn() as never,
         a2a: () => goneA2A,
@@ -555,6 +671,7 @@ describe("citadel ward approval effects", () => {
       } as A2ATaskPushDeliveryResult,
     ]);
     const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalStore(push),
       integrationHost: vi.fn() as never,
       a2a: () => a2a,
@@ -586,6 +703,7 @@ describe("citadel ward approval effects", () => {
     };
     const a2a = fakeA2A();
     const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalStore(tampered),
       integrationHost: vi.fn() as never,
       a2a: () => a2a,
@@ -618,6 +736,7 @@ describe("citadel ward approval effects", () => {
     cleanups.push(real.cleanup);
     const a2a = fakeA2A();
     const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalStore(integrationApproval()),
       integrationHost: () => real.host,
       a2a: () => a2a,
@@ -644,6 +763,7 @@ describe("citadel ward approval effects", () => {
       approvalId: "approval-ward-2",
     });
     const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalStore(first, second),
       integrationHost: () => real.host,
       a2a: () => fakeA2A(),
@@ -671,6 +791,7 @@ describe("citadel ward approval effects", () => {
     );
     const a2a = fakeA2A();
     const executors = buildCitadelWardApprovalEffectDeps({
+      requestVault: () => TEST_VAULT,
       storage: approvalStore(approval),
       integrationHost: vi.fn() as never,
       a2a: () => a2a,

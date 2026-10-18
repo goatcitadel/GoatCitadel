@@ -570,6 +570,7 @@ import { OpsSavedBoardService } from "./ops-saved-board-service.js";
 import { createExternalSourceRouteService } from "./external-source-route-service.js";
 import { ExternalSourceImportServiceError } from "./external-source-import-service.js";
 import {
+  buildCitadelWardRequestVaultForGateway,
   buildIntegrationActionHostForGateway,
   composeGatewayRouteServices,
   createChatThreadKnowledgeDependenciesForGateway,
@@ -2285,6 +2286,7 @@ export class GatewayService {
         storage: this.storage,
         integrationHost: () => buildIntegrationActionHostForGateway(this.getRouteCompositionPort()),
         a2a: () => this.routeServices.a2a,
+        requestVault: () => buildCitadelWardRequestVaultForGateway(this.getRouteCompositionPort()),
       }),
       enqueueAfterHooks: async (input) => {
         await this.hooksService.enqueueAfterHooks(input);

@@ -35,6 +35,9 @@ import {
   buildCitadelWardApprovalPayload,
   CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
   CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
+  citadelWardKindSealsRequest,
+  createCitadelWardRequestVault,
+  sealCitadelWardApprovalPayload,
 } from "./citadel-ward-approval.js";
 import { buildCitadelWardApprovalEffectDeps } from "./citadel-ward-approval-effect-service.js";
 import {
@@ -7922,6 +7925,8 @@ describe("communications approval effects", () => {
 });
 
 describe("citadel ward approval effects", () => {
+  const WARD_KEY = Buffer.alloc(32, 9);
+
   function createWardEffectHarness() {
     const raw = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const storage = createSqliteAsyncStorage(raw);
@@ -7941,6 +7946,7 @@ describe("citadel ward approval effects", () => {
     };
     const executors = buildCitadelWardApprovalEffectDeps({
       storage,
+      requestVault: () => createCitadelWardRequestVault(async () => WARD_KEY),
       integrationHost: () => {
         throw new Error("no integration host in this harness");
       },
@@ -7972,7 +7978,11 @@ describe("citadel ward approval effects", () => {
     const created = await storage.approvals.create({
       kind,
       riskLevel: "caution",
-      payload: { ...buildCitadelWardApprovalPayload({ wardAction, citadelId: "personal", request }) },
+      payload: {
+        ...(citadelWardKindSealsRequest(kind)
+          ? sealCitadelWardApprovalPayload(WARD_KEY, kind, { wardAction, citadelId: "personal", request })
+          : buildCitadelWardApprovalPayload({ wardAction, citadelId: "personal", request })),
+      },
       preview: {},
       linkage: { actionType: kind },
     });

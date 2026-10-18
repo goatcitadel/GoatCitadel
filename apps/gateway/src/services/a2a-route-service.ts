@@ -58,10 +58,10 @@ import { A2AGrpcClient, type A2AGrpcClientPort } from "./a2a-grpc-client.js";
 import { sendOutboundGrpc } from "./a2a-grpc-outbound-service.js";
 import { buildA2AOutboundWardAction, resolveWardEffectForExternalAction } from "./citadel-ward-gate.js";
 import {
-  buildCitadelWardApprovalPayload,
   buildCitadelWardRequestSummary,
   CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
   type CitadelWardApprovalRef,
+  type CitadelWardRequestVault,
 } from "./citadel-ward-approval.js";
 import { DRY_RUN_APPROVAL_TTL_MS } from "./integration-dry-run-gate.js";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
@@ -144,6 +144,8 @@ export interface A2ARouteServiceDependencies {
   grpcClient?: A2AGrpcClientPort;
   /** Opens Citadel Ward approvals; without it a ward `require_approval` stays a fail-closed block. */
   createApproval?: (input: ApprovalCreateInput) => Promise<ApprovalRequest>;
+  /** Seals an outbound ward approval request (its params can carry secrets); without it the call stays blocked. */
+  citadelWardRequests?: CitadelWardRequestVault;
 }
 
 interface A2ATurnIdentity {
@@ -632,8 +634,9 @@ export class A2ARouteService {
 
   /**
    * Open an operator approval for a ward `require_approval` refusal. The approval carries the
-   * exact outbound request plus its hash; executing it is the approval effect's job (it replays
-   * with `wardApproval`). Hosts without `createApproval` keep the fail-closed block.
+   * exact outbound request sealed, plus its hash; executing it is the approval effect's job (it
+   * replays with `wardApproval`). Hosts without `createApproval`, or whose request cannot be
+   * sealed, keep the fail-closed block: the request never lands in the approval in plaintext.
    */
   private async openOutboundWardApproval(
     input: A2AOutboundPreviewRequest,
@@ -642,17 +645,22 @@ export class A2ARouteService {
     checkedAt: string,
   ): Promise<{ approvalId: string } | { warning: string }> {
     const { action: wardAction, citadelId, transport } = ward;
-    const createApproval = this.deps.createApproval;
+    const { createApproval, citadelWardRequests } = this.deps;
     if (!createApproval) {
       return {
         warning: `A Citadel Ward requires approval for ${wardAction} (citadel ${citadelId}), but no approval loop is available on this host, so the call is blocked.`,
       };
     }
-    const payload = buildCitadelWardApprovalPayload({
+    const payload = await citadelWardRequests?.seal(CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND, {
       wardAction,
       citadelId,
       request: { outbound: input, actorId },
     });
+    if (!payload) {
+      return {
+        warning: `A Citadel Ward requires approval for ${wardAction} (citadel ${citadelId}), but the request could not be sealed for the approval record, so the approval loop is unavailable and the call is blocked.`,
+      };
+    }
     try {
       const approval = await createApproval({
         kind: CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
@@ -753,6 +761,7 @@ export class A2ARouteService {
     }
 
     const mutationIdempotencyStore = this.deps.mutationIdempotencyStore;
+    const config = this.deps.config;
     if (preview.transport === "GRPC") {
       return sendOutboundGrpc({
         request: input,
@@ -763,7 +772,7 @@ export class A2ARouteService {
         peer,
         wardEffect: ward.effect,
         deps: {
-          config: this.deps.config,
+          config,
           storage: this.deps.storage,
           grpcClient: this.grpcClient,
           mutationIdempotencyStore,
@@ -790,7 +799,7 @@ export class A2ARouteService {
         const discovered = await this.discoverOutboundJsonRpcUrl(peer, checkedAt);
         await claim.markExternalCallStarted();
         const response = await fetchAllowlisted(discovered.jsonRpcUrl, {
-          allowlist: this.deps.config.toolPolicy.sandbox.networkAllowlist,
+          allowlist: config.toolPolicy.sandbox.networkAllowlist,
           init: {
             method: "POST",
             headers: buildOutboundHeaders(peer),

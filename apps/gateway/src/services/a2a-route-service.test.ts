@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -13,8 +14,17 @@ import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { projectA2AExternalValue } from "./a2a-public-projection.js";
 import { A2ARouteService } from "./a2a-route-service.js";
 import { buildInboundIdempotencyKey, normalizeInboundMessage } from "./a2a-route-utils.js";
-import { citadelWardReplayIdempotencyKey } from "./citadel-ward-approval.js";
+import {
+  CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
+  citadelWardReplayIdempotencyKey,
+  createCitadelWardRequestVault,
+  readCitadelWardApprovalPayload,
+  type CitadelWardRequestVault,
+  type CitadelWardSealedApprovalPayload,
+} from "./citadel-ward-approval.js";
 import { buildCitadelWardApprovalEffectDeps } from "./citadel-ward-approval-effect-service.js";
+
+const WARD_VAULT = createCitadelWardRequestVault(async () => randomBytes(32).fill(7));
 
 describe("A2ARouteService", () => {
   let storage: Storage | undefined;
@@ -1509,9 +1519,19 @@ describe("A2ARouteService", () => {
           wardAction,
           citadelId: "personal",
           payloadHash: expect.any(String),
-          request: { outbound: outboundInput, actorId: "operator-1" },
+          sealedRequest: { v: 1, alg: "aes-256-gcm" },
         },
         expiresAt: "2026-06-01T00:15:00.000Z",
+      });
+      const payload = createApproval.mock.calls[0]![0].payload;
+      expect(payload).not.toHaveProperty("request");
+      const sealed = readCitadelWardApprovalPayload(
+        CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
+        payload,
+      ) as CitadelWardSealedApprovalPayload;
+      expect(await WARD_VAULT.open(CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND, sealed)).toEqual({
+        outbound: outboundInput,
+        actorId: "operator-1",
       });
       expect(harness.peer.posts()).toHaveLength(0);
       expect(harness.storage.externalSideEffectRuns.listByConnection("peer-remote")).toEqual([]);
@@ -1604,6 +1624,33 @@ describe("A2ARouteService", () => {
       expect(response).toMatchObject({ status: "blocked", warnings: [expect.stringMatching(/denies/)] });
       expect(harness.peer.posts()).toHaveLength(0);
       expect(createApproval).not.toHaveBeenCalled();
+    });
+
+    it("keeps secret params out of the approval record, and blocks when they cannot be sealed", async () => {
+      const createApproval = approvalStub();
+      const harness = await createWardedHarness(createApproval);
+      const secretInput = { ...outboundInput, params: { apiToken: "secret-xyz", text: "hi" } };
+
+      await harness.service.sendOutbound(secretInput, "operator-1", "2026-06-01T00:00:00.000Z");
+      expect(JSON.stringify(createApproval.mock.calls[0]![0])).not.toContain("secret-xyz");
+
+      const unsealable = approvalStub();
+      const keyless = createService({
+        networkAllowlist: ["127.0.0.1"],
+        outboundPeers: [{ peerId: "peer-remote", agentCardUrl: harness.peer.agentCardUrl }],
+        createApproval: unsealable,
+        citadelWardRequests: createCitadelWardRequestVault(async () => undefined),
+      });
+      addWard(keyless.storage, "require_approval");
+      const response = await keyless.service.sendOutbound(secretInput, "operator-1", "2026-06-01T00:00:00.000Z");
+
+      expect(response).toMatchObject({
+        status: "blocked",
+        warnings: [expect.stringMatching(/could not be sealed.*approval loop is unavailable/)],
+      });
+      expect(response.approvalId).toBeUndefined();
+      expect(unsealable).not.toHaveBeenCalled();
+      expect(harness.peer.posts()).toHaveLength(0);
     });
 
     it("keeps the fail-closed block when no approval loop is wired", async () => {
@@ -1735,6 +1782,7 @@ describe("A2ARouteService", () => {
         eventSequence: harness.eventSequence,
         urlHash: harness.urlHash,
         citadelId: "personal",
+        workspaceId: "default",
       };
     }
 
@@ -1749,6 +1797,7 @@ describe("A2ARouteService", () => {
       expect(harness.createApproval).toHaveBeenCalledTimes(1);
       expect(harness.createApproval.mock.calls[0]?.[0]).toMatchObject({
         kind: "citadel_ward.a2a_push",
+        linkage: { workspaceId: "default", actionType: "citadel_ward.a2a_push" },
         payload: {
           wardAction: "a2a.outbound.push",
           citadelId: "personal",
@@ -1959,6 +2008,24 @@ describe("A2ARouteService", () => {
       });
     });
 
+    it("approved push refuses when the task moved to another workspace after approval", async () => {
+      const harness = await createDeferredPush();
+
+      const results = await harness.service.deliverApprovedPush(
+        { ...approvedPush(harness), workspaceId: "ws-before-move" },
+        "2026-06-01T00:00:02.000Z",
+      );
+
+      expect(results).toEqual([
+        expect.objectContaining({ status: "blocked", error: expect.stringMatching(/moved to another workspace/) }),
+      ]);
+      expect(harness.pushDeliveryFetch).not.toHaveBeenCalled();
+      expect(harness.storage.a2aTaskPushConfigs.get(harness.taskId, "peer-1")).toMatchObject({
+        lastDeliveryStatus: "blocked",
+        lastEventSequence: harness.eventSequence,
+      });
+    });
+
     it("an undeliverable approved push does not leave the config stuck deferred", async () => {
       const harness = await createDeferredPush();
       const setConfig = (id: string, enabled: boolean, checkedAt: string) =>
@@ -1987,6 +2054,7 @@ describe("A2ARouteService", () => {
         explanationStatus: "not_requested",
       } as ApprovalRequest;
       const executors = buildCitadelWardApprovalEffectDeps({
+        requestVault: () => WARD_VAULT,
         storage: {
           approvals: { get: async () => approval },
           a2aTaskPushConfigs: createSqliteAsyncStorage(harness.storage).a2aTaskPushConfigs,
@@ -2084,6 +2152,7 @@ describe("A2ARouteService", () => {
       allowedWorkspaceIds?: string[];
       outboundPeers?: A2AOutboundPeerConfig[];
       createApproval?: A2ARouteServiceDependencies["createApproval"];
+      citadelWardRequests?: CitadelWardRequestVault;
     } = {},
   ) {
     storage = new Storage({
@@ -2270,6 +2339,7 @@ describe("A2ARouteService", () => {
       mutationIdempotencyStore: asyncStorage.mutationIdempotency,
       pushDeliveryFetch: options.pushDeliveryFetch,
       createApproval: options.createApproval,
+      citadelWardRequests: options.citadelWardRequests ?? WARD_VAULT,
     });
     return { service, storage, tasks, chatTurnRuntime, createChatSession, seedTask };
   }

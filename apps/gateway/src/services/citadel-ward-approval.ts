@@ -1,12 +1,19 @@
 import { createHash } from "node:crypto";
 import { canonicalJsonString } from "@goatcitadel/contracts";
+import { openReplayEnvelope, sealReplayEnvelope, type ReplayEnvelope } from "./external-side-effect-replay-record.js";
 import { projectPublicSecretValue } from "./public-secret-projection.js";
 
 /**
  * Citadel Ward `require_approval` effects on integration actions, A2A outbound sends and
- * A2A push deliveries become operator approvals. The approval payload carries the exact
- * request plus a `payloadHash` over it; the executor re-reads the payload, recomputes the
- * hash, re-checks the ward and only then performs the action once.
+ * A2A push deliveries become operator approvals. The approval payload binds the exact request
+ * by a `payloadHash` over it; the executor recovers the request, recomputes the hash, re-checks
+ * the ward and only then performs the action once.
+ *
+ * Integration and outbound requests can carry secrets (action input, call params), and
+ * approvals are ordinary durable records returned by the approval APIs, so those requests are
+ * stored only as `sealedRequest`: an AES-256-GCM envelope under the external side-effect replay
+ * key, bound to the approval kind and payload hash. A push request names only the task, peer,
+ * event and a URL hash, so it stays plaintext and its refusal can always be recorded.
  */
 export const CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND = "citadel_ward.integration_action";
 export const CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND = "citadel_ward.a2a_outbound";
@@ -17,11 +24,31 @@ export type CitadelWardApprovalKind =
   | typeof CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND
   | typeof CITADEL_WARD_A2A_PUSH_APPROVAL_KIND;
 
-export interface CitadelWardApprovalPayload<TRequest extends Record<string, unknown> = Record<string, unknown>> {
+interface CitadelWardApprovalBinding {
   wardAction: string;
   citadelId: string;
   workspaceId?: string;
   payloadHash: string;
+}
+
+/** Integration and outbound approvals: the request exists only inside the sealed envelope. */
+export interface CitadelWardSealedApprovalPayload extends CitadelWardApprovalBinding {
+  sealedRequest: ReplayEnvelope;
+}
+
+/** Push approvals: the request holds no secrets and stays readable. */
+export interface CitadelWardPlainApprovalPayload<
+  TRequest extends Record<string, unknown> = Record<string, unknown>,
+> extends CitadelWardApprovalBinding {
+  request: TRequest;
+}
+
+export type CitadelWardApprovalPayload = CitadelWardSealedApprovalPayload | CitadelWardPlainApprovalPayload;
+
+export interface CitadelWardApprovalPayloadInput<TRequest extends Record<string, unknown> = Record<string, unknown>> {
+  wardAction: string;
+  citadelId: string;
+  workspaceId?: string;
   request: TRequest;
 }
 
@@ -31,6 +58,7 @@ export interface CitadelWardApprovalRef {
 }
 
 const REPLAY_IDEMPOTENCY_PREFIX = "citadel-ward:";
+const SEAL_AAD_PREFIX = "goatcitadel:citadel-ward-approval:v1";
 const WARD_KINDS: readonly string[] = [
   CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,
   CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
@@ -42,38 +70,112 @@ export function computeCitadelWardPayloadHash(request: Record<string, unknown>):
   return createHash("sha256").update(canonicalJsonString(request)).digest("hex");
 }
 
-export function buildCitadelWardApprovalPayload<T extends Record<string, unknown>>(
-  input: Omit<CitadelWardApprovalPayload<T>, "payloadHash">,
-): CitadelWardApprovalPayload<T> {
-  return { ...input, payloadHash: computeCitadelWardPayloadHash(input.request) };
-}
-
 function nonBlank(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-/** Returns the payload when well formed, otherwise undefined. Does not verify the hash. */
-export function readCitadelWardApprovalPayload(payload: unknown): CitadelWardApprovalPayload | undefined {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+function bindingFor(input: CitadelWardApprovalPayloadInput): CitadelWardApprovalBinding {
+  return {
+    wardAction: input.wardAction,
+    citadelId: input.citadelId,
+    ...(nonBlank(input.workspaceId) ? { workspaceId: input.workspaceId } : {}),
+    payloadHash: computeCitadelWardPayloadHash(input.request),
+  };
+}
+
+/** Whether approvals of this kind must carry their request sealed (every kind but push). */
+export function citadelWardKindSealsRequest(kind: string): boolean {
+  return kind !== CITADEL_WARD_A2A_PUSH_APPROVAL_KIND;
+}
+
+/** The plaintext payload of a push approval. */
+export function buildCitadelWardApprovalPayload<T extends Record<string, unknown>>(
+  input: CitadelWardApprovalPayloadInput<T>,
+): CitadelWardPlainApprovalPayload<T> {
+  return { ...bindingFor(input), request: input.request };
+}
+
+function sealAad(kind: string, payloadHash: string): string {
+  return `${SEAL_AAD_PREFIX}\0${kind}\0${payloadHash}`;
+}
+
+/** Seals the request under `key`, bound to the approval kind and payload hash. */
+export function sealCitadelWardApprovalPayload(
+  key: Buffer,
+  kind: string,
+  input: CitadelWardApprovalPayloadInput,
+): CitadelWardSealedApprovalPayload {
+  const binding = bindingFor(input);
+  return { ...binding, sealedRequest: sealReplayEnvelope(key, sealAad(kind, binding.payloadHash), input.request) };
+}
+
+/** The sealed request, or undefined when the envelope does not open under `key` for this kind and hash. */
+export function openCitadelWardApprovalRequest(
+  key: Buffer,
+  kind: string,
+  payload: CitadelWardSealedApprovalPayload,
+): Record<string, unknown> | undefined {
+  const opened = openReplayEnvelope(key, sealAad(kind, payload.payloadHash), payload.sealedRequest);
+  const request = opened?.payload;
+  return request && typeof request === "object" && !Array.isArray(request)
+    ? (request as Record<string, unknown>)
+    : undefined;
+}
+
+/**
+ * Seals and opens ward approval requests under the shared external side-effect replay key.
+ * Neither method throws: without a key (no keychain, unsafe write custody, a lookup miss) or
+ * on any cipher failure, `seal` and `open` return undefined, and callers fail closed.
+ */
+export interface CitadelWardRequestVault {
+  seal(kind: string, input: CitadelWardApprovalPayloadInput): Promise<CitadelWardSealedApprovalPayload | undefined>;
+  open(kind: string, payload: CitadelWardSealedApprovalPayload): Promise<Record<string, unknown> | undefined>;
+}
+
+export function createCitadelWardRequestVault(
+  resolveKey: () => Buffer | undefined | Promise<Buffer | undefined>,
+): CitadelWardRequestVault {
+  const withKey = async <T>(use: (key: Buffer) => T): Promise<T | undefined> => {
+    try {
+      const key = await resolveKey();
+      return key ? use(key) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    seal: (kind, input) => withKey((key) => sealCitadelWardApprovalPayload(key, kind, input)),
+    open: (kind, payload) => withKey((key) => openCitadelWardApprovalRequest(key, kind, payload)),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Returns the payload when well formed for `kind`, otherwise undefined: a push approval must
+ * carry its plaintext `request`, every other kind only a `sealedRequest` (a plaintext request is
+ * refused). Neither opens the envelope nor verifies the hash.
+ */
+export function readCitadelWardApprovalPayload(kind: string, payload: unknown): CitadelWardApprovalPayload | undefined {
+  if (!isRecord(payload)) {
     return undefined;
   }
-  const { wardAction, citadelId, workspaceId, payloadHash, request } = payload as Record<string, unknown>;
+  const { wardAction, citadelId, workspaceId, payloadHash, request, sealedRequest } = payload;
   if (!nonBlank(wardAction) || !nonBlank(citadelId) || !nonBlank(payloadHash)) {
-    return undefined;
-  }
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
     return undefined;
   }
   if (workspaceId !== undefined && !nonBlank(workspaceId)) {
     return undefined;
   }
-  return {
-    wardAction,
-    citadelId,
-    ...(workspaceId !== undefined ? { workspaceId } : {}),
-    payloadHash,
-    request: request as Record<string, unknown>,
-  };
+  const binding = { wardAction, citadelId, ...(workspaceId !== undefined ? { workspaceId } : {}), payloadHash };
+  if (citadelWardKindSealsRequest(kind)) {
+    return request === undefined && isRecord(sealedRequest)
+      ? { ...binding, sealedRequest: sealedRequest as unknown as ReplayEnvelope }
+      : undefined;
+  }
+  return sealedRequest === undefined && isRecord(request) ? { ...binding, request } : undefined;
 }
 
 /**

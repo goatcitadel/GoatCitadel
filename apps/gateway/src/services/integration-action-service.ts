@@ -35,11 +35,11 @@ import {
   type CitadelWardGateStorage,
 } from "./citadel-ward-gate.js";
 import {
-  buildCitadelWardApprovalPayload,
   buildCitadelWardRequestSummary,
   CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,
   citadelWardInputSummaryFields,
   type CitadelWardApprovalRef,
+  type CitadelWardRequestVault,
 } from "./citadel-ward-approval.js";
 import {
   DRY_RUN_APPROVAL_TTL_MS,
@@ -79,6 +79,11 @@ export interface IntegrationActionHost {
   sideEffectRunStore?: ExternalSideEffectRunStore;
   /** Encrypted replay copies of runner payloads (WS8); absent on narrow test hosts. */
   replayRecords?: ExternalSideEffectReplayRecords;
+  /**
+   * Seals a ward approval request (it can carry secrets) so the approval record never holds
+   * it in plaintext. Without it a ward require_approval keeps the fail-closed block.
+   */
+  citadelWardRequests?: CitadelWardRequestVault;
   /**
    * Optional approval front door (dry-run Stage 2). When present together with
    * `storage.dryRunCommits` + `storage.pendingApprovalActions`, a require_dry_run
@@ -689,8 +694,9 @@ async function invokeGmailAction(
 
 /**
  * Open an operator approval for a ward `require_approval` refusal. The approval carries the
- * exact invoke request plus its hash; executing it is the approval effect's job (it re-invokes
- * with `wardApproval`). Hosts without `createApproval` keep the fail-closed block.
+ * exact invoke request sealed, plus its hash; executing it is the approval effect's job (it
+ * re-invokes with `wardApproval`). Hosts without `createApproval`, or whose request cannot be
+ * sealed, keep the fail-closed block: the request never lands in the approval in plaintext.
  */
 async function openIntegrationWardApproval(
   host: IntegrationActionHost,
@@ -712,7 +718,7 @@ async function openIntegrationWardApproval(
       `A Citadel Ward requires approval for ${ward.action}, but no approval loop is available on this host, so the action is blocked.`,
     );
   }
-  const payload = buildCitadelWardApprovalPayload({
+  const payload = await host.citadelWardRequests?.seal(CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND, {
     wardAction: ward.action,
     citadelId: ward.citadelId,
     workspaceId: connection.workspaceId,
@@ -725,6 +731,11 @@ async function openIntegrationWardApproval(
       },
     },
   });
+  if (!payload) {
+    return refusal(
+      `A Citadel Ward requires approval for ${ward.action}, but the request could not be sealed for the approval record, so the approval loop is unavailable and the action is blocked.`,
+    );
+  }
   try {
     const approval = await createApproval({
       kind: CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,

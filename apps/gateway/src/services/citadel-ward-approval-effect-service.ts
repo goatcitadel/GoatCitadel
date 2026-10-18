@@ -20,6 +20,7 @@ import {
   readCitadelWardApprovalPayload,
   type CitadelWardApprovalPayload,
   type CitadelWardApprovalRef,
+  type CitadelWardRequestVault,
 } from "./citadel-ward-approval.js";
 import { buildIntegrationWardAction, resolveWardEffectForExternalAction } from "./citadel-ward-gate.js";
 import type { CommunicationsApprovalEffectSettlement } from "./communications-approval-effect-service.js";
@@ -28,7 +29,8 @@ import { invokeIntegrationConnectionAction, type IntegrationActionHost } from ".
 
 /**
  * Executes approved Citadel Ward `require_approval` actions (integration operator actions,
- * A2A outbound sends, A2A push deliveries) exactly once. The approval payload is re-read and
+ * A2A outbound sends, A2A push deliveries) exactly once. The approval payload is re-read, its
+ * sealed request opened (integration and outbound requests are never stored in plaintext) and
  * hash-verified, the action is replayed with the approval reference under the original request's
  * idempotency key (else `citadel-ward:<approvalId>`, so two approvals of one keyed request still
  * execute once), and the owner re-checks the live ward (deny still wins). Every refusal is a terminal `CitadelWardApprovalEffectError`; any other error is
@@ -89,6 +91,8 @@ export interface CitadelWardApprovalEffectDeps {
   storage: Pick<AsyncStorage, "approvals" | "a2aTaskPushConfigs">;
   integrationHost: () => IntegrationActionHost;
   a2a: () => CitadelWardApprovalEffectA2APort;
+  /** Opens the sealed integration and outbound requests; without it those approvals cannot execute. */
+  requestVault: () => CitadelWardRequestVault | undefined;
 }
 
 /**
@@ -125,7 +129,8 @@ export class CitadelWardApprovalEffectService {
   private async executeApproved(approvalId: string): Promise<Record<string, unknown>> {
     const approval = await this.readApproval(approvalId, ["approved"]);
     const payload = readWardPayload(approval);
-    if (computeCitadelWardPayloadHash(payload.request) !== payload.payloadHash) {
+    const request = await this.openRequest(approval, payload);
+    if (computeCitadelWardPayloadHash(request) !== payload.payloadHash) {
       throw new CitadelWardApprovalEffectError(
         "payload_hash_mismatch",
         `The approved ${payload.wardAction} request no longer matches approval ${approvalId}; nothing was executed.`,
@@ -133,12 +138,33 @@ export class CitadelWardApprovalEffectService {
     }
     const wardApproval: CitadelWardApprovalRef = { approvalId, wardAction: payload.wardAction };
     if (approval.kind === CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND) {
-      return this.executeIntegrationAction(payload, wardApproval);
+      return this.executeIntegrationAction(payload, request, wardApproval);
     }
     if (approval.kind === CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND) {
-      return this.executeA2AOutbound(payload, wardApproval);
+      return this.executeA2AOutbound(request, wardApproval);
     }
-    return this.executeA2APush(payload, wardApproval);
+    return this.executeA2APush(payload, request, wardApproval);
+  }
+
+  /**
+   * The plaintext push request, or the opened sealed request. An envelope that does not open
+   * (no vault, a missing or rotated key, a tampered envelope) is terminal: nothing is executed.
+   */
+  private async openRequest(
+    approval: ApprovalRequest,
+    payload: CitadelWardApprovalPayload,
+  ): Promise<Record<string, unknown>> {
+    if ("request" in payload) {
+      return payload.request;
+    }
+    const opened = await this.deps.requestVault()?.open(approval.kind, payload);
+    if (!opened) {
+      throw new CitadelWardApprovalEffectError(
+        "invalid_payload",
+        `The sealed request of Citadel Ward approval ${approval.approvalId} could not be opened; nothing was executed.`,
+      );
+    }
+    return opened;
   }
 
   /** Records a rejected or expired approval. Never executes; a deferred push resumes later events. */
@@ -146,7 +172,7 @@ export class CitadelWardApprovalEffectService {
     const approval = await this.readApproval(input.approvalId, ["rejected", "edited"]);
     const disposition = input.expired ? "expired" : "rejected";
     if (approval.kind === CITADEL_WARD_A2A_PUSH_APPROVAL_KIND) {
-      await this.recordPushRefusal(input.approvalId, readPushRequest(readWardPayload(approval).request), disposition);
+      await this.recordPushRefusal(input.approvalId, readPushRequest(readPlainRequest(approval)), disposition);
     }
     return { disposition, kind: approval.kind };
   }
@@ -179,9 +205,10 @@ export class CitadelWardApprovalEffectService {
 
   private async executeIntegrationAction(
     payload: CitadelWardApprovalPayload,
+    approvedRequest: Record<string, unknown>,
     wardApproval: CitadelWardApprovalRef,
   ): Promise<Record<string, unknown>> {
-    const request = readIntegrationRequest(payload.request);
+    const request = readIntegrationRequest(approvedRequest);
     const host = this.deps.integrationHost();
     const connection = await host.storage.integrationConnections.get(request.connectionId);
     const actionKnown =
@@ -191,6 +218,12 @@ export class CitadelWardApprovalEffectService {
       throw new CitadelWardApprovalEffectError(
         "blocked",
         `The integration action approved by ${wardApproval.approvalId} no longer exists; nothing was executed.`,
+      );
+    }
+    if (normalizeWorkspaceId(connection.workspaceId) !== normalizeWorkspaceId(payload.workspaceId)) {
+      throw new CitadelWardApprovalEffectError(
+        "blocked",
+        `The connection moved to another workspace after approval ${wardApproval.approvalId}; nothing was run. Request approval again.`,
       );
     }
     const wardAction = buildIntegrationWardAction(connection.catalogId, request.actionId);
@@ -219,10 +252,10 @@ export class CitadelWardApprovalEffectService {
   }
 
   private async executeA2AOutbound(
-    payload: CitadelWardApprovalPayload,
+    approvedRequest: Record<string, unknown>,
     wardApproval: CitadelWardApprovalRef,
   ): Promise<Record<string, unknown>> {
-    const { outbound, actorId } = readOutboundRequest(payload.request);
+    const { outbound, actorId } = readOutboundRequest(approvedRequest);
     const result = await this.deps.a2a().sendOutbound(
       {
         ...outbound,
@@ -237,9 +270,10 @@ export class CitadelWardApprovalEffectService {
 
   private async executeA2APush(
     payload: CitadelWardApprovalPayload,
+    approvedRequest: Record<string, unknown>,
     wardApproval: CitadelWardApprovalRef,
   ): Promise<Record<string, unknown>> {
-    const push = readPushRequest(payload.request);
+    const push = readPushRequest(approvedRequest);
     const results = await this.deps.a2a().deliverApprovedPush({
       approvalId: wardApproval.approvalId,
       wardAction: wardApproval.wardAction,
@@ -248,6 +282,7 @@ export class CitadelWardApprovalEffectService {
       eventSequence: push.eventSequence,
       urlHash: push.urlHash,
       citadelId: payload.citadelId,
+      ...(payload.workspaceId !== undefined ? { workspaceId: payload.workspaceId } : {}),
     });
     const [first] = results;
     return first ? mapPushResult(first) : this.readSettledPush(push, wardApproval.approvalId);
@@ -300,7 +335,7 @@ export class CitadelWardApprovalEffectService {
 }
 
 function readWardPayload(approval: ApprovalRequest): CitadelWardApprovalPayload {
-  const payload = readCitadelWardApprovalPayload(approval.payload);
+  const payload = readCitadelWardApprovalPayload(approval.kind, approval.payload);
   if (!payload) {
     throw invalidPayload(approval.approvalId);
   }
@@ -312,6 +347,18 @@ function invalidPayload(approvalId?: string): CitadelWardApprovalEffectError {
     "invalid_payload",
     `The Citadel Ward approval${approvalId ? ` ${approvalId}` : ""} payload is malformed.`,
   );
+}
+
+/** The plaintext request of a push approval; a sealed payload here is malformed. */
+function readPlainRequest(approval: ApprovalRequest): Record<string, unknown> {
+  const payload = readWardPayload(approval);
+  if (!("request" in payload)) throw invalidPayload(approval.approvalId);
+  return payload.request;
+}
+
+/** A blank or missing workspace id means unbound. */
+function normalizeWorkspaceId(workspaceId: string | undefined): string | undefined {
+  return workspaceId?.trim() || undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -370,7 +417,8 @@ function readPushRequest(request: Record<string, unknown>): {
 }
 
 function readWardRequest(approval: ApprovalRequest): Record<string, unknown> | undefined {
-  return readCitadelWardApprovalPayload(approval.payload)?.request;
+  const payload = readCitadelWardApprovalPayload(approval.kind, approval.payload);
+  return payload && "request" in payload ? payload.request : undefined;
 }
 
 /** The push event identity for recording a failure; undefined when the request does not name one. */

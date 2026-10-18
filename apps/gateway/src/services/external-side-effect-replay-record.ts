@@ -24,8 +24,8 @@ export interface ExternalSideEffectReplayRecordDeps {
   };
 }
 
-function buildAad(runId: string, payloadHash: string): Buffer {
-  return Buffer.from(`${AAD_PREFIX}\0${runId}\0${payloadHash}`, "utf8");
+function buildAad(runId: string, payloadHash: string): string {
+  return `${AAD_PREFIX}\0${runId}\0${payloadHash}`;
 }
 
 type ReplayKeySecretStore = Pick<SecretStoreService, "isAvailable" | "getSecret" | "setSecret"> &
@@ -108,6 +108,71 @@ export function sharedExternalSideEffectReplayKeyResolver(
   return resolver;
 }
 
+/** The sealed form of a replay payload: AES-256-GCM over `{"payload": …}` JSON, base64 fields. */
+export interface ReplayEnvelope {
+  v: 1;
+  alg: "aes-256-gcm";
+  iv: string;
+  ciphertext: string;
+  tag: string;
+}
+
+/** Seals `payload` under `key`, bound to `aad`. Throws only on a malformed key. */
+export function sealReplayEnvelope(key: Buffer, aad: string, payload: unknown): ReplayEnvelope {
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_BYTES });
+  cipher.setAAD(Buffer.from(aad, "utf8"));
+  const ciphertext = Buffer.concat([cipher.update(JSON.stringify({ payload }), "utf8"), cipher.final()]);
+  return {
+    v: 1,
+    alg: "aes-256-gcm",
+    iv: iv.toString("base64"),
+    ciphertext: ciphertext.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+  };
+}
+
+/**
+ * Opens an envelope sealed by `sealReplayEnvelope` under the same key and AAD. Returns
+ * undefined (never throws) for a malformed, tampered, mis-bound or wrong-key envelope.
+ */
+export function openReplayEnvelope(key: Buffer, aad: string, envelope: unknown): { payload: unknown } | undefined {
+  try {
+    if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) {
+      return undefined;
+    }
+    const record = envelope as Record<string, unknown>;
+    if (
+      record.v !== 1 ||
+      record.alg !== "aes-256-gcm" ||
+      typeof record.iv !== "string" ||
+      typeof record.ciphertext !== "string" ||
+      typeof record.tag !== "string"
+    ) {
+      return undefined;
+    }
+    const iv = Buffer.from(record.iv, "base64");
+    const tag = Buffer.from(record.tag, "base64");
+    if (iv.length !== IV_BYTES || tag.length !== TAG_BYTES) {
+      return undefined;
+    }
+    const decipher = createDecipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_BYTES });
+    decipher.setAAD(Buffer.from(aad, "utf8"));
+    decipher.setAuthTag(tag);
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(record.ciphertext, "base64")),
+      decipher.final(),
+    ]).toString("utf8");
+    const parsed: unknown = JSON.parse(plaintext);
+    if (typeof parsed !== "object" || parsed === null || !Object.hasOwn(parsed, "payload")) {
+      return undefined;
+    }
+    return { payload: (parsed as { payload: unknown }).payload };
+  } catch {
+    return undefined;
+  }
+}
+
 export function createExternalSideEffectReplayRecords(
   deps: ExternalSideEffectReplayRecordDeps,
 ): ExternalSideEffectReplayRecords {
@@ -118,21 +183,8 @@ export function createExternalSideEffectReplayRecords(
         if (!key) {
           return false;
         }
-        const iv = randomBytes(IV_BYTES);
-        const cipher = createCipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_BYTES });
-        cipher.setAAD(buildAad(input.runId, input.payloadHash));
-        const ciphertext = Buffer.concat([
-          cipher.update(JSON.stringify({ payload: input.payload }), "utf8"),
-          cipher.final(),
-        ]);
-        const record = JSON.stringify({
-          v: 1,
-          alg: "aes-256-gcm",
-          iv: iv.toString("base64"),
-          ciphertext: ciphertext.toString("base64"),
-          tag: cipher.getAuthTag().toString("base64"),
-        });
-        return await deps.runs.attachReplayRecord(input.runId, record);
+        const envelope = sealReplayEnvelope(key, buildAad(input.runId, input.payloadHash), input.payload);
+        return await deps.runs.attachReplayRecord(input.runId, JSON.stringify(envelope));
       } catch (error) {
         log.warn("External side-effect replay record could not be sealed", {
           runId: input.runId,
@@ -151,33 +203,7 @@ export function createExternalSideEffectReplayRecords(
         if (!json) {
           return undefined;
         }
-        const record = JSON.parse(json) as Record<string, unknown>;
-        if (
-          record.v !== 1 ||
-          record.alg !== "aes-256-gcm" ||
-          typeof record.iv !== "string" ||
-          typeof record.ciphertext !== "string" ||
-          typeof record.tag !== "string"
-        ) {
-          return undefined;
-        }
-        const iv = Buffer.from(record.iv, "base64");
-        const tag = Buffer.from(record.tag, "base64");
-        if (iv.length !== IV_BYTES || tag.length !== TAG_BYTES) {
-          return undefined;
-        }
-        const decipher = createDecipheriv("aes-256-gcm", key, iv, { authTagLength: TAG_BYTES });
-        decipher.setAAD(buildAad(run.runId, run.payloadHash));
-        decipher.setAuthTag(tag);
-        const plaintext = Buffer.concat([
-          decipher.update(Buffer.from(record.ciphertext, "base64")),
-          decipher.final(),
-        ]).toString("utf8");
-        const parsed: unknown = JSON.parse(plaintext);
-        if (typeof parsed !== "object" || parsed === null || !Object.hasOwn(parsed, "payload")) {
-          return undefined;
-        }
-        return { payload: (parsed as { payload: unknown }).payload };
+        return openReplayEnvelope(key, buildAad(run.runId, run.payloadHash), JSON.parse(json));
       } catch {
         return undefined;
       }
