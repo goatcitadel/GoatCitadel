@@ -193,15 +193,21 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
   }
 
   public async reconcileSpec(spec: CronJobSpecInput): Promise<CronJobRecord> {
-    const desired = projectCanonicalCronSpec(spec);
+    const requested = projectCanonicalCronSpec(spec);
     return await this.commitMutation<CronJobRecord>(async () => {
-      const current = await this.storage.cronJobs.get(desired.jobId);
+      const current = await this.storage.cronJobs.get(requested.jobId);
       if (!current) {
         return {
-          mutation: { kind: "create", spec: desired },
-          updateSpecs: (specs) => upsertCanonicalSpec(specs, desired),
+          mutation: { kind: "create", spec: requested },
+          updateSpecs: (specs) => upsertCanonicalSpec(specs, requested),
         };
       }
+      // Reconcilers that do not own the scope (startup built-in helpers, the legacy loader)
+      // omit citadelId; keep the stored scope. Only an explicit citadelId changes it here.
+      const desired =
+        Object.prototype.hasOwnProperty.call(spec, "citadelId") || !current.citadelId
+          ? requested
+          : projectCanonicalCronSpec({ ...requested, citadelId: current.citadelId });
       // A changed schedule (e.g. a built-in re-zoned on startup) invalidates the
       // persisted nextRunAt; re-project it as startup reconciliation does.
       const scheduleChanged = current.schedule !== desired.schedule;

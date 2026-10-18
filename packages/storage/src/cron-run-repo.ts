@@ -64,6 +64,7 @@ interface CronJobExecutionRow {
   action_config_json: string | null;
   execution_generation: number | string;
   active_run_id: string | null;
+  citadel_id?: string | null;
 }
 
 export class CronRunRepository {
@@ -122,7 +123,7 @@ export class CronRunRepository {
       LIMIT @limit
     `);
     this.getJobStmt = db.prepare(`
-      SELECT job_id, revision, action, action_config_json, execution_generation, active_run_id
+      SELECT job_id, revision, action, action_config_json, execution_generation, active_run_id, citadel_id
       FROM cron_jobs
       WHERE job_id = ?
       LIMIT 1
@@ -357,6 +358,8 @@ export class CronRunRepository {
         {
           action: job.action,
           actionConfig: parseActionConfig(job.action_config_json),
+          // Admission-time scope; omitted for global jobs so their snapshots are unchanged.
+          ...(typeof job.citadel_id === "string" && job.citadel_id ? { citadelId: job.citadel_id } : {}),
         },
         "actionSnapshot",
       );

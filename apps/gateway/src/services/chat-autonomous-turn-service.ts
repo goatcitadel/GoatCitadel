@@ -155,7 +155,7 @@ export interface ChatAutonomousTurnDeps {
       | "proactiveHeartbeatTurnsV1Enabled"
       | "commitmentScheduledTurnsV1Enabled",
   ): Promise<boolean>;
-  createCronInboxTask(job: CronJobRecord, options?: { taskId?: string }): Promise<TaskRecord>;
+  createCronInboxTask(job: CronJobRecord, options?: { taskId?: string; workspaceId?: string }): Promise<TaskRecord>;
   getSessionAutonomyPrefs: HeartbeatTickDeps["getSessionAutonomyPrefs"];
   patchSessionAutonomyPrefs(sessionId: string, patch: { proactiveMode: "off" }): Promise<void>;
   listChatSessions(query: {
@@ -256,13 +256,18 @@ export async function runCronAgentTurn(
   const cronRun = input.cronRun ? assertCronRunOwnsInvocation(input.cronRun, input) : undefined;
   const admissionIdentity = cronRun ? buildCronChatAdmissionIdentity(cronRun) : undefined;
   const inboxTaskId = cronRun ? buildCronInboxTaskId(cronRun) : undefined;
+  // Fallback inbox tasks are filed in the job's citadel workspace, like the turn itself.
+  const inboxOptions = {
+    ...(inboxTaskId ? { taskId: inboxTaskId } : {}),
+    ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+  };
   const autonomyDisabled = await deps.isFeatureEnabled("autonomyV1Disabled");
   if (
     autonomyDisabled ||
     input.config.inertInboxFallback ||
     (input.config.commitment && !(await deps.isFeatureEnabled("commitmentScheduledTurnsV1Enabled")))
   ) {
-    const task = await deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
+    const task = await deps.createCronInboxTask(input.job, inboxOptions);
     return { mode: "inbox", taskId: task.taskId };
   }
   const scheduledEnabled = Boolean(admissionIdentity && (await deps.isFeatureEnabled("scheduledChatTurnsV1Enabled")));
@@ -277,7 +282,7 @@ export async function runCronAgentTurn(
       }
     }
     if (!historicalRunExists) {
-      const task = await deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
+      const task = await deps.createCronInboxTask(input.job, inboxOptions);
       return { mode: "inbox", taskId: task.taskId };
     }
   }
@@ -295,7 +300,7 @@ export async function runCronAgentTurn(
       actionConfig: currentOccurrence.run.actionSnapshot.actionConfig as CronJobRecord["actionConfig"],
     })
   ) {
-    const task = await deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
+    const task = await deps.createCronInboxTask(input.job, inboxOptions);
     return {
       mode: "inbox",
       taskId: task.taskId,
@@ -323,7 +328,7 @@ export async function runCronAgentTurn(
     occurrenceCreatedAt: currentOccurrence?.run.createdAt,
   });
   if ("failClosedReason" in scheduledPolicy) {
-    const task = await deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
+    const task = await deps.createCronInboxTask(input.job, inboxOptions);
     return {
       mode: "inbox",
       taskId: task.taskId,

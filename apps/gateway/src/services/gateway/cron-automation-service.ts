@@ -805,8 +805,10 @@ export class CronAutomationService {
     }
 
     let job: CronJobRecord;
+    let workspaceId: string | undefined;
     try {
       job = await this.buildCanonicalAgentTurnSnapshotJob(current);
+      workspaceId = (await resolveCronJobCitadelScope(this.citadelReader(), job)).workspaceId;
     } catch (error) {
       return await this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
         failureMessage: normalizeCronFailureMessage(error),
@@ -826,7 +828,7 @@ export class CronAutomationService {
     }
     const admittedSummary = await runAgentTurnCronJob({
       job,
-      workspaceId: (await resolveCronJobCitadelScope(this.citadelReader(), job)).workspaceId,
+      workspaceId,
       normalizedJobId: current.jobId,
       runId: current.runId,
       cronRun: token,
@@ -862,10 +864,16 @@ export class CronAutomationService {
     if (snapshotAction !== "agent_turn" || !snapshotConfig) {
       throw new Error(`Cron run ${run.runId} does not contain a valid agent_turn action snapshot.`);
     }
+    // The run executes in the citadel it was admitted under; a scope change after admission fails closed.
+    const snapshotCitadelId = readString(run.actionSnapshot.citadelId);
+    if ((liveJob.citadelId ?? undefined) !== snapshotCitadelId) {
+      throw new Error(`Cron job ${run.jobId} changed citadel scope after run ${run.runId} was admitted.`);
+    }
     return {
       ...liveJob,
       action: "agent_turn",
       actionConfig: normalizeAgentTurnCronActionConfig(snapshotConfig),
+      ...(snapshotCitadelId ? { citadelId: snapshotCitadelId } : {}),
     };
   }
 

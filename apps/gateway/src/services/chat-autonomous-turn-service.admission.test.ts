@@ -838,6 +838,32 @@ describe("deterministic autonomous Chat child admission", () => {
     expect(createDurableRun).not.toHaveBeenCalled();
   });
 
+  it("files a citadel-scoped inbox fallback in the citadel workspace", async () => {
+    const createCronInboxTask = vi.fn((_job: CronJobRecord, options?: { taskId?: string }) => ({
+      taskId: options?.taskId ?? "unexpected-random-task",
+    }));
+    const { deps } = buildDeps({ createCronInboxTask });
+    const job = {
+      jobId: CRON_TOKEN.jobId,
+      name: "Weekly review",
+      action: "agent_turn",
+      schedule: "0 9 * * 1",
+      enabled: true,
+      citadelId: "team",
+    } as CronJobRecord;
+    await runCronAgentTurn(deps, {
+      job,
+      runId: CRON_TOKEN.runId,
+      config: { prompt: "Review" },
+      cronRun: CRON_TOKEN,
+      workspaceId: "ws-team",
+    });
+    expect(createCronInboxTask).toHaveBeenCalledWith(job, {
+      taskId: buildCronInboxTaskId(CRON_TOKEN),
+      workspaceId: "ws-team",
+    });
+  });
+
   it("rejects a new autonomous turn before admission, prep, or durable writes", async () => {
     const identity = buildCronChatAdmissionIdentity(CRON_TOKEN);
     const { deps, admitSystemChatTurn, prepareAgentChatTurn, createDurableRun } = buildDeps();

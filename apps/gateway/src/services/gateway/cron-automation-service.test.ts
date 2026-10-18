@@ -350,7 +350,11 @@ class FakeCronRuns {
       trigger: input.trigger ?? "scheduled_due",
       jobRevision: job.revision,
       action: job.action,
-      actionSnapshot: { action: job.action, actionConfig: job.actionConfig },
+      actionSnapshot: {
+        action: job.action,
+        actionConfig: job.actionConfig,
+        ...(job.citadelId ? { citadelId: job.citadelId } : {}),
+      },
       scheduledFor: input.scheduledFor,
       status: "admitting",
       phase: "child_admission",
@@ -2499,6 +2503,39 @@ describe("citadel-scoped cron jobs", () => {
 
     expect(agentTurn).toHaveBeenCalledTimes(1);
     expect(agentTurn.mock.calls[0]?.[0]).toMatchObject({ workspaceId: "ws-team" });
+  });
+
+  it("fails closed when an admitted agent turn's job changes citadel before launch", async () => {
+    const agentTurn = vi.fn();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const admit = cronRuns.beginAdmission.bind(cronRuns);
+    // Scope drift between admission and child launch (e.g. an edit racing restart recovery).
+    cronRuns.beginAdmission = (input) => {
+      const result = admit(input);
+      const row = cronJobs.rows.get(input.jobId)!;
+      cronJobs.rows.set(input.jobId, { ...row, citadelId: "other" });
+      return result;
+    };
+    const service = createService(new FakeDb(), vi.fn(), {
+      cronJobs,
+      cronRuns,
+      citadels: citadelReader([citadelRecord("team"), citadelRecord("other")]),
+      handlers: { agentTurn },
+    });
+    await service.createCronJob({
+      jobId: "drifting-agent",
+      name: "Drifting agent",
+      action: "agent_turn",
+      schedule: "0 12 * * * UTC",
+      actionConfig: { agentTurn: { prompt: "Summarize the team queue" } },
+      citadelId: "team",
+    });
+
+    const result = await service.runCronJobNow("drifting-agent");
+
+    expect(cronRuns.get(result.runId)?.status).toBe("manual_reconciliation_required");
+    expect(agentTurn).not.toHaveBeenCalled();
   });
 
   it("leaves global jobs untouched by citadel lookups", async () => {
