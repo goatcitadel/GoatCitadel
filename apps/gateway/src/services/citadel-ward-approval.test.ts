@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCitadelWardApprovalPayload,
+  buildCitadelWardRequestSummary,
+  citadelWardInputSummaryFields,
   citadelWardReplayIdempotencyKey,
+  citadelWardUrlOrigin,
   computeCitadelWardPayloadHash,
   isCitadelWardApprovalKind,
   readCitadelWardApprovalPayload,
@@ -32,6 +35,39 @@ describe("citadel ward approval contract", () => {
 
   it("replay key is namespaced by approval id", () => {
     expect(citadelWardReplayIdempotencyKey("ap-1")).toBe("citadel-ward:ap-1");
+  });
+
+  it("replays under the request's own idempotency key when it carried one", () => {
+    expect(citadelWardReplayIdempotencyKey("ap-1", "client-key")).toBe("client-key");
+    expect(citadelWardReplayIdempotencyKey("ap-1", "  ")).toBe("citadel-ward:ap-1");
+    expect(citadelWardReplayIdempotencyKey("ap-1", 42)).toBe("citadel-ward:ap-1");
+  });
+
+  it("request summary is bounded, truncated and redacts secret-looking keys", () => {
+    const summary = buildCitadelWardRequestSummary([
+      ["Peer", "peer-1"],
+      ["Skipped", undefined],
+      ["Parameters", { password: "hunter2-not-real", nested: { clientSecret: "s-not-real" }, note: "z".repeat(300) }],
+      ...citadelWardInputSummaryFields({ apiKey: "k-not-real", count: 3 }),
+    ]);
+    expect(summary.map((entry) => entry.label)).toEqual(["Peer", "Parameters", "Input apiKey", "Input count"]);
+    expect(summary[1]!.value).toHaveLength(200);
+    expect(summary[1]!.value.endsWith("…")).toBe(true);
+    expect(summary[2]).toEqual({ label: "Input apiKey", value: "[REDACTED]" });
+    expect(summary[3]).toEqual({ label: "Input count", value: "3" });
+    const text = JSON.stringify(summary);
+    for (const secret of ["hunter2-not-real", "s-not-real", "k-not-real"]) expect(text).not.toContain(secret);
+
+    const many = buildCitadelWardRequestSummary(Array.from({ length: 25 }, (_, index) => [`Field ${index}`, index]));
+    expect(many).toHaveLength(21);
+    expect(many.at(-1)).toEqual({ label: "More fields", value: "5 not shown" });
+  });
+
+  it("push URL summary keeps only the origin", () => {
+    expect(citadelWardUrlOrigin("https://user:pw@peer.example:8443/push/abc?token=t")).toBe(
+      "https://peer.example:8443",
+    );
+    expect(citadelWardUrlOrigin("not a url")).toBe("unparseable URL");
   });
 
   it("recognises only ward approval kinds", () => {

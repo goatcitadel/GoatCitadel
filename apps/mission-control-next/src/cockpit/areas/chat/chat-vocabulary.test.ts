@@ -28,6 +28,11 @@ describe("chat vocabulary", () => {
     expect(presentApprovalAction("shell.exec", "tool_invoke")).toBe("Run command");
     expect(presentApprovalAction(undefined, "remote_worker.native_runtime")).toBe("Run on a remote worker");
     expect(presentApprovalAction(undefined, undefined)).toBe("Action request");
+    expect(presentApprovalAction(undefined, "citadel_ward.integration_action")).toBe(
+      "Citadel Ward: integration action",
+    );
+    expect(presentApprovalAction(undefined, "citadel_ward.a2a_outbound")).toBe("Citadel Ward: outbound A2A call");
+    expect(presentApprovalAction(undefined, "citadel_ward.a2a_push")).toBe("Citadel Ward: A2A push delivery");
   });
 
   it("presents friendly file types", () => {

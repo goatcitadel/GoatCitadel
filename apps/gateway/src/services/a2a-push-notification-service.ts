@@ -23,7 +23,9 @@ import { projectA2AExternalValue } from "./a2a-public-projection.js";
 import { buildA2AOutboundWardAction, resolveWardEffectForExternalAction } from "./citadel-ward-gate.js";
 import {
   buildCitadelWardApprovalPayload,
+  buildCitadelWardRequestSummary,
   CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
+  citadelWardUrlOrigin,
   type CitadelWardApprovalRef,
 } from "./citadel-ward-approval.js";
 import { DRY_RUN_APPROVAL_TTL_MS } from "./integration-dry-run-gate.js";
@@ -35,6 +37,7 @@ interface ApprovedPendingEvent {
   wardApproval: CitadelWardApprovalRef;
   eventSequence: number;
   urlHash: string;
+  citadelId: string;
 }
 
 export interface A2AApprovedPushInput {
@@ -45,6 +48,8 @@ export interface A2AApprovedPushInput {
   eventSequence: number;
   /** `request.urlHash` from the approval payload; the push URL must still match it. */
   urlHash: string;
+  /** The citadel the approval was minted under; the task's live citadel must still match it. */
+  citadelId: string;
 }
 
 export interface A2ARefusedPushApprovalInput {
@@ -52,7 +57,9 @@ export interface A2ARefusedPushApprovalInput {
   taskId: string;
   peerId: string;
   eventSequence: number;
-  disposition: "rejected" | "expired";
+  /** `failed`: approved, but the approved push could not be delivered (`reason` says why). */
+  disposition: "rejected" | "expired" | "failed";
+  reason?: string;
 }
 
 export interface A2APeerAuthContext {
@@ -199,12 +206,14 @@ export class A2APushNotificationService {
       wardApproval: { approvalId: input.approvalId, wardAction: input.wardAction },
       eventSequence: input.eventSequence,
       urlHash: input.urlHash,
+      citadelId: input.citadelId,
     });
   }
 
   /**
-   * Record a rejected or expired push approval as a blocked delivery of that event, then resume
-   * later queued events (each still under the live ward).
+   * Record a rejected, expired or undeliverable (failed) push approval as a blocked delivery of
+   * that event, so the config never stays deferred, then resume later queued events (each still
+   * under the live ward). A config already past the event is left alone.
    */
   public async recordRefusedPushApproval(
     input: A2ARefusedPushApprovalInput,
@@ -221,7 +230,10 @@ export class A2APushNotificationService {
       {
         status: "blocked",
         attemptCount: config.attemptCount + 1,
-        error: `Citadel Ward approval ${input.approvalId} for a2a.outbound.push was ${input.disposition}, so delivery is blocked.`,
+        error:
+          input.disposition === "failed"
+            ? `Citadel Ward approval ${input.approvalId} for a2a.outbound.push was approved, but the approved push could not be delivered (${input.reason ?? "no reason recorded"}), so delivery is blocked.`
+            : `Citadel Ward approval ${input.approvalId} for a2a.outbound.push was ${input.disposition}, so delivery is blocked.`,
         lastEventSequence: input.eventSequence,
       },
       checkedAt,
@@ -261,7 +273,8 @@ export class A2APushNotificationService {
     checkedAt: string,
     approved?: ApprovedPendingEvent,
   ): Promise<A2ATaskPushDeliveryResult[]> {
-    const pushConfigs = this.deps.storage.a2aTaskPushConfigs;
+    const storage = this.deps.storage;
+    const pushConfigs = storage.a2aTaskPushConfigs;
     const config = await pushConfigs.find(binding.a2aTaskId, peerId);
     if (!config?.enabled || (config.lastDeliveryStatus === "deferred_pending_approval" && !approved)) {
       return [];
@@ -273,8 +286,8 @@ export class A2APushNotificationService {
     if (approved && first?.sequence !== approved.eventSequence) {
       return [];
     }
-    if (approved && first && hashStableJson(config.url) !== approved.urlHash) {
-      const error = `The push URL changed after Citadel Ward approval ${approved.wardApproval.approvalId}, so delivery is blocked.`;
+    const error = approved && first ? await approvedPushDrift(storage, config, binding, approved) : undefined;
+    if (first && error) {
       const updated = await pushConfigs.recordDelivery(
         task.id,
         binding.peerId,
@@ -534,6 +547,13 @@ export class A2APushNotificationService {
           title: `A2A push ${event.kind} to ${binding.peerId} — Citadel Ward approval`,
           route: wardAction,
           target: binding.peerId,
+          requestSummary: buildCitadelWardRequestSummary([
+            ["Task", task.id],
+            ["Peer", binding.peerId],
+            ["Event kind", event.kind],
+            ["Event sequence", String(event.sequence)],
+            ["Push URL origin", citadelWardUrlOrigin(config.url)],
+          ]),
         },
         linkage: { actionType: CITADEL_WARD_A2A_PUSH_APPROVAL_KIND },
         expiresAt: new Date(Date.parse(checkedAt) + DRY_RUN_APPROVAL_TTL_MS).toISOString(),
@@ -603,6 +623,30 @@ export class A2APushNotificationService {
     }
     return { statusCode: response.status, ok: true };
   }
+}
+
+/**
+ * Why an approved event may no longer be sent as approved: its push URL or its task's citadel
+ * changed after approval. Undefined when both still match.
+ */
+async function approvedPushDrift(
+  storage: Storage,
+  config: StoredPushConfig,
+  binding: A2ATaskBindingRecord,
+  approved: ApprovedPendingEvent,
+): Promise<string | undefined> {
+  const { approvalId } = approved.wardApproval;
+  if (hashStableJson(config.url) !== approved.urlHash) {
+    return `The push URL changed after Citadel Ward approval ${approvalId}, so delivery is blocked.`;
+  }
+  const live = await resolveWardEffectForExternalAction({
+    storage,
+    workspaceId: binding.workspaceId,
+    action: approved.wardApproval.wardAction,
+  });
+  return live.citadelId === approved.citadelId
+    ? undefined
+    : `The task's citadel changed after approval ${approvalId}, so delivery is blocked.`;
 }
 
 function buildPushPayload(

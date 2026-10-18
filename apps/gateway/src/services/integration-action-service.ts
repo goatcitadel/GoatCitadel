@@ -36,7 +36,9 @@ import {
 } from "./citadel-ward-gate.js";
 import {
   buildCitadelWardApprovalPayload,
+  buildCitadelWardRequestSummary,
   CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND,
+  citadelWardInputSummaryFields,
   type CitadelWardApprovalRef,
 } from "./citadel-ward-approval.js";
 import {
@@ -732,6 +734,11 @@ async function openIntegrationWardApproval(
         title: `${action.label} — Citadel Ward approval`,
         route: ward.action,
         target: `${connection.connectionId}:${action.actionId}`,
+        requestSummary: buildCitadelWardRequestSummary([
+          ["Connection", `${connection.label} (${connection.catalogId})`],
+          ["Action", `${action.label} (${action.actionId})`],
+          ...citadelWardInputSummaryFields(request.input ?? {}),
+        ]),
       },
       linkage: { workspaceId: connection.workspaceId, actionType: CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND },
       expiresAt: new Date(Date.parse(checkedAt) + DRY_RUN_APPROVAL_TTL_MS).toISOString(),

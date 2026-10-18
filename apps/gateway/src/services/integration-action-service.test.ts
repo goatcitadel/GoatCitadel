@@ -1920,6 +1920,36 @@ describe("integration-action-service", () => {
       expect(host.publishRealtime).toHaveBeenCalled();
     });
 
+    it("previews a bounded, redacted summary of the action awaiting approval", async () => {
+      const connection = guardedActivepiecesConnection();
+      const createApproval = wardApprovalCreate();
+      const host = wardHost(connection, [{ actionPattern: "integration.*", effect: "require_approval" }], {
+        createApproval,
+      });
+
+      await invokeIntegrationConnectionAction(host, connection.connectionId, "trigger_webhook", {
+        input: { payload: "y".repeat(400), apiToken: "tok-test-not-real" },
+      });
+
+      const summary = (
+        createApproval.mock.calls[0]![0].preview as {
+          requestSummary?: Array<{ label: string; value: string }>;
+        }
+      ).requestSummary;
+      expect(summary?.slice(0, 2)).toEqual([
+        { label: "Connection", value: "Activepieces (automation.activepieces)" },
+        { label: "Action", value: expect.stringMatching(/\(trigger_webhook\)$/) },
+      ]);
+      expect(summary?.find((entry) => entry.label === "Input apiToken")).toEqual({
+        label: "Input apiToken",
+        value: "[REDACTED]",
+      });
+      const payload = summary?.find((entry) => entry.label === "Input payload")?.value ?? "";
+      expect(payload).toHaveLength(200);
+      expect(payload.endsWith("…")).toBe(true);
+      expect(JSON.stringify(summary)).not.toContain("tok-test-not-real");
+    });
+
     it("executes an approved ward replay through the idempotent runner", async () => {
       const connection = guardedActivepiecesConnection();
       const fetchMock = webhookFetch();

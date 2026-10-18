@@ -14,6 +14,7 @@ import { projectA2AExternalValue } from "./a2a-public-projection.js";
 import { A2ARouteService } from "./a2a-route-service.js";
 import { buildInboundIdempotencyKey, normalizeInboundMessage } from "./a2a-route-utils.js";
 import { citadelWardReplayIdempotencyKey } from "./citadel-ward-approval.js";
+import { buildCitadelWardApprovalEffectDeps } from "./citadel-ward-approval-effect-service.js";
 
 describe("A2ARouteService", () => {
   let storage: Storage | undefined;
@@ -1516,6 +1517,35 @@ describe("A2ARouteService", () => {
       expect(harness.storage.externalSideEffectRuns.listByConnection("peer-remote")).toEqual([]);
     });
 
+    it("previews a bounded, redacted request summary on the approval", async () => {
+      const createApproval = approvalStub();
+      const harness = await createWardedHarness(createApproval);
+      // Secret-looking keys come first, so the truncation cannot be what hides them.
+      const params = {
+        apiKey: "sk-test-not-a-real-key",
+        nested: { authorization: "Bearer abc" },
+        text: "x".repeat(500),
+      };
+
+      await harness.service.sendOutbound({ ...outboundInput, params }, "operator-1", "2026-06-01T00:00:00.000Z");
+
+      const summary = (
+        createApproval.mock.calls[0]?.[0]?.preview as { requestSummary?: Array<{ label: string; value: string }> }
+      )?.requestSummary;
+      expect(summary?.map((entry) => entry.label)).toEqual(["Peer", "Method", "Transport", "Parameters"]);
+      expect(summary?.slice(0, 3)).toEqual([
+        { label: "Peer", value: "peer-remote" },
+        { label: "Method", value: "message/send" },
+        { label: "Transport", value: "JSONRPC" },
+      ]);
+      const parameters = summary?.[3]?.value ?? "";
+      expect(parameters.length).toBeLessThanOrEqual(200);
+      expect(parameters.endsWith("…")).toBe(true);
+      expect(JSON.stringify(summary)).not.toContain("sk-test-not-a-real-key");
+      expect(JSON.stringify(summary)).not.toContain("Bearer abc");
+      expect(harness.peer.posts()).toHaveLength(0);
+    });
+
     it("sends once on an approved replay", async () => {
       const createApproval = approvalStub();
       const harness = await createWardedHarness(createApproval);
@@ -1531,6 +1561,23 @@ describe("A2ARouteService", () => {
       expect(second).toMatchObject({ status: "replayed" });
       expect(harness.peer.posts()).toHaveLength(1);
       expect(createApproval).not.toHaveBeenCalled();
+    });
+
+    it("sends once when two approvals of one keyed request are both replayed under its key", async () => {
+      const createApproval = approvalStub();
+      const harness = await createWardedHarness(createApproval);
+      const keyed = { ...outboundInput, idempotencyKey: "client-key-1" };
+
+      const first = await harness.service.sendOutbound(keyed, "operator-1", "2026-06-01T00:00:00.000Z", {
+        wardApproval,
+      });
+      const second = await harness.service.sendOutbound(keyed, "operator-1", "2026-06-01T00:00:01.000Z", {
+        wardApproval: { approvalId: "approval-ward-2", wardAction },
+      });
+
+      expect(first).toMatchObject({ status: "sent" });
+      expect(second).toMatchObject({ status: "replayed" });
+      expect(harness.peer.posts()).toHaveLength(1);
     });
 
     it("does not accept a ward approval minted for another action", async () => {
@@ -1687,6 +1734,7 @@ describe("A2ARouteService", () => {
         peerId: "peer-1",
         eventSequence: harness.eventSequence,
         urlHash: harness.urlHash,
+        citadelId: "personal",
       };
     }
 
@@ -1713,6 +1761,15 @@ describe("A2ARouteService", () => {
             eventKind: "task.status",
             urlHash: expect.any(String),
           },
+        },
+        preview: {
+          requestSummary: [
+            { label: "Task", value: harness.taskId },
+            { label: "Peer", value: "peer-1" },
+            { label: "Event kind", value: "task.status" },
+            { label: "Event sequence", value: String(harness.eventSequence) },
+            { label: "Push URL origin", value: "https://peer.example" },
+          ],
         },
         expiresAt: "2026-06-01T00:15:01.000Z",
       });
@@ -1882,6 +1939,90 @@ describe("A2ARouteService", () => {
         lastDeliveryStatus: "blocked",
         lastEventSequence: harness.eventSequence,
       });
+    });
+
+    it("approved push refuses when the task's citadel changed after approval", async () => {
+      const harness = await createDeferredPush();
+
+      const results = await harness.service.deliverApprovedPush(
+        { ...approvedPush(harness), citadelId: "citadel-before-move" },
+        "2026-06-01T00:00:02.000Z",
+      );
+
+      expect(results).toEqual([
+        expect.objectContaining({ status: "blocked", error: expect.stringMatching(/citadel changed after approval/) }),
+      ]);
+      expect(harness.pushDeliveryFetch).not.toHaveBeenCalled();
+      expect(harness.storage.a2aTaskPushConfigs.get(harness.taskId, "peer-1")).toMatchObject({
+        lastDeliveryStatus: "blocked",
+        lastEventSequence: harness.eventSequence,
+      });
+    });
+
+    it("an undeliverable approved push does not leave the config stuck deferred", async () => {
+      const harness = await createDeferredPush();
+      const setConfig = (id: string, enabled: boolean, checkedAt: string) =>
+        harness.service.handleJsonRpc(
+          pushPeer,
+          {
+            jsonrpc: "2.0",
+            id,
+            method: "SetTaskPushNotificationConfig",
+            params: {
+              taskId: harness.taskId,
+              pushNotificationConfig: { url: pushUrl, events: ["task.status"], enabled },
+            },
+          },
+          checkedAt,
+        );
+      await setConfig("rpc-ward-push-disable", false, "2026-06-01T00:00:02.000Z");
+      const approval = {
+        approvalId: "approval-push-1",
+        kind: "citadel_ward.a2a_push",
+        riskLevel: "caution",
+        status: "approved",
+        payload: harness.createApproval.mock.calls[0]![0].payload,
+        preview: {},
+        createdAt: "2026-06-01T00:00:01.000Z",
+        explanationStatus: "not_requested",
+      } as ApprovalRequest;
+      const executors = buildCitadelWardApprovalEffectDeps({
+        storage: {
+          approvals: { get: async () => approval },
+          a2aTaskPushConfigs: createSqliteAsyncStorage(harness.storage).a2aTaskPushConfigs,
+        } as never,
+        integrationHost: () => {
+          throw new Error("no integration host in this test");
+        },
+        a2a: () => harness.service,
+      });
+
+      await expect(executors.executeApprovedCitadelWardAction({ approvalId: "approval-push-1" })).rejects.toMatchObject(
+        {
+          code: "blocked",
+        },
+      );
+      const refused = harness.storage.a2aTaskPushConfigs.get(harness.taskId, "peer-1");
+      expect(refused).toMatchObject({ lastDeliveryStatus: "blocked", lastEventSequence: harness.eventSequence });
+      expect(refused.lastDeliveryError).toMatch(/approved, but the approved push could not be delivered/);
+
+      await setConfig("rpc-ward-push-enable", true, "2026-06-01T00:00:03.000Z");
+      await harness.service.handleJsonRpc(
+        pushPeer,
+        { jsonrpc: "2.0", id: "rpc-ward-push-new-event", method: "CancelTask", params: { taskId: harness.taskId } },
+        "2026-06-01T00:00:04.000Z",
+      );
+
+      // A new event is not swallowed: under the still-live ward it opens its own approval.
+      expect(harness.createApproval).toHaveBeenCalledTimes(2);
+      const laterRequest = (
+        harness.createApproval.mock.calls[1]?.[0]?.payload as { request?: { eventSequence?: number } }
+      )?.request;
+      expect(laterRequest?.eventSequence).toBeGreaterThan(harness.eventSequence);
+      expect(harness.storage.a2aTaskPushConfigs.get(harness.taskId, "peer-1").lastDeliveryStatus).toBe(
+        "deferred_pending_approval",
+      );
+      expect(harness.pushDeliveryFetch).not.toHaveBeenCalled();
     });
 
     it("keeps the blocked delivery when no approval loop is wired", async () => {

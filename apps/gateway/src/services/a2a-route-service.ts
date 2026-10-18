@@ -59,6 +59,7 @@ import { sendOutboundGrpc } from "./a2a-grpc-outbound-service.js";
 import { buildA2AOutboundWardAction, resolveWardEffectForExternalAction } from "./citadel-ward-gate.js";
 import {
   buildCitadelWardApprovalPayload,
+  buildCitadelWardRequestSummary,
   CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
   type CitadelWardApprovalRef,
 } from "./citadel-ward-approval.js";
@@ -637,10 +638,10 @@ export class A2ARouteService {
   private async openOutboundWardApproval(
     input: A2AOutboundPreviewRequest,
     actorId: string,
-    wardAction: string,
-    citadelId: string,
+    ward: { action: string; citadelId: string; transport: string },
     checkedAt: string,
   ): Promise<{ approvalId: string } | { warning: string }> {
+    const { action: wardAction, citadelId, transport } = ward;
     const createApproval = this.deps.createApproval;
     if (!createApproval) {
       return {
@@ -661,6 +662,12 @@ export class A2ARouteService {
           title: `A2A ${input.method} to ${input.peerId} — Citadel Ward approval`,
           route: wardAction,
           target: input.peerId,
+          requestSummary: buildCitadelWardRequestSummary([
+            ["Peer", input.peerId],
+            ["Method", input.method],
+            ["Transport", transport],
+            ["Parameters", input.params],
+          ]),
         },
         linkage: { actionType: CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND },
         expiresAt: new Date(Date.parse(checkedAt) + DRY_RUN_APPROVAL_TTL_MS).toISOString(),
@@ -727,7 +734,12 @@ export class A2ARouteService {
           warnings: [`A Citadel Ward denies ${wardAction} (citadel ${ward.citadelId}).`],
         };
       }
-      const approval = await this.openOutboundWardApproval(input, actorId, wardAction, ward.citadelId, checkedAt);
+      const approval = await this.openOutboundWardApproval(
+        input,
+        actorId,
+        { action: wardAction, citadelId: ward.citadelId, transport: preview.transport },
+        checkedAt,
+      );
       return "approvalId" in approval
         ? {
             ...base,

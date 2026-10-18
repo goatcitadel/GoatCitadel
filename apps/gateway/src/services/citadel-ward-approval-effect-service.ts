@@ -29,9 +29,9 @@ import { invokeIntegrationConnectionAction, type IntegrationActionHost } from ".
 /**
  * Executes approved Citadel Ward `require_approval` actions (integration operator actions,
  * A2A outbound sends, A2A push deliveries) exactly once. The approval payload is re-read and
- * hash-verified, the action is replayed with the approval reference and the
- * `citadel-ward:<approvalId>` idempotency key, and the owner re-checks the live ward (deny still
- * wins). Every refusal is a terminal `CitadelWardApprovalEffectError`; any other error is
+ * hash-verified, the action is replayed with the approval reference under the original request's
+ * idempotency key (else `citadel-ward:<approvalId>`, so two approvals of one keyed request still
+ * execute once), and the owner re-checks the live ward (deny still wins). Every refusal is a terminal `CitadelWardApprovalEffectError`; any other error is
  * infrastructure and may retry, because the owners' side-effect ledgers keep a retry
  * exactly-once. A rejected or expired approval executes nothing; a deferred push is recorded as
  * blocked so later events resume.
@@ -106,8 +106,23 @@ const INTEGRATION_IN_PROGRESS_REASON = "external_side_effect_in_progress";
 export class CitadelWardApprovalEffectService {
   public constructor(private readonly deps: CitadelWardApprovalEffectDeps) {}
 
+  /**
+   * Executes the approved action. Any refusal of a push approval also records the event as a
+   * failed (blocked) delivery, so its config never stays deferred; a settled push is not a
+   * refusal. The refusal still fails the effect terminally with its code.
+   */
   public async executeApprovedAction(input: { approvalId: string }): Promise<Record<string, unknown>> {
-    const { approvalId } = input;
+    try {
+      return await this.executeApproved(input.approvalId);
+    } catch (error) {
+      if (error instanceof CitadelWardApprovalEffectError) {
+        await this.recordFailedPush(input.approvalId, error);
+      }
+      throw error;
+    }
+  }
+
+  private async executeApproved(approvalId: string): Promise<Record<string, unknown>> {
     const approval = await this.readApproval(approvalId, ["approved"]);
     const payload = readWardPayload(approval);
     if (computeCitadelWardPayloadHash(payload.request) !== payload.payloadHash) {
@@ -131,16 +146,35 @@ export class CitadelWardApprovalEffectService {
     const approval = await this.readApproval(input.approvalId, ["rejected", "edited"]);
     const disposition = input.expired ? "expired" : "rejected";
     if (approval.kind === CITADEL_WARD_A2A_PUSH_APPROVAL_KIND) {
-      const push = readPushRequest(readWardPayload(approval).request);
-      await this.deps.a2a().recordRefusedPushApproval({
-        approvalId: input.approvalId,
-        taskId: push.taskId,
-        peerId: push.peerId,
-        eventSequence: push.eventSequence,
-        disposition,
-      });
+      await this.recordPushRefusal(input.approvalId, readPushRequest(readWardPayload(approval).request), disposition);
     }
     return { disposition, kind: approval.kind };
+  }
+
+  /** Best-effort read of the push the approval names; nothing is recorded when it is unreadable. */
+  private async recordFailedPush(approvalId: string, error: CitadelWardApprovalEffectError): Promise<void> {
+    const approval = await this.findApproval(approvalId);
+    const request = approval?.kind === CITADEL_WARD_A2A_PUSH_APPROVAL_KIND ? readWardRequest(approval) : undefined;
+    const push = request ? readPushRequestOrUndefined(request) : undefined;
+    if (push) {
+      await this.recordPushRefusal(approvalId, push, "failed", `${error.code}: ${error.message}`);
+    }
+  }
+
+  private async recordPushRefusal(
+    approvalId: string,
+    push: { taskId: string; peerId: string; eventSequence: number },
+    disposition: "rejected" | "expired" | "failed",
+    reason?: string,
+  ): Promise<void> {
+    await this.deps.a2a().recordRefusedPushApproval({
+      approvalId,
+      taskId: push.taskId,
+      peerId: push.peerId,
+      eventSequence: push.eventSequence,
+      disposition,
+      ...(reason ? { reason } : {}),
+    });
   }
 
   private async executeIntegrationAction(
@@ -175,7 +209,10 @@ export class CitadelWardApprovalEffectService {
       host,
       request.connectionId,
       request.actionId,
-      { input: request.input, idempotencyKey: citadelWardReplayIdempotencyKey(wardApproval.approvalId) },
+      {
+        input: request.input,
+        idempotencyKey: citadelWardReplayIdempotencyKey(wardApproval.approvalId, request.idempotencyKey),
+      },
       { wardApproval },
     );
     return mapIntegrationResult(result);
@@ -186,14 +223,15 @@ export class CitadelWardApprovalEffectService {
     wardApproval: CitadelWardApprovalRef,
   ): Promise<Record<string, unknown>> {
     const { outbound, actorId } = readOutboundRequest(payload.request);
-    const result = await this.deps
-      .a2a()
-      .sendOutbound(
-        { ...outbound, idempotencyKey: citadelWardReplayIdempotencyKey(wardApproval.approvalId) },
-        actorId,
-        undefined,
-        { wardApproval },
-      );
+    const result = await this.deps.a2a().sendOutbound(
+      {
+        ...outbound,
+        idempotencyKey: citadelWardReplayIdempotencyKey(wardApproval.approvalId, outbound.idempotencyKey),
+      },
+      actorId,
+      undefined,
+      { wardApproval },
+    );
     return mapOutboundResult(result);
   }
 
@@ -209,6 +247,7 @@ export class CitadelWardApprovalEffectService {
       peerId: push.peerId,
       eventSequence: push.eventSequence,
       urlHash: push.urlHash,
+      citadelId: payload.citadelId,
     });
     const [first] = results;
     return first ? mapPushResult(first) : this.readSettledPush(push, wardApproval.approvalId);
@@ -238,15 +277,7 @@ export class CitadelWardApprovalEffectService {
     approvalId: string,
     statuses: readonly ApprovalRequest["status"][],
   ): Promise<ApprovalRequest> {
-    let approval: ApprovalRequest | undefined;
-    try {
-      approval = await this.deps.storage.approvals.get(approvalId);
-    } catch (error) {
-      // Only a missing approval is terminal; any other read failure is infrastructure,
-      // so it propagates and the effect worker defers and retries.
-      if (!(error instanceof NotFoundError)) throw error;
-      approval = undefined;
-    }
+    const approval = await this.findApproval(approvalId);
     if (!approval || !isCitadelWardApprovalKind(approval.kind) || !statuses.includes(approval.status)) {
       throw new CitadelWardApprovalEffectError(
         "approval_not_approved",
@@ -254,6 +285,17 @@ export class CitadelWardApprovalEffectService {
       );
     }
     return approval;
+  }
+
+  private async findApproval(approvalId: string): Promise<ApprovalRequest | undefined> {
+    try {
+      return await this.deps.storage.approvals.get(approvalId);
+    } catch (error) {
+      // Only a missing approval is terminal; any other read failure is infrastructure,
+      // so it propagates and the effect worker defers and retries.
+      if (!(error instanceof NotFoundError)) throw error;
+      return undefined;
+    }
   }
 }
 
@@ -285,15 +327,18 @@ function readIntegrationRequest(request: Record<string, unknown>): {
   connectionId: string;
   actionId: string;
   input: Record<string, unknown>;
+  idempotencyKey?: string;
 } {
   const invokeRequest = request.invokeRequest;
   if (!isRecord(invokeRequest) || (invokeRequest.input !== undefined && !isRecord(invokeRequest.input))) {
     throw invalidPayload();
   }
+  const { idempotencyKey } = invokeRequest;
   return {
     connectionId: readString(request.connectionId),
     actionId: readString(request.actionId),
     input: (invokeRequest.input as Record<string, unknown> | undefined) ?? {},
+    ...(typeof idempotencyKey === "string" ? { idempotencyKey } : {}),
   };
 }
 
@@ -322,6 +367,21 @@ function readPushRequest(request: Record<string, unknown>): {
     eventSequence,
     urlHash: readString(request.urlHash),
   };
+}
+
+function readWardRequest(approval: ApprovalRequest): Record<string, unknown> | undefined {
+  return readCitadelWardApprovalPayload(approval.payload)?.request;
+}
+
+/** The push event identity for recording a failure; undefined when the request does not name one. */
+function readPushRequestOrUndefined(
+  request: Record<string, unknown>,
+): { taskId: string; peerId: string; eventSequence: number } | undefined {
+  const { taskId, peerId, eventSequence } = request;
+  if (typeof taskId !== "string" || !taskId.trim() || typeof peerId !== "string" || !peerId.trim()) return undefined;
+  return typeof eventSequence === "number" && Number.isInteger(eventSequence)
+    ? { taskId, peerId, eventSequence }
+    : undefined;
 }
 
 function mapIntegrationResult(result: IntegrationActionInvokeResult): Record<string, unknown> {

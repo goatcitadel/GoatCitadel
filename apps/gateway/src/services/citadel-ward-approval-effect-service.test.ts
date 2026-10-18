@@ -441,6 +441,7 @@ describe("citadel ward approval effects", () => {
       peerId: "peer-1",
       eventSequence: 3,
       urlHash: "hash-1",
+      citadelId: "citadel-guarded",
     });
 
     a2a.sendOutbound.mockResolvedValueOnce({
@@ -524,7 +525,17 @@ describe("citadel ward approval effects", () => {
           result: { errorCode: "blocked" },
         }),
       );
+      // The approved event is recorded refused (a no-op when the config already moved past it).
+      expect(goneA2A.recordRefusedPushApproval).toHaveBeenCalledWith({
+        approvalId: "approval-ward-1",
+        taskId: "task-1",
+        peerId: "peer-1",
+        eventSequence: 3,
+        disposition: "failed",
+        reason: expect.stringMatching(/^blocked: .*nothing was delivered/),
+      });
     }
+    expect(settledA2A.recordRefusedPushApproval).not.toHaveBeenCalled();
   });
 
   it("a push ward tightened to deny fails the effect with ward_denied and delivers nothing", async () => {
@@ -561,6 +572,114 @@ describe("citadel ward approval effects", () => {
     expect(settlement.approvalEffects.completeEffect).not.toHaveBeenCalled();
     expect(settlement.deferForRetry).not.toHaveBeenCalled();
     expect(a2a.sendOutbound).not.toHaveBeenCalled();
+    // The owner already recorded the blocked delivery, so this refusal record is a no-op there.
+    expect(a2a.recordRefusedPushApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ disposition: "failed", reason: expect.stringMatching(/^ward_denied: /) }),
+    );
+  });
+
+  it("a hash mismatch on a push approval records the push refused with disposition failed", async () => {
+    const push = approvedPush();
+    const tampered: ApprovalRequest = {
+      ...push,
+      payload: { ...push.payload, request: { ...(push.payload.request as object), urlHash: "hash-other" } },
+    };
+    const a2a = fakeA2A();
+    const executors = buildCitadelWardApprovalEffectDeps({
+      storage: approvalStore(tampered),
+      integrationHost: vi.fn() as never,
+      a2a: () => a2a,
+    });
+    const settlement = fakeSettlement();
+
+    await runCitadelWardApprovalEffect(claimedEffect(push, "approve"), executors, settlement);
+
+    expect(settlement.approvalEffects.failEffect).toHaveBeenCalledWith(
+      "effect-1",
+      "worker-1",
+      1,
+      expect.objectContaining({ result: { errorCode: "payload_hash_mismatch" } }),
+    );
+    expect(a2a.deliverApprovedPush).not.toHaveBeenCalled();
+    expect(a2a.recordRefusedPushApproval).toHaveBeenCalledWith({
+      approvalId: "approval-ward-1",
+      taskId: "task-1",
+      peerId: "peer-1",
+      eventSequence: 3,
+      disposition: "failed",
+      reason: expect.stringMatching(/^payload_hash_mismatch: /),
+    });
+  });
+
+  it("an integration or outbound refusal records no push", async () => {
+    const real = createRealIntegrationHost(activepiecesConnection(), [
+      { actionPattern: "integration.*", effect: "deny" },
+    ]);
+    cleanups.push(real.cleanup);
+    const a2a = fakeA2A();
+    const executors = buildCitadelWardApprovalEffectDeps({
+      storage: approvalStore(integrationApproval()),
+      integrationHost: () => real.host,
+      a2a: () => a2a,
+    });
+
+    await expect(executors.executeApprovedCitadelWardAction({ approvalId: "approval-ward-1" })).rejects.toMatchObject({
+      code: "ward_denied",
+    });
     expect(a2a.recordRefusedPushApproval).not.toHaveBeenCalled();
+  });
+
+  it("two approvals of one keyed integration request execute the provider once", async () => {
+    const real = createRealIntegrationHost(activepiecesConnection(), [
+      { actionPattern: "integration.*", effect: "require_approval" },
+    ]);
+    cleanups.push(real.cleanup);
+    const keyed = {
+      connectionId: CONNECTION_ID,
+      actionId: "trigger_webhook",
+      invokeRequest: { input: {}, idempotencyKey: "client-key-1" },
+    };
+    const first = wardApproval(CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND, keyed);
+    const second = wardApproval(CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND, keyed, {
+      approvalId: "approval-ward-2",
+    });
+    const executors = buildCitadelWardApprovalEffectDeps({
+      storage: approvalStore(first, second),
+      integrationHost: () => real.host,
+      a2a: () => fakeA2A(),
+    });
+
+    const firstResult = await executors.executeApprovedCitadelWardAction({ approvalId: "approval-ward-1" });
+    const secondResult = await executors.executeApprovedCitadelWardAction({ approvalId: "approval-ward-2" });
+
+    expect(real.fetchMock).toHaveBeenCalledTimes(1);
+    expect(firstResult).toMatchObject({ disposition: "executed" });
+    expect(secondResult).toMatchObject({ disposition: "replayed", replayed: true });
+  });
+
+  it("an approved outbound replay runs under the request's own idempotency key when it has one", async () => {
+    const outboundRequest = {
+      peerId: "peer-1",
+      method: "SendMessage",
+      params: { text: "hi" },
+      idempotencyKey: "client-key-1",
+    };
+    const approval = wardApproval(
+      CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
+      { outbound: outboundRequest, actorId: "operator-1" },
+      { wardAction: "a2a.outbound.jsonrpc.SendMessage", citadelId: "personal" },
+    );
+    const a2a = fakeA2A();
+    const executors = buildCitadelWardApprovalEffectDeps({
+      storage: approvalStore(approval),
+      integrationHost: vi.fn() as never,
+      a2a: () => a2a,
+    });
+
+    await executors.executeApprovedCitadelWardAction({ approvalId: "approval-ward-1" });
+
+    expect(a2a.sendOutbound).toHaveBeenCalledWith(outboundRequest, "operator-1", undefined, {
+      wardApproval: { approvalId: "approval-ward-1", wardAction: "a2a.outbound.jsonrpc.SendMessage" },
+    });
   });
 });
