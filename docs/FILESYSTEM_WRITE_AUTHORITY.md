@@ -30,12 +30,12 @@ All of these apply, in order. Nothing later can widen what an earlier step refus
 
 1. **Deny-wins and tool availability.** A tool in `tools.deny` is refused everywhere. This includes `fs.delete` and `fs.write`, which are denied by default. Settings › Safety › Tools sets each of `fs.write`, `fs.delete`, `fs.copy`, `fs.move` and `fs.patch` to Denied, Available or Not listed (`tool_global_access`). Un-denying `fs.delete` or `fs.write` is a danger-risk change, because the tool becomes callable in **every** write root, including the runtime jail, subject to the effective approval policy.
 2. **Approvals and grants.** Approval rules, permission profiles, Citadel Wards and tool grants still apply unchanged.
-3. **Path resolution in the Gateway** (`tool-path-session-scope.ts`, `tool-path-resolution.ts`). For the tools it maps (`fs.write`, `fs.delete`, `fs.move`, the destination of `fs.copy`, and `git.worktree.create`/`remove`), relative paths resolve against the workspace or project. An absolute write path, or a relative path that resolves through a link, is accepted only when it lands in the workspace, the project, the runtime write jail or an admitted operator write root. `fs.patch`, artifact creation and browser-output tools are not mapped, so give them absolute paths; a relative path there resolves against the Gateway process directory, and the write gate then decides. Reads and the shell working directory (`cwd`) are not widened. Delegated child sessions stay inside their approved scope.
+3. **Path resolution in the Gateway** (`tool-path-session-scope.ts`, `tool-path-resolution.ts`). For the write tools it maps (`fs.write`, `fs.patch`, `fs.delete`, `fs.move`, the destination of `fs.copy`, artifact, document and presentation creation, browser screenshot/interact outputs, and `git.worktree.create`/`remove`), relative paths resolve against the workspace or project. For artifact, document and presentation creation and browser outputs only, an output path that already starts with the workspace folder name is not nested a second time. An absolute write path, or a relative path that resolves through a link, is accepted only when it lands in the workspace, the project, the runtime write jail or an admitted operator write root. Reads and the shell working directory (`cwd`) are not widened. Delegated child sessions stay inside their approved scope.
 4. **The central write gate** (`packages/policy-engine/src/sandbox/tool-write-gate.ts`). The policy engine runs it as a structural check, and the tool executor runs it again before acting:
    - writes may land in the jail or in any operator root;
    - deletes (`fs.delete`, and the source of `fs.move`) may land only in the jail or in operator roots with `allowDelete`;
    - a write root itself can never be deleted, nor any folder that contains a protected runtime path;
-   - **hard-forbidden targets** are refused even inside an allowed root: system, credential and profile locations, plus the runtime config folder, `data/secrets`, `data/postgres`, the configured bundled-Postgres data dir and the audit dir;
+   - **hard-forbidden targets** are refused even inside an allowed root: system, credential and profile locations, plus the runtime config folder, `data/secrets`, `data/postgres`, the configured bundled-Postgres data dir, the audit dir, and the SQLite database file with its `-wal`, `-shm` and `-journal` sidecars;
    - operator roots are ignored entirely unless the Gateway derived runtime write protection at config load (fail closed).
 
 Operator write roots also count as readable roots, so filesystem tools can list a folder before cleaning it.
@@ -48,7 +48,6 @@ Operator write roots also count as readable roots, so filesystem tools can list 
 
 ## Not implemented
 
-- The SQLite database file (`data/index.db` by default) is not on the hard-forbidden list. With `./data` in the default jail and `fs.write` or `fs.delete` made available, a tool could reach it. Keep those tools denied, or keep the database outside every write root, until it is added to the protected paths.
 
 - A chat approval cannot open a new folder: no path-scoped write grant is minted from an approval. Typing "I approve" in Chat changes nothing. Only the governed Settings and Change Plan paths above widen write scope.
 - Shell commands (`shell.exec`, `shell.exec_background`) are not limited by write roots. Their working directory is an execution context, not a write boundary; risky-shell approval and deny rules govern them.

@@ -453,7 +453,7 @@ flowchart LR
 - Capability and skills catalogs split inspectable review state from callable runtime state. Inactive candidates and proposals are never callable.
 - Memory lifecycle is explicit, scoped, and operator-visible. Trace-derived memory remains proposal-first.
 - Deny-wins policy, Citadel Wards, approval gates, path jails, allowlists, auth boundaries, and tool grants remain authoritative.
-- Filesystem tools write only inside the runtime write jail and operator write roots that the operator opens in Settings. Deleting inside a root requires that root's own opt-in, and the runtime config, secrets, bundled Postgres and audit paths are never writable by tools. See [Filesystem Write Authority](docs/FILESYSTEM_WRITE_AUTHORITY.md).
+- Filesystem tools write only inside the runtime write jail and operator write roots that the operator opens in Settings. Deleting inside a root requires that root's own opt-in, and the runtime config, secrets, database (SQLite and bundled Postgres) and audit paths are never writable by tools. See [Filesystem Write Authority](docs/FILESYSTEM_WRITE_AUTHORITY.md).
 - Canonical state belongs in repositories and durable logs. Retained realtime events are operator signals, not the complete historical record.
 
 ## What Ships In This Repo
