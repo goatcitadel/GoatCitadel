@@ -19,6 +19,7 @@ import {
   McpServersSettings,
   BudgetModeControl,
   ApprovalModeControl,
+  FilesystemWriteRootsControl,
   ModelsSettings,
   ToolGrantSettings,
   SafetyCatalogSummary,
@@ -162,6 +163,7 @@ export function SettingsArea() {
         return (
           <>
             <ApprovalModeControl />
+            <FilesystemWriteRootsControl />
             <ToolGrantSettings key={activeWorkspaceId} workspaceId={activeWorkspaceId ?? ""} />
             <SafetyCatalogSummary />
           </>
@@ -193,7 +195,7 @@ export function SettingsArea() {
       : rest[0] && !PAGES.some((item) => item.id === rest[0] || item.entries.some((entry) => entry.section === rest[0]))
         ? "This link does not match a settings page. Choose a page from Settings."
         : hash &&
-            !["application-updates", "approval-mode"].includes(hash) &&
+            !["application-updates", "approval-mode", "filesystem-write-roots"].includes(hash) &&
             !page.entries.some((entry) => entry.anchor === hash || entry.section === hash)
           ? "This link does not match a section on this settings page. Choose a section from Settings."
           : undefined;
