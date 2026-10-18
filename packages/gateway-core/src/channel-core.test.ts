@@ -409,6 +409,74 @@ describe("describeChannelCapabilities", () => {
     expect(describeChannelCapabilities("matrix", { homeserverUrl: "https://m.test" }).setupReady).toBe(false);
   });
 
+  it("describes QQBot as text-only with a signed webhook inbound and no typing", () => {
+    const outboundOnly = describeChannelCapabilities("qqbot", { appId: "1024", defaultTarget: "group:G1" });
+    expect(outboundOnly.setupReady).toBe(false);
+    expect(outboundOnly.inboundModes).toEqual(["none"]);
+
+    const configured = describeChannelCapabilities("qqbot", { appId: "1024", appSecretEnv: "QQBOT_APP_SECRET" });
+    expect(configured.setupReady).toBe(true);
+    expect(configured.inboundModes).toEqual(["webhook"]);
+    expect(configured.supportedActions).toEqual(expect.arrayContaining(["channel.send", "channel.reply"]));
+    expect(configured.supportedActions).not.toContain("channel.typing");
+    expect(configured.supportedActions).not.toContain("channel.react");
+    expect(configured.supportedActions).not.toContain("channel.unsend");
+    expect(configured.supportedAttachmentSources).toEqual([]);
+    expect(configured.platformUnsupportedActions?.["channel.typing"]).toBe(
+      "QQBot has no typing indicator API for bot messages.",
+    );
+    expect(configured.runtimePosture).toMatchObject({
+      outboundTransport: "api",
+      inboundTransport: "webhook",
+      lifecycle: "stateless",
+      inboundReadiness: "ready",
+    });
+    expect(configured.runtimePolicy.allowlist).toBe(true);
+    const notes = configured.supportNotes.join(" ");
+    expect(notes).toMatch(/default-deny/);
+    expect(notes).toMatch(/passive repl/i);
+    expect(notes).toMatch(/quota/i);
+    expect(notes).not.toMatch(/anyone can/i);
+  });
+
+  it("describes WeCom as text-only application messages with an encrypted callback inbound", () => {
+    const sendOnly = describeChannelCapabilities("wecom", {
+      corpId: "ww1",
+      agentId: "1000002",
+      secretEnv: "WECOM_SECRET",
+    });
+    expect(sendOnly.setupReady).toBe(true);
+    expect(sendOnly.inboundModes).toEqual(["none"]);
+    expect(sendOnly.runtimePosture).toMatchObject({ inboundReadiness: "unsupported", outboundTransport: "api" });
+    expect(sendOnly.supportNotes.join(" ")).toMatch(/callback/i);
+
+    const callback = describeChannelCapabilities("wecom", {
+      corpId: "ww1",
+      agentId: "1000002",
+      secretEnv: "WECOM_SECRET",
+      callbackTokenEnv: "WECOM_CALLBACK_TOKEN",
+      encodingAesKeyEnv: "WECOM_ENCODING_AES_KEY",
+    });
+    expect(callback.inboundModes).toEqual(["webhook"]);
+    expect(callback.supportedActions).toContain("channel.send");
+    expect(callback.supportedActions).not.toContain("channel.typing");
+    expect(callback.platformUnsupportedActions?.["channel.typing"]).toBe(
+      "WeCom has no typing indicator API for app messages.",
+    );
+    expect(callback.runtimePosture).toMatchObject({ inboundTransport: "webhook", inboundReadiness: "ready" });
+    expect(callback.runtimePolicy.allowlist).toBe(true);
+    expect(callback.supportNotes.join(" ")).toMatch(/default-deny/);
+    expect(callback.supportedAttachmentSources).toEqual([]);
+
+    const missingKey = describeChannelCapabilities("wecom", {
+      corpId: "ww1",
+      agentId: "1",
+      secretEnv: "S",
+      callbackTokenEnv: "T",
+    });
+    expect(missingKey.inboundModes).toEqual(["none"]);
+  });
+
   it("keeps Google Chat webhook mode outbound-only and points inbound at Chat app mode", () => {
     const webhook = describeChannelCapabilities("google-chat", {
       webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=k&token=t",
@@ -892,6 +960,8 @@ describe("channel action matrix (#354)", () => {
       { homeserverUrl: "https://matrix.example.test", accessTokenEnv: "MATRIX_TOKEN" },
       { homeserverUrl: "https://matrix.example.test", accessTokenEnv: "MATRIX_TOKEN", inboundStreamEnabled: true },
     ],
+    qqbot: [{ appId: "1024", appSecretEnv: "QQBOT_APP_SECRET" }],
+    wecom: [{ corpId: "ww1", agentId: "1000002", secretEnv: "WECOM_SECRET" }],
     imessage: [{ bridgeUrl: "http://127.0.0.1:1234", passwordEnv: "BB_PASSWORD" }],
     "nextcloud-talk": [{ baseUrl: "https://cloud.example.test", tokenEnv: "NC_TOKEN" }],
     line: [{ channelAccessTokenEnv: "LINE_TOKEN" }],
@@ -904,7 +974,11 @@ describe("channel action matrix (#354)", () => {
    * platform limit. Each entry needs a reason; keep this list honest and short.
    */
   const SCOPE_EXCLUDED = "Excluded from the WS5 channel-actions scope (#354 covers the core channel set only).";
+  const NOT_BY_ADAPTER =
+    "The platform offers it but this adapter is text-send only in WS6 (not supported by this adapter).";
   const KNOWN_ACTION_GAPS: Record<string, Partial<Record<(typeof MATRIX_ACTIONS)[number], string>>> = {
+    qqbot: { "channel.react": NOT_BY_ADAPTER, "channel.unsend": NOT_BY_ADAPTER },
+    wecom: { "channel.react": NOT_BY_ADAPTER, "channel.unsend": NOT_BY_ADAPTER },
     line: { "channel.react": SCOPE_EXCLUDED, "channel.unsend": SCOPE_EXCLUDED, "channel.typing": SCOPE_EXCLUDED },
     zalo: { "channel.react": SCOPE_EXCLUDED, "channel.unsend": SCOPE_EXCLUDED, "channel.typing": SCOPE_EXCLUDED },
     zalouser: {

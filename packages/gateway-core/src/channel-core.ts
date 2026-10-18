@@ -664,6 +664,88 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     ],
     requiredAnyOf: [["homeserverUrl"], ["accessTokenEnv", "accessToken"]],
   },
+  qqbot: {
+    platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS.qqbot,
+    supportedActions: ["channel.send", "channel.reply"],
+    supportedAttachmentSources: [],
+    resolveInboundModes: (config) => (isQqbotInboundEnabled(config) ? ["webhook"] : ["none"]),
+    threadCapabilities: {
+      rooms: true,
+      replies: true,
+      direct: true,
+      groups: true,
+    },
+    resolveRuntimePolicy: (config) => ({ allowlist: isQqbotInboundEnabled(config) }),
+    chunkingMode: "fallback",
+    supportsStreaming: false,
+    resolveRuntimePosture: (config) =>
+      isQqbotInboundEnabled(config)
+        ? {
+            outboundTransport: "api",
+            inboundTransport: "webhook",
+            lifecycle: "stateless",
+            inboundReadiness: "ready",
+            operatorSummary:
+              "QQBot sends text through the QQ Bot Open Platform API with an app access token; inbound events arrive on a signed webhook (ed25519 over the bot secret) and are default-deny by sender openid.",
+          }
+        : {
+            outboundTransport: "api",
+            lifecycle: "stateless",
+            inboundReadiness: "unsupported",
+            operatorSummary:
+              "QQBot sends text through the QQ Bot Open Platform API with an app access token. Inbound needs the app secret so signed webhook events can be verified.",
+          },
+    resolveSupportNotes: (config) => [
+      isQqbotInboundEnabled(config)
+        ? "QQBot inbound verifies the ed25519 request signature before anything is accepted; allow the QQ openids that may start turns, because inbound is default-deny (a dropped message's sender_not_allowlisted diagnostic shows the openid)."
+        : "QQBot inbound is off until the app secret is configured so signed webhook events can be verified.",
+      "QQ allows active (unprompted) group and C2C messages only within platform quotas, so replies sent soon after an inbound message (within about 5 minutes) are passive replies that carry the inbound msg_id (only the first chunk of a split reply; later chunks are active messages); later sends count against the active-message quota.",
+      "QQBot delivery is text-only in v1: attachments are rejected rather than dropped.",
+      "Targets are group:<openid>, user:<openid>, channel:<id> or dm:<guild id>.",
+      "QQBot reactions and unsend are not supported by this adapter.",
+    ],
+    requiredAnyOf: [["appId"], ["appSecretEnv", "appSecret"]],
+  },
+  wecom: {
+    platformUnsupportedActions: CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS.wecom,
+    supportedActions: ["channel.send"],
+    supportedAttachmentSources: [],
+    resolveInboundModes: (config) => (isWecomInboundEnabled(config) ? ["webhook"] : ["none"]),
+    threadCapabilities: {
+      direct: true,
+      groups: true,
+    },
+    resolveRuntimePolicy: (config) => ({ allowlist: isWecomInboundEnabled(config) }),
+    chunkingMode: "fallback",
+    supportsStreaming: false,
+    resolveRuntimePosture: (config) =>
+      isWecomInboundEnabled(config)
+        ? {
+            outboundTransport: "api",
+            inboundTransport: "webhook",
+            lifecycle: "stateless",
+            inboundReadiness: "ready",
+            operatorSummary:
+              "WeCom sends application text messages with a corp access token; inbound arrives on the encrypted callback (SHA-1 signature and AES-256-CBC decryption) and is default-deny by sender userid.",
+          }
+        : {
+            outboundTransport: "api",
+            lifecycle: "stateless",
+            inboundReadiness: "unsupported",
+            operatorSummary:
+              "WeCom sends application text messages with a corp access token. Inbound needs the callback token and EncodingAESKey so encrypted callbacks can be verified.",
+          },
+    resolveSupportNotes: (config) => [
+      isWecomInboundEnabled(config)
+        ? "WeCom inbound verifies the callback signature and decrypts with the EncodingAESKey (and checks the CorpID) before anything is accepted; allow the WeCom userids that may start turns, because inbound is default-deny."
+        : "WeCom inbound is off until the callback token and EncodingAESKey are configured for the encrypted callback.",
+      "WeCom delivery is text-only in v1: attachments are rejected rather than dropped.",
+      "Targets are user:<userid>, party:<departmentid>, tag:<tagid> or a bare userid; the application must be visible to the recipient.",
+      "The server IP must be on the WeCom application's trusted IP list or sends fail with errcode 60020.",
+      "WeCom reactions and unsend are not supported by this adapter.",
+    ],
+    requiredAnyOf: [["corpId"], ["agentId"], ["secretEnv", "secret"]],
+  },
   imessage: {
     supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
     supportedAttachmentSources: ["url", "inline"],
@@ -1339,6 +1421,20 @@ export function isMatrixInboundEnabled(config: Record<string, unknown>): boolean
     config.inboundStreamEnabled === true &&
     hasAnyConfigured(config, ["homeserverUrl"]) &&
     hasAnyConfigured(config, ["accessToken", "accessTokenEnv"])
+  );
+}
+
+/** QQBot signed webhook inbound: the app secret verifies the ed25519 request signature. */
+export function isQqbotInboundEnabled(config: Record<string, unknown>): boolean {
+  return hasAnyConfigured(config, ["appSecret", "appSecretEnv"]);
+}
+
+/** WeCom encrypted callback inbound: corp id, callback token and EncodingAESKey are all required. */
+export function isWecomInboundEnabled(config: Record<string, unknown>): boolean {
+  return (
+    hasAnyConfigured(config, ["corpId"]) &&
+    hasAnyConfigured(config, ["callbackToken", "callbackTokenEnv"]) &&
+    hasAnyConfigured(config, ["encodingAesKey", "encodingAesKeyEnv"])
   );
 }
 

@@ -193,6 +193,15 @@ describe("executeTool", () => {
     expect(resolveFixedOutboundHostsForTool("whatsapp.react")).toContain("graph.facebook.com");
   });
 
+  it("adds the fixed QQBot and WeCom hosts for channel.send", () => {
+    expect(resolveFixedOutboundHostsForTool("channel.send", "qqbot")).toEqual([
+      "api.sgroup.qq.com",
+      "sandbox.api.sgroup.qq.com",
+      "bots.qq.com",
+    ]);
+    expect(resolveFixedOutboundHostsForTool("channel.send", "wecom")).toEqual(["qyapi.weixin.qq.com"]);
+  });
+
   it("dispatches session.search to the chat-message repo scoped to the calling session", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const searchMessages = vi.fn(() => [
@@ -4437,6 +4446,265 @@ describe("executeTool", () => {
       expect(result).toMatchObject({ status: "failed" });
       expect(fetchMock).not.toHaveBeenCalled();
       delete process.env.MATRIX_OUTBOUND_TOKEN;
+    });
+  });
+
+  describe("qqbot and wecom outbound", () => {
+    function chinaStorage(key: string, config: Record<string, unknown>) {
+      return {
+        integrationConnections: {
+          get: vi.fn(() => ({ connectionId: `conn-${key}`, key, kind: "channel", config })),
+        },
+        commsDeliveries: {
+          createQueued: vi.fn((input: Record<string, unknown>) => ({
+            deliveryId: `delivery-${key}`,
+            status: "queued",
+            channelKey: input.channelKey,
+            target: input.target,
+            createdAt: "2026-10-17T00:00:00.000Z",
+            updatedAt: "2026-10-17T00:00:00.000Z",
+          })),
+          markSent: vi.fn(),
+          markFailed: vi.fn(),
+        },
+      } as unknown as Storage & AsyncStorage;
+    }
+    const chinaPolicy = {
+      ...policyConfig,
+      sandbox: {
+        ...policyConfig.sandbox,
+        networkAllowlist: ["bots.qq.com", "api.sgroup.qq.com", "sandbox.api.sgroup.qq.com", "qyapi.weixin.qq.com"],
+      },
+    };
+    const qqConfig = {
+      appId: "executor-app",
+      appSecretEnv: "QQBOT_EXECUTOR_SECRET",
+      defaultTarget: "group:GROUP_OPENID",
+    };
+    const wecomConfig = {
+      corpId: "executor-corp",
+      agentId: "1000002",
+      secretEnv: "WECOM_EXECUTOR_SECRET",
+      defaultTarget: "user:zhangsan",
+    };
+    function jsonResponse(body: unknown, status = 200) {
+      return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+    }
+
+    it("qqbot channel.send posts a passive group reply", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      process.env.QQBOT_EXECUTOR_SECRET = "qq-exec-secret";
+      const fetchMock = vi.fn(async (url: unknown) =>
+        String(url).startsWith("https://bots.qq.com/")
+          ? jsonResponse({ access_token: "qq-access", expires_in: "7200" })
+          : jsonResponse({ id: "qq-msg-1", timestamp: 1 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.send",
+          args: { connectionId: "conn-qqbot", message: "hello qq", replyToMessageId: "evt-9" },
+          agentId: "operator",
+          sessionId: "sess-qqbot-send",
+        },
+        chinaPolicy,
+        chinaStorage("qqbot", qqConfig),
+      );
+      expect(result).toMatchObject({ status: "sent", providerMessageId: "qq-msg-1" });
+      const sendCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/messages")) as unknown as [
+        string,
+        RequestInit,
+      ];
+      expect(String(sendCall[0])).toBe("https://api.sgroup.qq.com/v2/groups/GROUP_OPENID/messages");
+      expect(new Headers(sendCall[1].headers).get("authorization")).toBe("QQBot qq-access");
+      expect(JSON.parse(String(sendCall[1].body))).toEqual({
+        content: "hello qq",
+        msg_type: 0,
+        msg_id: "evt-9",
+        msg_seq: 1,
+      });
+      delete process.env.QQBOT_EXECUTOR_SECRET;
+    });
+
+    it("qqbot sends later chunks as active messages because their reply id is the previous message", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      process.env.QQBOT_EXECUTOR_SECRET = "qq-exec-secret-3";
+      const fetchMock = vi.fn(async (url: unknown) =>
+        String(url).startsWith("https://bots.qq.com/")
+          ? jsonResponse({ access_token: "qq-access-3", expires_in: "7200" })
+          : jsonResponse({ id: "qq-msg-3" }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      await executeTool(
+        {
+          toolName: "channel.send",
+          args: { connectionId: "conn-qqbot", message: "second", replyToMessageId: "qq-msg-1", replyToPartIndex: 1 },
+          agentId: "operator",
+          sessionId: "sess-qqbot-first",
+        },
+        chinaPolicy,
+        chinaStorage("qqbot", { ...qqConfig, appId: "executor-app-3" }),
+      );
+      const sendCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/messages")) as unknown as [
+        string,
+        RequestInit,
+      ];
+      expect(JSON.parse(String(sendCall[1].body))).toEqual({
+        content: "second",
+        msg_type: 0,
+        msg_seq: 2,
+      });
+      delete process.env.QQBOT_EXECUTOR_SECRET;
+    });
+
+    it("qqbot uses the sandbox host and rejects attachments instead of dropping them", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      process.env.QQBOT_EXECUTOR_SECRET = "qq-exec-secret-2";
+      const fetchMock = vi.fn(async (url: unknown) =>
+        String(url).startsWith("https://bots.qq.com/")
+          ? jsonResponse({ access_token: "qq-access-2", expires_in: "7200" })
+          : jsonResponse({ id: "qq-msg-2" }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const sandboxed = await executeTool(
+        {
+          toolName: "channel.send",
+          args: { connectionId: "conn-qqbot", message: "hi" },
+          agentId: "operator",
+          sessionId: "sess-qqbot-sandbox",
+        },
+        chinaPolicy,
+        chinaStorage("qqbot", { ...qqConfig, appId: "executor-app-2", sandbox: true }),
+      );
+      expect(sandboxed).toMatchObject({ status: "sent" });
+      expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith("https://sandbox.api.sgroup.qq.com/"))).toBe(
+        true,
+      );
+      const before = fetchMock.mock.calls.length;
+      const withAttachment = await executeTool(
+        {
+          toolName: "channel.send",
+          args: {
+            connectionId: "conn-qqbot",
+            message: "hi",
+            attachments: [{ url: "https://example.com/f.png", title: "f.png" }],
+          },
+          agentId: "operator",
+          sessionId: "sess-qqbot-attach",
+        },
+        chinaPolicy,
+        chinaStorage("qqbot", qqConfig),
+      );
+      expect(withAttachment).toMatchObject({ status: "failed" });
+      expect(JSON.stringify(withAttachment)).toContain("QQBot channel delivery is text-only");
+      expect(fetchMock.mock.calls.length).toBe(before);
+      delete process.env.QQBOT_EXECUTOR_SECRET;
+    });
+
+    it("qqbot react and unsend are not supported by this adapter", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fetchMock = vi.fn(async () => jsonResponse({}));
+      vi.stubGlobal("fetch", fetchMock);
+      for (const toolName of ["channel.react", "channel.unsend"]) {
+        const result = await executeTool(
+          {
+            toolName,
+            args: { connectionId: "conn-qqbot", messageId: "m", reaction: "x" },
+            agentId: "operator",
+            sessionId: `sess-qqbot-${toolName}`,
+          },
+          chinaPolicy,
+          chinaStorage("qqbot", qqConfig),
+        );
+        expect(result).toMatchObject({ status: "failed" });
+        expect(JSON.stringify(result)).toContain("not supported");
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("wecom channel.send posts message/send", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      process.env.WECOM_EXECUTOR_SECRET = "wecom-exec-secret";
+      const fetchMock = vi.fn(async (url: unknown) =>
+        String(url).includes("/cgi-bin/gettoken")
+          ? jsonResponse({ errcode: 0, errmsg: "ok", access_token: "wecom-access", expires_in: 7200 })
+          : jsonResponse({ errcode: 0, errmsg: "ok", msgid: "wecom-msg-1" }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.send",
+          args: { connectionId: "conn-wecom", message: "hello wecom" },
+          agentId: "operator",
+          sessionId: "sess-wecom-send",
+        },
+        chinaPolicy,
+        chinaStorage("wecom", wecomConfig),
+      );
+      expect(result).toMatchObject({ status: "sent", providerMessageId: "wecom-msg-1" });
+      const sendCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/message/send")) as unknown as [
+        string,
+        RequestInit,
+      ];
+      expect(String(sendCall[0])).toBe("https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=wecom-access");
+      expect(JSON.parse(String(sendCall[1].body))).toEqual({
+        touser: "zhangsan",
+        msgtype: "text",
+        agentid: 1000002,
+        text: { content: "hello wecom" },
+      });
+      delete process.env.WECOM_EXECUTOR_SECRET;
+    });
+
+    it("wecom retries once after an expired token and never exposes the token url on failure", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      process.env.WECOM_EXECUTOR_SECRET = "wecom-exec-secret-2";
+      let mints = 0;
+      let sends = 0;
+      const fetchMock = vi.fn(async (url: unknown) => {
+        if (String(url).includes("/cgi-bin/gettoken")) {
+          mints += 1;
+          return jsonResponse({ errcode: 0, errmsg: "ok", access_token: `wecom-access-${mints}`, expires_in: 7200 });
+        }
+        sends += 1;
+        return sends === 1
+          ? jsonResponse({ errcode: 42001, errmsg: "access_token expired" })
+          : jsonResponse({ errcode: 0, errmsg: "ok", msgid: "wecom-msg-2" });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.send",
+          args: { connectionId: "conn-wecom", message: "again" },
+          agentId: "operator",
+          sessionId: "sess-wecom-retry",
+        },
+        chinaPolicy,
+        chinaStorage("wecom", { ...wecomConfig, corpId: "executor-corp-2" }),
+      );
+      expect(result).toMatchObject({ status: "sent", providerMessageId: "wecom-msg-2" });
+      expect(mints).toBe(2);
+
+      const failing = vi.fn(async (url: unknown) =>
+        String(url).includes("/cgi-bin/gettoken")
+          ? jsonResponse({ errcode: 0, errmsg: "ok", access_token: "wecom-secret-token", expires_in: 7200 })
+          : jsonResponse({ errcode: 60020, errmsg: "not allow access from your ip" }),
+      );
+      vi.stubGlobal("fetch", failing);
+      const failed = await executeTool(
+        {
+          toolName: "channel.send",
+          args: { connectionId: "conn-wecom", message: "denied" },
+          agentId: "operator",
+          sessionId: "sess-wecom-fail",
+        },
+        chinaPolicy,
+        chinaStorage("wecom", { ...wecomConfig, corpId: "executor-corp-3" }),
+      );
+      expect(failed).toMatchObject({ status: "failed" });
+      expect(JSON.stringify(failed)).toContain("errcode 60020");
+      expect(JSON.stringify(failed)).not.toContain("wecom-secret-token");
+      delete process.env.WECOM_EXECUTOR_SECRET;
     });
   });
 

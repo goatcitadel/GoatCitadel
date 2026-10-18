@@ -174,6 +174,12 @@ export const CHANNEL_PLATFORM_UNSUPPORTED_ACTIONS: Readonly<
     "channel.react": "ntfy has no message reactions.",
     "channel.typing": "ntfy has no typing indicator.",
   },
+  qqbot: {
+    "channel.typing": "QQBot has no typing indicator API for bot messages.",
+  },
+  wecom: {
+    "channel.typing": "WeCom has no typing indicator API for app messages.",
+  },
   teams: {
     "channel.react": "Teams incoming webhooks can only post new messages.",
     "channel.unsend": "Teams incoming webhooks can only post new messages.",

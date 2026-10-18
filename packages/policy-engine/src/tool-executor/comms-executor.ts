@@ -37,6 +37,8 @@ import {
   matrixSendText,
   type MatrixClientContext,
 } from "./matrix-client.js";
+import { getQqbotAccessToken, qqbotSendText } from "./qqbot-client.js";
+import { clearWecomAccessToken, getWecomAccessToken, wecomSendText } from "./wecom-client.js";
 
 const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
@@ -477,6 +479,16 @@ async function executeCommsProviderTool(
         throw new Error("Matrix channel delivery is text-only; attachments are not supported.");
       }
       return matrixSend(connectionConfig, args, allowlist, target, sanitizedMessage, grantAllowlist);
+    case "qqbot":
+      if (attachments.length > 0) {
+        throw new Error("QQBot channel delivery is text-only; attachments are not supported.");
+      }
+      return qqbotSend(connectionConfig, args, allowlist, target, sanitizedMessage, grantAllowlist);
+    case "wecom":
+      if (attachments.length > 0) {
+        throw new Error("WeCom channel delivery is text-only; attachments are not supported.");
+      }
+      return wecomSend(connectionConfig, args, allowlist, target, sanitizedMessage, grantAllowlist);
     case "nextcloud-talk":
       return nextcloudTalkSend(
         connectionConfig,
@@ -2311,6 +2323,95 @@ async function matrixSend(
   return eventId;
 }
 
+/** Token mint is not an external side effect; the message POST is. */
+function chinaPlatformFetchers(allowlist: string[], grantAllowlist?: string[]) {
+  return {
+    tokenFetch: async (url: string, init: RequestInit) =>
+      (await fetchAllowlisted(url, init, allowlist, undefined, grantAllowlist, { crossesExternalSideEffect: false }))
+        .response,
+    apiFetch: async (url: string, init: RequestInit) =>
+      (await fetchAllowlisted(url, init, allowlist, undefined, grantAllowlist)).response,
+  };
+}
+
+async function qqbotSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+  grantAllowlist?: string[],
+): Promise<string> {
+  const appId = asString(config.appId);
+  const appSecret = secretFrom(config, "appSecret", "appSecretEnv");
+  if (!appId) {
+    throw new Error("Missing QQBot app id");
+  }
+  if (!appSecret) {
+    throw new Error("Missing QQBot app secret");
+  }
+  const resolvedTarget = normalizeChannelTarget(target, "qqbot") ?? resolveDefaultChannelTarget("qqbot", config);
+  if (!resolvedTarget) {
+    throw new Error("Missing QQBot target");
+  }
+  const { tokenFetch, apiFetch } = chinaPlatformFetchers(allowlist, grantAllowlist);
+  const token = await getQqbotAccessToken({ appId, appSecret, fetcher: tokenFetch });
+  const partIndex = Math.max(0, parseIntegerLike(args.replyToPartIndex) ?? 0);
+  const { messageId } = await qqbotSendText({
+    token,
+    sandbox: config.sandbox === true || asString(config.sandbox)?.toLowerCase() === "true",
+    target: resolvedTarget,
+    content: message,
+    // Passive replies need the inbound message id, which the gateway passes as the delivery reply id for the first
+    // chunk only (later chunks carry the previous QQ message id, which is not a valid msg_id), so later chunks
+    // are sent as active messages.
+    replyMsgId: partIndex === 0 ? (asString(args.replyToMessageId) ?? asString(args.replyTo)) : undefined,
+    msgSeq: partIndex + 1,
+    fetcher: apiFetch,
+  });
+  return messageId;
+}
+
+async function wecomSend(
+  config: Record<string, unknown>,
+  _args: Record<string, unknown>,
+  allowlist: string[],
+  target: string,
+  message: string,
+  grantAllowlist?: string[],
+): Promise<string> {
+  const corpId = asString(config.corpId);
+  const agentId = asString(config.agentId) ?? (typeof config.agentId === "number" ? String(config.agentId) : undefined);
+  const secret = secretFrom(config, "secret", "secretEnv");
+  if (!corpId) {
+    throw new Error("Missing WeCom corp id");
+  }
+  if (!agentId) {
+    throw new Error("Missing WeCom agent id");
+  }
+  if (!secret) {
+    throw new Error("Missing WeCom application secret");
+  }
+  const resolvedTarget = normalizeChannelTarget(target, "wecom") ?? resolveDefaultChannelTarget("wecom", config);
+  if (!resolvedTarget) {
+    throw new Error("Missing WeCom target");
+  }
+  const { tokenFetch, apiFetch } = chinaPlatformFetchers(allowlist, grantAllowlist);
+  const token = await getWecomAccessToken({ corpId, secret, fetcher: tokenFetch });
+  const { messageId } = await wecomSendText({
+    token,
+    agentId,
+    target: resolvedTarget,
+    content: message,
+    fetcher: apiFetch,
+    refreshToken: async () => {
+      clearWecomAccessToken({ corpId, secret });
+      return getWecomAccessToken({ corpId, secret, fetcher: tokenFetch });
+    },
+  });
+  return messageId;
+}
+
 async function matrixReactAction(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -2963,6 +3064,8 @@ const CHANNEL_TARGET_KEYS: Record<string, string[]> = {
   imessage: ["defaultHandle", "defaultTarget", "target"],
   mattermost: ["defaultChannel", "defaultTarget", "target"],
   matrix: ["defaultRoomId", "defaultTarget", "target"],
+  qqbot: ["defaultTarget", "target"],
+  wecom: ["defaultTarget", "target"],
   "nextcloud-talk": ["defaultRoomId", "defaultConversationId", "defaultTarget", "target"],
   line: ["defaultTarget", "defaultUserId", "defaultGroupId", "defaultRoomId", "target"],
   zalo: ["defaultRecipientId", "defaultTarget", "target"],
