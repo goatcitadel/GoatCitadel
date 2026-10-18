@@ -163,6 +163,7 @@ Notes:
 - Runs may be linked to sessions, turns, tasks, and approvals.
 - The `durableKernelV1Enabled` feature flag gates durable-run APIs. The `replayOverridesV1Enabled` flag (default: off) gates replay-with-overrides.
 - `unifiedComposerPaletteV1Enabled` is a Gateway-authored Mission Control projection gate. It changes only the Chat composer discovery surface: its client registry reads existing scoped APIs, caches source results per session, and degrades source failures independently. It does not create a second capability catalog, widen file/workspace access, or make inactive agents, candidates, proposals, or non-callable skills executable.
+- `chatAsyncClarificationV1Enabled` (default: on) gates the optional `user_input.request` Chat tool. It is callable only in top-level interactive durable Chat, allows one unanswered question at a time (at most 16 per turn, each expiring after 15 minutes), and its answers enter the next model boundary as ordinary clarification context; they never create grants or approvals. An explicit `false` in config, `GOATCITADEL_FEATURE_CHAT_ASYNC_CLARIFICATION_V1_ENABLED`, or stored settings removes the tool from the callable catalog and model schema and makes the executor, issuance, and reply paths fail closed.
 
 ### Evolution Change Plan
 
