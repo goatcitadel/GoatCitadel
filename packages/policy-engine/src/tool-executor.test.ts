@@ -4526,7 +4526,7 @@ describe("executeTool", () => {
       delete process.env.QQBOT_EXECUTOR_SECRET;
     });
 
-    it("qqbot sends later chunks as active messages because their reply id is the previous message", async () => {
+    it("qqbot reuses the original msg_id with an incrementing msg_seq on later chunks", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
       process.env.QQBOT_EXECUTOR_SECRET = "qq-exec-secret-3";
       const fetchMock = vi.fn(async (url: unknown) =>
@@ -4538,7 +4538,13 @@ describe("executeTool", () => {
       await executeTool(
         {
           toolName: "channel.send",
-          args: { connectionId: "conn-qqbot", message: "second", replyToMessageId: "qq-msg-1", replyToPartIndex: 1 },
+          args: {
+            connectionId: "conn-qqbot",
+            message: "second",
+            replyToMessageId: "qq-msg-1",
+            replyAnchorMessageId: "evt-9",
+            replyToPartIndex: 1,
+          },
           agentId: "operator",
           sessionId: "sess-qqbot-first",
         },
@@ -4552,6 +4558,7 @@ describe("executeTool", () => {
       expect(JSON.parse(String(sendCall[1].body))).toEqual({
         content: "second",
         msg_type: 0,
+        msg_id: "evt-9",
         msg_seq: 2,
       });
       delete process.env.QQBOT_EXECUTOR_SECRET;

@@ -699,8 +699,8 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       isQqbotInboundEnabled(config)
         ? "QQBot inbound verifies the ed25519 request signature before anything is accepted; allow the QQ openids that may start turns, because inbound is default-deny (a dropped message's sender_not_allowlisted diagnostic shows the openid)."
         : "QQBot inbound is off until the app secret is configured so signed webhook events can be verified.",
-      "QQ allows active (unprompted) group and C2C messages only within platform quotas, so replies sent soon after an inbound message (within about 5 minutes) are passive replies that carry the inbound msg_id (only the first chunk of a split reply; later chunks are active messages); later sends count against the active-message quota.",
-      "QQBot delivery is text-only in v1: attachments are rejected rather than dropped.",
+      "QQ allows active (unprompted) group and C2C messages only within platform quotas, so replies sent soon after an inbound message (within about 5 minutes) are passive replies that carry the inbound msg_id on every chunk of a split reply (QQ allows about 5 replies per message); later sends count against the active-message quota.",
+      "QQBot delivery is text-only in v1: attachments are rejected rather than dropped. Replies are split into 2,000-character chunks as a conservative guess; the exact QQ text limit is unverified.",
       "Targets are group:<openid>, user:<openid>, channel:<id> or dm:<guild id>.",
       "QQBot reactions and unsend are not supported by this adapter.",
     ],
@@ -739,7 +739,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
       isWecomInboundEnabled(config)
         ? "WeCom inbound verifies the callback signature and decrypts with the EncodingAESKey (and checks the CorpID) before anything is accepted; allow the WeCom userids that may start turns, because inbound is default-deny."
         : "WeCom inbound is off until the callback token and EncodingAESKey are configured for the encrypted callback.",
-      "WeCom delivery is text-only in v1: attachments are rejected rather than dropped.",
+      "WeCom delivery is text-only in v1: attachments are rejected rather than dropped. Text above 2,048 bytes is refused (WeCom would truncate it), so replies are split into small chunks.",
       "Targets are user:<userid>, party:<departmentid>, tag:<tagid> or a bare userid; the application must be visible to the recipient.",
       "The server IP must be on the WeCom application's trusted IP list or sends fail with errcode 60020.",
       "WeCom reactions and unsend are not supported by this adapter.",

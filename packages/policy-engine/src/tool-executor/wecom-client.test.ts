@@ -149,6 +149,25 @@ describe("wecom send", () => {
     );
   });
 
+  it("refuses text above 2048 bytes before any request", async () => {
+    const fetcher = sendFetcher();
+    await expect(
+      wecomSendText({ token: "t", agentId: "1", target: "u", content: "x".repeat(2049), fetcher }),
+    ).rejects.toThrow("WeCom text messages are limited to 2048 bytes");
+    await expect(
+      wecomSendText({ token: "t", agentId: "1", target: "u", content: "\u4e2d".repeat(683), fetcher }),
+    ).rejects.toThrow("limited to 2048 bytes");
+    expect(fetcher).not.toHaveBeenCalled();
+    const ok = await wecomSendText({ token: "t", agentId: "1", target: "u", content: "x".repeat(2048), fetcher });
+    expect(ok.messageId).toBe("m-1");
+  });
+
+  it("leaves the message id undefined when WeCom returns none", async () => {
+    const fetcher = sendFetcher({ errcode: 0, errmsg: "ok" });
+    const result = await wecomSendText({ token: "t", agentId: "1", target: "u", content: "x", fetcher });
+    expect(result.messageId).toBeUndefined();
+  });
+
   it("rejects an empty target id and a non-numeric agent id", async () => {
     const fetcher = sendFetcher();
     await expect(wecomSendText({ token: "t", agentId: "1", target: "user:", content: "x", fetcher })).rejects.toThrow(

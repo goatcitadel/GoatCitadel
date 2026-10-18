@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { sendQueuedChannelDelivery } from "./channel-delivery-helpers.js";
+import { buildChannelDeliveryPayload, sendQueuedChannelDelivery } from "./channel-delivery-helpers.js";
 
 const input = {
   deliveryId: "delivery-1",
@@ -28,6 +28,28 @@ describe("channel provider acknowledgement", () => {
     await expect(sendQueuedChannelDelivery(async () => ({ status: "sent" }), input)).resolves.toEqual({
       providerMessageId: undefined,
     });
+  });
+
+  it("carries the original reply anchor on every chunk while chaining the reply id", async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "sent", providerMessageId: "p1" })
+      .mockResolvedValueOnce({ status: "sent", providerMessageId: "p2" });
+    await sendQueuedChannelDelivery(send, {
+      ...input,
+      payload: { ...input.payload, replyToMessageId: "inbound-1", messageParts: ["a", "b"] },
+    });
+    expect(send.mock.calls.map(([call]) => [call.replyToMessageId, call.replyAnchorMessageId])).toEqual([
+      ["inbound-1", "inbound-1"],
+      ["p1", "inbound-1"],
+    ]);
+  });
+
+  it("splits WeCom and QQBot deliveries at their conservative chunk limits", () => {
+    const wecom = buildChannelDeliveryPayload({ connectionId: "c", target: "t", message: "x".repeat(1500) }, "wecom");
+    expect((wecom.messageParts as string[]).every((part) => part.length <= 680)).toBe(true);
+    const qq = buildChannelDeliveryPayload({ connectionId: "c", target: "t", message: "x".repeat(4500) }, "qqbot");
+    expect((qq.messageParts as string[]).every((part) => part.length <= 2000)).toBe(true);
   });
 
   it("preserves the earlier acknowledgement when a later chunk has no send outcome", async () => {

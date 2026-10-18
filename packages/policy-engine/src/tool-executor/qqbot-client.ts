@@ -50,9 +50,7 @@ export async function getQqbotAccessToken(input: {
       body: JSON.stringify({ appId: input.appId, clientSecret: input.appSecret }),
     });
   } catch (error) {
-    throw new Error(`QQBot token request failed: ${scrub(error instanceof Error ? error.message : String(error))}`, {
-      cause: error,
-    });
+    throw scrubbedFailure("QQBot token request failed", error, scrub);
   }
   const body = await readQqbotBody(response);
   if (!response.ok) {
@@ -68,6 +66,13 @@ export async function getQqbotAccessToken(input: {
   return token;
 }
 
+/** Drops a cached token (used after QQ reports it invalid or expired). */
+export function clearQqbotAccessToken(input: { appId: string; appSecret: string }): void {
+  tokenCache.delete(cacheKey(input.appId, input.appSecret));
+}
+
+const TOKEN_REJECTED_CODES = new Set([11242, 11243, 11244]);
+
 export async function qqbotSendText(input: {
   token: string;
   sandbox: boolean;
@@ -76,31 +81,52 @@ export async function qqbotSendText(input: {
   replyMsgId?: string;
   msgSeq: number;
   fetcher: Fetcher;
+  /** Mints a fresh token after QQ rejects the current one; the send is retried at most once. */
+  refreshToken?: () => Promise<string>;
 }): Promise<{ messageId: string }> {
   const { path, body } = buildSendRequest(input);
   const base = input.sandbox ? QQBOT_SANDBOX_API_BASE : QQBOT_API_BASE;
-  const scrub = (text: string) => scrubSecrets(text, [input.token]);
-  let response: Response;
-  try {
-    response = await input.fetcher(`${base}${path}`, {
-      method: "POST",
-      headers: { Authorization: `QQBot ${input.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  } catch (error) {
-    throw new Error(`QQBot send failed: ${scrub(error instanceof Error ? error.message : String(error))}`, {
-      cause: error,
-    });
+  let token = input.token;
+  let retried = false;
+  for (;;) {
+    const result = await attemptSend(token);
+    if (result.kind === "sent") return { messageId: result.messageId };
+    if (!retried && input.refreshToken) {
+      retried = true;
+      token = await input.refreshToken();
+      continue;
+    }
+    throw result.error;
   }
-  const parsed = await readQqbotBody(response);
-  if (!response.ok) {
-    throw new Error(`QQBot send failed (${response.status})${describeQqbotError(parsed, scrub)}`);
+
+  async function attemptSend(
+    accessToken: string,
+  ): Promise<{ kind: "sent"; messageId: string } | { kind: "rejected"; error: Error }> {
+    const scrub = (text: string) => scrubSecrets(text, [accessToken]);
+    let response: Response;
+    try {
+      response = await input.fetcher(`${base}${path}`, {
+        method: "POST",
+        headers: { Authorization: `QQBot ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      throw scrubbedFailure("QQBot send failed", error, scrub);
+    }
+    const parsed = await readQqbotBody(response);
+    if (!response.ok) {
+      const error = new Error(`QQBot send failed (${response.status})${describeQqbotError(parsed, scrub)}`);
+      if (response.status === 401 || TOKEN_REJECTED_CODES.has(Number(parsed.code))) {
+        return { kind: "rejected", error };
+      }
+      throw error;
+    }
+    const messageId = typeof parsed.id === "string" ? parsed.id.trim() : "";
+    if (!messageId) {
+      throw new Error("QQBot send returned no message id");
+    }
+    return { kind: "sent", messageId };
   }
-  const messageId = typeof parsed.id === "string" ? parsed.id.trim() : "";
-  if (!messageId) {
-    throw new Error("QQBot send returned no message id");
-  }
-  return { messageId };
 }
 
 function buildSendRequest(input: { target: string; content: string; replyMsgId?: string; msgSeq: number }): {
@@ -148,6 +174,12 @@ function describeQqbotError(body: Record<string, unknown>, scrub: (text: string)
   const message = typeof body.message === "string" ? body.message : undefined;
   const detail = [code, message ? scrub(message) : undefined].filter(Boolean).join(": ");
   return detail ? `: ${detail}` : "";
+}
+
+/** The cause is a scrubbed copy so an unscrubbed original (which may hold a secret) is never serialized. */
+function scrubbedFailure(label: string, error: unknown, scrub: (text: string) => string): Error {
+  const message = scrub(error instanceof Error ? error.message : String(error));
+  return new Error(`${label}: ${message}`, { cause: new Error(message) });
 }
 
 function scrubSecrets(text: string, secrets: string[]): string {

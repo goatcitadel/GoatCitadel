@@ -37,7 +37,7 @@ import {
   matrixSendText,
   type MatrixClientContext,
 } from "./matrix-client.js";
-import { getQqbotAccessToken, qqbotSendText } from "./qqbot-client.js";
+import { clearQqbotAccessToken, getQqbotAccessToken, qqbotSendText } from "./qqbot-client.js";
 import { clearWecomAccessToken, getWecomAccessToken, wecomSendText } from "./wecom-client.js";
 
 const MAX_HTTP_REDIRECTS = 5;
@@ -442,7 +442,7 @@ async function executeCommsProviderTool(
   grantAllowlist: string[] | undefined,
   target: string,
   message: string,
-): Promise<string> {
+): Promise<string | undefined> {
   if (toolName === "gmail.send") {
     return gmailSend(connectionConfig, args, allowlist, grantAllowlist);
   }
@@ -2359,13 +2359,16 @@ async function qqbotSend(
   const partIndex = Math.max(0, parseIntegerLike(args.replyToPartIndex) ?? 0);
   const { messageId } = await qqbotSendText({
     token,
+    refreshToken: async () => {
+      clearQqbotAccessToken({ appId, appSecret });
+      return getQqbotAccessToken({ appId, appSecret, fetcher: tokenFetch });
+    },
     sandbox: config.sandbox === true || asString(config.sandbox)?.toLowerCase() === "true",
     target: resolvedTarget,
     content: message,
-    // Passive replies need the inbound message id, which the gateway passes as the delivery reply id for the first
-    // chunk only (later chunks carry the previous QQ message id, which is not a valid msg_id), so later chunks
-    // are sent as active messages.
-    replyMsgId: partIndex === 0 ? (asString(args.replyToMessageId) ?? asString(args.replyTo)) : undefined,
+    // Passive replies need the inbound message id; later chunks carry the previous QQ message id as
+    // replyToMessageId, so the original anchor is read first.
+    replyMsgId: asString(args.replyAnchorMessageId) ?? asString(args.replyToMessageId) ?? asString(args.replyTo),
     msgSeq: partIndex + 1,
     fetcher: apiFetch,
   });
@@ -2379,7 +2382,7 @@ async function wecomSend(
   target: string,
   message: string,
   grantAllowlist?: string[],
-): Promise<string> {
+): Promise<string | undefined> {
   const corpId = asString(config.corpId);
   const agentId = asString(config.agentId) ?? (typeof config.agentId === "number" ? String(config.agentId) : undefined);
   const secret = secretFrom(config, "secret", "secretEnv");

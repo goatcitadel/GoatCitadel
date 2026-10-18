@@ -301,6 +301,18 @@ async function sandboxSend(
       });
       return;
     }
+    const invalid = readInvalidRecipient(body);
+    if (invalid) {
+      probe.steps.push({
+        key: "wecom_sandbox_send",
+        label: "Sandbox send",
+        status: "fail",
+        disposition: "blocking",
+        message: `WeCom reported the sandbox recipient invalid (${invalid}). Verify the user, department or tag can see the application.`,
+        failureCategory: "destination_mismatch",
+      });
+      return;
+    }
     probe.steps.push({
       key: "wecom_sandbox_send",
       label: "Sandbox send",
@@ -334,6 +346,15 @@ function parseRecipient(target: string): Record<string, string> | undefined {
     default:
       return { touser: id };
   }
+}
+
+/** Same rule as the outbound client: errcode 0 with an invalid single recipient is a failure. */
+function readInvalidRecipient(body: Record<string, unknown>): string | undefined {
+  for (const key of ["invaliduser", "invalidparty", "invalidtag"] as const) {
+    const value = body[key];
+    if (typeof value === "string" && value.trim()) return key;
+  }
+  return undefined;
 }
 
 function finish(probe: ChannelProbeReport) {

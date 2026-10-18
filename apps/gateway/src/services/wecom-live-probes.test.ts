@@ -121,6 +121,15 @@ describe("WeCom live probes", () => {
     expect(refused.checks.find((c) => c.key === "wecom_sandbox_send")?.message).toContain("errcode 81013");
   });
 
+  it("fails the sandbox send when WeCom reports the recipient invalid", async () => {
+    const result = await runWecomLiveChecks({
+      ...base,
+      includeSandboxSend: true,
+      fetcher: routedFetcher({ send: json({ errcode: 0, errmsg: "ok", invaliduser: "zhangsan", msgid: "M" }) }),
+    });
+    expect(result.checks.find((c) => c.key === "wecom_sandbox_send")).toMatchObject({ status: "fail" });
+  });
+
   it("does not leak the token when a fetch throws", async () => {
     const fetcher = vi.fn(async (url: string) => {
       if (url.includes("/gettoken")) return json({ errcode: 0, access_token: TOKEN, expires_in: 7200 });

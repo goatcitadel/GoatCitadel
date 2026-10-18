@@ -489,7 +489,7 @@ Official reference:
 
 QQBot sends text to group (`group:<openid>`), C2C (`user:<openid>`), guild channel (`channel:<id>`) and guild direct-message (`dm:<guild id>`) targets through the QQ Bot Open Platform. Outbound is text-only: a send with attachments fails with a clear error. Reactions and unsend are not supported by this adapter, and QQ has no typing indicator for bot messages.
 
-QQ allows active (unprompted) group and C2C messages only within platform quotas, so a reply sent soon after an inbound message (within about 5 minutes) is a passive reply that carries the inbound message id. Later sends count against the active-message quota and may be refused. Only the first chunk of a long reply is a passive reply: later chunks are sent as active messages with an increasing `msg_seq`, so keep replies short.
+QQ allows active (unprompted) group and C2C messages only within platform quotas, so a reply sent soon after an inbound message (within about 5 minutes) is a passive reply that carries the inbound message id. Later sends count against the active-message quota and may be refused. Every chunk of a split reply is a passive reply to the same inbound message id with an increasing `msg_seq`; QQ allows about 5 replies per message, so keep replies short. Replies are split at 2,000 characters as a conservative guess because the exact QQ text limit is unverified.
 
 Inbound is a signed webhook. GoatCitadel verifies the ed25519 signature (keyed from the AppSecret) on every request, including QQ's callback validation, before accepting anything. Inbound is default-deny: only the QQ openids in `allowedSenders` can start turns, and an empty list drops everything. A dropped message's `sender_not_allowlisted` diagnostic shows the openid to add.
 
@@ -522,7 +522,7 @@ Official reference:
 
 - https://developer.work.weixin.qq.com/document/path/90664
 
-WeCom sends application text messages to a user (`user:<userid>` or a bare userid), department (`party:<id>`) or tag (`tag:<id>`). Outbound is text-only: a send with attachments fails with a clear error. Reactions and unsend are not supported by this adapter, and WeCom has no typing indicator for application messages.
+WeCom sends application text messages to a user (`user:<userid>` or a bare userid), department (`party:<id>`) or tag (`tag:<id>`). Outbound is text-only: a send with attachments fails with a clear error, and text above 2,048 bytes is refused (WeCom would silently truncate it), so replies are split into chunks of at most 680 characters. Reactions and unsend are not supported by this adapter, and WeCom has no typing indicator for application messages.
 
 The application secret mints an access token that is cached and refreshed; if WeCom reports it invalid or expired (errcode 40014 or 42001) the send retries once with a fresh token. The token travels in the request URL, so GoatCitadel never writes that URL into errors or diagnostics. The gateway host's public IP must be on the application's trusted IP list, otherwise sends fail with errcode 60020.
 

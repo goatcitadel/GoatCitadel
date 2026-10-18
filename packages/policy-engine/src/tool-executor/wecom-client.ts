@@ -13,6 +13,7 @@ const WECOM_API_BASE = "https://qyapi.weixin.qq.com";
 const WECOM_RESPONSE_LIMITS = { maxBytes: 64 * 1024, timeoutMs: 10_000 } as const;
 const TOKEN_EXPIRY_MARGIN_MS = 60_000;
 const DEFAULT_TOKEN_TTL_SECONDS = 7_200;
+const MAX_TEXT_BYTES = 2048;
 const TOKEN_REJECTED_ERRCODES = new Set([40014, 42001]);
 
 interface CachedToken {
@@ -48,7 +49,7 @@ export async function getWecomAccessToken(input: {
   try {
     response = await input.fetcher(url, { method: "GET" });
   } catch (error) {
-    throw new Error(`WeCom gettoken request failed: ${scrub(error, [input.secret, input.corpId])}`, { cause: error });
+    throw scrubbedFailure("WeCom gettoken request failed", error, [input.secret, input.corpId]);
   }
   const body = await readWecomBody(response);
   if (!response.ok) {
@@ -76,7 +77,10 @@ export async function wecomSendText(input: {
   fetcher: Fetcher;
   /** Mints a fresh token after WeCom rejects the current one; the send is retried at most once. */
   refreshToken?: () => Promise<string>;
-}): Promise<{ messageId: string }> {
+}): Promise<{ messageId: string | undefined }> {
+  if (Buffer.byteLength(input.content, "utf8") > MAX_TEXT_BYTES) {
+    throw new Error("WeCom text messages are limited to 2048 bytes");
+  }
   const agentId = Number(input.agentId.trim());
   if (!Number.isInteger(agentId) || agentId < 0) {
     throw new Error("WeCom agent id must be numeric");
@@ -100,7 +104,7 @@ export async function wecomSendText(input: {
         throw new Error(`WeCom send failed: invalid recipient (${invalid})`);
       }
       const msgid = typeof body.msgid === "string" ? body.msgid.trim() : "";
-      return { messageId: msgid || `wecom-${Date.now()}` };
+      return { messageId: msgid || undefined };
     }
     if (TOKEN_REJECTED_ERRCODES.has(errcode) && !retried && input.refreshToken) {
       retried = true;
@@ -121,7 +125,7 @@ export async function wecomSendText(input: {
         body: requestBody,
       });
     } catch (error) {
-      throw new Error(`WeCom send request failed: ${scrub(error, [accessToken])}`, { cause: error });
+      throw scrubbedFailure("WeCom send request failed", error, [accessToken]);
     }
     const parsed = await readWecomBody(response);
     if (!response.ok) {
@@ -171,6 +175,12 @@ async function readWecomBody(response: Response): Promise<Record<string, unknown
   } catch {
     return {};
   }
+}
+
+/** The cause is a scrubbed copy so the credential-bearing URL can never be serialized. */
+function scrubbedFailure(label: string, error: unknown, secrets: string[]): Error {
+  const message = scrub(error, secrets);
+  return new Error(`${label}: ${message}`, { cause: new Error(message) });
 }
 
 function scrub(error: unknown, secrets: string[]): string {

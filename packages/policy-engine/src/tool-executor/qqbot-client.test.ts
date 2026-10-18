@@ -146,6 +146,69 @@ describe("qqbot send", () => {
     expect(call(fetcher).body).toEqual({ content: "c" });
   });
 
+  it("re-mints once and retries when QQ rejects the token, and not for other errors", async () => {
+    const queue = [json({ code: 11244, message: "token expired" }, 401), json({ id: "after" })];
+    const fetcher = vi.fn(async (_url: string, _init: RequestInit) => queue.shift() ?? json({}));
+    const refreshToken = vi.fn(async () => "fresh");
+    const result = await qqbotSendText({
+      token: "old",
+      sandbox: false,
+      target: "user:U",
+      content: "c",
+      msgSeq: 1,
+      fetcher,
+      refreshToken,
+    });
+    expect(result).toEqual({ messageId: "after" });
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    expect(new Headers((fetcher.mock.calls[1] as [string, RequestInit])[1].headers).get("authorization")).toBe(
+      "QQBot fresh",
+    );
+
+    const twice = vi.fn(async () => json({ code: 11244, message: "x" }, 401));
+    await expect(
+      qqbotSendText({
+        token: "old",
+        sandbox: false,
+        target: "user:U",
+        content: "c",
+        msgSeq: 1,
+        fetcher: twice,
+        refreshToken,
+      }),
+    ).rejects.toThrow(/401/);
+    expect(twice).toHaveBeenCalledTimes(2);
+
+    const forbidden = vi.fn(async () => json({ code: 304003, message: "x" }, 403));
+    const refresh2 = vi.fn(async () => "n");
+    await expect(
+      qqbotSendText({
+        token: "old",
+        sandbox: false,
+        target: "user:U",
+        content: "c",
+        msgSeq: 1,
+        fetcher: forbidden,
+        refreshToken: refresh2,
+      }),
+    ).rejects.toThrow(/403/);
+    expect(refresh2).not.toHaveBeenCalled();
+  });
+
+  it("does not carry an unscrubbed cause on a thrown mint failure", async () => {
+    const thrown = vi.fn(async () => {
+      throw new Error("boom " + SECRET);
+    });
+    const error = await getQqbotAccessToken({
+      appId: "app-cause",
+      appSecret: SECRET,
+      fetcher: thrown,
+      now: () => 0,
+    }).catch((e: unknown) => e as Error);
+    expect(JSON.stringify(error, Object.getOwnPropertyNames(error))).not.toContain(SECRET);
+    expect(String((error as Error).cause)).not.toContain(SECRET);
+  });
+
   it("percent-encodes the target id", async () => {
     const fetcher = sendFetcher();
     await qqbotSendText({ token: "t", sandbox: false, target: "group:a/b", content: "c", msgSeq: 1, fetcher });
