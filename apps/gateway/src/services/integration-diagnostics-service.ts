@@ -1,6 +1,7 @@
 import { runDiscordConnectionLiveChecks } from "./discord-connection-diagnostics.js";
 import { runGitHubLiveChecks } from "./github-integration-action.js";
 import { runNotionLiveChecks } from "./notion-integration-action.js";
+import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
 import { runConfiguredNextcloudTalkChecks } from "./nextcloud-talk-live-probes.js";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import { evaluateChannelInboundAccess } from "@goatcitadel/contracts";
@@ -458,12 +459,7 @@ export function buildIntegrationConnectionChecks(
       requireText("target", "Default Trello board", deps.readConnectionConfigValue(config, "defaultBoardId"), "warn");
     }
     if (connection.key === "notion") {
-      const hasToken = hasConnectionEnvValue(deps, config, "tokenEnv");
-      checks.push({
-        key: "auth",
-        status: hasToken ? "pass" : "fail",
-        message: hasToken ? "Notion integration token is configured." : "Notion integration token is missing.",
-      });
+      checks.push(buildGuardedTokenCheck(deps, connection, "Notion integration token", "NOTION_INTEGRATION_TOKEN"));
       requireText(
         "target",
         "Default Notion parent page",
@@ -472,12 +468,7 @@ export function buildIntegrationConnectionChecks(
       );
     }
     if (connection.key === "github") {
-      const hasToken = hasConnectionEnvValue(deps, config, "tokenEnv");
-      checks.push({
-        key: "auth",
-        status: hasToken ? "pass" : "fail",
-        message: hasToken ? "GitHub token is configured." : "GitHub token is missing.",
-      });
+      checks.push(buildGuardedTokenCheck(deps, connection, "GitHub token", "GITHUB_INTEGRATION_TOKEN"));
       requireText("target", "Default GitHub repository", deps.readConnectionConfigValue(config, "defaultRepo"));
     }
     if (["apple-notes", "apple-reminders", "things3", "bear"].includes(connection.key)) {
@@ -859,6 +850,29 @@ function readTargetString(target: Record<string, unknown> | undefined, key: stri
 
 function readBoolean(value: unknown): boolean {
   return value === true || (typeof value === "string" && value.trim().toLowerCase() === "true");
+}
+
+// Resolves through the same guarded path the actions use, so a forbidden env name (for example
+// GITHUB_TOKEN) is reported instead of passing on a raw process.env read. Names only, never values.
+function buildGuardedTokenCheck(
+  deps: IntegrationDiagnosticsPort,
+  connection: IntegrationConnection,
+  label: string,
+  suggestedEnv: string,
+): ConnectorDiagnosticReport["checks"][number] {
+  const config = connection.config;
+  if (deps.resolveConnectionSecret(config, "token", "tokenEnv", connection.catalogId)) {
+    return { key: "auth", status: "pass", message: `${label} is configured.` };
+  }
+  const envName = deps.readConnectionConfigValue(config, "tokenEnv");
+  if (envName && !isPermittedIntegrationSecretEnvVarName(envName, connection.catalogId)) {
+    return {
+      key: "auth",
+      status: "fail",
+      message: `${label} env var ${envName.trim().slice(0, 128)} is not allowed for this integration; use a dedicated variable such as ${suggestedEnv}.`,
+    };
+  }
+  return { key: "auth", status: "fail", message: `${label} is missing.` };
 }
 
 function hasConnectionEnvValue(

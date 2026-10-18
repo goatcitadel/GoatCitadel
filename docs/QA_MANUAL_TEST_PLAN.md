@@ -2060,7 +2060,8 @@ Expected:
 - Replay only retries eligible failed-before-boundary/stale claimed-not-sent states.
 - Unknown post-boundary outcomes stay manual.
 - Activepieces status is explicit operator read, not background polling.
-- Notion and GitHub writes are neither replayed nor reconciled by the worker (unknown outcomes stay manual); a rejected token (401/403) reports `notion_auth_rejected` or `github_auth_rejected` and never an unknown external outcome.
+- Notion and GitHub writes are neither replayed nor reconciled by the worker (unknown outcomes stay manual); a rejected token (Notion 401/403; GitHub 401 and any 403 that is not a rate limit) reports `notion_auth_rejected` or `github_auth_rejected` and never an unknown external outcome.
+- A GitHub 403 carrying `x-ratelimit-remaining: 0` or `retry-after` is a rate-limit failure ("GitHub rate limit reached; retry after ..."), not `github_auth_rejected`; the live diagnostic reports it as a warning.
 
 Result:
 

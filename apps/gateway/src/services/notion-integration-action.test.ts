@@ -628,7 +628,7 @@ describe("notion-integration-action", () => {
   });
 
   describe("runNotionLiveChecks", () => {
-    it("passes on 200, fails on 401 and stays silent without a token", async () => {
+    it("passes on 200, fails on 401 and fails without a token", async () => {
       stubBase();
       const connection = createConnection();
       const make = (status: number) =>
@@ -646,7 +646,9 @@ describe("notion-integration-action", () => {
       await expect(runNotionLiveChecks(make(401), connection)).resolves.toEqual([
         expect.objectContaining({ key: "auth_live", status: "fail" }),
       ]);
-      await expect(runNotionLiveChecks(make(200), createConnection({}))).resolves.toEqual([]);
+      await expect(runNotionLiveChecks(make(200), createConnection({}))).resolves.toEqual([
+        expect.objectContaining({ key: "auth_live", status: "fail" }),
+      ]);
     });
   });
 });

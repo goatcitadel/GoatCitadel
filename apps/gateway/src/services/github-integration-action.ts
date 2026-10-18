@@ -52,6 +52,8 @@ const COMMENT_PROBE_LOOKBACK_MS = 5 * 60 * 1000;
 const PR_BODY_LIMIT = 4000;
 const COMMENT_BODY_LIMIT = 1000;
 const AUTH_REJECTED_MESSAGE = "GitHub rejected the token. Check the token and that it can access the repository.";
+const TOKEN_UNRESOLVED_MESSAGE =
+  "GitHub token could not be resolved (missing, or its env var name is not allowed); live check skipped.";
 const NOT_FOUND_MESSAGE = "GitHub repository or item not found, or the token cannot see it.";
 
 // The override must be an origin: URL resolution drops any path, so GitHub Enterprise `/api/v3`
@@ -517,7 +519,10 @@ export async function runGitHubLiveChecks(
 ): Promise<ConnectorDiagnosticReport["checks"]> {
   const token = deps.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
   const repo = deps.readConnectionConfigValue(connection.config, "defaultRepo");
-  if (!token || !repo || !isValidRepo(repo)) {
+  if (!token) {
+    return [{ key: "auth_live", status: "fail", message: TOKEN_UNRESOLVED_MESSAGE }];
+  }
+  if (!repo || !isValidRepo(repo)) {
     return [];
   }
   try {
@@ -532,6 +537,12 @@ export async function runGitHubLiveChecks(
     });
     if (response.ok) {
       return [{ key: "auth_live", status: "pass", message: "GitHub accepted the token for the default repository." }];
+    }
+    if (response.status === 403) {
+      const limited = rateLimitMessage(response);
+      if (limited) {
+        return [{ key: "auth_live", status: "warn", message: limited }];
+      }
     }
     if (response.status === 401 || response.status === 403) {
       return [{ key: "auth_live", status: "fail", message: AUTH_REJECTED_MESSAGE }];

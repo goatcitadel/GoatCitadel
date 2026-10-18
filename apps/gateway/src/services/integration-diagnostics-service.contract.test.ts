@@ -408,6 +408,41 @@ describe("integration-diagnostics-service contract behavior", () => {
     }
   });
 
+  it("reports forbidden GitHub/Notion token env names as failing auth and live checks", async () => {
+    for (const [key, envName, suggested] of [
+      ["github", "GITHUB_TOKEN", "GITHUB_INTEGRATION_TOKEN"],
+      ["notion", "OPENAI_API_KEY", "NOTION_INTEGRATION_TOKEN"],
+    ] as const) {
+      vi.stubEnv(envName, "must-not-leak");
+      try {
+        const port = createPort();
+        port.resolveConnectionSecret = vi.fn(() => undefined);
+        const connection = createIntegrationConnection(key, "productivity", { tokenEnv: envName });
+        const auth = buildIntegrationConnectionChecks(port, connection).find((check) => check.key === "auth");
+        expect(auth).toEqual(expect.objectContaining({ status: "fail" }));
+        expect(auth?.message).toContain(envName);
+        expect(auth?.message).toContain(suggested);
+        expect(auth?.message).not.toContain("must-not-leak");
+        const live = await runIntegrationConnectionLiveChecks(port, connection, { includeSandboxSend: false });
+        expect(live.checks).toEqual([expect.objectContaining({ key: "auth_live", status: "fail" })]);
+        expect(port.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }
+  });
+
+  it("passes the structural token check for a direct token resolved through the guarded path", () => {
+    const port = createPort();
+    port.resolveConnectionSecret = vi.fn(() => "resolved-secret");
+    for (const key of ["github", "notion"]) {
+      const connection = createIntegrationConnection(key, "productivity", { token: "keychain:opaque" });
+      expect(buildIntegrationConnectionChecks(port, connection)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ key: "auth", status: "pass" })]),
+      );
+    }
+  });
+
   it("uses the service wrapper while checking local model-provider and platform readiness", async () => {
     const host = createPort();
     host.isConnectionUrlAllowlisted = vi.fn(() => true);

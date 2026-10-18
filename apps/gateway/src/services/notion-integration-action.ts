@@ -469,7 +469,14 @@ export async function runNotionLiveChecks(
 ): Promise<ConnectorDiagnosticReport["checks"]> {
   const token = deps.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId);
   if (!token) {
-    return [];
+    return [
+      {
+        key: "auth_live",
+        status: "fail",
+        message:
+          "Notion token could not be resolved (missing, or its env var name is not allowed); live check skipped.",
+      },
+    ];
   }
   try {
     const response = await deps.fetchWithDiagnosticsTimeout(new URL("/v1/users/me", notionApiBaseUrl()).toString(), {

@@ -764,7 +764,33 @@ describe("github-integration-action", () => {
   });
 
   describe("runGitHubLiveChecks", () => {
-    it("passes on 200, fails on 401 and stays silent without a token or valid repo", async () => {
+    it("warns with the retry time on primary and secondary 403 rate limits", async () => {
+      stubBase();
+      const connection = createConnection();
+      const make = (headers: Record<string, string>) =>
+        createHost(connection, {
+          fetchWithDiagnosticsTimeout: vi.fn(async () => jsonResponse({ message: "rate limit" }, 403, headers)),
+        });
+      const primary = await runGitHubLiveChecks(
+        make({ "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1893456000" }),
+        connection,
+      );
+      expect(primary).toEqual([
+        {
+          key: "auth_live",
+          status: "warn",
+          message: "GitHub rate limit reached; retry after 2030-01-01T00:00:00.000Z",
+        },
+      ]);
+      const secondary = await runGitHubLiveChecks(make({ "retry-after": "60" }), connection);
+      expect(secondary).toEqual([
+        expect.objectContaining({ key: "auth_live", status: "warn", message: expect.stringContaining("retry after") }),
+      ]);
+      const forbidden = await runGitHubLiveChecks(make({ "x-ratelimit-remaining": "42" }), connection);
+      expect(forbidden).toEqual([expect.objectContaining({ key: "auth_live", status: "fail" })]);
+    });
+
+    it("passes on 200, fails on 401 and fails without a token and stays silent without a valid repo", async () => {
       stubBase();
       const connection = createConnection();
       const make = (status: number) =>
@@ -780,9 +806,9 @@ describe("github-integration-action", () => {
       await expect(runGitHubLiveChecks(make(401), connection)).resolves.toEqual([
         expect.objectContaining({ key: "auth_live", status: "fail" }),
       ]);
-      await expect(runGitHubLiveChecks(make(200), createConnection({ defaultRepo: "octo/widgets" }))).resolves.toEqual(
-        [],
-      );
+      await expect(runGitHubLiveChecks(make(200), createConnection({ defaultRepo: "octo/widgets" }))).resolves.toEqual([
+        expect.objectContaining({ key: "auth_live", status: "fail" }),
+      ]);
       await expect(runGitHubLiveChecks(make(200), createConnection({ token: TOKEN }))).resolves.toEqual([]);
     });
   });
