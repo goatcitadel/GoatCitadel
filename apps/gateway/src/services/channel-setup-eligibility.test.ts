@@ -128,6 +128,21 @@ describe("Gateway channel finalization eligibility", () => {
       expect(evaluateChannelSetupEligibility(again, withTarget).allowed).toBe(false);
     }
   });
+  it("does not let the advisory QQBot identity warning block finalization", () => {
+    const qq = { key: "qqbot", config: {} } as IntegrationConnection;
+    const test = result({
+      status: "warn",
+      probe: {
+        kind: "qqbot_open_platform",
+        checkedAt: new Date().toISOString(),
+        steps: [
+          { key: "qqbot_auth", label: "Auth", status: "pass", message: "ok" },
+          { key: "qqbot_bot", label: "Bot identity", status: "warn", disposition: "advisory", message: "unreadable" },
+        ],
+      },
+    });
+    expect(evaluateChannelSetupEligibility(test, qq).allowed).toBe(true);
+  });
   it("does not let the advisory WeCom callback warning block an outbound-only finalization", () => {
     const wecom = { key: "wecom", config: {} } as IntegrationConnection;
     const test = result({

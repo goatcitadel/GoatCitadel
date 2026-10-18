@@ -114,7 +114,7 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
           title: "Register the callback URL",
           body: [
             paragraph(
-              "After you save the connection, open the QQ Bot console, choose Development > Callback configuration, and set the request URL to your public Gateway origin followed by /api/v1/integrations/connections/<connectionId>/qqbot/webhook (the connection id appears after the draft is saved). Subscribe to the group, C2C, guild-channel and direct-message events you need.",
+              "After you finalize the connection, open the QQ Bot console, choose Development > Callback configuration, and set the request URL to your public Gateway origin followed by /api/v1/integrations/connections/<connectionId>/qqbot/webhook (the connection id is created when you finalize, and the callback only works once the connection is enabled and connected). Subscribe to the group, C2C, guild-channel and direct-message events you need.",
             ),
             paragraph(
               "QQ then sends a signed validation request (op 13); GoatCitadel verifies it with the AppSecret and answers it. Every later event is signed the same way, and unsigned or wrongly signed requests are rejected.",
@@ -137,12 +137,11 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
           title: "Finish setup",
           body: [
             paragraph(
-              "Finalize saves the connection for runtime sends and the signed inbound webhook. After finalizing, allow your QQ openid, message the bot, and confirm it replies before relying on this connection.",
+              "Finalize saves the connection for runtime sends and the signed inbound webhook. After finalizing, register the callback URL in the QQ console and confirm it passes QQ's signed validation request. Then allow your QQ openid (group member_openid and C2C user_openid are different ids, so allow each scope's id), message the bot, and confirm it replies before relying on this connection.",
             ),
           ],
           successCriteria: [
             "QQ issued an access token for the AppID and AppSecret.",
-            "The callback URL passed QQ's signed validation request.",
             "The sandbox message arrived, or you confirmed delivery manually.",
           ],
         },

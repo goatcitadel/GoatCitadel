@@ -13,7 +13,7 @@ const OPTIONAL_DEFAULT_TARGET_KEYS: Readonly<Record<string, string>> = {
 };
 
 /** Advisory probe warnings that describe an optional capability (WeCom inbound) and never gate setup. */
-const NON_BLOCKING_ADVISORY_WARN_STEPS: ReadonlySet<string> = new Set(["wecom_callback"]);
+const NON_BLOCKING_ADVISORY_WARN_STEPS: ReadonlySet<string> = new Set(["wecom_callback", "qqbot_bot"]);
 
 /** The Gateway classifies exceptions; warning text and UI actions cannot waive required checks. */
 export function evaluateChannelSetupEligibility(

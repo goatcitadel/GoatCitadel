@@ -157,7 +157,7 @@ export function createWecomDefinition(): ChannelSetupRuntimeDefinition {
           title: "Register the callback URL",
           body: [
             paragraph(
-              "After you save the connection, open the application's message-receiving settings in the WeCom admin console and set the URL to your public Gateway origin followed by /api/v1/integrations/connections/<connectionId>/wecom/webhook (the connection id appears after the draft is saved). Enter the same Token and EncodingAESKey you stored here.",
+              "After you finalize the connection, open the application's message-receiving settings in the WeCom admin console and set the URL to your public Gateway origin followed by /api/v1/integrations/connections/<connectionId>/wecom/webhook (the connection id is created when you finalize, and the callback only works once the connection is enabled and connected). Enter the same Token and EncodingAESKey you stored here.",
             ),
             paragraph(
               "WeCom then sends a verification request with an encrypted echostr; GoatCitadel verifies the signature, decrypts it and answers with the plaintext. Save the URL in WeCom only after the connection is enabled.",

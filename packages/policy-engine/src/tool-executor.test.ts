@@ -4521,8 +4521,52 @@ describe("executeTool", () => {
         content: "hello qq",
         msg_type: 0,
         msg_id: "evt-9",
-        msg_seq: 1,
+        msg_seq: expect.any(Number),
       });
+      delete process.env.QQBOT_EXECUTOR_SECRET;
+    });
+
+    it("qqbot picks a different random msg_seq base for each send to the same anchor, and refuses a sixth chunk", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      process.env.QQBOT_EXECUTOR_SECRET = "qq-exec-secret-4";
+      const fetchMock = vi.fn(async (url: unknown) =>
+        String(url).startsWith("https://bots.qq.com/")
+          ? jsonResponse({ access_token: "qq-access-4", expires_in: "7200" })
+          : jsonResponse({ id: "qq-msg-4" }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const storage = chinaStorage("qqbot", { ...qqConfig, appId: "executor-app-4" });
+      for (const sessionId of ["sess-qq-seq-a", "sess-qq-seq-b"]) {
+        await executeTool(
+          {
+            toolName: "channel.send",
+            args: { connectionId: "conn-qqbot", message: "hi", replyAnchorMessageId: "evt-same" },
+            agentId: "operator",
+            sessionId,
+          },
+          chinaPolicy,
+          storage,
+        );
+      }
+      const seqs = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)
+        .filter(([url]) => String(url).includes("/messages"))
+        .map(([, init]) => (JSON.parse(String(init.body)) as { msg_seq: number }).msg_seq);
+      expect(seqs).toHaveLength(2);
+      expect(seqs[0]).not.toBe(seqs[1]);
+
+      fetchMock.mockClear();
+      const sixth = await executeTool(
+        {
+          toolName: "channel.send",
+          args: { connectionId: "conn-qqbot", message: "late", replyAnchorMessageId: "evt-same", replyToPartIndex: 5 },
+          agentId: "operator",
+          sessionId: "sess-qq-seq-c",
+        },
+        chinaPolicy,
+        storage,
+      );
+      expect(JSON.stringify(sixth)).toContain("at most 5 passive replies");
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/messages"))).toHaveLength(0);
       delete process.env.QQBOT_EXECUTOR_SECRET;
     });
 
@@ -4559,7 +4603,7 @@ describe("executeTool", () => {
         content: "second",
         msg_type: 0,
         msg_id: "evt-9",
-        msg_seq: 2,
+        msg_seq: expect.any(Number),
       });
       delete process.env.QQBOT_EXECUTOR_SECRET;
     });

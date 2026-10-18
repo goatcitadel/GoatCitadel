@@ -324,6 +324,30 @@ describe("WeCom webhook route", () => {
     expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
   });
 
+  it("acks verified events with nested XML (ScanCodeInfo, PicList/item) with success, never 400, and records a content-free diagnostic", async () => {
+    const nested = [
+      `<xml><ToUserName><![CDATA[${CORP_ID}]]></ToUserName><FromUserName><![CDATA[zhangsan]]></FromUserName><MsgType><![CDATA[event]]></MsgType>` +
+        `<Event><![CDATA[scancode_push]]></Event><ScanCodeInfo><ScanType><![CDATA[qrcode]]></ScanType><ScanResult><![CDATA[secret-scan]]></ScanResult></ScanCodeInfo></xml>`,
+      `<xml><FromUserName><![CDATA[zhangsan]]></FromUserName><MsgType><![CDATA[event]]></MsgType><Event><![CDATA[pic_sysphoto]]></Event>` +
+        `<SendPicsInfo><Count>1</Count><PicList><item><PicMd5Sum><![CDATA[abc]]></PicMd5Sum></item></PicList></SendPicsInfo></xml>`,
+    ];
+    for (const xml of nested) {
+      const ctx = await buildApp();
+      const response = await post(ctx.app, xml);
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toBe("success");
+      expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
+      const diagnostic = ctx.recordDevDiagnostic.mock.calls.find(
+        (c) => (c[0] as { event: string }).event === "channel.wecom_unparsed_event",
+      );
+      expect(diagnostic).toBeDefined();
+      expect(JSON.stringify(diagnostic)).not.toContain("secret-scan");
+      expect(JSON.stringify(diagnostic)).not.toContain("zhangsan");
+      await ctx.app.close();
+      app = null;
+    }
+  });
+
   it("keeps the real MsgId when Content carries spoofing markup, and acks a duplicated MsgId without dispatch", async () => {
     const ctx = await buildApp();
     const spoof = textXml("zhangsan", "7", "hi <MsgId>42</MsgId>");

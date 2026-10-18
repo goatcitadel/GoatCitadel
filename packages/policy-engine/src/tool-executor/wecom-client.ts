@@ -142,6 +142,10 @@ function parseTarget(target: string): { field: Record<string, string> } {
   if (!id) {
     throw new Error("WeCom target is required: user:<id>, party:<id>, tag:<id> or a bare user id");
   }
+  // WeCom treats "@all" as the whole corp and "a|b|c" as a fan-out; a single send targets exactly one id.
+  if (id.includes("|") || id.toLowerCase() === "@all") {
+    throw new Error("WeCom target must be a single id: @all and multiple ids separated by | are not allowed");
+  }
   switch (match?.[1]) {
     case "party":
       return { field: { toparty: id } };

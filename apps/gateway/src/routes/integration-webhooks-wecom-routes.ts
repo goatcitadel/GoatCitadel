@@ -182,8 +182,18 @@ function registerWecomRoutes(fastify: FastifyInstance): void {
         try {
           normalized = normalizeWecomMessage({ connectionId, xml });
         } catch {
-          void reply.code(400);
-          return { kind: "reply" as const, payload: { error: "Malformed WeCom message" } };
+          // The envelope signature and CorpID already verified, so this is a genuine WeCom event whose inner XML
+          // this flat parser cannot read (nested ScanCodeInfo, PicList/item, ...). A 400 would make WeCom retry
+          // it three times, so ack it and leave a content-free diagnostic.
+          fastify.services.integrationWebhooks.recordDevDiagnostic?.({
+            level: "warn",
+            category: "channels",
+            event: "channel.wecom_unparsed_event",
+            message:
+              "A verified WeCom message had XML this adapter does not parse and was acknowledged without dispatch.",
+            context: { channel: "wecom", connectionId },
+          });
+          return { kind: "reply" as const, payload: WECOM_ACK };
         }
         if (normalized.kind === "ignore") {
           if (normalized.reason === "missing_msg_id") {

@@ -168,6 +168,16 @@ describe("wecom send", () => {
     expect(result.messageId).toBeUndefined();
   });
 
+  it("rejects @all and multi-id targets before any request", async () => {
+    const fetcher = sendFetcher();
+    for (const target of ["@all", "user:@all", "party:@all", "tag:@all", "user:a|b|c", "a|b", "party:1|2", "tag:1|2"]) {
+      await expect(wecomSendText({ token: "t", agentId: "1", target, content: "x", fetcher })).rejects.toThrow(
+        /@all|single|multiple||/i,
+      );
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("rejects an empty target id and a non-numeric agent id", async () => {
     const fetcher = sendFetcher();
     await expect(wecomSendText({ token: "t", agentId: "1", target: "user:", content: "x", fetcher })).rejects.toThrow(

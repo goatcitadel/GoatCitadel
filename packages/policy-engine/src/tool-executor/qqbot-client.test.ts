@@ -161,6 +161,9 @@ describe("qqbot send", () => {
     });
     expect(result).toEqual({ messageId: "after" });
     expect(refreshToken).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String((fetcher.mock.calls[1] as [string, RequestInit])[1].body)).msg_seq).toBe(
+      JSON.parse(String((fetcher.mock.calls[0] as [string, RequestInit])[1].body)).msg_seq,
+    );
     expect(new Headers((fetcher.mock.calls[1] as [string, RequestInit])[1].headers).get("authorization")).toBe(
       "QQBot fresh",
     );

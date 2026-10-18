@@ -71,6 +71,8 @@ export function clearQqbotAccessToken(input: { appId: string; appSecret: string 
   tokenCache.delete(cacheKey(input.appId, input.appSecret));
 }
 
+// UNVERIFIED: these token-rejected codes are from QQ docs memory, not a live capture. The HTTP 401 branch below is
+// the reliable signal; confirm or correct the codes against a real rejected-token response.
 const TOKEN_REJECTED_CODES = new Set([11242, 11243, 11244]);
 
 export async function qqbotSendText(input: {

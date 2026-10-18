@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Channel and outbound connector execution is split from the policy orchestrator, but the provider family is still broad. */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { createHmac, randomBytes, randomInt, randomUUID } from "node:crypto";
 import type { ChannelDeliveryStatus, ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import {
   NTFY_OUTBOUND_MARKER_TAG,
@@ -2334,6 +2334,9 @@ function chinaPlatformFetchers(allowlist: string[], grantAllowlist?: string[]) {
   };
 }
 
+/** QQ accepts about five passive replies per inbound msg_id. */
+const QQBOT_MAX_PASSIVE_REPLIES = 5;
+
 async function qqbotSend(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -2354,9 +2357,15 @@ async function qqbotSend(
   if (!resolvedTarget) {
     throw new Error("Missing QQBot target");
   }
+  const partIndex = Math.max(0, parseIntegerLike(args.replyToPartIndex) ?? 0);
+  if (partIndex >= QQBOT_MAX_PASSIVE_REPLIES) {
+    throw new Error("QQ allows at most 5 passive replies per message; shorten the reply");
+  }
   const { tokenFetch, apiFetch } = chinaPlatformFetchers(allowlist, grantAllowlist);
   const token = await getQqbotAccessToken({ appId, appSecret, fetcher: tokenFetch });
-  const partIndex = Math.max(0, parseIntegerLike(args.replyToPartIndex) ?? 0);
+  // A random base per send keeps a later send (e.g. the final answer after an earlier channel.reply to the same
+  // msg_id) from reusing seq 1 and being dropped by QQ's dedupe. The chunk index is added so chunks stay ordered.
+  const msgSeq = randomInt(1, 2 ** 31 - 64) + partIndex;
   const { messageId } = await qqbotSendText({
     token,
     refreshToken: async () => {
@@ -2369,7 +2378,7 @@ async function qqbotSend(
     // Passive replies need the inbound message id; later chunks carry the previous QQ message id as
     // replyToMessageId, so the original anchor is read first.
     replyMsgId: asString(args.replyAnchorMessageId) ?? asString(args.replyToMessageId) ?? asString(args.replyTo),
-    msgSeq: partIndex + 1,
+    msgSeq,
     fetcher: apiFetch,
   });
   return messageId;

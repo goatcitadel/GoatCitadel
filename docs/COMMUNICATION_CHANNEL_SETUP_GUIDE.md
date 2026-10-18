@@ -489,7 +489,7 @@ Official reference:
 
 QQBot sends text to group (`group:<openid>`), C2C (`user:<openid>`), guild channel (`channel:<id>`) and guild direct-message (`dm:<guild id>`) targets through the QQ Bot Open Platform. Outbound is text-only: a send with attachments fails with a clear error. Reactions and unsend are not supported by this adapter, and QQ has no typing indicator for bot messages.
 
-QQ allows active (unprompted) group and C2C messages only within platform quotas, so a reply sent soon after an inbound message (within about 5 minutes) is a passive reply that carries the inbound message id. Later sends count against the active-message quota and may be refused. Every chunk of a split reply is a passive reply to the same inbound message id with an increasing `msg_seq`; QQ allows about 5 replies per message, so keep replies short. Replies are split at 2,000 characters as a conservative guess because the exact QQ text limit is unverified.
+QQ allows active (unprompted) group and C2C messages only within platform quotas, so a reply sent soon after an inbound message (within about 5 minutes) is a passive reply that carries the inbound message id. A reply carries the inbound message id and fails once QQ's passive window has passed; it does not fall back to an active send. Every chunk of a split reply is a passive reply to the same inbound message id with an increasing `msg_seq` (each send starts from a random base so a second send to the same message does not collide with an earlier one). QQ allows about 5 replies per message, so a reply that would need more than 5 chunks is refused before anything is sent: shorten it. QQ openids differ by scope (a group `member_openid` is not the C2C `user_openid`), so allowlist each scope's id. Replies are split at 2,000 characters as a conservative guess because the exact QQ text limit is unverified.
 
 Inbound is a signed webhook. GoatCitadel verifies the ed25519 signature (keyed from the AppSecret) on every request, including QQ's callback validation, before accepting anything. Inbound is default-deny: only the QQ openids in `allowedSenders` can start turns, and an empty list drops everything. A dropped message's `sender_not_allowlisted` diagnostic shows the openid to add.
 
@@ -513,7 +513,7 @@ Inbound is a signed webhook. GoatCitadel verifies the ed25519 signature (keyed f
 - host outside the network allowlist: add the QQ hosts before probing or sending
 - the callback URL fails validation in the console: the connection must be enabled with a resolvable AppSecret, and the URL must be reachable over public HTTPS
 - inbound messages are ignored: the sender is not on the allowlist, or the event is not one of the supported message types (group at-message, C2C, guild at-message, guild direct message)
-- sends fail after a few minutes: the passive-reply window passed; message the bot again, or stay within the active-message quota
+- sends fail after a few minutes: the passive-reply window passed; message the bot again (replies do not fall back to active sends)
 - `QQBot target must be group:, user:, channel: or dm:`: fix the target prefix
 
 ## WeCom
