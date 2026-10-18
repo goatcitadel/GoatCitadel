@@ -19,6 +19,7 @@ import { settingsChangePlanRequest, type SettingsChangePlanInput } from "./dashb
 import { globalToolAccessChangeSchema, operatorWriteRootChangeSchema } from "./operator-write-access-schemas.js";
 import { bindPublicCronCreator } from "./dashboard-cron-authority.js";
 import { CRON_JOBS_LIST_ROUTE_OPTIONS, replyWithCronJobs } from "./dashboard-cron-citadel.js";
+import { cronJobCreateSchema, cronJobUpdateSchema } from "./dashboard-cron-schemas.js";
 
 const memoryQuerySchema = z.object({
   dir: z.string().default("memory"),
@@ -66,64 +67,6 @@ const cronReviewParamsSchema = z.object({
 const cronReviewQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(200),
 });
-
-const cronJobCreateSchema = z
-  .object({
-    jobId: z.string().min(3).max(64),
-    name: z.string().min(1).max(120),
-    action: z
-      .enum([
-        "task",
-        "improvement",
-        "curator",
-        "backup",
-        "memory_flush",
-        "memory_consolidation",
-        "cost_report",
-        "update_review",
-        "watchdog",
-        "no_agent",
-        "agent_turn",
-      ])
-      .optional(),
-    actionConfig: z.record(z.string(), z.unknown()).optional(),
-    description: z.string().max(2000).optional(),
-    schedule: z.string().min(1).max(128),
-    enabled: z.boolean().optional(),
-    endAt: z.string().datetime().optional(),
-    workdir: z.string().min(1).optional(),
-    contextFrom: z.string().min(1).optional(),
-  })
-  .strict();
-
-const cronJobUpdateSchema = z
-  .object({
-    expectedRevision: z.number().int().positive(),
-    name: z.string().min(1).max(120).optional(),
-    action: z
-      .enum([
-        "task",
-        "improvement",
-        "curator",
-        "backup",
-        "memory_flush",
-        "memory_consolidation",
-        "cost_report",
-        "update_review",
-        "watchdog",
-        "no_agent",
-        "agent_turn",
-      ])
-      .optional(),
-    actionConfig: z.union([z.record(z.string(), z.unknown()), z.null()]).optional(),
-    description: z.string().max(2000).optional(),
-    schedule: z.string().min(1).max(128).optional(),
-    enabled: z.boolean().optional(),
-    endAt: z.union([z.string().datetime(), z.null()]).optional(),
-    workdir: z.union([z.string().min(1), z.null()]).optional(),
-    contextFrom: z.union([z.string().min(1), z.null()]).optional(),
-  })
-  .strict();
 
 const authUpdateSchema = z.object({
   mode: z.enum(["none", "token", "basic"]).optional(),

@@ -52,6 +52,27 @@ describe("CronJobRepository citadel scoping", () => {
     assert.deepEqual(repo.listByCitadel({ citadelId: " ", readableCitadelIds: "all" }), []);
   });
 
+  it("persists citadelId through create, update, and full-record upserts", () => {
+    const { repo } = createRepoWithDb();
+    const created = repo.createSpec({ ...makeJob("scoped"), citadelId: "ws-a" });
+    assert.equal(created.citadelId, "ws-a");
+    assert.equal(repo.get("scoped")?.citadelId, "ws-a");
+    assert.deepEqual(
+      repo.listByCitadel({ citadelId: "ws-a", readableCitadelIds: ["ws-a"] }).map((job) => job.jobId),
+      ["scoped"],
+    );
+
+    // A full-record upsert that does not name citadelId keeps the stored scope.
+    const { citadelId: _omitted, ...withoutCitadel } = repo.get("scoped")!;
+    assert.equal(repo.upsert({ ...withoutCitadel, name: "renamed" }).citadelId, "ws-a");
+
+    const moved = repo.updateSpecWithRevision("scoped", { citadelId: "ws-b" }, repo.get("scoped")!.revision);
+    assert.equal(moved.citadelId, "ws-b");
+    const cleared = repo.updateSpecWithRevision("scoped", { citadelId: null }, moved.revision);
+    assert.equal(cleared.citadelId, undefined);
+    assert.equal(repo.get("global"), undefined);
+  });
+
   it("never returns another citadel's jobs to a listed scope", () => {
     const { repo, db } = createRepoWithDb();
     repo.upsert(makeJob("a"));

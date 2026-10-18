@@ -22,6 +22,39 @@ export interface AddonHealthCheckRecord {
   message: string;
 }
 
+/**
+ * Durable data file an add-on keeps under `<add-ons root>/data/<addonId>/`. The
+ * resolved path is passed to the child in `envVar`; a legacy copy left in the
+ * install directory (plus companion files such as SQLite `-wal`) is moved in
+ * before launch or update.
+ */
+export interface AddonLaunchDataFile {
+  envVar: string;
+  fileName: string;
+  companionSuffixes?: string[];
+}
+
+/** Loopback JSON health probe; every `readyWhen` field must equal its value. */
+export interface AddonLaunchHealthProbe {
+  url: string;
+  readyWhen: Record<string, string | number | boolean>;
+  readyTimeoutMs: number;
+}
+
+/**
+ * Data-only launch contract an add-on manifest declares so the Gateway can
+ * start, probe, and report it without add-on-specific code. `command` runs in
+ * the install directory with the secret-free add-on child environment plus
+ * `env` and the resolved data-file paths.
+ */
+export interface AddonLaunchContract {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+  dataFiles?: AddonLaunchDataFile[];
+  health: AddonLaunchHealthProbe;
+}
+
 export interface AddonCatalogEntry {
   addonId: string;
   label: string;
@@ -36,6 +69,8 @@ export interface AddonCatalogEntry {
   webEntryMode: AddonWebEntryMode;
   requiresSeparateRepoDownload: true;
   launchUrl?: string;
+  /** Absent means the add-on cannot be launched from GoatCitadel. */
+  launch?: AddonLaunchContract;
   healthChecks: AddonHealthCheckRecord[];
   dashboardSlots?: AddonDashboardSlotDeclaration[];
 }

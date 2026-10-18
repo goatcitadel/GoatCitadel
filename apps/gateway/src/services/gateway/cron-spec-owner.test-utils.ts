@@ -56,5 +56,6 @@ function fullPatch(spec: CronJobSpecInput): CronJobSpecPatch {
     endAt: spec.endAt ?? null,
     workdir: spec.workdir ?? null,
     contextFrom: spec.contextFrom ?? null,
+    citadelId: spec.citadelId ?? null,
   };
 }
