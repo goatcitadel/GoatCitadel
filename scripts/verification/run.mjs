@@ -29,6 +29,7 @@ import {
   runApiCompatibilityLane,
   runBackupRoundtripLane,
   runCatalogParityLane,
+  runCodeModeDockerProofLane,
   runCodeModeHostileSandboxLane,
   runCodeModeSandboxRequiredLane,
   runDeepCoreLane,
@@ -131,6 +132,7 @@ const VALID_LANES = new Set([
   "architecture-metrics",
   "code-mode-sandbox",
   "code-mode-hostile-sandbox",
+  "code-mode-docker",
   "mesh-readiness",
   "agentic-contracts",
   "agentic-governance",
@@ -212,6 +214,7 @@ const REVIEW_LANES = new Set([
   "architecture-metrics",
   "code-mode-sandbox",
   "code-mode-hostile-sandbox",
+  "code-mode-docker",
   "mesh-readiness",
   "agentic-contracts",
   "agentic-governance",
@@ -435,6 +438,8 @@ async function runLockedVerification(lane, options) {
       await runCodeModeSandboxRequiredLane(context);
     } else if (lane === "code-mode-hostile-sandbox") {
       await runCodeModeHostileSandboxLane(context);
+    } else if (lane === "code-mode-docker") {
+      await runCodeModeDockerProofLane(context);
     } else if (lane === "mesh-readiness") {
       await runMeshReadinessLane(context, { profile });
     } else if (lane === "agentic-contracts") {

@@ -645,6 +645,23 @@ export interface CodeModeRunVerificationResponse {
   evidence: CodeModeVerificationEvidenceRecord;
 }
 
+/**
+ * Immutable link from a replayed Aider run to the run it replays, bound into the replay's hash-verified policy
+ * snapshot. A replay re-executes the recorded request at the same pinned workbench HEAD/state as a new run with its
+ * own approval; it never re-applies the original's (possibly promoted) patch.
+ */
+export interface CodeModeAiderReplayLink {
+  runId: string;
+  policySnapshotHash: string;
+  workspacePin: CodeModeAiderWorkspacePin;
+}
+
+export interface CodeModeAiderReplayResponse {
+  replayOfRunId: string;
+  /** The new run, `approval_pending` behind its own `code_mode.run` approval. */
+  run: CodeModeRunRecord;
+}
+
 export interface CodeModeRunRecord {
   runId: string;
   status: CodeModeRunStatus;

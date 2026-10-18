@@ -775,6 +775,38 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  // Replays a finished, pinned Aider run as a new run behind its own code_mode.run approval (#368).
+  fastify.post("/api/v1/code-mode/runs/:runId/replay", async (request, reply) => {
+    const params = runParamsSchema.safeParse(request.params);
+    const query = runDetailQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply
+        .code(201)
+        .send(
+          projectCapabilityPublicValue(
+            await fastify.services.capabilities.replayCodeModeAiderRun(
+              params.data.runId,
+              { ...query.data, workspaceId: query.data.workspaceId ?? DEFAULT_WORKSPACE_ID },
+              request.authActorId,
+            ),
+          ),
+        );
+    } catch (error) {
+      if (error instanceof ConflictError) {
+        return reply.code(409).send({ error: error.message, details: error.details });
+      }
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.get("/api/v1/code-mode/runs/:runId/artifacts/:artifactKind", async (request, reply) => {
     const parsed = runArtifactParamsSchema.safeParse(request.params);
     const query = runDetailQuerySchema.safeParse(request.query);

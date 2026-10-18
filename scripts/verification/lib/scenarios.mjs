@@ -137,6 +137,7 @@ import {
   runCodeModeHostileSandboxLane as runCodeModeHostileSandboxLaneImpl,
   runCodeModeSandboxRequiredLane as runCodeModeSandboxRequiredLaneImpl,
 } from "./scenarios/code-mode-sandbox-lanes.mjs";
+import { runCodeModeDockerProofLane as runCodeModeDockerProofLaneImpl } from "./scenarios/code-mode-docker-lane.mjs";
 export {
   A2A_FULL_LANE_COMMANDS,
   FAST_LANE_COMMANDS,
@@ -443,6 +444,10 @@ function withVerificationRouteParams(href, params) {
 
 export async function runCodeModeSandboxRequiredLane(context) {
   return await runCodeModeSandboxRequiredLaneImpl(context, verificationLaneDeps());
+}
+
+export async function runCodeModeDockerProofLane(context) {
+  return await runCodeModeDockerProofLaneImpl(context, verificationLaneDeps());
 }
 
 export async function runCodeModeHostileSandboxLane(context) {

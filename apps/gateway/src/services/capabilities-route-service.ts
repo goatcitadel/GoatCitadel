@@ -23,6 +23,7 @@ export type CapabilitiesRoutePort = Pick<
   | "listCodeModeRunVerificationEvidence"
   | "verifyCodeModeRun"
   | "requestCodeModeAiderPromotion"
+  | "replayCodeModeAiderRun"
   | "compareCodeModeRuns"
   | "createAutonomousActivationGrant"
   | "listProposals"
@@ -201,6 +202,14 @@ export class CapabilitiesRouteService {
     operatorId?: string,
   ) {
     return this.capabilities.requestCodeModeAiderPromotion(runId, scope, operatorId);
+  }
+
+  public replayCodeModeAiderRun(
+    runId: string,
+    scope: Parameters<CapabilitiesRoutePort["replayCodeModeAiderRun"]>[1],
+    operatorId?: string,
+  ) {
+    return this.capabilities.replayCodeModeAiderRun(runId, scope, operatorId);
   }
 
   public listCodeModeRunVerificationEvidence(

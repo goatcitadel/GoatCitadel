@@ -991,7 +991,7 @@ Expected:
 
 - Default trusted-code host runner is visible.
 - Docker runs only when explicitly configured.
-- Aider remains audit-only if enabled; a pinned `patch_produced` run reaches the workspace only through the separately approved `POST /api/v1/code-mode/runs/:runId/promote` (sha256 and pinned HEAD/state re-checked, applied at most once via `git apply --check` then apply; an interrupted promotion is never re-applied and is left for manual review); unpinned runs cannot be promoted; replay and candidate promotion are not offered; Docker stays configured-only.
+- Aider remains audit-only if enabled; a pinned `patch_produced` run reaches the workspace only through the separately approved `POST /api/v1/code-mode/runs/:runId/promote` (sha256 and pinned HEAD/state re-checked, applied at most once via `git apply --check` then apply; an interrupted promotion is never re-applied and is left for manual review); unpinned runs cannot be promoted; a finished pinned run can be replayed via `POST /api/v1/code-mode/runs/:runId/replay` as a new run behind its own approval at the same pinned HEAD/state (refused when the workbench moved; its patch goes through the same promote path); candidate promotion is not offered; Docker is callable only when configured with a digest-pinned image (`pnpm verify:code-mode:docker`).
 - Required isolation fails closed when unavailable.
 
 Result:

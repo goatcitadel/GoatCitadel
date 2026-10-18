@@ -116,7 +116,7 @@ export function createCodeModeExecutionBackendRunner(input: {
 
 function buildUnavailableBackendMessage(executionBackend: CodeModeRunExecutionBackendRef): string {
   if (executionBackend.backendId === CODE_MODE_DOCKER_BACKEND_ID) {
-    return "Docker Code Mode execution backend is preview-only and is not callable yet.";
+    return "Docker Code Mode execution backend is not enabled with a digest-pinned image.";
   }
   if (executionBackend.backendId === CODE_MODE_AIDER_ADAPTER_ID) {
     return "Aider Code Mode adapter is not callable with the current Docker and adapter configuration.";

@@ -64,7 +64,7 @@ describe("code-mode-execution-backend-runner", () => {
     } catch (error) {
       expect(error).toMatchObject({
         code: "CODE_MODE_EXECUTION_BACKEND_UNAVAILABLE",
-        message: "Docker Code Mode execution backend is preview-only and is not callable yet.",
+        message: "Docker Code Mode execution backend is not enabled with a digest-pinned image.",
       });
     }
 

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1271,6 +1271,147 @@ describe("CapabilitySystemService", () => {
     ).toMatchObject({ input: {}, aiderWorkspacePin: pin });
   });
 
+  // Docker proof lane (#368, `pnpm verify:code-mode:docker`): runs only when CI provides a pulled, digest-pinned image.
+  it.skipIf(!process.env.GOATCITADEL_CODE_MODE_DOCKER_PROOF_IMAGE)(
+    "docker proof: executes an approved Code Mode run in a digest-pinned container with hash-checked artifacts",
+    async () => {
+      const image = process.env.GOATCITADEL_CODE_MODE_DOCKER_PROOF_IMAGE!;
+      expect(image).toMatch(/@sha256:[a-f0-9]{64}$/);
+      const launches: Array<{ command: string; args: readonly string[] }> = [];
+      const harness = await createHarness({
+        sandboxConfig: { required: false, bestEffortHostEnabled: false },
+        dockerBackend: { enabled: true, image },
+        spawnCodeModeChild: ((command: string, args: readonly string[], options: never) => {
+          launches.push({ command, args });
+          return spawn(command, args, options);
+        }) as never,
+      });
+
+      const run = await harness.service.createCodeModeRun({
+        language: "javascript",
+        source: "return { ok: true, sum: 1 + 2 };",
+        executionBackendId: "docker-container",
+      });
+      expect(run).toMatchObject({ status: "approval_pending", executionBackend: { backendId: "docker-container" } });
+
+      await harness.service.executeApprovedCodeModeRun(run.approvalId!);
+
+      const finished = harness.storage.codeModeRuns.get(run.runId);
+      expect(finished.status, finished.error).toBe("completed");
+      expect(JSON.stringify(finished.result)).toContain('"sum":3');
+      expect(launches).toHaveLength(1);
+      expect(launches[0]!.command).toBe("docker");
+      expect(launches[0]!.args).toEqual(expect.arrayContaining(["run", "--network", "none", "--pull", "never", image]));
+      // Every recorded artifact still matches its recorded sha256 on disk.
+      const artifacts = [
+        finished.codeArtifact,
+        finished.wrapperManifestArtifact,
+        finished.policySnapshotArtifact,
+        ...(finished.stdoutArtifact ? [finished.stdoutArtifact] : []),
+        ...(finished.stderrArtifact ? [finished.stderrArtifact] : []),
+      ];
+      for (const artifact of artifacts) {
+        const bytes = await fs.readFile(path.resolve(harness.rootDir, artifact.relPath));
+        expect(createHash("sha256").update(bytes).digest("hex"), artifact.relPath).toBe(artifact.sha256);
+      }
+      expect(finished.codeHash).toBe(sha256Text("return { ok: true, sum: 1 + 2 };"));
+    },
+    180_000,
+  );
+
+  it("replays a finished pinned Aider run as a new linked run behind its own approval", async () => {
+    const harness = await createAiderPinHarness();
+    const head = await initAiderPinWorktree(harness.rootDir);
+    attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+    const original = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      sessionId: "session-pin",
+      input: { target: "index.ts" },
+      aider: { requestMarkdown: "Refactor this file.", model: "test-model" },
+    });
+    harness.storage.codeModeRuns.upsert({ ...harness.storage.codeModeRuns.get(original.runId), status: "completed" });
+    harness.createApproval.mockClear();
+
+    const replay = await harness.service.replayCodeModeAiderRun(
+      original.runId,
+      { workspaceId: original.workspaceId },
+      "operator-replay",
+    );
+
+    expect(replay.replayOfRunId).toBe(original.runId);
+    expect(replay.run).toMatchObject({ status: "approval_pending", sessionId: "session-pin" });
+    expect(replay.run.runId).not.toBe(original.runId);
+    expect(replay.run.approvalId).toBeDefined();
+    expect(replay.run.codeHash).toBe(original.codeHash);
+    expect(harness.createApproval).toHaveBeenCalledTimes(1);
+    expect(harness.createApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "code_mode.run",
+        payload: expect.objectContaining({ replayOfRunId: original.runId, replayPinnedHead: head }),
+      }),
+    );
+    expect(harness.storage.pendingApprovalActions.find(replay.run.approvalId!)).toMatchObject({
+      actionType: "code_mode.run",
+      request: {
+        input: { target: "index.ts" },
+        aider: { requestMarkdown: "Refactor this file.", model: "test-model" },
+      },
+    });
+    const snapshot = JSON.parse(
+      await fs.readFile(path.resolve(harness.rootDir, replay.run.policySnapshotArtifact.relPath), "utf8"),
+    ) as Record<string, unknown>;
+    expect(snapshot.codeModeAiderReplayOf).toMatchObject({
+      runId: original.runId,
+      policySnapshotHash: original.policySnapshotHash,
+      workspacePin: { worktreeHead: head, sessionId: "session-pin" },
+    });
+    // The original run is untouched by its replay.
+    expect(harness.storage.codeModeRuns.get(original.runId)).toMatchObject({ status: "completed" });
+  });
+
+  it("refuses to replay an Aider run once the workbench HEAD moved", async () => {
+    const harness = await createAiderPinHarness();
+    await initAiderPinWorktree(harness.rootDir);
+    attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+    const original = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      sessionId: "session-pin",
+      aider: { requestMarkdown: "Refactor this file." },
+    });
+    harness.storage.codeModeRuns.upsert({ ...harness.storage.codeModeRuns.get(original.runId), status: "completed" });
+    const worktree = path.join(harness.rootDir, "repo");
+    await fs.writeFile(path.join(worktree, "next.ts"), "export const next = 1;\n", "utf8");
+    execFileSync("git", ["-C", worktree, "add", "next.ts"], { windowsHide: true });
+    execFileSync("git", ["-C", worktree, "commit", "-q", "-m", "moved"], { windowsHide: true });
+    harness.createApproval.mockClear();
+
+    await expect(
+      harness.service.replayCodeModeAiderRun(original.runId, { workspaceId: original.workspaceId }),
+    ).rejects.toMatchObject({ details: { reason: "worktree_head_moved", runId: original.runId } });
+    expect(harness.createApproval).not.toHaveBeenCalled();
+  });
+
+  it("refuses to replay a run that has not finished", async () => {
+    const harness = await createAiderPinHarness();
+    await initAiderPinWorktree(harness.rootDir);
+    attachAiderPinWorkbench(harness.storage, async () => readyAiderPinWorkbench());
+    const pending = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      executionBackendId: "aider-cli-adapter",
+      sessionId: "session-pin",
+      aider: { requestMarkdown: "Refactor this file." },
+    });
+
+    await expect(
+      harness.service.replayCodeModeAiderRun(pending.runId, { workspaceId: pending.workspaceId }),
+    ).rejects.toMatchObject({ details: { reason: "run_not_terminal" } });
+  });
+
   it("does not pin Aider runs without a ready clean workbench", async () => {
     const harness = await createAiderPinHarness();
     await initAiderPinWorktree(harness.rootDir);
@@ -1516,7 +1657,7 @@ describe("CapabilitySystemService", () => {
           backendId: "docker-container",
           kind: "docker",
           callable: false,
-          runtimeSupport: "preview_only",
+          runtimeSupport: "not_available",
         }),
         expect.objectContaining({
           backendId: "aider-cli-adapter",

@@ -161,15 +161,17 @@ function buildDockerBackend(
     backendId: CODE_MODE_DOCKER_BACKEND_ID,
     kind: "docker",
     label: "Docker execution backend",
-    status: digestPinBlocked ? "blocked" : callable ? "available" : "preview",
-    runtimeSupport: digestPinBlocked ? "not_available" : callable ? "active_runner" : "preview_only",
+    // Graduated (#368): the runner is proven by `verify:code-mode:docker` against a digest-pinned image, so an
+    // unconfigured backend is blocked by configuration rather than advertised as planned.
+    status: callable ? "available" : "blocked",
+    runtimeSupport: callable ? "active_runner" : "not_available",
     default: false,
     callable,
     description: callable
       ? "Configured container backend for approved Code Mode runs using stdio JSON-RPC transport."
       : digestPinBlocked
         ? "Configured Docker backend is blocked because digest pinning is required but the image is tag-only."
-        : "Planned container backend for Code Mode runs after policy, artifact, and approval parity is wired.",
+        : "Container backend for approved Code Mode runs; callable once an operator enables it with a digest-pinned image.",
     blockers: [
       ...(!codeModeEnabled ? ["Code Mode v1 is disabled."] : []),
       ...(!enabled ? ["Docker backend is not enabled."] : []),
@@ -194,7 +196,12 @@ function buildDockerBackend(
       localFirstViability: "strong",
       license: "strong",
       cost: "strong",
-      requiredProofLanes: ["verify:code-mode:sandbox", "verify:desktop", "verify:runtime:truth"],
+      requiredProofLanes: [
+        "verify:code-mode:docker",
+        "verify:code-mode:sandbox",
+        "verify:desktop",
+        "verify:runtime:truth",
+      ],
     },
     evidence: {
       envFlag: enabled ? `${envFlag}=true` : envFlag,
@@ -213,20 +220,19 @@ function buildAiderAdapter(
   const enabled = aiderAdapter?.enabled ?? isTruthyEnv(env[envFlag]);
   const image = aiderAdapter?.image?.trim();
   const digestPinBlocked = Boolean(enabled && image && !isDigestPinnedImageRef(image));
-  const blockedByDocker = Boolean(codeModeEnabled && enabled && image && docker.status === "blocked");
   const callable = codeModeEnabled && enabled && docker.callable && Boolean(image) && !digestPinBlocked;
   return {
     backendId: CODE_MODE_AIDER_ADAPTER_ID,
     kind: "aider_adapter",
     label: "Aider CLI adapter",
-    status: blockedByDocker || digestPinBlocked ? "blocked" : callable ? "available" : "preview",
-    runtimeSupport: blockedByDocker || digestPinBlocked ? "not_available" : callable ? "active_runner" : "preview_only",
+    status: callable ? "available" : "blocked",
+    runtimeSupport: callable ? "active_runner" : "not_available",
     adapterForBackendId: CODE_MODE_DOCKER_BACKEND_ID,
     default: false,
     callable,
     description: callable
       ? "Configured Docker-backed Aider adapter for approved audit-only Code Mode runs."
-      : "Planned adapter for routing approved Code Mode tasks into Aider-compatible workflows.",
+      : "Docker-backed Aider adapter for approved audit-only Code Mode runs; callable once Code Mode, the Docker backend and the adapter are enabled with digest-pinned images.",
     blockers: [
       ...(!codeModeEnabled ? ["Code Mode v1 is disabled."] : []),
       ...(!enabled ? ["Aider adapter is not enabled."] : []),
@@ -237,7 +243,7 @@ function buildAiderAdapter(
     governance: [
       "Must retain explicit approvals and immutable run evidence.",
       "Runs only in run-temp/artifact space; the operator workspace changes only through an approved, hash-checked promote.",
-      "Replay posture stays non-replayable; a promoted patch is never re-applied.",
+      "Replay creates a new approval-gated run from the recorded request at the same pinned HEAD; a promoted patch is never re-applied.",
     ],
     evaluation: {
       credentialStorage: "partial",

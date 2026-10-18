@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "image": "node@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402",
+  "resolvedFrom": "docker.io/library/node:22-alpine (multi-arch OCI index digest, looked up 2026-10-18)",
+  "reason": "The Code Mode child harness is a self-contained Node script written into the run-temp bind mount, so the container needs only a Node runtime. The official node image is Docker-maintained, node 22 matches the repository engine line, and Alpine is the smallest official Node variant. Pinning the index digest makes the proof reproducible; bump it deliberately by replacing this digest."
+}

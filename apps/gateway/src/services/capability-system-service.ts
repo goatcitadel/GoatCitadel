@@ -1,4 +1,10 @@
 import { applyReleaseBoundSkillRetrust } from "./release-bound-skill-retrust-owner.js";
+import {
+  assertReplayPinUnchanged,
+  CODE_MODE_AIDER_REPLAY_SNAPSHOT_KEY,
+  prepareCodeModeAiderReplay,
+  withCodeModeAiderReplayPreview,
+} from "./code-mode-aider-replay.js";
 /* eslint-disable max-lines */
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
@@ -36,6 +42,8 @@ import type {
   ChatSessionWorkbenchRecord,
   ChatTurnTraceRecord,
   CodeModeAiderPromotionRequestResponse,
+  CodeModeAiderReplayLink,
+  CodeModeAiderReplayResponse,
   CodeModeAiderWorkspacePin,
   CodeModeAutonomousActivationEvidence,
   CodeModeLanguage,
@@ -1616,6 +1624,26 @@ export class CapabilitySystemService {
     return response;
   }
 
+  /**
+   * Replays a finished, workspace-pinned Aider run as a NEW run: same recorded request, input and source at the same
+   * pinned HEAD/state, behind its own `code_mode.run` approval. Refused when the workbench moved; its patch can only
+   * reach the workbench through the promote path, and the original run is never touched.
+   */
+  public async replayCodeModeAiderRun(
+    runId: string,
+    scope: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
+    operatorId?: string,
+  ): Promise<CodeModeAiderReplayResponse> {
+    const original = await this.getCodeModeRunInScope(runId, scope);
+    const prepared = await prepareCodeModeAiderReplay(
+      { ...this.options, artifactRoot: this.artifactRoot },
+      original,
+      operatorId,
+    );
+    const run = await this.createCodeModeRun(prepared.request, { replayOf: prepared.replayOf });
+    return { replayOfRunId: original.runId, run };
+  }
+
   /** Requests the separate `code_mode.aider_promote` approval for a completed, workspace-pinned Aider patch. */
   public async requestCodeModeAiderPromotion(
     runId: string,
@@ -1799,7 +1827,11 @@ export class CapabilitySystemService {
     return [...childSessionIds];
   }
 
-  public async createCodeModeRun(request: CodeModeRunRequest): Promise<CodeModeRunRecord> {
+  public async createCodeModeRun(
+    request: CodeModeRunRequest,
+    /** Server-internal only (never from a route body): binds a replay to the run it replays. */
+    internal: { replayOf?: CodeModeAiderReplayLink } = {},
+  ): Promise<CodeModeRunRecord> {
     await this.requireCodeModeEnabled();
     const source = request.source.trim();
     if (!source) {
@@ -1871,6 +1903,9 @@ export class CapabilitySystemService {
       normalizedAiderRequest && sessionId
         ? await captureAiderWorkspacePinOrNone(this.options, { sessionId, runId })
         : undefined;
+    if (internal.replayOf) {
+      assertReplayPinUnchanged(internal.replayOf, aiderWorkspacePin);
+    }
     const runInputHash = hashCodeModeInputBinding(
       runInput,
       normalizedAiderRequest,
@@ -1917,6 +1952,7 @@ export class CapabilitySystemService {
       ...(normalizedAiderRequest ? { codeModeAiderRequest: normalizedAiderRequest } : {}),
       ...(frozenAiderExecution ? { codeModeAiderExecution: frozenAiderExecution } : {}),
       ...(aiderWorkspacePin ? { codeModeAiderWorkspacePin: aiderWorkspacePin } : {}),
+      ...(internal.replayOf ? { [CODE_MODE_AIDER_REPLAY_SNAPSHOT_KEY]: internal.replayOf } : {}),
       codeModeAutonomousActivation: autonomousActivation,
     };
     const policySnapshotHash = sha256Text(JSON.stringify(policySnapshot));
@@ -1941,31 +1977,34 @@ export class CapabilitySystemService {
       policySnapshot,
     );
 
-    const approvalPayload = buildCodeModeApprovalPayload({
-      runId,
-      workspaceId,
-      codeHash,
-      wrapperManifestHash,
-      inputHash: runInputHash,
-      capabilitySnapshotId: snapshot.snapshotId,
-      requestedOutputIntent: request.requestedOutputIntent,
-      saveCandidateOnSuccess: Boolean(request.saveCandidateOnSuccess),
-      inspectPath: codeArtifact.relPath,
-      codePreview: buildCodePreview(source),
-      affectedResources: wrapperManifest.wrappers.map((wrapper) => wrapper.name),
-      sessionId,
-      turnId,
-      originSurface,
-      sandbox,
-      permissionProfileId: policyContext?.permissionProfileId,
-      permissionProfileLabel: policyContext?.permissionProfile?.label,
-      localOperatorOverrideId: policyContext?.localOperatorOverrideId,
-      executionBackend,
-      aiderRequest: normalizedAiderRequest,
-      aiderExecution: frozenAiderExecution,
-      aiderWorkspacePin,
-      autonomousActivation,
-    });
+    const approvalPayload = withCodeModeAiderReplayPreview(
+      internal.replayOf,
+      buildCodeModeApprovalPayload({
+        runId,
+        workspaceId,
+        codeHash,
+        wrapperManifestHash,
+        inputHash: runInputHash,
+        capabilitySnapshotId: snapshot.snapshotId,
+        requestedOutputIntent: request.requestedOutputIntent,
+        saveCandidateOnSuccess: Boolean(request.saveCandidateOnSuccess),
+        inspectPath: codeArtifact.relPath,
+        codePreview: buildCodePreview(source),
+        affectedResources: wrapperManifest.wrappers.map((wrapper) => wrapper.name),
+        sessionId,
+        turnId,
+        originSurface,
+        sandbox,
+        permissionProfileId: policyContext?.permissionProfileId,
+        permissionProfileLabel: policyContext?.permissionProfile?.label,
+        localOperatorOverrideId: policyContext?.localOperatorOverrideId,
+        executionBackend,
+        aiderRequest: normalizedAiderRequest,
+        aiderExecution: frozenAiderExecution,
+        aiderWorkspacePin,
+        autonomousActivation,
+      }),
+    );
     const approvalLinkage = buildCodeModeApprovalLinkage({
       workspaceId,
       runId,

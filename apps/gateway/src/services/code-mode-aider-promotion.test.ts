@@ -24,6 +24,7 @@ import {
   requestCodeModeAiderPromotion,
   type CodeModeAiderPromotionDeps,
 } from "./code-mode-aider-promotion.js";
+import { readCodeModeAiderReplayLink } from "./code-mode-aider-replay.js";
 import { parseCodeModeAiderAdapterResultEnvelope } from "./code-mode-aider-result-contract.js";
 import { captureCodeModeAiderWorkspacePin } from "./code-mode-aider-workspace-pin.js";
 import { captureCodeModeGitWorktreeState } from "./code-mode-worktree-capture.js";
@@ -201,6 +202,23 @@ describe("Aider promotion", { timeout: 60_000 }, () => {
     expect((await fx.promotion())?.approvalId).toBe(first);
   });
 
+  it("promotes a replayed run's patch through the same path at most once", async () => {
+    const fx = await createFixture({ replayOfRunId: "run-original-1" });
+    expect(readCodeModeAiderReplayLink(fx.deps, await fx.run())).toMatchObject({
+      runId: "run-original-1",
+      workspacePin: { worktreeHead: fx.pin.worktreeHead },
+    });
+    const approvalId = await fx.requestAndApprove();
+
+    expect(await fx.execute(approvalId)).toMatchObject({ outcome: "executed" });
+    expect(fx.readWorktreeFile()).toBe(PROMOTED);
+    expect(await requestCodeModeAiderPromotion(fx.deps, await fx.run(), "operator-1")).toMatchObject({
+      status: "already_promoted",
+    });
+    expect(await fx.execute(approvalId)).toMatchObject({ outcome: "executed", result: { alreadyPromoted: true } });
+    expect(fx.apply).toHaveBeenCalledTimes(1);
+  });
+
   it("request returns already_promoted without a new approval", async () => {
     const fx = await createFixture();
     const approvalId = await fx.requestAndApprove();
@@ -374,6 +392,8 @@ interface FixtureOptions {
   crashAfterApply?: boolean;
   /** Overrides the recorded patch bytes (persisted hash-consistently). */
   patchContent?: string;
+  /** Records the run as a replay of this original run id (hash-bound in its policy snapshot). */
+  replayOfRunId?: string;
 }
 
 async function createFixture(options: FixtureOptions = {}) {
@@ -417,6 +437,15 @@ async function createFixture(options: FixtureOptions = {}) {
     mode: "test",
     codeModeInputHash: INPUT_HASH,
     ...(options.pinned === false ? {} : { codeModeAiderWorkspacePin: pin }),
+    ...(options.replayOfRunId
+      ? {
+          codeModeAiderReplayOf: {
+            runId: options.replayOfRunId,
+            policySnapshotHash: "c".repeat(64),
+            workspacePin: pin,
+          },
+        }
+      : {}),
   };
   const policySnapshotArtifact = await persister.persistJson({
     segments: [runId],
