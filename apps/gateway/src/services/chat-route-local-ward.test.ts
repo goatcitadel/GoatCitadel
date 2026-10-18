@@ -9,6 +9,7 @@ import {
   isLoopbackUrl,
   isRouteLocalProvider,
   readCitadelWardDispatchReason,
+  routeWardActionsFor,
   selectRouteLocalProvider,
 } from "./chat-route-local-ward.js";
 import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
@@ -140,8 +141,9 @@ describe("model.chat ward dispatch backstop", () => {
       reason: "citadel_ward_route_local_unavailable",
       citadelId: "citadel-ops",
     });
-    expect(deps.storage.workspaces.find).toHaveBeenCalledWith("workspace-ops");
-    expect(deps.storage.chatSessionMeta.get).not.toHaveBeenCalled();
+    expect(deps.storage.chatSessionMeta.get).toHaveBeenCalledWith("session-1");
+    expect(deps.storage.workspaces.find).toHaveBeenCalledWith("workspace-from-session");
+    expect(deps.storage.workspaces.find).not.toHaveBeenCalledWith("workspace-ops");
   });
 
   it("route_local ward passes a loopback local provider and rejects a LAN one", async () => {
@@ -276,5 +278,135 @@ describe("model.chat ward dispatch backstop", () => {
     await expect(filterWardAdmittedFallbackTargets({ llmService: {} }, chatAttribution, targets)).resolves.toEqual(
       targets,
     );
+  });
+});
+
+describe("model.chat ward across a local reroute", () => {
+  // `model.chat.openai` is route_local; no ward names the local provider.
+  function openAiRouteLocalDeps(sessionWorkspaceId: string | undefined = "workspace-ops") {
+    return {
+      storage: {
+        workspaces: {
+          find: vi.fn(async (workspaceId: string) =>
+            workspaceId === "workspace-ops" ? { citadelId: "citadel-ops" } : undefined,
+          ),
+        },
+        citadels: {
+          listWards: vi.fn(async (citadelId: string) =>
+            citadelId === "citadel-ops"
+              ? [{ name: "openai-local", actionPattern: "model.chat.openai", effect: "route_local" as const }]
+              : [],
+          ),
+        },
+        chatSessionMeta: {
+          get: vi.fn(async () => (sessionWorkspaceId ? { workspaceId: sessionWorkspaceId } : undefined)),
+        },
+      },
+      recordDevDiagnostic: vi.fn(),
+    };
+  }
+  const reroutedAttribution: ModelUsageAttributionContext = {
+    workspaceId: "workspace-ops",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    callKind: "chat_initial",
+    wardActions: routeWardActionsFor({ requestedProviderId: "openai", effectiveProviderId: "ollama" }),
+  };
+
+  it("routeWardActionsFor names the requested and effective providers once", () => {
+    expect(routeWardActionsFor({ requestedProviderId: "openai", effectiveProviderId: "ollama" })).toEqual([
+      "model.chat.openai",
+      "model.chat.ollama",
+    ]);
+    expect(routeWardActionsFor({ requestedProviderId: "ollama", effectiveProviderId: "ollama" })).toEqual([
+      "model.chat.ollama",
+    ]);
+    expect(routeWardActionsFor({})).toBeUndefined();
+    expect(routeWardActionsFor(undefined)).toBeUndefined();
+  });
+
+  it("rejects a rerouted turn whose local provider now points at a remote URL", async () => {
+    const guard = createModelChatWardDispatchGuard(openAiRouteLocalDeps() as never);
+    await expect(
+      guard({
+        attribution: reroutedAttribution,
+        route: { providerId: "ollama" },
+        providerBaseUrl: "http://127.0.0.1:11434/v1",
+      }),
+    ).resolves.toBeUndefined();
+    let caught: unknown;
+    try {
+      await guard({
+        attribution: reroutedAttribution,
+        route: { providerId: "ollama" },
+        providerBaseUrl: "https://ollama.example.com/v1",
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(LlmDispatchGuardRejectedError);
+    expect(readCitadelWardDispatchReason(caught)).toBe("citadel_ward_route_local_unavailable");
+  });
+
+  it("rejects a durable-resume dispatch that carries the governing ward action", async () => {
+    const guard = createModelChatWardDispatchGuard(openAiRouteLocalDeps() as never);
+    await expect(
+      guard({
+        attribution: { ...reroutedAttribution, durableRunId: "run-1", callKind: "chat_tool_loop" },
+        route: { providerId: "ollama" },
+        providerBaseUrl: "https://ollama.example.com/v1",
+      }),
+    ).rejects.toBeInstanceOf(LlmDispatchGuardRejectedError);
+  });
+
+  it("ignores carried actions outside model.chat", async () => {
+    const deps = openAiRouteLocalDeps();
+    deps.storage.citadels.listWards.mockImplementation(async () => [
+      { name: "integration-local", actionPattern: "integration.*", effect: "route_local" as const },
+    ]);
+    const guard = createModelChatWardDispatchGuard(deps as never);
+    await expect(
+      guard({
+        attribution: { ...reroutedAttribution, wardActions: ["integration.automation.gmail.send"] },
+        route: { providerId: "ollama" },
+        providerBaseUrl: "https://ollama.example.com/v1",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("scopes the ward to the canonical session workspace, not the attribution workspace", async () => {
+    const deps = openAiRouteLocalDeps("workspace-ops");
+    const guard = createModelChatWardDispatchGuard(deps as never);
+    await expect(
+      guard({
+        attribution: { workspaceId: "default", sessionId: "session-1", callKind: "chat_initial" },
+        route: { providerId: "openai" },
+        providerBaseUrl: "https://api.openai.com/v1",
+      }),
+    ).rejects.toBeInstanceOf(LlmDispatchGuardRejectedError);
+    expect(deps.storage.workspaces.find).toHaveBeenCalledWith("workspace-ops");
+    expect(deps.storage.workspaces.find).not.toHaveBeenCalledWith("default");
+    expect(deps.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        event: "chat.citadel_ward.workspace_scope_mismatch",
+        sessionId: "session-1",
+        context: { attributionWorkspaceId: "default", sessionWorkspaceId: "workspace-ops" },
+      }),
+    );
+  });
+
+  it("falls back to the attribution workspace only when the session is unknown", async () => {
+    const deps = openAiRouteLocalDeps(undefined);
+    const guard = createModelChatWardDispatchGuard(deps as never);
+    await expect(
+      guard({
+        attribution: { workspaceId: "workspace-ops", sessionId: "mason-session", callKind: "chat_initial" },
+        route: { providerId: "openai" },
+        providerBaseUrl: "https://api.openai.com/v1",
+      }),
+    ).rejects.toBeInstanceOf(LlmDispatchGuardRejectedError);
+    expect(deps.storage.workspaces.find).toHaveBeenCalledWith("workspace-ops");
+    expect(deps.recordDevDiagnostic).not.toHaveBeenCalled();
   });
 });

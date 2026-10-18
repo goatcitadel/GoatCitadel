@@ -1,3 +1,5 @@
+import type { RoutingPreflightSelectionSource } from "@goatcitadel/contracts";
+
 export type WorkTrustTone = "default" | "live" | "warning" | "critical" | "success" | "muted";
 
 export interface WorkTrustDescriptor {
@@ -48,6 +50,22 @@ export function formatWorkProviderModelSummary(providerLabel?: string | null, mo
     return modelLabel;
   }
   return "Provider routing pending";
+}
+
+/** Operator-facing label for where a route preflight's provider/model came from. */
+export function formatSelectionSourceSummary(source?: RoutingPreflightSelectionSource | string | null): string {
+  switch (source) {
+    case "session":
+      return "Selection: session";
+    case "global":
+      return "Selection: global";
+    case "manual":
+      return "Selection: manual";
+    case "citadel_ward_route_local":
+      return "Selection: kept on a local model by a Citadel Ward";
+    default:
+      return "Selection: pending";
+  }
 }
 
 export function buildThreadedGatewayStatusSummary(input: {

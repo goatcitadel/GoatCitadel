@@ -685,6 +685,8 @@ export interface ChatTurnAgentRunnerInput {
   capabilityProfileContent?: string;
   /** Stable provider/model/capability-selection dimension for compaction hysteresis. */
   compactionDimensionHash?: string;
+  /** Citadel Ward `model.chat.*` actions that governed this turn's route (`routeWardActionsFor`). */
+  routeWardActions?: readonly string[];
   /**
    * Server-authored linkage to the final routed-context snapshot. This carries
    * hashes and identifiers only; routed refs and admitted content stay outside
@@ -2667,6 +2669,7 @@ export class ChatTurnAgentRunner {
       agentId: workerUsageAttribution?.agentId ?? "goatherder",
       workerId: workerUsageAttribution?.workerId,
       parentOperationId: workerUsageAttribution?.parentOperationId,
+      ...(input.routeWardActions?.length ? { wardActions: [...input.routeWardActions] } : {}),
     });
     let usageObserved = false;
     let completionLatencyMs = 0;
@@ -9581,6 +9584,7 @@ export class ChatTurnAgentRunner {
       agentId: workerUsageAttribution?.agentId ?? "goatherder",
       workerId: workerUsageAttribution?.workerId,
       parentOperationId: workerUsageAttribution?.parentOperationId,
+      ...(input.routeWardActions?.length ? { wardActions: [...input.routeWardActions] } : {}),
     };
   }
 }

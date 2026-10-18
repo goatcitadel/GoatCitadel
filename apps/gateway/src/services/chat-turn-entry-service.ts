@@ -885,6 +885,7 @@ async function runAgentSendChatMessageLlmPath(
       featureAdmission: prepared.featureAdmission,
       capabilityProfileContent: prepared.capabilityProfileContent,
       compactionDimensionHash: prepared.compactionDimensionHash,
+      routeWardActions: prepared.routeWardActions,
     });
     await assertChatTurnCompletionWritable(host, prepared.turnId, controller.signal, [turnResult.turnTrace.status]);
     let reflectionTrace: ChatTurnTraceRecord["reflection"] = {
@@ -970,6 +971,7 @@ async function runAgentSendChatMessageLlmPath(
         modelRouter: prepared.modelRouterDecision,
         signal: controller.signal,
         compactionDimensionHash: prepared.compactionDimensionHash,
+        routeWardActions: prepared.routeWardActions,
       });
       await assertChatTurnCompletionWritable(host, retryTurnId, controller.signal, [retryResult.turnTrace.status]);
       if (retryResult.turnTrace.status === "completed" && retryResult.assistantContent.trim().length > 0) {

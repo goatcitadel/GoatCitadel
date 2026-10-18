@@ -2,11 +2,22 @@ import { describe, expect, it } from "vitest";
 import {
   buildThreadedGatewayStatusSummary,
   buildThreadedSessionStatusSummary,
+  formatSelectionSourceSummary,
   formatWorkProviderModelSummary,
   formatWorkloadSummaryDescriptor,
 } from "./work-trust";
 
 describe("work-trust", () => {
+  it("labels every route selection source, including a Citadel Ward local reroute", () => {
+    expect(formatSelectionSourceSummary("manual")).toBe("Selection: manual");
+    expect(formatSelectionSourceSummary("session")).toBe("Selection: session");
+    expect(formatSelectionSourceSummary("global")).toBe("Selection: global");
+    expect(formatSelectionSourceSummary("citadel_ward_route_local")).toBe(
+      "Selection: kept on a local model by a Citadel Ward",
+    );
+    expect(formatSelectionSourceSummary(undefined)).toBe("Selection: pending");
+  });
+
   it("formats provider/model summaries with pending fallbacks", () => {
     expect(formatWorkProviderModelSummary("OpenAI", "gpt-5.5")).toBe("OpenAI / gpt-5.5");
     expect(formatWorkProviderModelSummary("OpenAI", null)).toBe("OpenAI");

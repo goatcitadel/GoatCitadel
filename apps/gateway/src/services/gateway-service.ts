@@ -1651,7 +1651,12 @@ export class GatewayService {
         });
       },
     });
-    this.llmService.setDispatchWardGuard(createModelChatWardDispatchGuard({ storage: this.storage }));
+    this.llmService.setDispatchWardGuard(
+      createModelChatWardDispatchGuard({
+        storage: this.storage,
+        recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      }),
+    );
     this.chatSessionStatusService = new ChatSessionStatusService({
       storage: this.storage,
       getModelContextWindow: (providerId, model) => this.llmService.getModelContextWindow(providerId, model),

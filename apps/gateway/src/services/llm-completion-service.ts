@@ -396,7 +396,12 @@ export async function createChatCompletion(
     const fallbackRequiresToolProtocolNormalization = Boolean(lastError && shouldRetryToolProtocolError(lastError));
     const fallbacks = await filterWardAdmittedFallbackTargets(
       host,
-      { workspaceId: chatHookWorkspaceId, sessionId: memoryInput?.sessionId, callKind: "chat_fallback" },
+      {
+        workspaceId: chatHookWorkspaceId,
+        sessionId: memoryInput?.sessionId,
+        callKind: "chat_fallback",
+        wardActions: attributionInput.wardActions,
+      },
       filterCrossProviderFallbackTargets(
         authorizedFallback
           ? [authorizedFallback]
@@ -1026,7 +1031,12 @@ export async function* createChatCompletionStream(
     const fallbackRequiresToolProtocolNormalization = Boolean(lastError && shouldRetryToolProtocolError(lastError));
     const fallbacks = await filterWardAdmittedFallbackTargets(
       host,
-      { workspaceId: chatHookWorkspaceId, sessionId: memoryInput?.sessionId, callKind: "chat_fallback" },
+      {
+        workspaceId: chatHookWorkspaceId,
+        sessionId: memoryInput?.sessionId,
+        callKind: "chat_fallback",
+        wardActions: attributionInput.wardActions,
+      },
       filterCrossProviderFallbackTargets(
         authorizedFallback
           ? [authorizedFallback]

@@ -1,4 +1,5 @@
 import {
+  DEFAULT_CITADEL_ID,
   PolicyViolationError,
   type CitadelWard,
   type LlmProviderConfig,
@@ -8,7 +9,11 @@ import {
   type RoutingWardReasonCode,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
-import { resolveWardEffectForExternalAction, type CitadelWardGateStorage } from "./citadel-ward-gate.js";
+import {
+  resolveWardEffectForExternalAction,
+  type CitadelWardGateResult,
+  type CitadelWardGateStorage,
+} from "./citadel-ward-gate.js";
 import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 import type { LlmDispatchWardGuard, LlmService } from "./llm-service.js";
 import type { ResolvedChatRouteDescriptor } from "./chat-route-resolution.js";
@@ -50,10 +55,37 @@ const BLOCKING_WARD_REASON_CODES: ReadonlySet<RoutingWardReasonCode> = new Set([
 export interface RouteLocalWardDependencies {
   readonly storage: Partial<Pick<Storage, "workspaces" | "citadels" | "chatSessionMeta">>;
   resolveSessionWorkspaceId?(sessionId: string): Promise<string | undefined>;
+  /** Records a dispatch whose attribution workspace disagrees with its session. */
+  recordDevDiagnostic?(input: {
+    level: "warn";
+    category: "chat";
+    event: "chat.citadel_ward.workspace_scope_mismatch";
+    message: string;
+    sessionId: string;
+    context: { attributionWorkspaceId: string; sessionWorkspaceId: string };
+  }): void;
 }
 
+const MODEL_CHAT_WARD_ACTION_PREFIX = "model.chat.";
+
 export function buildModelChatWardAction(providerId: string): string {
-  return `model.chat.${providerId}`;
+  return `${MODEL_CHAT_WARD_ACTION_PREFIX}${providerId}`;
+}
+
+/**
+ * The `model.chat.*` actions that govern a turn's route: the requested
+ * provider's and the effective provider's. A `route_local` ward that rerouted
+ * the turn names the requested provider, so dispatches carry these actions
+ * (`ModelUsageAttributionContext.wardActions`) and the backstop keeps
+ * enforcing that ward after the turn moved to a local provider.
+ */
+export function routeWardActionsFor(
+  route: { readonly requestedProviderId?: string; readonly effectiveProviderId?: string } | undefined,
+): string[] | undefined {
+  const providerIds = [route?.requestedProviderId?.trim(), route?.effectiveProviderId?.trim()].filter(
+    (providerId): providerId is string => Boolean(providerId),
+  );
+  return providerIds.length > 0 ? [...new Set(providerIds.map(buildModelChatWardAction))] : undefined;
 }
 
 /** Strict loopback check: `localhost`, `127.0.0.0/8` or `[::1]` over http(s). */
@@ -143,18 +175,21 @@ function isWardGatedDispatch(attribution: ModelUsageAttributionContext): boolean
  * inbound, autonomous, delegated, assembly, fallback and session-scoped utility
  * dispatches can reach a provider without a fresh resolution, so the ward is
  * re-evaluated before each of them: `deny` rejects, and `route_local` rejects
- * any endpoint that is not on this machine.
+ * any endpoint that is not on this machine. The dispatched provider's action
+ * is evaluated together with the route's carried `wardActions` (deny-wins), so
+ * a ward on the requested provider still binds a turn it rerouted locally.
  */
 export function createModelChatWardDispatchGuard(deps: RouteLocalWardDependencies): LlmDispatchWardGuard {
   return async ({ attribution, route, providerBaseUrl }) => {
     if (!isWardGatedDispatch(attribution)) return;
     const wardStorage = buildModelChatWardStorage(deps.storage);
     if (!wardStorage) return;
-    const ward = await resolveWardEffectForExternalAction({
-      storage: wardStorage,
-      workspaceId: await resolveDispatchWorkspaceId(deps, attribution),
-      action: buildModelChatWardAction(route.providerId),
-    });
+    const workspaceId = await resolveDispatchWorkspaceId(deps, attribution);
+    const ward = await resolveModelChatWard(
+      wardStorage,
+      workspaceId,
+      dispatchWardActions(attribution, route.providerId),
+    );
     if (ward.effect === "deny") {
       throw rejectWardDispatch("citadel_ward_deny", ward.citadelId, MODEL_CHAT_WARD_DENY_MESSAGE);
     }
@@ -203,14 +238,54 @@ function rejectWardDispatch(
   return new LlmDispatchGuardRejectedError(new PolicyViolationError({ message, details: { reason, citadelId } }));
 }
 
+/** The dispatched provider's action plus the route's carried `model.chat.*` actions. */
+function dispatchWardActions(attribution: ModelUsageAttributionContext, providerId: string): string[] {
+  const carried = (attribution.wardActions ?? []).filter((action) => action.startsWith(MODEL_CHAT_WARD_ACTION_PREFIX));
+  return [...new Set([buildModelChatWardAction(providerId), ...carried])];
+}
+
+/** Deny-wins across every action; only `deny` and `route_local` wards are loaded. */
+async function resolveModelChatWard(
+  storage: CitadelWardGateStorage,
+  workspaceId: string | undefined,
+  actions: readonly string[],
+): Promise<CitadelWardGateResult> {
+  const results = await Promise.all(
+    actions.map((action) => resolveWardEffectForExternalAction({ storage, workspaceId, action })),
+  );
+  const citadelId = results[0]?.citadelId ?? DEFAULT_CITADEL_ID;
+  const effect = results.some((result) => result.effect === "deny")
+    ? "deny"
+    : results.some((result) => result.effect === "route_local")
+      ? "route_local"
+      : undefined;
+  return { effect, citadelId };
+}
+
+/**
+ * The canonical session's workspace scopes the ward: an attribution workspace
+ * (for example `default` stamped by a completion route) never overrides it.
+ * The attribution workspace applies only when the dispatch has no known session.
+ */
 async function resolveDispatchWorkspaceId(
   deps: RouteLocalWardDependencies,
   attribution: ModelUsageAttributionContext,
 ): Promise<string | undefined> {
-  const workspaceId = attribution.workspaceId?.trim();
-  if (workspaceId) return workspaceId;
+  const attributionWorkspaceId = attribution.workspaceId?.trim() || undefined;
   const sessionId = attribution.sessionId?.trim();
-  return sessionId ? await resolveWorkspaceId(deps, sessionId) : undefined;
+  const sessionWorkspaceId = sessionId ? await resolveWorkspaceId(deps, sessionId) : undefined;
+  if (!sessionId || !sessionWorkspaceId) return attributionWorkspaceId;
+  if (attributionWorkspaceId && attributionWorkspaceId !== sessionWorkspaceId) {
+    deps.recordDevDiagnostic?.({
+      level: "warn",
+      category: "chat",
+      event: "chat.citadel_ward.workspace_scope_mismatch",
+      message: "A model dispatch named a workspace other than its session's; the ward used the session's workspace.",
+      sessionId,
+      context: { attributionWorkspaceId, sessionWorkspaceId },
+    });
+  }
+  return sessionWorkspaceId;
 }
 
 /** Diagnostic fields for each turn-entry `recordDevDiagnostic` context. */
@@ -293,7 +368,8 @@ function buildModelChatWardStorage(storage: RouteLocalWardDependencies["storage"
 }
 
 async function resolveWorkspaceId(deps: RouteLocalWardDependencies, sessionId: string): Promise<string | undefined> {
-  if (deps.resolveSessionWorkspaceId) return await deps.resolveSessionWorkspaceId(sessionId);
+  const resolveSessionWorkspaceId = deps.resolveSessionWorkspaceId;
+  if (resolveSessionWorkspaceId) return await resolveSessionWorkspaceId.call(deps, sessionId);
   return (await deps.storage.chatSessionMeta?.get(sessionId))?.workspaceId;
 }
 

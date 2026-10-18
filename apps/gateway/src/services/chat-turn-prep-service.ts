@@ -60,7 +60,7 @@ import {
   resolveSustainedLocalCodingProfile,
 } from "./chat-turn-execution-profile.js";
 import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
-import { admitChatRouteWard } from "./chat-route-local-ward.js";
+import { admitChatRouteWard, routeWardActionsFor } from "./chat-route-local-ward.js";
 import { assertChatSessionActive, splitChatPrefsPatch } from "./chat-session-utils.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import type { ResolvedChatRouteDescriptor } from "./chat-route-resolution.js";
@@ -384,6 +384,8 @@ export interface PreparedAgentChatTurn {
   routedContextSnapshot?: ChatRoutedContextSnapshotRecord;
   /** Stable provider/model/capability-selection dimension used by compaction and first-call usage. */
   compactionDimensionHash: string;
+  /** Citadel Ward `model.chat.*` actions of the requested and effective route providers. */
+  routeWardActions?: readonly string[];
   promptPreparation?: {
     durationMs: number;
     promptSha256: string;
@@ -1350,6 +1352,7 @@ export async function prepareAgentChatTurn(
     sourceTurnId: options?.sourceTurnId,
     effectiveToolAutonomy,
     compactionDimensionHash: compactionDimension.dimensionHash,
+    routeWardActions: routeWardActionsFor(boundCapabilityProfile?.selection ?? effectiveProviderRoute),
     promptPreparation: {
       durationMs: Math.max(0, performance.now() - preparationStartedAt),
       promptSha256: createHash("sha256").update(canonicalJsonString(history)).digest("hex"),

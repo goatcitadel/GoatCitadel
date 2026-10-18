@@ -33,18 +33,7 @@ export function readVisualStreamModeFromStorage(): ChatVisualStreamMode {
   }
 }
 
-export function formatSelectionSourceSummary(source?: RoutingPreflightResult["selectionSource"]): string {
-  switch (source) {
-    case "session":
-      return "Selection: session";
-    case "global":
-      return "Selection: global";
-    case "manual":
-      return "Selection: manual";
-    default:
-      return "Selection: pending";
-  }
-}
+export { formatSelectionSourceSummary } from "./work-trust";
 
 function truncateContextBlock(value: string): string {
   if (value.length <= SELECTED_CONTEXT_MAX_CHARS) {

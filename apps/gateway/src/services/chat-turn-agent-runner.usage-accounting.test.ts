@@ -197,6 +197,31 @@ describe("ChatTurnAgentRunner secondary-call usage accounting", () => {
     });
   });
 
+  it("carries the turn's route ward actions into every completion attribution", async () => {
+    const attributions: ModelUsageAttributionContext[] = [];
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion: vi.fn(
+        async (_request: ChatCompletionRequest, attribution?: ModelUsageAttributionContext) => {
+          if (attribution) attributions.push(attribution);
+          return {
+            model: "glm-5",
+            choices: [{ index: 0, message: { role: "assistant", content: "Local answer." }, finish_reason: "stop" }],
+          };
+        },
+      ),
+      invokeTool: vi.fn(),
+    });
+
+    await orchestrator.run({ ...baseTurnInput(), routeWardActions: ["model.chat.openai", "model.chat.glm"] });
+
+    expect(attributions.length).toBeGreaterThan(0);
+    for (const attribution of attributions) {
+      expect(attribution.wardActions).toEqual(["model.chat.openai", "model.chat.glm"]);
+    }
+  });
+
   it("attributes delegated worker calls to the persisted step and preserves worker identity on repair", async () => {
     const attributions: ModelUsageAttributionContext[] = [];
     const requests: ChatCompletionRequest[] = [];

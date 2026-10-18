@@ -2338,7 +2338,11 @@ export async function* streamPreparedAgentChatTurn(
                   prepared.featureAdmission?.references.providerRoute?.primary.providerId ??
                   input.providerId ??
                   prepared.prefs.providerId,
-                model: prepared.capabilityProfile?.selection.effectiveModel ?? prepared.featureAdmission?.references.providerRoute?.primary.model ?? input.model ?? prepared.prefs.model,
+                model:
+                  prepared.capabilityProfile?.selection.effectiveModel ??
+                  prepared.featureAdmission?.references.providerRoute?.primary.model ??
+                  input.model ??
+                  prepared.prefs.model,
                 webMode:
                   prepared.capabilityProfile?.selection.webMode ??
                   prepared.normalized.webMode ??
@@ -2393,6 +2397,7 @@ export async function* streamPreparedAgentChatTurn(
                 ...(prepared.serverOnlyPosture ? { serverOnlyPosture: prepared.serverOnlyPosture } : {}),
                 capabilityProfileContent: prepared.capabilityProfileContent,
                 compactionDimensionHash: prepared.compactionDimensionHash,
+                routeWardActions: prepared.routeWardActions,
                 ...(serverContextUsageAttribution ? { serverContextUsageAttribution } : {}),
               };
               return host.turnRuntime.runStream(runnerInput);
@@ -2483,11 +2488,17 @@ export async function* streamPreparedAgentChatTurn(
     // Admit only the terminal state emitted by this execution; cancellation,
     // a competing terminal state, and stale durable generations still win.
     const settledTrace = await readFanoutCompletionTrace(host, turnId);
-    const fanoutWaiting = deferGeneralPostCommit && Boolean(options?.canonicalDurableRunId) &&
-      settledTrace.durable?.runId === options?.canonicalDurableRunId && runnerFanoutWaitId !== undefined &&
+    const fanoutWaiting =
+      deferGeneralPostCommit &&
+      Boolean(options?.canonicalDurableRunId) &&
+      settledTrace.durable?.runId === options?.canonicalDurableRunId &&
+      runnerFanoutWaitId !== undefined &&
       readDurableFanoutWaitInvocationId(settledTrace) === runnerFanoutWaitId;
-    const completionOwnerStatuses: ChatTurnTraceRecord["status"][] = ["running", runnerTerminalStatus ?? "completed",
-      ...(fanoutWaiting ? ["waiting_for_tool" as const] : [])];
+    const completionOwnerStatuses: ChatTurnTraceRecord["status"][] = [
+      "running",
+      runnerTerminalStatus ?? "completed",
+      ...(fanoutWaiting ? ["waiting_for_tool" as const] : []),
+    ];
     await assertChatStreamCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
 
     const delegationWaiting =

@@ -212,9 +212,7 @@ Only an unexpected throw defers for retry. The runner's idempotency keeps a retr
 - **Ward action:** `model.chat.<providerId>`, evaluated per Chat turn against the session's workspace citadel. It goes through `resolveWardEffectForExternalAction`, which is deny-wins and resolves to the personal citadel when the session is unbound.
 - **`model.tool.<toolName>` is not wired in this PR.** No single model-backed tool boundary exists to gate yet. The docs say `route_local` is enforced for Chat model routing only, and #347 is closed against its "boundary gate" wording. This is recorded as a follow-up, not claimed.
 - **Primary enforcement point:** `resolveChatRouteDescriptor` (`apps/gateway/src/services/chat-route-resolution.ts:207`). There is no ranked candidate list, so the pool is `runtime.providers`.
-- **Local backend (strict):** a provider counts as local only in two cases.
-  - Its inferred engine kind (`inferRuntimeEngineKind`) is `ollama` or `llama_cpp`, and `isLocalChatProviderUrl(baseUrl)` holds.
-  - Its kind is `openai_compatible` and its baseUrl host is loopback: `localhost`, `127.0.0.0/8`, or `[::1]`. This uses a new strict `isLoopbackUrl` helper.
+- **Local backend (loopback, shipped rule):** a provider counts as local exactly when `isLoopbackUrl(baseUrl)` holds, for any engine kind: an `http(s)` host of `localhost`, `127.0.0.0/8`, or `[::1]`. Ruling recorded 2026-10-18 after review: `route_local` promises "kept on this machine", so a LAN host is never local (even Ollama or llama.cpp), and a loopback endpoint is trusted whatever serves it (including a local proxy). This replaced the earlier engine-kind draft (`inferRuntimeEngineKind` plus `isLocalChatProviderUrl`).
 - **Health:** a candidate is usable unless `getCachedModelAvailability(providerId, model)` is `"unavailable"` or `"stale_unavailable"`.
 - **Outcome:**
   - Requested provider is already local: keep it.
@@ -222,7 +220,7 @@ Only an unexpected throw defers for retry. The runner's idempotency keeps a retr
   - No usable local provider: set `blockedReason` to "A Citadel Ward requires this chat to stay on a local model, and no local model route is available." and set `wardReasonCode: "citadel_ward_route_local_unavailable"`.
   - A matched `deny` blocks the same way with `wardReasonCode: "citadel_ward_deny"`. This is deny-wins honesty, since a deny on `model.chat.*` must not be weaker than `route_local`.
 - **Fail closed at turn entry:** every `chat-turn-entry-service.ts` call site that reads the descriptor must throw `PolicyViolationError` with `details: { reason: <wardReasonCode>, citadelId }` when `wardReasonCode` is a blocking code. Today those sites do not throw on `blockedReason`.
-- **Dispatch backstop:** the dispatch-time cross-provider fallback (`resolveFallbackTargets`, `gateway-service.ts:11596`, which can return the cloud `moonshot`) must not leave a local route. The `LlmDispatchGuard` (`llm-dispatch-guard.ts`) re-evaluates `model.chat.<route.providerId>` for `attribution.workspaceId`. If the ward is `route_local` and the provider is not local, it rejects with `LlmDispatchGuardRejectedError` (`citadel_ward_route_local_unavailable`).
+- **Dispatch backstop:** the dispatch-time cross-provider fallback (`resolveFallbackTargets`, `gateway-service.ts:11596`, which can return the cloud `moonshot`) must not leave a local route. The `LlmDispatchGuard` (`llm-dispatch-guard.ts`) re-evaluates `model.chat.<route.providerId>`, together with the route's carried `attribution.wardActions` (the requested and effective providers' actions, deny-wins), in the canonical session's workspace (`attribution.workspaceId` only when the dispatch has no known session). If the ward is `route_local` and the provider is not local, it rejects with `LlmDispatchGuardRejectedError` (`citadel_ward_route_local_unavailable`).
 - **Audit:** the descriptor carries `wardReasonCode` (`citadel_ward_route_local` when enforced and satisfied) plus `wardCitadelId`. They are added to `RoutingDecisionSnapshot` and its fingerprint, and to each call site's `recordDevDiagnostic` context.
 
 ### Task 6: Route resolution enforces `route_local`
@@ -243,7 +241,7 @@ Only an unexpected throw defers for retry. The runner's idempotency keeps a retr
 
 - [ ] **Step 1: Write failing tests:**
   - `isLoopbackUrl`: true for `http://localhost:11434`, `http://127.0.0.2:8080/v1` and `http://[::1]:1234`. False for `http://192.168.1.5:11434`, `https://api.openai.com`, `http://localhost.evil.com` and `undefined`.
-  - `isRouteLocalProvider`: true for an ollama provider on `http://127.0.0.1:11434`. False for an openai_compatible provider on `http://10.0.0.5:8000` and for an `ollama`-named provider on `https://ollama.com`.
+  - `isRouteLocalProvider` (`= isLoopbackUrl(baseUrl)` for any engine): true for an ollama provider on `http://127.0.0.1:11434` and for any engine (LM Studio, vLLM, llama.cpp) on a loopback host. False for any provider on a LAN host such as `http://10.0.0.5:8000` or `http://192.168.1.20:11434`, and for an `ollama`-named provider on `https://ollama.com`.
   - Resolution, `"route_local ward keeps a local requested provider"`: the session requests local `ollama`. The descriptor keeps it with `wardReasonCode: "citadel_ward_route_local"`.
   - Resolution, `"route_local ward switches a cloud request to the available local provider"`: `effectiveProviderId === "ollama"` and `selectionSource === "citadel_ward_route_local"`.
   - Resolution, `"route_local ward with no healthy local provider fails closed"`: availability is `"unavailable"`. Expect `blockedReason` to be set and `wardReasonCode === "citadel_ward_route_local_unavailable"`.
