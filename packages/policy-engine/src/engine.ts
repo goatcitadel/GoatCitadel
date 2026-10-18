@@ -2875,7 +2875,7 @@ function requiresExplicitWritePath(toolName: string): boolean {
 }
 
 function requiresExplicitPathForGrantConstraints(toolName: string): boolean {
-  return toolName === "browser.screenshot";
+  return toolName === "browser.screenshot" || toolName === "git.add";
 }
 
 function matchesHostAllowlist(host: string, patterns: string[]): boolean {

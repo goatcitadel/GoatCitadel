@@ -5616,6 +5616,35 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
       sessionId: "session-1",
     });
     expect(elsewhere.reasonCodes).toEqual(["grant_constraints_block"]);
+
+    const omitted = await engine.evaluateAccess({
+      toolName: "git.add",
+      args: {},
+      agentId: "agent",
+      sessionId: "session-1",
+    });
+    expect(omitted.allowed).toBe(false);
+    expect(omitted.reasonCodes).toEqual(["grant_constraints_block"]);
+
+    vi.mocked(storage.toolGrants.list).mockResolvedValue([
+      {
+        grantId: "grant-git-add-open",
+        toolPattern: "git.add",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session-1",
+        grantType: "persistent",
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    const unconstrained = await engine.evaluateAccess({
+      toolName: "git.add",
+      args: {},
+      agentId: "agent",
+      sessionId: "session-1",
+    });
+    expect(unconstrained.reasonCodes).toContain("allowed");
   });
 
   it("applies scoped grant constraints to safe tools", async () => {

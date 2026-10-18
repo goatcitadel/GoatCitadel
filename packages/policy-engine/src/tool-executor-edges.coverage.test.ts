@@ -178,6 +178,17 @@ describe("tool executor edge coverage", () => {
     expect(mocked.execFileAsync).not.toHaveBeenCalledWith("git", expect.anything(), expect.anything());
   });
 
+  it("rejects option-shaped worktree branch for an in-jail path", async () => {
+    await expect(
+      executeTool(
+        request("git.worktree.create", { path: path.join(tempRoot, "worktrees", "orphan"), branch: "--orphan" }),
+        config,
+        storageStub(),
+      ),
+    ).rejects.toThrow(/must not start with "-"/);
+    expect(mocked.execFileAsync).not.toHaveBeenCalledWith("git", expect.anything(), expect.anything());
+  });
+
   it("accepts slash and dot branch names", async () => {
     await expect(
       executeTool(request("git.branch.create", { branch: "codex/x.y" }), config, storageStub()),
