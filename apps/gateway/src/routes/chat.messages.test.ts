@@ -115,17 +115,30 @@ describe("chat message routes", () => {
   });
 
   it("scopes admission-bound routed context inspection to the authenticated operator", async () => {
-    const getChatTurnRoutedContext = vi.fn().mockResolvedValueOnce({ state: "admission_bound", routedContext: { snapshotId: "snapshot-1" } })
+    const getChatTurnRoutedContext = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "admission_bound", routedContext: { snapshotId: "snapshot-1" } })
       .mockRejectedValueOnce(new NotFoundError({ entity: "chat routed context", id: "turn-1" }));
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.addHook("onRequest", async (request) => { request.authActorId = "operator-1"; });
+    app.addHook("onRequest", async (request) => {
+      request.authActorId = "operator-1";
+    });
     app.decorate("services", { chatMessages: { getChatTurnRoutedContext } } as never);
     await app.register(chatRoutes);
-    const allowed = await app.inject({ method: "GET", url: "/api/v1/chat/sessions/session-1/turns/turn-1/routed-context?workspaceId=workspace-1" });
+    const allowed = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/session-1/turns/turn-1/routed-context?workspaceId=workspace-1",
+    });
     expect(allowed.statusCode).toBe(200);
-    expect(getChatTurnRoutedContext).toHaveBeenLastCalledWith("session-1", "turn-1", { workspaceId: "workspace-1", operatorId: "operator-1" });
-    const denied = await app.inject({ method: "GET", url: "/api/v1/chat/sessions/session-1/turns/turn-1/routed-context?workspaceId=other" });
+    expect(getChatTurnRoutedContext).toHaveBeenLastCalledWith("session-1", "turn-1", {
+      workspaceId: "workspace-1",
+      operatorId: "operator-1",
+    });
+    const denied = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/session-1/turns/turn-1/routed-context?workspaceId=other",
+    });
     expect(denied.statusCode).toBe(404);
     expect(denied.body).not.toContain("snapshot-1");
   });
@@ -370,6 +383,54 @@ describe("chat message routes", () => {
         model: "gpt-5.4",
         routeDecision: expect.objectContaining({
           capabilityCompactionDimensionHash: "a".repeat(64),
+        }),
+      }),
+      undefined,
+    );
+  });
+
+  it("replays a Citadel Ward route_local decision through its original request", async () => {
+    const routeDecision = {
+      action: "send" as const,
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestedProviderId: "openai",
+      requestedModel: "gpt-5.4",
+      effectiveProviderId: "ollama",
+      effectiveModel: "llama3.2",
+      selectionSource: "citadel_ward_route_local" as const,
+      fallbackPolicy: "off" as const,
+      fallbackResult: "not_applicable" as const,
+      runtimeReachability: "reachable" as const,
+      runtimeClass: "local" as const,
+      wardReasonCode: "citadel_ward_route_local" as const,
+      wardCitadelId: "citadel-ops",
+      fingerprint: "ward-route-fingerprint",
+    };
+    const routePreflight = vi.fn(async () => ({ decision: routeDecision }));
+    const agentSendChatMessage = vi.fn(async () => ({ sessionId: "sess-1", turnId: "turn-1" }));
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("services", { chatMessages: { routePreflight, agentSendChatMessage } } as never);
+    await app.register(chatRoutes);
+
+    const sent = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: { content: "hello", providerId: "ollama", model: "llama3.2", routeDecision },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(routePreflight).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({ action: "send", providerId: "openai", model: "gpt-5.4" }),
+    );
+    expect(agentSendChatMessage).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({
+        providerId: "ollama",
+        routeDecision: expect.objectContaining({
+          wardReasonCode: "citadel_ward_route_local",
+          wardCitadelId: "citadel-ops",
         }),
       }),
       undefined,

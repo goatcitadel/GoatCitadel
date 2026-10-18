@@ -38,6 +38,7 @@ import {
   resolveChatRouteDescriptor,
   type ChatRouteResolutionDependencies,
 } from "./chat-route-resolution.js";
+import { assertChatRouteWardAdmitsTurn, describeChatRouteWard } from "./chat-route-local-ward.js";
 import {
   buildEmptyAssistantTurnFallbackText,
   ChatTurnCancelledError,
@@ -427,9 +428,11 @@ export async function agentSendChatMessage(
             effectiveModel: routeDescriptor.effectiveModel,
             selectionSource: routeDescriptor.selectionSource,
             fallbackPolicy: routeDescriptor.fallbackPolicy,
+            ...describeChatRouteWard(routeDescriptor),
           },
         },
       });
+      assertChatRouteWardAdmitsTurn(routeDescriptor);
       const prepared = await host.prepareAgentChatTurn(sessionId, input, {
         branchKind: "append",
         turnId: turnIdentity.turnId,
@@ -834,8 +837,15 @@ async function runAgentSendChatMessageLlmPath(
       content: prepared.content,
       mode: prepared.capabilityProfile?.selection.mode ?? mode,
       providerId:
-        prepared.capabilityProfile?.selection.effectiveProviderId ?? prepared.featureAdmission?.references.providerRoute?.primary.providerId ?? input.providerId ?? prepared.prefs.providerId,
-      model: prepared.capabilityProfile?.selection.effectiveModel ?? prepared.featureAdmission?.references.providerRoute?.primary.model ?? input.model ?? prepared.prefs.model,
+        prepared.capabilityProfile?.selection.effectiveProviderId ??
+        prepared.featureAdmission?.references.providerRoute?.primary.providerId ??
+        input.providerId ??
+        prepared.prefs.providerId,
+      model:
+        prepared.capabilityProfile?.selection.effectiveModel ??
+        prepared.featureAdmission?.references.providerRoute?.primary.model ??
+        input.model ??
+        prepared.prefs.model,
       webMode: prepared.capabilityProfile?.selection.webMode ?? prepared.normalized.webMode ?? prepared.prefs.webMode,
       memoryMode:
         prepared.capabilityProfile?.selection.memory.mode ??
@@ -1367,8 +1377,10 @@ export async function* agentSendChatMessageStream(
           context: {
             selectionSource: routeDescriptor.selectionSource,
             fallbackPolicy: routeDescriptor.fallbackPolicy,
+            ...describeChatRouteWard(routeDescriptor),
           },
         });
+        assertChatRouteWardAdmitsTurn(routeDescriptor);
         const prepared = await host.prepareAgentChatTurn(sessionId, input, {
           branchKind: "append",
           turnId: turnIdentity.turnId,
@@ -1515,8 +1527,10 @@ export async function retryChatTurn(
       context: {
         selectionSource: routeDescriptor.selectionSource,
         fallbackPolicy: routeDescriptor.fallbackPolicy,
+        ...describeChatRouteWard(routeDescriptor),
       },
     });
+    assertChatRouteWardAdmitsTurn(routeDescriptor);
     const turnIdentity = createEntryTurnIdentity();
     const admissionActorId = resolveTurnAdmissionActorId(request);
     const turnAdmission = await admitEntryOperatorChatTurn(
@@ -1672,8 +1686,10 @@ export async function* retryChatTurnStream(
           context: {
             selectionSource: routeDescriptor.selectionSource,
             fallbackPolicy: routeDescriptor.fallbackPolicy,
+            ...describeChatRouteWard(routeDescriptor),
           },
         });
+        assertChatRouteWardAdmitsTurn(routeDescriptor);
         const prepared = await host.prepareAgentChatTurn(sessionId, request, {
           branchKind: "retry",
           turnId: turnIdentity.turnId,
@@ -1805,8 +1821,10 @@ export async function editChatTurn(
       context: {
         selectionSource: routeDescriptor.selectionSource,
         fallbackPolicy: routeDescriptor.fallbackPolicy,
+        ...describeChatRouteWard(routeDescriptor),
       },
     });
+    assertChatRouteWardAdmitsTurn(routeDescriptor);
     const turnIdentity = createEntryTurnIdentity();
     const admissionActorId = resolveTurnAdmissionActorId(request);
     const turnAdmission = await admitEntryOperatorChatTurn(
@@ -1941,8 +1959,10 @@ export async function* editChatTurnStream(
           context: {
             selectionSource: routeDescriptor.selectionSource,
             fallbackPolicy: routeDescriptor.fallbackPolicy,
+            ...describeChatRouteWard(routeDescriptor),
           },
         });
+        assertChatRouteWardAdmitsTurn(routeDescriptor);
         const prepared = await host.prepareAgentChatTurn(sessionId, request, {
           branchKind: "edit",
           turnId: turnIdentity.turnId,

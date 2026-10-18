@@ -2331,6 +2331,14 @@
     },
     {
       "planStep": "C0",
+      "path": "apps/gateway/src/services/chat-route-local-ward.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 13,
+      "reason": "WS3 gap-closure program (issue #347): Citadel Ward route_local enforcement for Chat model routing. The accesses cover the optional ward storage (workspaces, citadels, chatSessionMeta) and the optional session-workspace reader that resolve the model.chat.<providerId> ward, plus reading the input bag (deps, runtime providers, descriptor, availability reader). Keeping the ward logic here leaves chat-route-resolution.ts at its baseline of 25 dependency member accesses.",
+      "evidence": "apps/gateway/src/services/chat-route-local-ward.test.ts covers strict loopback and route-local classification, candidate selection and the fail-closed turn assertion; chat-route-resolution.test.ts covers keeping a local route, switching a cloud request to local, failing closed with no healthy local provider, dropping a cloud fallback, deny and no ward storage; chat-turn-entry-service.test.ts rejects send, retry and edit with PolicyViolationError before any provider call; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
       "path": "apps/gateway/src/services/gateway/durable-chat-turn-payload.ts",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 0,

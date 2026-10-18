@@ -17,6 +17,11 @@ import { DEFAULT_CITADEL_ID, evaluateWards } from "@goatcitadel/contracts";
  * `runIdempotentExternalSideEffect` as `wardEffect` (it refuses pre-boundary);
  * `redact`/`route_local` are not meaningful at these boundaries and pass
  * through (callers may record them).
+ *
+ * Chat model routing also evaluates through this gate, with the action
+ * `model.chat.<providerId>` (see `chat-route-local-ward.ts`). There, `deny`
+ * blocks the turn and `route_local` keeps it on a strictly local backend or
+ * fails it closed; the other effects pass through for model routing.
  */
 export interface CitadelWardGateStorage {
   workspaces?: {

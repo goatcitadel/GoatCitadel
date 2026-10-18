@@ -9,19 +9,23 @@ import {
   type RoutingPreflightResult,
   type ChatSessionPrefsRecord,
   type ChatProviderFallbackPreference,
+  type RoutingWardReasonCode,
 } from "@goatcitadel/contracts";
 import { createHash } from "node:crypto";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { LlmService } from "./llm-service.js";
 import { isLocalChatProviderUrl } from "./chat-provider-fallback-authority.js";
 import { splitChatPrefsPatch } from "./chat-session-utils.js";
+import { enforceRouteLocalWard, type RouteLocalWardDependencies } from "./chat-route-local-ward.js";
 
 type LlmRuntimeConfig = ReturnType<LlmService["getRuntimeConfig"]>;
 type RuntimeProvider = LlmRuntimeConfig["providers"][number];
 const ROUTING_DECISION_TTL_MS = 30_000;
 
 export interface ChatRouteResolutionDependencies {
-  readonly storage: Pick<Storage, "chatSessionPrefs">;
+  /** Ward storage is optional: without `citadels` no Citadel Ward applies to routing. */
+  readonly storage: Pick<Storage, "chatSessionPrefs"> & RouteLocalWardDependencies["storage"];
+  resolveSessionWorkspaceId?: RouteLocalWardDependencies["resolveSessionWorkspaceId"];
   readonly llmService: Pick<LlmService, "getRuntimeConfig"> &
     Partial<Pick<LlmService, "getCachedModelAvailability" | "refreshModelCatalogInBackground">>;
   resolveFallbackTargets(
@@ -61,6 +65,8 @@ export interface ResolvedChatRouteDescriptor {
   runtimeProvider?: RuntimeProvider;
   fallbackTarget?: { providerId: string; model: string };
   providerFallback?: ChatProviderFallbackPreference;
+  wardReasonCode?: RoutingWardReasonCode;
+  wardCitadelId?: string;
 }
 
 function normalizeRequestedModel(providerId: string, model: string): string {
@@ -85,7 +91,8 @@ export function buildPreviewPrefs(
     ...(input.prefsOverride ?? {}),
     mode: input.mode ?? input.prefsOverride?.mode,
     providerId: input.providerId ?? input.prefsOverride?.providerId,
-    providerFallback: input.providerFallback !== undefined ? input.providerFallback : input.prefsOverride?.providerFallback,
+    providerFallback:
+      input.providerFallback !== undefined ? input.providerFallback : input.prefsOverride?.providerFallback,
     model: input.model ?? input.prefsOverride?.model,
     webMode: input.webMode ?? input.prefsOverride?.webMode,
     thinkingLevel: input.thinkingLevel ?? input.prefsOverride?.thinkingLevel,
@@ -96,7 +103,10 @@ export function buildPreviewPrefs(
   return {
     ...sessionPrefs,
     ...splitPrefs.basePatch,
-    providerFallback: prefsOverride.providerFallback === null ? undefined : prefsOverride.providerFallback ?? sessionPrefs.providerFallback,
+    providerFallback:
+      prefsOverride.providerFallback === null
+        ? undefined
+        : (prefsOverride.providerFallback ?? sessionPrefs.providerFallback),
   };
 }
 
@@ -209,6 +219,23 @@ export async function resolveChatRouteDescriptor(
   sessionId: string,
   input: RoutingPreflightRequest,
 ): Promise<ResolvedChatRouteDescriptor> {
+  const { runtime, descriptor, getModelAvailability } = await resolveUnwardedChatRouteDescriptor(
+    deps,
+    sessionId,
+    input,
+  );
+  return await enforceRouteLocalWard({ deps, sessionId, runtime, descriptor, getModelAvailability });
+}
+
+async function resolveUnwardedChatRouteDescriptor(
+  deps: ChatRouteResolutionDependencies,
+  sessionId: string,
+  input: RoutingPreflightRequest,
+): Promise<{
+  runtime: LlmRuntimeConfig;
+  descriptor: ResolvedChatRouteDescriptor;
+  getModelAvailability?(providerId: string, model: string): ReturnType<LlmService["getCachedModelAvailability"]>;
+}> {
   const sessionPrefs = await deps.storage.chatSessionPrefs.ensure(sessionId);
   const previewPrefs = buildPreviewPrefs(sessionPrefs, input);
   const llmService = deps.llmService;
@@ -221,9 +248,11 @@ export async function resolveChatRouteDescriptor(
   const requestedProviderId =
     requestedProvider?.providerId ?? input.providerId ?? previewPrefs.providerId ?? runtime.activeProviderId;
   const requestedModel = input.model ?? previewPrefs.model ?? (requestedProvider ? undefined : runtime.activeModel);
+  const getModelAvailability = llmService.getCachedModelAvailability?.bind(llmService);
+  const resolved = (descriptor: ResolvedChatRouteDescriptor) => ({ runtime, descriptor, getModelAvailability });
 
   if (!requestedProviderId) {
-    return {
+    return resolved({
       requestedProviderId: undefined,
       requestedModel,
       effectiveProviderId: undefined,
@@ -233,11 +262,11 @@ export async function resolveChatRouteDescriptor(
       fallbackResult: "not_applicable",
       runtimeClass: "unknown",
       blockedReason: "No model provider is configured yet. Connect one in Settings → Providers & models first.",
-    };
+    });
   }
 
   if (!requestedProvider) {
-    return {
+    return resolved({
       requestedProviderId,
       requestedModel,
       effectiveProviderId: requestedProviderId,
@@ -247,12 +276,12 @@ export async function resolveChatRouteDescriptor(
       fallbackResult: "not_applicable",
       runtimeClass: "unknown",
       blockedReason: `Unknown model provider: ${requestedProviderId}.`,
-    };
+    });
   }
 
   const runtimeClass = classifyRuntime(requestedProvider);
   if (!requestedProvider.hasApiKey && runtimeClass !== "local") {
-    return {
+    return resolved({
       requestedProviderId,
       requestedModel,
       effectiveProviderId: requestedProvider.providerId,
@@ -263,10 +292,9 @@ export async function resolveChatRouteDescriptor(
       runtimeClass,
       runtimeProvider: requestedProvider,
       blockedReason: `${requestedProvider.label} is not configured yet. Add an API key before using it.`,
-    };
+    });
   }
 
-  const getModelAvailability = llmService.getCachedModelAvailability?.bind(llmService);
   const effectiveModelResolution = resolveEffectiveModel({
     runtime,
     provider: requestedProvider,
@@ -278,13 +306,21 @@ export async function resolveChatRouteDescriptor(
   }
   const effectiveProviderId = requestedProvider.providerId;
   const effectiveModel = effectiveModelResolution.model;
-  const providerFallback = !effectiveModelResolution.blockedReason && effectiveModel
-    ? await resolveOptedInFallback(deps, runtime, requestedProvider, previewPrefs.providerFallback, getModelAvailability, resolveEffectiveModel)
-    : undefined;
+  const providerFallback =
+    !effectiveModelResolution.blockedReason && effectiveModel
+      ? await resolveOptedInFallback(
+          deps,
+          runtime,
+          requestedProvider,
+          previewPrefs.providerFallback,
+          getModelAvailability,
+          resolveEffectiveModel,
+        )
+      : undefined;
   const fallbackRuntimeClass = providerFallback
     ? classifyRuntime(runtime.providers.find((provider) => provider.providerId === providerFallback.providerId))
     : undefined;
-  return {
+  return resolved({
     requestedProviderId,
     requestedModel,
     effectiveProviderId,
@@ -292,15 +328,22 @@ export async function resolveChatRouteDescriptor(
     selectionSource,
     normalizationReason: effectiveModelResolution.normalizationReason,
     fallbackPolicy: providerFallback ? "armed" : "off",
-    fallbackResult: !providerFallback ? "not_applicable" : fallbackRuntimeClass === runtimeClass
-      ? "same_boundary" : runtimeClass === "local" ? "local_to_cloud" : "cloud_to_local",
+    fallbackResult: !providerFallback
+      ? "not_applicable"
+      : fallbackRuntimeClass === runtimeClass
+        ? "same_boundary"
+        : runtimeClass === "local"
+          ? "local_to_cloud"
+          : "cloud_to_local",
     runtimeClass,
     blockedReason: effectiveModelResolution.blockedReason,
     degradedReason: undefined,
     runtimeProvider: requestedProvider,
-    fallbackTarget: providerFallback ? { providerId: providerFallback.providerId, model: providerFallback.model } : undefined,
+    fallbackTarget: providerFallback
+      ? { providerId: providerFallback.providerId, model: providerFallback.model }
+      : undefined,
     providerFallback,
-  };
+  });
 }
 
 export async function preflightChatRoute(
@@ -316,11 +359,7 @@ export async function preflightChatRoute(
   let runtimeReachability: RoutingPreflightResult["runtimeReachability"] = "not_checked";
   let blockedReason = descriptor.blockedReason;
 
-  if (
-    !blockedReason &&
-    descriptor.runtimeClass === "local" &&
-    descriptor.runtimeProvider?.providerId
-  ) {
+  if (!blockedReason && descriptor.runtimeClass === "local" && descriptor.runtimeProvider?.providerId) {
     try {
       const models = await deps.listLlmModels?.(descriptor.runtimeProvider.providerId);
       if (models) {
@@ -351,6 +390,8 @@ export async function preflightChatRoute(
     runtimeClass: descriptor.runtimeClass,
     blockedReason,
     degradedReason: undefined,
+    wardReasonCode: descriptor.wardReasonCode,
+    wardCitadelId: descriptor.wardCitadelId,
   } satisfies Omit<RoutingPreflightResult, "decision">;
 
   return {
@@ -384,6 +425,8 @@ export function createRoutingDecisionSnapshot(
     runtimeClass: result.runtimeClass,
     blockedReason: result.blockedReason,
     degradedReason: result.degradedReason,
+    wardReasonCode: result.wardReasonCode,
+    wardCitadelId: result.wardCitadelId,
     capabilityFingerprint: result.capabilityProfile?.fingerprint,
     capabilityContentHash: result.capabilityProfile?.contentHash,
     capabilityProfileSchemaVersion: result.capabilityProfile?.schemaVersion,
@@ -418,6 +461,8 @@ export function createRoutingDecisionFingerprint(
     runtimeClass: input.runtimeClass,
     blockedReason: input.blockedReason,
     degradedReason: input.degradedReason,
+    wardReasonCode: input.wardReasonCode,
+    wardCitadelId: input.wardCitadelId,
     capabilityFingerprint: input.capabilityFingerprint,
     capabilityContentHash: input.capabilityContentHash,
     capabilityProfileSchemaVersion: input.capabilityProfileSchemaVersion,

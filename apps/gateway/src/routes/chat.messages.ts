@@ -138,7 +138,7 @@ const routeDecisionSchema = z.object({
   requestedModel: z.string().optional(),
   effectiveProviderId: z.string().optional(),
   effectiveModel: z.string().optional(),
-  selectionSource: z.enum(["manual", "session", "global"]),
+  selectionSource: z.enum(["manual", "session", "global", "citadel_ward_route_local"]),
   normalizationReason: z.string().optional(),
   fallbackPolicy: z.enum(["off", "armed"]),
   fallbackResult: z.enum(["not_applicable", "same_boundary", "local_to_cloud", "cloud_to_local"]),
@@ -146,6 +146,10 @@ const routeDecisionSchema = z.object({
   runtimeClass: z.enum(["local", "cloud", "unknown"]),
   blockedReason: z.string().optional(),
   degradedReason: z.string().optional(),
+  wardReasonCode: z
+    .enum(["citadel_ward_route_local", "citadel_ward_route_local_unavailable", "citadel_ward_deny"])
+    .optional(),
+  wardCitadelId: z.string().optional(),
   capabilityFingerprint: z.string().min(1).optional(),
   capabilityContentHash: z
     .string()
@@ -488,24 +492,34 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     }
   });
 
-  fastify.get("/api/v1/chat/sessions/:sessionId/core-state", withRouteAccess(fastify, "operator"), async (request, reply) => {
-    reply.header("cache-control", "private, no-store");
-    reply.header("pragma", "no-cache");
-    const params = sessionParamsSchema.safeParse(request.params);
-    const query = z.object({ includeThread: z.enum(["true", "false"]).default("true") }).strict().safeParse(request.query ?? {});
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid conversation core-state request." });
-    try {
-      const sessionId = params.data.sessionId;
-      const [thread, binding, prefs] = await Promise.all([
-        query.data.includeThread === "true" ? fastify.services.chatMessages.getChatThread(sessionId, { includeDecisionTrace: false }) : undefined,
-        fastify.services.chatSessions.getChatSessionBinding(sessionId),
-        fastify.services.chatSupport.getChatSessionPrefs(sessionId),
-      ]);
-      return reply.send({ sessionId, ...(thread ? { thread } : {}), binding: binding ?? null, prefs });
-    } catch (error) {
-      return sendRouteError(reply, error, request.log);
-    }
-  });
+  fastify.get(
+    "/api/v1/chat/sessions/:sessionId/core-state",
+    withRouteAccess(fastify, "operator"),
+    async (request, reply) => {
+      reply.header("cache-control", "private, no-store");
+      reply.header("pragma", "no-cache");
+      const params = sessionParamsSchema.safeParse(request.params);
+      const query = z
+        .object({ includeThread: z.enum(["true", "false"]).default("true") })
+        .strict()
+        .safeParse(request.query ?? {});
+      if (!params.success || !query.success)
+        return reply.code(400).send({ error: "Invalid conversation core-state request." });
+      try {
+        const sessionId = params.data.sessionId;
+        const [thread, binding, prefs] = await Promise.all([
+          query.data.includeThread === "true"
+            ? fastify.services.chatMessages.getChatThread(sessionId, { includeDecisionTrace: false })
+            : undefined,
+          fastify.services.chatSessions.getChatSessionBinding(sessionId),
+          fastify.services.chatSupport.getChatSessionPrefs(sessionId),
+        ]);
+        return reply.send({ sessionId, ...(thread ? { thread } : {}), binding: binding ?? null, prefs });
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
 
   fastify.get("/api/v1/chat/sessions/:sessionId/thread", operatorOrCompanionRoute, async (request, reply) => {
     reply.header("cache-control", "private, no-store");
@@ -738,10 +752,15 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     const query = capabilityProfileQuerySchema.safeParse(request.query ?? {});
     if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid routed context scope." });
     try {
-      return reply.send(await fastify.services.chatMessages.getChatTurnRoutedContext(params.data.sessionId, params.data.turnId, {
-        workspaceId: query.data.workspaceId, operatorId: request.authActorId,
-      }));
-    } catch (error) { return sendChatWriteError(reply, error); }
+      return reply.send(
+        await fastify.services.chatMessages.getChatTurnRoutedContext(params.data.sessionId, params.data.turnId, {
+          workspaceId: query.data.workspaceId,
+          operatorId: request.authActorId,
+        }),
+      );
+    } catch (error) {
+      return sendChatWriteError(reply, error);
+    }
   });
 
   fastify.get("/api/v1/chat/sessions/:sessionId/turns/:turnId/capability-profile", async (request, reply) => {
@@ -1044,7 +1063,10 @@ async function requireFreshRouteDecision(
     sendRouteChanged(reply, "route_effective_mismatch");
     return true;
   }
-  const shouldReplayManualSelection = decision.selectionSource === "manual";
+  // A ward-switched route replays its original request explicitly so the ward
+  // re-derives the same local route and fingerprint.
+  const shouldReplayManualSelection =
+    decision.selectionSource === "manual" || decision.selectionSource === "citadel_ward_route_local";
   const shouldReplaySessionSelection = decision.selectionSource === "session";
   const replayedPrefsOverride = shouldReplaySessionSelection
     ? {
