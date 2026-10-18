@@ -26,6 +26,16 @@ function fixture(owner: SettingsApprovalOwner): ChangePlanRecord {
       target: { ...base.target, resourceId: change.operation },
     };
   }
+  if (owner === "filesystem-write-access")
+    return {
+      ...base,
+      origin: { surface: "settings", workspaceId: "default" },
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "tool_global_access", toolName: "fs.delete", posture: "available" },
+      },
+      target: { ...base.target, resourceId: "tool_global_access:fs.delete" },
+    };
   if (owner === "provider-routing")
     return {
       ...base,
@@ -55,6 +65,7 @@ const owners: SettingsApprovalOwner[] = [
   "guided-model",
   "tool-approval",
   "budget-mode",
+  "filesystem-write-access",
 ];
 
 describe("native Settings exact approval owner binding", () => {
@@ -86,7 +97,7 @@ describe("native Settings exact approval owner binding", () => {
     expect(settingsApprovalOwnerBinding(plan, owner, "workspace-a", { ...plan, planId: "other-plan" })).toBeNull();
     expect(settingsApprovalOwnerBinding(plan, owner, "workspace-a", { ...plan, requiredAction: undefined })).toBeNull();
   });
-  it.each(["tool-approval", "budget-mode"] as const)(
+  it.each(["tool-approval", "budget-mode", "filesystem-write-access"] as const)(
     "rejects another runtime operation for %s even with the expected target",
     (owner) => {
       const plan = fixture(owner);

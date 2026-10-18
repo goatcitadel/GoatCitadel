@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeChannelCapabilities,
+  isMatrixInboundEnabled,
   listChannelRuleKeys,
   planChannelRichMessageDelivery,
   planChannelTextDelivery,
@@ -369,6 +370,43 @@ describe("describeChannelCapabilities", () => {
       inboundStreamEnabled: true,
     });
     expect(noToken.inboundModes).toEqual(["none"]);
+  });
+
+  it("describes Matrix as text-only outbound with opt-in /sync inbound", () => {
+    const outbound = describeChannelCapabilities("matrix", {
+      homeserverUrl: "https://matrix.example.test",
+      accessTokenEnv: "MATRIX_TOKEN",
+    });
+    expect(outbound.setupReady).toBe(true);
+    expect(outbound.inboundModes).toEqual(["none"]);
+    expect(outbound.supportedActions).toEqual(
+      expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"]),
+    );
+    expect(outbound.supportedAttachmentSources).toEqual([]);
+    expect(outbound.chunkingMode).toBe("fallback");
+    expect(outbound.runtimePosture).toMatchObject({ lifecycle: "stateless", outboundTransport: "api" });
+    expect(outbound.supportNotes.join(" ")).toMatch(/text-only/i);
+
+    const enabled = describeChannelCapabilities("matrix", {
+      homeserverUrl: "https://matrix.example.test",
+      accessToken: "keychain:goatcitadel:channel-x",
+      inboundStreamEnabled: true,
+    });
+    expect(enabled.inboundModes).toEqual(["stream"]);
+    expect(enabled.runtimePosture).toMatchObject({
+      lifecycle: "persistent",
+      inboundTransport: "stream",
+      inboundReadiness: "ready",
+    });
+    expect(enabled.runtimePosture.operatorSummary).toBe(
+      "Matrix uses the client-server API with an access token; optional inbound long-polls /sync and resumes from a stored sync token after restarts.",
+    );
+
+    const base = { homeserverUrl: "https://m.test", accessTokenEnv: "T" };
+    expect(isMatrixInboundEnabled({ ...base, inboundStreamEnabled: true })).toBe(true);
+    expect(isMatrixInboundEnabled({ ...base, inboundStreamEnabled: "true" })).toBe(false);
+    expect(isMatrixInboundEnabled({ homeserverUrl: "https://m.test", inboundStreamEnabled: true })).toBe(false);
+    expect(describeChannelCapabilities("matrix", { homeserverUrl: "https://m.test" }).setupReady).toBe(false);
   });
 
   it("keeps Google Chat webhook mode outbound-only and points inbound at Chat app mode", () => {
@@ -850,6 +888,10 @@ describe("channel action matrix (#354)", () => {
     whatsapp: [{ phoneNumberId: "1", accessTokenEnv: "WA_TOKEN" }],
     signal: [{ baseUrl: "http://127.0.0.1:8080" }],
     mattermost: [{ serverUrl: "https://mm.example.test", botTokenEnv: "MM_TOKEN" }],
+    matrix: [
+      { homeserverUrl: "https://matrix.example.test", accessTokenEnv: "MATRIX_TOKEN" },
+      { homeserverUrl: "https://matrix.example.test", accessTokenEnv: "MATRIX_TOKEN", inboundStreamEnabled: true },
+    ],
     imessage: [{ bridgeUrl: "http://127.0.0.1:1234", passwordEnv: "BB_PASSWORD" }],
     "nextcloud-talk": [{ baseUrl: "https://cloud.example.test", tokenEnv: "NC_TOKEN" }],
     line: [{ channelAccessTokenEnv: "LINE_TOKEN" }],

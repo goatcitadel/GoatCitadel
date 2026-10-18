@@ -570,6 +570,7 @@ import { OpsSavedBoardService } from "./ops-saved-board-service.js";
 import { createExternalSourceRouteService } from "./external-source-route-service.js";
 import { ExternalSourceImportServiceError } from "./external-source-import-service.js";
 import {
+  buildCitadelWardRequestVaultForGateway,
   buildIntegrationActionHostForGateway,
   composeGatewayRouteServices,
   createChatThreadKnowledgeDependenciesForGateway,
@@ -850,6 +851,7 @@ import { ChatSessionStatusService } from "./chat-session-status-service.js";
 import { ChatTimerService } from "./chat-timer-service.js";
 import { resolveChatRunVariableRequest } from "./chat-run-variable-service.js";
 import { buildCommunicationsApprovalEffectDeps } from "./communications-approval-effect-service.js";
+import { buildCitadelWardApprovalEffectDeps } from "./citadel-ward-approval-effect-service.js";
 import {
   createChannelSetupHostForGateway,
   createNotificationRoutingServiceForGateway,
@@ -2287,6 +2289,12 @@ export class GatewayService {
       executeApprovedEngineeringLearningLifecycle: (approvalId) =>
         this.engineeringLearningService.applyApprovedAction(approvalId),
       ...buildCommunicationsApprovalEffectDeps(this.storage, () => this.buildCommsHost()),
+      ...buildCitadelWardApprovalEffectDeps({
+        storage: this.storage,
+        integrationHost: () => buildIntegrationActionHostForGateway(this.getRouteCompositionPort()),
+        a2a: () => this.routeServices.a2a,
+        requestVault: () => buildCitadelWardRequestVaultForGateway(this.getRouteCompositionPort()),
+      }),
       enqueueAfterHooks: async (input) => {
         await this.hooksService.enqueueAfterHooks(input);
       },

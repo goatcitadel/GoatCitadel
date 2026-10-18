@@ -32,6 +32,15 @@ import {
   CommunicationsApprovalEffectService,
 } from "./communications-approval-effect-service.js";
 import {
+  buildCitadelWardApprovalPayload,
+  CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
+  CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
+  citadelWardKindSealsRequest,
+  createCitadelWardRequestVault,
+  sealCitadelWardApprovalPayload,
+} from "./citadel-ward-approval.js";
+import { buildCitadelWardApprovalEffectDeps } from "./citadel-ward-approval-effect-service.js";
+import {
   ExternalSourceKnowledgeEffectServiceError,
   deriveExternalSourceKnowledgeSnapshotApprovalId,
   deriveExternalSourceKnowledgeSnapshotMaterializedIdentities,
@@ -7909,6 +7918,154 @@ describe("communications approval effects", () => {
         status: "failed",
         failureReason: "Send approval expired; nothing was sent.",
       });
+    } finally {
+      harness.raw.close();
+    }
+  });
+});
+
+describe("citadel ward approval effects", () => {
+  const WARD_KEY = Buffer.alloc(32, 9);
+
+  function createWardEffectHarness() {
+    const raw = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    const storage = createSqliteAsyncStorage(raw);
+    const a2a = {
+      sendOutbound: vi.fn(async () => ({
+        checkedAt: new Date().toISOString(),
+        peerId: "peer-1",
+        method: "SendMessage" as const,
+        transport: "JSONRPC" as const,
+        status: "sent" as const,
+        idempotencyKey: "replay",
+        auditRef: "extfx-ward-1",
+        warnings: [],
+      })),
+      deliverApprovedPush: vi.fn(async () => []),
+      recordRefusedPushApproval: vi.fn(async () => undefined),
+    };
+    const executors = buildCitadelWardApprovalEffectDeps({
+      storage,
+      requestVault: () => createCitadelWardRequestVault(async () => WARD_KEY),
+      integrationHost: () => {
+        throw new Error("no integration host in this harness");
+      },
+      a2a: () => a2a,
+    });
+    const createEffects = () => {
+      const backgroundTasks = new Set<Promise<void>>();
+      const service = new ApprovalEffectsService(
+        { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+        { ...createApprovalEffectDeps(), backgroundTasks, ...executors } as never,
+      );
+      const drain = async () => {
+        service.requestEffectProcessing();
+        await Promise.all([...backgroundTasks]);
+        service.stopWorker();
+      };
+      return { service, drain };
+    };
+    return { raw, storage, a2a, createEffects };
+  }
+
+  async function seedWardApproval(
+    storage: ReturnType<typeof createSqliteAsyncStorage>,
+    kind: string,
+    request: Record<string, unknown>,
+    wardAction: string,
+    decision: "approve" | "reject",
+  ): Promise<ApprovalRequest> {
+    const created = await storage.approvals.create({
+      kind,
+      riskLevel: "caution",
+      payload: {
+        ...(citadelWardKindSealsRequest(kind)
+          ? sealCitadelWardApprovalPayload(WARD_KEY, kind, { wardAction, citadelId: "personal", request })
+          : buildCitadelWardApprovalPayload({ wardAction, citadelId: "personal", request })),
+      },
+      preview: {},
+      linkage: { actionType: kind },
+    });
+    return storage.approvals.resolve(created.approvalId, { decision, resolvedBy: "operator" });
+  }
+
+  it("resolving a citadel ward approval enqueues and completes its apply effect", async () => {
+    const harness = createWardEffectHarness();
+    try {
+      const outbound = { peerId: "peer-1", method: "SendMessage", params: { text: "hi" } };
+      const approval = await seedWardApproval(
+        harness.storage,
+        CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
+        { outbound, actorId: "operator-1" },
+        "a2a.outbound.jsonrpc.SendMessage",
+        "approve",
+      );
+      const { service, drain } = harness.createEffects();
+      const resolution = { decision: "approve" as const, resolvedBy: "operator" };
+
+      const enqueued = await service.enqueueResolutionEffects(approval, resolution, { deferProcessing: true });
+      const wardEffect = enqueued.find((effect) => effect.effectKind === "citadel_ward_a2a_outbound_apply");
+      expect(wardEffect).toMatchObject({
+        targetKind: "citadel_ward_action",
+        targetId: approval.approvalId,
+        payload: { decision: "approve", payloadHash: approval.payload.payloadHash },
+      });
+
+      await drain();
+
+      expect(harness.a2a.sendOutbound).toHaveBeenCalledTimes(1);
+      expect(harness.a2a.sendOutbound).toHaveBeenCalledWith(
+        { ...outbound, idempotencyKey: `citadel-ward:${approval.approvalId}` },
+        "operator-1",
+        undefined,
+        { wardApproval: { approvalId: approval.approvalId, wardAction: "a2a.outbound.jsonrpc.SendMessage" } },
+      );
+      const settled = await harness.storage.approvalEffects.get(wardEffect!.effectId);
+      expect(settled.status).toBe("completed");
+      expect(settled.result).toMatchObject({ disposition: "sent", replayed: false });
+
+      const replayed = await service.enqueueResolutionEffects(approval, resolution, { deferProcessing: true });
+      expect(replayed.find((effect) => effect.effectKind === "citadel_ward_a2a_outbound_apply")?.effectId).toBe(
+        wardEffect!.effectId,
+      );
+    } finally {
+      harness.raw.close();
+    }
+  });
+
+  it("records an expired citadel ward push approval so the deferred push resumes", async () => {
+    const harness = createWardEffectHarness();
+    try {
+      const approval = await seedWardApproval(
+        harness.storage,
+        CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
+        { taskId: "task-1", peerId: "peer-1", eventSequence: 2, eventKind: "status", urlHash: "hash-1" },
+        "a2a.outbound.push",
+        "reject",
+      );
+      const { service, drain } = harness.createEffects();
+
+      const enqueued = await service.enqueueResolutionEffects(
+        approval,
+        { decision: "reject", resolvedBy: "system" },
+        { deferProcessing: true, allowExpired: true, outcome: "expired" },
+      );
+      const wardEffect = enqueued.find((effect) => effect.effectKind === "citadel_ward_a2a_push_apply");
+      expect(wardEffect?.payload).toMatchObject({ decision: "reject", expired: true });
+
+      await drain();
+
+      expect(harness.a2a.deliverApprovedPush).not.toHaveBeenCalled();
+      expect(harness.a2a.recordRefusedPushApproval).toHaveBeenCalledWith({
+        approvalId: approval.approvalId,
+        taskId: "task-1",
+        peerId: "peer-1",
+        eventSequence: 2,
+        disposition: "expired",
+      });
+      const settled = await harness.storage.approvalEffects.get(wardEffect!.effectId);
+      expect(settled.status).toBe("completed");
+      expect(settled.result).toMatchObject({ disposition: "expired" });
     } finally {
       harness.raw.close();
     }

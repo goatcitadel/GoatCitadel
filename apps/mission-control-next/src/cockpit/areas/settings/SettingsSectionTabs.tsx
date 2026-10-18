@@ -31,7 +31,12 @@ export function useSettingsSectionHash() {
 }
 
 export function selectedSettingsSection(page: SettingsIndexPage, routeSection: string | undefined, hash: string) {
-  const aliasedHash = hash === "application-updates" ? "appearance" : hash === "approval-mode" ? "tools" : hash;
+  const aliasedHash =
+    hash === "application-updates"
+      ? "appearance"
+      : hash === "approval-mode" || hash === "filesystem-write-roots"
+        ? "tools"
+        : hash;
   return (
     page.entries.find((entry) => entry.anchor === aliasedHash || entry.section === aliasedHash)?.section ??
     page.entries.find((entry) => entry.section === routeSection)?.section ??
@@ -113,7 +118,7 @@ export function SettingsSectionTabs({
               }
             >
               {entry.releaseStatus !== "ship" ? (
-                <p role="status" className="py-2 text-sm text-fg-secondary">
+                <p className="py-2 text-sm text-fg-secondary">
                   {describeReleaseSurfaceStatus(entry.releaseStatus)}. {entry.releaseNote}
                 </p>
               ) : null}

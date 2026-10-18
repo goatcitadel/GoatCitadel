@@ -1929,6 +1929,23 @@ describe("approval lifecycle service", () => {
     },
   );
 
+  it.each(["citadel_ward.integration_action", "citadel_ward.a2a_outbound", "citadel_ward.a2a_push"])(
+    "rejects edit decisions for exact-payload %s approvals",
+    async (approvalKind) => {
+      const host = createApprovalHarness({ approvalKind });
+
+      await expect(
+        resolveApproval(host, "approval-1", {
+          decision: "edit",
+          resolvedBy: "operator",
+          editedPayload: { request: { eventSequence: 99 } },
+        }),
+      ).rejects.toThrow(/Citadel Ward approvals can only be approved or rejected/);
+
+      expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+    },
+  );
+
   it("marks linked Code Mode runs expired when approval expires", async () => {
     const host = createApprovalHarness({
       approvalKind: "code_mode.run",

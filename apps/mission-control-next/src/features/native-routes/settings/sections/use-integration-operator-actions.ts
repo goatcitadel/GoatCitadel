@@ -117,7 +117,7 @@ export function useIntegrationOperatorActions(s: IntegrationSettingsState) {
             receipt.connectionId !== connection.connectionId ||
             receipt.catalogId !== connection.catalogId ||
             receipt.actionId !== reviewed.action.actionId ||
-            !["executed", "failed", "blocked"].includes(receipt.status) ||
+            !["executed", "failed", "blocked", "approval_required"].includes(receipt.status) ||
             !receipt.message ||
             !receipt.checkedAt
           )
@@ -128,7 +128,12 @@ export function useIntegrationOperatorActions(s: IntegrationSettingsState) {
       setOperatorReview(null);
       s.setLastOperatorActionResult({ ...result, actionLabel: reviewed.action.label });
       s.setNotice({
-        tone: result.status === "failed" ? "error" : result.status === "blocked" ? "warning" : "success",
+        tone:
+          result.status === "failed"
+            ? "error"
+            : result.status === "blocked" || result.status === "approval_required"
+              ? "warning"
+              : "success",
         message: result.message,
       });
       // A presentation refresh cannot make an acknowledged action retryable or erase its receipt.

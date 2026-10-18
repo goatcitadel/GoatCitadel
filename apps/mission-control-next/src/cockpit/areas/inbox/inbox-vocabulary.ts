@@ -74,6 +74,9 @@ const effectKinds: Readonly<Record<ApprovalEffectKind, string>> = {
   engineering_learning_lifecycle_apply: "Apply the engineering learning",
   communications_mail_send_apply: "Send the approved email",
   communications_calendar_create_apply: "Create the approved calendar event",
+  citadel_ward_integration_action_apply: "Run the approved integration action",
+  citadel_ward_a2a_outbound_apply: "Send the approved A2A call",
+  citadel_ward_a2a_push_apply: "Deliver the approved A2A push",
   approval_observability: "Record the decision trail",
 };
 

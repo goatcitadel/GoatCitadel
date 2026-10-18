@@ -8,7 +8,8 @@ export type SettingsApprovalOwner =
   | "provider-management"
   | "guided-model"
   | "tool-approval"
-  | "budget-mode";
+  | "budget-mode"
+  | "filesystem-write-access";
 export type SettingsApprovalReceipt = Pick<ChangePlanRecord, "planId" | "revision" | "status" | "requiredAction">;
 
 function identifier(value: unknown): value is string {
@@ -90,6 +91,24 @@ export function settingsApprovalOwnerBinding(
       plan.request.change.operation === operation &&
       plan.target.ownerId === "runtime_settings" &&
       plan.target.resourceId === operation &&
+      plan.adapter.adapterId === "runtime-configuration" &&
+      plan.adapter.version === 2 &&
+      plan.scope === "runtime";
+  } else if (owner === "filesystem-write-access") {
+    // One owner reviews both write-access operations; each plan names its own resource.
+    expectedWorkspace = "default";
+    const change = plan.request.kind === "runtime_configuration" ? plan.request.change : undefined;
+    const resourceId =
+      change?.operation === "operator_write_root"
+        ? `operator_write_root:${change.preset ?? "path"}`
+        : change?.operation === "tool_global_access"
+          ? `tool_global_access:${change.toolName}`
+          : undefined;
+    matches =
+      plan.kind === "runtime_configuration" &&
+      resourceId !== undefined &&
+      plan.target.ownerId === "runtime_settings" &&
+      plan.target.resourceId === resourceId &&
       plan.adapter.adapterId === "runtime-configuration" &&
       plan.adapter.version === 2 &&
       plan.scope === "runtime";

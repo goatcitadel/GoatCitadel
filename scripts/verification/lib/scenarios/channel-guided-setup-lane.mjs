@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 
 export const GUIDED_CHANNEL_CATALOG_IDS = [
-  "channel.discord", "channel.google-chat", "channel.imessage", "channel.line", "channel.mattermost",
+  "channel.discord", "channel.google-chat", "channel.imessage", "channel.line", "channel.matrix", "channel.mattermost",
   "channel.nextcloud-talk", "channel.ntfy", "channel.signal", "channel.slack", "channel.teams",
   "channel.telegram", "channel.whatsapp", "channel.zalo", "channel.zalouser",
 ];

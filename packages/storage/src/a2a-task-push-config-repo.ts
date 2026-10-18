@@ -221,7 +221,11 @@ function normalizeEvents(value: unknown): A2ATaskPushEventKind[] {
 }
 
 function normalizeDeliveryStatus(value: unknown): A2ATaskPushDeliveryStatus {
-  return value === "delivered" || value === "retry_scheduled" || value === "dead_lettered" || value === "blocked"
+  return value === "delivered" ||
+    value === "retry_scheduled" ||
+    value === "dead_lettered" ||
+    value === "blocked" ||
+    value === "deferred_pending_approval"
     ? value
     : "pending";
 }
