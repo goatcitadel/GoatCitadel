@@ -13,7 +13,7 @@
 - **Notion and GitHub** follow Trello. Each gets a catalog form, registry actions and an extracted `invoke<Provider>Action` module. Writes go through `runWardGatedExternalSideEffect` → `runIdempotentExternalSideEffect`.
 - **Plugin integrity** adds an async verifier that runs before the sync record builder. The verifier handles npm tarballs (SRI `sha512`) and local folders (a deterministic manifest hash).
 
-**Tech Stack:** TypeScript, Fastify gateway, vitest, Node 24 `fetch` and `node:crypto` (ed25519, AES-256-CBC, SHA-1/256/512). No new dependencies.
+**Tech Stack:** TypeScript, Fastify gateway, vitest, Node's global `fetch` and `node:crypto` (repo-pinned Node 22 LTS) (ed25519, AES-256-CBC, SHA-1/256/512). No new dependencies.
 
 **Spec:** `docs/superpowers/plans/2026-10-15-gap-closure-program.md`, section "WS6 — New integrations", plus its Global Constraints and Review Focus. Issues: #356 (Matrix), #357 (QQBot), #358 (WeCom), #359 (Notion), #360 (GitHub), #348 (plugin integrity); tracker #341. Task 6.6 (iMessage via Photon) is **out of scope**, because it is blocked on the operator-supplied sidecar contract (#355).
 
@@ -578,7 +578,7 @@ export async function wecomSendText(input: { token: string; agentId: string; tar
 - Create: `apps/gateway/src/services/github-integration-action.ts` + `.test.ts`, and the allowance entry.
 - Modify: the same registration files as Task 8, with `productivity.github`. In the catalog, the entry becomes `"beta"`, `["token"]`, "GitHub issues and pull requests: list, read, create issues and comment through a fine-grained token."
 - Docs:
-  - The idempotent-writes list in `docs/1_0_CONTRACT.md` (~L76), `docs/CANONICAL_RUNTIME_STATE_MODEL.md` (~L161), `docs/ENGINEERING_HANDBOOK.md` (~L23) and `docs/1_0_RELEASE_EVIDENCE.md` (~L112). Add "Notion page create and block append, GitHub issue create and comment", and keep the replay-allowlist sentence accurate (Trello only).
+  - The idempotent-writes list in `docs/1_0_CONTRACT.md` (~L76), `docs/CANONICAL_RUNTIME_STATE_MODEL.md` (~L161), `docs/ENGINEERING_HANDBOOK.md` (~L23) and `docs/1_0_RELEASE_EVIDENCE.md` (~L112). Add "Notion page create and block append, GitHub issue create and comment", and keep the replay-allowlist sentence accurate: the allowlist is Activepieces `trigger_webhook`, Gmail `write`, Trello `write` and the local-bridge writes (Apple Notes, Apple Reminders, Things 3, Bear); Notion and GitHub stay excluded.
   - `docs/QA_MANUAL_TEST_PLAN.md` INT-05.
   - `docs/citadel_update/spec.md` L613 ("issues/PR read and draft only") gets a dated note: the 2026-10-15 gap-closure decision adds governed issue create and comment.
 
