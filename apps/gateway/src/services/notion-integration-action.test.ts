@@ -432,6 +432,25 @@ describe("notion-integration-action", () => {
     expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
   });
 
+  it("still maps a 401 to notion_auth_rejected when body.cancel rejects", async () => {
+    stubBase();
+    const connection = createConnection();
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(async () => {
+        const response = jsonResponse({ message: "nope" }, 401);
+        Object.defineProperty(response.body, "cancel", {
+          value: () => Promise.reject(new Error("cancel failed")),
+        });
+        return response;
+      }),
+    });
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "block_append", {
+      idempotencyKey: "op-key",
+      input: { blockId: "block-9", content: "More" },
+    });
+    expect(result).toMatchObject({ status: "blocked", blockedReason: "notion_auth_rejected" });
+  });
+
   it("appends text with a PATCH carrying the content and the marker", async () => {
     stubBase();
     const connection = createConnection();

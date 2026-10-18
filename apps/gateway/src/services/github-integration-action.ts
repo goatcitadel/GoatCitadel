@@ -555,13 +555,13 @@ async function settleWrite(response: Response, failurePrefix: string): Promise<P
   // Auth statuses are decided before the body is read: an unparseable 401 page must still be a
   // proven-not-dispatched credential failure.
   if (response.status === 401) {
-    await response.body?.cancel();
+    await response.body?.cancel().catch(() => undefined);
     throw new ProviderAuthRejectedError("GitHub", 401);
   }
   if (response.status === 403) {
     const limited = rateLimitMessage(response);
     if (limited) {
-      await response.body?.cancel();
+      await response.body?.cancel().catch(() => undefined);
       throw new ProviderRequestRejectedError("GitHub", 403, limited);
     }
     const forbidden = await parseProviderResponse(response);

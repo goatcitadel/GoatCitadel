@@ -591,6 +591,25 @@ describe("github-integration-action", () => {
     expect(failureStatuses).not.toContain("failed_before_boundary");
   });
 
+  it("still maps a 401 to github_auth_rejected when body.cancel rejects", async () => {
+    stubBase();
+    const connection = createConnection();
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(async () => {
+        const response = jsonResponse({ message: "nope" }, 401);
+        Object.defineProperty(response.body, "cancel", {
+          value: () => Promise.reject(new Error("cancel failed")),
+        });
+        return response;
+      }),
+    });
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "issue_create", {
+      idempotencyKey: "op-key",
+      input: { title: "t" },
+    });
+    expect(result).toMatchObject({ status: "blocked", blockedReason: "github_auth_rejected" });
+  });
+
   it("treats a 403 with retry-after as a secondary rate limit", async () => {
     stubBase();
     const connection = createConnection();
