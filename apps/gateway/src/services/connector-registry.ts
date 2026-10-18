@@ -196,6 +196,9 @@ function describeIntegrationApprovalDelivery(
       return "Set config.defaultChannel or config.defaultTarget to enable approval delivery.";
     case "matrix":
       return "Set config.defaultRoomId or config.defaultTarget to enable approval delivery.";
+    case "qqbot":
+    case "wecom":
+      return "Set config.defaultTarget to enable approval delivery.";
     case "nextcloud-talk":
       return "Set config.defaultRoomId or config.defaultConversationId to enable approval delivery.";
     case "line":

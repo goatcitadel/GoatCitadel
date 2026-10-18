@@ -37,7 +37,7 @@ const FORBIDDEN_INTEGRATION_ENV_PREFIXES = ["GOATCITADEL_", "POSTGRES_", "AWS_"]
 const CATALOG_ENV_PREFIX_ALIASES: Readonly<Record<string, readonly string[]>> = {
   "automation.gif-search": ["GIPHY_", "TENOR_"],
   "channel.imessage": ["PHOTON_"],
-  "channel.qq": ["QQBOT_"],
+  "channel.qqbot": ["QQBOT_"],
 };
 
 const CATALOG_ENV_EXACT_ALIASES: Readonly<Record<string, readonly string[]>> = {

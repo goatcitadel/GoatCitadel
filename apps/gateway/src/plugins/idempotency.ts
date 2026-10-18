@@ -4,6 +4,8 @@ import type { FastifyRequest } from "fastify";
 import { isGenericChannelInboundPath } from "../services/generic-channel-webhook.js";
 import { isLineWebhookPath } from "../services/line-webhook.js";
 import { isGoogleChatWebhookPath } from "../services/google-chat-webhook.js";
+import { isQqbotWebhookPath } from "../services/qqbot-webhook.js";
+import { isWecomWebhookPath } from "../services/wecom-webhook.js";
 import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.js";
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
 import { isTelegramWebhookPath } from "../services/telegram-webhook.js";
@@ -308,6 +310,8 @@ function isWebhookOrInboundPath(url: string): boolean {
     isLineWebhookPath(url) ||
     isNextcloudTalkWebhookPath(url) ||
     isGoogleChatWebhookPath(url) ||
+    isQqbotWebhookPath(url) ||
+    isWecomWebhookPath(url) ||
     isSlackWebhookPath(url) ||
     isTelegramWebhookPath(url) ||
     isWhatsAppWebhookPath(url)

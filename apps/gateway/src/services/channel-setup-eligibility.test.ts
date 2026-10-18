@@ -111,4 +111,75 @@ describe("Gateway channel finalization eligibility", () => {
     });
     expect(evaluateChannelSetupEligibility(again, withRoom).allowed).toBe(false);
   });
+  it("defers the optional QQBot and WeCom default-target warning but keeps it blocking once a target is set", () => {
+    for (const key of ["qqbot", "wecom"]) {
+      const bare = { key, config: {} } as IntegrationConnection;
+      const test = result({
+        status: "warn",
+        issues: [{ key: "target", level: "warn", message: "No default target" }],
+      });
+      expect(evaluateChannelSetupEligibility(test, bare).allowed).toBe(true);
+      expect(test.issues[0]!.disposition).toBe("deferred");
+      const withTarget = { key, config: { defaultTarget: "user:u1" } } as unknown as IntegrationConnection;
+      const again = result({
+        status: "warn",
+        issues: [{ key: "target", level: "warn", message: "No default target" }],
+      });
+      expect(evaluateChannelSetupEligibility(again, withTarget).allowed).toBe(false);
+    }
+  });
+  it("does not let the advisory QQBot identity warning block finalization", () => {
+    const qq = { key: "qqbot", config: {} } as IntegrationConnection;
+    const test = result({
+      status: "warn",
+      probe: {
+        kind: "qqbot_open_platform",
+        checkedAt: new Date().toISOString(),
+        steps: [
+          { key: "qqbot_auth", label: "Auth", status: "pass", message: "ok" },
+          { key: "qqbot_bot", label: "Bot identity", status: "warn", disposition: "advisory", message: "unreadable" },
+        ],
+      },
+    });
+    expect(evaluateChannelSetupEligibility(test, qq).allowed).toBe(true);
+  });
+  it("does not let the advisory WeCom callback warning block an outbound-only finalization", () => {
+    const wecom = { key: "wecom", config: {} } as IntegrationConnection;
+    const test = result({
+      status: "warn",
+      issues: [{ key: "wecom_callback", level: "warn", message: "Inbound callback: inbound is disabled" }],
+      probe: {
+        kind: "wecom_application",
+        checkedAt: new Date().toISOString(),
+        steps: [
+          { key: "wecom_auth", label: "Auth", status: "pass", message: "ok" },
+          {
+            key: "wecom_callback",
+            label: "Inbound callback",
+            status: "warn",
+            disposition: "advisory",
+            message: "inbound is disabled",
+          },
+          {
+            key: "wecom_sandbox_send",
+            label: "Send",
+            status: "pass",
+            message: "ok",
+            providerMessageId: "m1",
+          },
+        ],
+      },
+    });
+    expect(evaluateChannelSetupEligibility(test, wecom).allowed).toBe(true);
+    // The same warning from any other step stays blocking.
+    const other = result({
+      status: "warn",
+      probe: {
+        kind: "wecom_application",
+        checkedAt: new Date().toISOString(),
+        steps: [{ key: "wecom_agent", label: "App", status: "warn", disposition: "advisory", message: "x" }],
+      },
+    });
+    expect(evaluateChannelSetupEligibility(other, wecom).allowed).toBe(false);
+  });
 });

@@ -5,8 +5,8 @@ import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 
 export const GUIDED_CHANNEL_CATALOG_IDS = [
   "channel.discord", "channel.google-chat", "channel.imessage", "channel.line", "channel.matrix", "channel.mattermost",
-  "channel.nextcloud-talk", "channel.ntfy", "channel.signal", "channel.slack", "channel.teams",
-  "channel.telegram", "channel.whatsapp", "channel.zalo", "channel.zalouser",
+  "channel.nextcloud-talk", "channel.ntfy", "channel.qqbot", "channel.signal", "channel.slack", "channel.teams",
+  "channel.telegram", "channel.wecom", "channel.whatsapp", "channel.zalo", "channel.zalouser",
 ];
 export function assertGuidedChannelCatalog(definitions) {
   assert.deepEqual(definitions.map(item => item.catalog.catalogId).sort(), GUIDED_CHANNEL_CATALOG_IDS);

@@ -65,6 +65,26 @@ export function resolveNextcloudTalkSecret(config: Record<string, unknown>): str
   );
 }
 
+export function resolveQqbotSecret(config: Record<string, unknown>): string | undefined {
+  return readConfigSecret(config, "appSecret", "appSecretEnv");
+}
+
+export interface WecomCallbackSecrets {
+  corpId?: string;
+  token?: string;
+  encodingAesKey?: string;
+}
+
+/** Callback credentials for the WeCom URL verification and message callbacks. */
+export function resolveWecomCallbackSecrets(config: Record<string, unknown>): WecomCallbackSecrets {
+  const corpId = typeof config.corpId === "string" ? config.corpId.trim() : "";
+  return {
+    ...(corpId ? { corpId } : {}),
+    token: readConfigSecret(config, "callbackToken", "callbackTokenEnv"),
+    encodingAesKey: readConfigSecret(config, "encodingAesKey", "encodingAesKeyEnv"),
+  };
+}
+
 export function resolveWhatsAppAppSecret(config: Record<string, unknown>): string | undefined {
   return (
     readConfigSecret(config, "appSecret", "appSecretEnv") ??

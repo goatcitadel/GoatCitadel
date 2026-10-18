@@ -9,6 +9,8 @@ import { isMeshCapabilityNodePublicationPath } from "../services/mesh-capability
 import type { MeshCapabilityAuthenticatedNodeIdentity } from "../services/mesh-capability-publication-service.js";
 import { isLineWebhookPath } from "../services/line-webhook.js";
 import { isGoogleChatWebhookPath } from "../services/google-chat-webhook.js";
+import { isQqbotWebhookPath } from "../services/qqbot-webhook.js";
+import { isWecomWebhookPath } from "../services/wecom-webhook.js";
 import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.js";
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
 import { isTelegramWebhookPath } from "../services/telegram-webhook.js";
@@ -149,6 +151,8 @@ export const authPlugin = fp(async (fastify) => {
       isLineWebhookPath(request.url) ||
       isNextcloudTalkWebhookPath(request.url) ||
       isGoogleChatWebhookPath(request.url) ||
+      isQqbotWebhookPath(request.url) ||
+      isWecomWebhookPath(request.url) ||
       isSlackWebhookPath(request.url) ||
       isTelegramWebhookPath(request.url) ||
       isWhatsAppWebhookPath(request.url)
