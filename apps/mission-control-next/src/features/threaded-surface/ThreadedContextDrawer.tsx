@@ -1,6 +1,7 @@
 import { useDraftLeave } from "../native-routes/library/DraftLeaveDialog";
 import { useMemo, useState } from "react";
 import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surface-core";
+import { formatSelectionSourceSummary } from "@goatcitadel/threaded-surface-core/work-trust";
 import type {
   ChatMode,
   ChatCompletionReasoningEffort,
@@ -62,7 +63,7 @@ function writeSubagentAutoAckToStorage(sessionId: string): void {
 }
 
 function formatSelectionSource(value?: string | null): string {
-  return value ? `Selection: ${value}` : "Selection pending";
+  return value ? formatSelectionSourceSummary(value) : "Selection pending";
 }
 
 function formatRouteSummary(props: MissionThreadedContextDockProps): string {

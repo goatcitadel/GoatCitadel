@@ -3,10 +3,12 @@ import type {
   ChatCompletionResponse,
   MemoryContextPack,
   MemoryContextPlacement,
+  RoutingWardReasonCode,
 } from "@goatcitadel/contracts";
 import { coerceDurationMs } from "@goatcitadel/contracts";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
+import { readCitadelWardDispatchReason } from "./chat-route-local-ward.js";
 import { absorbCompletionStreamChunk, createCompletionStreamAggregate } from "./chat-agent-completion-adapters.js";
 import { isChatTurnCancelledError } from "./chat-turn-helpers.js";
 import { parseTransformLlmOutputHookPatch } from "./hook-patch-helpers.js";
@@ -29,6 +31,8 @@ export interface ChatCompletionFailureContext {
   readonly emittedOutput: boolean;
   readonly failureClass: ProviderFailureClass;
   readonly toolProtocolError: boolean;
+  /** Set when a Citadel Ward refused the dispatch (`citadel_ward_*`). */
+  readonly wardReasonCode?: RoutingWardReasonCode;
 }
 
 type ChatCompletionFailureError = Error & {
@@ -45,12 +49,18 @@ export function attachChatCompletionFailureContext(
     emittedOutput: input.emittedOutput,
     failureClass: classifyProviderFailure(error),
     toolProtocolError: shouldRetryToolProtocolError(error),
+    ...wardReasonCodeField(error),
   }) satisfies ChatCompletionFailureContext;
   Object.defineProperty(error, CHAT_COMPLETION_FAILURE_CONTEXT, {
     configurable: true,
     value: context,
   });
   return error;
+}
+
+function wardReasonCodeField(error: Error): { wardReasonCode?: RoutingWardReasonCode } {
+  const wardReasonCode = readCitadelWardDispatchReason(error);
+  return wardReasonCode ? { wardReasonCode } : {};
 }
 
 export function readChatCompletionFailureContext(error: unknown): ChatCompletionFailureContext | undefined {

@@ -1,0 +1,434 @@
+import {
+  DEFAULT_CITADEL_ID,
+  PolicyViolationError,
+  type CitadelWard,
+  type LlmProviderConfig,
+  type LlmProviderSummary,
+  type ModelUsageAttributionContext,
+  type ModelUsageCallKind,
+  type RoutingWardReasonCode,
+} from "@goatcitadel/contracts";
+import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import {
+  resolveWardEffectForExternalAction,
+  type CitadelWardGateResult,
+  type CitadelWardGateStorage,
+} from "./citadel-ward-gate.js";
+import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
+import type { LlmDispatchWardGuard, LlmService } from "./llm-service.js";
+import type { ResolvedChatRouteDescriptor } from "./chat-route-resolution.js";
+
+/**
+ * Citadel Ward `route_local` enforcement for Chat model routing.
+ *
+ * Every Chat turn evaluates `model.chat.<providerId>` against the session's
+ * workspace citadel (personal citadel when unbound). Only `deny` and
+ * `route_local` wards apply at this boundary: `deny` blocks the turn, and
+ * `route_local` keeps the turn on a strictly local backend or blocks it.
+ * Other effects (`require_approval`, `require_dry_run`, `redact`) are not
+ * enforced for model routing, so they are filtered out before the deny-wins
+ * evaluation instead of hiding a matching `route_local` ward. The same ward is
+ * re-checked before every model dispatch that carries Chat content
+ * (`createModelChatWardDispatchGuard`): turns, their tool loops, repairs and
+ * fallbacks, delegation workers, assembly calls, and utility calls with a
+ * session or turn lineage.
+ *
+ * Not ward-gated: utility calls without a session or turn lineage, embedding
+ * and image-generation calls, and `model.tool.<toolName>` actions (there is no
+ * single model-backed tool boundary to gate yet).
+ */
+
+type LlmRuntimeConfig = ReturnType<LlmService["getRuntimeConfig"]>;
+type RuntimeProvider = LlmRuntimeConfig["providers"][number];
+type ModelAvailability = ReturnType<LlmService["getCachedModelAvailability"]>;
+type RouteLocalProviderShape = Pick<LlmProviderSummary | LlmProviderConfig, "providerId" | "baseUrl">;
+
+export const ROUTE_LOCAL_UNAVAILABLE_MESSAGE =
+  "A Citadel Ward requires this chat to stay on a local model, and no local model route is available.";
+export const MODEL_CHAT_WARD_DENY_MESSAGE = "A Citadel Ward denies chat with this model provider.";
+
+const BLOCKING_WARD_REASON_CODES: ReadonlySet<RoutingWardReasonCode> = new Set([
+  "citadel_ward_route_local_unavailable",
+  "citadel_ward_deny",
+]);
+
+export interface RouteLocalWardDependencies {
+  readonly storage: Partial<Pick<Storage, "workspaces" | "citadels" | "chatSessionMeta">>;
+  resolveSessionWorkspaceId?(sessionId: string): Promise<string | undefined>;
+  /** Records a dispatch whose attribution workspace disagrees with its session. */
+  recordDevDiagnostic?(input: {
+    level: "warn";
+    category: "chat";
+    event: "chat.citadel_ward.workspace_scope_mismatch";
+    message: string;
+    sessionId: string;
+    context: { attributionWorkspaceId: string; sessionWorkspaceId: string };
+  }): void;
+}
+
+const MODEL_CHAT_WARD_ACTION_PREFIX = "model.chat.";
+
+export function buildModelChatWardAction(providerId: string): string {
+  return `${MODEL_CHAT_WARD_ACTION_PREFIX}${providerId}`;
+}
+
+/**
+ * The `model.chat.*` actions that govern a turn's route: the requested
+ * provider's and the effective provider's. A `route_local` ward that rerouted
+ * the turn names the requested provider, so dispatches carry these actions
+ * (`ModelUsageAttributionContext.wardActions`) and the backstop keeps
+ * enforcing that ward after the turn moved to a local provider.
+ */
+export function routeWardActionsFor(
+  route: { readonly requestedProviderId?: string; readonly effectiveProviderId?: string } | undefined,
+): string[] | undefined {
+  const providerIds = [route?.requestedProviderId?.trim(), route?.effectiveProviderId?.trim()].filter(
+    (providerId): providerId is string => Boolean(providerId),
+  );
+  return providerIds.length > 0 ? [...new Set(providerIds.map(buildModelChatWardAction))] : undefined;
+}
+
+/** Strict loopback check: `localhost`, `127.0.0.0/8` or `[::1]` over http(s). */
+export function isLoopbackUrl(url?: string): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return host === "localhost" || host === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A provider is route-local only when its endpoint is a loopback host, whatever
+ * its engine: `route_local` promises "kept on this machine", so a LAN or remote
+ * host never counts and a loopback host always does.
+ */
+export function isRouteLocalProvider(provider: RouteLocalProviderShape): boolean {
+  return isLoopbackUrl(provider.baseUrl);
+}
+
+export function selectRouteLocalProvider<TProvider extends RouteLocalProviderShape & { defaultModel?: string }>(input: {
+  providers: readonly TProvider[];
+  getModelAvailability?(providerId: string, model: string): ModelAvailability;
+  isProviderDenied?(providerId: string): boolean;
+}): { provider: TProvider; model: string } | undefined {
+  for (const provider of input.providers) {
+    const model = provider.defaultModel?.trim();
+    if (!model || !isRouteLocalProvider(provider) || input.isProviderDenied?.(provider.providerId)) continue;
+    const availability = input.getModelAvailability?.(provider.providerId, model);
+    if (availability === "unavailable" || availability === "stale_unavailable") continue;
+    return { provider, model };
+  }
+  return undefined;
+}
+
+/** Fails a turn closed when its route descriptor carries a blocking ward code. */
+export function assertChatRouteWardAdmitsTurn(
+  descriptor: Pick<ResolvedChatRouteDescriptor, "wardReasonCode" | "wardCitadelId" | "blockedReason"> | undefined,
+): void {
+  const reason = descriptor?.wardReasonCode;
+  if (!reason || !BLOCKING_WARD_REASON_CODES.has(reason)) return;
+  throw new PolicyViolationError({
+    message: descriptor.blockedReason ?? ROUTE_LOCAL_UNAVAILABLE_MESSAGE,
+    details: { reason, citadelId: descriptor.wardCitadelId },
+  });
+}
+
+/** Returns the descriptor once its ward outcome admits the turn; fails closed otherwise. */
+export function admitChatRouteWard<
+  TDescriptor extends Pick<ResolvedChatRouteDescriptor, "wardReasonCode" | "wardCitadelId" | "blockedReason">,
+>(descriptor: TDescriptor | undefined): TDescriptor | undefined {
+  assertChatRouteWardAdmitsTurn(descriptor);
+  return descriptor;
+}
+
+/** Call kinds that always carry Chat content: turns and the work they spawn. */
+const CHAT_CONTENT_CALL_KINDS: ReadonlySet<ModelUsageCallKind> = new Set([
+  "chat_initial",
+  "chat_tool_loop",
+  "chat_repair",
+  "chat_fallback",
+  "delegation_worker",
+  "assembly_participant",
+  "assembly_synthesis",
+]);
+
+/**
+ * Whether a dispatch carries Chat content and is therefore ward-gated. Utility
+ * calls (plan drafts, memory distillation, compaction, titles, classifiers)
+ * count when they carry a session or turn lineage; utility calls without one,
+ * embeddings and image generation do not.
+ */
+function isWardGatedDispatch(attribution: ModelUsageAttributionContext): boolean {
+  const callKind = attribution.callKind;
+  if (!callKind) return false;
+  if (CHAT_CONTENT_CALL_KINDS.has(callKind)) return true;
+  return callKind === "utility" && Boolean(attribution.sessionId?.trim() || attribution.turnId?.trim());
+}
+
+/**
+ * Dispatch backstop for the `model.chat.<providerId>` ward. Route resolution
+ * already keeps a turn local, but durable resumes, bound capability profiles,
+ * inbound, autonomous, delegated, assembly, fallback and session-scoped utility
+ * dispatches can reach a provider without a fresh resolution, so the ward is
+ * re-evaluated before each of them: `deny` rejects, and `route_local` rejects
+ * any endpoint that is not on this machine. The dispatched provider's action
+ * is evaluated together with the route's carried `wardActions` (deny-wins), so
+ * a ward on the requested provider still binds a turn it rerouted locally.
+ */
+export function createModelChatWardDispatchGuard(deps: RouteLocalWardDependencies): LlmDispatchWardGuard {
+  return async ({ attribution, route, providerBaseUrl }) => {
+    if (!isWardGatedDispatch(attribution)) return;
+    const wardStorage = buildModelChatWardStorage(deps.storage);
+    if (!wardStorage) return;
+    const workspaceId = await resolveDispatchWorkspaceId(deps, attribution);
+    const ward = await resolveModelChatWard(
+      wardStorage,
+      workspaceId,
+      dispatchWardActions(attribution, route.providerId),
+    );
+    if (ward.effect === "deny") {
+      throw rejectWardDispatch("citadel_ward_deny", ward.citadelId, MODEL_CHAT_WARD_DENY_MESSAGE);
+    }
+    if (
+      ward.effect === "route_local" &&
+      !isRouteLocalProvider({ providerId: route.providerId, baseUrl: providerBaseUrl ?? "" })
+    ) {
+      throw rejectWardDispatch("citadel_ward_route_local_unavailable", ward.citadelId, ROUTE_LOCAL_UNAVAILABLE_MESSAGE);
+    }
+  };
+}
+
+/** Drops fallback targets the dispatch ward would refuse, so a local primary
+ * with a cloud fallback still runs locally instead of failing on the fallback. */
+export async function filterWardAdmittedFallbackTargets<TTarget extends { providerId: string }>(
+  host: { readonly llmService: Partial<Pick<LlmService, "admitsDispatchWard">> },
+  attribution: ModelUsageAttributionContext,
+  targets: readonly TTarget[],
+): Promise<TTarget[]> {
+  const { llmService } = host;
+  if (!llmService.admitsDispatchWard) return [...targets];
+  const admitted: TTarget[] = [];
+  for (const target of targets) {
+    if (await llmService.admitsDispatchWard(attribution, target.providerId)) admitted.push(target);
+  }
+  return admitted;
+}
+
+/**
+ * The ward reason code of a dispatch-time Citadel Ward rejection, so a turn
+ * failure or diagnostic can name it. Other authority rejections return undefined.
+ */
+export function readCitadelWardDispatchReason(error: unknown): RoutingWardReasonCode | undefined {
+  if (!(error instanceof LlmDispatchGuardRejectedError)) return undefined;
+  const cause = error.cause;
+  if (!(cause instanceof PolicyViolationError)) return undefined;
+  const reason = cause.details?.reason;
+  return reason === "citadel_ward_route_local_unavailable" || reason === "citadel_ward_deny" ? reason : undefined;
+}
+
+function rejectWardDispatch(
+  reason: RoutingWardReasonCode,
+  citadelId: string,
+  message: string,
+): LlmDispatchGuardRejectedError {
+  return new LlmDispatchGuardRejectedError(new PolicyViolationError({ message, details: { reason, citadelId } }));
+}
+
+/** The dispatched provider's action plus the route's carried `model.chat.*` actions. */
+function dispatchWardActions(attribution: ModelUsageAttributionContext, providerId: string): string[] {
+  const carried = (attribution.wardActions ?? []).filter((action) => action.startsWith(MODEL_CHAT_WARD_ACTION_PREFIX));
+  return [...new Set([buildModelChatWardAction(providerId), ...carried])];
+}
+
+/** Deny-wins across every action; only `deny` and `route_local` wards are loaded. */
+async function resolveModelChatWard(
+  storage: CitadelWardGateStorage,
+  workspaceId: string | undefined,
+  actions: readonly string[],
+): Promise<CitadelWardGateResult> {
+  const results = await Promise.all(
+    actions.map((action) => resolveWardEffectForExternalAction({ storage, workspaceId, action })),
+  );
+  const citadelId = results[0]?.citadelId ?? DEFAULT_CITADEL_ID;
+  const effect = results.some((result) => result.effect === "deny")
+    ? "deny"
+    : results.some((result) => result.effect === "route_local")
+      ? "route_local"
+      : undefined;
+  return { effect, citadelId };
+}
+
+/**
+ * The canonical session's workspace scopes the ward: an attribution workspace
+ * (for example `default` stamped by a completion route) never overrides it.
+ * The attribution workspace applies only when the dispatch has no known session.
+ */
+async function resolveDispatchWorkspaceId(
+  deps: RouteLocalWardDependencies,
+  attribution: ModelUsageAttributionContext,
+): Promise<string | undefined> {
+  const attributionWorkspaceId = attribution.workspaceId?.trim() || undefined;
+  const sessionId = attribution.sessionId?.trim();
+  const sessionWorkspaceId = sessionId ? await resolveWorkspaceId(deps, sessionId) : undefined;
+  if (!sessionId || !sessionWorkspaceId) return attributionWorkspaceId;
+  if (attributionWorkspaceId && attributionWorkspaceId !== sessionWorkspaceId) {
+    deps.recordDevDiagnostic?.({
+      level: "warn",
+      category: "chat",
+      event: "chat.citadel_ward.workspace_scope_mismatch",
+      message: "A model dispatch named a workspace other than its session's; the ward used the session's workspace.",
+      sessionId,
+      context: { attributionWorkspaceId, sessionWorkspaceId },
+    });
+  }
+  return sessionWorkspaceId;
+}
+
+/** Diagnostic fields for each turn-entry `recordDevDiagnostic` context. */
+export function describeChatRouteWard(
+  descriptor: Pick<ResolvedChatRouteDescriptor, "wardReasonCode" | "wardCitadelId">,
+): { wardReasonCode?: RoutingWardReasonCode; wardCitadelId?: string } {
+  return { wardReasonCode: descriptor.wardReasonCode, wardCitadelId: descriptor.wardCitadelId };
+}
+
+/**
+ * Applies the `model.chat.*` ward to a resolved descriptor. Returns the
+ * descriptor unchanged when no ward storage is wired or no ward applies.
+ */
+export async function enforceRouteLocalWard(input: {
+  deps: RouteLocalWardDependencies;
+  sessionId: string;
+  runtime: LlmRuntimeConfig;
+  descriptor: ResolvedChatRouteDescriptor;
+  getModelAvailability?(providerId: string, model: string): ModelAvailability;
+}): Promise<ResolvedChatRouteDescriptor> {
+  const { descriptor } = input;
+  const requestedProviderId = descriptor.requestedProviderId;
+  const wardStorage = buildModelChatWardStorage(input.deps.storage);
+  if (!requestedProviderId || !wardStorage) return descriptor;
+  const workspaceId = await resolveWorkspaceId(input.deps, input.sessionId);
+  const evaluate = (providerId: string) =>
+    resolveWardEffectForExternalAction({
+      storage: wardStorage,
+      workspaceId,
+      action: buildModelChatWardAction(providerId),
+    });
+  const ward = await evaluate(requestedProviderId);
+  if (ward.effect === "deny") {
+    return blockDescriptor(descriptor, "citadel_ward_deny", ward.citadelId, MODEL_CHAT_WARD_DENY_MESSAGE);
+  }
+  if (ward.effect !== "route_local") return descriptor;
+
+  const requestedProvider = descriptor.runtimeProvider;
+  if (
+    requestedProvider &&
+    requestedProvider.providerId === requestedProviderId &&
+    isRouteLocalProvider(requestedProvider)
+  ) {
+    return keepLocalDescriptor(input.runtime, descriptor, ward.citadelId);
+  }
+  const deniedProviderIds = new Set<string>();
+  for (const provider of input.runtime.providers) {
+    if ((await evaluate(provider.providerId)).effect === "deny") deniedProviderIds.add(provider.providerId);
+  }
+  const selected = selectRouteLocalProvider({
+    providers: input.runtime.providers,
+    getModelAvailability: input.getModelAvailability,
+    isProviderDenied: (providerId) => deniedProviderIds.has(providerId),
+  });
+  if (!selected) {
+    return blockDescriptor(
+      descriptor,
+      "citadel_ward_route_local_unavailable",
+      ward.citadelId,
+      ROUTE_LOCAL_UNAVAILABLE_MESSAGE,
+    );
+  }
+  return switchToLocalDescriptor(descriptor, selected.provider, selected.model, ward.citadelId);
+}
+
+function buildModelChatWardStorage(storage: RouteLocalWardDependencies["storage"]): CitadelWardGateStorage | undefined {
+  const citadels = storage.citadels;
+  if (!citadels) return undefined;
+  const wardsByCitadel = new Map<string, Promise<CitadelWard[]>>();
+  const listEnforcedWards = (citadelId: string) => {
+    const cached = wardsByCitadel.get(citadelId);
+    if (cached) return cached;
+    const loaded = Promise.resolve(citadels.listWards(citadelId)).then((wards) =>
+      wards.filter((ward) => ward.effect === "deny" || ward.effect === "route_local"),
+    );
+    wardsByCitadel.set(citadelId, loaded);
+    return loaded;
+  };
+  return { workspaces: storage.workspaces, citadels: { listWards: listEnforcedWards } };
+}
+
+async function resolveWorkspaceId(deps: RouteLocalWardDependencies, sessionId: string): Promise<string | undefined> {
+  const resolveSessionWorkspaceId = deps.resolveSessionWorkspaceId;
+  if (resolveSessionWorkspaceId) return await resolveSessionWorkspaceId.call(deps, sessionId);
+  return (await deps.storage.chatSessionMeta?.get(sessionId))?.workspaceId;
+}
+
+function withoutFallback(descriptor: ResolvedChatRouteDescriptor): ResolvedChatRouteDescriptor {
+  return {
+    ...descriptor,
+    fallbackPolicy: "off",
+    fallbackResult: "not_applicable",
+    fallbackTarget: undefined,
+    providerFallback: undefined,
+  };
+}
+
+function keepLocalDescriptor(
+  runtime: LlmRuntimeConfig,
+  descriptor: ResolvedChatRouteDescriptor,
+  citadelId: string,
+): ResolvedChatRouteDescriptor {
+  const fallbackProvider = descriptor.providerFallback
+    ? runtime.providers.find((provider) => provider.providerId === descriptor.providerFallback?.providerId)
+    : undefined;
+  const base =
+    descriptor.providerFallback && !(fallbackProvider && isRouteLocalProvider(fallbackProvider))
+      ? withoutFallback(descriptor)
+      : descriptor;
+  return { ...base, wardReasonCode: "citadel_ward_route_local", wardCitadelId: citadelId };
+}
+
+function switchToLocalDescriptor(
+  descriptor: ResolvedChatRouteDescriptor,
+  provider: RuntimeProvider,
+  model: string,
+  citadelId: string,
+): ResolvedChatRouteDescriptor {
+  return {
+    ...withoutFallback(descriptor),
+    effectiveProviderId: provider.providerId,
+    effectiveModel: model,
+    selectionSource: "citadel_ward_route_local",
+    normalizationReason: `A Citadel Ward keeps this chat on a local model, so it routes to ${provider.label} (${model}).`,
+    runtimeClass: "local",
+    runtimeProvider: provider,
+    blockedReason: undefined,
+    wardReasonCode: "citadel_ward_route_local",
+    wardCitadelId: citadelId,
+  };
+}
+
+function blockDescriptor(
+  descriptor: ResolvedChatRouteDescriptor,
+  wardReasonCode: RoutingWardReasonCode,
+  citadelId: string,
+  blockedReason: string,
+): ResolvedChatRouteDescriptor {
+  return {
+    ...withoutFallback(descriptor),
+    effectiveModel: undefined,
+    blockedReason,
+    wardReasonCode,
+    wardCitadelId: citadelId,
+  };
+}

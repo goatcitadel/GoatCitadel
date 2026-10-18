@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessageRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
-import { ConflictError, NotFoundError, SCHEDULED_TURN_PERMISSION_PROFILE_ID } from "@goatcitadel/contracts";
+import {
+  ConflictError,
+  NotFoundError,
+  PolicyViolationError,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+} from "@goatcitadel/contracts";
 
 const dispatchMocks = vi.hoisted(() => ({
   consumePreparedAgentChatTurn: vi.fn(async (_host, sessionId, _request, prepared, eventType) => ({
@@ -1084,6 +1089,64 @@ describe("agentSendChatMessage", () => {
     expect(host.updateActiveLeafOrThrow).toHaveBeenCalledWith("session-1", "parent-1", retryRequest.turnId);
   });
 
+  it("keeps a reflection retry on the prepared effective route (e.g. a ward-selected local model)", async () => {
+    const host = createHost({});
+    const basePrepared = createPreparedTurn({
+      prefs: {
+        sessionId: "session-1",
+        mode: "chat",
+        webMode: "off",
+        memoryMode: "off",
+        providerId: "openai",
+        model: "cloud-model",
+        planningMode: "off",
+        reflectionMode: "on",
+      },
+      autonomy: {
+        reflectionMode: "on",
+        proactiveMode: "off",
+        lastProactiveRunId: undefined,
+      },
+    });
+    host.prepareAgentChatTurn = vi.fn(async () => ({
+      ...basePrepared,
+      featureAdmission: {
+        references: { providerRoute: { primary: { providerId: "ollama", model: "llama3" } } },
+      },
+    })) as never;
+    let callCount = 0;
+    host.turnRuntime.run = vi.fn(async (request: { turnId: string; sourceTurnId?: string }) => {
+      callCount += 1;
+      if (callCount === 1) {
+        return {
+          assistantContent: "The first attempt failed.",
+          assistantModel: "llama3",
+          turnTrace: createTrace({
+            status: "failed",
+            failure: { failureClass: "tool_failed", message: "tool failed", retryable: true },
+          }),
+        };
+      }
+      return {
+        assistantContent: "Recovered answer.",
+        assistantModel: "llama3",
+        turnTrace: createTrace({
+          turnId: request.turnId,
+          sourceTurnId: request.sourceTurnId,
+          branchKind: "retry",
+          status: "completed",
+        }),
+      };
+    }) as never;
+
+    await agentSendChatMessage(host, "session-1", { content: "hello", mode: "chat" });
+
+    expect(host.turnRuntime.run).toHaveBeenCalledTimes(2);
+    for (const call of vi.mocked(host.turnRuntime.run).mock.calls) {
+      expect(call[0]).toEqual(expect.objectContaining({ providerId: "ollama", model: "llama3" }));
+    }
+  });
+
   it("routes retry turns through prepared dispatch with the original user message and attachment ids", async () => {
     const host = createHost({});
 
@@ -1794,3 +1857,60 @@ async function collectChunks(stream: AsyncGenerator<Record<string, unknown>>): P
   }
   return chunks;
 }
+
+describe("chat turn entry citadel ward route_local", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function routeLocalWardHost() {
+    const host = createHost({});
+    const storage = host.storage as unknown as Record<string, unknown>;
+    storage.chatSessionMeta = { get: vi.fn(async () => ({ sessionId: "session-1", workspaceId: "workspace-ops" })) };
+    storage.workspaces = {
+      find: vi.fn(async (workspaceId: string) =>
+        workspaceId === "workspace-ops" ? { citadelId: "citadel-ops" } : undefined,
+      ),
+    };
+    storage.citadels = {
+      listWards: vi.fn(async () => [{ name: "keep-local", actionPattern: "model.chat.*", effect: "route_local" }]),
+    };
+    return host;
+  }
+
+  async function expectWardRejection(run: () => Promise<unknown>) {
+    let caught: unknown;
+    try {
+      await run();
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(PolicyViolationError);
+    expect((caught as PolicyViolationError).details).toEqual({
+      reason: "citadel_ward_route_local_unavailable",
+      citadelId: "citadel-ops",
+    });
+  }
+
+  it("a route_local-unavailable descriptor rejects the turn with PolicyViolationError", async () => {
+    const host = routeLocalWardHost();
+    await expectWardRejection(() => agentSendChatMessage(host, "session-1", { content: "hello", mode: "chat" }));
+    await expectWardRejection(() => retryChatTurn(host, "session-1", "turn-original", {}));
+    await expectWardRejection(() => editChatTurn(host, "session-1", "turn-original", { content: "edited" }));
+
+    expect(host.prepareAgentChatTurn).not.toHaveBeenCalled();
+    expect(host.turnRuntime.run).not.toHaveBeenCalled();
+    expect(dispatchMocks.consumePreparedAgentChatTurn).not.toHaveBeenCalled();
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.turn.start",
+        context: expect.objectContaining({
+          routePreflight: expect.objectContaining({
+            wardReasonCode: "citadel_ward_route_local_unavailable",
+            wardCitadelId: "citadel-ops",
+          }),
+        }),
+      }),
+    );
+  });
+});

@@ -94,6 +94,14 @@ export interface ModelUsageAttributionContext {
   attemptIndex?: number;
   fallbackIndex?: number;
   repairIndex?: number;
+  /**
+   * Citadel Ward `model.chat.<providerId>` actions that governed this call's
+   * route, such as the requested provider's action when a `route_local` ward
+   * rerouted the turn to a local model. The dispatch ward backstop evaluates
+   * them together with the dispatched provider's action (deny-wins). They are
+   * not part of the usage identity and are not persisted with usage events.
+   */
+  wardActions?: readonly string[];
 }
 
 export interface ModelUsageNumbers {

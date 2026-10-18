@@ -55,11 +55,16 @@ export interface TurnRuntimeRequest {
   canonicalWriteFence?: <T>(work: () => T | Promise<T>) => Promise<Awaited<T>>;
   /** Immutable server-owned capability upper bound for this admitted Chat turn. */
   capabilityProfile?: ChatTurnCapabilityProfileRecord;
-  featureAdmission?: { references: import("@goatcitadel/contracts").ChatTurnFeatureReferences; referenceSha256: string };
+  featureAdmission?: {
+    references: import("@goatcitadel/contracts").ChatTurnFeatureReferences;
+    referenceSha256: string;
+  };
   /** Original admitted content when a durable continuation adds answered-prompt context. */
   capabilityProfileContent?: string;
   /** Stable provider/model/capability-selection dimension used by compaction hysteresis. */
   compactionDimensionHash?: string;
+  /** Citadel Ward `model.chat.*` actions that governed this turn's route; the dispatch backstop re-checks them. */
+  routeWardActions?: readonly string[];
 }
 
 export interface TurnRuntimeResult {

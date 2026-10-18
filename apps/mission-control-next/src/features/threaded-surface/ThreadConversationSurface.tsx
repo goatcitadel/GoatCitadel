@@ -6,7 +6,10 @@ import type {
   MissionThreadedDropTargetProps,
   MissionThreadedRenderSurfaceInput,
 } from "@goatcitadel/threaded-surface-core";
-import { buildThreadedSessionStatusSummary } from "@goatcitadel/threaded-surface-core/work-trust";
+import {
+  buildThreadedSessionStatusSummary,
+  formatSelectionSourceSummary,
+} from "@goatcitadel/threaded-surface-core/work-trust";
 import { ChatModelPicker } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import { ChatExecutionPlanSummary } from "@goatcitadel/mission-control-shared/components/chat/ChatExecutionPlanSummary";
 import { ChatChangePlanCard } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard";
@@ -64,7 +67,7 @@ export function ThreadConversationSurface({
   const headerModelSummary =
     resolveChatRouteReadiness(props).state === "no_provider" ? "Not connected" : headerStatus.providerModelSummary;
   const routeSelectionSummary = props.routePreflight?.selectionSource
-    ? `Selection: ${props.routePreflight.selectionSource}`
+    ? formatSelectionSourceSummary(props.routePreflight.selectionSource)
     : (props.trust.selectionSourceSummary ?? "Route pending");
   // A pending approval is explained once, by the composer's approval panel.
   const composerGateHint =

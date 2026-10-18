@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChatCompletionRequest, MemoryContextPack } from "@goatcitadel/contracts";
+import { PolicyViolationError, type ChatCompletionRequest, type MemoryContextPack } from "@goatcitadel/contracts";
 import {
   attachChatCompletionFailureContext,
   buildMemoryContextSystemMessage,
@@ -23,6 +23,7 @@ import {
 } from "./llm-completion-helpers.js";
 import { ChatTurnCancelledError } from "./chat-turn-helpers.js";
 import { StreamIdleTimeoutError } from "./stream-idle-watchdog.js";
+import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 
 describe("llm-completion-helpers", () => {
   afterEach(() => {
@@ -249,6 +250,25 @@ describe("llm-completion-helpers", () => {
       failureClass: "transient",
       toolProtocolError: false,
     });
+  });
+
+  it("carries the Citadel Ward reason code of a dispatch-time ward rejection", () => {
+    const error = new LlmDispatchGuardRejectedError(
+      new PolicyViolationError({
+        message: "A Citadel Ward requires this chat to stay on a local model.",
+        details: { reason: "citadel_ward_route_local_unavailable", citadelId: "citadel-ops" },
+      }),
+    );
+    expect(
+      readChatCompletionFailureContext(
+        attachChatCompletionFailureContext(error, { deadlineAtMs: undefined, emittedOutput: false }),
+      ),
+    ).toMatchObject({ failureClass: "authority_denied", wardReasonCode: "citadel_ward_route_local_unavailable" });
+    expect(
+      readChatCompletionFailureContext(
+        attachChatCompletionFailureContext(new Error("plain"), { deadlineAtMs: undefined, emittedOutput: false }),
+      ),
+    ).not.toHaveProperty("wardReasonCode");
   });
 
   it("classifies provider denials and blocks unsafe cross-provider fallback classes", () => {

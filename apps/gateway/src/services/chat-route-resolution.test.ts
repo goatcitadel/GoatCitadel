@@ -737,7 +737,6 @@ describe("chat-route-resolution", () => {
   });
 });
 
-
 describe("opt-in provider fallback preflight", () => {
   function enabledHost() {
     return { ...createHost(), isFeatureEnabled: vi.fn(async () => true) };
@@ -745,29 +744,60 @@ describe("opt-in provider fallback preflight", () => {
   it("arms only one operator-selected target and fingerprints target plus consent", async () => {
     const host = enabledHost();
     const preference = { providerId: "ollama", model: "llama3.2", allowLocalToCloud: false };
-    const result = await preflightChatRoute(host as never, "session-1", { action: "send", providerFallback: preference });
-    expect(result).toMatchObject({ fallbackPolicy: "armed", fallbackResult: "cloud_to_local", providerFallback: preference });
+    const result = await preflightChatRoute(host as never, "session-1", {
+      action: "send",
+      providerFallback: preference,
+    });
+    expect(result).toMatchObject({
+      fallbackPolicy: "armed",
+      fallbackResult: "cloud_to_local",
+      providerFallback: preference,
+    });
     expect(result.decision.providerFallback).toEqual(preference);
-    expect(createRoutingDecisionFingerprint({ ...result.decision, providerFallback: { ...preference, allowLocalToCloud: true } }))
-      .not.toBe(result.decision.fingerprint);
+    expect(
+      createRoutingDecisionFingerprint({
+        ...result.decision,
+        providerFallback: { ...preference, allowLocalToCloud: true },
+      }),
+    ).not.toBe(result.decision.fingerprint);
     expect(host.resolveFallbackTargets).not.toHaveBeenCalled();
   });
   it("stays off when disabled, missing, same-provider, invalid target, or explicitly cleared", async () => {
-    for (const preference of [undefined, null,
+    for (const preference of [
+      undefined,
+      null,
       { providerId: "openai", model: "gpt-5.4-mini", allowLocalToCloud: false },
-      { providerId: "missing", model: "none", allowLocalToCloud: false }]) {
-      expect((await preflightChatRoute(enabledHost() as never, "session-1", { action: "send", providerFallback: preference })).fallbackPolicy).toBe("off");
+      { providerId: "missing", model: "none", allowLocalToCloud: false },
+    ]) {
+      expect(
+        (
+          await preflightChatRoute(enabledHost() as never, "session-1", {
+            action: "send",
+            providerFallback: preference,
+          })
+        ).fallbackPolicy,
+      ).toBe("off");
     }
     const host = createHost();
-    expect((await preflightChatRoute(host as never, "session-1", { action: "send",
-      providerFallback: { providerId: "ollama", model: "llama3.2", allowLocalToCloud: false } })).fallbackPolicy).toBe("off");
+    expect(
+      (
+        await preflightChatRoute(host as never, "session-1", {
+          action: "send",
+          providerFallback: { providerId: "ollama", model: "llama3.2", allowLocalToCloud: false },
+        })
+      ).fallbackPolicy,
+    ).toBe("off");
   });
   it("requires explicit local-to-cloud consent", async () => {
-    const host = { ...createHost({ runtime: { activeProviderId: "ollama", activeModel: "llama3.2" } }),
-      isFeatureEnabled: async () => true };
+    const host = {
+      ...createHost({ runtime: { activeProviderId: "ollama", activeModel: "llama3.2" } }),
+      isFeatureEnabled: async () => true,
+    };
     for (const allowLocalToCloud of [false, true]) {
-      const result = await preflightChatRoute(host as never, "session-1", { action: "send",
-        providerFallback: { providerId: "openai", model: "gpt-5.4-mini", allowLocalToCloud } });
+      const result = await preflightChatRoute(host as never, "session-1", {
+        action: "send",
+        providerFallback: { providerId: "openai", model: "gpt-5.4-mini", allowLocalToCloud },
+      });
       expect(result.fallbackPolicy).toBe(allowLocalToCloud ? "armed" : "off");
       if (allowLocalToCloud) expect(result.fallbackResult).toBe("local_to_cloud");
     }
@@ -775,9 +805,145 @@ describe("opt-in provider fallback preflight", () => {
   it("lets explicit null override a saved session target", async () => {
     const host = enabledHost();
     const saved = host.storage.chatSessionPrefs.ensure();
-    host.storage.chatSessionPrefs.ensure.mockReturnValue({ ...saved,
-      providerFallback: { providerId: "ollama", model: "llama3.2", allowLocalToCloud: false } } as never);
+    host.storage.chatSessionPrefs.ensure.mockReturnValue({
+      ...saved,
+      providerFallback: { providerId: "ollama", model: "llama3.2", allowLocalToCloud: false },
+    } as never);
     expect((await preflightChatRoute(host as never, "session-1", { action: "send" })).fallbackPolicy).toBe("armed");
-    expect((await preflightChatRoute(host as never, "session-1", { action: "send", providerFallback: null })).fallbackPolicy).toBe("off");
+    expect(
+      (await preflightChatRoute(host as never, "session-1", { action: "send", providerFallback: null })).fallbackPolicy,
+    ).toBe("off");
+  });
+});
+
+describe("chat-route-resolution citadel ward route_local", () => {
+  function wardHost(
+    effect: "route_local" | "deny",
+    input?: Parameters<typeof createHost>[0],
+    actionPattern = "model.chat.*",
+  ) {
+    const base = createHost(input);
+    const listWards = vi.fn(async () => [{ name: "keep-local", actionPattern, effect }]);
+    return {
+      ...base,
+      storage: {
+        ...base.storage,
+        workspaces: { find: vi.fn(async () => ({ citadelId: "citadel-ops" })) },
+        citadels: { listWards },
+      },
+      resolveSessionWorkspaceId: vi.fn(async () => "workspace-ops"),
+    };
+  }
+
+  it("route_local ward keeps a local requested provider", async () => {
+    const host = wardHost("route_local");
+    const descriptor = await resolveChatRouteDescriptor(host as never, "session-1", {
+      action: "send" as const,
+      providerId: "ollama",
+      model: "llama3.2",
+    });
+    expect(descriptor).toMatchObject({
+      effectiveProviderId: "ollama",
+      effectiveModel: "llama3.2",
+      selectionSource: "manual",
+      wardReasonCode: "citadel_ward_route_local",
+      wardCitadelId: "citadel-ops",
+      blockedReason: undefined,
+    });
+    expect(host.resolveSessionWorkspaceId).toHaveBeenCalledWith("session-1");
+    expect(host.storage.workspaces.find).toHaveBeenCalledWith("workspace-ops");
+  });
+
+  it("route_local ward switches a cloud request to the available local provider", async () => {
+    const host = wardHost("route_local");
+    const result = await preflightChatRoute(host as never, "session-1", {
+      action: "send",
+      providerId: "openai",
+      model: "gpt-5.4-mini",
+    });
+    expect(result).toMatchObject({
+      requestedProviderId: "openai",
+      requestedModel: "gpt-5.4-mini",
+      effectiveProviderId: "ollama",
+      effectiveModel: "llama3.2",
+      selectionSource: "citadel_ward_route_local",
+      runtimeClass: "local",
+      fallbackPolicy: "off",
+      wardReasonCode: "citadel_ward_route_local",
+      wardCitadelId: "citadel-ops",
+      blockedReason: undefined,
+    });
+    expect(result.decision).toMatchObject({
+      selectionSource: "citadel_ward_route_local",
+      wardReasonCode: "citadel_ward_route_local",
+      wardCitadelId: "citadel-ops",
+    });
+    expect(createRoutingDecisionFingerprint({ ...result.decision, wardCitadelId: "other" })).not.toBe(
+      result.decision.fingerprint,
+    );
+  });
+
+  it("route_local ward with no healthy local provider fails closed", async () => {
+    const host = wardHost("route_local", {
+      liveCatalog: { openai: ["gpt-5.4-mini"], ollama: [] },
+    });
+    const descriptor = await resolveChatRouteDescriptor(host as never, "session-1", {
+      action: "send",
+      providerId: "openai",
+      model: "gpt-5.4-mini",
+    });
+    expect(host.llmService.getCachedModelAvailability("ollama", "llama3.2")).toBe("unavailable");
+    expect(descriptor.blockedReason).toBe(
+      "A Citadel Ward requires this chat to stay on a local model, and no local model route is available.",
+    );
+    expect(descriptor).toMatchObject({
+      wardReasonCode: "citadel_ward_route_local_unavailable",
+      wardCitadelId: "citadel-ops",
+      fallbackPolicy: "off",
+      effectiveModel: undefined,
+    });
+  });
+
+  it("drops a cloud fallback from a kept local route", async () => {
+    const host = {
+      ...wardHost("route_local"),
+      isFeatureEnabled: async () => true,
+    };
+    const result = await preflightChatRoute(host as never, "session-1", {
+      action: "send",
+      providerId: "ollama",
+      model: "llama3.2",
+      providerFallback: { providerId: "openai", model: "gpt-5.4-mini", allowLocalToCloud: true },
+    });
+    expect(result).toMatchObject({
+      fallbackPolicy: "off",
+      fallbackResult: "not_applicable",
+      providerFallback: undefined,
+    });
+  });
+
+  it("a deny ward on model chat blocks with citadel_ward_deny", async () => {
+    const host = wardHost("deny", undefined, "model.chat.openai");
+    const descriptor = await resolveChatRouteDescriptor(host as never, "session-1", {
+      action: "send",
+      providerId: "openai",
+      model: "gpt-5.4-mini",
+    });
+    expect(descriptor).toMatchObject({ wardReasonCode: "citadel_ward_deny", wardCitadelId: "citadel-ops" });
+    expect(descriptor.blockedReason).toBeTruthy();
+  });
+
+  it("no ward storage leaves routing unchanged", async () => {
+    const plain = createHost();
+    const withSessionReader = { ...plain, resolveSessionWorkspaceId: vi.fn(async () => "workspace-ops") };
+    const descriptor = await resolveChatRouteDescriptor(withSessionReader as never, "session-1", {
+      action: "send",
+      providerId: "openai",
+      model: "gpt-5.4-mini",
+    });
+    expect(descriptor).toMatchObject({ effectiveProviderId: "openai", selectionSource: "manual" });
+    expect(descriptor.wardReasonCode).toBeUndefined();
+    expect(descriptor.wardCitadelId).toBeUndefined();
+    expect(withSessionReader.resolveSessionWorkspaceId).not.toHaveBeenCalled();
   });
 });

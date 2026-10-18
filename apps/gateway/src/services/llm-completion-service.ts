@@ -22,6 +22,7 @@ import {
   readAuthorizedChatProviderFallback,
 } from "./chat-provider-fallback-authority.js";
 import { shouldAllowCrossProviderFallback } from "./chat-session-utils.js";
+import { filterWardAdmittedFallbackTargets, readCitadelWardDispatchReason } from "./chat-route-local-ward.js";
 import { ChatTurnCancelledError, isChatTurnCancelledError } from "./chat-turn-helpers.js";
 import {
   CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT,
@@ -289,7 +290,9 @@ export async function createChatCompletion(
       try {
         throwIfChatCompletionRequestAborted(attemptRequest.signal, memoryInput?.turnId);
         const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
-        response = await dispatchAdmittedChatCompletion(host.llmService, attemptRequest,
+        response = await dispatchAdmittedChatCompletion(
+          host.llmService,
+          attemptRequest,
           {
             ...attemptRequest,
             timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
@@ -347,6 +350,7 @@ export async function createChatCompletion(
             remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
             emittedOutput: false,
             failureClass: classifyProviderFailure(lastError),
+            wardReasonCode: readCitadelWardDispatchReason(lastError),
             sessionId: memoryInput?.sessionId,
             turnId: memoryInput?.turnId,
             durableRunId: memoryInput?.runId,
@@ -390,9 +394,20 @@ export async function createChatCompletion(
   lastError = resolveChatCompletionRequestAbortError(hookableRequest.signal, memoryInput?.turnId) ?? lastError;
   if (!response && allowCrossProviderFallback && (!lastError || shouldAttemptCrossProviderFallback(lastError))) {
     const fallbackRequiresToolProtocolNormalization = Boolean(lastError && shouldRetryToolProtocolError(lastError));
-    const fallbacks = filterCrossProviderFallbackTargets(
-      authorizedFallback ? [authorizedFallback] : host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
-      primaryProviderId,
+    const fallbacks = await filterWardAdmittedFallbackTargets(
+      host,
+      {
+        workspaceId: chatHookWorkspaceId,
+        sessionId: memoryInput?.sessionId,
+        callKind: "chat_fallback",
+        wardActions: attributionInput.wardActions,
+      },
+      filterCrossProviderFallbackTargets(
+        authorizedFallback
+          ? [authorizedFallback]
+          : host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
+        primaryProviderId,
+      ),
     );
     fallbackLoop: for (const [fallbackOrdinal, fallback] of fallbacks.entries()) {
       if (
@@ -406,11 +421,7 @@ export async function createChatCompletion(
         lastError = resolveChatCompletionRequestAbortError(hookableRequest.signal, memoryInput?.turnId) ?? lastError;
         break;
       }
-      for (
-        let transientRetryIndex = 0;
-        transientRetryIndex < fallbackAttemptLimit;
-        transientRetryIndex += 1
-      ) {
+      for (let transientRetryIndex = 0; transientRetryIndex < fallbackAttemptLimit; transientRetryIndex += 1) {
         try {
           throwIfChatCompletionRequestAborted(hookableRequest.signal, memoryInput?.turnId);
           const fallbackRequest = fallbackRequiresToolProtocolNormalization
@@ -419,13 +430,23 @@ export async function createChatCompletion(
           const dispatchRequest = { ...fallbackRequest, providerId: fallback.providerId, model: fallback.model };
           const guard = await prepareCurrentChatProviderFallbackDispatch(host, hookableRequest, dispatchRequest);
           throwIfChatCompletionRequestAborted(hookableRequest.signal, memoryInput?.turnId);
-          dispatchRequest.timeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
+          dispatchRequest.timeoutMs = getRemainingChatCompletionTimeoutMs(
+            completionDeadline,
+            hookableRequest.timeoutMs,
+          );
           lastAttemptTarget = { providerId: fallback.providerId, model: fallback.model };
-          response = await dispatchAdmittedChatCompletion(host.llmService, dispatchRequest, dispatchRequest, usageAttribution.next({
-            callKind: "chat_fallback", fallbackIndex: fallbackOrdinal + 1,
-            repairIndex: fallbackRequiresToolProtocolNormalization ? TOOL_PROTOCOL_RETRY_MINIMAL_THINKING : 0,
-            dispatchedReasoningEffort: fallbackRequest.reasoning?.effort,
-          }), guard);
+          response = await dispatchAdmittedChatCompletion(
+            host.llmService,
+            dispatchRequest,
+            dispatchRequest,
+            usageAttribution.next({
+              callKind: "chat_fallback",
+              fallbackIndex: fallbackOrdinal + 1,
+              repairIndex: fallbackRequiresToolProtocolNormalization ? TOOL_PROTOCOL_RETRY_MINIMAL_THINKING : 0,
+              dispatchedReasoningEffort: fallbackRequest.reasoning?.effort,
+            }),
+            guard,
+          );
           throwIfChatCompletionRequestAborted(hookableRequest.signal, memoryInput?.turnId);
           host.recordDevDiagnostic({
             level: "info",
@@ -459,10 +480,7 @@ export async function createChatCompletion(
           if (isAuthoritativeChatDispatchError(lastError)) {
             break fallbackLoop;
           }
-          if (
-            transientRetryIndex < fallbackAttemptLimit - 1 &&
-            shouldRetryTransientProviderError(lastError)
-          ) {
+          if (transientRetryIndex < fallbackAttemptLimit - 1 && shouldRetryTransientProviderError(lastError)) {
             if (
               await delayChatCompletionRetry(
                 completionDeadline,
@@ -517,6 +535,7 @@ export async function createChatCompletion(
         remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
         emittedOutput: false,
         failureClass: finalError ? classifyProviderFailure(finalError) : "unknown",
+        wardReasonCode: readCitadelWardDispatchReason(finalError),
         sessionId: memoryInput?.sessionId,
         turnId: memoryInput?.turnId,
         durableRunId: memoryInput?.runId,
@@ -668,7 +687,9 @@ export async function* createChatCompletionStream(
     },
   });
   const startProviderAttempt = createLlmStreamAttemptObserver(host, {
-    completionStartedAt, sessionId: memoryInput?.sessionId, taskId: memoryInput?.taskId,
+    completionStartedAt,
+    sessionId: memoryInput?.sessionId,
+    taskId: memoryInput?.taskId,
   });
   const memoryContext = await composeChatCompletionMemoryContext(host, request, memoryInput, attributionInput);
   const memoryContextInsertion = memoryContext ? insertMemoryContextMessage(request, memoryContext) : undefined;
@@ -814,7 +835,9 @@ export async function* createChatCompletionStream(
             ? AbortSignal.any([attemptRequest.signal, idleAbort.signal])
             : idleAbort.signal;
         const recordFirstChunk = startProviderAttempt(lastAttemptTarget.providerId, lastAttemptTarget.model, false);
-        const providerStream = streamAdmittedChatCompletion(host.llmService, attemptRequest,
+        const providerStream = streamAdmittedChatCompletion(
+          host.llmService,
+          attemptRequest,
           {
             ...attemptRequest,
             stream: true,
@@ -910,6 +933,7 @@ export async function* createChatCompletionStream(
             emittedOutput: attemptStreamed,
             remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
             failureClass: classifyProviderFailure(lastError),
+            wardReasonCode: readCitadelWardDispatchReason(lastError),
             sessionId: memoryInput?.sessionId,
             turnId: memoryInput?.turnId,
             durableRunId: memoryInput?.runId,
@@ -978,6 +1002,7 @@ export async function* createChatCompletionStream(
         remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
         emittedOutput: true,
         failureClass: lastError ? classifyProviderFailure(lastError) : "unknown",
+        wardReasonCode: readCitadelWardDispatchReason(lastError),
         sessionId: memoryInput?.sessionId,
         turnId: memoryInput?.turnId,
         durableRunId: memoryInput?.runId,
@@ -1004,9 +1029,20 @@ export async function* createChatCompletionStream(
 
   if (!streamed && allowCrossProviderFallback && (!lastError || shouldAttemptCrossProviderFallback(lastError))) {
     const fallbackRequiresToolProtocolNormalization = Boolean(lastError && shouldRetryToolProtocolError(lastError));
-    const fallbacks = filterCrossProviderFallbackTargets(
-      authorizedFallback ? [authorizedFallback] : host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
-      primaryProviderId,
+    const fallbacks = await filterWardAdmittedFallbackTargets(
+      host,
+      {
+        workspaceId: chatHookWorkspaceId,
+        sessionId: memoryInput?.sessionId,
+        callKind: "chat_fallback",
+        wardActions: attributionInput.wardActions,
+      },
+      filterCrossProviderFallbackTargets(
+        authorizedFallback
+          ? [authorizedFallback]
+          : host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
+        primaryProviderId,
+      ),
     );
     fallbackLoop: for (const [fallbackOrdinal, fallback] of fallbacks.entries()) {
       if (
@@ -1020,11 +1056,7 @@ export async function* createChatCompletionStream(
         lastError = resolveChatCompletionRequestAbortError(withContext.signal, memoryInput?.turnId) ?? lastError;
         break;
       }
-      for (
-        let transientRetryIndex = 0;
-        transientRetryIndex < fallbackAttemptLimit;
-        transientRetryIndex += 1
-      ) {
+      for (let transientRetryIndex = 0; transientRetryIndex < fallbackAttemptLimit; transientRetryIndex += 1) {
         let attemptStreamed = false;
         try {
           throwIfChatCompletionRequestAborted(withContext.signal, memoryInput?.turnId);
@@ -1043,7 +1075,9 @@ export async function* createChatCompletionStream(
               ? AbortSignal.any([fallbackRetryRequest.signal, idleAbort.signal])
               : idleAbort.signal;
           const recordFirstChunk = startProviderAttempt(fallback.providerId, fallback.model, true);
-          const fallbackProviderStream = streamAdmittedChatCompletion(host.llmService, dispatchRequest,
+          const fallbackProviderStream = streamAdmittedChatCompletion(
+            host.llmService,
+            dispatchRequest,
             {
               ...dispatchRequest,
               stream: true,
@@ -1130,6 +1164,7 @@ export async function* createChatCompletionStream(
               emittedOutput: attemptStreamed,
               remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
               failureClass: classifyProviderFailure(lastError),
+              wardReasonCode: readCitadelWardDispatchReason(lastError),
               sessionId: memoryInput?.sessionId,
               turnId: memoryInput?.turnId,
               durableRunId: memoryInput?.runId,
@@ -1143,10 +1178,7 @@ export async function* createChatCompletionStream(
             streamFailedAfterEmit = true;
             break;
           }
-          if (
-            transientRetryIndex < fallbackAttemptLimit - 1 &&
-            shouldRetryTransientProviderError(lastError)
-          ) {
+          if (transientRetryIndex < fallbackAttemptLimit - 1 && shouldRetryTransientProviderError(lastError)) {
             if (
               await delayChatCompletionRetry(
                 completionDeadline,
@@ -1194,6 +1226,7 @@ export async function* createChatCompletionStream(
         remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
         emittedOutput: true,
         failureClass: lastError ? classifyProviderFailure(lastError) : "unknown",
+        wardReasonCode: readCitadelWardDispatchReason(lastError),
         sessionId: memoryInput?.sessionId,
         turnId: memoryInput?.turnId,
         durableRunId: memoryInput?.runId,
@@ -1248,6 +1281,7 @@ export async function* createChatCompletionStream(
         remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
         emittedOutput: false,
         failureClass: finalError ? classifyProviderFailure(finalError) : "unknown",
+        wardReasonCode: readCitadelWardDispatchReason(finalError),
         sessionId: memoryInput?.sessionId,
         turnId: memoryInput?.turnId,
         durableRunId: memoryInput?.runId,
@@ -1522,9 +1556,10 @@ function throwIfChatCompletionRequestAborted(signal: AbortSignal | undefined, tu
 function assertRequiredRuntimeTarget(original: ChatCompletionRequest, dispatched: ChatCompletionRequest): void {
   const required = original.requiredRuntimeTarget;
   if (!required) return;
-  if (dispatched.providerId !== required.providerId ||
-      (required.model && dispatched.model !== required.model)) {
-    throw new Error(`The selected local model route changed before dispatch; coding run requires ${required.providerId}/${required.model ?? "selected model"}.`);
+  if (dispatched.providerId !== required.providerId || (required.model && dispatched.model !== required.model)) {
+    throw new Error(
+      `The selected local model route changed before dispatch; coding run requires ${required.providerId}/${required.model ?? "selected model"}.`,
+    );
   }
 }
 

@@ -2082,7 +2082,16 @@ export interface ChatSendMessageRequest {
 }
 
 export type RoutingPreflightAction = "send" | "retry" | "edit";
-export type RoutingPreflightSelectionSource = "manual" | "session" | "global";
+export type RoutingPreflightSelectionSource = "manual" | "session" | "global" | "citadel_ward_route_local";
+/**
+ * Citadel Ward outcome for Chat model routing (`model.chat.<providerId>`).
+ * `citadel_ward_route_local` means a `route_local` ward applied and the route
+ * stays local; the other two codes block the turn.
+ */
+export type RoutingWardReasonCode =
+  | "citadel_ward_route_local"
+  | "citadel_ward_route_local_unavailable"
+  | "citadel_ward_deny";
 export type RoutingPreflightFallbackPolicy = "off" | "armed";
 export type RoutingPreflightFallbackResult = "not_applicable" | "same_boundary" | "local_to_cloud" | "cloud_to_local";
 export type RoutingPreflightRuntimeReachability = "not_checked" | "reachable" | "unreachable" | "models_unavailable";
@@ -2134,6 +2143,8 @@ export interface RoutingDecisionSnapshot {
   runtimeClass: RoutingPreflightRuntimeClass;
   blockedReason?: string;
   degradedReason?: string;
+  wardReasonCode?: RoutingWardReasonCode;
+  wardCitadelId?: string;
   capabilityFingerprint?: string;
   capabilityContentHash?: string;
   capabilityProfileSchemaVersion?: typeof import("./chat-capability-profile.js").CHAT_TURN_CAPABILITY_PROFILE_VERSION;
@@ -2155,6 +2166,8 @@ export interface RoutingPreflightResult {
   runtimeClass: RoutingPreflightRuntimeClass;
   blockedReason?: string;
   degradedReason?: string;
+  wardReasonCode?: RoutingWardReasonCode;
+  wardCitadelId?: string;
   capabilityProfile?: import("./chat-capability-profile.js").ChatTurnCapabilityProfilePreview;
   decision: RoutingDecisionSnapshot;
 }
