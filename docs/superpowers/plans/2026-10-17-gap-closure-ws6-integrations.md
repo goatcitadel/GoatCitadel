@@ -329,11 +329,11 @@ export function normalizeQqbotWebhookPayload(input: { connectionId: string; payl
 - forced-allowlist inbound fields.
 
 **Behavior:**
-- **Headers:** `X-Signature-Ed25519` (hex) and `X-Signature-Timestamp`. A missing or bad signature gets 401 with no dispatch. This applies to **every** request, op 13 included.
+- **Headers:** `X-Signature-Ed25519` (hex) and `X-Signature-Timestamp`. Op 0 dispatch requires a valid signature: a missing or bad signature gets 401 with no dispatch. Op 13 is answered even when the signature headers are absent; when they are present the signature is verified and a bad one gets 401.
 - **op 13 (callback validation):**
   - It is answered only if `plain_token` matches `^[A-Za-z0-9_-]{1,128}$` and `event_ts` matches `^\d{1,16}$`. Otherwise 400.
   - The reply is `{ plain_token, signature: signQqbotValidation(...) }`, returned as `parsePayload` → `{ kind: "reply" }`.
-  - The format check stops the reply from signing anything that could equal `timestamp + JSON body`.
+  - The strict format check (not header presence) stops the reply from signing anything that could equal `timestamp + JSON body`, so it cannot be used as a signing oracle.
 - **op 0 dispatch:**
   - `GROUP_AT_MESSAGE_CREATE`: scope `group`, target `group:${d.group_openid}`, actor `d.author.member_openid`.
   - `C2C_MESSAGE_CREATE`: scope `c2c`, target `user:${d.author.user_openid}`, actor `d.author.user_openid`.
