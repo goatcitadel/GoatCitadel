@@ -347,7 +347,9 @@ describe("github-integration-action", () => {
     const connection = createConnection();
     const host = createHost(connection, {
       fetchWithDiagnosticsTimeout: vi.fn(async () =>
-        jsonResponse({ message: "Resource not accessible" }, 403, { "x-ratelimit-remaining": "42" }),
+        jsonResponse({ message: "Resource not accessible by personal access token" }, 403, {
+          "x-ratelimit-remaining": "42",
+        }),
       ),
     });
     const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "issue_list", { input: {} });
@@ -472,7 +474,10 @@ describe("github-integration-action", () => {
   it.each([
     ["a JSON 401", () => jsonResponse({ message: "Bad credentials" }, 401)],
     ["an unparseable 401", () => new Response("<html>nope</html>", { status: 401 })],
-    ["a non-rate-limit 403", () => jsonResponse({ message: "forbidden" }, 403)],
+    [
+      "a token-permission 403",
+      () => jsonResponse({ message: "Resource not accessible by personal access token" }, 403),
+    ],
   ])("maps %s on a write to github_auth_rejected, never an unknown external outcome", async (_label, make) => {
     stubBase();
     const connection = createConnection();
@@ -553,6 +558,82 @@ describe("github-integration-action", () => {
     expect(fetchCalls(host).map(([url, init]) => [init.method, url])).toEqual([
       ["GET", `${BASE}/repos/octo/widgets/issues/5/comments?since=2026-10-18T11%3A55%3A00.000Z&per_page=100`],
     ]);
+  });
+
+  it.each([
+    ["HTTP 500", () => jsonResponse({ message: "boom" }, 500)],
+    ["HTTP 429", () => jsonResponse({ message: "slow down" }, 429)],
+    [
+      "a network error",
+      () => {
+        throw new TypeError("fetch failed");
+      },
+    ],
+  ])("records %s on issue_create as unknown_external_outcome, never auth_rejected", async (_label, make) => {
+    stubBase();
+    const connection = createConnection();
+    const sideEffectRunStore = createSideEffectRunStore();
+    const host = createHost(connection, {
+      sideEffectRunStore: sideEffectRunStore as never,
+      fetchWithDiagnosticsTimeout: vi.fn(async () => make()),
+    });
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "issue_create", {
+      idempotencyKey: "op-key",
+      input: { title: "t" },
+    });
+    expect(result.blockedReason).not.toBe("github_auth_rejected");
+    expect(result.status).not.toBe("executed");
+    const failureStatuses = [
+      ...sideEffectRunStore.markFailure.mock.calls.map((call) => (call[1] as { status: string }).status),
+      ...sideEffectRunStore.markFailureIfStatus.mock.calls.map((call) => (call[2] as { status: string }).status),
+    ];
+    expect(failureStatuses).toContain("unknown_external_outcome");
+    expect(failureStatuses).not.toContain("failed_before_boundary");
+  });
+
+  it("treats a 403 with retry-after as a secondary rate limit", async () => {
+    stubBase();
+    const connection = createConnection();
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(async () =>
+        jsonResponse({ message: "secondary" }, 403, { "retry-after": "60" }),
+      ),
+    });
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "issue_create", {
+      idempotencyKey: "op-key",
+      input: { title: "t" },
+    });
+    expect(result.status).toBe("failed");
+    expect(result.message).toContain("GitHub rate limit reached; retry after");
+  });
+
+  it("reports a non-token 403 on a write with GitHub's message instead of blaming the token", async () => {
+    stubBase();
+    const connection = createConnection();
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(async () => jsonResponse({ message: "Issue is locked" }, 403)),
+    });
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "issue_comment", {
+      idempotencyKey: "op-key",
+      input: { number: 4, body: "hi" },
+    });
+    expect(result.status).toBe("failed");
+    expect(result.blockedReason).toBeUndefined();
+    expect(result.message).toBe("GitHub refused the request: Issue is locked");
+  });
+
+  it("keeps the issue and comment bodies untrimmed", async () => {
+    stubBase();
+    const connection = createConnection();
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(async () => jsonResponse({ number: 1, html_url: "u" }, 201)),
+    });
+    await invokeIntegrationConnectionAction(host, connection.connectionId, "issue_create", {
+      idempotencyKey: "op-key",
+      input: { title: "t", body: "  indented\n" },
+    });
+    const body = (JSON.parse(fetchCalls(host)[0]![1].body as string) as { body: string }).body;
+    expect(body.startsWith("  indented\n\n\n")).toBe(true);
   });
 
   it("opens a dry-run preview and approval for a require_dry_run issue_create without calling GitHub", async () => {

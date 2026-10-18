@@ -377,6 +377,61 @@ describe("notion-integration-action", () => {
     expect(failureStatuses).not.toContain("unknown_external_outcome");
   });
 
+  it.each([
+    ["HTTP 500", () => jsonResponse({ message: "boom" }, 500)],
+    ["HTTP 429", () => jsonResponse({ message: "slow down" }, 429)],
+    [
+      "a network error",
+      () => {
+        throw new TypeError("fetch failed");
+      },
+    ],
+  ])(
+    "records %s on page_create and block_append as unknown_external_outcome, never auth_rejected",
+    async (_l, make) => {
+      stubBase();
+      const connection = createConnection({ token: TOKEN, defaultParentPageId: "parent-default" });
+      for (const [actionId, input] of [
+        ["page_create", { title: "Status" }],
+        ["block_append", { blockId: "block-9", content: "More" }],
+      ] as const) {
+        const sideEffectRunStore = createSideEffectRunStore();
+        const host = createHost(connection, {
+          sideEffectRunStore: sideEffectRunStore as never,
+          fetchWithDiagnosticsTimeout: vi.fn(async () => make()),
+        });
+        const result = await invokeIntegrationConnectionAction(host, connection.connectionId, actionId, {
+          idempotencyKey: "op-key",
+          input: { ...input },
+        });
+        expect(result.blockedReason).not.toBe("notion_auth_rejected");
+        expect(result.status).not.toBe("executed");
+        const failureStatuses = [
+          ...sideEffectRunStore.markFailure.mock.calls.map((call) => (call[1] as { status: string }).status),
+          ...sideEffectRunStore.markFailureIfStatus.mock.calls.map((call) => (call[2] as { status: string }).status),
+        ];
+        expect(failureStatuses).toContain("unknown_external_outcome");
+        expect(failureStatuses).not.toContain("failed_before_boundary");
+      }
+    },
+  );
+
+  it.each([
+    ["page_read", { pageId: ".." }],
+    ["page_create", { title: "t", parentPageId: "../x" }],
+    ["block_append", { blockId: "a/b", content: "c" }],
+  ])("blocks an unsafe Notion id for %s before any fetch", async (actionId, input) => {
+    stubBase();
+    const connection = createConnection();
+    const host = createHost(connection);
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, actionId, {
+      idempotencyKey: "op-key",
+      input,
+    });
+    expect(result).toMatchObject({ status: "blocked", blockedReason: "notion_id_invalid" });
+    expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+  });
+
   it("appends text with a PATCH carrying the content and the marker", async () => {
     stubBase();
     const connection = createConnection();

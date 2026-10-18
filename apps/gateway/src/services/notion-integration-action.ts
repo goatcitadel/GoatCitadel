@@ -166,6 +166,9 @@ async function runPageRead(
   if (!pageId) {
     return blocked(connection, actionId, checkedAt, "Provide a Notion page ID to read.", "notion_page_missing");
   }
+  if (!isValidNotionId(pageId)) {
+    return idInvalid(connection, actionId, checkedAt);
+  }
   const base = notionApiBaseUrl();
   const pageResponse = await host.fetchWithDiagnosticsTimeout(
     new URL(`/v1/pages/${encodeURIComponent(pageId)}`, base).toString(),
@@ -234,6 +237,9 @@ async function runPageCreate(
       "notion_parent_missing",
     );
   }
+  if (!isValidNotionId(parentPageId)) {
+    return idInvalid(connection, actionId, checkedAt);
+  }
   const content = readStringInput(request.input, "content") ?? "";
   const tooLong = checkTextLength(connection, actionId, checkedAt, title, content);
   if (tooLong) {
@@ -271,6 +277,9 @@ async function runBlockAppend(
       "Provide a Notion page or block ID and the text to append.",
       "notion_input_missing",
     );
+  }
+  if (!isValidNotionId(blockId)) {
+    return idInvalid(connection, actionId, checkedAt);
   }
   const tooLong = checkTextLength(connection, actionId, checkedAt, content);
   if (tooLong) {
@@ -412,7 +421,9 @@ export function buildNotionBlockAppendRunInput(
         cursor = next;
         continue;
       }
-      // The appended paragraph lands at the end, so only the last page can hold the marker.
+      // Heuristic (future reconcile-only path): the appended paragraph lands at the end, so only the
+      // last children page is inspected. If other writers append after ours the marker can sit on an
+      // earlier page and the probe reports not found, which fails safe (manual review, no resend).
       const match = (Array.isArray(record.results) ? record.results : [])
         .filter(isRecord)
         .find((block) => block.type === "paragraph" && extractBlockText(block).includes(marker));
@@ -492,6 +503,7 @@ async function settleWrite(response: Response, failurePrefix: string): Promise<P
   // Auth statuses are decided before the body is read so an unparseable 401 page still maps to a
   // proven-not-dispatched credential failure.
   if (response.status === 401 || response.status === 403) {
+    await response.body?.cancel();
     throw new ProviderAuthRejectedError("Notion", response.status);
   }
   const parsed = await parseProviderResponse(response);
@@ -632,6 +644,27 @@ function blocked(
     output,
     checkedAt,
   };
+}
+
+const NOTION_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
+
+/** Ids go into URL paths; anything with dots or separators (for example "..") is refused before a fetch. */
+function isValidNotionId(id: string): boolean {
+  return NOTION_ID_PATTERN.test(id);
+}
+
+function idInvalid(
+  connection: IntegrationConnection,
+  actionId: string,
+  checkedAt: string,
+): IntegrationActionInvokeResult {
+  return blocked(
+    connection,
+    actionId,
+    checkedAt,
+    "Notion page and block IDs may contain only letters, digits and dashes.",
+    "notion_id_invalid",
+  );
 }
 
 function readStringInput(input: Record<string, unknown> | undefined, key: string): string | undefined {

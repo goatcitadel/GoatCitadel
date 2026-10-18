@@ -296,7 +296,7 @@ async function runIssueCreate(
   const parts = buildGitHubIssueCreateRunInput(host, connection, {
     checkedAt,
     idempotencyKey: request.idempotencyKey,
-    payload: { provider: "github", repo, title, body: readStringInput(request.input, "body") ?? "" },
+    payload: { provider: "github", repo, title, body: readRawText(request.input, "body") ?? "" },
   });
   if ("blockedReason" in parts) {
     return blocked(connection, actionId, checkedAt, parts.message, parts.blockedReason);
@@ -320,7 +320,7 @@ async function runIssueComment(
   if (number === undefined) {
     return numberInvalid(connection, actionId, checkedAt);
   }
-  const commentBody = readStringInput(request.input, "body");
+  const commentBody = readRawText(request.input, "body");
   if (!commentBody) {
     return blocked(connection, actionId, checkedAt, "Provide the comment text.", "github_body_missing");
   }
@@ -555,14 +555,21 @@ async function settleWrite(response: Response, failurePrefix: string): Promise<P
   // Auth statuses are decided before the body is read: an unparseable 401 page must still be a
   // proven-not-dispatched credential failure.
   if (response.status === 401) {
+    await response.body?.cancel();
     throw new ProviderAuthRejectedError("GitHub", 401);
   }
   if (response.status === 403) {
     const limited = rateLimitMessage(response);
     if (limited) {
+      await response.body?.cancel();
       throw new ProviderRequestRejectedError("GitHub", 403, limited);
     }
-    throw new ProviderAuthRejectedError("GitHub", 403);
+    const forbidden = await parseProviderResponse(response);
+    if (isTokenPermissionMessage(forbidden.message)) {
+      throw new ProviderAuthRejectedError("GitHub", 403);
+    }
+    // Definitive refusal that is not a token problem (for example a locked issue).
+    throw new ProviderRequestRejectedError("GitHub", 403, `GitHub refused the request: ${forbidden.message}`);
   }
   const parsed = await parseProviderResponse(response);
   if (response.status === 404) {
@@ -598,6 +605,9 @@ function readFailure(
       return failed(connection, actionId, checkedAt, limited);
     }
   }
+  if (response.status === 403 && !isTokenPermissionMessage(parsed.message)) {
+    return failed(connection, actionId, checkedAt, `GitHub refused the request: ${parsed.message}`);
+  }
   if (response.status === 401 || response.status === 403) {
     return blocked(connection, actionId, checkedAt, AUTH_REJECTED_MESSAGE, "github_auth_rejected");
   }
@@ -608,6 +618,11 @@ function readFailure(
 }
 
 function rateLimitMessage(response: Response): string | undefined {
+  // retry-after on a 403 marks GitHub's secondary rate limit.
+  const retryAfter = Number(response.headers.get("retry-after"));
+  if (Number.isFinite(retryAfter) && retryAfter > 0 && response.headers.get("x-ratelimit-remaining") !== "0") {
+    return `GitHub rate limit reached; retry after ${new Date(Date.now() + retryAfter * 1000).toISOString()}`;
+  }
   if (response.headers.get("x-ratelimit-remaining") !== "0") {
     return undefined;
   }
@@ -744,6 +759,17 @@ function blocked(
     output,
     checkedAt,
   };
+}
+
+/** Raw text for issue and comment bodies: trimmed only for the emptiness check, never rewritten. */
+function readRawText(input: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = input?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+/** A 403 whose GitHub message points at the token or its permissions (not, say, a locked issue). */
+function isTokenPermissionMessage(message: string | undefined): boolean {
+  return message === undefined || /token|credential|resource not accessible|permission|scope/i.test(message);
 }
 
 function readStringInput(input: Record<string, unknown> | undefined, key: string): string | undefined {
