@@ -105,6 +105,21 @@ describe("shared reviewed integration actions", () => {
     expect(api.invokeIntegrationConnectionAction).toHaveBeenCalledExactlyOnceWith("fixture", "read", {});
     expect(owner.lastOperatorActionResult?.status).toBe("executed");
   });
+  it("acknowledges a ward-governed action as waiting for approval", async () => {
+    await mount();
+    await act(async () => owner.handleOperatorAction(action));
+    api.invokeIntegrationConnectionAction.mockResolvedValueOnce({
+      ...result,
+      status: "approval_required",
+      message: "A Citadel Ward requires operator approval; approval approval-ward-1 is pending.",
+      blockedReason: "citadel_ward_approval_required",
+      output: { approvalId: "approval-ward-1" },
+    });
+    await act(async () => owner.confirmOperatorAction());
+    expect(owner.lastOperatorActionResult?.status).toBe("approval_required");
+    expect(owner.notice).toMatchObject({ tone: "warning", message: expect.stringContaining("approval-ward-1") });
+    expect(owner.connectionMutation.phase).not.toBe("uncertain");
+  });
   it("withholds a changed advertised action before dispatch", async () => {
     await mount();
     await act(async () => owner.handleOperatorAction(action));

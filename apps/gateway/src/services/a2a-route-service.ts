@@ -14,10 +14,13 @@ import type {
   A2AOutboundPreviewResponse,
   A2AOutboundSendResponse,
   A2AOutboundTransport,
+  A2ATaskPushDeliveryResult,
   A2ATaskPushNotificationConfig,
   A2ATaskBindingRecord,
   A2ATaskExportPreviewRequest,
   A2ATaskExportPreviewResponse,
+  ApprovalCreateInput,
+  ApprovalRequest,
   TaskActivityRecord,
   TaskRecord,
 } from "@goatcitadel/contracts";
@@ -46,10 +49,21 @@ import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 import type { TaskLifecycleService } from "./task-lifecycle-service.js";
 import type { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
 import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
-import { A2APushNotificationService } from "./a2a-push-notification-service.js";
+import {
+  A2APushNotificationService,
+  type A2AApprovedPushInput,
+  type A2ARefusedPushApprovalInput,
+} from "./a2a-push-notification-service.js";
 import { A2AGrpcClient, type A2AGrpcClientPort } from "./a2a-grpc-client.js";
 import { sendOutboundGrpc } from "./a2a-grpc-outbound-service.js";
 import { buildA2AOutboundWardAction, resolveWardEffectForExternalAction } from "./citadel-ward-gate.js";
+import {
+  buildCitadelWardRequestSummary,
+  CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
+  type CitadelWardApprovalRef,
+  type CitadelWardRequestVault,
+} from "./citadel-ward-approval.js";
+import { DRY_RUN_APPROVAL_TTL_MS } from "./integration-dry-run-gate.js";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
 import {
   buildInboundIdempotencyKey,
@@ -128,6 +142,10 @@ export interface A2ARouteServiceDependencies {
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
   pushDeliveryFetch?: typeof fetchAllowlisted;
   grpcClient?: A2AGrpcClientPort;
+  /** Opens Citadel Ward approvals; without it a ward `require_approval` stays a fail-closed block. */
+  createApproval?: (input: ApprovalCreateInput) => Promise<ApprovalRequest>;
+  /** Seals an outbound ward approval request (its params can carry secrets); without it the call stays blocked. */
+  citadelWardRequests?: CitadelWardRequestVault;
 }
 
 interface A2ATurnIdentity {
@@ -180,6 +198,7 @@ export class A2ARouteService {
       tasks: deps.tasks,
       mutationIdempotencyStore: deps.mutationIdempotencyStore,
       pushDeliveryFetch: deps.pushDeliveryFetch,
+      createApproval: deps.createApproval,
       buildTaskFromBinding: async (binding, checkedAt) => await this.buildTaskFromBinding(binding, checkedAt),
       buildEventsForTask: async (task, since, checkedAt) => await this.buildEventsForTask(task, since, checkedAt),
     });
@@ -515,6 +534,19 @@ export class A2ARouteService {
     return await this.pushNotifications.deleteTaskPushNotificationConfig(peer, params, checkedAt);
   }
 
+  /** Citadel Ward approval effect: deliver the approved deferred push event (ward re-checked). */
+  public async deliverApprovedPush(
+    input: A2AApprovedPushInput,
+    checkedAt?: string,
+  ): Promise<A2ATaskPushDeliveryResult[]> {
+    return await this.pushNotifications.deliverApprovedPush(input, checkedAt);
+  }
+
+  /** Citadel Ward approval effect: record a rejected or expired push approval as blocked. */
+  public async recordRefusedPushApproval(input: A2ARefusedPushApprovalInput, checkedAt?: string): Promise<void> {
+    await this.pushNotifications.recordRefusedPushApproval(input, checkedAt);
+  }
+
   public async setGrpcTaskPushNotificationConfig(
     peer: A2APeerAuthResult,
     params: Record<string, unknown>,
@@ -587,18 +619,81 @@ export class A2ARouteService {
     };
   }
 
+  /**
+   * `options.wardApproval` is internal-only: the Citadel Ward approval executor passes it when
+   * replaying an approved send. HTTP routes never forward a caller-supplied value.
+   */
   public async sendOutbound(
     input: A2AOutboundPreviewRequest,
     actorId: string,
     checkedAt = new Date().toISOString(),
+    options: { wardApproval?: CitadelWardApprovalRef } = {},
   ): Promise<A2AOutboundSendResponse> {
-    return projectA2AExternalValue(await this.sendOutboundRaw(input, actorId, checkedAt));
+    return projectA2AExternalValue(await this.sendOutboundRaw(input, actorId, checkedAt, options));
+  }
+
+  /**
+   * Open an operator approval for a ward `require_approval` refusal. The approval carries the
+   * exact outbound request sealed, plus its hash; executing it is the approval effect's job (it
+   * replays with `wardApproval`). Hosts without `createApproval`, or whose request cannot be
+   * sealed, keep the fail-closed block: the request never lands in the approval in plaintext.
+   */
+  private async openOutboundWardApproval(
+    input: A2AOutboundPreviewRequest,
+    actorId: string,
+    ward: { action: string; citadelId: string; transport: string },
+    checkedAt: string,
+  ): Promise<{ approvalId: string } | { warning: string }> {
+    const { action: wardAction, citadelId, transport } = ward;
+    const { createApproval, citadelWardRequests } = this.deps;
+    if (!createApproval) {
+      return {
+        warning: `A Citadel Ward requires approval for ${wardAction} (citadel ${citadelId}), but no approval loop is available on this host, so the call is blocked.`,
+      };
+    }
+    const payload = await citadelWardRequests?.seal(CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND, {
+      wardAction,
+      citadelId,
+      request: { outbound: input, actorId },
+    });
+    if (!payload) {
+      return {
+        warning: `A Citadel Ward requires approval for ${wardAction} (citadel ${citadelId}), but the request could not be sealed for the approval record, so the approval loop is unavailable and the call is blocked.`,
+      };
+    }
+    try {
+      const approval = await createApproval({
+        kind: CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND,
+        riskLevel: "caution",
+        payload: { ...payload },
+        preview: {
+          title: `A2A ${input.method} to ${input.peerId} — Citadel Ward approval`,
+          route: wardAction,
+          target: input.peerId,
+          requestSummary: buildCitadelWardRequestSummary([
+            ["Peer", input.peerId],
+            ["Method", input.method],
+            ["Transport", transport],
+            ["Parameters", input.params],
+          ]),
+        },
+        linkage: { actionType: CITADEL_WARD_A2A_OUTBOUND_APPROVAL_KIND },
+        expiresAt: new Date(Date.parse(checkedAt) + DRY_RUN_APPROVAL_TTL_MS).toISOString(),
+      });
+      return { approvalId: approval.approvalId };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "citadel_ward_approval_create_failed";
+      return {
+        warning: `A Citadel Ward requires approval for ${wardAction}; the approval could not be opened (${reason}), so the call is blocked.`,
+      };
+    }
   }
 
   private async sendOutboundRaw(
     input: A2AOutboundPreviewRequest,
     actorId: string,
     checkedAt: string,
+    options: { wardApproval?: CitadelWardApprovalRef },
   ): Promise<A2AOutboundSendResponse> {
     const preview = this.buildOutboundPreview(input, checkedAt);
     const idempotencyKey = input.idempotencyKey?.trim() || hashStableJson(preview.envelope);
@@ -620,31 +715,53 @@ export class A2ARouteService {
     // Citadel Ward gate (Stage 1): a2a peers carry no workspace binding, so
     // outbound calls evaluate against the default personal citadel — a real
     // global hook (an operator ward on `a2a.outbound.*` gates every peer).
-    // deny/require_approval block here, before either transport; require_dry_run
-    // threads to the runner, which refuses pre-boundary.
+    // deny blocks and require_approval opens an operator approval here, before either
+    // transport; require_dry_run threads to the runner, which refuses pre-boundary.
     const wardAction = buildA2AOutboundWardAction(preview.transport === "GRPC" ? "grpc" : "jsonrpc", input.method);
-    const ward = await resolveWardEffectForExternalAction({
+    const resolvedWard = await resolveWardEffectForExternalAction({
       storage: this.deps.storage,
       action: wardAction,
     });
+    // A matching approved ward replay satisfies require_approval (and only that).
+    const wardApproved = resolvedWard.effect === "require_approval" && options.wardApproval?.wardAction === wardAction;
+    const ward = wardApproved ? { ...resolvedWard, effect: undefined } : resolvedWard;
     if (ward.effect === "deny" || ward.effect === "require_approval") {
-      return {
+      const base = {
         checkedAt,
         peerId: input.peerId,
         method: input.method,
         transport: preview.transport,
-        status: "blocked",
         agentCardUrl: peer.agentCardUrl,
         grpcUrl: preview.grpcUrl,
         idempotencyKey,
-        warnings: [
-          ward.effect === "deny"
-            ? `A Citadel Ward denies ${wardAction} (citadel ${ward.citadelId}).`
-            : `A Citadel Ward requires approval for ${wardAction} (citadel ${ward.citadelId}); approval-gated a2a outbound is not wired, so the call is blocked.`,
-        ],
       };
+      if (ward.effect === "deny") {
+        return {
+          ...base,
+          status: "blocked",
+          warnings: [`A Citadel Ward denies ${wardAction} (citadel ${ward.citadelId}).`],
+        };
+      }
+      const approval = await this.openOutboundWardApproval(
+        input,
+        actorId,
+        { action: wardAction, citadelId: ward.citadelId, transport: preview.transport },
+        checkedAt,
+      );
+      return "approvalId" in approval
+        ? {
+            ...base,
+            status: "approval_required",
+            approvalId: approval.approvalId,
+            warnings: [
+              `A Citadel Ward requires operator approval for ${wardAction}; approval ${approval.approvalId} is pending.`,
+            ],
+          }
+        : { ...base, status: "blocked", warnings: [approval.warning] };
     }
 
+    const mutationIdempotencyStore = this.deps.mutationIdempotencyStore;
+    const config = this.deps.config;
     if (preview.transport === "GRPC") {
       return sendOutboundGrpc({
         request: input,
@@ -655,17 +772,17 @@ export class A2ARouteService {
         peer,
         wardEffect: ward.effect,
         deps: {
-          config: this.deps.config,
+          config,
           storage: this.deps.storage,
           grpcClient: this.grpcClient,
-          mutationIdempotencyStore: this.deps.mutationIdempotencyStore,
+          mutationIdempotencyStore,
           evidenceEnvelopeService: this.deps.evidenceEnvelopeService,
         },
       });
     }
 
     const run = await runIdempotentExternalSideEffect<A2AJsonRpcResponse>({
-      mutationStore: this.deps.mutationIdempotencyStore,
+      mutationStore: mutationIdempotencyStore,
       sideEffectRunStore: this.deps.storage.externalSideEffectRuns,
       boundary: "a2a_jsonrpc_outbound",
       catalogId: "a2a",
@@ -682,7 +799,7 @@ export class A2ARouteService {
         const discovered = await this.discoverOutboundJsonRpcUrl(peer, checkedAt);
         await claim.markExternalCallStarted();
         const response = await fetchAllowlisted(discovered.jsonRpcUrl, {
-          allowlist: this.deps.config.toolPolicy.sandbox.networkAllowlist,
+          allowlist: config.toolPolicy.sandbox.networkAllowlist,
           init: {
             method: "POST",
             headers: buildOutboundHeaders(peer),
@@ -1254,7 +1371,8 @@ export class A2ARouteService {
     workspaceId: string;
   }): Promise<{ task: TaskRecord; created: boolean }> {
     const validate = (task: TaskRecord): TaskRecord => this.validateA2ALocalTask(task, input);
-    const existing = await this.deps.storage.tasks.find(input.localTaskId);
+    const taskStore = this.deps.storage.tasks;
+    const existing = await taskStore.find(input.localTaskId);
     if (existing) {
       return { task: validate(existing), created: false };
     }
@@ -1280,7 +1398,7 @@ export class A2ARouteService {
       );
       return { task: validate(task), created: true };
     } catch (error) {
-      const raced = await this.deps.storage.tasks.find(input.localTaskId);
+      const raced = await taskStore.find(input.localTaskId);
       if (!raced) {
         throw error;
       }
@@ -1293,8 +1411,9 @@ export class A2ARouteService {
     identity: StableA2ADispatchIdentity,
   ): Promise<A2ADispatchClaimResult> {
     return await this.deps.storage.runImmediateTransaction(async () => {
-      const current = await this.deps.storage.a2aTaskBindings.getForUpdate(a2aTaskId);
-      const databaseNow = await this.deps.storage.a2aTaskBindings.readDatabaseNow();
+      const bindings = this.deps.storage.a2aTaskBindings;
+      const current = await bindings.getForUpdate(a2aTaskId);
+      const databaseNow = await bindings.readDatabaseNow();
       const dispatch = readA2ADispatchState(current);
       if (current.durableRunId || dispatch.status === "applied") {
         return { binding: current, owned: false as const };
@@ -1314,7 +1433,7 @@ export class A2ARouteService {
       const turnIdentity = dispatch.turnIdentity ?? identity.turnIdentity;
       const claimToken = randomUUID();
       const claimExpiresAt = new Date(Date.parse(databaseNow) + A2A_DISPATCH_LEASE_MS).toISOString();
-      const claimed = await this.deps.storage.a2aTaskBindings.update(
+      const claimed = await bindings.update(
         a2aTaskId,
         {
           state: current.state === "failed" ? "working" : current.state,

@@ -41,6 +41,7 @@ import {
   ValidationError,
 } from "@goatcitadel/contracts";
 import { isCommunicationsApprovalKind } from "./communications-approval-effect-service.js";
+import { isCitadelWardApprovalKind } from "./citadel-ward-approval.js";
 import { DEVICE_ACCESS_APPROVAL_KIND } from "./device-access-helpers.js";
 import { assertChatTurnToolUseOpen, closeChatTurnToolUse, resolveChatTurnControlOwner } from "./chat-turn-control.js";
 import type { ApprovalReplayResult, ApprovalResolutionContext, ApprovalResolveResult } from "./approval-types.js";
@@ -1070,6 +1071,12 @@ async function commitStandardApprovalResolution(
     throw new ValidationError({
       message:
         "Communications approvals bind one exact hashed message or event; reject it and send a new request instead of editing.",
+    });
+  }
+  if (isCitadelWardApprovalKind(current.kind) && input.decision === "edit") {
+    throw new ValidationError({
+      message:
+        "Citadel Ward approvals can only be approved or rejected; they bind one exact hashed request, so reject it and retry the action instead of editing.",
     });
   }
 

@@ -327,6 +327,34 @@ describe("ChannelStreamRuntimeService supersession and resilience", () => {
     return { service, started, setConnections: (next: IntegrationConnection[]) => (current = next) };
   }
 
+  it("prefixes adapter diagnostics once and passes the level through (default info)", async () => {
+    const recordDevDiagnostic = vi.fn();
+    let captured: ChannelStreamRunContext | undefined;
+    const adapter: ChannelStreamAdapter = {
+      channelKey: "fake",
+      isInboundEnabled: () => true,
+      run: (ctx) =>
+        new Promise<void>(() => {
+          captured = ctx;
+        }),
+    };
+    const service = new ChannelStreamRuntimeService({
+      listConnections: async () => [connection()],
+      adapters: [adapter],
+      dispatch: vi.fn(async () => ({})),
+      recordDevDiagnostic,
+      sleep: async () => undefined,
+    });
+    await service.sync();
+    await flush();
+    captured!.diagnostic("bare_name", "info msg");
+    captured!.diagnostic("warn_name", "warn msg", { n: 1 }, "warn");
+    const calls = recordDevDiagnostic.mock.calls.map((c) => c[0] as { level: string; event: string });
+    expect(calls).toContainEqual(expect.objectContaining({ level: "info", event: "fake.stream.bare_name" }));
+    expect(calls).toContainEqual(expect.objectContaining({ level: "warn", event: "fake.stream.warn_name" }));
+    void service.close();
+  });
+
   it("does not start the replacement session until the superseded one settles", async () => {
     const h = lateSettlingHarness();
     await h.service.sync();

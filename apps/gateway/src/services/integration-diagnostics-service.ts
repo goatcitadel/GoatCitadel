@@ -1,6 +1,7 @@
 import { runDiscordConnectionLiveChecks } from "./discord-connection-diagnostics.js";
 import { buildGuardedTokenCheck, runGitHubLiveChecks } from "./github-integration-action.js";
 import { runNotionLiveChecks } from "./notion-integration-action.js";
+import { runConfiguredMatrixChecks } from "./matrix-live-probes.js";
 import { runConfiguredNextcloudTalkChecks } from "./nextcloud-talk-live-probes.js";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import { evaluateChannelInboundAccess } from "@goatcitadel/contracts";
@@ -37,6 +38,7 @@ const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set([
   "nextcloud-talk",
   "ntfy",
   "mattermost",
+  "matrix",
   "signal",
   "google-chat",
 ]);
@@ -302,6 +304,17 @@ export function buildIntegrationConnectionChecks(
         checkUrl("url", "Mattermost server URL", deps.readConnectionConfigValue(config, "serverUrl"), true);
         requireSecretRef("auth", "Mattermost bot token", "botToken", "botTokenEnv");
         requireText("target", "Default Mattermost channel", resolveChannelConfigTarget(connection.key, config), "warn");
+        break;
+      case "matrix":
+        checkUrl("url", "Matrix homeserver URL", deps.readConnectionConfigValue(config, "homeserverUrl"), true);
+        requireSecretRef("auth", "Matrix access token", "accessToken", "accessTokenEnv");
+        requireText("target", "Default Matrix room", resolveChannelConfigTarget(connection.key, config), "warn");
+        checks.push({
+          key: "delivery_posture",
+          status: "pass",
+          message:
+            "Matrix outbound is text-only. Inbound is a separate opt-in /sync long-poll (inboundStreamEnabled); inbound is default-deny and only allowlisted Matrix user ids can start turns. If the homeserver rejects the stored sync token the runtime re-primes and messages in that gap are skipped.",
+        });
         break;
       case "imessage":
         if (readIMessageBridgeProvider(deps, config) === "photon") {
@@ -790,6 +803,8 @@ export async function runIntegrationConnectionLiveChecks(
         fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
+    case "matrix":
+      return runConfiguredMatrixChecks(deps, connection, options.includeSandboxSend);
     case "nextcloud-talk": {
       return runConfiguredNextcloudTalkChecks(deps, connection, options.includeSandboxSend);
     }

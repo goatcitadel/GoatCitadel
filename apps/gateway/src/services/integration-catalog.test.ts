@@ -228,8 +228,20 @@ describe("integration-catalog", () => {
     expect(resolveIntegrationCatalogRuntimeAvailability(whatsapp, new Set())).toBe("runnable");
   });
 
+  it("promotes Matrix to a beta runnable channel with an opt-in forced-allowlist inbound form", () => {
+    const entry = requireCatalogEntry("channel.matrix");
+    expect(entry.maturity).toBe("beta");
+    expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("beta");
+    expect(resolveIntegrationCatalogRuntimeAvailability(entry, new Set())).toBe("runnable");
+    expect(entry.capabilities).toEqual(["chat", "rooms", "reactions", "unsend", "typing", "inbound"]);
+    const fields = getIntegrationFormSchema("channel.matrix")?.fields ?? [];
+    expect(fields.find((field) => field.key === "inboundStreamEnabled")).toBeDefined();
+    expect(fields.find((field) => field.key === "allowedSenders")).toBeDefined();
+    expect(fields.find((field) => field.key === "defaultRoomId")?.required).toBeFalsy();
+  });
+
   it("keeps catalog-only channels blocked until adapter probes exist", () => {
-    for (const catalogId of ["channel.matrix", "channel.qqbot", "channel.wecom"]) {
+    for (const catalogId of ["channel.qqbot", "channel.wecom"]) {
       const entry = requireCatalogEntry(catalogId);
       expect(entry.maturity).toBe("planned");
       expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("disabled");
@@ -290,6 +302,7 @@ describe("integration-catalog", () => {
       "channel.zalouser",
       "channel.whatsapp",
       "channel.mattermost",
+      "channel.matrix",
       "channel.imessage",
       "channel.line",
     ];

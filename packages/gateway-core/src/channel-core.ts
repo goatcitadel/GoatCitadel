@@ -622,6 +622,48 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     ],
     requiredAnyOf: [["serverUrl"], ["botTokenEnv", "botToken"]],
   },
+  matrix: {
+    supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
+    supportedAttachmentSources: [],
+    resolveInboundModes: (config) => (isMatrixInboundEnabled(config) ? ["stream"] : ["none"]),
+    threadCapabilities: {
+      rooms: true,
+      threads: true,
+      replies: true,
+      direct: true,
+      groups: true,
+    },
+    chunkingMode: "fallback",
+    supportsStreaming: false,
+    resolveRuntimePosture: (config) =>
+      isMatrixInboundEnabled(config)
+        ? {
+            outboundTransport: "api",
+            inboundTransport: "stream",
+            lifecycle: "persistent",
+            inboundReadiness: "ready",
+            operatorSummary:
+              "Matrix uses the client-server API with an access token; optional inbound long-polls /sync and resumes from a stored sync token after restarts.",
+          }
+        : {
+            outboundTransport: "api",
+            lifecycle: "stateless",
+            inboundReadiness: "unsupported",
+            operatorSummary:
+              "Matrix uses the client-server API with an access token; optional inbound long-polls /sync and resumes from a stored sync token after restarts. Inbound is off until inboundStreamEnabled is set.",
+          },
+    resolveSupportNotes: (config) => [
+      isMatrixInboundEnabled(config)
+        ? "Matrix inbound long-polls /sync and stores the sync token after each accepted batch, so a restart resumes without replaying history. Allow the Matrix user ids that may start turns, because inbound is default-deny."
+        : "Matrix inbound is off; set inboundStreamEnabled with an access token to long-poll /sync.",
+      "Matrix is text-only in v1: attachments are not uploaded to the media repository.",
+      "End-to-end encrypted rooms are not supported: inbound ignores encrypted events and outbound sends unencrypted messages; use an unencrypted room.",
+      "Matrix unsend redacts the original event; the bot can redact its own events, and other users' events only with the redact power level.",
+      "Matrix typing sets the bot typing state in a room id target (the bot user id is resolved with whoami).",
+      "Matrix room messages are plain m.text bodies, so mentions are not rendered by the server.",
+    ],
+    requiredAnyOf: [["homeserverUrl"], ["accessTokenEnv", "accessToken"]],
+  },
   imessage: {
     supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
     supportedAttachmentSources: ["url", "inline"],
@@ -1288,6 +1330,15 @@ function isMattermostInboundEnabled(config: Record<string, unknown>): boolean {
     isExplicitTrue(config.inboundStreamEnabled) &&
     hasAnyConfigured(config, ["serverUrl"]) &&
     hasAnyConfigured(config, ["botToken", "botTokenEnv", "token", "tokenEnv"])
+  );
+}
+
+/** Mirrors the Matrix stream adapter: strict opt-in, homeserver URL and an access token. */
+export function isMatrixInboundEnabled(config: Record<string, unknown>): boolean {
+  return (
+    config.inboundStreamEnabled === true &&
+    hasAnyConfigured(config, ["homeserverUrl"]) &&
+    hasAnyConfigured(config, ["accessToken", "accessTokenEnv"])
   );
 }
 

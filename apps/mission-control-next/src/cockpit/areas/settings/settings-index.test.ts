@@ -107,6 +107,9 @@ describe("cockpit settings index", () => {
     ["signing", "Hooks", "cockpit"],
     ["basic password", "Access & devices", "cockpit"],
     ["voice transcription", "Runtime configuration", "cockpit"],
+    ["write root", "Tools", "cockpit"],
+    ["temp cleanup", "Tools", "cockpit"],
+    ["fs.delete", "Tools", "cockpit"],
   ])("finds actual control terms %s with an honest destination", (term, label, destination) => {
     const entries = searchSettingsPages(buildSettingsIndex(), term).flatMap((page) => page.entries);
     expect(entries.find((entry) => entry.label === label)?.destination).toBe(destination);

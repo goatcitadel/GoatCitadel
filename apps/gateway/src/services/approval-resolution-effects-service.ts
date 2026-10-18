@@ -88,7 +88,17 @@ import {
   isCommunicationsApprovalKind,
   runCommunicationsApprovalEffect,
   type CommunicationsApprovalEffectExecutors,
+  type CommunicationsApprovalEffectSettlement,
 } from "./communications-approval-effect-service.js";
+import { isCitadelWardApprovalKind } from "./citadel-ward-approval.js";
+import {
+  CITADEL_WARD_A2A_OUTBOUND_EFFECT_KIND,
+  CITADEL_WARD_A2A_PUSH_EFFECT_KIND,
+  CITADEL_WARD_INTEGRATION_ACTION_EFFECT_KIND,
+  buildCitadelWardApprovalEffectUpsert,
+  runCitadelWardApprovalEffect,
+  type CitadelWardApprovalEffectExecutors,
+} from "./citadel-ward-approval-effect-service.js";
 import { MemoryLifecycleApplyError } from "./memory-domain-journey-producer.js";
 import { parseMemoryLifecycleApprovalBinding } from "./memory-journey-producer.js";
 import type { MemoryLifecycleApplyResult } from "./memory-lifecycle-service.js";
@@ -380,9 +390,12 @@ export interface ApprovalResolutionEffectsResult {
 /**
  * WS2: the communications executors (`executeApprovedCommunicationsMailSend`,
  * `executeApprovedCommunicationsCalendarCreate`, `recordCommunicationsMailSendRejected`)
- * come from `CommunicationsApprovalEffectExecutors`.
+ * come from `CommunicationsApprovalEffectExecutors`; WS3: the Citadel Ward executors
+ * (`executeApprovedCitadelWardAction`, `recordCitadelWardApprovalRefused`) come from
+ * `CitadelWardApprovalEffectExecutors`.
  */
-export interface ApprovalEffectsServiceDeps extends CommunicationsApprovalEffectExecutors {
+export interface ApprovalEffectsServiceDeps
+  extends CommunicationsApprovalEffectExecutors, CitadelWardApprovalEffectExecutors {
   backgroundTasks: Set<Promise<void>>;
   sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
   wakeDurableRun(
@@ -797,13 +810,14 @@ export class ApprovalEffectsService {
     if (approval.kind === ENGINEERING_LEARNING_APPROVAL_KIND && input.decision === "approve") {
       enqueued.push(await this.enqueueEngineeringLearningLifecycleApply(approval));
     }
-    const communicationsEffect = buildCommunicationsApprovalEffectUpsert(
-      approval,
-      input.decision,
-      options.outcome === "expired" || (options.allowExpired === true && !options.outcome),
-    );
+    const expired = options.outcome === "expired" || (options.allowExpired === true && !options.outcome);
+    const communicationsEffect = buildCommunicationsApprovalEffectUpsert(approval, input.decision, expired);
     if (communicationsEffect) {
       enqueued.push(await this.approvalEffectRepository.upsert(communicationsEffect));
+    }
+    const citadelWardEffect = buildCitadelWardApprovalEffectUpsert(approval, input.decision, expired);
+    if (citadelWardEffect) {
+      enqueued.push(await this.approvalEffectRepository.upsert(citadelWardEffect));
     }
     enqueued.push(
       await this.ctx.storage.approvalEffects.upsert({
@@ -819,10 +833,12 @@ export class ApprovalEffectsService {
     );
     const pendingAction = await this.ctx.storage.pendingApprovalActions.find(approval.approvalId);
     if (
-      // A communications tool.invoke row only ever runs through the comms ledger effect.
+      // A communications tool.invoke row only ever runs through the comms ledger effect, and a
+      // Citadel Ward approval only ever runs through its ward apply effect.
       (input.decision === "approve" &&
         pendingAction?.resolutionStatus === "pending" &&
-        !isCommunicationsApprovalKind(approval.kind)) ||
+        !isCommunicationsApprovalKind(approval.kind) &&
+        !isCitadelWardApprovalKind(approval.kind)) ||
       (approval.kind === "code_mode.run" &&
         (input.decision === "approve" || input.decision === "reject") &&
         !pendingAction)
@@ -1555,7 +1571,12 @@ export class ApprovalEffectsService {
         return;
       case COMMUNICATIONS_MAIL_SEND_EFFECT_KIND:
       case COMMUNICATIONS_CALENDAR_CREATE_EFFECT_KIND:
-        await this.handleCommunicationsApprovalEffect(effect);
+        await runCommunicationsApprovalEffect(effect, this.deps, this.delegatedEffectSettlement(effect));
+        return;
+      case CITADEL_WARD_INTEGRATION_ACTION_EFFECT_KIND:
+      case CITADEL_WARD_A2A_OUTBOUND_EFFECT_KIND:
+      case CITADEL_WARD_A2A_PUSH_EFFECT_KIND:
+        await runCitadelWardApprovalEffect(effect, this.deps, this.delegatedEffectSettlement(effect));
         return;
       case "approval_inbox_follow_up":
         await this.handleApprovalInboxFollowUp(effect);
@@ -1782,13 +1803,12 @@ export class ApprovalEffectsService {
   }
 
   /**
-   * WS2: execute one approved mail send or calendar create (or record a rejected
-   * send on its draft) through the communications executor. A
-   * `CommunicationsApprovalEffectError` fails the effect closed with its code; only an
-   * unexpected error defers for retry, which the side-effect ledger keeps exactly-once.
+   * The settlement a delegated effect runner (WS2 communications, WS3 Citadel Ward) settles
+   * its claimed row through. The runner fails the effect closed on its typed error; only an
+   * unexpected error defers for retry, which the owners' side-effect ledgers keep exactly-once.
    */
-  private async handleCommunicationsApprovalEffect(effect: ApprovalEffectRecord): Promise<void> {
-    await runCommunicationsApprovalEffect(effect, this.deps, {
+  private delegatedEffectSettlement(effect: ApprovalEffectRecord): CommunicationsApprovalEffectSettlement {
+    return {
       workerId: this.workerId,
       approvalEffects: this.approvalEffectRepository,
       isEffectStillClaimed: (effectId) => this.isEffectStillClaimed(effectId),
@@ -1797,7 +1817,7 @@ export class ApprovalEffectsService {
           deliveryState: "retry_scheduled",
           approvalId: effect.approvalId,
         }),
-    });
+    };
   }
 
   private async handleDelegationScopeExpansionApply(effect: ApprovalEffectRecord): Promise<void> {

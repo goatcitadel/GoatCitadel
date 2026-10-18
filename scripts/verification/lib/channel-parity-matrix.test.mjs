@@ -12,7 +12,7 @@ const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 
 test("advertised channel parity matrix is complete and internally consistent", () => {
   assert.deepEqual(validateAdvertisedChannelParityMatrix(), []);
-  assert.equal(new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.id)).size, 24);
+  assert.equal(new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.id)).size, 26);
   assert.deepEqual(
     [...new Set(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => row.family))].sort(),
     [...REQUIRED_CHANNEL_FAMILIES].sort(),
@@ -71,6 +71,9 @@ const NO_PROVIDER_ACK_STREAM_ROWS = new Set([
   "mattermost.bot-websocket",
 ]);
 
+// Stream inbound that does persist a provider cursor and so states its own restart recovery.
+const PERSISTED_CURSOR_STREAM_ROWS = new Set(["matrix.sync-stream"]);
+
 test("stream rows without provider acknowledgement or replay state that honestly", () => {
   const byId = new Map(ADVERTISED_CHANNEL_PARITY_MATRIX.map((row) => [row.id, row]));
   for (const id of ["signal.daemon-events", "mattermost.bot-websocket"]) {
@@ -84,10 +87,18 @@ test("stream rows without provider acknowledgement or replay state that honestly
   assert.equal(ntfy?.durability.inboundReplay, "in_process_reconnect_only");
   assert.equal(ntfy?.durability.restartRecovery, "no_replay_after_restart_messages_skipped");
   for (const row of ADVERTISED_CHANNEL_PARITY_MATRIX) {
-    if (row.expected.lifecycle === "persistent" && !NO_PROVIDER_ACK_STREAM_ROWS.has(row.id)) {
+    if (row.expected.lifecycle === "persistent" && !NO_PROVIDER_ACK_STREAM_ROWS.has(row.id) && !PERSISTED_CURSOR_STREAM_ROWS.has(row.id)) {
       assert.equal(row.durability.restartRecovery, "persistent_runtime_plus_shared_durable_recovery", row.id);
     }
   }
+});
+
+test("the Matrix sync stream states its persisted-cursor replay honestly", () => {
+  const row = ADVERTISED_CHANNEL_PARITY_MATRIX.find((candidate) => candidate.id === "matrix.sync-stream");
+  assert.equal(row?.durability.inboundCommitBeforeAck, true);
+  assert.equal(row?.durability.inboundReplay, "persisted_sync_token");
+  assert.equal(row?.durability.restartRecovery, "persistent_runtime_resumes_from_persisted_sync_token");
+  assert.equal(row?.expected.lifecycle, "persistent");
 });
 
 test("an inbound row that drops commit-before-ack without stating replay fails validation", () => {

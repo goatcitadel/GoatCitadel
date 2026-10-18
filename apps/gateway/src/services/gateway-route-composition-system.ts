@@ -10,6 +10,7 @@ import type {
   CommunicationsMailDraftStore,
 } from "./communications-dashboard-service.js";
 import { COMMUNICATIONS_MAIL_SEND_APPROVAL_KIND } from "./communications-approval-effect-service.js";
+import { buildCitadelWardRequestVaultForGateway } from "./gateway-route-composition-integrations.js";
 import {
   createSettingsRuntimeDependenciesForGateway,
   createWorkspacesRoutePortForGateway,
@@ -51,6 +52,8 @@ export function composeSystemRouteDependencies(
       chatTurnRuntime: gateway.chatTurnRuntime,
       mutationIdempotencyStore: gateway.mutationIdempotencyStore,
       evidenceEnvelopeService: gateway.evidenceEnvelopeService,
+      createApproval: (input) => gateway.createApproval(input),
+      citadelWardRequests: buildCitadelWardRequestVaultForGateway(gateway),
     },
     addons: createAddonsRoutePort({
       addonsService: gateway.addonsService,

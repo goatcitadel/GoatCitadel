@@ -101,6 +101,19 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     firstMessage:
       "Confirm the test post arrives in the chosen channel. For inbound, allow your Mattermost user id, post in a channel the bot has joined, and confirm its reply; inbound posts from users who are not allowed are dropped.",
   },
+  matrix: {
+    summary:
+      "Send Matrix room messages, replies, reactions and redactions through a bot account and, optionally, receive messages over the /sync long-poll.",
+    prerequisites: [
+      "A Matrix bot account on a reachable homeserver and its access token in a gateway environment variable (for example MATRIX_ACCESS_TOKEN).",
+      "The bot invited to and joined in the intended room, with permission to post.",
+      "The homeserver host added to the network allowlist.",
+      "End-to-end encrypted rooms are not supported: inbound ignores encrypted events and outbound sends unencrypted messages; use an unencrypted room.",
+      "For inbound, the Matrix user ids (such as @alice:example.com) allowed to start conversations; a dropped message's sender_not_allowlisted diagnostic shows the id.",
+    ],
+    firstMessage:
+      "Confirm the sandbox notice arrives in the chosen room. For inbound, allow your Matrix user id, post in a room the bot has joined, and confirm its reply; messages from users who are not allowed are dropped. Outbound is text-only.",
+  },
   imessage: {
     summary: "Use a reachable BlueBubbles Mac bridge for outbound iMessage delivery.",
     prerequisites: [
