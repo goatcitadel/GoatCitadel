@@ -85,7 +85,7 @@ export async function wecomSendText(input: {
   if (!Number.isInteger(agentId) || agentId < 0) {
     throw new Error("WeCom agent id must be numeric");
   }
-  const recipient = parseTarget(input.target);
+  const recipient = parseWecomTarget(input.target);
   const payload = JSON.stringify({
     ...recipient.field,
     msgtype: "text",
@@ -135,7 +135,8 @@ export async function wecomSendText(input: {
   }
 }
 
-function parseTarget(target: string): { field: Record<string, string> } {
+/** Parses one WeCom recipient; rejects @all and | fan-out. Shared with the guided sandbox probe. */
+export function parseWecomTarget(target: string): { field: Record<string, string> } {
   const trimmed = target.trim();
   const match = /^(user|party|tag):(.*)$/s.exec(trimmed);
   const id = (match ? match[2] : trimmed)?.trim() ?? "";

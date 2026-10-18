@@ -79,6 +79,8 @@ export {
   type BackgroundProcessIdentity,
   type RecoveredProcessCleanupOutcome,
 } from "./tool-executor/background-process-identity.js";
+export { parseWecomTarget } from "./tool-executor/wecom-client.js";
+export { qqbotPassiveReplyLimit } from "./tool-executor/qqbot-client.js";
 export { resolveFixedOutboundHostsForTool } from "./tool-executor/fixed-outbound-hosts.js";
 const execFileAsync = promisify(execFile);
 const SHELL_EXEC_DEFAULT_TIMEOUT_MS = 20000;

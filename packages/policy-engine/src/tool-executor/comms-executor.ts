@@ -37,7 +37,7 @@ import {
   matrixSendText,
   type MatrixClientContext,
 } from "./matrix-client.js";
-import { clearQqbotAccessToken, getQqbotAccessToken, qqbotSendText } from "./qqbot-client.js";
+import { clearQqbotAccessToken, getQqbotAccessToken, qqbotPassiveReplyLimit, qqbotSendText } from "./qqbot-client.js";
 import { clearWecomAccessToken, getWecomAccessToken, wecomSendText } from "./wecom-client.js";
 
 const MAX_HTTP_REDIRECTS = 5;
@@ -2334,9 +2334,6 @@ function chinaPlatformFetchers(allowlist: string[], grantAllowlist?: string[]) {
   };
 }
 
-/** QQ accepts about five passive replies per inbound msg_id. */
-const QQBOT_MAX_PASSIVE_REPLIES = 5;
-
 async function qqbotSend(
   config: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -2360,8 +2357,9 @@ async function qqbotSend(
   const partIndex = Math.max(0, parseIntegerLike(args.replyToPartIndex) ?? 0);
   const replyMsgId = asString(args.replyAnchorMessageId) ?? asString(args.replyToMessageId) ?? asString(args.replyTo);
   // The passive-reply cap only applies when a msg_id anchor makes this a passive reply; active sends are quota-bound instead.
-  if (replyMsgId && partIndex >= QQBOT_MAX_PASSIVE_REPLIES) {
-    throw new Error("QQ allows at most 5 passive replies per message; shorten the reply");
+  const passiveLimit = qqbotPassiveReplyLimit(resolvedTarget);
+  if (replyMsgId && partIndex >= passiveLimit) {
+    throw new Error(`QQ allows at most ${passiveLimit} passive replies per message; shorten the reply`);
   }
   const { tokenFetch, apiFetch } = chinaPlatformFetchers(allowlist, grantAllowlist);
   const token = await getQqbotAccessToken({ appId, appSecret, fetcher: tokenFetch });

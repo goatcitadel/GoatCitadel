@@ -121,6 +121,17 @@ describe("WeCom live probes", () => {
     expect(refused.checks.find((c) => c.key === "wecom_sandbox_send")?.message).toContain("errcode 81013");
   });
 
+  it.each(["@all", "user:@all", "user:@ALL", "user:a|b"])(
+    "refuses a broadcast or multi-recipient sandbox target %s without sending",
+    async (target) => {
+      const fetcher = routedFetcher({});
+      const result = await runWecomLiveChecks({ ...base, target, includeSandboxSend: true, fetcher });
+      expect(result.checks.find((c) => c.key === "wecom_sandbox_send")).toMatchObject({ status: "fail" });
+      expect(result.checks.find((c) => c.key === "wecom_sandbox_send")?.message).toContain("single");
+      expect(fetcher.mock.calls.some(([url]) => String(url).includes("/cgi-bin/message/send"))).toBe(false);
+    },
+  );
+
   it("fails the sandbox send when WeCom reports the recipient invalid", async () => {
     const result = await runWecomLiveChecks({
       ...base,

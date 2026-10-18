@@ -61,6 +61,40 @@ describe("channel provider acknowledgement", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("sends nothing when a passive QQBot C2C (user:) reply would need 5 parts", async () => {
+    const send = vi.fn().mockResolvedValue({ status: "sent", providerMessageId: "p" });
+    await expect(
+      sendQueuedChannelDelivery(send, {
+        ...input,
+        channelKey: "qqbot",
+        target: "user:U1",
+        payload: {
+          ...input.payload,
+          target: "user:U1",
+          replyToMessageId: "inbound-1",
+          messageParts: ["a", "b", "c", "d", "e"],
+        },
+      }),
+    ).rejects.toThrow(/at most 4 passive replies/);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("still sends 5 passive QQBot group parts", async () => {
+    const send = vi.fn().mockResolvedValue({ status: "sent", providerMessageId: "p" });
+    await sendQueuedChannelDelivery(send, {
+      ...input,
+      channelKey: "qqbot",
+      target: "group:G1",
+      payload: {
+        ...input.payload,
+        target: "group:G1",
+        replyToMessageId: "inbound-1",
+        messageParts: ["a", "b", "c", "d", "e"],
+      },
+    });
+    expect(send).toHaveBeenCalledTimes(5);
+  });
+
   it("does not apply the QQBot passive-reply limit to active (no anchor) deliveries", async () => {
     const send = vi.fn().mockResolvedValue({ status: "sent", providerMessageId: "p" });
     await sendQueuedChannelDelivery(send, {

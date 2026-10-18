@@ -4568,6 +4568,27 @@ describe("executeTool", () => {
       expect(JSON.stringify(sixth)).toContain("at most 5 passive replies");
       expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/messages"))).toHaveLength(0);
 
+      // C2C (user:) replies are capped at 4 passive replies per message (groups at 5).
+      fetchMock.mockClear();
+      const c2cFifth = await executeTool(
+        {
+          toolName: "channel.send",
+          args: {
+            connectionId: "conn-qqbot",
+            target: "user:USER_OPENID",
+            message: "late",
+            replyAnchorMessageId: "evt-c2c",
+            replyToPartIndex: 4,
+          },
+          agentId: "operator",
+          sessionId: "sess-qq-seq-c2c",
+        },
+        chinaPolicy,
+        storage,
+      );
+      expect(JSON.stringify(c2cFifth)).toContain("at most 4 passive replies");
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/messages"))).toHaveLength(0);
+
       // An active send (no msg_id anchor) is not bound by the passive-reply cap.
       const active = await executeTool(
         {

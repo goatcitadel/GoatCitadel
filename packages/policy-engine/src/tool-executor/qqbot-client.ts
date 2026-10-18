@@ -19,6 +19,11 @@ const QQBOT_SANDBOX_API_BASE = "https://sandbox.api.sgroup.qq.com";
 const QQBOT_RESPONSE_LIMITS = { maxBytes: 64 * 1024, timeoutMs: 10_000 } as const;
 const TOKEN_EXPIRY_MARGIN_MS = 60_000;
 const DEFAULT_TOKEN_TTL_SECONDS = 7_200;
+/** QQ docs: C2C (user:) messages allow 4 passive replies per msg_id; group messages allow 5. */
+export function qqbotPassiveReplyLimit(target: string | undefined): number {
+  return /^user:/i.test((target ?? "").trim()) ? 4 : 5;
+}
+
 const TARGET_ERROR = "QQBot target must be group:, user:, channel: or dm:";
 
 interface CachedToken {

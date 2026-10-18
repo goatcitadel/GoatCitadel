@@ -1,4 +1,5 @@
 import { redactSecretText, type ChannelProbeReport, type IntegrationConnection } from "@goatcitadel/contracts";
+import { parseWecomTarget } from "@goatcitadel/policy-engine";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
 import { mapProbeStepsToChecks } from "./channel-probe-result.js";
 import type { StructuralCheckContext } from "./qqbot-live-probes.js";
@@ -262,6 +263,21 @@ async function sandboxSend(
       message: input.target
         ? "Sandbox send skipped because the default target has no recipient id."
         : "Sandbox send skipped because no default target is configured.",
+    });
+    return;
+  }
+  // Same single-recipient rule as the runtime client: never broadcast (@all) or fan out (a|b) from a test send.
+  try {
+    parseWecomTarget(input.target ?? "");
+  } catch (error) {
+    probe.steps.push({
+      key: "wecom_sandbox_send",
+      label: "Sandbox send",
+      status: "fail",
+      disposition: "blocking",
+      message:
+        `Sandbox send refused: the default target must be a single recipient id (no @all, no | lists). ${error instanceof Error ? error.message : ""}`.trim(),
+      failureCategory: "destination_mismatch",
     });
     return;
   }
