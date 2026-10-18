@@ -163,23 +163,35 @@ export function readWecomXmlFields(xml: string, names: readonly string[]): Recor
     position = open.lastIndex;
     let value = "";
     if (!tag[2]) {
-      const body = new RegExp(`\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>\\s*</${name}>|([^<]*)</${name}>`, "y");
-      body.lastIndex = position;
-      const match = body.exec(xml);
-      if (match) {
-        value = match[1] !== undefined ? match[1] : decodePredefinedEntities(match[2] ?? "");
-        position = body.lastIndex;
+      const closeTag = `</${name}>`;
+      let cursor = position;
+      while (cursor < xml.length && /\s/.test(xml.charAt(cursor))) {
+        cursor += 1;
+      }
+      if (xml.startsWith("<![CDATA[", cursor)) {
+        // CDATA cannot contain "]]>", so the first terminator ends it. One indexOf, never past this element.
+        const start = cursor + "<![CDATA[".length;
+        const end = xml.indexOf("]]>", start);
+        if (end < 0) {
+          throw new Error("WeCom XML is malformed");
+        }
+        cursor = end + 3;
+        while (cursor < xml.length && /\s/.test(xml.charAt(cursor))) {
+          cursor += 1;
+        }
+        if (!xml.startsWith(closeTag, cursor)) {
+          throw new Error("WeCom XML is malformed");
+        }
+        value = xml.slice(start, end);
+        position = cursor + closeTag.length;
       } else {
-        // Nested or otherwise unsupported content: skip the whole element, read nothing from it.
-        const close = xml.indexOf(`</${name}>`, position);
-        if (close < 0) {
+        // Plain text runs to the next "<", which must open this element's own close tag.
+        const lt = xml.indexOf("<", position);
+        if (lt < 0 || !xml.startsWith(closeTag, lt)) {
           throw new Error("WeCom XML is malformed");
         }
-        position = close + name.length + 3;
-        if (wanted.has(name)) {
-          throw new Error("WeCom XML is malformed");
-        }
-        continue;
+        value = decodePredefinedEntities(xml.slice(position, lt));
+        position = lt + closeTag.length;
       }
     }
     if (wanted.has(name)) {

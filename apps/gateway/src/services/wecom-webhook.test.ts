@@ -189,6 +189,21 @@ describe("WeCom XML reader", () => {
     expect(() => readWecomXmlFields("<MsgId>1</MsgId>", ["MsgId"])).toThrow("WeCom XML root element is missing");
   });
 
+  it("fails closed in linear time on adversarial unterminated CDATA (256 KiB)", () => {
+    const unit = "<A><![CDATA[</A>";
+    const bodies = [
+      "<xml>" + unit.repeat(Math.floor((256 * 1024 - 20) / unit.length)) + "</xml>",
+      "<xml>" + unit.repeat(Math.floor((256 * 1024 - 30) / unit.length)) + "]]> </xml>",
+      "<xml><A>" + "<![CDATA[".repeat(Math.floor((256 * 1024 - 30) / 9)) + "</A></xml>",
+    ];
+    for (const body of bodies) {
+      expect(Buffer.byteLength(body)).toBeLessThanOrEqual(256 * 1024);
+      const started = performance.now();
+      expect(() => readWecomXmlFields(body, ["Encrypt", "MsgId"])).toThrow("WeCom XML is malformed");
+      expect(performance.now() - started).toBeLessThan(250);
+    }
+  });
+
   it("rejects XML over 256 KiB", () => {
     expect(() => readWecomXmlFields(`<xml><A>${"x".repeat(256 * 1024)}</A></xml>`, ["A"])).toThrow(
       "WeCom XML is too large",
