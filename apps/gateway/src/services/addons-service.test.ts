@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AddonCatalogEntry } from "@goatcitadel/contracts";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() =>
@@ -18,6 +19,7 @@ vi.mock("node:child_process", () => ({
 
 import { AddonsService, __internal } from "./addons-service.js";
 import { AddonSlotService } from "./addon-slot-service.js";
+import { parseAddonLaunchContract, prepareAddonDataFiles } from "./addon-launch-contract.js";
 
 describe("AddonsService", () => {
   let tempDir: string;
@@ -281,7 +283,15 @@ describe("AddonsService", () => {
     await fs.writeFile(path.join(addonPath, "arena.db"), "database", "utf8");
     await fs.writeFile(path.join(addonPath, "arena.db-wal"), "wal", "utf8");
 
-    const databasePath = await __internal.prepareArenaDataPath(addonPath, addonsRoot);
+    const arenaLaunch = new AddonsService(tempDir).listCatalog()[0]?.launch;
+    const env = await prepareAddonDataFiles({
+      addonId: "arena",
+      installedPath: addonPath,
+      addonsRootDir: addonsRoot,
+      dataFiles: arenaLaunch?.dataFiles ?? [],
+      assertWithinRoot: __internal.assertAddonPathWithinRoot,
+    });
+    const databasePath = env.ARENA_DB_PATH ?? "";
 
     expect(databasePath).toBe(path.join(addonsRoot, "data", "arena", "arena.db"));
     await expect(fs.readFile(databasePath, "utf8")).resolves.toBe("database");
@@ -454,9 +464,125 @@ describe("AddonsService", () => {
     ).toBe(false);
   });
 
-  it("declares a launch spec for every catalog add-on", async () => {
-    const { listAddonLaunchSpecIds, listAddonCatalogIds } = await import("./addons-service.js");
-    expect(listAddonLaunchSpecIds().sort()).toEqual(listAddonCatalogIds().sort());
+  it("has every catalog add-on manifest declare a valid launch contract", () => {
+    for (const entry of new AddonsService(tempDir).listCatalog()) {
+      expect(entry.launch, entry.addonId).toBeDefined();
+      expect(() => parseAddonLaunchContract(entry.addonId, entry.launch)).not.toThrow();
+    }
+  });
+
+  const notesAddon = (launch: unknown): AddonCatalogEntry =>
+    ({
+      addonId: "notes",
+      label: "Notes",
+      description: "A second add-on used to prove the generic launch contract.",
+      owner: "example",
+      repoUrl: "https://example.test/notes",
+      sameOwnerAsGoatCitadel: false,
+      trustTier: "community",
+      category: "productivity",
+      runtimeType: "separate_repo_app",
+      installCommands: [],
+      webEntryMode: "external_local_url",
+      requiresSeparateRepoDownload: true,
+      launchUrl: "http://127.0.0.1:4100/",
+      launch,
+      healthChecks: [],
+    }) as AddonCatalogEntry;
+  const notesLaunch = {
+    command: "node",
+    args: ["server.js", "--quiet"],
+    env: { NOTES_PORT: "4100" },
+    dataFiles: [{ envVar: "NOTES_DATA_PATH", fileName: "notes.json" }],
+    health: { url: "http://127.0.0.1:4100/ready", readyWhen: { state: "ready" }, readyTimeoutMs: 2_000 },
+  };
+  async function writeNotesManifest(): Promise<{ addonsRoot: string; addonPath: string }> {
+    const addonsRoot = path.join(goatHome, "addons");
+    const addonPath = path.join(addonsRoot, "notes");
+    await fs.mkdir(addonPath, { recursive: true });
+    await fs.writeFile(path.join(addonPath, "notes.json"), "[]", "utf8");
+    const record = {
+      addonId: "notes",
+      installedPath: addonPath,
+      repoUrl: "https://example.test/notes",
+      owner: "example",
+      sameOwnerAsGoatCitadel: false,
+      trustTier: "community",
+      runtimeType: "separate_repo_app",
+      webEntryMode: "external_local_url",
+      installedAt: "2026-10-18T00:00:00.000Z",
+      updatedAt: "2026-10-18T00:00:00.000Z",
+      consentedAt: "2026-10-18T00:00:00.000Z",
+      consentedBy: "operator",
+      runtimeStatus: "installed",
+    };
+    await fs.writeFile(path.join(addonsRoot, "manifest.json"), `${JSON.stringify({ items: { notes: record } })}\n`);
+    return { addonsRoot, addonPath };
+  }
+
+  it("launches a second add-on purely from its manifest launch contract", async () => {
+    const { addonsRoot, addonPath } = await writeNotesManifest();
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ state: "ready" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    spawnMock.mockImplementationOnce(() => ({ pid: process.pid, unref: vi.fn() }));
+    const catalog = [...new AddonsService(tempDir).listCatalog(), notesAddon(notesLaunch)];
+
+    const result = await new AddonsService(tempDir, { catalog }).launch("notes");
+
+    expect(result.status.status).toBe("running");
+    expect(result.status.installed?.launchUrl).toBe("http://127.0.0.1:4100/");
+    const [spawnFile, spawnArgs, spawnOptions] = spawnMock.mock.calls[0] ?? [];
+    expect(spawnFile).toBe("node");
+    expect(spawnArgs).toEqual(["server.js", "--quiet"]);
+    expect(spawnOptions).toEqual(
+      expect.objectContaining({
+        cwd: addonPath,
+        env: expect.objectContaining({
+          NOTES_PORT: "4100",
+          NOTES_DATA_PATH: path.join(addonsRoot, "data", "notes", "notes.json"),
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:4100/ready", expect.anything());
+    expect(result.status.healthChecks).toContainEqual(expect.objectContaining({ key: "health", status: "pass" }));
+    expect(result.status.healthChecks.map((check) => check.key)).not.toContain("build_output");
+    await expect(fs.readFile(path.join(addonsRoot, "data", "notes", "notes.json"), "utf8")).resolves.toBe("[]");
+  });
+
+  it("marks a second add-on as errored when its readiness fields do not match", async () => {
+    await writeNotesManifest();
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ state: "starting" }), { status: 200 }));
+    spawnMock.mockImplementationOnce(() => ({ pid: process.pid, unref: vi.fn() }));
+    const fastLaunch = { ...notesLaunch, health: { ...notesLaunch.health, readyTimeoutMs: 1_000 } };
+
+    const result = await new AddonsService(tempDir, { catalog: [notesAddon(fastLaunch)] }).launch("notes");
+
+    expect(result.status.installed?.runtimeStatus).toBe("error");
+    expect(result.status.installed?.lastError).toContain("state=ready");
+  });
+
+  it("refuses a manifest launch contract whose health probe leaves loopback", async () => {
+    await writeNotesManifest();
+    const remote = { ...notesLaunch, health: { ...notesLaunch.health, url: "http://example.test/ready" } };
+
+    await expect(new AddonsService(tempDir, { catalog: [notesAddon(remote)] }).launch("notes")).rejects.toThrow(
+      "invalid launch contract",
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses to launch an add-on whose manifest declares no launch contract", async () => {
+    await writeNotesManifest();
+
+    await expect(new AddonsService(tempDir, { catalog: [notesAddon(undefined)] }).launch("notes")).rejects.toThrow(
+      "does not declare a launch contract",
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("launches Arena with the local web origin and persists the launch URL when uiReady is true", async () => {
@@ -697,6 +823,6 @@ describe("AddonsService", () => {
     const status = await service.getStatus("arena");
 
     expect(status.status).toBe("error");
-    expect(status.installed?.lastError).toContain("did not report uiReady");
+    expect(status.installed?.lastError).toContain("did not report ready (status=ok, uiReady=true)");
   });
 });
