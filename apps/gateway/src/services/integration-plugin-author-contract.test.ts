@@ -262,8 +262,35 @@ describe("integration plugin author contract", () => {
     expect(quarantined.enabled).toBe(false);
     expect(quarantined.integrityStatus).toBe("quarantined");
     expect(quarantined.sourceMetadata?.integrityStatus).toBe("quarantined");
-    expect(quarantined.sourceMetadata?.expectedIntegrity).toBeUndefined();
+    // the value the bytes failed against is kept, attributed to the registry when unpinned
+    expect(quarantined.sourceMetadata).toMatchObject({
+      expectedIntegrity: "sha512-wanted",
+      integritySource: "registry",
+      actualIntegrity: "sha512-other",
+    });
     expect(quarantined.trustWarnings?.map((warning) => warning.code)).toContain("integrity_mismatch");
+  });
+
+  it("does not infer npm for uppercase names", () => {
+    expect(resolveIntegrationPluginInstallMetadata("MyPlugin").sourceMetadata.type).toBe("manual");
+  });
+
+  it("ignores the descriptor integrity.expected as a local pin and says so", () => {
+    const source = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-plugin-pin-"));
+    try {
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(referencePluginSource(), INTEGRATION_PLUGIN_MANIFEST_FILENAME), "utf8"),
+      ) as Record<string, unknown>;
+      fs.writeFileSync(
+        path.join(source, INTEGRATION_PLUGIN_MANIFEST_FILENAME),
+        JSON.stringify({ ...manifest, integrity: { expected: `sha512-${"A".repeat(86)}==` } }),
+      );
+      const metadata = resolveIntegrationPluginInstallMetadata(source, { sourceType: "local" });
+      expect(metadata.sourceMetadata.expectedIntegrity).toBeUndefined();
+      expect(metadata.trustWarnings.map((warning) => warning.code)).toContain("integrity_manifest_pin_ignored");
+    } finally {
+      fs.rmSync(source, { recursive: true, force: true });
+    }
   });
 
   it("does not claim runtime verification is pending for unverifiable sources", () => {

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   evaluateChannelInboundAccess,
@@ -8,6 +9,7 @@ import {
   createIntegrationConnection,
   getIntegrationConnectionChannelRuntimeStatus,
   installIntegrationPlugin,
+  PluginPackageStorageError,
   setIntegrationPluginEnabled,
   updateIntegrationConnection,
   type IntegrationChannelPort,
@@ -583,5 +585,112 @@ describe("integration plugin package integrity at install", () => {
       "integration_plugin_installed",
       "integration_plugin_updated",
     ]);
+  });
+
+  it("serializes list writes: a slow install does not revert a concurrent disable", async () => {
+    const deps = createDeps();
+    const base = {
+      label: "B",
+      version: "1.0.0",
+      installedAt: "2026-10-18T00:00:00.000Z",
+      updatedAt: "2026-10-18T00:00:00.000Z",
+      capabilities: ["channel.adapter"],
+      integrityStatus: "verified",
+    };
+    const read = withPluginStore(deps, [{ ...base, pluginId: "other", enabled: true }] as IntegrationPluginRecord[]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(deps.verifyIntegrationPluginPackage).mockImplementationOnce(async () => {
+      await gate;
+      return { status: "unknown", warnings: [] };
+    });
+
+    const slow = installIntegrationPlugin(deps, { source: "slow-plugin", pluginId: "slow-plugin" });
+    await setIntegrationPluginEnabled(deps, "other", false);
+    release();
+    await slow;
+    const fast = await installIntegrationPlugin(deps, { source: "fast-plugin", pluginId: "fast-plugin" });
+
+    const ids = read().map((item) => [item.pluginId, item.enabled]);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        ["other", false],
+        ["slow-plugin", true],
+        [fast.pluginId, true],
+      ]),
+    );
+    expect(read()).toHaveLength(3);
+  });
+
+  it("disables an npm install whose package could not be verified or validated", async () => {
+    const deps = createDeps();
+    withPluginStore(deps);
+    vi.mocked(deps.verifyIntegrationPluginPackage).mockResolvedValue({
+      status: "unknown",
+      warnings: [{ code: "integrity_unverifiable", severity: "critical", message: "blocked" }],
+    });
+    const record = await installIntegrationPlugin(deps, { source: "npm:goat-plugin", pluginId: "goat-plugin" });
+    expect(record.enabled).toBe(false);
+    expect(record.integrityStatus).toBe("unknown");
+  });
+
+  it("includes integrityStatus in install and update realtime payloads", async () => {
+    const deps = createDeps();
+    withPluginStore(deps);
+    vi.mocked(deps.verifyIntegrationPluginPackage).mockResolvedValue({
+      status: "quarantined",
+      expectedIntegrity: "sha512-x",
+      warnings: [],
+    });
+    await installIntegrationPlugin(deps, { source: "goat-plugin", pluginId: "goat-plugin" });
+    await installIntegrationPlugin(deps, { source: "goat-plugin", pluginId: "goat-plugin" });
+    expect(
+      vi
+        .mocked(deps.publishRealtime)
+        .mock.calls.map((call) => (call[2] as { integrityStatus: string }).integrityStatus),
+    ).toEqual(["quarantined", "quarantined"]);
+  });
+
+  it("keeps the previous operator pin when an update supplies none", async () => {
+    const deps = createDeps();
+    withPluginStore(deps);
+    const pin = `sha512-${"A".repeat(86)}==`;
+    vi.mocked(deps.verifyIntegrationPluginPackage).mockResolvedValue({
+      status: "verified",
+      actualIntegrity: pin,
+      integritySource: "operator",
+      verifiedAt: "2026-10-18T00:00:00.000Z",
+      warnings: [],
+    });
+    await installIntegrationPlugin(deps, {
+      source: "npm:goat-plugin",
+      pluginId: "goat-plugin",
+      expectedIntegrity: pin,
+    });
+    const updated = await installIntegrationPlugin(deps, { source: "npm:goat-plugin", pluginId: "goat-plugin" });
+    expect(vi.mocked(deps.verifyIntegrationPluginPackage).mock.calls[1]![0].expectedIntegrity).toBe(pin);
+    expect(updated.sourceMetadata?.expectedIntegrity).toBe(pin);
+  });
+
+  it("hashes the plugin folder when the local source is the descriptor file", async () => {
+    const deps = createDeps();
+    withPluginStore(deps);
+    const folder = path.resolve(process.cwd(), "../../templates/integration-plugins/reference-integration-plugin");
+    await installIntegrationPlugin(deps, {
+      source: path.join(folder, "goatcitadel.integration-plugin.json"),
+      sourceType: "local",
+    });
+    expect(vi.mocked(deps.verifyIntegrationPluginPackage).mock.calls[0]![0].source).toBe(folder);
+  });
+
+  it("wraps verifier storage failures in PluginPackageStorageError", async () => {
+    const deps = createDeps();
+    withPluginStore(deps);
+    vi.mocked(deps.verifyIntegrationPluginPackage).mockRejectedValue(new Error("EACCES"));
+    await expect(
+      installIntegrationPlugin(deps, { source: "npm:goat-plugin", pluginId: "goat-plugin" }),
+    ).rejects.toBeInstanceOf(PluginPackageStorageError);
   });
 });

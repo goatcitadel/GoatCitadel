@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ValidationError, type IntegrationConnection, type IntegrationPluginRecord } from "@goatcitadel/contracts";
+import { PluginPackageStorageError } from "../services/integration-channel-service.js";
 import { buildInstalledIntegrationPluginRecord } from "../services/integration-plugin-author-contract.js";
 import { buildGenericChannelInboundSignature } from "../services/generic-channel-webhook.js";
 import type { DurableInboundChannelAcceptInput } from "../services/channel-inbound-dispatch.js";
@@ -866,11 +867,36 @@ describe("integrations control routes", () => {
     expect(rawPlugin.theme).toEqual({ accentColor: "#17c3b2", dashboardVariant: "compact" });
   });
 
+  it("maps install storage failures to 503 and validation failures to 400", async () => {
+    const installIntegrationPlugin = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new PluginPackageStorageError();
+      })
+      .mockImplementationOnce(() => {
+        throw new ValidationError({ field: "expectedIntegrity", message: "bad pin" });
+      });
+    app = Fastify();
+    decorateIntegrationServices(app, { installIntegrationPlugin });
+    await app.register(integrationsRoutes);
+    const request = {
+      method: "POST" as const,
+      url: "/api/v1/integrations/plugins/install",
+      payload: { source: "npm:p" },
+    };
+    const storage = await app.inject(request);
+    const validation = await app.inject(request);
+    expect(storage.statusCode).toBe(503);
+    expect(storage.json().error).toContain("could not be stored");
+    expect(validation.statusCode).toBe(400);
+  });
+
   it("refuses to enable a quarantined plugin with a 400 and the reason", async () => {
     const setIntegrationPluginEnabled = vi.fn(() => {
       throw new ValidationError({
         field: "pluginId",
-        message: "Plugin is quarantined after an integrity failure. Reinstall it from a verified source.",
+        message:
+          "Plugin is quarantined after an integrity failure. Reinstall it; the new install's integrity result replaces the quarantine.",
       });
     });
     app = Fastify();

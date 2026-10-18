@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { link, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,7 +20,7 @@ const NOW = new Date("2026-10-18T00:00:00.000Z");
 
 let roots: string[] = [];
 async function tmp(): Promise<string> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "gc-plugin-integrity-"));
+  const dir = await mkdtemp(path.join(await realpath(os.tmpdir()), "gc-plugin-integrity-"));
   roots.push(dir);
   return dir;
 }
@@ -183,6 +183,35 @@ describe("verifyIntegrationPluginPackage review carry-overs", () => {
     }) as unknown as typeof fetchAllowlistedOnce;
     const second = await verifyIntegrationPluginPackage(await npmInput({ fetchOnce: blocked }));
     expect(second.warnings[0]!.message).toContain("registry_blocked");
+  });
+});
+
+describe("local source classification", () => {
+  it("a missing path is unknown/critical with manifest_path_missing, not quarantined", async () => {
+    const result = await verifyIntegrationPluginPackage({
+      pluginId: "p",
+      source: path.join(await tmp(), "nope"),
+      sourceType: "local",
+      networkAllowlist: [],
+      pluginStoreRoot: path.join(await tmp(), "integration-plugins"),
+    });
+    expect(result.status).toBe("unknown");
+    expect(result.warnings[0]).toMatchObject({ severity: "critical" });
+    expect(result.warnings[0]!.message).toContain("manifest_path_missing");
+  });
+
+  it("a plain file is unknown with manifest_not_directory", async () => {
+    const dir = await tmp();
+    await writeFile(path.join(dir, "f.js"), "1");
+    const result = await verifyIntegrationPluginPackage({
+      pluginId: "p",
+      source: path.join(dir, "f.js"),
+      sourceType: "local",
+      networkAllowlist: [],
+      pluginStoreRoot: path.join(dir, "integration-plugins"),
+    });
+    expect(result.status).toBe("unknown");
+    expect(result.warnings[0]!.message).toContain("manifest_not_directory");
   });
 });
 

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { ValidationError } from "@goatcitadel/contracts";
+import { PluginPackageStorageError } from "../services/integration-channel-service.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { sendRouteError } from "./_error-handler.js";
 import type {
@@ -483,7 +484,9 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
         .code(201)
         .send(projectPublicSecretValue(await fastify.services.integrations.installIntegrationPlugin(parsed.data)));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return reply
+        .code(error instanceof PluginPackageStorageError ? 503 : 400)
+        .send({ error: (error as Error).message });
     }
   });
 

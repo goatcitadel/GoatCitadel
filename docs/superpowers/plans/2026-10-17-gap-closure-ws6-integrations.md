@@ -721,7 +721,7 @@ export async function verifyIntegrationPluginPackage(input: {
 - Modify: `integration-channel-service.ts`.
   - `installIntegrationPlugin` calls `deps.verifyIntegrationPluginPackage(...)` before building the record. Pass `sourceType` and `expectedIntegrity` into `resolveIntegrationPluginInstallMetadata` too.
   - Publish realtime on update as well, as `integration_plugin_updated`.
-  - `setIntegrationPluginEnabled(pluginId, true)` throws `ValidationError("Plugin is quarantined after an integrity failure. Reinstall it from a verified source.")` when `integrityStatus === "quarantined"` or `"mismatch"`.
+  - `setIntegrationPluginEnabled(pluginId, true)` throws `ValidationError("Plugin is quarantined after an integrity failure. Reinstall it; the new install's integrity result replaces the quarantine.")` when `integrityStatus === "quarantined"` or `"mismatch"`.
 - Modify: `IntegrationChannelPort`. Add `verifyIntegrationPluginPackage(input: Omit<Parameters<typeof verifyIntegrationPluginPackage>[0], "networkAllowlist" | "pluginStoreRoot">): Promise<PluginPackageIntegrityResult>`. Wire it in `createIntegrationChannelPortForGateway` (`gateway-route-composition-integrations.ts`), using `gateway.config.toolPolicy.sandbox.networkAllowlist` and `path.resolve(gateway.config.rootDir, gateway.config.assistant.dataDir, "integration-plugins")`. Fix the `integration-channel-service.test.ts` `createDeps()` literal.
 - Modify: `agentic-capability-availability.ts` `mapPluginIntegrityStatus`.
   - `runtimeAvailable` must also be false for `quarantined`.

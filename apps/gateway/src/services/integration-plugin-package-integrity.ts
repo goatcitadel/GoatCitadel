@@ -202,14 +202,38 @@ export async function verifyIntegrationPluginPackage(
   };
 }
 
+async function classifyLocalRoot(root: string): Promise<IntegrationPluginTrustWarning | undefined> {
+  try {
+    const stat = await lstat(root);
+    if (stat.isDirectory() || stat.isSymbolicLink()) return undefined;
+    return warning(
+      "integrity_manifest_invalid",
+      "critical",
+      "The local plugin source is not a directory (manifest_not_directory), so it cannot be hashed.",
+    );
+  } catch {
+    return warning(
+      "integrity_manifest_invalid",
+      "critical",
+      "The local plugin path does not exist or is not readable (manifest_path_missing), so it cannot be hashed.",
+    );
+  }
+}
+
 async function verifyLocal(
   input: VerifyIntegrationPluginPackageInput,
   expected: string | undefined,
   now: () => Date,
 ): Promise<PluginPackageIntegrityResult> {
+  const root = path.resolve(input.source);
+  const missing = await classifyLocalRoot(root);
+  if (missing) {
+    // Not a tree violation: there is nothing to hash, so the result is unknown (not a quarantine).
+    return { status: "unknown", warnings: [missing] };
+  }
   let actual: string;
   try {
-    actual = await computeLocalPluginManifestIntegrity(path.resolve(input.source));
+    actual = await computeLocalPluginManifestIntegrity(root);
   } catch (error) {
     return {
       status: "quarantined",

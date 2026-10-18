@@ -44,7 +44,10 @@ export function resolveIntegrationPluginInstallMetadata(
   const resolved = resolveIntegrationPluginAuthorManifestSource(source);
   const sourceType = options.sourceType ?? inferInstallSourceType(resolved.source);
   const descriptorHealth = buildPluginDescriptorHealth(resolved, source);
-  const expectedIntegrity = options.expectedIntegrity ?? resolved.manifest?.integrity?.expected;
+  // A local descriptor lives inside the hashed tree, so its own `integrity.expected` can never be a valid pin:
+  // local sources pin on the operator-supplied value only. npm sources may still carry the descriptor value.
+  const manifestPin = resolved.manifest?.integrity?.expected;
+  const expectedIntegrity = options.expectedIntegrity ?? (sourceType === "local" ? undefined : manifestPin);
   const integrity = options.integrity;
   const integrityStatus = integrity
     ? integrityStatusFromResult(integrity)
@@ -56,6 +59,16 @@ export function resolveIntegrationPluginInstallMetadata(
   const trustWarnings = [
     ...buildTrustWarnings(sourceType, integrityStatus, expectedIntegrity, integrity !== undefined),
     ...(integrity?.warnings ?? []),
+    ...(sourceType === "local" && manifestPin
+      ? [
+          {
+            code: "integrity_manifest_pin_ignored",
+            severity: "warning" as const,
+            message:
+              "The descriptor's integrity.expected is ignored for local folders (it is inside the hashed tree). Pass expectedIntegrity at install to pin.",
+          },
+        ]
+      : []),
     ...descriptorHealth.issues.map((issue) => ({
       code: issue.code,
       severity: issue.severity,
@@ -73,7 +86,7 @@ export function resolveIntegrationPluginInstallMetadata(
       packageVersion: resolved.manifest?.version,
       integrityStatus,
       expectedIntegrity,
-      ...integrityEvidence(integrity),
+      ...integrityEvidence(integrity, Boolean(expectedIntegrity)),
     },
     trustWarnings,
     descriptorHealth,
@@ -97,7 +110,10 @@ export function buildInstalledIntegrationPluginRecord(
       input.existing?.description ??
       `Installed from ${installMetadata.source}`,
     source: installMetadata.source,
-    enabled: isQuarantined(installMetadata) ? false : (input.existing?.enabled ?? true),
+    enabled:
+      isQuarantined(installMetadata) || isUnrunnableNpm(installMetadata.sourceMetadata.type, input.integrity)
+        ? false
+        : (input.existing?.enabled ?? true),
     installedAt: input.existing?.installedAt ?? input.now,
     updatedAt: input.now,
     capabilities: installMetadata.manifest?.capabilities ?? input.existing?.capabilities ?? ["channel.adapter"],
@@ -123,15 +139,46 @@ function isQuarantined(metadata: ResolvedIntegrationPluginInstallMetadata): bool
   );
 }
 
+/** An npm plugin whose package could not be fetched/validated has nothing to run: never show it as enabled. */
+function isUnrunnableNpm(
+  sourceType: IntegrationPluginInstallSourceType,
+  result?: PluginPackageIntegrityResult,
+): boolean {
+  return (
+    sourceType === "npm" &&
+    result?.status === "unknown" &&
+    result.warnings.some(
+      (item) =>
+        item.severity === "critical" &&
+        (item.code === "integrity_unverifiable" || item.code === "integrity_registry_invalid"),
+    )
+  );
+}
+
 function integrityStatusFromResult(
   result: PluginPackageIntegrityResult,
 ): IntegrationPluginSourceMetadata["integrityStatus"] {
   return result.status;
 }
 
-function integrityEvidence(result: PluginPackageIntegrityResult | undefined): Partial<IntegrationPluginSourceMetadata> {
+function integrityEvidence(
+  result: PluginPackageIntegrityResult | undefined,
+  pinned: boolean,
+): Partial<IntegrationPluginSourceMetadata> {
   if (!result) {
     return {};
+  }
+  if (result.status === "quarantined") {
+    // Keep the value the bytes failed against (the operator pin, or the registry-published integrity).
+    return {
+      ...(result.actualIntegrity ? { actualIntegrity: result.actualIntegrity } : {}),
+      ...(result.expectedIntegrity
+        ? {
+            expectedIntegrity: result.expectedIntegrity,
+            integritySource: pinned ? ("operator" as const) : ("registry" as const),
+          }
+        : {}),
+    };
   }
   if (result.status === "verified") {
     return {
@@ -141,7 +188,7 @@ function integrityEvidence(result: PluginPackageIntegrityResult | undefined): Pa
       artifactPath: result.artifactPath,
     };
   }
-  if (result.status === "quarantined" || result.status === "not_applicable") {
+  if (result.status === "not_applicable") {
     return result.actualIntegrity ? { actualIntegrity: result.actualIntegrity } : {};
   }
   return {};
@@ -267,7 +314,7 @@ function inferInstallSourceType(source: string): IntegrationPluginInstallSourceT
 
 /** `npm:`-prefixed, scoped (`@s/n`) and/or versioned (`n@1.2.3`) package specifiers. */
 function isNpmPackageSpec(value: string): boolean {
-  return /^(?:npm:)?(?:@[\w][\w.~-]*\/)?[\w][\w.~-]*(?:@[A-Za-z0-9][A-Za-z0-9._+-]*)?$/.test(value);
+  return /^(?:npm:)?(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*(?:@[A-Za-z0-9][A-Za-z0-9._+-]*)?$/.test(value);
 }
 
 function isGitHubHttpsUrl(source: string): boolean {
