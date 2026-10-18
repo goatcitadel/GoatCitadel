@@ -3,12 +3,14 @@ import {
   type CitadelWard,
   type LlmProviderConfig,
   type LlmProviderSummary,
+  type ModelUsageAttributionContext,
+  type ModelUsageCallKind,
   type RoutingWardReasonCode,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
-import { isLocalChatProviderUrl } from "./chat-provider-fallback-authority.js";
 import { resolveWardEffectForExternalAction, type CitadelWardGateStorage } from "./citadel-ward-gate.js";
-import type { LlmService } from "./llm-service.js";
+import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
+import type { LlmDispatchWardGuard, LlmService } from "./llm-service.js";
 import { inferRuntimeEngineKind } from "./llm-runtime-truth-service.js";
 import type { ResolvedChatRouteDescriptor } from "./chat-route-resolution.js";
 
@@ -21,7 +23,9 @@ import type { ResolvedChatRouteDescriptor } from "./chat-route-resolution.js";
  * `route_local` keeps the turn on a strictly local backend or blocks it.
  * Other effects (`require_approval`, `require_dry_run`, `redact`) are not
  * enforced for model routing, so they are filtered out before the deny-wins
- * evaluation instead of hiding a matching `route_local` ward.
+ * evaluation instead of hiding a matching `route_local` ward. The same ward is
+ * re-checked before every Chat model dispatch (`createModelChatWardDispatchGuard`),
+ * including fallbacks and turns that reuse a frozen route.
  *
  * `model.tool.<toolName>` is not wired here: there is no single model-backed
  * tool boundary to gate yet.
@@ -64,21 +68,21 @@ export function isLoopbackUrl(url?: string): boolean {
 }
 
 /**
- * A provider is route-local only when it is an Ollama or llama.cpp engine on a
- * local URL, or a generic OpenAI-compatible endpoint on a loopback host. Named
- * proxy or hosted engines (LiteLLM, remote APIs) never count, even on loopback.
+ * A provider is route-local only when it is an Ollama, llama.cpp or generic
+ * OpenAI-compatible engine on a loopback host. `route_local` means "kept on
+ * this machine", so a LAN host never counts, and named proxy or hosted engines
+ * (LiteLLM, remote APIs) never count, even on loopback.
  */
 export function isRouteLocalProvider(provider: RouteLocalProviderShape): boolean {
   const engineKind = inferRuntimeEngineKind(provider);
-  if (engineKind === "ollama" || engineKind === "llama_cpp") {
-    return isLocalChatProviderUrl(provider.baseUrl);
-  }
   // Engine inference reports an unrecognized loopback host (127.0.0.2, [::1]) as
-  // remote_api, so both kinds are the generic OpenAI-compatible case here.
-  if (engineKind === "openai_compatible" || engineKind === "remote_api") {
-    return isLoopbackUrl(provider.baseUrl);
-  }
-  return false;
+  // remote_api, so that kind is the generic OpenAI-compatible case here.
+  const localEngine =
+    engineKind === "ollama" ||
+    engineKind === "llama_cpp" ||
+    engineKind === "openai_compatible" ||
+    engineKind === "remote_api";
+  return localEngine && isLoopbackUrl(provider.baseUrl);
 }
 
 export function selectRouteLocalProvider<TProvider extends RouteLocalProviderShape & { defaultModel?: string }>(input: {
@@ -106,6 +110,85 @@ export function assertChatRouteWardAdmitsTurn(
     message: descriptor.blockedReason ?? ROUTE_LOCAL_UNAVAILABLE_MESSAGE,
     details: { reason, citadelId: descriptor.wardCitadelId },
   });
+}
+
+/** Returns the descriptor once its ward outcome admits the turn; fails closed otherwise. */
+export function admitChatRouteWard<
+  TDescriptor extends Pick<ResolvedChatRouteDescriptor, "wardReasonCode" | "wardCitadelId" | "blockedReason">,
+>(descriptor: TDescriptor | undefined): TDescriptor | undefined {
+  assertChatRouteWardAdmitsTurn(descriptor);
+  return descriptor;
+}
+
+const CHAT_TURN_CALL_KINDS: ReadonlySet<ModelUsageCallKind> = new Set([
+  "chat_initial",
+  "chat_tool_loop",
+  "chat_repair",
+  "chat_fallback",
+]);
+
+/**
+ * Dispatch backstop for the `model.chat.<providerId>` ward. Route resolution
+ * already keeps a turn local, but durable resumes, bound capability profiles,
+ * inbound, autonomous and fallback dispatches can reach a provider without a
+ * fresh resolution, so the ward is re-evaluated before every Chat model
+ * dispatch: `deny` rejects, and `route_local` rejects any provider that is not
+ * route-local. Non-chat calls (utility, embedding, delegation) are not gated.
+ */
+export function createModelChatWardDispatchGuard(deps: RouteLocalWardDependencies): LlmDispatchWardGuard {
+  return async ({ attribution, route, providerBaseUrl }) => {
+    if (!attribution.callKind || !CHAT_TURN_CALL_KINDS.has(attribution.callKind)) return;
+    const wardStorage = buildModelChatWardStorage(deps.storage);
+    if (!wardStorage) return;
+    const ward = await resolveWardEffectForExternalAction({
+      storage: wardStorage,
+      workspaceId: await resolveDispatchWorkspaceId(deps, attribution),
+      action: buildModelChatWardAction(route.providerId),
+    });
+    if (ward.effect === "deny") {
+      throw rejectWardDispatch("citadel_ward_deny", ward.citadelId, MODEL_CHAT_WARD_DENY_MESSAGE);
+    }
+    if (
+      ward.effect === "route_local" &&
+      !isRouteLocalProvider({ providerId: route.providerId, baseUrl: providerBaseUrl ?? "" })
+    ) {
+      throw rejectWardDispatch("citadel_ward_route_local_unavailable", ward.citadelId, ROUTE_LOCAL_UNAVAILABLE_MESSAGE);
+    }
+  };
+}
+
+/** Drops fallback targets the dispatch ward would refuse, so a local primary
+ * with a cloud fallback still runs locally instead of failing on the fallback. */
+export async function filterWardAdmittedFallbackTargets<TTarget extends { providerId: string }>(
+  host: { readonly llmService: Partial<Pick<LlmService, "admitsDispatchWard">> },
+  attribution: ModelUsageAttributionContext,
+  targets: readonly TTarget[],
+): Promise<TTarget[]> {
+  const { llmService } = host;
+  if (!llmService.admitsDispatchWard) return [...targets];
+  const admitted: TTarget[] = [];
+  for (const target of targets) {
+    if (await llmService.admitsDispatchWard(attribution, target.providerId)) admitted.push(target);
+  }
+  return admitted;
+}
+
+function rejectWardDispatch(
+  reason: RoutingWardReasonCode,
+  citadelId: string,
+  message: string,
+): LlmDispatchGuardRejectedError {
+  return new LlmDispatchGuardRejectedError(new PolicyViolationError({ message, details: { reason, citadelId } }));
+}
+
+async function resolveDispatchWorkspaceId(
+  deps: RouteLocalWardDependencies,
+  attribution: ModelUsageAttributionContext,
+): Promise<string | undefined> {
+  const workspaceId = attribution.workspaceId?.trim();
+  if (workspaceId) return workspaceId;
+  const sessionId = attribution.sessionId?.trim();
+  return sessionId ? await resolveWorkspaceId(deps, sessionId) : undefined;
 }
 
 /** Diagnostic fields for each turn-entry `recordDevDiagnostic` context. */

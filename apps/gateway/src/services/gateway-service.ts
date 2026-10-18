@@ -652,6 +652,7 @@ import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
 import * as chatDurableRunService from "./chat-durable-run-service.js";
 import * as chatRoutedContextService from "./chat-routed-context-service.js";
+import { createModelChatWardDispatchGuard } from "./chat-route-local-ward.js";
 import {
   assertAdmittedExplicitContextCurrent,
   prepareRoutedContextAdmission,
@@ -1650,6 +1651,7 @@ export class GatewayService {
         });
       },
     });
+    this.llmService.setDispatchWardGuard(createModelChatWardDispatchGuard({ storage: this.storage }));
     this.chatSessionStatusService = new ChatSessionStatusService({
       storage: this.storage,
       getModelContextWindow: (providerId, model) => this.llmService.getModelContextWindow(providerId, model),

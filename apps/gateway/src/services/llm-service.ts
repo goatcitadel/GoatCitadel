@@ -219,6 +219,19 @@ export interface LlmServiceOptions {
   googleCloudAuthService?: GoogleCloudAuthService;
 }
 
+/**
+ * Policy backstop evaluated before every tracked provider dispatch, whether or
+ * not a governed dispatch scope is active (the Citadel Ward `model.chat.*`
+ * check). It is shaped so it can also serve as an `LlmDispatchGuard`.
+ */
+export interface LlmDispatchWardInput {
+  readonly attribution: ModelUsageAttributionContext;
+  readonly route: Pick<LlmDispatchRoute, "providerId">;
+  readonly providerBaseUrl?: string;
+}
+
+export type LlmDispatchWardGuard = (input: LlmDispatchWardInput) => Promise<void>;
+
 export interface LlmLocalServiceLease {
   release(): void | Promise<void>;
 }
@@ -338,6 +351,7 @@ export class LlmService {
   private readonly localServiceLeaseAcquirer: LlmLocalServiceLeaseAcquirer | undefined;
   private readonly modelUsageAccounting: ModelUsageAccountingService | undefined;
   private readonly dispatchGuardScope = new LlmDispatchGuardScope();
+  private dispatchWardGuard: LlmDispatchWardGuard | undefined;
 
   public constructor(
     config: LlmConfigFile,
@@ -1264,6 +1278,9 @@ export class LlmService {
     const requestedOutputTokenCap = outputCapField
       ? (input.outputCapRecovery?.requestedOutputTokenCap ?? outputCapField.value)
       : undefined;
+    const { attribution, resolved } = input;
+    // The ward backstop runs before any usage intent or network attempt.
+    await this.authorizeDispatchWard(attribution, resolved.provider.providerId, resolved.provider.baseUrl);
     const reservation = await this.modelUsageAccounting?.prepareDispatch({
       source: "llm_service",
       attribution: input.attribution,
@@ -1903,6 +1920,38 @@ export class LlmService {
     } catch (error) {
       await reservation?.abandon({ retainNoDispatchEvidence: true });
       throw error;
+    }
+  }
+
+  /** Installs the Citadel Ward backstop that runs before every tracked JSON
+   * provider dispatch, governed or not. The Gateway wires it after storage. */
+  public setDispatchWardGuard(guard: LlmDispatchWardGuard | undefined): void {
+    this.dispatchWardGuard = guard;
+  }
+
+  /** Whether the ward backstop would admit a dispatch to `providerId`; lets
+   * fallback selection drop a refused target instead of failing on it. */
+  public async admitsDispatchWard(attribution: ModelUsageAttributionContext, providerId: string): Promise<boolean> {
+    try {
+      await this.authorizeDispatchWard(attribution, providerId, this.providers.get(providerId)?.baseUrl);
+      return true;
+    } catch (error) {
+      if (error instanceof LlmDispatchGuardRejectedError) return false;
+      throw error;
+    }
+  }
+
+  private async authorizeDispatchWard(
+    attribution: ModelUsageAttributionContext,
+    providerId: string,
+    providerBaseUrl: string | undefined,
+  ): Promise<void> {
+    const guard = this.dispatchWardGuard;
+    if (!guard) return;
+    try {
+      await guard({ attribution, route: { providerId }, providerBaseUrl });
+    } catch (error) {
+      throw error instanceof LlmDispatchGuardRejectedError ? error : new LlmDispatchGuardRejectedError(error);
     }
   }
 
