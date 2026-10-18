@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,7 @@ const spawnMock = vi.hoisted(() =>
   vi.fn(() => ({
     pid: 4321,
     unref: vi.fn(),
+    once: vi.fn(),
   })),
 );
 
@@ -529,7 +531,7 @@ describe("AddonsService", () => {
           headers: { "content-type": "application/json" },
         }),
     );
-    spawnMock.mockImplementationOnce(() => ({ pid: process.pid, unref: vi.fn() }));
+    spawnMock.mockImplementationOnce(() => ({ pid: process.pid, unref: vi.fn(), once: vi.fn() }));
     const catalog = [...new AddonsService(tempDir).listCatalog(), notesAddon(notesLaunch)];
 
     const result = await new AddonsService(tempDir, { catalog }).launch("notes");
@@ -557,7 +559,7 @@ describe("AddonsService", () => {
   it("marks a second add-on as errored when its readiness fields do not match", async () => {
     await writeNotesManifest();
     fetchMock.mockImplementation(async () => new Response(JSON.stringify({ state: "starting" }), { status: 200 }));
-    spawnMock.mockImplementationOnce(() => ({ pid: process.pid, unref: vi.fn() }));
+    spawnMock.mockImplementationOnce(() => ({ pid: process.pid, unref: vi.fn(), once: vi.fn() }));
     const fastLaunch = { ...notesLaunch, health: { ...notesLaunch.health, readyTimeoutMs: 1_000 } };
 
     const result = await new AddonsService(tempDir, { catalog: [notesAddon(fastLaunch)] }).launch("notes");
@@ -574,6 +576,18 @@ describe("AddonsService", () => {
       "invalid launch contract",
     );
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("fails the launch, without crashing the process, when the manifest command cannot be spawned", async () => {
+    await writeNotesManifest();
+    const child = Object.assign(new EventEmitter(), { pid: undefined, unref: vi.fn() });
+    spawnMock.mockImplementationOnce(() => child as never);
+
+    await expect(new AddonsService(tempDir, { catalog: [notesAddon(notesLaunch)] }).launch("notes")).rejects.toThrow(
+      "Failed to start add-on process: node",
+    );
+    // The asynchronous ENOENT is handled; an unhandled `error` event would throw here.
+    expect(() => child.emit("error", Object.assign(new Error("spawn node ENOENT"), { code: "ENOENT" }))).not.toThrow();
   });
 
   it("refuses to launch an add-on whose manifest declares no launch contract", async () => {
@@ -637,6 +651,7 @@ describe("AddonsService", () => {
     spawnMock.mockImplementationOnce(() => ({
       pid: process.pid,
       unref: vi.fn(),
+      once: vi.fn(),
     }));
 
     const service = new AddonsService(tempDir);

@@ -743,9 +743,12 @@ function spawnDetachedCommand(
     stdio: "ignore",
     env: buildAddonChildEnv(extraEnv),
   });
+  // A missing or non-executable manifest command emits `error` asynchronously; without a
+  // listener that event would crash the Gateway instead of failing this launch.
+  child.once("error", () => undefined);
   child.unref();
   if (typeof child.pid !== "number") {
-    throw new Error("Failed to start add-on process.");
+    throw new Error(`Failed to start add-on process: ${command}`);
   }
   return { pid: child.pid };
 }
