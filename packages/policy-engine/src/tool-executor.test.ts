@@ -4332,6 +4332,27 @@ describe("executeTool", () => {
       delete process.env.MATRIX_OUTBOUND_TOKEN;
     });
 
+    it("matrix rejects a present but invalid reply id instead of sending a plain message", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      process.env.MATRIX_OUTBOUND_TOKEN = "syt_outbound";
+      const fetchMock = vi.fn(async (..._args: unknown[]) => new Response("{}", { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await executeTool(
+        {
+          toolName: "channel.send",
+          args: { connectionId: "conn-matrix", message: "hi", replyToMessageId: "12345" },
+          agentId: "operator",
+          sessionId: "sess-matrix-badreply",
+        },
+        matrixPolicy,
+        matrixStorage(matrixConfig),
+      );
+      expect(result).toMatchObject({ status: "failed" });
+      expect(JSON.stringify(result)).toContain("replyToMessageId must be a Matrix event id");
+      expect(fetchMock).not.toHaveBeenCalled();
+      delete process.env.MATRIX_OUTBOUND_TOKEN;
+    });
+
     it("matrix channel.react and channel.unsend use the message's room and event id", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
       process.env.MATRIX_OUTBOUND_TOKEN = "syt_outbound";

@@ -108,6 +108,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "A Matrix bot account on a reachable homeserver and its access token in a gateway environment variable (for example MATRIX_ACCESS_TOKEN).",
       "The bot invited to and joined in the intended room, with permission to post.",
       "The homeserver host added to the network allowlist.",
+      "End-to-end encrypted rooms are not supported: inbound ignores encrypted events and outbound sends unencrypted messages; use an unencrypted room.",
       "For inbound, the Matrix user ids (such as @alice:example.com) allowed to start conversations; a dropped message's sender_not_allowlisted diagnostic shows the id.",
     ],
     firstMessage:

@@ -3,6 +3,7 @@ import { assertHostAllowed, fetchAllowlistedOnce, readBoundedResponseJson } from
 
 /**
  * Minimal Matrix client-server API (v3) client for outbound channel actions.
+ * Transaction ids dedupe a re-sent request only when the caller passes a stable idempotency key.
  * Every request goes through the connection allowlist (and the tool grant
  * allowlist when present); response bodies are read through the bounded reader
  * and error text never includes the access token.
@@ -23,7 +24,10 @@ const MATRIX_RESPONSE_LIMITS = { maxBytes: 64 * 1024, timeoutMs: 10_000 } as con
 const MATRIX_TXN_ID_LENGTH = 32;
 const DEFAULT_TYPING_TIMEOUT_MS = 30_000;
 
-/** Deterministic transaction id for a tool-call idempotency key and chunk, else a random one. */
+/**
+ * Transaction id: deterministic only when the caller supplies an idempotency key (and chunk index), else random.
+ * The gateway does not yet pass one, so retried sends currently get a fresh id and are not deduped by the homeserver.
+ */
 export function deriveMatrixTxnId(idempotencyKey: string | undefined, chunkIndex = 0): string {
   const key = idempotencyKey?.trim();
   if (!key) {

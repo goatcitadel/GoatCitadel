@@ -32,7 +32,7 @@ const PRIMING_FILTER = JSON.stringify({
 });
 const SYNC_FILTER = JSON.stringify({
   room: {
-    timeline: { types: ["m.room.message"], limit: MATRIX_TIMELINE_LIMIT },
+    timeline: { types: ["m.room.message", "m.room.encrypted"], limit: MATRIX_TIMELINE_LIMIT },
     state: { lazy_load_members: true },
     ephemeral: { types: [] },
   },
@@ -151,10 +151,15 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
 
   async function emitBatch(ctx: ChannelStreamRunContext, selfId: string, sync: MatrixSyncResponse): Promise<void> {
     const connectionId = ctx.connection.connectionId;
+    let encryptedIgnored = 0;
     for (const [roomId, room] of Object.entries(sync.rooms?.join ?? {})) {
       const events = room?.timeline?.events;
       if (!Array.isArray(events)) continue;
       for (const raw of events as MatrixTimelineEvent[]) {
+        if (raw?.type === "m.room.encrypted") {
+          encryptedIgnored += 1;
+          continue;
+        }
         if (!raw || raw.type !== "m.room.message") continue;
         if (typeof raw.event_id !== "string" || typeof raw.sender !== "string" || raw.sender === selfId) continue;
         const content = raw.content as
@@ -164,6 +169,8 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
         if (typeof msgtype !== "string" || !MATRIX_INBOUND_MSGTYPES.includes(msgtype)) continue;
         if (typeof content?.body !== "string" || content.body.trim().length === 0) continue;
         const relates = content["m.relates_to"];
+        // An edit is a new event carrying m.replace; treating it as a message would start a second turn.
+        if (relates?.rel_type === "m.replace") continue;
         const threadId =
           relates?.rel_type === "m.thread" && typeof relates.event_id === "string" ? relates.event_id : undefined;
         await ctx.emit({
@@ -183,6 +190,13 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
           },
         });
       }
+    }
+    if (encryptedIgnored > 0) {
+      ctx.diagnostic(
+        "encrypted_event_ignored",
+        "Matrix end-to-end encrypted events were ignored; use an unencrypted room.",
+        { eventCount: encryptedIgnored },
+      );
     }
   }
 
@@ -263,8 +277,10 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
             reprimedSinceLastSuccess = true;
             // A stale or invalid since token would otherwise wedge the connection on endless retries.
             ctx.diagnostic(
-              "matrix.stream.since_rejected",
+              "since_rejected",
               "Matrix rejected the stored sync token; re-primed. Messages in the gap were skipped.",
+              undefined,
+              "warn",
             );
             cursor = await prime();
             continue;
@@ -277,9 +293,10 @@ export function createMatrixStreamAdapter(deps: MatrixStreamAdapterDeps): Channe
           ).length;
           if (limitedRooms > 0) {
             ctx.diagnostic(
-              "matrix.stream.timeline_limited",
+              "timeline_limited",
               `Matrix returned a limited timeline for ${limitedRooms} room(s); older messages in the gap were skipped.`,
               { roomCount: limitedRooms },
+              "warn",
             );
           }
           await emitBatch(ctx, selfId, sync);

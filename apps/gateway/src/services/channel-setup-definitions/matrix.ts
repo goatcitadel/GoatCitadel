@@ -46,7 +46,7 @@ export function createMatrixDefinition(): ChannelSetupRuntimeDefinition {
             ),
             note(
               "warning",
-              "Matrix is a guided beta lane. Outbound is text-only (no attachments), and the homeserver host must be in the network allowlist.",
+              "Matrix is a guided beta lane. Outbound is text-only (no attachments), and the homeserver host must be in the network allowlist. End-to-end encrypted rooms are not supported: inbound ignores encrypted events and outbound sends unencrypted messages; use an unencrypted room.",
             ),
           ],
         },

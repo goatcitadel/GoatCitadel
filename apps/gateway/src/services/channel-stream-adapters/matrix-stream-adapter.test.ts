@@ -211,6 +211,45 @@ describe("matrix stream adapter", () => {
     expect(h.emitted.map((e) => e.message.eventId)).toEqual(["$emote", "$ok"]);
   });
 
+  it("ignores message edits (m.replace) so they never start a new turn", async () => {
+    const h = harness({
+      store: memoryStore({ cursor: "c", scope: SELF }),
+      syncs: [
+        () =>
+          json(
+            syncBody("n", [
+              msg("$edit", {}, { "m.relates_to": { rel_type: "m.replace", event_id: "$orig" } }),
+              msg("$ok"),
+            ]),
+          ),
+      ],
+    });
+    await h.adapter.run(h.ctx());
+    expect(h.emitted.map((e) => e.message.eventId)).toEqual(["$ok"]);
+  });
+
+  it("ignores encrypted events and records one count-only diagnostic per batch", async () => {
+    const h = harness({
+      store: memoryStore({ cursor: "c", scope: SELF }),
+      syncs: [
+        () =>
+          json(
+            syncBody("n", [
+              msg("$enc1", { type: "m.room.encrypted" }),
+              msg("$enc2", { type: "m.room.encrypted" }),
+              msg("$ok"),
+            ]),
+          ),
+      ],
+    });
+    await h.adapter.run(h.ctx());
+    expect(h.emitted.map((e) => e.message.eventId)).toEqual(["$ok"]);
+    const calls = h.diagnostic.mock.calls.filter((c) => c[0] === "encrypted_event_ignored");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![1]).not.toContain("!room:example.test");
+    expect(calls[0]![2]).toEqual({ eventCount: 2 });
+  });
+
   it("emits the exact normalized event", async () => {
     const h = harness({
       store: memoryStore({ cursor: "c", scope: SELF }),
@@ -319,7 +358,7 @@ describe("matrix stream adapter", () => {
     });
     const incremental = JSON.parse(new URL(h.urls[2]!).searchParams.get("filter")!);
     expect(incremental.room).toEqual({
-      timeline: { types: ["m.room.message"], limit: 100 },
+      timeline: { types: ["m.room.message", "m.room.encrypted"], limit: 100 },
       state: { lazy_load_members: true },
       ephemeral: { types: [] },
     });
@@ -337,8 +376,10 @@ describe("matrix stream adapter", () => {
     });
     await h.adapter.run(h.ctx());
     expect(h.diagnostic).toHaveBeenCalledWith(
-      "matrix.stream.since_rejected",
+      "since_rejected",
       "Matrix rejected the stored sync token; re-primed. Messages in the gap were skipped.",
+      undefined,
+      "warn",
     );
     expect(store.writes[0]).toEqual({ cursor: "fresh", scope: SELF });
     expect(new URL(h.urls[3]!).searchParams.get("since")).toBe("fresh");
@@ -371,9 +412,12 @@ describe("matrix stream adapter", () => {
     };
     const h = harness({ store: memoryStore({ cursor: "c", scope: SELF }), syncs: [() => json(body)] });
     await h.adapter.run(h.ctx());
-    expect(h.diagnostic).toHaveBeenCalledWith("matrix.stream.timeline_limited", expect.not.stringContaining("!a:x"), {
-      roomCount: 2,
-    });
+    expect(h.diagnostic).toHaveBeenCalledWith(
+      "timeline_limited",
+      expect.not.stringContaining("!a:x"),
+      { roomCount: 2 },
+      "warn",
+    );
   });
 
   it("a persistent 4xx after re-priming rethrows instead of looping", async () => {

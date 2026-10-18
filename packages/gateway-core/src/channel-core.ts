@@ -657,6 +657,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
         ? "Matrix inbound long-polls /sync and stores the sync token after each accepted batch, so a restart resumes without replaying history. Allow the Matrix user ids that may start turns, because inbound is default-deny."
         : "Matrix inbound is off; set inboundStreamEnabled with an access token to long-poll /sync.",
       "Matrix is text-only in v1: attachments are not uploaded to the media repository.",
+      "End-to-end encrypted rooms are not supported: inbound ignores encrypted events and outbound sends unencrypted messages; use an unencrypted room.",
       "Matrix unsend redacts the original event; the bot can redact its own events, and other users' events only with the redact power level.",
       "Matrix typing sets the bot typing state in a room id target (the bot user id is resolved with whoami).",
       "Matrix room messages are plain m.text bodies, so mentions are not rendered by the server.",

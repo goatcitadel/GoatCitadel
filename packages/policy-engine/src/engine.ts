@@ -2677,23 +2677,26 @@ async function extractGrantHostCandidates(
     return { hosts: [], blockedReason: "grant host constraints require a canonical channel connection" };
   }
   const ntfySend = request.toolName === "channel.send" && connection?.key === "ntfy";
+  const matrixAction =
+    (request.toolName === "channel.send" ||
+      request.toolName === "channel.react" ||
+      request.toolName === "channel.unsend") &&
+    connection?.key === "matrix";
   if (
-    ntfySend &&
+    (ntfySend || matrixAction) &&
     (connection.kind !== "channel" ||
       (connection.workspaceId !== undefined && connection.workspaceId !== request.workspaceId))
   ) {
-    return { hosts: [], blockedReason: "grant host constraints rejected the ntfy connection scope" };
+    return {
+      hosts: [],
+      blockedReason: `grant host constraints rejected the ${ntfySend ? "ntfy" : "matrix"} connection scope`,
+    };
   }
   // ntfy encodes target as a topic path; it never selects the network origin.
   // Use the same canonical base URL/default as the executor, retaining every
   // attachment and other URL constraint. Execution rechecks the grant as well.
   // Matrix room ids (!room:server) never select the network origin; the configured
   // homeserver is the only outbound host for send, react and redact.
-  const matrixAction =
-    (request.toolName === "channel.send" ||
-      request.toolName === "channel.react" ||
-      request.toolName === "channel.unsend") &&
-    connection?.key === "matrix";
   const candidates = extractHostCandidates(ntfySend || matrixAction ? { ...args, target: undefined } : args);
   if (matrixAction) {
     const configured = connection.config.homeserverUrl;

@@ -451,6 +451,8 @@ Official reference:
 
 Matrix outbound is text-only (no attachments). It supports room sends, replies, reactions, redactions (unsend) and typing notices through the client-server API.
 
+End-to-end encrypted rooms are not supported: inbound ignores encrypted events and outbound sends unencrypted messages; use an unencrypted room.
+
 ### Step-by-step
 
 1. Create a Matrix account for the bot on your homeserver.
@@ -471,6 +473,9 @@ Matrix outbound is text-only (no attachments). It supports room sends, replies, 
 - host outside the network allowlist: add the homeserver host before probing or sending
 - messages missing after a long outage: if the homeserver rejects the stored sync token the runtime re-primes from the present, so messages in that gap are skipped
 - inbound messages are ignored: the sender is not on the allowlist (a dropped message's `sender_not_allowlisted` diagnostic shows the id)
+- messages from an encrypted room never arrive: end-to-end encrypted rooms are not supported; an `encrypted_event_ignored` diagnostic records the count, so move the bot to an unencrypted room
+- messages missing after a busy period: if a room produces more than 100 messages in one sync, the older ones are skipped and a warn `timeline_limited` diagnostic records how many rooms were affected
+- edited messages do not start a new turn: Matrix edits are ignored on inbound
 - room ids look like `!opaque:example.com`; a `#alias:example.com` is not accepted as a send target
 
 ## Validation Checklist Per Channel

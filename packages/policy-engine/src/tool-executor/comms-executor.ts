@@ -87,13 +87,19 @@ async function executeCommsToolWithBoundaryTracking(
   assertNoRawRemoteApprovalBearer(args);
   const connectionId = required(args.connectionId, "connectionId");
   const connection = await storage.integrationConnections.get(connectionId);
+  const scopedKey =
+    (toolName === "channel.send" || toolName === "channel.unsend") && connection.key === "ntfy"
+      ? "ntfy"
+      : (toolName === "channel.send" || toolName === "channel.unsend" || toolName === "channel.react") &&
+          connection.key === "matrix"
+        ? "matrix"
+        : undefined;
   if (
-    (toolName === "channel.send" || toolName === "channel.unsend") &&
-    connection.key === "ntfy" &&
+    scopedKey &&
     (connection.kind !== "channel" ||
       (connection.workspaceId !== undefined && connection.workspaceId !== request.workspaceId))
   ) {
-    throw new Error("The canonical ntfy connection scope changed before dispatch.");
+    throw new Error(`The canonical ${scopedKey} connection scope changed before dispatch.`);
   }
   const connectionConfig = record(connection.config);
   const target =
@@ -2262,13 +2268,21 @@ function resolveMatrixEventId(value: unknown, field: string): string {
   return eventId;
 }
 
-function optionalMatrixEventId(...values: unknown[]): string | undefined {
-  return values
-    .map((value) => asString(value))
-    .find((value): value is string => Boolean(value && MATRIX_EVENT_ID_PATTERN.test(value)));
+/** Returns the first present id; a present but non-event id throws instead of silently dropping the reply/thread. */
+function optionalMatrixEventId(field: string, ...values: unknown[]): string | undefined {
+  const present = values.map((value) => asString(value)).find((value): value is string => Boolean(value));
+  if (present === undefined) return undefined;
+  if (!MATRIX_EVENT_ID_PATTERN.test(present)) {
+    throw new Error(`${field} must be a Matrix event id starting with a dollar sign`);
+  }
+  return present;
 }
 
-/** Idempotent per delivery key and chunk so a re-sent chunk dedupes at the homeserver; random otherwise. */
+/**
+ * The transaction id is deterministic only when the caller passes idempotencyKey (and chunkIndex); the gateway does
+ * not pass one yet, so a retried send gets a fresh id and the homeserver cannot dedupe it. No automatic resend
+ * happens after an unknown outcome.
+ */
 function resolveMatrixTxnId(args: Record<string, unknown>): string {
   const chunkIndex = typeof args.chunkIndex === "number" && Number.isInteger(args.chunkIndex) ? args.chunkIndex : 0;
   return deriveMatrixTxnId(asString(args.idempotencyKey), chunkIndex);
@@ -2288,8 +2302,8 @@ async function matrixSend(
     roomId,
     body: message,
     txnId: resolveMatrixTxnId(args),
-    replyToEventId: optionalMatrixEventId(args.replyToMessageId, args.replyTo),
-    threadRootId: optionalMatrixEventId(args.threadId, args.rootId),
+    replyToEventId: optionalMatrixEventId("replyToMessageId", args.replyToMessageId, args.replyTo),
+    threadRootId: optionalMatrixEventId("threadId", args.threadId, args.rootId),
   });
   return eventId;
 }

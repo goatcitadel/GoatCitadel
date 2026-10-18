@@ -80,7 +80,7 @@ async function fixture(options: { homeserverUrl?: string } = {}) {
   vi.stubGlobal("fetch", fetch);
   const readGrant = async () =>
     (await storage.toolGrants.list("workspace", workspace.workspaceId)).find((item) => item.grantId === grant.grantId);
-  return { grant, request, fetch, readGrant, engine: new ToolPolicyEngine(config, storage) };
+  return { grant, connection, request, fetch, readGrant, engine: new ToolPolicyEngine(config, storage) };
 }
 
 describe("canonical Matrix homeserver host constraints", () => {
@@ -90,6 +90,47 @@ describe("canonical Matrix homeserver host constraints", () => {
     expect(result.outcome).toBe("executed");
     expect(result.result).toMatchObject({ status: "sent", providerMessageId: "$synthetic" });
     expect(String(f.fetch.mock.calls[0]?.[0])).toContain("http://127.0.0.1:12345/_matrix/client/v3/rooms/");
+    expect((await f.readGrant())?.usesRemaining).toBe(0);
+  });
+
+  it.each(["workspace", "kind"])(
+    "withholds dispatch when canonical Matrix %s changes after admission",
+    async (change) => {
+      const f = await fixture({ homeserverUrl: "http://127.0.0.1:12345" });
+      const result = await f.engine.invoke(f.request, {
+        beforeExecute: async () => {
+          if (change === "workspace") {
+            await storage.integrationConnections.update(f.connection.connectionId, {
+              expectedRevision: f.connection.revision,
+              workspaceId: "other-workspace",
+            });
+          } else {
+            // Kind is immutable through public updates; corrupt it in the disposable store.
+            await storage.db
+              .prepare("UPDATE integration_connections SET kind = ? WHERE connection_id = ?")
+              .run("automation", f.connection.connectionId);
+          }
+        },
+      });
+      expect(result.outcome).toBe("blocked");
+      expect(result.policyReason).toContain("matrix connection scope");
+      expect(f.fetch).not.toHaveBeenCalled();
+      expect((await f.readGrant())?.usesRemaining).toBe(0);
+    },
+  );
+
+  it("withholds dispatch when the homeserver changes after admission", async () => {
+    const f = await fixture({ homeserverUrl: "http://127.0.0.1:12345" });
+    const result = await f.engine.invoke(f.request, {
+      beforeExecute: async () => {
+        await storage.integrationConnections.update(f.connection.connectionId, {
+          expectedRevision: f.connection.revision,
+          config: { ...f.connection.config, homeserverUrl: "https://foreign.example" },
+        });
+      },
+    });
+    expect(f.fetch).not.toHaveBeenCalled();
+    expect(result.result).toMatchObject({ status: "failed", deliveryStatus: "blocked" });
     expect((await f.readGrant())?.usesRemaining).toBe(0);
   });
 
