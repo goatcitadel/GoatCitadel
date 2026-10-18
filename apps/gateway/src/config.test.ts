@@ -139,8 +139,31 @@ describe("loadGatewayConfig", () => {
         path.join(canonicalRoot, "data", "secrets"),
         path.join(canonicalRoot, "data", "postgres"),
         path.join(canonicalRoot, "data", "audit"),
+        path.join(canonicalRoot, "data", "index.db"),
+        path.join(canonicalRoot, "data", "index.db-wal"),
+        path.join(canonicalRoot, "data", "index.db-shm"),
+        path.join(canonicalRoot, "data", "index.db-journal"),
       ],
     });
+    expect(config.dbPath).toBe(path.join(rootDir, "data", "index.db"));
+  });
+
+  it("protects the SQLite database and its sidecars through a junctioned data dir", async () => {
+    const { rootDir, configDir } = await createConfigFixture();
+    const realData = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-real-db-data-"));
+    TEMP_ROOTS.push(realData);
+    symlinkSync(realData, path.join(rootDir, "db-link"), process.platform === "win32" ? "junction" : "dir");
+    const assistantPath = path.join(configDir, "assistant.config.json");
+    const assistantConfig = JSON.parse(await readFile(assistantPath, "utf8")) as Record<string, unknown>;
+    await writeJson(assistantPath, { ...assistantConfig, dataDir: "./db-link" });
+
+    const config = await loadGatewayConfig(rootDir);
+    const realDataDir = realpathSync(realData);
+    expect(config.toolPolicy.sandbox.runtimeWriteProtection?.protectedPaths).toEqual(
+      expect.arrayContaining(
+        ["index.db", "index.db-wal", "index.db-shm", "index.db-journal"].map((name) => path.join(realDataDir, name)),
+      ),
+    );
   });
 
   it("accepts preset-only operator roots and protects a relocated bundled Postgres data dir", async () => {

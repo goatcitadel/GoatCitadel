@@ -16,16 +16,24 @@ interface RuntimeWriteProtectionInput {
 }
 
 /**
+ * SQLite files beside the database: the runtime opens it in WAL mode (`-wal`,
+ * `-shm`), and a rollback journal (`-journal`) appears whenever WAL is off.
+ */
+const SQLITE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
+
+/**
  * Runtime paths that model-driven tools may never write or delete, even inside
- * an allowed root: the config directory plus the secrets, Postgres (default and
- * configured bundled data dir), and audit trees. Every path is resolved through
- * its closest existing ancestor so it matches the canonical targets the write
- * jail produces when a root or data dir sits behind a symlink or junction.
- * Derived at every load and never persisted.
+ * an allowed root: the config directory, the secrets, Postgres (default and
+ * configured bundled data dir), and audit trees, plus the SQLite database file
+ * and its sidecars, which sit directly in the data dir (often a jail root).
+ * Every path is resolved through its closest existing ancestor so it matches
+ * the canonical targets the write jail produces when a root or data dir sits
+ * behind a symlink or junction. Derived at every load and never persisted.
  */
 export function buildRuntimeWriteProtection(
   rootDir: string,
   assistant: RuntimeWriteProtectionInput,
+  dbPath: string,
 ): RuntimeWriteProtection {
   const resolvedRoot = canonicalThroughExistingAncestor(path.resolve(rootDir));
   const dataDir = path.resolve(resolvedRoot, assistant.dataDir);
@@ -37,6 +45,7 @@ export function buildRuntimeWriteProtection(
     ...(assistant.database?.bundledPostgres?.dataDir
       ? [path.resolve(resolvedRoot, assistant.database.bundledPostgres.dataDir)]
       : []),
+    ...SQLITE_FILE_SUFFIXES.map((suffix) => `${path.resolve(resolvedRoot, dbPath)}${suffix}`),
   ];
   const seen = new Set<string>();
   const protectedPaths: string[] = [];
