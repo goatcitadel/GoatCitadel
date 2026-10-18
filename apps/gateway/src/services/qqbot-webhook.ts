@@ -72,6 +72,35 @@ export function verifyQqbotSignature(input: {
   }
 }
 
+/**
+ * QQ may send the op 13 callback validation without signature headers. Only a body that is exactly an op 13
+ * validation with a strictly formatted token and timestamp may skip signature checks: that format can never equal
+ * "timestamp + JSON body" of a dispatch, so answering it cannot be used as a signing oracle.
+ */
+export function isUnsignedQqbotValidationBody(rawBody: Buffer): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody.toString("utf8"));
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return false;
+  }
+  const root = parsed as Record<string, unknown>;
+  const data = root.d;
+  if (root.op !== 13 || typeof data !== "object" || data === null || Array.isArray(data)) {
+    return false;
+  }
+  const { plain_token: plainToken, event_ts: eventTs } = data as Record<string, unknown>;
+  return (
+    typeof plainToken === "string" &&
+    typeof eventTs === "string" &&
+    PLAIN_TOKEN.test(plainToken) &&
+    EVENT_TS.test(eventTs)
+  );
+}
+
 /** Callback-validation (op 13) reply: hex ed25519 signature over eventTs + plainToken. */
 export function signQqbotValidation(input: { appSecret: string; eventTs: string; plainToken: string }): string {
   const { privateKey } = deriveQqbotEd25519KeyPair(input.appSecret);

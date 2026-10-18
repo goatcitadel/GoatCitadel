@@ -503,7 +503,7 @@ Inbound is a signed webhook. GoatCitadel verifies the ed25519 signature (keyed f
    - `appSecretEnv=QQBOT_APP_SECRET` (an earlier `tokenEnv` value is shown here as `appSecretEnv` when you edit)
    - `defaultTarget=user:<openid>` (optional)
    - `sandbox=true` while the application is unpublished
-5. Save and enable the connection, then in the QQ console set the callback URL to `https://<your-gateway>/api/v1/integrations/connections/<connectionId>/qqbot/webhook` and subscribe to the events you need. QQ sends a signed validation request that GoatCitadel answers.
+5. Save and enable the connection, then in the QQ console set the callback URL to `https://<your-gateway>/api/v1/integrations/connections/<connectionId>/qqbot/webhook` and subscribe to the events you need. QQ sends a validation request (op 13) that GoatCitadel answers with an AppSecret signature; QQ may send it without signature headers, and if it includes them they must verify. Every other event must be signed.
 6. Add the QQ openids that may start turns to `allowedSenders`.
 7. Run the guided test: it mints a token, reads the bot identity and, when you run the explicit send, sends one active sandbox message to the default target. A rejection of that message can be a quota, not a credential problem.
 

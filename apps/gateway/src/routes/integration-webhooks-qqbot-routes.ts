@@ -1,5 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { normalizeQqbotWebhookPayload, signQqbotValidation, verifyQqbotSignature } from "../services/qqbot-webhook.js";
+import {
+  isUnsignedQqbotValidationBody,
+  normalizeQqbotWebhookPayload,
+  signQqbotValidation,
+  verifyQqbotSignature,
+} from "../services/qqbot-webhook.js";
 import { createWebhookRouteOptions, resolveQqbotSecret } from "./integration-webhooks-shared.js";
 import type { IntegrationConnectionRecord } from "../services/channel-inbound-dispatch.js";
 import { createWebhookHandler, dispatchInboundWebhookMessage, readHeaderValue } from "./webhook-handler-factory.js";
@@ -28,13 +33,13 @@ export function registerQqbotWebhookRoutes(fastify: FastifyInstance): void {
             error: "QQBot connection is missing its app secret (appSecret or appSecretEnv)",
           };
         }
-        // Every request is signed, including the op 13 callback validation.
-        const valid = verifyQqbotSignature({
-          appSecret,
-          signatureHex: readHeaderValue(request.headers["x-signature-ed25519"]),
-          timestamp: readHeaderValue(request.headers["x-signature-timestamp"]),
-          rawBody,
-        });
+        const signatureHex = readHeaderValue(request.headers["x-signature-ed25519"]);
+        const timestamp = readHeaderValue(request.headers["x-signature-timestamp"]);
+        // Dispatches always need a valid signature. QQ may send the op 13 callback validation with no signature
+        // headers at all, so that one shape (strict token format) is allowed through; if either header is
+        // present, the signature must verify.
+        const unsignedValidation = !signatureHex && !timestamp && isUnsignedQqbotValidationBody(rawBody);
+        const valid = unsignedValidation || verifyQqbotSignature({ appSecret, signatureHex, timestamp, rawBody });
         return valid
           ? { ok: true as const }
           : {

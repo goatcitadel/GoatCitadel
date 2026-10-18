@@ -143,9 +143,85 @@ describe("QQBot webhook route", () => {
       const response = await post(ctx.app, groupEvent(), headers);
       expect(response.statusCode).toBe(401);
     }
-    // op 13 is signed too: an unsigned validation request is refused.
-    const unsigned = await post(ctx.app, { op: 13, d: { plain_token: "tok", event_ts: TS } }, { signature: null });
-    expect(unsigned.statusCode).toBe(401);
+    expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
+  });
+
+  it("answers an unsigned op 13 validation when the token format is strict", async () => {
+    const ctx = await buildApp();
+    const response = await post(
+      ctx.app,
+      { op: 13, d: { plain_token: "Arq0D5A61EgUu4OxUvOp", event_ts: TS } },
+      { signature: null, timestamp: null },
+    );
+    expect(response.statusCode).toBe(200);
+    const reply = response.json() as { plain_token: string; signature: string };
+    expect(reply.plain_token).toBe("Arq0D5A61EgUu4OxUvOp");
+    expect(
+      verifyQqbotSignature({
+        appSecret: APP_SECRET,
+        signatureHex: reply.signature,
+        timestamp: TS,
+        rawBody: Buffer.from("Arq0D5A61EgUu4OxUvOp"),
+      }),
+    ).toBe(true);
+    expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
+  });
+
+  it("never signs an unsigned op 13 whose token is not strictly formatted", async () => {
+    const ctx = await buildApp();
+    for (const d of [
+      { plain_token: '{"op":0}', event_ts: TS },
+      { plain_token: "tok", event_ts: "12abc" },
+      { plain_token: "", event_ts: TS },
+      { plain_token: "tok" },
+    ]) {
+      const response = await post(ctx.app, { op: 13, d }, { signature: null, timestamp: null });
+      expect([400, 401]).toContain(response.statusCode);
+      expect(response.body).not.toMatch(/"signature"s*:/);
+    }
+  });
+
+  it("rejects an op 13 with a present but bad signature with 401", async () => {
+    const ctx = await buildApp();
+    const response = await post(
+      ctx.app,
+      { op: 13, d: { plain_token: "tok", event_ts: TS } },
+      { signature: "00".repeat(64) },
+    );
+    expect(response.statusCode).toBe(401);
+    expect(response.body).not.toContain("plain_token");
+  });
+
+  it("rejects an op 13 with only one signature header present", async () => {
+    const ctx = await buildApp();
+    const response = await post(ctx.app, { op: 13, d: { plain_token: "tok", event_ts: TS } }, { signature: null });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("rejects unsigned non-JSON with 400 (Fastify parser) and other non-validation bodies with 401", async () => {
+    const ctx = await buildApp();
+    const garbage = await ctx.app.inject({
+      method: "POST",
+      url: webhookUrl,
+      headers: { "content-type": "application/json" },
+      payload: "not json",
+    });
+    expect(garbage.statusCode).toBe(400);
+    expect(garbage.body).not.toMatch(/"signature"s*:/);
+    for (const payload of [
+      "[1,2]",
+      "null",
+      JSON.stringify(groupEvent()),
+      JSON.stringify({ op: "13", d: { plain_token: "t", event_ts: TS } }),
+    ]) {
+      const response = await ctx.app.inject({
+        method: "POST",
+        url: webhookUrl,
+        headers: { "content-type": "application/json" },
+        payload,
+      });
+      expect(response.statusCode).toBe(401);
+    }
     expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
   });
 
