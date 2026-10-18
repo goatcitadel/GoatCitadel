@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
-import { restoredTestExclude } from "../../vitest.shared";
+import { resolveLocalTestMaxWorkers, restoredTestExclude } from "../../vitest.shared";
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -67,6 +67,7 @@ export default defineConfig({
     ],
   },
   test: {
+    maxWorkers: resolveLocalTestMaxWorkers(),
     testTimeout: 15_000,
     hookTimeout: 15_000,
     exclude: [

@@ -19,7 +19,7 @@
   "scripts": {
     "build": "tsc -b tsconfig.json",
     "typecheck": "tsc -b tsconfig.json",
-    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test": "tsx --test --test-concurrency=3 \"src/**/*.test.ts\"",
     "test:postgres": "pnpm build && node --test --test-concurrency=1 --test-reporter=tap \"dist/postgres/real-postgres.test.js\" \"dist/approval-run-linkage.postgres-proof.js\" \"dist/postgres/proof-worker-completion.test.js\" \"dist/mutation-idempotency-dispatch-fence.postgres.test.js\"",
     "test:coverage": "node ../../scripts/storage-coverage.mjs",
     "lint": "tsc -b tsconfig.json"

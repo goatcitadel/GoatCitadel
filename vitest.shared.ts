@@ -17,3 +17,20 @@ export const restoredTestExclude: string[] = [
   "**/build/**",
   "**/.{idea,cache,output,temp}/**",
 ];
+
+/**
+ * Vitest's default pool size is (cores - 1) fork workers per run — 23 on a
+ * 24-core dev box. Several agent sessions testing at once then exhaust RAM and
+ * page the whole machine into 30-second freezes. Cap workers on local runs; CI
+ * keeps vitest's default. `GOATCITADEL_TEST_MAX_WORKERS` overrides the cap, and a
+ * CLI `--maxWorkers` still wins over both.
+ */
+export const LOCAL_TEST_MAX_WORKERS_DEFAULT = 2;
+
+export function resolveLocalTestMaxWorkers(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  const override = Number.parseInt(env.GOATCITADEL_TEST_MAX_WORKERS ?? "", 10);
+  if (Number.isInteger(override) && override > 0) {
+    return override;
+  }
+  return env.CI ? undefined : LOCAL_TEST_MAX_WORKERS_DEFAULT;
+}
