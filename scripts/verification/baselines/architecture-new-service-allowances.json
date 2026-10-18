@@ -2427,6 +2427,14 @@
     },
     {
       "planStep": "C0",
+      "path": "apps/gateway/src/services/wecom-webhook.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS6 new-integrations program: WeCom callback inbound helpers: SHA-1 callback signature, AES-256-CBC message decryption with PKCS#7 (block size 32) validation and CorpID receive-id check, a flat DTD-free XML field reader, and text message normalization. Pure functions with no adapter host or injected dependency members; the route owns the HTTP boundary and GatewayService gains nothing.",
+      "evidence": "apps/gateway/src/services/wecom-webhook.test.ts covers the hand-computed SHA-1 vector, fixed-key round trip, block-size-32 padding, receive-id mismatch, bad padding, length overrun, malformed key without echo, DTD/entity rejection, the 256 KiB cap and text/event normalization; apps/gateway/src/routes/integrations.wecom-webhook.test.ts covers GET verification, POST signature and CorpID refusal, replay idempotency and the forced default-deny sender gate; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
       "path": "apps/gateway/src/services/channel-typing-adapters.ts",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 3,

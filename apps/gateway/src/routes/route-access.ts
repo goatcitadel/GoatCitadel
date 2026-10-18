@@ -154,6 +154,7 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/integrations/connections/:connectionId/nextcloud-talk/webhook", accessClass: "webhook" },
   { prefix: "/api/v1/integrations/connections/:connectionId/google-chat/webhook", accessClass: "webhook" },
   { prefix: "/api/v1/integrations/connections/:connectionId/qqbot/webhook", accessClass: "webhook" },
+  { prefix: "/api/v1/integrations/connections/:connectionId/wecom/webhook", accessClass: "webhook" },
   { prefix: "/api/v1/integrations", accessClass: "operator" },
 ];
 

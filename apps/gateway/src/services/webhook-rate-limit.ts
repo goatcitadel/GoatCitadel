@@ -12,7 +12,8 @@ export type AcceptedWebhookSource =
   | "line"
   | "nextcloud-talk"
   | "google-chat"
-  | "qqbot";
+  | "qqbot"
+  | "wecom";
 
 export type AcceptedWebhookRateLimit = ReturnType<FastifyInstance["createRateLimit"]>;
 

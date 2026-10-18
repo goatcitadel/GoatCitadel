@@ -3,6 +3,7 @@ import { evaluateChannelInboundAccess } from "@goatcitadel/contracts";
 import type { GoogleChatCertFetcher } from "../services/google-chat-webhook.js";
 import { registerGoogleChatWebhookRoutes } from "./integration-webhooks-google-chat-routes.js";
 import { registerQqbotWebhookRoutes } from "./integration-webhooks-qqbot-routes.js";
+import { registerWecomWebhookRoutes } from "./integration-webhooks-wecom-routes.js";
 import { registerLineWebhookRoutes } from "./integration-webhooks-line-routes.js";
 import { registerNextcloudTalkWebhookRoutes } from "./integration-webhooks-nextcloud-talk-routes.js";
 import { registerSlackWebhookRoutes } from "./integration-webhooks-slack-routes.js";
@@ -224,4 +225,5 @@ export const integrationWebhookRoutes: FastifyPluginAsync<IntegrationWebhookRout
   registerNextcloudTalkWebhookRoutes(fastify);
   registerGoogleChatWebhookRoutes(fastify, { fetchCerts: options?.googleChatCertFetcher });
   registerQqbotWebhookRoutes(fastify);
+  registerWecomWebhookRoutes(fastify);
 };
