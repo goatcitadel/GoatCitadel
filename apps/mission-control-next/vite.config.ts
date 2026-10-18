@@ -27,6 +27,17 @@ const RESTORED_TEST_EXCLUDE = [
   "**/.{idea,cache,output,temp}/**",
 ];
 
+// Inlined copy of `resolveLocalTestMaxWorkers` from the root vitest.shared.ts, for the
+// same tsconfig reason: cap local fork workers so parallel sessions cannot page the
+// machine; CI keeps vitest's default.
+function resolveLocalTestMaxWorkers(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  const override = Number.parseInt(env.GOATCITADEL_TEST_MAX_WORKERS ?? "", 10);
+  if (Number.isInteger(override) && override > 0) {
+    return override;
+  }
+  return env.CI ? undefined : 2;
+}
+
 const DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1", ".ts.net"];
 export const DEV_OPTIMIZE_DEPS_ESBUILD_TARGET = "esnext";
 const MONACO_PUBLIC_BASE = "/vendor/monaco/vs";
@@ -458,6 +469,7 @@ export default defineConfig(({ mode, command }) => {
     test: {
       alias: buildWorkspaceSourceAliases(),
       exclude: RESTORED_TEST_EXCLUDE,
+      maxWorkers: resolveLocalTestMaxWorkers(),
       setupFiles: "./src/test/setup.ts",
       testTimeout: 20000,
     },

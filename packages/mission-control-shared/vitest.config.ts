@@ -1,8 +1,9 @@
 import { defineConfig } from "vitest/config";
-import { restoredTestExclude } from "../../vitest.shared";
+import { resolveLocalTestMaxWorkers, restoredTestExclude } from "../../vitest.shared";
 
 export default defineConfig({
   test: {
+    maxWorkers: resolveLocalTestMaxWorkers(),
     exclude: restoredTestExclude,
     setupFiles: ["./src/test/setup.ts"],
   },
