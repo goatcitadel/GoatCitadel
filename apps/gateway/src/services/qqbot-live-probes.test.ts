@@ -34,7 +34,7 @@ describe("QQBot live probes", () => {
     expect(result.probe.steps.find((s) => s.key === "qqbot_sandbox_send")).toMatchObject({ status: "skipped" });
     expect(fetcher.mock.calls.some(([url]) => String(url).includes("/messages"))).toBe(false);
     const me = fetcher.mock.calls.find(([url]) => String(url).endsWith("/users/@me"));
-    expect(String(me?.[0])).toBe("https://api.sgroup.qq.com/users/@me");
+    expect(String(me?.[0])).toBe("https://api.bot.qq.com/users/@me");
     expect(new Headers((me?.[1] as RequestInit).headers).get("authorization")).toBe(`QQBot ${TOKEN}`);
     expect(JSON.stringify(result)).not.toContain(SECRET);
     expect(JSON.stringify(result)).not.toContain(TOKEN);

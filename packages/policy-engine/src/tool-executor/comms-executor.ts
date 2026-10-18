@@ -2358,7 +2358,9 @@ async function qqbotSend(
     throw new Error("Missing QQBot target");
   }
   const partIndex = Math.max(0, parseIntegerLike(args.replyToPartIndex) ?? 0);
-  if (partIndex >= QQBOT_MAX_PASSIVE_REPLIES) {
+  const replyMsgId = asString(args.replyAnchorMessageId) ?? asString(args.replyToMessageId) ?? asString(args.replyTo);
+  // The passive-reply cap only applies when a msg_id anchor makes this a passive reply; active sends are quota-bound instead.
+  if (replyMsgId && partIndex >= QQBOT_MAX_PASSIVE_REPLIES) {
     throw new Error("QQ allows at most 5 passive replies per message; shorten the reply");
   }
   const { tokenFetch, apiFetch } = chinaPlatformFetchers(allowlist, grantAllowlist);
@@ -2377,7 +2379,7 @@ async function qqbotSend(
     content: message,
     // Passive replies need the inbound message id; later chunks carry the previous QQ message id as
     // replyToMessageId, so the original anchor is read first.
-    replyMsgId: asString(args.replyAnchorMessageId) ?? asString(args.replyToMessageId) ?? asString(args.replyTo),
+    replyMsgId,
     msgSeq,
     fetcher: apiFetch,
   });

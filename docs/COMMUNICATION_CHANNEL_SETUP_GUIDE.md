@@ -497,7 +497,7 @@ Inbound is a signed webhook. GoatCitadel verifies the ed25519 signature (keyed f
 
 1. Create a QQ Bot Open Platform application and note the AppID and AppSecret.
 2. Export the AppSecret in the gateway environment, for example `QQBOT_APP_SECRET`.
-3. Add `bots.qq.com` and `api.sgroup.qq.com` (and `sandbox.api.sgroup.qq.com` if you use the sandbox) to the network allowlist.
+3. Add `bots.qq.com` and `api.bot.qq.com` (and `sandbox.api.sgroup.qq.com` if you use the sandbox) to the network allowlist.
 4. In GoatCitadel `Connections`, add `channel.qqbot` and set:
    - `appId=<AppID>`
    - `appSecretEnv=QQBOT_APP_SECRET` (an earlier `tokenEnv` value is shown here as `appSecretEnv` when you edit)

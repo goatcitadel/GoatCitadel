@@ -195,7 +195,7 @@ describe("executeTool", () => {
 
   it("adds the fixed QQBot and WeCom hosts for channel.send", () => {
     expect(resolveFixedOutboundHostsForTool("channel.send", "qqbot")).toEqual([
-      "api.sgroup.qq.com",
+      "api.bot.qq.com",
       "sandbox.api.sgroup.qq.com",
       "bots.qq.com",
     ]);
@@ -4473,7 +4473,7 @@ describe("executeTool", () => {
       ...policyConfig,
       sandbox: {
         ...policyConfig.sandbox,
-        networkAllowlist: ["bots.qq.com", "api.sgroup.qq.com", "sandbox.api.sgroup.qq.com", "qyapi.weixin.qq.com"],
+        networkAllowlist: ["bots.qq.com", "api.bot.qq.com", "sandbox.api.sgroup.qq.com", "qyapi.weixin.qq.com"],
       },
     };
     const qqConfig = {
@@ -4515,7 +4515,7 @@ describe("executeTool", () => {
         string,
         RequestInit,
       ];
-      expect(String(sendCall[0])).toBe("https://api.sgroup.qq.com/v2/groups/GROUP_OPENID/messages");
+      expect(String(sendCall[0])).toBe("https://api.bot.qq.com/v2/groups/GROUP_OPENID/messages");
       expect(new Headers(sendCall[1].headers).get("authorization")).toBe("QQBot qq-access");
       expect(JSON.parse(String(sendCall[1].body))).toEqual({
         content: "hello qq",
@@ -4567,6 +4567,20 @@ describe("executeTool", () => {
       );
       expect(JSON.stringify(sixth)).toContain("at most 5 passive replies");
       expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/messages"))).toHaveLength(0);
+
+      // An active send (no msg_id anchor) is not bound by the passive-reply cap.
+      const active = await executeTool(
+        {
+          toolName: "channel.send",
+          args: { connectionId: "conn-qqbot", message: "part six", replyToPartIndex: 5 },
+          agentId: "operator",
+          sessionId: "sess-qq-seq-d",
+        },
+        chinaPolicy,
+        storage,
+      );
+      expect(active).toMatchObject({ status: "sent" });
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/messages"))).toHaveLength(1);
       delete process.env.QQBOT_EXECUTOR_SECRET;
     });
 

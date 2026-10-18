@@ -33,6 +33,9 @@ const CHANNEL_DELIVERY_CHUNK_LIMITS: Record<string, number> = {
   slack: 32_000,
 };
 
+/** QQ accepts about five passive replies per inbound msg_id; active (anchor-less) sends are not bound by this. */
+const QQBOT_MAX_PASSIVE_REPLY_PARTS = 5;
+
 type ToolInvokeResultLike = Omit<ToolInvokeResult, "outcome"> & {
   outcome: ToolInvokeResult["outcome"] | "failed";
 };
@@ -202,6 +205,17 @@ export async function sendQueuedChannelDelivery(
 ): Promise<{ providerMessageId?: string; deliveryDiagnostics?: ChannelDeliveryDiagnostics }> {
   const baseInput = channelDeliveryPayloadToSendInput(input);
   const messageParts = readChannelDeliveryMessageParts(input.payload);
+  // Refuse before any chunk leaves so a too-long passive reply is never sent truncated.
+  if (
+    input.channelKey.toLowerCase() === "qqbot" &&
+    baseInput.replyToMessageId &&
+    messageParts.length > QQBOT_MAX_PASSIVE_REPLY_PARTS
+  ) {
+    throw createChannelDeliveryFailureError(
+      `QQ allows at most ${QQBOT_MAX_PASSIVE_REPLY_PARTS} passive replies per message; this reply needs ${messageParts.length} parts. Shorten the reply. Nothing was sent.`,
+      "blocked",
+    );
+  }
   if (messageParts.length <= 1) {
     let result: Awaited<ReturnType<ChannelDeliverySender>>;
     try {

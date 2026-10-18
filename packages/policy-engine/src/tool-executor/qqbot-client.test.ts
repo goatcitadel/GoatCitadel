@@ -115,7 +115,7 @@ describe("qqbot send", () => {
     });
     expect(result).toEqual({ messageId: "msg-1" });
     const { url, init, body } = call(fetcher);
-    expect(url).toBe("https://api.sgroup.qq.com/v2/groups/GROUP_OPENID/messages");
+    expect(url).toBe("https://api.bot.qq.com/v2/groups/GROUP_OPENID/messages");
     expect(init.method).toBe("POST");
     expect(new Headers(init.headers).get("authorization")).toBe("QQBot tok");
     expect(body).toEqual({ content: "hello", msg_type: 0, msg_id: "evt-1", msg_seq: 2 });
@@ -124,7 +124,7 @@ describe("qqbot send", () => {
   it("routes user, channel and dm targets and the sandbox host", async () => {
     let fetcher = sendFetcher();
     await qqbotSendText({ token: "t", sandbox: false, target: "user:U1", content: "c", msgSeq: 1, fetcher });
-    expect(call(fetcher).url).toBe("https://api.sgroup.qq.com/v2/users/U1/messages");
+    expect(call(fetcher).url).toBe("https://api.bot.qq.com/v2/users/U1/messages");
     expect(call(fetcher).body).toEqual({ content: "c", msg_type: 0, msg_seq: 1 });
 
     fetcher = sendFetcher();
@@ -137,7 +137,7 @@ describe("qqbot send", () => {
       msgSeq: 1,
       fetcher,
     });
-    expect(call(fetcher).url).toBe("https://api.sgroup.qq.com/channels/C9/messages");
+    expect(call(fetcher).url).toBe("https://api.bot.qq.com/channels/C9/messages");
     expect(call(fetcher).body).toEqual({ content: "c", msg_id: "m" });
 
     fetcher = sendFetcher();
@@ -215,7 +215,7 @@ describe("qqbot send", () => {
   it("percent-encodes the target id", async () => {
     const fetcher = sendFetcher();
     await qqbotSendText({ token: "t", sandbox: false, target: "group:a/b", content: "c", msgSeq: 1, fetcher });
-    expect(call(fetcher).url).toBe("https://api.sgroup.qq.com/v2/groups/a%2Fb/messages");
+    expect(call(fetcher).url).toBe("https://api.bot.qq.com/v2/groups/a%2Fb/messages");
   });
 
   it("rejects an unknown target prefix before any request", async () => {

@@ -23,7 +23,7 @@ const FIXED_OUTBOUND_HOSTS_BY_CHANNEL_KEY = new Map<string, string[]>([
   ["gmail", ["gmail.googleapis.com"]],
   ["google-calendar", ["www.googleapis.com"]],
   ["line", ["api.line.me"]],
-  ["qqbot", ["api.sgroup.qq.com", "sandbox.api.sgroup.qq.com", "bots.qq.com"]],
+  ["qqbot", ["api.bot.qq.com", "sandbox.api.sgroup.qq.com", "bots.qq.com"]],
   ["slack", ["slack.com"]],
   ["telegram", ["api.telegram.org"]],
   ["wecom", ["qyapi.weixin.qq.com"]],

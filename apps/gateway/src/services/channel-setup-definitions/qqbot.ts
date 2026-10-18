@@ -48,7 +48,7 @@ export function createQqbotDefinition(): ChannelSetupRuntimeDefinition {
             ),
             note(
               "warning",
-              "QQBot is a guided beta lane. Outbound is text-only (attachments are rejected), reactions and unsend are not supported, and the QQ hosts (bots.qq.com, api.sgroup.qq.com, and sandbox.api.sgroup.qq.com for the sandbox) must be in the network allowlist.",
+              "QQBot is a guided beta lane. Outbound is text-only (attachments are rejected), reactions and unsend are not supported, and the QQ hosts (bots.qq.com, api.bot.qq.com, and sandbox.api.sgroup.qq.com for the sandbox) must be in the network allowlist.",
             ),
           ],
         },

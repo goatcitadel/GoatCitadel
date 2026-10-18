@@ -45,6 +45,32 @@ describe("channel provider acknowledgement", () => {
     ]);
   });
 
+  it("sends nothing when a passive QQBot reply would need more than 5 parts", async () => {
+    const send = vi.fn().mockResolvedValue({ status: "sent", providerMessageId: "p" });
+    await expect(
+      sendQueuedChannelDelivery(send, {
+        ...input,
+        channelKey: "qqbot",
+        payload: {
+          ...input.payload,
+          replyToMessageId: "inbound-1",
+          messageParts: ["a", "b", "c", "d", "e", "f"],
+        },
+      }),
+    ).rejects.toThrow(/at most 5 passive replies/);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not apply the QQBot passive-reply limit to active (no anchor) deliveries", async () => {
+    const send = vi.fn().mockResolvedValue({ status: "sent", providerMessageId: "p" });
+    await sendQueuedChannelDelivery(send, {
+      ...input,
+      channelKey: "qqbot",
+      payload: { ...input.payload, messageParts: ["a", "b", "c", "d", "e", "f"] },
+    });
+    expect(send).toHaveBeenCalledTimes(6);
+  });
+
   it("splits WeCom and QQBot deliveries at their conservative chunk limits", () => {
     const wecom = buildChannelDeliveryPayload({ connectionId: "c", target: "t", message: "x".repeat(1500) }, "wecom");
     expect((wecom.messageParts as string[]).every((part) => part.length <= 680)).toBe(true);

@@ -119,7 +119,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
       "Send QQ group, C2C, channel and direct-message text through a QQ Bot Open Platform app and receive messages on a signed webhook.",
     prerequisites: [
       "A QQ Bot Open Platform app with its AppID and its AppSecret in a gateway environment variable (for example QQBOT_APP_SECRET).",
-      "The QQ hosts (bots.qq.com and api.sgroup.qq.com, or sandbox.api.sgroup.qq.com for the sandbox) added to the network allowlist.",
+      "The QQ hosts (bots.qq.com and api.bot.qq.com, or sandbox.api.sgroup.qq.com for the sandbox) added to the network allowlist.",
       "A public HTTPS Gateway URL registered as the callback URL in the QQ console.",
       "For inbound, the QQ openids allowed to start conversations; a dropped message's sender_not_allowlisted diagnostic shows the id.",
     ],

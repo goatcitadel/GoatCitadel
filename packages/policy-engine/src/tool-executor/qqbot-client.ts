@@ -11,7 +11,10 @@ import { readBoundedResponseJson } from "../sandbox/network-guard.js";
 export type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
 
 const QQBOT_TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
-const QQBOT_API_BASE = "https://api.sgroup.qq.com";
+// QQ's 2026-08-10 API changelog unified all API call domains under api.bot.qq.com. The changelog does not
+// mention the token endpoint or the sandbox host, so those stay on bots.qq.com and sandbox.api.sgroup.qq.com
+// (unverified; revisit if QQ publishes a unified sandbox host).
+const QQBOT_API_BASE = "https://api.bot.qq.com";
 const QQBOT_SANDBOX_API_BASE = "https://sandbox.api.sgroup.qq.com";
 const QQBOT_RESPONSE_LIMITS = { maxBytes: 64 * 1024, timeoutMs: 10_000 } as const;
 const TOKEN_EXPIRY_MARGIN_MS = 60_000;
