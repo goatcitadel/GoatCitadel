@@ -1297,7 +1297,9 @@ describe("CapabilitySystemService", () => {
       await harness.service.executeApprovedCodeModeRun(run.approvalId!);
 
       const finished = harness.storage.codeModeRuns.get(run.runId);
-      expect(finished.status, finished.error).toBe("completed");
+      expect(finished.status, `${finished.error ?? ""}\nstderr: ${finished.stderrPreview ?? "(none)"}`).toBe(
+        "completed",
+      );
       expect(JSON.stringify(finished.result)).toContain('"sum":3');
       expect(launches).toHaveLength(1);
       expect(launches[0]!.command).toBe("docker");
