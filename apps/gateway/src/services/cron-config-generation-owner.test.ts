@@ -223,6 +223,24 @@ describe("CronConfigGenerationOwner", () => {
     expect(rezonedImprovement.lastRunId).toBe("run-1");
   });
 
+  it("keeps an operator-assigned citadel when a reconciler omits citadelId, and clears it only when named", async () => {
+    const scoped = spec({ jobId: "curator_weekly", name: "Curator", action: "curator", citadelId: "team" });
+    const { root } = await createRoot([scoped]);
+    const storage = createStorage(root);
+    storage.cronJobs.createSpec(scoped);
+    const configGeneration = new ConfigGenerationService(root);
+    const owner = new CronConfigGenerationOwner(configGeneration, createSqliteAsyncStorage(storage));
+    const { citadelId: _omitted, ...withoutScope } = scoped;
+
+    const reconciled = await owner.reconcileSpec({ ...withoutScope, description: "startup ensure" });
+    expect(reconciled.citadelId).toBe("team");
+    const canonical = (configGeneration.getActivePayload().cronJobs as { jobs: Array<{ citadelId?: string }> }).jobs;
+    expect(canonical[0]?.citadelId).toBe("team");
+
+    const cleared = await owner.reconcileSpec({ ...withoutScope, citadelId: undefined });
+    expect(cleared.citadelId).toBeUndefined();
+  });
+
   it("rolls Storage back exactly when owner apply fails and publishes the prior canonical state", async () => {
     const job = spec();
     const { root } = await createRoot([job]);

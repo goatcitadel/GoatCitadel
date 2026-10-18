@@ -1,5 +1,9 @@
-import { assertOwnedAutonomousDurableReplay, assertOwnedCronChatDurableRun,
-  toCanonicalAutonomousChatChildIdentity, cronChatAdmissionIdentityMatches } from "./autonomous-chat-replay-authority.js";
+import {
+  assertOwnedAutonomousDurableReplay,
+  assertOwnedCronChatDurableRun,
+  toCanonicalAutonomousChatChildIdentity,
+  cronChatAdmissionIdentityMatches,
+} from "./autonomous-chat-replay-authority.js";
 import { createAutonomousOccurrenceAuthorityHost } from "./autonomous-chat-occurrence-guards.js";
 /* eslint-disable max-lines -- Autonomous admission and recovery stay co-located while the runtime contract is being frozen. */
 import { createHash, randomUUID } from "node:crypto";
@@ -33,9 +37,7 @@ import {
   HEARTBEAT_PERMISSION_PROFILE_ID,
   SCHEDULED_TURN_PERMISSION_PROFILE_ID,
 } from "./gateway/autonomous-turn-policy.js";
-import {
-  runCommitmentSweep as runCommitmentSweepCore,
-} from "./gateway/commitment-sweep-service.js";
+import { runCommitmentSweep as runCommitmentSweepCore } from "./gateway/commitment-sweep-service.js";
 import {
   buildScheduledCreatorIntersectionProfile,
   permissionProfileAppliesToCreator,
@@ -66,8 +68,13 @@ import {
   type AutonomousChatChildIdentity,
   type CanonicalCronChatAdmissionIdentity,
 } from "./chat-durable-runtime-authority.js";
-import { assertScheduledConfigMatches, assertScheduledOccurrenceCurrent, buildCronChatAdmissionIdentity,
-  buildScheduledOccurrenceReference, readCurrentScheduledOccurrence } from "./scheduled-chat-authority.js";
+import {
+  assertScheduledConfigMatches,
+  assertScheduledOccurrenceCurrent,
+  buildCronChatAdmissionIdentity,
+  buildScheduledOccurrenceReference,
+  readCurrentScheduledOccurrence,
+} from "./scheduled-chat-authority.js";
 export { buildCronChatAdmissionIdentity } from "./scheduled-chat-authority.js";
 import { assertHeartbeatOccurrenceCurrent, buildHeartbeatOccurrenceReference } from "./heartbeat-chat-authority.js";
 
@@ -136,9 +143,19 @@ export interface ChatAutonomousTurnDeps {
     | "gatewaySql"
     | "runImmediateTransaction"
   >;
-  cron: Pick<CronAutomationService, "listCronJobs" | "getCronJob" | "deleteCronJob" | "createCronJob" | "processCommitmentOccurrence">;
-  isFeatureEnabled(flag: "autonomyV1Disabled" | "durableKernelV1Enabled" | "scheduledChatTurnsV1Enabled" | "proactiveHeartbeatTurnsV1Enabled" | "commitmentScheduledTurnsV1Enabled"): Promise<boolean>;
-  createCronInboxTask(job: CronJobRecord, options?: { taskId?: string }): Promise<TaskRecord>;
+  cron: Pick<
+    CronAutomationService,
+    "listCronJobs" | "getCronJob" | "deleteCronJob" | "createCronJob" | "processCommitmentOccurrence"
+  >;
+  isFeatureEnabled(
+    flag:
+      | "autonomyV1Disabled"
+      | "durableKernelV1Enabled"
+      | "scheduledChatTurnsV1Enabled"
+      | "proactiveHeartbeatTurnsV1Enabled"
+      | "commitmentScheduledTurnsV1Enabled",
+  ): Promise<boolean>;
+  createCronInboxTask(job: CronJobRecord, options?: { taskId?: string; workspaceId?: string }): Promise<TaskRecord>;
   getSessionAutonomyPrefs: HeartbeatTickDeps["getSessionAutonomyPrefs"];
   patchSessionAutonomyPrefs(sessionId: string, patch: { proactiveMode: "off" }): Promise<void>;
   listChatSessions(query: {
@@ -232,18 +249,28 @@ export async function runCronAgentTurn(
     config: CronAgentTurnConfig;
     /** Canonical cron-run owner. When present, deterministic child admission is mandatory. */
     cronRun?: CronRunExecutionToken;
+    /** Workspace of the job's citadel, resolved and scope-checked by the cron owner. */
+    workspaceId?: string;
   },
 ): Promise<CronAgentTurnRunOutcome> {
   const cronRun = input.cronRun ? assertCronRunOwnsInvocation(input.cronRun, input) : undefined;
   const admissionIdentity = cronRun ? buildCronChatAdmissionIdentity(cronRun) : undefined;
   const inboxTaskId = cronRun ? buildCronInboxTaskId(cronRun) : undefined;
+  // Fallback inbox tasks are filed in the job's citadel workspace, like the turn itself.
+  const inboxOptions = {
+    ...(inboxTaskId ? { taskId: inboxTaskId } : {}),
+    ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+  };
   const autonomyDisabled = await deps.isFeatureEnabled("autonomyV1Disabled");
-  if (autonomyDisabled || input.config.inertInboxFallback ||
-    (input.config.commitment && !(await deps.isFeatureEnabled("commitmentScheduledTurnsV1Enabled")))) {
-    const task = await deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
+  if (
+    autonomyDisabled ||
+    input.config.inertInboxFallback ||
+    (input.config.commitment && !(await deps.isFeatureEnabled("commitmentScheduledTurnsV1Enabled")))
+  ) {
+    const task = await deps.createCronInboxTask(input.job, inboxOptions);
     return { mode: "inbox", taskId: task.taskId };
   }
-  const scheduledEnabled = Boolean(admissionIdentity && await deps.isFeatureEnabled("scheduledChatTurnsV1Enabled"));
+  const scheduledEnabled = Boolean(admissionIdentity && (await deps.isFeatureEnabled("scheduledChatTurnsV1Enabled")));
   if (!scheduledEnabled) {
     let historicalRunExists = false;
     if (admissionIdentity) {
@@ -255,26 +282,42 @@ export async function runCronAgentTurn(
       }
     }
     if (!historicalRunExists) {
-      const task = await deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
+      const task = await deps.createCronInboxTask(input.job, inboxOptions);
       return { mode: "inbox", taskId: task.taskId };
     }
   }
-  const currentOccurrence = scheduledEnabled && admissionIdentity
-    ? await readCurrentScheduledOccurrence(deps, buildScheduledOccurrenceReference(admissionIdentity)) : undefined;
+  const currentOccurrence =
+    scheduledEnabled && admissionIdentity
+      ? await readCurrentScheduledOccurrence(deps, buildScheduledOccurrenceReference(admissionIdentity))
+      : undefined;
   if (currentOccurrence) assertScheduledConfigMatches(input.config, currentOccurrence.config);
-  if (currentOccurrence && !input.config.commitment && !hasCurrentCronCreatorAuthority({
-    ...currentOccurrence.job, action: "agent_turn", actionConfig: currentOccurrence.run.actionSnapshot.actionConfig as CronJobRecord["actionConfig"],
-  })) {
-    const task = await deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
-    return { mode: "inbox", taskId: task.taskId, profilePosture: "creator_profile_missing",
-      profileWarning: "This schedule needs an authenticated action review before agent execution." };
+  if (
+    currentOccurrence &&
+    !input.config.commitment &&
+    !hasCurrentCronCreatorAuthority({
+      ...currentOccurrence.job,
+      action: "agent_turn",
+      actionConfig: currentOccurrence.run.actionSnapshot.actionConfig as CronJobRecord["actionConfig"],
+    })
+  ) {
+    const task = await deps.createCronInboxTask(input.job, inboxOptions);
+    return {
+      mode: "inbox",
+      taskId: task.taskId,
+      profilePosture: "creator_profile_missing",
+      profileWarning: "This schedule needs an authenticated action review before agent execution.",
+    };
   }
   if (input.config.commitment) {
-    if (!currentOccurrence) throw new ConflictError({ message: "Commitment requires current canonical cron authority." });
-    await deps.storage.agentCommitments.assertScheduledOccurrence(currentOccurrence.run.runId, currentOccurrence.config);
+    if (!currentOccurrence)
+      throw new ConflictError({ message: "Commitment requires current canonical cron authority." });
+    await deps.storage.agentCommitments.assertScheduledOccurrence(
+      currentOccurrence.run.runId,
+      currentOccurrence.config,
+    );
   }
   // Validate the canonical cron owner before creating or mutating a session.
-  const sessionId = await ensureCronAgentSession(deps, input.job.jobId, input.config.sessionId);
+  const sessionId = await ensureCronAgentSession(deps, input.job.jobId, input.config.sessionId, input.workspaceId);
   const systemActorId = `system:cron:${input.job.jobId}`;
   const scheduledPolicy = await resolveScheduledAgentTurnPolicy(deps, {
     config: input.config,
@@ -285,7 +328,7 @@ export async function runCronAgentTurn(
     occurrenceCreatedAt: currentOccurrence?.run.createdAt,
   });
   if ("failClosedReason" in scheduledPolicy) {
-    const task = await deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
+    const task = await deps.createCronInboxTask(input.job, inboxOptions);
     return {
       mode: "inbox",
       taskId: task.taskId,
@@ -327,8 +370,11 @@ export async function runCronAgentTurn(
  * (pending-only).
  */
 export async function runCommitmentSweep(deps: ChatAutonomousTurnDeps): Promise<void> {
-  if ((await deps.isFeatureEnabled("autonomyV1Disabled")) || !(await deps.isFeatureEnabled("durableKernelV1Enabled")) ||
-    !(await deps.isFeatureEnabled("commitmentScheduledTurnsV1Enabled"))) {
+  if (
+    (await deps.isFeatureEnabled("autonomyV1Disabled")) ||
+    !(await deps.isFeatureEnabled("durableKernelV1Enabled")) ||
+    !(await deps.isFeatureEnabled("commitmentScheduledTurnsV1Enabled"))
+  ) {
     return;
   }
   await deps.storage.agentCommitments.reconcileScheduled();
@@ -339,7 +385,9 @@ export async function runCommitmentSweep(deps: ChatAutonomousTurnDeps): Promise<
     deliverCommitment: async (commitment) => {
       const deliveryChannel = await resolveCommitmentDeliveryChannel(deps, commitment.sessionId);
       const run = await deps.storage.agentCommitments.claimScheduledOccurrence({
-        commitmentId: commitment.commitmentId, expectedRevision: commitment.revision ?? 1, deliveryChannel,
+        commitmentId: commitment.commitmentId,
+        expectedRevision: commitment.revision ?? 1,
+        deliveryChannel,
       });
       await deps.cron.processCommitmentOccurrence(run.runId);
       return true;
@@ -389,8 +437,11 @@ async function resolveCommitmentDeliveryChannel(
  * Eval-integrity / non-human / replay-scratch sessions are excluded.
  */
 export async function runHeartbeatSweep(deps: ChatAutonomousTurnDeps): Promise<void> {
-  if ((await deps.isFeatureEnabled("autonomyV1Disabled")) || !(await deps.isFeatureEnabled("durableKernelV1Enabled")) ||
-    !(await deps.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled"))) {
+  if (
+    (await deps.isFeatureEnabled("autonomyV1Disabled")) ||
+    !(await deps.isFeatureEnabled("durableKernelV1Enabled")) ||
+    !(await deps.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled"))
+  ) {
     return;
   }
   const now = new Date();
@@ -573,19 +624,29 @@ async function ensureCronAgentSession(
   deps: ChatAutonomousTurnDeps,
   jobId: string,
   configuredSessionId?: string,
+  citadelWorkspaceId?: string,
 ): Promise<string> {
+  const workspaceId = deps.normalizeWorkspaceId(citadelWorkspaceId);
   const explicit = configuredSessionId?.trim();
   if (explicit && (await deps.getSession(explicit))) {
-    if (!(await deps.storage.chatSessionMeta.get(explicit))) {
+    const explicitMeta = await deps.storage.chatSessionMeta.get(explicit);
+    if (!explicitMeta) {
       throw new Error("configured cron session has no controllable Chat lifecycle");
+    }
+    if (citadelWorkspaceId && deps.normalizeWorkspaceId(explicitMeta.workspaceId) !== workspaceId) {
+      throw new Error("configured cron session is outside the job's citadel workspace");
     }
     return explicit;
   }
   const peer = `cron_${createHash("sha256").update(jobId).digest("hex").slice(0, 12)}`;
-  const sessionKey = `mission:scheduler:${peer}`;
+  // Citadel-scoped jobs get their own stable session per workspace; global jobs keep the
+  // historical key so existing scheduler sessions are reused unchanged.
+  const sessionKey =
+    workspaceId === deps.normalizeWorkspaceId(undefined)
+      ? `mission:scheduler:${peer}`
+      : `mission:scheduler:${peer}:${workspaceId}`;
   const sessionId = `sess_${createHash("sha256").update(sessionKey).digest("hex").slice(0, 24)}`;
   const now = new Date().toISOString();
-  const workspaceId = deps.normalizeWorkspaceId(undefined);
   const existingMeta = await deps.storage.chatSessionMeta.get(sessionId);
   if (existingMeta && deps.normalizeWorkspaceId(existingMeta.workspaceId) !== workspaceId) {
     throw new Error("stable cron session key already belongs to another workspace");
@@ -652,7 +713,10 @@ async function resolveScheduledAgentTurnPolicy(
   });
   const createdBy = input.config.createdBy;
   if (!createdBy) {
-    return { profilePosture: "creator_profile_missing", failClosedReason: "Scheduled agent turn has no creator provenance." };
+    return {
+      profilePosture: "creator_profile_missing",
+      failClosedReason: "Scheduled agent turn has no creator provenance.",
+    };
   }
   const creatorProfileId = createdBy.permissionProfileId?.trim();
   if (!creatorProfileId) {
@@ -841,10 +905,14 @@ export async function enqueueAutonomousChatTurn(
       ...(admissionIdentity ? { admissionIdentity } : {}),
     };
   }
-  const scheduledOccurrence = kind === "scheduled" && admissionIdentity && await deps.isFeatureEnabled("scheduledChatTurnsV1Enabled")
-    ? buildScheduledOccurrenceReference(admissionIdentity) : undefined;
-  const heartbeatReference = kind === "heartbeat" && heartbeatOccurrence && await deps.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled")
-    ? buildHeartbeatOccurrenceReference(heartbeatOccurrence.occurrence) : undefined;
+  const scheduledOccurrence =
+    kind === "scheduled" && admissionIdentity && (await deps.isFeatureEnabled("scheduledChatTurnsV1Enabled"))
+      ? buildScheduledOccurrenceReference(admissionIdentity)
+      : undefined;
+  const heartbeatReference =
+    kind === "heartbeat" && heartbeatOccurrence && (await deps.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled"))
+      ? buildHeartbeatOccurrenceReference(heartbeatOccurrence.occurrence)
+      : undefined;
   if (!scheduledOccurrence && !heartbeatReference) {
     throw new Error(
       "Scheduled and heartbeat Chat execution is temporarily unavailable while new turns use live capabilities.",
@@ -864,8 +932,16 @@ export async function enqueueAutonomousChatTurn(
   const requestLease = deps.sessionControlRuntimeOwner.startRequestLeaseHeartbeat(turnAdmission);
   try {
     const scheduledHost = createAutonomousOccurrenceAuthorityHost(deps);
-    if (scheduledOccurrence) await assertScheduledOccurrenceCurrent(scheduledHost, { reference: scheduledOccurrence, admission: turnAdmission });
-    if (heartbeatReference) await assertHeartbeatOccurrenceCurrent(scheduledHost, { reference: heartbeatReference, admission: turnAdmission });
+    if (scheduledOccurrence)
+      await assertScheduledOccurrenceCurrent(scheduledHost, {
+        reference: scheduledOccurrence,
+        admission: turnAdmission,
+      });
+    if (heartbeatReference)
+      await assertHeartbeatOccurrenceCurrent(scheduledHost, {
+        reference: heartbeatReference,
+        admission: turnAdmission,
+      });
     const prepared = await deps.prepareAgentChatTurn(input.sessionId, request, {
       ingestUserMessage: false,
       userMessageId: childIdentity.userMessageId,
@@ -895,15 +971,28 @@ export async function enqueueAutonomousChatTurn(
     if (Boolean(capabilityCatalogSnapshots) !== Boolean(chatTurnCapabilityProfiles)) {
       throw new Error("Autonomous Chat capability admission stores are incompletely configured.");
     }
-    if (scheduledOccurrence && (!prepared.featureAdmission ||
-      canonicalJsonString(prepared.featureAdmission.references.scheduledOccurrence) !== canonicalJsonString(scheduledOccurrence))) {
+    if (
+      scheduledOccurrence &&
+      (!prepared.featureAdmission ||
+        canonicalJsonString(prepared.featureAdmission.references.scheduledOccurrence) !==
+          canonicalJsonString(scheduledOccurrence))
+    ) {
       throw new Error("Scheduled Chat turn has no exact admitted occurrence reference.");
     }
-    if (heartbeatReference && (!prepared.featureAdmission ||
-      canonicalJsonString(prepared.featureAdmission.references.heartbeatOccurrence) !== canonicalJsonString(heartbeatReference))) {
+    if (
+      heartbeatReference &&
+      (!prepared.featureAdmission ||
+        canonicalJsonString(prepared.featureAdmission.references.heartbeatOccurrence) !==
+          canonicalJsonString(heartbeatReference))
+    ) {
       throw new Error("Heartbeat Chat turn has no exact admitted occurrence reference.");
     }
-    if (capabilityStoresPresent && !scheduledOccurrence && !heartbeatReference && (!prepared.capabilityProfile || !prepared.capabilityCatalogSnapshot)) {
+    if (
+      capabilityStoresPresent &&
+      !scheduledOccurrence &&
+      !heartbeatReference &&
+      (!prepared.capabilityProfile || !prepared.capabilityCatalogSnapshot)
+    ) {
       throw new Error(`Autonomous Chat turn ${prepared.turnId} cannot be admitted without its capability profile.`);
     }
     if (prepared.capabilityProfile) {
@@ -979,8 +1068,16 @@ export async function enqueueAutonomousChatTurn(
     let run!: DurableRunForTrace & { runId: string };
     const admit = async () => {
       await deps.sessionControlRuntimeOwner.assertActiveTurnWrite(turnAdmission);
-      if (scheduledOccurrence) await assertScheduledOccurrenceCurrent(scheduledHost, { reference: scheduledOccurrence, admission: turnAdmission });
-      if (heartbeatReference) await assertHeartbeatOccurrenceCurrent(scheduledHost, { reference: heartbeatReference, admission: turnAdmission });
+      if (scheduledOccurrence)
+        await assertScheduledOccurrenceCurrent(scheduledHost, {
+          reference: scheduledOccurrence,
+          admission: turnAdmission,
+        });
+      if (heartbeatReference)
+        await assertHeartbeatOccurrenceCurrent(scheduledHost, {
+          reference: heartbeatReference,
+          admission: turnAdmission,
+        });
       if (prepared.capabilityProfile && prepared.capabilityCatalogSnapshot && capabilityStoresPresent) {
         await chatDurableRunService.persistPreparedChatCapabilityAdmission(
           {
@@ -1030,10 +1127,12 @@ export async function enqueueAutonomousChatTurn(
           admissionId: heartbeatOccurrence.occurrence.admissionId,
           turnId: heartbeatOccurrence.occurrence.turnId,
           durableRunId: heartbeatOccurrence.occurrence.durableRunId,
-          ...(heartbeatReference ? { featureReferenceSha256: prepared.featureAdmission!.referenceSha256 } : {
-            capabilityProfileId: prepared.capabilityProfile!.profileId,
-            capabilityProfileHash: prepared.capabilityProfile!.hashes.profileHash,
-          }),
+          ...(heartbeatReference
+            ? { featureReferenceSha256: prepared.featureAdmission!.referenceSha256 }
+            : {
+                capabilityProfileId: prepared.capabilityProfile!.profileId,
+                capabilityProfileHash: prepared.capabilityProfile!.hashes.profileHash,
+              }),
         });
       }
     };
@@ -1239,14 +1338,17 @@ export async function scheduleManage(
     ...(createdByJobId ? { createdByJobId } : {}),
   });
   const jobId = await generateScheduleJobId(deps, validated.name);
-  const created = await deps.cron.createCronJob({
-    jobId,
-    name: validated.name,
-    action: "agent_turn",
-    schedule: validated.schedule,
-    ...(validated.endAt ? { endAt: validated.endAt } : {}),
-    actionConfig: buildScheduleCreateActionConfig(validated),
-  }, { actorId: validated.createdBy.operatorId ?? validated.createdBy.authActorId ?? "", source: "admitted_chat" });
+  const created = await deps.cron.createCronJob(
+    {
+      jobId,
+      name: validated.name,
+      action: "agent_turn",
+      schedule: validated.schedule,
+      ...(validated.endAt ? { endAt: validated.endAt } : {}),
+      actionConfig: buildScheduleCreateActionConfig(validated),
+    },
+    { actorId: validated.createdBy.operatorId ?? validated.createdBy.authActorId ?? "", source: "admitted_chat" },
+  );
   return {
     op: "create",
     jobId: created.jobId,
