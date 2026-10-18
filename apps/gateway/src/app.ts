@@ -669,7 +669,7 @@ function classifyRateLimitBucket(
 }
 
 function isSignedInboundWebhookRoute(normalizedUrl: string): boolean {
-  return /^\/api\/v1\/integrations\/connections\/[^/]+\/(?:[^/]+\/inbound|(?:slack|telegram|whatsapp|line|nextcloud-talk)\/webhook)$/u.test(
+  return /^\/api\/v1\/integrations\/connections\/[^/]+\/(?:[^/]+\/inbound|(?:slack|telegram|whatsapp|line|nextcloud-talk|google-chat|qqbot|wecom)\/webhook)$/u.test(
     normalizedUrl,
   );
 }

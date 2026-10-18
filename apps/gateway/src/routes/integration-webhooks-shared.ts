@@ -65,6 +65,10 @@ export function resolveNextcloudTalkSecret(config: Record<string, unknown>): str
   );
 }
 
+export function resolveQqbotSecret(config: Record<string, unknown>): string | undefined {
+  return readConfigSecret(config, "appSecret", "appSecretEnv");
+}
+
 export function resolveWhatsAppAppSecret(config: Record<string, unknown>): string | undefined {
   return (
     readConfigSecret(config, "appSecret", "appSecretEnv") ??
