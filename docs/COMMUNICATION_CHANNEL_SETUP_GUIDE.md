@@ -7,9 +7,9 @@ This guide walks through GoatCitadel channel setup in the order that makes the m
 
 For parity status and tranche tracking, see [OPENCLAW_PARITY_STATUS.md](./OPENCLAW_PARITY_STATUS.md).
 
-Guided Mission Control setup is currently available for `channel.discord`, `channel.slack`, `channel.telegram`, `channel.google-chat`, `channel.teams`, `channel.whatsapp`, `channel.signal`, `channel.mattermost`, `channel.imessage`, `channel.nextcloud-talk`, `channel.line`, `channel.zalo`, and `channel.zalouser`.
+Guided Mission Control setup is currently available for `channel.discord`, `channel.slack`, `channel.telegram`, `channel.google-chat`, `channel.teams`, `channel.whatsapp`, `channel.signal`, `channel.mattermost`, `channel.matrix`, `channel.imessage`, `channel.nextcloud-talk`, `channel.line`, `channel.zalo`, and `channel.zalouser`.
 
-Discord, Slack, Telegram, Google Chat, Teams, Mattermost, WhatsApp, Signal, LINE, iMessage, Zalo OA, and Zalo Personal guided test/retest flows now run live probe coverage before finalize. WhatsApp, Signal, Zalo OA, and Zalo Personal still rely on operator-controlled sandbox targets or bridge-native delivery confirmation for pre-finalize send checks.
+Discord, Slack, Telegram, Google Chat, Teams, Mattermost, Matrix, WhatsApp, Signal, LINE, iMessage, Zalo OA, and Zalo Personal guided test/retest flows now run live probe coverage before finalize. WhatsApp, Signal, Zalo OA, and Zalo Personal still rely on operator-controlled sandbox targets or bridge-native delivery confirmation for pre-finalize send checks.
 
 ## Guided Channel Setup At A Glance
 
@@ -21,6 +21,7 @@ Discord, Slack, Telegram, Google Chat, Teams, Mattermost, WhatsApp, Signal, LINE
 | `channel.google-chat` | Incoming webhook, or Chat app service-account key | sandbox webhook probe (webhook mode); Google-signed JWT webhook inbound plus API send/reply/unsend in Chat app mode | yes |
 | `channel.teams` | Incoming webhook | sandbox webhook probe | yes |
 | `channel.mattermost` | Bot token | auth, channel resolution, sandbox send/delete; opt-in bot WebSocket inbound (`inboundStreamEnabled`) | yes |
+| `channel.matrix` | Bot access token | whoami auth, joined-room check, sandbox `m.notice` send; opt-in `/sync` inbound (`inboundStreamEnabled`) | yes |
 | `channel.whatsapp` | Cloud API access token + phone-number id | sender auth plus sandbox send; signed inbound webhook runtime when app secret + verify token are configured | yes |
 | `channel.signal` | Bridge URL | sandbox send through the Signal bridge JSON-RPC path; opt-in signal-cli daemon event-stream inbound (`receiveEvents`) | yes |
 | `channel.imessage` | BlueBubbles bridge URL + password | bridge query plus sandbox send/unsend | yes |
@@ -33,7 +34,7 @@ Discord, Slack, Telegram, Google Chat, Teams, Mattermost, WhatsApp, Signal, LINE
 
 Inbound capability is derived from the runtime capability rules (`packages/gateway-core/src/channel-core.ts`), not from this doc:
 
-- **Bidirectional (inbound available when configured):** Telegram, Slack, Discord, WhatsApp (app secret + verify token), LINE (channel secret), Nextcloud Talk (webhook), ntfy (opt-in persistent subscription to a topic's JSON stream; the topic is the sender, so allow `ntfy-topic:<topic>`, and GoatCitadel's own publishes are tagged and ignored on the way back in. The token gates reading the topic; anyone able to publish to the subscribed topic can start turns, so use a topic whose write access is limited to trusted publishers. Messages published while the gateway is disconnected or restarting are skipped: no history is fetched on reconnect after a restart or a connection edit. A stream silent for 2 minutes is reconnected), Mattermost (opt-in persistent bot WebSocket for `posted` events; allow the Mattermost user ids that may start turns, and the bot's own and system posts are ignored; Mattermost has no replay, so posts sent while the socket is disconnected or that fail acceptance are not recovered; the bot pings the socket every 30 seconds and reconnects one that answers nothing for 90 seconds), Signal (opt-in `receiveEvents` subscription to a `signal-cli daemon --http` event stream; see below), Google Chat (Chat app mode only: a service-account key plus `audienceType`/`audience`; see below).
+- **Bidirectional (inbound available when configured):** Telegram, Slack, Discord, WhatsApp (app secret + verify token), LINE (channel secret), Nextcloud Talk (webhook), ntfy (opt-in persistent subscription to a topic's JSON stream; the topic is the sender, so allow `ntfy-topic:<topic>`, and GoatCitadel's own publishes are tagged and ignored on the way back in. The token gates reading the topic; anyone able to publish to the subscribed topic can start turns, so use a topic whose write access is limited to trusted publishers. Messages published while the gateway is disconnected or restarting are skipped: no history is fetched on reconnect after a restart or a connection edit. A stream silent for 2 minutes is reconnected), Mattermost (opt-in persistent bot WebSocket for `posted` events; allow the Mattermost user ids that may start turns, and the bot's own and system posts are ignored; Mattermost has no replay, so posts sent while the socket is disconnected or that fail acceptance are not recovered; the bot pings the socket every 30 seconds and reconnects one that answers nothing for 90 seconds), Matrix (opt-in `/sync` long-poll; allow the Matrix user ids such as `@alice:example.com` that may start turns; the bot's own messages are ignored and the `since` token is persisted, so a restart resumes where it stopped; see below), Signal (opt-in `receiveEvents` subscription to a `signal-cli daemon --http` event stream; see below), Google Chat (Chat app mode only: a service-account key plus `audienceType`/`audience`; see below).
 - **Outbound delivery today:** iMessage (bridge), Microsoft Teams, Google Chat webhook mode, Zalo OA, Zalo Personal.
 
 The BlueBubbles server authenticates every iMessage bridge request with a `?password=` URL query parameter, so the password travels inside the request URL. Use an `https://` bridge URL, or a bridge on the same machine (`127.0.0.1`, `localhost`, or `[::1]`). A bridge URL without a scheme uses `http://` only for those loopback hosts and `https://` for every other host. Plain `http://` to a remote host is used only when you enter it explicitly, and it exposes the password to anyone who can observe that network path.
@@ -441,6 +442,35 @@ Official references:
 - direct messages work but group routing is wrong: validate the room/group source ids and resend from the intended thread
 - `404` from LINE webhook verification: the connection id in the URL is wrong or the route is not reachable from the public internet
 - local HTTP URL: LINE requires a reachable HTTPS endpoint for webhook delivery
+
+## Matrix
+
+Official reference:
+
+- https://spec.matrix.org/latest/client-server-api/
+
+Matrix outbound is text-only (no attachments). It supports room sends, replies, reactions, redactions (unsend) and typing notices through the client-server API.
+
+### Step-by-step
+
+1. Create a Matrix account for the bot on your homeserver.
+2. Obtain an access token for that account (for example from your client's advanced settings or the login API) and export it in the gateway environment, for example `MATRIX_ACCESS_TOKEN`.
+3. Invite the bot to the room and accept the invite (join it) so it can post and, for inbound, receive.
+4. Add the homeserver host to the network allowlist.
+5. In GoatCitadel `Connections`, add `channel.matrix` and set:
+   - `homeserverUrl=https://matrix.example.com`
+   - `accessTokenEnv=MATRIX_ACCESS_TOKEN`
+   - `defaultRoomId=!roomid:example.com` (optional; sends normally take the room from the target)
+6. Optional inbound: set `inboundStreamEnabled=true` and allow the Matrix user ids that may start turns. Inbound is default-deny and always allowlist-only.
+7. Run the guided test: it checks the token (whoami), that the bot has joined the default room, and sends a sandbox `m.notice` when you run the explicit send. Confirm receipt in the room.
+
+### Matrix troubleshooting
+
+- `token rejected`: the homeserver refused the access token; generate a new one and update the env var
+- bot has not joined the default room: invite the bot account and accept the invite
+- host outside the network allowlist: add the homeserver host before probing or sending
+- inbound messages are ignored: the sender is not on the allowlist (a dropped message's `sender_not_allowlisted` diagnostic shows the id)
+- room ids look like `!opaque:example.com`; a `#alias:example.com` is not accepted as a send target
 
 ## Validation Checklist Per Channel
 

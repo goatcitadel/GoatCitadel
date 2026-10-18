@@ -53,6 +53,7 @@ describe("channel setup definitions", () => {
         "channel.whatsapp",
         "channel.signal",
         "channel.mattermost",
+        "channel.matrix",
         "channel.imessage",
         "channel.nextcloud-talk",
         "channel.line",
@@ -970,6 +971,67 @@ describe("channel setup definitions", () => {
     }
   });
 
+  it("collects the Matrix inbound opt-in and forces a default-deny allowlist when opted in", () => {
+    const definition = requireChannelSetupDefinition("channel.matrix");
+    const fieldKeys = definition.definition.wizard.steps.flatMap((step) => (step.fields ?? []).map((f) => f.key));
+    expect(fieldKeys).toEqual(expect.arrayContaining(["homeserverUrl", "inboundStreamEnabled", "allowedSenders"]));
+
+    const draft = createDraft("channel.matrix", {
+      homeserverUrl: "https://matrix.example.com",
+      accessTokenEnv: "MATRIX_ACCESS_TOKEN",
+      inboundStreamEnabled: true,
+    });
+    expect(definition.validate(draft)).toEqual([]);
+    expect(definition.normalize(draft)).toMatchObject({
+      homeserverUrl: "https://matrix.example.com",
+      accessTokenEnv: "MATRIX_ACCESS_TOKEN",
+      inboundStreamEnabled: true,
+      inboundAccessMode: "allowlist",
+    });
+
+    const outboundOnly = definition.normalize(
+      createDraft("channel.matrix", {
+        homeserverUrl: "https://matrix.example.com",
+        accessTokenEnv: "MATRIX_ACCESS_TOKEN",
+      }),
+    );
+    expect(outboundOnly).not.toHaveProperty("inboundStreamEnabled");
+  });
+
+  it("hydrates a legacy-open Matrix connection into an allowlist once inbound is enabled", () => {
+    const definition = requireChannelSetupDefinition("channel.matrix");
+    const hydrated = definition.hydrate(
+      createConnection({
+        catalogId: "channel.matrix",
+        key: "matrix",
+        label: "Matrix Primary",
+        config: {
+          homeserverUrl: "https://matrix.example.com",
+          accessTokenEnv: "MATRIX_ACCESS_TOKEN",
+          inboundAccessMode: "open_legacy",
+        },
+      }),
+    );
+    const draft = {
+      ...createDraft("channel.matrix", { ...hydrated.draft, inboundStreamEnabled: true }, "edit"),
+      hydration: hydrated.hydration,
+    };
+    expect(definition.validate(draft)).toEqual([]);
+    expect(definition.normalize(draft)).toMatchObject({
+      accessTokenEnv: "MATRIX_ACCESS_TOKEN",
+      inboundStreamEnabled: true,
+      inboundAccessMode: "allowlist",
+    });
+  });
+
+  it("requires a homeserver URL and an access token for Matrix", () => {
+    const definition = requireChannelSetupDefinition("channel.matrix");
+    const issues = definition.validate(createDraft("channel.matrix", {}));
+    expect(issues.map((issue) => issue.key)).toEqual(
+      expect.arrayContaining(["homeserverUrl_required", "matrix_auth_missing"]),
+    );
+  });
+
   it("preserves env-backed iMessage bridge auth during edit flows", () => {
     const definition = requireChannelSetupDefinition("channel.imessage");
     const hydrated = definition.hydrate(
@@ -1321,6 +1383,7 @@ describe("channel setup definitions", () => {
       "channel.whatsapp",
       "channel.signal",
       "channel.mattermost",
+      "channel.matrix",
       "channel.imessage",
       "channel.line",
       "channel.zalo",
@@ -1338,6 +1401,7 @@ describe("channel setup definitions", () => {
       "channel.discord",
       "channel.whatsapp",
       "channel.mattermost",
+      "channel.matrix",
       "channel.imessage",
       "channel.line",
     ] as const;
@@ -1349,7 +1413,7 @@ describe("channel setup definitions", () => {
   });
 
   it("keeps guided channel copy out of the old planned-parity wording for visible built-in channels", () => {
-    const channels = ["channel.whatsapp", "channel.mattermost", "channel.line"] as const;
+    const channels = ["channel.whatsapp", "channel.mattermost", "channel.matrix", "channel.line"] as const;
 
     for (const catalogId of channels) {
       const definition = requireChannelSetupDefinition(catalogId);

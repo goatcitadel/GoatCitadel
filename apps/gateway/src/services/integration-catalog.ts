@@ -249,7 +249,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
     catalogId: "channel.matrix",
     title: "Matrix Connection",
     description:
-      "Catalog-only Matrix setup entry. Live send/read probes are not enabled until a Matrix adapter is wired.",
+      "Configure a Matrix bot account (access token) for room sends, reactions, redactions and optional /sync inbound.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "Matrix" }),
@@ -263,8 +263,14 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       }),
       text("defaultRoomId", "Default Room ID", {
         placeholder: "!roomid:example.com",
-        required: true,
+        description: "Optional default room. Sends normally take the room from the target.",
       }),
+      inboundOptInField(
+        "inboundStreamEnabled",
+        "Receive Inbound Messages",
+        "Opt in to a persistent /sync long-poll of the rooms the bot has joined. Anyone who can post in those rooms can start turns, so keep the bot only in trusted rooms.",
+      ),
+      ...forcedAllowlistInboundFields('Allow Matrix user ids such as "@alice:example.com".'),
       bool("enabled", "Enabled", false),
     ],
   },
@@ -993,10 +999,10 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "channel",
     "matrix",
     "Matrix",
-    "Matrix catalog/setup entry. Runtime adapter probes are not wired yet.",
-    "planned",
+    "Matrix rooms over the client-server API, with optional /sync inbound.",
+    "beta",
     ["token"],
-    ["catalog", "setup"],
+    ["chat", "rooms", "reactions", "unsend", "typing", "inbound"],
   ),
   entry(
     "channel",
