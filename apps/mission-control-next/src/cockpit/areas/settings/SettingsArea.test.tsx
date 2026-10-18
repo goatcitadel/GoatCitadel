@@ -51,6 +51,9 @@ vi.mock("./CapabilityScopesSettings", () => ({
 vi.mock("./McpServersSettings", () => ({ McpServersSettings: () => <OwnerProbe name="MCP owner" /> }));
 vi.mock("./BudgetModeControl", () => ({ BudgetModeControl: () => <OwnerProbe name="Budget owner" /> }));
 vi.mock("./ApprovalModeControl", () => ({ ApprovalModeControl: () => <OwnerProbe name="Approval owner" /> }));
+vi.mock("./FilesystemWriteRootsControl", () => ({
+  FilesystemWriteRootsControl: () => <OwnerProbe name="Filesystem write roots owner" />,
+}));
 vi.mock("./ModelsSettings", () => ({ ModelsSettings: () => <OwnerProbe name="Models owner" /> }));
 vi.mock("./LocalAiSettings", () => ({ LocalAiSettings: () => <OwnerProbe name="Local AI owner" /> }));
 vi.mock("./CitadelBlueprintSettings", () => ({
