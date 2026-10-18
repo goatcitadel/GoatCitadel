@@ -1665,7 +1665,9 @@ describe("A2ARouteService", () => {
         },
         "2026-06-01T00:00:01.000Z",
       );
-      const request = (createApproval.mock.calls[0]?.[0]?.payload as { request?: { eventSequence?: number } })?.request;
+      const request = (
+        createApproval.mock.calls[0]?.[0]?.payload as { request?: { eventSequence?: number; urlHash?: string } }
+      )?.request;
       return {
         ...harness,
         taskId,
@@ -1673,6 +1675,7 @@ describe("A2ARouteService", () => {
         createApproval,
         pushDeliveryFetch,
         eventSequence: request?.eventSequence ?? -1,
+        urlHash: request?.urlHash ?? "",
       };
     }
 
@@ -1683,6 +1686,7 @@ describe("A2ARouteService", () => {
         taskId: harness.taskId,
         peerId: "peer-1",
         eventSequence: harness.eventSequence,
+        urlHash: harness.urlHash,
       };
     }
 
@@ -1790,6 +1794,7 @@ describe("A2ARouteService", () => {
 
     it("rejected approval records a blocked delivery", async () => {
       const harness = await createDeferredPush();
+      const recordDelivery = vi.spyOn(harness.storage.a2aTaskPushConfigs, "recordDelivery");
 
       await harness.service.recordRefusedPushApproval(
         {
@@ -1802,10 +1807,81 @@ describe("A2ARouteService", () => {
         "2026-06-01T00:00:02.000Z",
       );
 
+      expect(recordDelivery.mock.calls[0]?.[2]).toMatchObject({
+        status: "blocked",
+        lastEventSequence: harness.eventSequence,
+        error: expect.stringMatching(/rejected/),
+      });
+      // Later events resume after the refusal; each still defers behind its own approval under the live ward.
       const stored = harness.storage.a2aTaskPushConfigs.get(harness.taskId, "peer-1");
-      expect(stored).toMatchObject({ lastDeliveryStatus: "blocked", lastEventSequence: harness.eventSequence });
-      expect(stored.lastDeliveryError).toMatch(/rejected/);
+      expect(stored.lastEventSequence).toBe(harness.eventSequence);
+      expect(["blocked", "deferred_pending_approval"]).toContain(stored.lastDeliveryStatus);
       expect(harness.pushDeliveryFetch).not.toHaveBeenCalled();
+    });
+
+    it("refusal resumes later queued events under the live ward", async () => {
+      const harness = await createDeferredPush();
+      await harness.service.handleJsonRpc(
+        pushPeer,
+        { jsonrpc: "2.0", id: "rpc-ward-push-cancel", method: "CancelTask", params: { taskId: harness.taskId } },
+        "2026-06-01T00:00:02.000Z",
+      );
+      // The cancel status event queues behind the deferred one: no new approval yet.
+      expect(harness.createApproval).toHaveBeenCalledTimes(1);
+
+      await harness.service.recordRefusedPushApproval(
+        {
+          approvalId: "approval-push-1",
+          taskId: harness.taskId,
+          peerId: "peer-1",
+          eventSequence: harness.eventSequence,
+          disposition: "expired",
+        },
+        "2026-06-01T00:00:03.000Z",
+      );
+
+      // The queued event resumes and, under the still-live ward, defers behind its own approval.
+      expect(harness.createApproval).toHaveBeenCalledTimes(2);
+      const laterRequest = (
+        harness.createApproval.mock.calls[1]?.[0]?.payload as { request?: { eventSequence?: number } }
+      )?.request;
+      expect(laterRequest?.eventSequence).toBeGreaterThan(harness.eventSequence);
+      expect(harness.storage.a2aTaskPushConfigs.get(harness.taskId, "peer-1")).toMatchObject({
+        lastDeliveryStatus: "deferred_pending_approval",
+        lastEventSequence: harness.eventSequence,
+      });
+      expect(harness.pushDeliveryFetch).not.toHaveBeenCalled();
+    });
+
+    it("approved push refuses when the push URL changed after approval", async () => {
+      const harness = await createDeferredPush();
+      await harness.service.handleJsonRpc(
+        pushPeer,
+        {
+          jsonrpc: "2.0",
+          id: "rpc-ward-push-reconfigure",
+          method: "SetTaskPushNotificationConfig",
+          params: {
+            taskId: harness.taskId,
+            pushNotificationConfig: { url: "https://peer.example/a2a/other-target", events: ["task.status"] },
+          },
+        },
+        "2026-06-01T00:00:02.000Z",
+      );
+      expect(harness.storage.a2aTaskPushConfigs.get(harness.taskId, "peer-1").lastDeliveryStatus).toBe(
+        "deferred_pending_approval",
+      );
+
+      const results = await harness.service.deliverApprovedPush(approvedPush(harness), "2026-06-01T00:00:03.000Z");
+
+      expect(results).toEqual([
+        expect.objectContaining({ status: "blocked", error: expect.stringMatching(/URL changed/) }),
+      ]);
+      expect(harness.pushDeliveryFetch).not.toHaveBeenCalled();
+      expect(harness.storage.a2aTaskPushConfigs.get(harness.taskId, "peer-1")).toMatchObject({
+        lastDeliveryStatus: "blocked",
+        lastEventSequence: harness.eventSequence,
+      });
     });
 
     it("keeps the blocked delivery when no approval loop is wired", async () => {
