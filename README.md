@@ -544,7 +544,7 @@ Do not claim without fresh proof:
 
 - cross-platform or general hostile-code sandboxing for Code Mode beyond the named Windows-native proof slice
 - ungoverned autonomous high-risk tool activation
-- full Citadel Ward effect enforcement across every effect: `deny`/`require_approval`/`redact` are enforced and all matched wards are audited, and `route_local` is enforced only for model dispatches that carry Chat content (`model.chat.*`); utility calls without a session or turn lineage, embedding and image-generation calls, and `model.tool.*` actions are not ward-gated yet; `route_local` trusts any loopback endpoint as this machine, so a loopback proxy that forwards to a remote provider is not detected
+- full Citadel Ward effect enforcement across every effect: `deny`/`require_approval`/`redact` are enforced and all matched wards are audited, and `route_local` is enforced only for model dispatches that carry Chat content (`model.chat.*`); utility calls without a session or turn lineage, embedding and image-generation calls, and `model.tool.*` actions are not ward-gated yet; `route_local` trusts any loopback endpoint as this machine, so a loopback proxy that forwards to a remote provider is not detected; remote worker Chat placement (`chatRemotePlacementV1Enabled`, off by default) is not ward-gated
 - the workspace/Citadel capability-scoping Settings panels as certified release surface, or agent-side skill-discovery scoping as complete
 - multi-user Citadel sharing or cross-operator Citadel membership
 - NPU sidecar maturity or local-inference completeness as a `1.0` signal; that path is retired from the shipped 1.0 source and installer.
