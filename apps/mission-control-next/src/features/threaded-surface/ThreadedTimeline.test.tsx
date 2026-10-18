@@ -618,6 +618,35 @@ describe("ThreadedTimeline", () => {
     ]);
   });
 
+  it("announces streamed reasoning once through the single live region, then the answer stream", () => {
+    const props = buildProps({ streamStatus: "streaming", activeStreamingTurnId: "turn-1" });
+    const turn = props.thread.turns[0];
+    turn.assistantMessage = undefined;
+    turn.trace.status = "running";
+    turn.thinking = "Weighing the menu";
+    const liveRegionText = (renderer: TestRenderer.ReactTestRenderer) =>
+      renderer.root.findByProps({ className: "mc-next-thread-live-region" }).children.join("");
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    expect(liveRegionText(renderer)).toBe("Cowork model is thinking.");
+    expect(
+      renderer.root.findByProps({ className: "mc-next-thread-thinking" }).findByType("summary").children.join(""),
+    ).toBe("Thinking…");
+
+    // Further reasoning deltas do not change the announcement, so it is not repeated.
+    turn.thinking = "Weighing the menu, then the playlist";
+    act(() => renderer.update(<ThreadedTimeline props={{ ...props } as any} />));
+    expect(liveRegionText(renderer)).toBe("Cowork model is thinking.");
+
+    // Once answer text arrives the region moves on to the ordinary streaming status.
+    const answering = {
+      ...props,
+      streamingPreview: { turnId: "turn-1", visibleText: "Here is the plan" },
+    };
+    act(() => renderer.update(<ThreadedTimeline props={answering as any} />));
+    expect(liveRegionText(renderer)).toBe("Cowork response streaming.");
+  });
+
   it("shows why memory citations were used without adding why-used copy to ordinary citations", () => {
     const props = buildProps();
     props.thread.turns[0].citations = [

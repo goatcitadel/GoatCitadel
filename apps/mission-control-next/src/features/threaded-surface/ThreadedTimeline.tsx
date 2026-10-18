@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkflowSkillCaptureControl } from "./WorkflowSkillCaptureControl";
-import {
-  type ChatThreadSystemNoticeRecord,
-  type ChatThreadTurnRecord,
-} from "@goatcitadel/contracts";
+import { type ChatThreadSystemNoticeRecord, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatOptimisticUserMessage } from "@goatcitadel/mission-control-shared/components/chat/ChatOptimisticUserMessage";
 import { SurfaceReconnectBanner } from "@goatcitadel/mission-control-shared/components/chat/SurfaceReconnectBanner";
@@ -151,6 +148,14 @@ export function resolveStreamingPreviewScrollSignal(
   const visibleLineCount = countVisibleLines(preview.visibleText);
   const visibleCharacterBucket = Math.floor(preview.visibleText.length / STREAM_SCROLL_CHARACTER_BUCKET);
   return [preview.turnId, visibleLineCount, visibleCharacterBucket].join(":");
+}
+
+/** True while a turn has streamed reasoning but no answer text has arrived yet. */
+export function isTurnThinkingWithoutAnswer(
+  turn: { thinking?: string; assistantMessage?: { content?: string } } | undefined,
+  previewText: string | undefined,
+): boolean {
+  return Boolean(turn?.thinking) && !previewText && !turn?.assistantMessage?.content;
 }
 
 export type ThreadedTimelineItem =
@@ -428,17 +433,27 @@ export function ThreadedTimeline({
   const effectiveStreamStatus =
     hasExplicitNonStreamError && props.streamStatus === "error" ? "idle" : props.streamStatus;
   const hasStreamError = effectiveStreamStatus === "error" || Boolean(streamTransportError?.trim());
+  // Streamed reasoning gets one stable phase announcement in this single live
+  // region (the thinking disclosure itself stays non-live): the string only
+  // changes when the phase does, never per reasoning delta.
+  const streamingTurnId = props.activeStreamingTurnId ?? streamingPreview?.turnId ?? null;
+  const streamingTurn = streamingTurnId
+    ? props.thread?.turns.find((turn) => turn.turnId === streamingTurnId)
+    : undefined;
+  const streamingTurnIsThinking = isTurnThinkingWithoutAnswer(streamingTurn, streamingPreview?.visibleText);
   const liveStatus = props.isStopPending
     ? "Stopping response. Waiting for confirmation."
     : hasStreamError
       ? "Chat response could not be completed. Use the composer to try again or open Activity for details."
-      : effectiveStreamStatus === "streaming"
-        ? `${toTitleCase(props.mode)} response streaming${props.queuedCount > 0 ? ` with ${props.queuedCount} queued` : ""}.`
-        : effectiveStreamStatus === "queued"
-          ? `${toTitleCase(props.mode)} turn queued.`
-          : effectiveStreamStatus === "connecting"
-            ? `${toTitleCase(props.mode)} stream connecting.`
-            : "";
+      : effectiveStreamStatus === "streaming" && streamingTurnIsThinking
+        ? `${toTitleCase(props.mode)} model is thinking.`
+        : effectiveStreamStatus === "streaming"
+          ? `${toTitleCase(props.mode)} response streaming${props.queuedCount > 0 ? ` with ${props.queuedCount} queued` : ""}.`
+          : effectiveStreamStatus === "queued"
+            ? `${toTitleCase(props.mode)} turn queued.`
+            : effectiveStreamStatus === "connecting"
+              ? `${toTitleCase(props.mode)} stream connecting.`
+              : "";
   const streamingPreviewSignal = resolveStreamingPreviewScrollSignal(streamingPreview, props.activeStreamingTurnId);
   const activeWorkState = deriveFocusedActiveWorkState({
     // A locally submitted message is new work; a previous terminal turn must
@@ -571,7 +586,11 @@ export function ThreadedTimeline({
       </div>
       <div ref={scrollRef} className="mc-next-thread-scroll" onScroll={handleThreadScroll}>
         <div className="mc-next-thread-status-lane">
-          <SurfaceReconnectBanner mode={props.mode} status={props.eventStreamStatus} onRefresh={props.onRefreshThread} />
+          <SurfaceReconnectBanner
+            mode={props.mode}
+            status={props.eventStreamStatus}
+            onRefresh={props.onRefreshThread}
+          />
           <FocusedActiveWorkSummary
             state={displayActiveWorkState}
             approvalActionsInComposer={Boolean(props.pendingApproval)}
