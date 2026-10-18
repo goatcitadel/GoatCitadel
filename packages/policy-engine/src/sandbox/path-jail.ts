@@ -101,7 +101,12 @@ function resolvePathViaExistingAncestor(targetPath: string, rootGuard?: { roots:
       if (symlinkHops > MAX_SYMLINK_HOPS) {
         throw new Error(`Path traverses too many symbolic links: ${targetPath}`);
       }
-      absoluteTarget = path.resolve(path.dirname(probe), fs.readlinkSync(probe), path.relative(probe, absoluteTarget));
+      // Relative link targets resolve against the link's real directory, not its written parent.
+      absoluteTarget = path.resolve(
+        fs.realpathSync(path.dirname(probe)),
+        fs.readlinkSync(probe),
+        path.relative(probe, absoluteTarget),
+      );
       probe = absoluteTarget;
       continue;
     }

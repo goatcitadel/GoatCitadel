@@ -1078,7 +1078,7 @@ async function gitWorktreeCreate(args: Record<string, unknown>, config: ToolPoli
     windowsHide: true,
     env: buildModelSpawnEnv(config),
   });
-  return { created: true, path: path.resolve(p), branch };
+  return { created: true, path: absolutePath, branch };
 }
 
 async function gitWorktreeRemove(args: Record<string, unknown>, config: ToolPolicyConfig) {
@@ -1090,7 +1090,7 @@ async function gitWorktreeRemove(args: Record<string, unknown>, config: ToolPoli
     windowsHide: true,
     env: buildModelSpawnEnv(config),
   });
-  return { removed: true, path: path.resolve(p) };
+  return { removed: true, path: absolutePath };
 }
 
 async function runRestricted(

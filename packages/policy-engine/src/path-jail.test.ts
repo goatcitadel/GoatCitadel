@@ -114,7 +114,7 @@ describe("assertWritePathInJail", () => {
     fs.symlinkSync(path.join(jail, "b"), path.join(jail, "a"), "junction");
     fs.symlinkSync(path.join(jail, "a"), path.join(jail, "b"), "junction");
 
-    expect(() => assertWritePathInJail(path.join(jail, "a", "x.txt"), [jail])).toThrow(/too many symbolic links/i);
+    expect(() => assertWritePathInJail(path.join(jail, "a"), [jail])).toThrow(/Path traverses too many symbolic links/);
   });
 
   it("still allows a dangling junction whose target is inside the jail", () => {
@@ -124,7 +124,26 @@ describe("assertWritePathInJail", () => {
     fs.mkdirSync(jail);
     fs.symlinkSync(path.join(jail, "later"), path.join(jail, "link"), "junction");
 
-    expect(() => assertWritePathInJail(path.join(jail, "link", "x.txt"), [jail])).not.toThrow();
+    expect(assertWritePathInJail(path.join(jail, "link", "x.txt"), [jail])).toBe(
+      path.join(fs.realpathSync(jail), "later", "x.txt"),
+    );
+  });
+
+  it("resolves a relative dangling link against the link's real directory", (ctx) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-path-jail-dangling-real-parent-"));
+    tempDirs.push(root);
+    const jail = path.join(root, "workspace");
+    fs.mkdirSync(path.join(jail, "x", "y", "z"), { recursive: true });
+    fs.symlinkSync(jail, path.join(jail, "x", "y", "z", "a"), "junction");
+    try {
+      fs.symlinkSync(path.join("..", "escaped.txt"), path.join(jail, "out.txt"), "file");
+    } catch {
+      ctx.skip(); // Windows without Developer Mode cannot create file symlinks.
+    }
+
+    expect(() => assertWritePathInJail(path.join(jail, "x", "y", "z", "a", "out.txt"), [jail])).toThrow(
+      /outside write jail/i,
+    );
   });
 });
 
