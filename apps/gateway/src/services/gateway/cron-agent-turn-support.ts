@@ -44,6 +44,8 @@ export type AgentTurnCronRunHandler = (input: {
   runId: string;
   config: CronAgentTurnConfig;
   cronRun: CronRunExecutionToken;
+  /** Server-resolved workspace of the job's citadel; absent for global jobs. */
+  workspaceId?: string;
 }) => Promise<AgentTurnCronRunOutcome>;
 
 /**
@@ -82,11 +84,17 @@ export function normalizeAgentTurnCronActionConfig(rawValue: Record<string, unkn
   const inertInboxFallback = rawAgentTurn.inertInboxFallback === true;
   const createdBy = normalizeAgentTurnCreatedBy(rawAgentTurn.createdBy);
   const commitment = rawAgentTurn.commitment as CronAgentTurnConfig["commitment"];
-  if (commitment !== undefined && (!commitment || typeof commitment.commitmentId !== "string" ||
-    !commitment.commitmentId.trim() || commitment.commitmentId.length > 256 ||
-    !Number.isSafeInteger(commitment.revision) || commitment.revision < 1 ||
-    !/^[0-9a-f]{64}$/u.test(commitment.materialSha256) ||
-    Object.keys(commitment).some(key => !["commitmentId", "revision", "materialSha256"].includes(key)))) {
+  if (
+    commitment !== undefined &&
+    (!commitment ||
+      typeof commitment.commitmentId !== "string" ||
+      !commitment.commitmentId.trim() ||
+      commitment.commitmentId.length > 256 ||
+      !Number.isSafeInteger(commitment.revision) ||
+      commitment.revision < 1 ||
+      !/^[0-9a-f]{64}$/u.test(commitment.materialSha256) ||
+      Object.keys(commitment).some((key) => !["commitmentId", "revision", "materialSha256"].includes(key)))
+  ) {
     throw new Error("Invalid canonical commitment occurrence reference.");
   }
   return {
@@ -149,6 +157,7 @@ export async function runAgentTurnCronJob(input: {
   normalizedJobId: string;
   runId: string;
   cronRun: CronRunExecutionToken;
+  workspaceId?: string;
   runHandler: AgentTurnCronRunHandler;
   attachDeterministicChild: (
     token: CronRunExecutionToken,
@@ -174,6 +183,7 @@ export async function runAgentTurnCronJob(input: {
     runId: input.runId,
     config: agentTurnConfig,
     cronRun: input.cronRun,
+    ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
   });
   const attachedAt = new Date().toISOString();
   let attached: CronRunRecord | undefined;

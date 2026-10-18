@@ -202,6 +202,11 @@ export interface CronJobRecord {
   updatedAt?: string;
   workdir?: string;
   contextFrom?: string;
+  /**
+   * Citadel this job belongs to; absent means a global job. Execution fails closed
+   * when the citadel is missing or archived, and agent turns run in its default workspace.
+   */
+  citadelId?: string;
   lastRunOutput?: string;
   lastRunId?: string;
   /** `skipped`: the run settled cleanly but its handler reported it did no work. */

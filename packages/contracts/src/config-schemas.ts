@@ -865,6 +865,7 @@ export const CronJobSchema = z
     endAt: z.string().optional(),
     workdir: z.string().optional(),
     contextFrom: z.string().optional(),
+    citadelId: z.string().optional(),
     lastRunOutput: z.string().optional(),
     lastRunId: z.string().optional(),
     lastRunStatus: z.enum(["ok", "failed", "skipped"]).optional(),

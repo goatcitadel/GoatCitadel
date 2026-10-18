@@ -31,6 +31,7 @@ import {
   normalizeAgentTurnCronActionConfig,
   runAgentTurnCronJob,
 } from "./cron-agent-turn-support.js";
+import { normalizeCronJobCitadelId, resolveCronJobCitadelScope, type CronCitadelReader } from "./cron-citadel-scope.js";
 import { normalizeNoAgentCronActionConfig, runNoAgentCronJob } from "./cron-no-agent-support.js";
 import {
   COST_REPORT_HOURLY_JOB_ID,
@@ -231,6 +232,10 @@ export class CronAutomationService {
 
   public constructor(private readonly deps: CronAutomationServiceDeps) {}
 
+  private citadelReader(): CronCitadelReader {
+    return this.deps.storage.citadels;
+  }
+
   /**
    * Lists cron jobs. With a `citadel` request the listing is Watchtower scope-checked: the
    * access scope is built here, on the server (only the local operator access class may read
@@ -283,6 +288,7 @@ export class CronAutomationService {
       actionConfig?: unknown;
       workdir?: string;
       contextFrom?: string;
+      citadelId?: string;
     },
     creatorAuthority?: import("@goatcitadel/contracts").CronJobCreatorAuthorityInput,
   ): Promise<CronJobRecord> {
@@ -306,6 +312,10 @@ export class CronAutomationService {
       workdir: normalizeCronWorkdir(input.workdir),
       contextFrom: normalizeCronContextFrom(input.contextFrom),
     };
+    const citadelId = await normalizeCronJobCitadelId(this.citadelReader(), input.citadelId);
+    if (citadelId) {
+      job.citadelId = citadelId;
+    }
     if (isScheduledCronAction(job.action)) {
       job.nextRunAt = computeNextCronRunAt(job.schedule, new Date(), job.endAt);
     }
@@ -341,6 +351,8 @@ export class CronAutomationService {
       actionConfig?: unknown;
       workdir?: string | null;
       contextFrom?: string | null;
+      /** null or blank clears the scope (a global job). */
+      citadelId?: string | null;
     },
     expectedRevision: number,
     creatorAuthority?: import("@goatcitadel/contracts").CronJobCreatorAuthorityInput,
@@ -364,6 +376,10 @@ export class CronAutomationService {
       endAt: input.endAt !== undefined ? normalizeCronEndAt(input.endAt) : current.endAt,
       workdir: input.workdir !== undefined ? normalizeCronWorkdir(input.workdir) : current.workdir,
       contextFrom: input.contextFrom !== undefined ? normalizeCronContextFrom(input.contextFrom) : current.contextFrom,
+      citadelId:
+        input.citadelId !== undefined
+          ? await normalizeCronJobCitadelId(this.citadelReader(), input.citadelId)
+          : current.citadelId,
     };
     if (isScheduledCronAction(updated.action)) {
       updated.nextRunAt = computeNextCronRunAt(updated.schedule, new Date(), updated.endAt);
@@ -426,6 +442,9 @@ export class CronAutomationService {
     if (!force && isCronJobBackedOff(job, new Date())) {
       throw new Error(`Cron job is in backoff until ${job.backoffUntil}: ${normalizedJobId}`);
     }
+    // Citadel scope is enforced for every trigger (due sweep, manual, forced): a job whose
+    // citadel is gone or archived is refused rather than run as a global job.
+    await resolveCronJobCitadelScope(this.citadelReader(), job);
     const lifecycleAdmission = this.deps.sharedHostLifecycle?.tryReserve(
       "cron",
       `cron:${normalizedJobId}:${options.admissionKey?.trim() || randomUUID()}`,
@@ -807,6 +826,7 @@ export class CronAutomationService {
     }
     const admittedSummary = await runAgentTurnCronJob({
       job,
+      workspaceId: (await resolveCronJobCitadelScope(this.citadelReader(), job)).workspaceId,
       normalizedJobId: current.jobId,
       runId: current.runId,
       cronRun: token,

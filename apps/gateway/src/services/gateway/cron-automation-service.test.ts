@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CronJobRecord, CronRunRecord, DurableRunStatus } from "@goatcitadel/contracts";
+import type { CitadelRecord, CronJobRecord, CronRunRecord, DurableRunStatus } from "@goatcitadel/contracts";
+import { NotFoundError, PolicyViolationError, ValidationError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import {
   computeNextCronRunAt,
@@ -22,6 +23,7 @@ import {
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./cron-automation-service.js";
 import { createTestCronSpecOwner } from "./cron-spec-owner.test-utils.js";
+import type { CronCitadelReader } from "./cron-citadel-scope.js";
 import { SharedHostLifecycleService } from "../shared-host-lifecycle-service.js";
 
 afterEach(() => {
@@ -451,6 +453,7 @@ function createService(
     durableStatuses?: Record<string, DurableRunStatus>;
     cronRuns?: FakeCronRuns;
     sharedHostLifecycle?: SharedHostLifecycleService;
+    citadels?: CronCitadelReader;
   } = {},
 ): CronAutomationService {
   const cronJobs = options.cronJobs ?? new FakeCronJobs();
@@ -460,6 +463,7 @@ function createService(
       db,
       cronJobs,
       cronRuns,
+      citadels: options.citadels ?? { findRecord: () => undefined, getCitadel: () => undefined },
       runImmediateTransaction: <T>(callback: () => T): T => db.runImmediateTransaction(callback),
       durableRuns: {
         getRun: (runId: string) => {
@@ -2399,5 +2403,110 @@ describe("findCronRunById", () => {
       failureCount: 1,
       backoffUntil: "2026-05-15T12:04:00.000Z",
     });
+  });
+});
+
+describe("citadel-scoped cron jobs", () => {
+  const citadelRecord = (citadelId: string, extra: Partial<CitadelRecord> = {}): CitadelRecord => ({
+    citadelId,
+    revision: "r1",
+    name: citadelId,
+    slug: citadelId,
+    kind: "company",
+    lifecycleStatus: "active",
+    createdAt: "2026-10-18T00:00:00.000Z",
+    updatedAt: "2026-10-18T00:00:00.000Z",
+    ...extra,
+  });
+  function citadelReader(records: CitadelRecord[]): CronCitadelReader {
+    const byId = new Map(records.map((record) => [record.citadelId, record]));
+    return { findRecord: (citadelId) => byId.get(citadelId), getCitadel: () => undefined };
+  }
+  const taskJob = { jobId: "scoped-task", name: "Scoped task", action: "task" as const, schedule: "0 8 * * * UTC" };
+
+  it("stores an active citadel on create and rejects missing or archived citadels", async () => {
+    const reader = citadelReader([citadelRecord("team"), citadelRecord("old", { lifecycleStatus: "archived" })]);
+    const service = createService(new FakeDb(), vi.fn(), { citadels: reader });
+
+    expect((await service.createCronJob({ ...taskJob, citadelId: " team " })).citadelId).toBe("team");
+    await expect(service.createCronJob({ ...taskJob, jobId: "ghost", citadelId: "ghost" })).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+    await expect(service.createCronJob({ ...taskJob, jobId: "old-job", citadelId: "old" })).rejects.toBeInstanceOf(
+      ValidationError,
+    );
+  });
+
+  it("clears the scope on update with null", async () => {
+    const service = createService(new FakeDb(), vi.fn(), { citadels: citadelReader([citadelRecord("team")]) });
+    const created = await service.createCronJob({ ...taskJob, citadelId: "team" });
+
+    const cleared = await service.updateCronJob(created.jobId, { citadelId: null }, created.revision);
+
+    expect(cleared.citadelId).toBeUndefined();
+  });
+
+  it("refuses to run a job whose citadel was archived, even when forced, without calling the handler", async () => {
+    const records = [citadelRecord("team")];
+    const task = vi.fn(async () => ({ taskId: "task-1" }));
+    const service = createService(new FakeDb(), vi.fn(), {
+      citadels: { findRecord: (id) => records.find((record) => record.citadelId === id), getCitadel: () => undefined },
+      handlers: { task },
+    });
+    await service.createCronJob({ ...taskJob, citadelId: "team" });
+    records[0] = { ...records[0]!, lifecycleStatus: "archived" };
+
+    await expect(service.runCronJobNow("scoped-task")).rejects.toBeInstanceOf(PolicyViolationError);
+    await expect(service.runCronJobNow("scoped-task", { force: true })).rejects.toThrow("archived");
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it("refuses to run a job whose citadel no longer exists", async () => {
+    const records = [citadelRecord("team")];
+    const service = createService(new FakeDb(), vi.fn(), {
+      citadels: { findRecord: (id) => records.find((record) => record.citadelId === id), getCitadel: () => undefined },
+    });
+    await service.createCronJob({ ...taskJob, citadelId: "team" });
+    records.length = 0;
+
+    await expect(service.runCronJobNow("scoped-task")).rejects.toThrow("no longer present");
+  });
+
+  it("runs a citadel-scoped agent turn in the citadel's default workspace", async () => {
+    const agentTurn = vi.fn(async () => ({
+      mode: "agent_turn" as const,
+      durableRunId: "durable-ws",
+      sessionId: "sess-ws",
+      turnId: "turn-ws",
+      userMessageId: "message-user-ws",
+      assistantMessageId: "message-assistant-ws",
+    }));
+    const service = createService(new FakeDb(), vi.fn(), {
+      citadels: citadelReader([citadelRecord("team", { defaultWorkspaceId: "ws-team" })]),
+      handlers: { agentTurn },
+      durableStatuses: { "durable-ws": "running" },
+    });
+    await service.createCronJob({
+      jobId: "scoped-agent",
+      name: "Scoped agent",
+      action: "agent_turn",
+      schedule: "0 12 * * * UTC",
+      actionConfig: { agentTurn: { prompt: "Summarize the team queue" } },
+      citadelId: "team",
+    });
+
+    await service.runCronJobNow("scoped-agent");
+
+    expect(agentTurn).toHaveBeenCalledTimes(1);
+    expect(agentTurn.mock.calls[0]?.[0]).toMatchObject({ workspaceId: "ws-team" });
+  });
+
+  it("leaves global jobs untouched by citadel lookups", async () => {
+    const findRecord = vi.fn(() => undefined);
+    const service = createService(new FakeDb(), vi.fn(), { citadels: { findRecord, getCitadel: () => undefined } });
+    await service.createCronJob({ ...taskJob, jobId: "global-task" });
+
+    await expect(service.runCronJobNow("global-task")).resolves.toMatchObject({ status: "ok" });
+    expect(findRecord).not.toHaveBeenCalled();
   });
 });
