@@ -31,7 +31,12 @@ export function useSettingsSectionHash() {
 }
 
 export function selectedSettingsSection(page: SettingsIndexPage, routeSection: string | undefined, hash: string) {
-  const aliasedHash = hash === "application-updates" ? "appearance" : hash === "approval-mode" ? "tools" : hash;
+  const aliasedHash =
+    hash === "application-updates"
+      ? "appearance"
+      : hash === "approval-mode" || hash === "filesystem-write-roots"
+        ? "tools"
+        : hash;
   return (
     page.entries.find((entry) => entry.anchor === aliasedHash || entry.section === aliasedHash)?.section ??
     page.entries.find((entry) => entry.section === routeSection)?.section ??

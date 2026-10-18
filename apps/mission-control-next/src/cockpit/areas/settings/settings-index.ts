@@ -39,7 +39,8 @@ const CONTROL_TERMS: Record<string, string> = {
   addons: "install update uninstall enable disable launch stop addon extension capability pack import export",
   permissions:
     "permission profile select activate chat effective policy create edit archive default override autonomy grant revoke",
-  tools: "approval prompt mode allow deny scoped tool grant create revoke expiry",
+  tools:
+    "approval prompt mode allow deny scoped tool grant create revoke expiry filesystem write root folder temp cleanup delete fs.write fs.delete fs.copy fs.move fs.patch",
   "trust-policy": "trust source provenance blocker callability last use",
   hooks: "register delete webhook signing lifecycle event delivery test history redrive",
   budget: "budget preference cost saver balanced power spend",

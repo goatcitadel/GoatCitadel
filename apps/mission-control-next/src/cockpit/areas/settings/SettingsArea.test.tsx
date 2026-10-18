@@ -247,6 +247,9 @@ describe("Settings section tabs", () => {
     expect(selectedSettingsSection(pages.find((page) => page.id === "safety")!, "safety", "approval-mode")).toBe(
       "tools",
     );
+    expect(
+      selectedSettingsSection(pages.find((page) => page.id === "safety")!, "safety", "filesystem-write-roots"),
+    ).toBe("tools");
     expect(selectedSettingsSection(pages[0]!, "general", "application-updates")).toBe("general");
   });
 });

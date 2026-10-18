@@ -54,6 +54,7 @@ export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
   ["system", "managed-runtime-settings"],
   ["system", "settings-budget-mode"],
   ["system", "settings-approval-mode"],
+  ["system", "settings-filesystem-write-access"],
   ["system", "first-run-defaults"],
   ["settings", "gateway-auth"],
   ["settings", "permission-selection"],
