@@ -534,6 +534,28 @@ export function buildGuardedTokenCheck(
   return { key: "auth", status: "fail", message: `${label} is missing.` };
 }
 
+export function buildTokenAndTargetChecks(
+  deps: Pick<IntegrationActionHost, "resolveConnectionSecret" | "readConnectionConfigValue">,
+  connection: IntegrationConnection,
+  spec: {
+    tokenLabel: string;
+    suggestedEnv: string;
+    targetKey: string;
+    targetLabel: string;
+    targetMissingStatus: "warn" | "fail";
+  },
+): ConnectorDiagnosticReport["checks"] {
+  const target = deps.readConnectionConfigValue(connection.config, spec.targetKey);
+  return [
+    buildGuardedTokenCheck(deps, connection, spec.tokenLabel, spec.suggestedEnv),
+    {
+      key: "target",
+      status: target ? "pass" : spec.targetMissingStatus,
+      message: target ? `${spec.targetLabel} is set.` : `${spec.targetLabel} is missing.`,
+    },
+  ];
+}
+
 export async function runGitHubLiveChecks(
   deps: Pick<
     IntegrationActionHost,

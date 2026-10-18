@@ -1,5 +1,5 @@
 import { runDiscordConnectionLiveChecks } from "./discord-connection-diagnostics.js";
-import { buildGuardedTokenCheck, runGitHubLiveChecks } from "./github-integration-action.js";
+import { buildTokenAndTargetChecks, runGitHubLiveChecks } from "./github-integration-action.js";
 import { runNotionLiveChecks } from "./notion-integration-action.js";
 import { runConfiguredMatrixChecks } from "./matrix-live-probes.js";
 import { runConfiguredNextcloudTalkChecks } from "./nextcloud-talk-live-probes.js";
@@ -471,17 +471,26 @@ export function buildIntegrationConnectionChecks(
       requireText("target", "Default Trello board", deps.readConnectionConfigValue(config, "defaultBoardId"), "warn");
     }
     if (connection.key === "notion") {
-      checks.push(buildGuardedTokenCheck(deps, connection, "Notion integration token", "NOTION_INTEGRATION_TOKEN"));
-      requireText(
-        "target",
-        "Default Notion parent page",
-        deps.readConnectionConfigValue(config, "defaultParentPageId"),
-        "warn",
+      checks.push(
+        ...buildTokenAndTargetChecks(deps, connection, {
+          tokenLabel: "Notion integration token",
+          suggestedEnv: "NOTION_INTEGRATION_TOKEN",
+          targetKey: "defaultParentPageId",
+          targetLabel: "Default Notion parent page",
+          targetMissingStatus: "warn",
+        }),
       );
     }
     if (connection.key === "github") {
-      checks.push(buildGuardedTokenCheck(deps, connection, "GitHub token", "GITHUB_INTEGRATION_TOKEN"));
-      requireText("target", "Default GitHub repository", deps.readConnectionConfigValue(config, "defaultRepo"));
+      checks.push(
+        ...buildTokenAndTargetChecks(deps, connection, {
+          tokenLabel: "GitHub token",
+          suggestedEnv: "GITHUB_INTEGRATION_TOKEN",
+          targetKey: "defaultRepo",
+          targetLabel: "Default GitHub repository",
+          targetMissingStatus: "fail",
+        }),
+      );
     }
     if (["apple-notes", "apple-reminders", "things3", "bear"].includes(connection.key)) {
       const bridgeUrl =
