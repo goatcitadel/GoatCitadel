@@ -806,6 +806,46 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       bool("enabled", "Enabled", true),
     ],
   },
+  "productivity.notion": {
+    catalogId: "productivity.notion",
+    title: "Notion Connection",
+    description:
+      "Configure a Notion internal integration token (referenced by ENV var name). Share each page you want GoatCitadel to reach with the integration.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Notion" }),
+      text("tokenEnv", "Integration Token ENV Var", {
+        placeholder: "NOTION_INTEGRATION_TOKEN",
+        required: true,
+        secretRef: true,
+      }),
+      text("defaultParentPageId", "Default Parent Page ID", {
+        placeholder: "notion-page-id",
+        advanced: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
+  "productivity.github": {
+    catalogId: "productivity.github",
+    title: "GitHub Connection",
+    description:
+      "Configure a GitHub fine-grained token (referenced by ENV var name) and the default repository. GITHUB_TOKEN and GH_TOKEN are refused; use a dedicated variable such as GITHUB_INTEGRATION_TOKEN.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "GitHub" }),
+      text("tokenEnv", "Fine-grained Token ENV Var", {
+        placeholder: "GITHUB_INTEGRATION_TOKEN",
+        required: true,
+        secretRef: true,
+      }),
+      text("defaultRepo", "Default Repository", {
+        placeholder: "owner/name",
+        required: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
   "automation.gif-search": {
     catalogId: "automation.gif-search",
     title: "GIF Search Connection",
@@ -1258,10 +1298,10 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "productivity",
     "notion",
     "Notion",
-    "Notion workspace integration.",
-    "planned",
-    ["oauth", "token"],
-    ["workspace-link"],
+    "Notion pages: search, read, create and append through an internal integration token.",
+    "beta",
+    ["token"],
+    ["read", "write"],
   ),
   entry("productivity", "obsidian", "Obsidian", "Obsidian vault integration.", "beta", ["local"], ["vault"]),
   entry("productivity", "bear", "Bear Notes", "Bear notes integration.", "beta", ["local-agent"], ["read", "write"]),
@@ -1270,10 +1310,10 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "productivity",
     "github",
     "GitHub",
-    "GitHub issue/pr/repo automation integration.",
-    "planned",
+    "GitHub issues and pull requests: list, read, create issues and comment through a fine-grained token.",
+    "beta",
     ["token"],
-    ["repo-link"],
+    ["read", "write"],
   ),
 
   // Automation tools

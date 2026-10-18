@@ -2523,6 +2523,22 @@
     },
     {
       "planStep": "C0",
+      "path": "apps/gateway/src/services/notion-integration-action.ts",
+      "maxHostCallbacks": 9,
+      "maxDependencyMemberAccesses": 11,
+      "reason": "WS6 gap-closure program: the Notion search, page read, page create and block append operator actions plus the users/me diagnostics probe live in their own module so integration-action-service keeps its 19-access budget and integration-writeback-run-inputs stays at 21. Its accesses are the connection token and config reads, the host fetch, the durable stores threaded into the shared idempotent runner input, and the diagnostics fetch/secret pair.",
+      "evidence": "2026-10-18: notion-integration-action.test.ts covers the exact search, page read, page create and block append requests and headers, the idempotency marker paragraph, 401 mapping to notion_auth_rejected without a token leak and without an unknown external outcome, ward deny, require_dry_run preview plus approval, duplicate replay without a fetch, the paged reconcile probe, and missing parent and token blocks; integration-catalog, integration-diagnostics and integration-action-service suites pass; Gateway typecheck passes; repository counter measures 11 dependency accesses and 9 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/github-integration-action.ts",
+      "maxHostCallbacks": 10,
+      "maxDependencyMemberAccesses": 16,
+      "reason": "WS6 gap-closure program: the GitHub issue and pull request list and read actions, the governed issue create and comment writes, and the repository diagnostics probe live in their own module so integration-action-service keeps its 19-access budget and integration-writeback-run-inputs stays at 21. Its accesses are the connection token and config reads, the host fetch, the durable stores threaded into the shared idempotent runner input, and the diagnostics fetch, secret and config reads, plus the guarded structural token and target check shared with the diagnostics service (one config read for the target).",
+      "evidence": "2026-10-18: github-integration-action.test.ts covers the exact list, read, issue create and comment requests and headers, pull-request filtering, the trailing idempotency marker comment, 401 and non-rate-limit 403 (including an unparseable 401 body) mapping to github_auth_rejected without a token leak and without an unknown external outcome, rate-limit and not-found failures, ward deny, require_dry_run preview plus approval, duplicate replay without a fetch, the issue create reconcile probe, and invalid repo and number blocks; integration-catalog, integration-diagnostics and integration-action-service suites pass; Gateway typecheck passes; diagnostics token-guard and live-check cases (forbidden env name, unresolved token, primary and secondary rate limit) pass; repository counter measures 16 dependency accesses and 10 host callbacks."
+    },
+    {
+      "planStep": "C0",
       "path": "apps/gateway/src/services/integration-plugin-package-integrity.ts",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 0,

@@ -60,6 +60,44 @@ export interface WritebackRunInputParts {
   target: string;
 }
 
+/**
+ * Thrown by a provider `send` when the provider rejected the credentials before doing any work.
+ * A 401/403 proves the write was not applied, so callers pair it with
+ * `isExternalCallProvenNotDispatched` instead of leaving the run as an unknown external outcome.
+ * The message never carries the credential.
+ */
+export class ProviderAuthRejectedError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly status: 401 | 403,
+  ) {
+    super(`${provider} rejected the integration credentials (${status}).`);
+    this.name = "ProviderAuthRejectedError";
+  }
+}
+
+/**
+ * Thrown by a provider `send` for a definitive pre-dispatch rejection other than bad credentials
+ * (rate limit, not found, validation): the provider proved it did not apply the write, so the run
+ * records failed-before-boundary instead of an unknown external outcome. The message is the
+ * operator-facing text and never carries the credential.
+ */
+export class ProviderRequestRejectedError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ProviderRequestRejectedError";
+  }
+}
+
+/** True for errors that prove the provider did not apply the write. */
+export function isProviderPreDispatchRejection(error: unknown): boolean {
+  return error instanceof ProviderAuthRejectedError || error instanceof ProviderRequestRejectedError;
+}
+
 export interface WritebackRunInputBlocked {
   blockedReason: string;
   message: string;
@@ -69,7 +107,7 @@ export interface WritebackRunInputBlocked {
 const GMAIL_MESSAGE_ID_DOMAIN = "goatcitadel:gmail-message-id:v2";
 const TRELLO_MARKER_DOMAIN = "goatcitadel:trello-marker:v2";
 const LOCAL_BRIDGE_IDEMPOTENCY_KEY_DOMAIN = "goatcitadel:local-bridge-idempotency-key:v2";
-const OPERATOR_ACTION_BOUNDARY = "integration_operator_action";
+export const OPERATOR_ACTION_BOUNDARY = "integration_operator_action";
 const LOCAL_BRIDGE_ACTION_BOUNDARY = "integration_local_bridge_action";
 
 /**
@@ -361,7 +399,7 @@ export const gmailApiBaseUrl = () =>
  * runner's own identity rule so a reconcile probe matches what send used. Undefined
  * without an explicit idempotency key: reconciliation then fails closed.
  */
-function liveDedupeScope(
+export function liveDedupeScope(
   connection: IntegrationConnection,
   options: WritebackRunInputOptions<unknown>,
   boundary: string,
@@ -381,7 +419,7 @@ function liveDedupeScope(
   return { ...identity, idempotencyKey };
 }
 
-function baseInput(
+export function baseInput(
   host: IntegrationActionHost,
   connection: IntegrationConnection,
   options: WritebackRunInputOptions<unknown>,
@@ -406,7 +444,7 @@ function baseInput(
  * On replay the probe runs before the boundary: a found effect settles without resending,
  * and a probe error throws while the claim is still provably pre-boundary.
  */
-function buildDedupedExecute(
+export function buildDedupedExecute(
   host: IntegrationActionHost,
   payload: unknown,
   replay: boolean | undefined,
@@ -427,7 +465,7 @@ function buildDedupedExecute(
   };
 }
 
-function buildReconcile(
+export function buildReconcile(
   scope: WritebackDedupeScope | undefined,
   probe: (scope: WritebackDedupeScope) => Promise<ExternalSideEffectProbeResult>,
 ): () => Promise<ExternalSideEffectProbeResult> {
@@ -450,7 +488,7 @@ async function sealReplayRecord(
   await host.replayRecords?.seal({ runId: claim.sideEffectRunId, payloadHash: claim.payloadHash, payload });
 }
 
-async function readProbeJson(host: IntegrationActionHost, url: string, init: RequestInit): Promise<unknown> {
+export async function readProbeJson(host: IntegrationActionHost, url: string, init: RequestInit): Promise<unknown> {
   const response = await host.fetchWithDiagnosticsTimeout(url, init);
   const raw = await readBoundedResponseText(response, {
     maxBytes: 256 * 1024,
@@ -467,7 +505,7 @@ async function readProbeJson(host: IntegrationActionHost, url: string, init: Req
   }
 }
 
-function digestScope(domain: string, scope: WritebackDedupeScope): string {
+export function digestScope(domain: string, scope: WritebackDedupeScope): string {
   return createHash("sha256")
     .update(`${domain}\0${JSON.stringify([scope.routePath, scope.actorScope, scope.idempotencyKey])}`)
     .digest("hex");
@@ -481,7 +519,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function resolveApiBaseUrl(envKey: string, fallback: string): string {
+export function resolveApiBaseUrl(envKey: string, fallback: string): string {
   const override = process.env[envKey]?.trim();
   return override && override.length > 0 ? override : fallback;
 }

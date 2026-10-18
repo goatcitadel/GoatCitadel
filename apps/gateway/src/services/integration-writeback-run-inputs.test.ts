@@ -13,6 +13,7 @@ import {
   deriveGmailMessageId,
   deriveLocalBridgeIdempotencyKey,
   deriveTrelloIdempotencyMarker,
+  ProviderAuthRejectedError,
   type WritebackDedupeScope,
 } from "./integration-writeback-run-inputs.js";
 
@@ -525,5 +526,15 @@ describe("integration-writeback-run-inputs", () => {
         payload: bridgePayload,
       }),
     ).toMatchObject({ blockedReason: "bridge_url_missing" });
+  });
+});
+
+describe("ProviderAuthRejectedError", () => {
+  it.each([401, 403] as const)("names the provider and the %s status without any credential", (status) => {
+    const error = new ProviderAuthRejectedError("Notion", status);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe(`Notion rejected the integration credentials (${status}).`);
+    expect(error.provider).toBe("Notion");
+    expect(error.status).toBe(status);
   });
 });

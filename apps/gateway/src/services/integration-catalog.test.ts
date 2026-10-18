@@ -384,6 +384,8 @@ describe("integration-catalog", () => {
       "productivity.things3",
       "productivity.bear",
       "productivity.trello",
+      "productivity.notion",
+      "productivity.github",
       "automation.gmail",
       "automation.activepieces",
       "automation.gif-search",
@@ -404,6 +406,52 @@ describe("integration-catalog", () => {
         expect.arrayContaining((entry.operatorActions ?? []).map((action) => action.capability)),
       );
     }
+  });
+
+  it("advertises Notion search first, then read and the two governed writes, behind a token form", () => {
+    const entry = requireCatalogEntry("productivity.notion");
+    expect(entry.description).toBe(
+      "Notion pages: search, read, create and append through an internal integration token.",
+    );
+    expect(entry.authMethods).toEqual(["token"]);
+    expect((entry.operatorActions ?? []).map((action) => [action.actionId, action.capability])).toEqual([
+      ["search", "read"],
+      ["page_read", "read"],
+      ["page_create", "write"],
+      ["block_append", "write"],
+    ]);
+    const fields = getIntegrationFormSchema("productivity.notion")?.fields ?? [];
+    expect(fields.map((field) => field.key)).toEqual(["label", "tokenEnv", "defaultParentPageId", "enabled"]);
+    expect(fields.find((field) => field.key === "tokenEnv")).toMatchObject({
+      required: true,
+      secretRef: true,
+      placeholder: "NOTION_INTEGRATION_TOKEN",
+    });
+  });
+
+  it("advertises GitHub issue and pull request reads plus two governed writes behind a token form", () => {
+    const entry = requireCatalogEntry("productivity.github");
+    expect(entry.description).toBe(
+      "GitHub issues and pull requests: list, read, create issues and comment through a fine-grained token.",
+    );
+    expect(entry.maturity).toBe("beta");
+    expect(entry.authMethods).toEqual(["token"]);
+    expect((entry.operatorActions ?? []).map((action) => [action.actionId, action.capability])).toEqual([
+      ["issue_list", "read"],
+      ["issue_read", "read"],
+      ["pr_list", "read"],
+      ["pr_read", "read"],
+      ["issue_create", "write"],
+      ["issue_comment", "write"],
+    ]);
+    const fields = getIntegrationFormSchema("productivity.github")?.fields ?? [];
+    expect(fields.map((field) => field.key)).toEqual(["label", "tokenEnv", "defaultRepo", "enabled"]);
+    expect(fields.find((field) => field.key === "tokenEnv")).toMatchObject({
+      required: true,
+      secretRef: true,
+      placeholder: "GITHUB_INTEGRATION_TOKEN",
+    });
+    expect(fields.find((field) => field.key === "defaultRepo")).toMatchObject({ required: true });
   });
 
   it("advertises Activepieces webhook trigger and explicit run-status read actions", () => {

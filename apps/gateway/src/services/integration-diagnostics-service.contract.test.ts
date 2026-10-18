@@ -331,6 +331,118 @@ describe("integration-diagnostics-service contract behavior", () => {
     }
   });
 
+  it("checks the Notion token structurally and with a live users/me probe", async () => {
+    vi.stubEnv("NOTION_INTEGRATION_TOKEN", "notion-secret");
+    vi.stubEnv("GOATCITADEL_NOTION_API_BASE_URL", "http://notion.test");
+    try {
+      const configured = createIntegrationConnection("notion", "productivity", {
+        tokenEnv: "NOTION_INTEGRATION_TOKEN",
+        token: "notion-secret",
+        defaultParentPageId: "parent-1",
+      });
+      expect(buildIntegrationConnectionChecks(createPort(), configured)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ key: "auth", status: "pass" }),
+          expect.objectContaining({ key: "target", status: "pass" }),
+        ]),
+      );
+      const missing = createIntegrationConnection("notion", "productivity", {});
+      expect(buildIntegrationConnectionChecks(createPort(), missing)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ key: "auth", status: "fail" })]),
+      );
+
+      const port = createPort();
+      vi.mocked(port.fetchWithDiagnosticsTimeout).mockResolvedValueOnce(
+        new Response('{"object":"user"}', { status: 200 }),
+      );
+      const live = await runIntegrationConnectionLiveChecks(port, configured, { includeSandboxSend: false });
+      expect(live.checks).toEqual([expect.objectContaining({ key: "auth_live", status: "pass" })]);
+      expect(vi.mocked(port.fetchWithDiagnosticsTimeout).mock.calls[0]![0]).toBe("http://notion.test/v1/users/me");
+
+      vi.mocked(port.fetchWithDiagnosticsTimeout).mockResolvedValueOnce(new Response("{}", { status: 401 }));
+      const rejected = await runIntegrationConnectionLiveChecks(port, configured, { includeSandboxSend: false });
+      expect(rejected.checks).toEqual([expect.objectContaining({ key: "auth_live", status: "fail" })]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("checks the GitHub token and default repository structurally and with a live repo probe", async () => {
+    vi.stubEnv("GITHUB_INTEGRATION_TOKEN", "github-secret");
+    vi.stubEnv("GOATCITADEL_GITHUB_API_BASE_URL", "http://github.test");
+    try {
+      const configured = createIntegrationConnection("github", "productivity", {
+        tokenEnv: "GITHUB_INTEGRATION_TOKEN",
+        token: "github-secret",
+        defaultRepo: "octo/widgets",
+      });
+      expect(buildIntegrationConnectionChecks(createPort(), configured)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ key: "auth", status: "pass" }),
+          expect.objectContaining({ key: "target", status: "pass" }),
+        ]),
+      );
+      const missing = createIntegrationConnection("github", "productivity", {});
+      expect(buildIntegrationConnectionChecks(createPort(), missing)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ key: "auth", status: "fail" }),
+          expect.objectContaining({ key: "target", status: "fail" }),
+        ]),
+      );
+
+      const port = createPort();
+      vi.mocked(port.fetchWithDiagnosticsTimeout).mockResolvedValueOnce(
+        new Response('{"full_name":"octo/widgets"}', { status: 200 }),
+      );
+      const live = await runIntegrationConnectionLiveChecks(port, configured, { includeSandboxSend: false });
+      expect(live.checks).toEqual([expect.objectContaining({ key: "auth_live", status: "pass" })]);
+      expect(vi.mocked(port.fetchWithDiagnosticsTimeout).mock.calls[0]![0]).toBe(
+        "http://github.test/repos/octo/widgets",
+      );
+
+      vi.mocked(port.fetchWithDiagnosticsTimeout).mockResolvedValueOnce(new Response("{}", { status: 401 }));
+      const rejected = await runIntegrationConnectionLiveChecks(port, configured, { includeSandboxSend: false });
+      expect(rejected.checks).toEqual([expect.objectContaining({ key: "auth_live", status: "fail" })]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("reports forbidden GitHub/Notion token env names as failing auth and live checks", async () => {
+    for (const [key, envName, suggested] of [
+      ["github", "GITHUB_TOKEN", "GITHUB_INTEGRATION_TOKEN"],
+      ["notion", "OPENAI_API_KEY", "NOTION_INTEGRATION_TOKEN"],
+    ] as const) {
+      vi.stubEnv(envName, "must-not-leak");
+      try {
+        const port = createPort();
+        port.resolveConnectionSecret = vi.fn(() => undefined);
+        const connection = createIntegrationConnection(key, "productivity", { tokenEnv: envName });
+        const auth = buildIntegrationConnectionChecks(port, connection).find((check) => check.key === "auth");
+        expect(auth).toEqual(expect.objectContaining({ status: "fail" }));
+        expect(auth?.message).toContain(envName);
+        expect(auth?.message).toContain(suggested);
+        expect(auth?.message).not.toContain("must-not-leak");
+        const live = await runIntegrationConnectionLiveChecks(port, connection, { includeSandboxSend: false });
+        expect(live.checks).toEqual([expect.objectContaining({ key: "auth_live", status: "fail" })]);
+        expect(port.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }
+  });
+
+  it("passes the structural token check for a direct token resolved through the guarded path", () => {
+    const port = createPort();
+    port.resolveConnectionSecret = vi.fn(() => "resolved-secret");
+    for (const key of ["github", "notion"]) {
+      const connection = createIntegrationConnection(key, "productivity", { token: "keychain:opaque" });
+      expect(buildIntegrationConnectionChecks(port, connection)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ key: "auth", status: "pass" })]),
+      );
+    }
+  });
+
   it("uses the service wrapper while checking local model-provider and platform readiness", async () => {
     const host = createPort();
     host.isConnectionUrlAllowlisted = vi.fn(() => true);

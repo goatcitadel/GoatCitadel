@@ -1,4 +1,6 @@
 import { runDiscordConnectionLiveChecks } from "./discord-connection-diagnostics.js";
+import { buildTokenAndTargetChecks, runGitHubLiveChecks } from "./github-integration-action.js";
+import { runNotionLiveChecks } from "./notion-integration-action.js";
 import { runConfiguredMatrixChecks } from "./matrix-live-probes.js";
 import { runConfiguredNextcloudTalkChecks } from "./nextcloud-talk-live-probes.js";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
@@ -468,6 +470,28 @@ export function buildIntegrationConnectionChecks(
       });
       requireText("target", "Default Trello board", deps.readConnectionConfigValue(config, "defaultBoardId"), "warn");
     }
+    if (connection.key === "notion") {
+      checks.push(
+        ...buildTokenAndTargetChecks(deps, connection, {
+          tokenLabel: "Notion integration token",
+          suggestedEnv: "NOTION_INTEGRATION_TOKEN",
+          targetKey: "defaultParentPageId",
+          targetLabel: "Default Notion parent page",
+          targetMissingStatus: "warn",
+        }),
+      );
+    }
+    if (connection.key === "github") {
+      checks.push(
+        ...buildTokenAndTargetChecks(deps, connection, {
+          tokenLabel: "GitHub token",
+          suggestedEnv: "GITHUB_INTEGRATION_TOKEN",
+          targetKey: "defaultRepo",
+          targetLabel: "Default GitHub repository",
+          targetMissingStatus: "fail",
+        }),
+      );
+    }
     if (["apple-notes", "apple-reminders", "things3", "bear"].includes(connection.key)) {
       const bridgeUrl =
         deps.readConnectionConfigValue(config, "bridgeUrl") ?? deps.readConnectionConfigValue(config, "baseUrl");
@@ -603,6 +627,12 @@ export async function runIntegrationConnectionLiveChecks(
     discordRuntimeReadiness?: "required" | "deferred";
   },
 ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe?: ChannelProbeReport }> {
+  if (connection.catalogId === "productivity.notion") {
+    return { checks: await runNotionLiveChecks(deps, connection) };
+  }
+  if (connection.catalogId === "productivity.github") {
+    return { checks: await runGitHubLiveChecks(deps, connection) };
+  }
   if (connection.kind !== "channel") {
     return { checks: [] };
   }

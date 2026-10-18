@@ -17,6 +17,8 @@ import {
 } from "./external-side-effect-runner-service.js";
 import { getIntegrationOperatorActions, isLocalBridgeCatalogId } from "./integration-action-registry.js";
 import { invokeGifSearchAction } from "./gif-search-action.js";
+import { invokeGitHubAction } from "./github-integration-action.js";
+import { invokeNotionAction } from "./notion-integration-action.js";
 import { buildLocalBridgeActionTargets, isLocalBridgeExternalSideEffectAction } from "./local-bridge-action-policy.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 import type { ExternalSideEffectReplayRecords } from "./external-side-effect-replay-record.js";
@@ -160,6 +162,10 @@ export async function invokeIntegrationConnectionAction(
     result = await invokeLocalBridgeAction(host, connection, action, request, checkedAt, ward);
   } else if (connection.catalogId === "productivity.trello") {
     result = await invokeTrelloAction(host, connection, actionId, request, checkedAt, ward);
+  } else if (connection.catalogId === "productivity.notion") {
+    result = await invokeNotionAction(host, connection, actionId, request, checkedAt, ward);
+  } else if (connection.catalogId === "productivity.github") {
+    result = await invokeGitHubAction(host, connection, actionId, request, checkedAt, ward);
   } else if (connection.catalogId === "automation.gmail") {
     result = await invokeGmailAction(host, connection, actionId, request, checkedAt, ward);
   } else if (connection.catalogId === "automation.activepieces") {
