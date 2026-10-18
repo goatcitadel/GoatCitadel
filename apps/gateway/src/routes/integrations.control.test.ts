@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { IntegrationConnection, IntegrationPluginRecord } from "@goatcitadel/contracts";
+import { ValidationError, type IntegrationConnection, type IntegrationPluginRecord } from "@goatcitadel/contracts";
+import { PluginPackageStorageError } from "../services/integration-channel-service.js";
 import { buildInstalledIntegrationPluginRecord } from "../services/integration-plugin-author-contract.js";
 import { buildGenericChannelInboundSignature } from "../services/generic-channel-webhook.js";
 import type { DurableInboundChannelAcceptInput } from "../services/channel-inbound-dispatch.js";
@@ -45,7 +46,11 @@ describe("integrations control routes", () => {
       ...rawConnection,
       // Response projection still redacts any credential held by the service;
       // ordinary public creation only submits the supported ENV reference.
-      config: { ...input.config, botToken: "created-short", webhookUrl: "https://hooks.example.test/new?token=created-hook" },
+      config: {
+        ...input.config,
+        botToken: "created-short",
+        webhookUrl: "https://hooks.example.test/new?token=created-hook",
+      },
     }));
     app = Fastify();
     decorateIntegrationServices(app, {
@@ -860,6 +865,76 @@ describe("integrations control routes", () => {
     expect(rawPlugin.description).toContain("plugin-description-short");
     expect(rawPlugin.source).toContain("plugin-source-path");
     expect(rawPlugin.theme).toEqual({ accentColor: "#17c3b2", dashboardVariant: "compact" });
+  });
+
+  it("maps install storage failures to 503 and validation failures to 400", async () => {
+    const installIntegrationPlugin = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new PluginPackageStorageError();
+      })
+      .mockImplementationOnce(() => {
+        throw new ValidationError({ field: "expectedIntegrity", message: "bad pin" });
+      });
+    app = Fastify();
+    decorateIntegrationServices(app, { installIntegrationPlugin });
+    await app.register(integrationsRoutes);
+    const request = {
+      method: "POST" as const,
+      url: "/api/v1/integrations/plugins/install",
+      payload: { source: "npm:p" },
+    };
+    const storage = await app.inject(request);
+    const validation = await app.inject(request);
+    expect(storage.statusCode).toBe(503);
+    expect(storage.json().error).toContain("could not be stored");
+    expect(validation.statusCode).toBe(400);
+  });
+
+  it("logs a redacted cause for an install storage 503", async () => {
+    const lines: string[] = [];
+    const installIntegrationPlugin = vi.fn(() => {
+      throw new PluginPackageStorageError({
+        cause: new Error("EACCES: permission denied, mkdir 'C:\\Users\\alice\\secret-store\\p' and /home/alice/data"),
+      });
+    });
+    app = Fastify({ logger: { level: "warn", stream: { write: (line: string) => void lines.push(line) } } });
+    decorateIntegrationServices(app, { installIntegrationPlugin });
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/plugins/install",
+      payload: { source: "npm:p" },
+    });
+
+    expect(response.statusCode).toBe(503);
+    const logged = lines.join("");
+    expect(logged).toContain("integration plugin package storage failed");
+    expect(logged).toContain("EACCES");
+    expect(logged).not.toContain("alice");
+    expect(logged).not.toContain("secret-store");
+  });
+
+  it("refuses to enable a quarantined plugin with a 400 and the reason", async () => {
+    const setIntegrationPluginEnabled = vi.fn(() => {
+      throw new ValidationError({
+        field: "pluginId",
+        message:
+          "Plugin is quarantined after an integrity failure. Reinstall it; the new install's integrity result replaces the quarantine.",
+      });
+    });
+    app = Fastify();
+    decorateIntegrationServices(app, { setIntegrationPluginEnabled });
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/plugins/quarantined-plugin/enable",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain("quarantined after an integrity failure");
   });
 
   it("supports reference plugin install, list, and enable-disable lifecycle routes", async () => {

@@ -2528,6 +2528,14 @@
       "maxDependencyMemberAccesses": 16,
       "reason": "WS6 gap-closure program: the GitHub issue and pull request list and read actions, the governed issue create and comment writes, and the repository diagnostics probe live in their own module so integration-action-service keeps its 19-access budget and integration-writeback-run-inputs stays at 21. Its accesses are the connection token and config reads, the host fetch, the durable stores threaded into the shared idempotent runner input, and the diagnostics fetch, secret and config reads, plus the guarded structural token and target check shared with the diagnostics service (one config read for the target).",
       "evidence": "2026-10-18: github-integration-action.test.ts covers the exact list, read, issue create and comment requests and headers, pull-request filtering, the trailing idempotency marker comment, 401 and non-rate-limit 403 (including an unparseable 401 body) mapping to github_auth_rejected without a token leak and without an unknown external outcome, rate-limit and not-found failures, ward deny, require_dry_run preview plus approval, duplicate replay without a fetch, the issue create reconcile probe, and invalid repo and number blocks; integration-catalog, integration-diagnostics and integration-action-service suites pass; Gateway typecheck passes; diagnostics token-guard and live-check cases (forbidden env name, unresolved token, primary and secondary rate limit) pass; repository counter measures 16 dependency accesses and 10 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/integration-plugin-package-integrity.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "WS6 integrations program: standalone integration plugin package integrity verifier (npm sha512 SRI against registry dist.integrity and operator pin, deterministic local manifest sha256) with ordinary-path artifact storage; it takes every dependency as an argument and reads no host.",
+      "evidence": "apps/gateway/src/services/integration-plugin-package-integrity.test.ts covers registry and operator verification, mismatch quarantine with nothing stored, allowlist-blocked no-fetch, off-host tarball refusal, spec and SRI parsing, deterministic local manifest hashing, symlink and hardlink rejection and git/url unknown status; Gateway typecheck passes."
     }
   ]
 }
