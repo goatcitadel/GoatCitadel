@@ -28,6 +28,7 @@ import { emitProviderTypingWithDeps } from "./channel-typing-adapters.js";
 import type { ChannelStreamRuntimeStatus } from "./channel-stream-runtime-service.js";
 import {
   buildInstalledIntegrationPluginRecord,
+  isIntegrityUnrunnablePlugin,
   resolveIntegrationPluginInstallMetadata,
 } from "./integration-plugin-author-contract.js";
 import type {
@@ -101,6 +102,13 @@ export interface IntegrationChannelPort {
   fetchWithDiagnosticsTimeout(url: string, init?: RequestInit): Promise<Response>;
   readIntegrationPlugins(): Promise<IntegrationPluginRecord[]>;
   writeIntegrationPlugins(plugins: IntegrationPluginRecord[]): Promise<void>;
+  recordDevDiagnostic?(entry: {
+    level: "warn";
+    category: string;
+    event: string;
+    message: string;
+    context: Record<string, unknown>;
+  }): void;
   verifyIntegrationPluginPackage(
     input: Omit<VerifyIntegrationPluginPackageInput, "networkAllowlist" | "pluginStoreRoot">,
   ): Promise<PluginPackageIntegrityResult>;
@@ -739,6 +747,23 @@ export class PluginPackageStorageError extends Error {
   }
 }
 
+const UNVERIFIED_ENABLE_MESSAGE =
+  "Plugin package integrity could not be verified; reinstall once the registry is reachable or the local path exists.";
+
+async function publishAfterCommit(deps: IntegrationChannelPort, payload: Record<string, unknown>): Promise<void> {
+  try {
+    await deps.publishRealtime("system", "integrations", payload);
+  } catch (error) {
+    deps.recordDevDiagnostic?.({
+      level: "warn",
+      category: "integrations",
+      event: "integration.plugin.realtime_publish_failed",
+      message: "Integration plugin change was saved but its realtime event could not be published.",
+      context: { type: String(payload.type), pluginId: String(payload.pluginId), error: (error as Error).message },
+    });
+  }
+}
+
 const QUARANTINE_ENABLE_MESSAGE =
   "Plugin is quarantined after an integrity failure. Reinstall it; the new install's integrity result replaces the quarantine.";
 
@@ -806,7 +831,8 @@ export async function installIntegrationPlugin(
     await deps.writeIntegrationPlugins(
       existing ? plugins.map((item) => (item.pluginId === nextId ? record : item)) : [record, ...plugins],
     );
-    await deps.publishRealtime("system", "integrations", {
+    // The list write has committed: a failing realtime publish must not turn it into a failed request.
+    await publishAfterCommit(deps, {
       type: existing ? "integration_plugin_updated" : "integration_plugin_installed",
       pluginId: record.pluginId,
       source: input.source,
@@ -846,13 +872,16 @@ export async function setIntegrationPluginEnabled(
     if (enabled && (current.integrityStatus === "quarantined" || current.integrityStatus === "mismatch")) {
       throw new ValidationError({ field: "pluginId", message: QUARANTINE_ENABLE_MESSAGE });
     }
+    if (enabled && isIntegrityUnrunnablePlugin(current)) {
+      throw new ValidationError({ field: "pluginId", message: UNVERIFIED_ENABLE_MESSAGE });
+    }
     const updated: IntegrationPluginRecord = {
       ...current,
       enabled,
       updatedAt: now,
     };
     await deps.writeIntegrationPlugins(plugins.map((item) => (item.pluginId === pluginId ? updated : item)));
-    await deps.publishRealtime("system", "integrations", {
+    await publishAfterCommit(deps, {
       type: enabled ? "integration_plugin_enabled" : "integration_plugin_disabled",
       pluginId,
     });

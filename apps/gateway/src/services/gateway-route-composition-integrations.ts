@@ -633,6 +633,7 @@ function createIntegrationChannelPortForGateway(
     writeIntegrationPlugins: async (plugins) => {
       await writeIntegrationPlugins(storage, plugins);
     },
+    recordDevDiagnostic: (entry) => gateway.recordDevDiagnostic(entry),
     verifyIntegrationPluginPackage: async (input) =>
       await verifyIntegrationPluginPackage({
         ...input,

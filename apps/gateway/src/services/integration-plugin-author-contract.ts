@@ -111,7 +111,7 @@ export function buildInstalledIntegrationPluginRecord(
       `Installed from ${installMetadata.source}`,
     source: installMetadata.source,
     enabled:
-      isQuarantined(installMetadata) || isUnrunnableNpm(installMetadata.sourceMetadata.type, input.integrity)
+      isQuarantined(installMetadata) || isUnrunnableSource(installMetadata.sourceMetadata.type, input.integrity)
         ? false
         : (input.existing?.enabled ?? true),
     installedAt: input.existing?.installedAt ?? input.now,
@@ -140,18 +140,35 @@ function isQuarantined(metadata: ResolvedIntegrationPluginInstallMetadata): bool
 }
 
 /** An npm plugin whose package could not be fetched/validated has nothing to run: never show it as enabled. */
-function isUnrunnableNpm(
+const UNRUNNABLE_INTEGRITY_CODES = new Set([
+  "integrity_unverifiable",
+  "integrity_registry_invalid",
+  "integrity_manifest_invalid",
+]);
+
+function hasUnrunnableIntegrityWarning(warnings: readonly IntegrationPluginTrustWarning[] | undefined): boolean {
+  return (warnings ?? []).some((item) => item.severity === "critical" && UNRUNNABLE_INTEGRITY_CODES.has(item.code));
+}
+
+/** An npm/local plugin whose package could not be fetched, found or validated has nothing to run. */
+function isUnrunnableSource(
   sourceType: IntegrationPluginInstallSourceType,
   result?: PluginPackageIntegrityResult,
 ): boolean {
   return (
-    sourceType === "npm" &&
+    (sourceType === "npm" || sourceType === "local") &&
     result?.status === "unknown" &&
-    result.warnings.some(
-      (item) =>
-        item.severity === "critical" &&
-        (item.code === "integrity_unverifiable" || item.code === "integrity_registry_invalid"),
-    )
+    hasUnrunnableIntegrityWarning(result.warnings)
+  );
+}
+
+/** Record-level form of the same rule, used to refuse enabling such a plugin later. */
+export function isIntegrityUnrunnablePlugin(record: IntegrationPluginRecord): boolean {
+  const type = record.sourceMetadata?.type;
+  return (
+    (type === "npm" || type === "local") &&
+    (record.integrityStatus ?? record.sourceMetadata?.integrityStatus) === "unknown" &&
+    hasUnrunnableIntegrityWarning(record.trustWarnings)
   );
 }
 

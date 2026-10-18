@@ -693,4 +693,72 @@ describe("integration plugin package integrity at install", () => {
       installIntegrationPlugin(deps, { source: "npm:goat-plugin", pluginId: "goat-plugin" }),
     ).rejects.toBeInstanceOf(PluginPackageStorageError);
   });
+
+  it("returns the committed record when the realtime publish rejects (create and update)", async () => {
+    const deps = createDeps();
+    const read = withPluginStore(deps);
+    vi.mocked(deps.publishRealtime).mockRejectedValue(new Error("bus down"));
+    const record = vi.fn();
+    (deps as { recordDevDiagnostic?: unknown }).recordDevDiagnostic = record;
+
+    const created = await installIntegrationPlugin(deps, { source: "goat-plugin", pluginId: "goat-plugin" });
+    const updated = await installIntegrationPlugin(deps, { source: "goat-plugin", pluginId: "goat-plugin" });
+
+    expect(created.pluginId).toBe("goat-plugin");
+    expect(updated.pluginId).toBe("goat-plugin");
+    expect(read()).toHaveLength(1);
+    expect(record).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses to enable plugins whose package could not be verified or found", async () => {
+    const deps = createDeps();
+    const base = {
+      label: "U",
+      version: "1.0.0",
+      enabled: false,
+      installedAt: "2026-10-18T00:00:00.000Z",
+      updatedAt: "2026-10-18T00:00:00.000Z",
+      capabilities: ["channel.adapter"],
+      integrityStatus: "unknown",
+    };
+    withPluginStore(deps, [
+      {
+        ...base,
+        pluginId: "npm-u",
+        sourceMetadata: { type: "npm", display: "x", integrityStatus: "unknown" },
+        trustWarnings: [{ code: "integrity_unverifiable", severity: "critical", message: "m" }],
+      },
+      {
+        ...base,
+        pluginId: "local-u",
+        sourceMetadata: { type: "local", display: "x", integrityStatus: "unknown" },
+        trustWarnings: [{ code: "integrity_manifest_invalid", severity: "critical", message: "m" }],
+      },
+      {
+        ...base,
+        pluginId: "git-u",
+        sourceMetadata: { type: "git", display: "x", integrityStatus: "unknown" },
+        trustWarnings: [{ code: "integrity_not_verified", severity: "warning", message: "m" }],
+      },
+    ] as IntegrationPluginRecord[]);
+
+    await expect(setIntegrationPluginEnabled(deps, "npm-u", true)).rejects.toThrow(/could not be verified/);
+    await expect(setIntegrationPluginEnabled(deps, "local-u", true)).rejects.toThrow(/could not be verified/);
+    expect((await setIntegrationPluginEnabled(deps, "git-u", true)).enabled).toBe(true);
+  });
+
+  it("records a local install with a missing path disabled", async () => {
+    const deps = createDeps();
+    withPluginStore(deps);
+    vi.mocked(deps.verifyIntegrationPluginPackage).mockResolvedValue({
+      status: "unknown",
+      warnings: [{ code: "integrity_manifest_invalid", severity: "critical", message: "manifest_path_missing" }],
+    });
+    const record = await installIntegrationPlugin(deps, {
+      source: path.resolve("definitely-missing-plugin-dir"),
+      sourceType: "local",
+      pluginId: "gone",
+    });
+    expect(record.enabled).toBe(false);
+  });
 });
