@@ -150,7 +150,7 @@ describe("tool executor edge coverage", () => {
       kind: "build",
     });
 
-    expect(mocked.execFileAsync).toHaveBeenCalledWith("git", ["add", filePath], expect.any(Object));
+    expect(mocked.execFileAsync).toHaveBeenCalledWith("git", ["add", "--", filePath], expect.any(Object));
     expect(mocked.execFileAsync).toHaveBeenCalledWith(
       "git",
       ["commit", "-m", "coverage checkpoint"],
@@ -158,9 +158,30 @@ describe("tool executor edge coverage", () => {
     );
     expect(mocked.execFileAsync).toHaveBeenCalledWith(
       "git",
-      ["worktree", "add", worktreePath, "codex/coverage-edge"],
+      ["worktree", "add", "--", path.resolve(worktreePath), "codex/coverage-edge"],
       expect.any(Object),
     );
+  });
+
+  it("rejects option-shaped git operands before invoking git", async () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["git.add", { paths: ["-A"] }],
+      ["git.add", { paths: ["--force"] }],
+      ["git.branch.create", { branch: "--edit-description" }],
+      ["git.branch.switch", { branch: "-" }],
+      ["git.worktree.create", { path: "--detach", branch: "C:\\outside" }],
+      ["git.worktree.remove", { path: "-f" }],
+    ];
+    for (const [tool, args] of cases) {
+      await expect(executeTool(request(tool, args), config, storageStub())).rejects.toThrow(/must not start with "-"/);
+    }
+    expect(mocked.execFileAsync).not.toHaveBeenCalledWith("git", expect.anything(), expect.anything());
+  });
+
+  it("accepts slash and dot branch names", async () => {
+    await expect(
+      executeTool(request("git.branch.create", { branch: "codex/x.y" }), config, storageStub()),
+    ).resolves.toMatchObject({ created: true, branch: "codex/x.y" });
   });
 
   it("rejects mutating git tools before invoking git when required inputs or jail checks fail", async () => {

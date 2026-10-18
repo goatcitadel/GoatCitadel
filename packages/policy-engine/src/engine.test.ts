@@ -5577,6 +5577,47 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     ).toEqual(["grant_constraints_block"]);
   });
 
+  it("constrains git.add by grant allowedPaths through args.paths", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: { ...policyConfig.tools, approvalMode: "bypass" },
+        sandbox: { ...policyConfig.sandbox, writeJailRoots: ["./workspace"] },
+      },
+      storage,
+    );
+    vi.mocked(storage.toolGrants.list).mockResolvedValue([
+      {
+        grantId: "grant-git-add",
+        toolPattern: "git.add",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session-1",
+        grantType: "persistent",
+        constraints: { allowedPaths: ["./workspace/allowed"] },
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+
+    const inside = await engine.evaluateAccess({
+      toolName: "git.add",
+      args: { paths: [path.resolve("./workspace/allowed/file.ts")] },
+      agentId: "agent",
+      sessionId: "session-1",
+    });
+    expect(inside.reasonCodes).toContain("allowed");
+
+    const elsewhere = await engine.evaluateAccess({
+      toolName: "git.add",
+      args: { paths: [path.resolve("./workspace/elsewhere/file.ts")] },
+      agentId: "agent",
+      sessionId: "session-1",
+    });
+    expect(elsewhere.reasonCodes).toEqual(["grant_constraints_block"]);
+  });
+
   it("applies scoped grant constraints to safe tools", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(

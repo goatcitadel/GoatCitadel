@@ -1013,15 +1013,24 @@ function readGitDiffBounded(args: string[], config: ToolPolicyConfig): Promise<{
   });
 }
 
+// SEC: git runs without a shell, but a leading "-" would still be parsed as an option.
+function assertGitOperand(value: string, field: string): string {
+  if (value.startsWith("-")) {
+    throw new Error(`${field} must not start with "-"`);
+  }
+  return value;
+}
+
 async function gitAdd(args: Record<string, unknown>, config: ToolPolicyConfig) {
-  const paths = stringArray(args.paths);
+  const paths = stringArray(args.paths).map((p) => assertGitOperand(p, "paths"));
   // SEC: Always run jail check on every path, including ".". Never allow
   // wildcard staging that bypasses write-jail enforcement.
   const resolvedPaths = paths.length > 0 ? paths : ["."];
-  for (const p of resolvedPaths) {
-    assertWritePathInJail(path.resolve(p), config.sandbox.writeJailRoots);
+  const absolutePaths = resolvedPaths.map((p) => path.resolve(p));
+  for (const p of absolutePaths) {
+    assertWritePathInJail(p, config.sandbox.writeJailRoots);
   }
-  await execFileAsync("git", ["add", ...resolvedPaths], {
+  await execFileAsync("git", ["add", "--", ...absolutePaths], {
     timeout: 15000,
     windowsHide: true,
     env: buildModelSpawnEnv(config),
@@ -1040,7 +1049,7 @@ async function gitCommit(args: Record<string, unknown>, config: ToolPolicyConfig
 }
 
 async function gitBranchCreate(args: Record<string, unknown>, config: ToolPolicyConfig) {
-  const branch = required(args.branch, "branch");
+  const branch = assertGitOperand(required(args.branch, "branch"), "branch");
   await execFileAsync("git", ["branch", branch], {
     timeout: 10000,
     windowsHide: true,
@@ -1050,7 +1059,7 @@ async function gitBranchCreate(args: Record<string, unknown>, config: ToolPolicy
 }
 
 async function gitBranchSwitch(args: Record<string, unknown>, config: ToolPolicyConfig) {
-  const branch = required(args.branch, "branch");
+  const branch = assertGitOperand(required(args.branch, "branch"), "branch");
   await execFileAsync("git", ["switch", branch], {
     timeout: 15000,
     windowsHide: true,
@@ -1060,10 +1069,11 @@ async function gitBranchSwitch(args: Record<string, unknown>, config: ToolPolicy
 }
 
 async function gitWorktreeCreate(args: Record<string, unknown>, config: ToolPolicyConfig) {
-  const p = required(args.path, "path");
-  const branch = required(args.branch, "branch");
-  assertWritePathInJail(p, config.sandbox.writeJailRoots);
-  await execFileAsync("git", ["worktree", "add", p, branch], {
+  const p = assertGitOperand(required(args.path, "path"), "path");
+  const branch = assertGitOperand(required(args.branch, "branch"), "branch");
+  const absolutePath = path.resolve(p);
+  assertWritePathInJail(absolutePath, config.sandbox.writeJailRoots);
+  await execFileAsync("git", ["worktree", "add", "--", absolutePath, branch], {
     timeout: 30000,
     windowsHide: true,
     env: buildModelSpawnEnv(config),
@@ -1072,9 +1082,10 @@ async function gitWorktreeCreate(args: Record<string, unknown>, config: ToolPoli
 }
 
 async function gitWorktreeRemove(args: Record<string, unknown>, config: ToolPolicyConfig) {
-  const p = required(args.path, "path");
-  assertWritePathInJail(p, config.sandbox.writeJailRoots);
-  await execFileAsync("git", ["worktree", "remove", p], {
+  const p = assertGitOperand(required(args.path, "path"), "path");
+  const absolutePath = path.resolve(p);
+  assertWritePathInJail(absolutePath, config.sandbox.writeJailRoots);
+  await execFileAsync("git", ["worktree", "remove", "--", absolutePath], {
     timeout: 30000,
     windowsHide: true,
     env: buildModelSpawnEnv(config),

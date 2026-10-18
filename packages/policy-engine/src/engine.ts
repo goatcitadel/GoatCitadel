@@ -2756,7 +2756,8 @@ function extractPathCandidates(args?: Record<string, unknown>): string[] {
   if (!args) {
     return [];
   }
-  return [args.path, args.from, args.to, args.relativePath, args.outputPath]
+  const listed = Array.isArray(args.paths) ? args.paths : [];
+  return [args.path, args.from, args.to, args.relativePath, args.outputPath, ...listed]
     .map((value) => (typeof value === "string" ? value.trim() : ""))
     .filter(Boolean);
 }
