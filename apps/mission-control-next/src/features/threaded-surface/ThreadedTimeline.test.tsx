@@ -12,6 +12,8 @@ import {
   resolveFocusedActiveTurn,
   countVisibleLines,
   resolveStreamingPreviewScrollSignal,
+  advanceStreamPhase,
+  INITIAL_STREAM_PHASE,
 } from "./ThreadedTimeline";
 import {
   publishChannelActivityFromRealtimeEvent,
@@ -645,6 +647,27 @@ describe("ThreadedTimeline", () => {
     };
     act(() => renderer.update(<ThreadedTimeline props={answering as any} />));
     expect(liveRegionText(renderer)).toBe("Cowork response streaming.");
+
+    // A later reasoning pass after intermediate answer text (multi-pass tool turn) is announced again.
+    turn.thinking = "Weighing the menu, then the playlist, then the lights";
+    act(() => renderer.update(<ThreadedTimeline props={{ ...answering } as any} />));
+    expect(liveRegionText(renderer)).toBe("Cowork model is thinking.");
+
+    // A message queued while the model is thinking is still announced.
+    act(() => renderer.update(<ThreadedTimeline props={{ ...answering, queuedCount: 1 } as any} />));
+    expect(liveRegionText(renderer)).toBe("Cowork model is thinking with 1 queued.");
+  });
+
+  it("advances the stream phase by whichever text grew last", () => {
+    let state = advanceStreamPhase(INITIAL_STREAM_PHASE, "turn-1", 5, 0);
+    expect(state.phase).toBe("thinking");
+    expect(advanceStreamPhase(state, "turn-1", 5, 0)).toBe(state);
+    state = advanceStreamPhase(state, "turn-1", 5, 12);
+    expect(state.phase).toBe("answering");
+    state = advanceStreamPhase(state, "turn-1", 9, 12);
+    expect(state.phase).toBe("thinking");
+    expect(advanceStreamPhase(state, "turn-1", 12, 20).phase).toBe("answering");
+    expect(advanceStreamPhase(state, "turn-2", 0, 0).phase).toBe("idle");
   });
 
   it("shows why memory citations were used without adding why-used copy to ordinary citations", () => {
