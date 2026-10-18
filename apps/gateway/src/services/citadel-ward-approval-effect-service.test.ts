@@ -423,7 +423,7 @@ describe("citadel ward approval effects", () => {
         ...integration.payload,
         sealedRequest: sealReplayEnvelope(
           TEST_KEY,
-          `goatcitadel:citadel-ward-approval:v1 ${CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND} ${hash}`,
+          `goatcitadel:citadel-ward-approval:v1\0${CITADEL_WARD_INTEGRATION_ACTION_APPROVAL_KIND}\0${hash}`,
           { connectionId: CONNECTION_ID, actionId: "trigger_webhook", invokeRequest: { input: { x: 1 } } },
         ),
       },
