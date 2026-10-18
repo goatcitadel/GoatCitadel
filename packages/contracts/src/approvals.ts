@@ -222,7 +222,8 @@ export type ApprovalEffectTargetKind =
   | "delegation_step"
   | "engineering_learning"
   | "mail_draft"
-  | "calendar_event";
+  | "calendar_event"
+  | "citadel_ward_action";
 
 export interface ApprovalEffectRecord {
   effectId: string;

@@ -2339,6 +2339,14 @@
     },
     {
       "planStep": "C0",
+      "path": "apps/gateway/src/services/citadel-ward-approval-effect-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 5,
+      "reason": "WS3 gap-closure program: executor for approved Citadel Ward require_approval actions (integration operator actions, A2A outbound sends, A2A push deliveries) plus the effect-row glue the approval effects worker delegates to. The accesses cover the approval re-read, the lazily composed integration host and A2A route-service ports, and the injected storage; the glue lives here so approval-resolution-effects-service.ts stays at 258 (below its 259 baseline) by sharing one settlement builder with the communications runner.",
+      "evidence": "apps/gateway/src/services/citadel-ward-approval-effect-service.test.ts covers enqueue identity for approved/rejected/expired ward approvals and none for other kinds, an approved integration action executed once across two runs over a real in-memory runner store (second run replayed), a ward tightened to deny, a citadel changed after approval, a tampered request, non-approved and missing approvals, rejection and expiry recording the refused push, A2A outbound and push dispatch with the ward approval reference, and retry/missing-executor settlement; approval-resolution-effects-service.test.ts covers resolution enqueue + completion and an expired push approval; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C0",
       "path": "apps/gateway/src/services/gateway/durable-chat-turn-payload.ts",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 0,
