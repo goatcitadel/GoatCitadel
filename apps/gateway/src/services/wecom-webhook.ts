@@ -118,7 +118,14 @@ function decodePredefinedEntities(value: string): string {
     .replace(/&amp;/g, "&");
 }
 
-/** Reads flat `<Name><![CDATA[v]]></Name>` or `<Name>v</Name>` fields. No DTD, entity declaration or nesting support. */
+const DUPLICATE_FIELD_ERROR = "WeCom XML repeats a field";
+
+/**
+ * Reads flat `<Name><![CDATA[v]]></Name>` or `<Name>v</Name>` fields that are DIRECT children of the root
+ * `<xml>` element. A sequential scanner consumes each element's whole content (CDATA or text) before looking
+ * for the next tag, so markup inside a user-controlled value (Content) can never be read as a field. A requested
+ * field that appears twice at top level is refused. No DTD, entity declaration or nesting support.
+ */
 export function readWecomXmlFields(xml: string, names: readonly string[]): Record<string, string | undefined> {
   if (Buffer.byteLength(xml, "utf8") > MAX_XML_BYTES) {
     throw new Error("WeCom XML is too large");
@@ -126,41 +133,92 @@ export function readWecomXmlFields(xml: string, names: readonly string[]): Recor
   if (XML_DTD.test(xml)) {
     throw new Error("WeCom XML must not contain a DTD or entity declaration");
   }
-  const result: Record<string, string | undefined> = {};
   for (const name of names) {
     if (!/^[A-Za-z][A-Za-z0-9]*$/.test(name)) {
       throw new Error("WeCom XML field name is invalid");
     }
-    const match = new RegExp(`<${name}>\\s*(?:<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>|([^<]*?))\\s*</${name}>`).exec(xml);
-    if (!match) {
-      result[name] = undefined;
-      continue;
-    }
-    const value = match[1] !== undefined ? match[1] : decodePredefinedEntities(match[2] ?? "");
-    result[name] = value;
   }
-  return result;
+  const wanted = new Set(names);
+  const result: Record<string, string | undefined> = Object.fromEntries(names.map((name) => [name, undefined]));
+  const seen = new Set<string>();
+
+  const root = /^\s*(?:<\?xml[^>]*\?>\s*)?<xml>/.exec(xml);
+  if (!root) {
+    throw new Error("WeCom XML root element is missing");
+  }
+  let position = root[0].length;
+  const open = /\s*<([A-Za-z][A-Za-z0-9]*)(\s*\/)?>/y;
+  const rootClose = /\s*<\/xml>\s*$/y;
+  for (;;) {
+    rootClose.lastIndex = position;
+    if (rootClose.test(xml)) {
+      return result;
+    }
+    open.lastIndex = position;
+    const tag = open.exec(xml);
+    if (!tag) {
+      throw new Error("WeCom XML is malformed");
+    }
+    const name = tag[1] ?? "";
+    position = open.lastIndex;
+    let value = "";
+    if (!tag[2]) {
+      const body = new RegExp(`\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>\\s*</${name}>|([^<]*)</${name}>`, "y");
+      body.lastIndex = position;
+      const match = body.exec(xml);
+      if (match) {
+        value = match[1] !== undefined ? match[1] : decodePredefinedEntities(match[2] ?? "");
+        position = body.lastIndex;
+      } else {
+        // Nested or otherwise unsupported content: skip the whole element, read nothing from it.
+        const close = xml.indexOf(`</${name}>`, position);
+        if (close < 0) {
+          throw new Error("WeCom XML is malformed");
+        }
+        position = close + name.length + 3;
+        if (wanted.has(name)) {
+          throw new Error("WeCom XML is malformed");
+        }
+        continue;
+      }
+    }
+    if (wanted.has(name)) {
+      if (seen.has(name)) {
+        throw new Error(DUPLICATE_FIELD_ERROR);
+      }
+      seen.add(name);
+      result[name] = value;
+    }
+  }
 }
 
 export function normalizeWecomMessage(input: { connectionId: string; xml: string }): WecomNormalization {
-  const fields = readWecomXmlFields(input.xml, [
-    "ToUserName",
-    "FromUserName",
-    "CreateTime",
-    "MsgType",
-    "Content",
-    "MsgId",
-    "AgentID",
-  ]);
+  let fields: Record<string, string | undefined>;
+  try {
+    fields = readWecomXmlFields(input.xml, [
+      "ToUserName",
+      "FromUserName",
+      "CreateTime",
+      "MsgType",
+      "Content",
+      "MsgId",
+      "AgentID",
+    ]);
+  } catch (error) {
+    if (error instanceof Error && error.message === DUPLICATE_FIELD_ERROR) {
+      return { kind: "ignore", reason: "duplicate_field" };
+    }
+    throw error;
+  }
   // Only plain text is dispatched; events and media types are acknowledged and dropped.
   if (fields.MsgType?.trim() !== "text") {
     return { kind: "ignore", reason: "unsupported_msg_type" };
   }
   const eventId = fields.MsgId?.trim();
   const actorId = fields.FromUserName?.trim();
-  const content = fields.Content?.trim();
-  if (!eventId || !actorId || !content) {
-    return { kind: "ignore", reason: "missing_fields" };
+  const content = fields.Content;
+  if (!eventId || !actorId || !content?.trim()) {
+    return { kind: "ignore", reason: !eventId ? "missing_msg_id" : "missing_fields" };
   }
   const agentId = fields.AgentID?.trim() || undefined;
   return {

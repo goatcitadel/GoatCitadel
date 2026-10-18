@@ -169,6 +169,30 @@ describe("WeCom webhook route", () => {
     expect((await get(other.app, encrypt("x"))).statusCode).toBe(400);
   });
 
+  it("GET for a disabled connection or an unknown id gets a fixed 404 that does not echo the lookup error", async () => {
+    const disabled = await buildApp({ connection: buildConnection({}, { enabled: false }) });
+    const echostr = encrypt("handshake");
+    const response = await get(disabled.app, echostr);
+    expect(response.statusCode).toBe(404);
+    expect(response.body).not.toContain("handshake");
+    await disabled.app.close();
+    app = null;
+
+    const next = Fastify();
+    next.decorate("services", {
+      integrationWebhooks: {
+        getIntegrationConnection: vi.fn(() => {
+          throw new Error("no row for 33333333 in C:/secret/db");
+        }),
+      },
+    } as never);
+    await next.register(integrationWebhookRoutes);
+    app = next;
+    const missing = await get(next, echostr);
+    expect(missing.statusCode).toBe(404);
+    expect(missing.body).not.toContain("secret");
+  });
+
   it("POST with a bad signature gets 401 and never dispatches", async () => {
     const ctx = await buildApp();
     for (const overrides of [{ signature: "0".repeat(40) }, { token: "wrong-token" }]) {
@@ -298,6 +322,49 @@ describe("WeCom webhook route", () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toBe("success");
     expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps the real MsgId when Content carries spoofing markup, and acks a duplicated MsgId without dispatch", async () => {
+    const ctx = await buildApp();
+    const spoof = textXml("zhangsan", "7", "hi <MsgId>42</MsgId>");
+    expect((await post(ctx.app, spoof)).statusCode).toBe(200);
+    const call = ctx.acceptInboundChannelEvent.mock.calls[0]?.[0] as DurableInboundChannelAcceptInput;
+    expect(call.idempotencyKey).toBe(`wecom:${connectionId}:7`);
+    expect(call.message.content).toBe("hi <MsgId>42</MsgId>");
+
+    const duplicated = textXml().replace("</xml>", "<MsgId>99</MsgId></xml>");
+    const response = await post(ctx.app, duplicated);
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe("success");
+    expect(ctx.acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an envelope with a repeated Encrypt element", async () => {
+    const ctx = await buildApp();
+    const encrypted = encrypt(textXml());
+    const signature = computeWecomSignature(TOKEN, TS, NONCE, encrypted);
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `${webhookPath}?msg_signature=${signature}&timestamp=${TS}&nonce=${NONCE}`,
+      headers: { "content-type": "text/xml" },
+      payload: `<xml><Encrypt>${encrypted}</Encrypt><Encrypt>${encrypted}</Encrypt></xml>`,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
+  });
+
+  it("records a content-free dev diagnostic for a text message with no MsgId, then acks", async () => {
+    const ctx = await buildApp();
+    const xml = textXml().replace(/<MsgId>[^<]*<\/MsgId>/, "");
+    const response = await post(ctx.app, xml);
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe("success");
+    expect(ctx.acceptInboundChannelEvent).not.toHaveBeenCalled();
+    const diagnostic = ctx.recordDevDiagnostic.mock.calls.find(
+      (c) => (c[0] as { event: string }).event === "channel.wecom_missing_msg_id",
+    );
+    expect(diagnostic).toBeDefined();
+    expect(JSON.stringify(diagnostic)).not.toContain("hello bot");
   });
 
   it("returns 503 without leaking error text when durable acceptance fails, so WeCom retries", async () => {

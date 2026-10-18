@@ -75,8 +75,12 @@ function registerWecomRoutes(fastify: FastifyInstance): void {
       let connection;
       try {
         connection = await fastify.services.integrationWebhooks.getIntegrationConnection(params.data.connectionId);
-      } catch (error) {
-        return reply.code(404).send({ error: (error as Error).message });
+      } catch {
+        return reply.code(404).send({ error: "Integration connection not found" });
+      }
+      // A disabled or disconnected connection must not complete a handshake either.
+      if (connection.enabled === false || (connection.status !== undefined && connection.status !== "connected")) {
+        return reply.code(404).send({ error: "Integration connection not found" });
       }
       if (connection.key !== "wecom") {
         return reply.code(400).send({ error: "Integration connection is not a WeCom connector" });
@@ -182,6 +186,15 @@ function registerWecomRoutes(fastify: FastifyInstance): void {
           return { kind: "reply" as const, payload: { error: "Malformed WeCom message" } };
         }
         if (normalized.kind === "ignore") {
+          if (normalized.reason === "missing_msg_id") {
+            fastify.services.integrationWebhooks.recordDevDiagnostic?.({
+              level: "warn",
+              category: "channels",
+              event: "channel.wecom_missing_msg_id",
+              message: "A WeCom text message had no MsgId and was acknowledged without dispatch.",
+              context: { channel: "wecom", connectionId },
+            });
+          }
           return { kind: "reply" as const, payload: WECOM_ACK };
         }
         return { kind: "dispatch" as const, parsed: normalized };

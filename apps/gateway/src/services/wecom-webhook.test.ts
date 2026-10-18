@@ -162,6 +162,33 @@ describe("WeCom XML reader", () => {
     );
   });
 
+  it("reads only direct children of the root: markup inside a value is never a field", () => {
+    const xml =
+      "<xml><Content><![CDATA[hi <MsgId>42</MsgId><AgentID>9</AgentID>]]></Content><MsgId>7</MsgId><AgentID>1000002</AgentID></xml>";
+    expect(readWecomXmlFields(xml, ["Content", "MsgId", "AgentID"])).toEqual({
+      Content: "hi <MsgId>42</MsgId><AgentID>9</AgentID>",
+      MsgId: "7",
+      AgentID: "1000002",
+    });
+    // Same, with the spoofing markup placed before the real field and the real field absent.
+    expect(readWecomXmlFields("<xml><Content><![CDATA[<MsgId>42</MsgId>]]></Content></xml>", ["MsgId"]).MsgId).toBe(
+      undefined,
+    );
+  });
+
+  it("refuses a requested field that appears twice at top level", () => {
+    expect(() => readWecomXmlFields("<xml><MsgId>1</MsgId><MsgId>2</MsgId></xml>", ["MsgId"])).toThrow(
+      "WeCom XML repeats a field",
+    );
+    expect(() => readWecomXmlFields("<xml><Encrypt>a</Encrypt><Encrypt>b</Encrypt></xml>", ["Encrypt"])).toThrow(
+      "WeCom XML repeats a field",
+    );
+  });
+
+  it("rejects a document without an xml root", () => {
+    expect(() => readWecomXmlFields("<MsgId>1</MsgId>", ["MsgId"])).toThrow("WeCom XML root element is missing");
+  });
+
   it("rejects XML over 256 KiB", () => {
     expect(() => readWecomXmlFields(`<xml><A>${"x".repeat(256 * 1024)}</A></xml>`, ["A"])).toThrow(
       "WeCom XML is too large",
@@ -181,9 +208,36 @@ describe("WeCom normalization", () => {
       eventId: "1234567890123456",
       actorId: "zhangsan",
       agentId: "1000002",
-      content: "hello there",
+      content: " hello there ",
       metadata: { msgType: "text", createTime: "1348831860", toUserName: CORP_ID, agentId: "1000002" },
     });
+  });
+
+  it("keeps the real MsgId and AgentID when Content tries to spoof them", () => {
+    const xml =
+      "<xml><FromUserName>zhangsan</FromUserName><MsgType>text</MsgType>" +
+      "<Content><![CDATA[ hi <MsgId>42</MsgId><AgentID>9</AgentID> ]]></Content><MsgId>7</MsgId><AgentID>1000002</AgentID></xml>";
+    expect(normalizeWecomMessage({ connectionId: "c1", xml })).toMatchObject({
+      kind: "message",
+      eventId: "7",
+      agentId: "1000002",
+      content: " hi <MsgId>42</MsgId><AgentID>9</AgentID> ",
+    });
+  });
+
+  it("ignores a duplicated top-level MsgId and flags a text message with no MsgId", () => {
+    expect(
+      normalizeWecomMessage({
+        connectionId: "c1",
+        xml: "<xml><FromUserName>u</FromUserName><MsgType>text</MsgType><Content>hi</Content><MsgId>1</MsgId><MsgId>2</MsgId></xml>",
+      }),
+    ).toEqual({ kind: "ignore", reason: "duplicate_field" });
+    expect(
+      normalizeWecomMessage({
+        connectionId: "c1",
+        xml: "<xml><FromUserName>u</FromUserName><MsgType>text</MsgType><Content>hi</Content></xml>",
+      }),
+    ).toEqual({ kind: "ignore", reason: "missing_msg_id" });
   });
 
   it("ignores events, other message types and incomplete text messages", () => {
@@ -204,7 +258,7 @@ describe("WeCom normalization", () => {
         connectionId: "c1",
         xml: "<xml><FromUserName>u</FromUserName><MsgType>text</MsgType><Content>hi</Content></xml>",
       }),
-    ).toEqual({ kind: "ignore", reason: "missing_fields" });
+    ).toEqual({ kind: "ignore", reason: "missing_msg_id" });
   });
 });
 
