@@ -141,15 +141,49 @@ const MISMATCH = warning(
   "critical",
   "Plugin package bytes do not match the expected integrity. The package was not stored.",
 );
-const UNVERIFIABLE = warning(
-  "integrity_unverifiable",
-  "critical",
-  "Plugin package integrity could not be verified (registry fetch blocked or failed). Add the registry host to the network allowlist and reinstall.",
-);
+function unverifiable(reason: string): IntegrationPluginTrustWarning {
+  return warning(
+    "integrity_unverifiable",
+    "critical",
+    `Plugin package integrity could not be verified (registry fetch blocked or failed: ${reason}). Add the registry host to the network allowlist and reinstall.`,
+  );
+}
+
+/** A short, non-secret cause code for a failed registry request. */
+class RegistryReason extends Error {}
+
+function registryFailureReason(error: unknown): string {
+  if (error instanceof RegistryReason) return error.message;
+  const name = error instanceof Error ? error.name : "";
+  const message = error instanceof Error ? error.message : "";
+  if (name === "TimeoutError" || name === "AbortError") return "registry_timeout";
+  if (/allowlist|not allowed|blocked/iu.test(message)) return "registry_blocked";
+  if (/exceed|limit|too large/iu.test(message)) return "registry_response_limit";
+  return "registry_fetch_failed";
+}
+
+function manifestFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (/symlink/iu.test(message)) return "manifest_symlink";
+  if (/hardlink/iu.test(message)) return "manifest_hardlink";
+  if (/limit|depth/iu.test(message)) return "manifest_limit";
+  if (/changed during/iu.test(message)) return "manifest_changed";
+  if (/unsupported/iu.test(message)) return "manifest_unsupported_entry";
+  return "manifest_unreadable";
+}
+
+const SAFE_PLUGIN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+
+function assertSafePluginId(pluginId: string): void {
+  if (!SAFE_PLUGIN_ID.test(pluginId) || pluginId.includes("..")) {
+    throw new ValidationError({ field: "pluginId", message: "pluginId is not a safe plugin store directory name" });
+  }
+}
 
 export async function verifyIntegrationPluginPackage(
   input: VerifyIntegrationPluginPackageInput,
 ): Promise<PluginPackageIntegrityResult> {
+  if (input.sourceType === "npm") assertSafePluginId(input.pluginId);
   const now = input.now ?? (() => new Date());
   const expected = input.expectedIntegrity?.trim() || undefined;
   if (expected !== undefined) {
@@ -176,7 +210,7 @@ async function verifyLocal(
   let actual: string;
   try {
     actual = await computeLocalPluginManifestIntegrity(path.resolve(input.source));
-  } catch {
+  } catch (error) {
     return {
       status: "quarantined",
       expectedIntegrity: expected ?? "",
@@ -184,7 +218,7 @@ async function verifyLocal(
         warning(
           "integrity_manifest_invalid",
           "critical",
-          "The local plugin tree could not be hashed (symlink, hardlink, unsupported entry, or size limit).",
+          `The local plugin tree could not be hashed (${manifestFailureReason(error)}): symlink, hardlink, unsupported entry, or size limit.`,
         ),
       ],
     };
@@ -227,15 +261,15 @@ async function verifyNpm(
   let dist: { tarball?: unknown; integrity?: unknown } | undefined;
   try {
     const response = await fetchOnce(metadataUrl, guard(METADATA_MAX_BYTES));
-    if (!response.ok) throw new Error(`registry metadata ${response.status}`);
+    if (!response.ok) throw new RegistryReason(`registry_status_${response.status}`);
     const body = await readBoundedResponseJson<{ dist?: { tarball?: unknown; integrity?: unknown } }>(response, {
       maxBytes: METADATA_MAX_BYTES,
       timeoutMs: NETWORK_TIMEOUT_MS,
       label: "npm registry metadata",
     });
     dist = body?.dist;
-  } catch {
-    return { status: "unknown", warnings: [UNVERIFIABLE] };
+  } catch (error) {
+    return { status: "unknown", warnings: [unverifiable(registryFailureReason(error))] };
   }
 
   const invalid: PluginPackageIntegrityResult = {
@@ -265,14 +299,14 @@ async function verifyNpm(
   let bytes: Uint8Array;
   try {
     const response = await fetchOnce(tarball.toString(), guard(PLUGIN_TARBALL_MAX_BYTES));
-    if (!response.ok) throw new Error(`registry tarball ${response.status}`);
+    if (!response.ok) throw new RegistryReason(`registry_status_${response.status}`);
     bytes = await readBoundedResponseBytes(response, {
       maxBytes: PLUGIN_TARBALL_MAX_BYTES,
       timeoutMs: NETWORK_TIMEOUT_MS,
       label: "npm plugin tarball",
     });
-  } catch {
-    return { status: "unknown", warnings: [UNVERIFIABLE] };
+  } catch (error) {
+    return { status: "unknown", warnings: [unverifiable(registryFailureReason(error))] };
   }
 
   const sha512 = createHash("sha512").update(bytes).digest();
@@ -315,9 +349,7 @@ async function storeTarball(
   hashPrefix: string,
   bytes: Uint8Array,
 ): Promise<string> {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(pluginId) || pluginId.includes("..")) {
-    throw new ValidationError({ field: "pluginId", message: "pluginId is not a safe plugin store directory name" });
-  }
+  assertSafePluginId(pluginId);
   const root = path.resolve(storeRoot);
   await mkdir(root, { recursive: true });
   await assertOrdinaryPath(root);

@@ -169,6 +169,7 @@ These are still true after this document lands:
 - GoatCitadel now has a repo-native starter-pack export path that bundles the contract doc plus the reference add-on and integration-plugin scaffolds.
 - GoatCitadel already has a meaningful operator lifecycle for add-ons and integration plugins.
 - The public SDK story is anchored in the published `@goatcitadel/extensions-sdk` package, the reference scaffolds, and the tested starter-pack export path.
+- npm plugin packages are downloaded through the network allowlist and verified against SRI sha512 (operator-pinned or registry-published) before they are recorded as verified; local plugin folders get a deterministic sha256 file-manifest hash; git and URL sources are recorded as unverified. A mismatch quarantines and disables the plugin.
 
 ## Recommended Next Slice
 

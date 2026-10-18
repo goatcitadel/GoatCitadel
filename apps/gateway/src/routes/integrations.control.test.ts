@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { IntegrationConnection, IntegrationPluginRecord } from "@goatcitadel/contracts";
+import { ValidationError, type IntegrationConnection, type IntegrationPluginRecord } from "@goatcitadel/contracts";
 import { buildInstalledIntegrationPluginRecord } from "../services/integration-plugin-author-contract.js";
 import { buildGenericChannelInboundSignature } from "../services/generic-channel-webhook.js";
 import type { DurableInboundChannelAcceptInput } from "../services/channel-inbound-dispatch.js";
@@ -45,7 +45,11 @@ describe("integrations control routes", () => {
       ...rawConnection,
       // Response projection still redacts any credential held by the service;
       // ordinary public creation only submits the supported ENV reference.
-      config: { ...input.config, botToken: "created-short", webhookUrl: "https://hooks.example.test/new?token=created-hook" },
+      config: {
+        ...input.config,
+        botToken: "created-short",
+        webhookUrl: "https://hooks.example.test/new?token=created-hook",
+      },
     }));
     app = Fastify();
     decorateIntegrationServices(app, {
@@ -860,6 +864,26 @@ describe("integrations control routes", () => {
     expect(rawPlugin.description).toContain("plugin-description-short");
     expect(rawPlugin.source).toContain("plugin-source-path");
     expect(rawPlugin.theme).toEqual({ accentColor: "#17c3b2", dashboardVariant: "compact" });
+  });
+
+  it("refuses to enable a quarantined plugin with a 400 and the reason", async () => {
+    const setIntegrationPluginEnabled = vi.fn(() => {
+      throw new ValidationError({
+        field: "pluginId",
+        message: "Plugin is quarantined after an integrity failure. Reinstall it from a verified source.",
+      });
+    });
+    app = Fastify();
+    decorateIntegrationServices(app, { setIntegrationPluginEnabled });
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/plugins/quarantined-plugin/enable",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain("quarantined after an integrity failure");
   });
 
   it("supports reference plugin install, list, and enable-disable lifecycle routes", async () => {

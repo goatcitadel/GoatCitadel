@@ -9,6 +9,7 @@ import type {
   PluginDescriptorHealth,
 } from "@goatcitadel/contracts";
 import { resolveIntegrationPluginAuthorManifestSource } from "@goatcitadel/extensions-sdk";
+import type { PluginPackageIntegrityResult } from "./integration-plugin-package-integrity.js";
 export {
   INTEGRATION_PLUGIN_MANIFEST_FILENAME,
   validateIntegrationPluginAuthorManifest,
@@ -30,20 +31,31 @@ export interface BuildInstalledIntegrationPluginRecordInput {
   source: string;
   sourceType?: IntegrationPluginInstallSourceType;
   expectedIntegrity?: string;
+  integrity?: PluginPackageIntegrityResult;
   existing?: IntegrationPluginRecord;
 }
 
 export function resolveIntegrationPluginInstallMetadata(
   source: string,
-  options: Pick<IntegrationPluginInstallInput, "sourceType" | "expectedIntegrity"> = {},
+  options: Pick<IntegrationPluginInstallInput, "sourceType" | "expectedIntegrity"> & {
+    integrity?: PluginPackageIntegrityResult;
+  } = {},
 ): ResolvedIntegrationPluginInstallMetadata {
   const resolved = resolveIntegrationPluginAuthorManifestSource(source);
   const sourceType = options.sourceType ?? inferInstallSourceType(resolved.source);
   const descriptorHealth = buildPluginDescriptorHealth(resolved, source);
   const expectedIntegrity = options.expectedIntegrity ?? resolved.manifest?.integrity?.expected;
-  const integrityStatus = expectedIntegrity ? "missing" : sourceType === "local" ? "not_applicable" : "unknown";
+  const integrity = options.integrity;
+  const integrityStatus = integrity
+    ? integrityStatusFromResult(integrity)
+    : expectedIntegrity
+      ? "unknown"
+      : sourceType === "local"
+        ? "not_applicable"
+        : "unknown";
   const trustWarnings = [
-    ...buildTrustWarnings(sourceType, integrityStatus, expectedIntegrity),
+    ...buildTrustWarnings(sourceType, integrityStatus, expectedIntegrity, integrity !== undefined),
+    ...(integrity?.warnings ?? []),
     ...descriptorHealth.issues.map((issue) => ({
       code: issue.code,
       severity: issue.severity,
@@ -61,6 +73,7 @@ export function resolveIntegrationPluginInstallMetadata(
       packageVersion: resolved.manifest?.version,
       integrityStatus,
       expectedIntegrity,
+      ...integrityEvidence(integrity),
     },
     trustWarnings,
     descriptorHealth,
@@ -73,6 +86,7 @@ export function buildInstalledIntegrationPluginRecord(
   const installMetadata = resolveIntegrationPluginInstallMetadata(input.source, {
     sourceType: input.sourceType,
     expectedIntegrity: input.expectedIntegrity,
+    integrity: input.integrity,
   });
   return {
     pluginId: input.pluginId,
@@ -83,15 +97,12 @@ export function buildInstalledIntegrationPluginRecord(
       input.existing?.description ??
       `Installed from ${installMetadata.source}`,
     source: installMetadata.source,
-    enabled: installMetadata.descriptorHealth.status === "quarantined" ? false : (input.existing?.enabled ?? true),
+    enabled: isQuarantined(installMetadata) ? false : (input.existing?.enabled ?? true),
     installedAt: input.existing?.installedAt ?? input.now,
     updatedAt: input.now,
     capabilities: installMetadata.manifest?.capabilities ?? input.existing?.capabilities ?? ["channel.adapter"],
     sourceMetadata: installMetadata.sourceMetadata,
-    integrityStatus:
-      installMetadata.descriptorHealth.status === "quarantined"
-        ? "quarantined"
-        : installMetadata.sourceMetadata.integrityStatus,
+    integrityStatus: isQuarantined(installMetadata) ? "quarantined" : installMetadata.sourceMetadata.integrityStatus,
     trustWarnings: installMetadata.trustWarnings,
     descriptorHealth: installMetadata.descriptorHealth,
     theme: installMetadata.manifest?.theme ?? input.existing?.theme,
@@ -104,6 +115,36 @@ export function buildInstalledIntegrationPluginRecord(
         }))
       : input.existing?.toolOverrides,
   };
+}
+
+function isQuarantined(metadata: ResolvedIntegrationPluginInstallMetadata): boolean {
+  return (
+    metadata.descriptorHealth.status === "quarantined" || metadata.sourceMetadata.integrityStatus === "quarantined"
+  );
+}
+
+function integrityStatusFromResult(
+  result: PluginPackageIntegrityResult,
+): IntegrationPluginSourceMetadata["integrityStatus"] {
+  return result.status;
+}
+
+function integrityEvidence(result: PluginPackageIntegrityResult | undefined): Partial<IntegrationPluginSourceMetadata> {
+  if (!result) {
+    return {};
+  }
+  if (result.status === "verified") {
+    return {
+      actualIntegrity: result.actualIntegrity,
+      verifiedAt: result.verifiedAt,
+      integritySource: result.integritySource,
+      artifactPath: result.artifactPath,
+    };
+  }
+  if (result.status === "quarantined" || result.status === "not_applicable") {
+    return result.actualIntegrity ? { actualIntegrity: result.actualIntegrity } : {};
+  }
+  return {};
 }
 
 function buildPluginDescriptorHealth(
@@ -218,10 +259,15 @@ function inferInstallSourceType(source: string): IntegrationPluginInstallSourceT
   if (/^(git\+|ssh:\/\/|git@)/i.test(trimmed)) {
     return "git";
   }
-  if (/^(npm:|@?[\w.-]+\/[\w.-]+|@[\w.-]+\/[\w.-]+|[\w.-]+)$/i.test(trimmed) && !/[\\/:]/.test(trimmed)) {
+  if (isNpmPackageSpec(trimmed)) {
     return "npm";
   }
   return path.isAbsolute(trimmed) || trimmed.startsWith(".") ? "local" : "manual";
+}
+
+/** `npm:`-prefixed, scoped (`@s/n`) and/or versioned (`n@1.2.3`) package specifiers. */
+function isNpmPackageSpec(value: string): boolean {
+  return /^(?:npm:)?(?:@[\w][\w.~-]*\/)?[\w][\w.~-]*(?:@[A-Za-z0-9][A-Za-z0-9._+-]*)?$/.test(value);
 }
 
 function isGitHubHttpsUrl(source: string): boolean {
@@ -262,13 +308,14 @@ function buildTrustWarnings(
   sourceType: IntegrationPluginInstallSourceType,
   integrityStatus: IntegrationPluginSourceMetadata["integrityStatus"],
   expectedIntegrity?: string,
+  verifierRan = false,
 ): IntegrationPluginTrustWarning[] {
   const warnings: IntegrationPluginTrustWarning[] = [];
-  if (integrityStatus === "missing" && expectedIntegrity) {
+  if (!verifierRan && integrityStatus === "unknown" && expectedIntegrity) {
     warnings.push({
       code: "integrity_not_verified",
       severity: "warning",
-      message: "An expected integrity value was supplied, but runtime package verification is not wired yet.",
+      message: "An expected integrity value was supplied, but this source type cannot be verified.",
     });
   }
   if (sourceType === "url" || sourceType === "manual" || sourceType === "unknown") {

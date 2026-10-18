@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { evaluateChannelInboundAccess, type IntegrationConnection } from "@goatcitadel/contracts";
+import {
+  evaluateChannelInboundAccess,
+  type IntegrationConnection,
+  type IntegrationPluginRecord,
+} from "@goatcitadel/contracts";
 import {
   createIntegrationConnection,
   getIntegrationConnectionChannelRuntimeStatus,
+  installIntegrationPlugin,
+  setIntegrationPluginEnabled,
   updateIntegrationConnection,
   type IntegrationChannelPort,
 } from "./integration-channel-service.js";
@@ -95,6 +101,7 @@ function createDeps(): IntegrationChannelPort {
     fetchWithDiagnosticsTimeout: vi.fn(async () => new Response("{}")),
     readIntegrationPlugins: vi.fn(() => []),
     writeIntegrationPlugins: vi.fn(),
+    verifyIntegrationPluginPackage: vi.fn(async () => ({ status: "unknown" as const, warnings: [] })),
   };
 }
 
@@ -429,5 +436,152 @@ describe("integration-channel-service runtime status", () => {
     expect(failed.ready).toBe(false);
     expect(failed.lastError).toContain("401");
     expect(failed.metadata.streamStoppedReason).toBe("auth_failed");
+  });
+});
+
+describe("integration plugin package integrity at install", () => {
+  function withPluginStore(deps: IntegrationChannelPort, initial: IntegrationPluginRecord[] = []) {
+    let plugins = initial;
+    vi.mocked(deps.readIntegrationPlugins).mockImplementation(async () => plugins);
+    vi.mocked(deps.writeIntegrationPlugins).mockImplementation(async (next) => {
+      plugins = next;
+    });
+    return () => plugins;
+  }
+
+  it("install records verified integrity from the verifier", async () => {
+    const deps = createDeps();
+    const read = withPluginStore(deps);
+    vi.mocked(deps.verifyIntegrationPluginPackage).mockResolvedValue({
+      status: "verified",
+      actualIntegrity: "sha512-actual",
+      integritySource: "registry",
+      verifiedAt: "2026-10-18T00:00:00.000Z",
+      artifactPath: "integration-plugins/goat-plugin/abc.tgz",
+      warnings: [{ code: "integrity_not_pinned", severity: "warning", message: "pin it" }],
+    });
+
+    const record = await installIntegrationPlugin(deps, { source: "goat-plugin", pluginId: "goat-plugin" });
+
+    expect(record.integrityStatus).toBe("verified");
+    expect(record.enabled).toBe(true);
+    expect(record.sourceMetadata).toMatchObject({
+      type: "npm",
+      integrityStatus: "verified",
+      actualIntegrity: "sha512-actual",
+      integritySource: "registry",
+      verifiedAt: "2026-10-18T00:00:00.000Z",
+      artifactPath: "integration-plugins/goat-plugin/abc.tgz",
+    });
+    expect(record.sourceMetadata?.expectedIntegrity).toBeUndefined();
+    expect(record.trustWarnings?.map((warning) => warning.code)).toContain("integrity_not_pinned");
+    expect(read()).toHaveLength(1);
+  });
+
+  it("install quarantines and disables on mismatch", async () => {
+    const deps = createDeps();
+    withPluginStore(deps);
+    vi.mocked(deps.verifyIntegrationPluginPackage).mockResolvedValue({
+      status: "quarantined",
+      actualIntegrity: "sha512-actual",
+      expectedIntegrity: "sha512-wanted",
+      warnings: [{ code: "integrity_mismatch", severity: "critical", message: "mismatch" }],
+    });
+
+    const record = await installIntegrationPlugin(deps, { source: "goat-plugin", pluginId: "goat-plugin" });
+
+    expect(record.enabled).toBe(false);
+    expect(record.integrityStatus).toBe("quarantined");
+    expect(record.sourceMetadata?.actualIntegrity).toBe("sha512-actual");
+    expect(record.trustWarnings?.map((warning) => warning.code)).toContain("integrity_mismatch");
+  });
+
+  it("never persists an empty string as the operator pin", async () => {
+    const deps = createDeps();
+    withPluginStore(deps);
+    vi.mocked(deps.verifyIntegrationPluginPackage).mockResolvedValue({
+      status: "quarantined",
+      expectedIntegrity: "",
+      warnings: [{ code: "integrity_manifest_invalid", severity: "critical", message: "bad tree" }],
+    });
+
+    const record = await installIntegrationPlugin(deps, {
+      source: "./local-plugin",
+      sourceType: "local",
+      pluginId: "lp",
+    });
+
+    expect(record.sourceMetadata?.expectedIntegrity).toBeUndefined();
+    expect(record.integrityStatus).toBe("quarantined");
+  });
+
+  it("enabling a quarantined plugin is refused", async () => {
+    const deps = createDeps();
+    const base = {
+      label: "Q",
+      version: "1.0.0",
+      enabled: false,
+      installedAt: "2026-10-18T00:00:00.000Z",
+      updatedAt: "2026-10-18T00:00:00.000Z",
+      capabilities: ["channel.adapter"],
+    };
+    const read = withPluginStore(deps, [
+      { ...base, pluginId: "q1", integrityStatus: "quarantined" },
+      { ...base, pluginId: "q2", integrityStatus: "mismatch" },
+      { ...base, pluginId: "ok", integrityStatus: "verified" },
+    ] as IntegrationPluginRecord[]);
+
+    await expect(setIntegrationPluginEnabled(deps, "q1", true)).rejects.toThrow(
+      /quarantined after an integrity failure/,
+    );
+    await expect(setIntegrationPluginEnabled(deps, "q2", true)).rejects.toThrow(
+      /quarantined after an integrity failure/,
+    );
+    expect((await setIntegrationPluginEnabled(deps, "ok", true)).enabled).toBe(true);
+    // disabling a quarantined plugin stays allowed
+    expect((await setIntegrationPluginEnabled(deps, "q1", false)).enabled).toBe(false);
+    expect(read().find((item) => item.pluginId === "q1")?.enabled).toBe(false);
+  });
+
+  it("install passes sourceType and expectedIntegrity to the verifier", async () => {
+    const deps = createDeps();
+    withPluginStore(deps);
+    const expected = `sha512-${"A".repeat(86)}==`;
+
+    await installIntegrationPlugin(deps, {
+      source: "npm:@goat/plugin@1.2.3",
+      pluginId: "goat-plugin",
+      expectedIntegrity: expected,
+    });
+
+    expect(deps.verifyIntegrationPluginPackage).toHaveBeenCalledWith({
+      pluginId: "goat-plugin",
+      source: "npm:@goat/plugin@1.2.3",
+      sourceType: "npm",
+      expectedIntegrity: expected,
+    });
+  });
+
+  it("fails the install without recording when the verifier throws a storage failure", async () => {
+    const deps = createDeps();
+    const read = withPluginStore(deps);
+    vi.mocked(deps.verifyIntegrationPluginPackage).mockRejectedValue(new Error("EACCES: C:/secret/path"));
+
+    await expect(installIntegrationPlugin(deps, { source: "goat-plugin", pluginId: "goat-plugin" })).rejects.toThrow(
+      /could not be stored/,
+    );
+    expect(read()).toHaveLength(0);
+    expect(deps.writeIntegrationPlugins).not.toHaveBeenCalled();
+  });
+
+  it("publishes a realtime update when an existing plugin is reinstalled", async () => {
+    const deps = createDeps();
+    withPluginStore(deps);
+    await installIntegrationPlugin(deps, { source: "goat-plugin", pluginId: "goat-plugin" });
+    await installIntegrationPlugin(deps, { source: "goat-plugin", pluginId: "goat-plugin" });
+    expect(vi.mocked(deps.publishRealtime).mock.calls.map((call) => (call[2] as { type: string }).type)).toEqual([
+      "integration_plugin_installed",
+      "integration_plugin_updated",
+    ]);
   });
 });

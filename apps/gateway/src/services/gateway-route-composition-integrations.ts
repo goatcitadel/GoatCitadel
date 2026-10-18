@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   createChannelSetupGuidancePort,
   createIntegrationFormGuidancePort,
@@ -68,6 +69,7 @@ import {
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { readChatAttachmentContentForGateway } from "./gateway-route-composition-shared.js";
 import { getChannelStreamRuntime } from "./channel-stream-runtime-registry.js";
+import { verifyIntegrationPluginPackage } from "./integration-plugin-package-integrity.js";
 
 export function composeIntegrationChannelRouteDependencies(
   gateway: GatewayRouteCompositionPort,
@@ -631,6 +633,12 @@ function createIntegrationChannelPortForGateway(
     writeIntegrationPlugins: async (plugins) => {
       await writeIntegrationPlugins(storage, plugins);
     },
+    verifyIntegrationPluginPackage: async (input) =>
+      await verifyIntegrationPluginPackage({
+        ...input,
+        networkAllowlist: gateway.config.toolPolicy.sandbox.networkAllowlist,
+        pluginStoreRoot: path.resolve(gateway.config.rootDir, gateway.config.assistant.dataDir, "integration-plugins"),
+      }),
   };
 }
 

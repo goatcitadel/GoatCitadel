@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
+import { ValidationError } from "@goatcitadel/contracts";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { sendRouteError } from "./_error-handler.js";
 import type {
@@ -271,8 +272,14 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     const params = connectionParamsSchema.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     try {
-      return reply.send(projectIntegrationConnectionForPublicResponse(await fastify.services.integrations.getIntegrationConnection(params.data.connectionId)));
-    } catch (error) { return sendRouteError(reply, error, request.log); }
+      return reply.send(
+        projectIntegrationConnectionForPublicResponse(
+          await fastify.services.integrations.getIntegrationConnection(params.data.connectionId),
+        ),
+      );
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.post("/api/v1/integrations/connections", async (request, reply) => {
@@ -282,7 +289,9 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     }
     try {
       assertIntegrationPublicInput(parsed.data.catalogId, parsed.data.config);
-      const created = await fastify.services.integrations.createIntegrationConnection(parsed.data, () => markMutationCommitted(request));
+      const created = await fastify.services.integrations.createIntegrationConnection(parsed.data, () =>
+        markMutationCommitted(request),
+      );
       await markMutationCommitted(request);
       return reply.code(201).send(projectIntegrationConnectionForPublicResponse(created));
     } catch (error) {
@@ -311,7 +320,11 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
         assertIntegrationPublicInput(current.catalogId, parsed.data.config, current.config);
         update = preserveIntegrationConnectionSecretsForPublicUpdate(current, parsed.data);
       }
-      const updated = await fastify.services.integrations.updateIntegrationConnection(params.data.connectionId, update, () => markMutationCommitted(request));
+      const updated = await fastify.services.integrations.updateIntegrationConnection(
+        params.data.connectionId,
+        update,
+        () => markMutationCommitted(request),
+      );
       await markMutationCommitted(request);
       return reply.send(projectIntegrationConnectionForPublicResponse(updated));
     } catch (error) {
@@ -328,7 +341,11 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     const review = z.object({ expectedRevision: z.string().regex(/^[a-f0-9]{64}$/) }).safeParse(request.body ?? {});
     if (!review.success) return reply.code(400).send({ error: review.error.flatten() });
     try {
-      const deleted = await fastify.services.integrations.deleteIntegrationConnection(params.data.connectionId, review.data.expectedRevision, () => markMutationCommitted(request));
+      const deleted = await fastify.services.integrations.deleteIntegrationConnection(
+        params.data.connectionId,
+        review.data.expectedRevision,
+        () => markMutationCommitted(request),
+      );
       if (deleted) await markMutationCommitted(request);
       return reply.send({ deleted });
     } catch (error) {
@@ -482,7 +499,8 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
         ),
       );
     } catch (error) {
-      return reply.code(404).send({ error: (error as Error).message });
+      // A quarantined plugin is a refused request, not a missing one.
+      return reply.code(error instanceof ValidationError ? 400 : 404).send({ error: (error as Error).message });
     }
   });
 

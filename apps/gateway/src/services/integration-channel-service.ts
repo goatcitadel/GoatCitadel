@@ -29,6 +29,10 @@ import {
   buildInstalledIntegrationPluginRecord,
   resolveIntegrationPluginInstallMetadata,
 } from "./integration-plugin-author-contract.js";
+import type {
+  PluginPackageIntegrityResult,
+  VerifyIntegrationPluginPackageInput,
+} from "./integration-plugin-package-integrity.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
 import { emitChannelActivityImpl } from "./integration-channel-activity.js";
@@ -96,6 +100,9 @@ export interface IntegrationChannelPort {
   fetchWithDiagnosticsTimeout(url: string, init?: RequestInit): Promise<Response>;
   readIntegrationPlugins(): Promise<IntegrationPluginRecord[]>;
   writeIntegrationPlugins(plugins: IntegrationPluginRecord[]): Promise<void>;
+  verifyIntegrationPluginPackage(
+    input: Omit<VerifyIntegrationPluginPackageInput, "networkAllowlist" | "pluginStoreRoot">,
+  ): Promise<PluginPackageIntegrityResult>;
 }
 
 function sanitizePluginId(value: string): string {
@@ -726,9 +733,19 @@ export async function installIntegrationPlugin(
 ): Promise<IntegrationPluginRecord> {
   const now = new Date().toISOString();
   const plugins = await deps.readIntegrationPlugins();
-  const installMetadata = resolveIntegrationPluginInstallMetadata(input.source);
+  const installMetadata = resolveIntegrationPluginInstallMetadata(input.source, {
+    sourceType: input.sourceType,
+    expectedIntegrity: input.expectedIntegrity,
+  });
   const nextId = sanitizePluginId(input.pluginId ?? installMetadata.manifest?.pluginId ?? input.source);
   const existing = plugins.find((item) => item.pluginId === nextId);
+  const integrity = await verifyPluginPackageForInstall(deps, {
+    pluginId: nextId,
+    // `installMetadata.source` is already resolved to an absolute path for existing local folders.
+    source: installMetadata.source,
+    sourceType: installMetadata.sourceMetadata.type,
+    expectedIntegrity: installMetadata.sourceMetadata.expectedIntegrity,
+  });
   if (existing) {
     const updated = buildInstalledIntegrationPluginRecord({
       now,
@@ -736,9 +753,15 @@ export async function installIntegrationPlugin(
       source: input.source,
       sourceType: input.sourceType,
       expectedIntegrity: input.expectedIntegrity,
+      integrity,
       existing,
     });
     await deps.writeIntegrationPlugins(plugins.map((item) => (item.pluginId === nextId ? updated : item)));
+    await deps.publishRealtime("system", "integrations", {
+      type: "integration_plugin_updated",
+      pluginId: updated.pluginId,
+      source: input.source,
+    });
     return updated;
   }
 
@@ -748,6 +771,7 @@ export async function installIntegrationPlugin(
     source: input.source,
     sourceType: input.sourceType,
     expectedIntegrity: input.expectedIntegrity,
+    integrity,
   });
   await deps.writeIntegrationPlugins([created, ...plugins]);
   await deps.publishRealtime("system", "integrations", {
@@ -756,6 +780,24 @@ export async function installIntegrationPlugin(
     source: input.source,
   });
   return created;
+}
+
+async function verifyPluginPackageForInstall(
+  deps: IntegrationChannelPort,
+  input: Parameters<IntegrationChannelPort["verifyIntegrationPluginPackage"]>[0],
+): Promise<PluginPackageIntegrityResult> {
+  try {
+    return await deps.verifyIntegrationPluginPackage(input);
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      throw error;
+    }
+    // Storage failures (disk, permissions) must not leave a half-recorded plugin.
+    throw new Error(
+      "Plugin package could not be stored, so the install was not recorded. Check the plugin store directory and retry.",
+      { cause: error },
+    );
+  }
 }
 
 export async function setIntegrationPluginEnabled(
@@ -768,6 +810,12 @@ export async function setIntegrationPluginEnabled(
   const current = plugins.find((item) => item.pluginId === pluginId);
   if (!current) {
     throw new Error(`Unknown integration plugin: ${pluginId}`);
+  }
+  if (enabled && (current.integrityStatus === "quarantined" || current.integrityStatus === "mismatch")) {
+    throw new ValidationError({
+      field: "pluginId",
+      message: "Plugin is quarantined after an integrity failure. Reinstall it from a verified source.",
+    });
   }
   const updated: IntegrationPluginRecord = {
     ...current,

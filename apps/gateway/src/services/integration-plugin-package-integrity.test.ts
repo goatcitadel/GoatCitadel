@@ -165,6 +165,27 @@ describe("npm", () => {
   });
 });
 
+describe("verifyIntegrationPluginPackage review carry-overs", () => {
+  it("rejects an unsafe pluginId before any fetch", async () => {
+    const fetchOnce = fakeFetch({});
+    await expect(
+      verifyIntegrationPluginPackage(await npmInput({ fetchOnce, pluginId: "../escape" })),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(fetchOnce.calls).toHaveLength(0);
+  });
+
+  it("names a short non-secret cause in the unverifiable warning", async () => {
+    const notFound = (async () => new Response("{}", { status: 404 })) as unknown as typeof fetchAllowlistedOnce;
+    const result = await verifyIntegrationPluginPackage(await npmInput({ fetchOnce: notFound }));
+    expect(result.warnings[0]!.message).toContain("registry_status_404");
+    const blocked = (async () => {
+      throw new Error("host is not in the network allowlist");
+    }) as unknown as typeof fetchAllowlistedOnce;
+    const second = await verifyIntegrationPluginPackage(await npmInput({ fetchOnce: blocked }));
+    expect(second.warnings[0]!.message).toContain("registry_blocked");
+  });
+});
+
 describe("parsers", () => {
   it("parseNpmPackageSpec handles scoped and versioned specs", () => {
     expect(parseNpmPackageSpec("npm:@s/n@1.2.3")).toEqual({ name: "@s/n", version: "1.2.3" });
@@ -259,12 +280,18 @@ describe("local", () => {
     expect(none).toMatchObject({ status: "not_applicable", actualIntegrity: hash });
   });
 
-  it("a symlink inside the tree -> quarantined integrity_manifest_invalid", async () => {
+  it("a symlink inside the tree -> quarantined integrity_manifest_invalid", async (ctx) => {
     const dir = await tree([["a.js", "1"]]);
+    await mkdir(path.join(dir, "real"));
     try {
-      await symlink(path.join(dir, "a.js"), path.join(dir, "link.js"));
+      await symlink(path.join(dir, "real"), path.join(dir, "link"), "junction");
     } catch {
-      return; // symlink privilege unavailable on this host
+      try {
+        await symlink(path.join(dir, "a.js"), path.join(dir, "link.js"));
+      } catch {
+        ctx.skip(); // neither a junction nor a symlink can be created on this host
+        return;
+      }
     }
     const result = await verifyIntegrationPluginPackage({
       pluginId: "p",
