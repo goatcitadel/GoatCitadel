@@ -1,4 +1,5 @@
 import { runDiscordConnectionLiveChecks } from "./discord-connection-diagnostics.js";
+import { runNotionLiveChecks } from "./notion-integration-action.js";
 import { runConfiguredNextcloudTalkChecks } from "./nextcloud-talk-live-probes.js";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import { evaluateChannelInboundAccess } from "@goatcitadel/contracts";
@@ -455,6 +456,20 @@ export function buildIntegrationConnectionChecks(
       });
       requireText("target", "Default Trello board", deps.readConnectionConfigValue(config, "defaultBoardId"), "warn");
     }
+    if (connection.key === "notion") {
+      const hasToken = hasConnectionEnvValue(deps, config, "tokenEnv");
+      checks.push({
+        key: "auth",
+        status: hasToken ? "pass" : "fail",
+        message: hasToken ? "Notion integration token is configured." : "Notion integration token is missing.",
+      });
+      requireText(
+        "target",
+        "Default Notion parent page",
+        deps.readConnectionConfigValue(config, "defaultParentPageId"),
+        "warn",
+      );
+    }
     if (["apple-notes", "apple-reminders", "things3", "bear"].includes(connection.key)) {
       const bridgeUrl =
         deps.readConnectionConfigValue(config, "bridgeUrl") ?? deps.readConnectionConfigValue(config, "baseUrl");
@@ -590,6 +605,9 @@ export async function runIntegrationConnectionLiveChecks(
     discordRuntimeReadiness?: "required" | "deferred";
   },
 ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe?: ChannelProbeReport }> {
+  if (connection.catalogId === "productivity.notion") {
+    return { checks: await runNotionLiveChecks(deps, connection) };
+  }
   if (connection.kind !== "channel") {
     return { checks: [] };
   }

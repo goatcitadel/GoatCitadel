@@ -331,6 +331,42 @@ describe("integration-diagnostics-service contract behavior", () => {
     }
   });
 
+  it("checks the Notion token structurally and with a live users/me probe", async () => {
+    vi.stubEnv("NOTION_INTEGRATION_TOKEN", "notion-secret");
+    vi.stubEnv("GOATCITADEL_NOTION_API_BASE_URL", "http://notion.test");
+    try {
+      const configured = createIntegrationConnection("notion", "productivity", {
+        tokenEnv: "NOTION_INTEGRATION_TOKEN",
+        token: "notion-secret",
+        defaultParentPageId: "parent-1",
+      });
+      expect(buildIntegrationConnectionChecks(createPort(), configured)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ key: "auth", status: "pass" }),
+          expect.objectContaining({ key: "target", status: "pass" }),
+        ]),
+      );
+      const missing = createIntegrationConnection("notion", "productivity", {});
+      expect(buildIntegrationConnectionChecks(createPort(), missing)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ key: "auth", status: "fail" })]),
+      );
+
+      const port = createPort();
+      vi.mocked(port.fetchWithDiagnosticsTimeout).mockResolvedValueOnce(
+        new Response('{"object":"user"}', { status: 200 }),
+      );
+      const live = await runIntegrationConnectionLiveChecks(port, configured, { includeSandboxSend: false });
+      expect(live.checks).toEqual([expect.objectContaining({ key: "auth_live", status: "pass" })]);
+      expect(vi.mocked(port.fetchWithDiagnosticsTimeout).mock.calls[0]![0]).toBe("http://notion.test/v1/users/me");
+
+      vi.mocked(port.fetchWithDiagnosticsTimeout).mockResolvedValueOnce(new Response("{}", { status: 401 }));
+      const rejected = await runIntegrationConnectionLiveChecks(port, configured, { includeSandboxSend: false });
+      expect(rejected.checks).toEqual([expect.objectContaining({ key: "auth_live", status: "fail" })]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("uses the service wrapper while checking local model-provider and platform readiness", async () => {
     const host = createPort();
     host.isConnectionUrlAllowlisted = vi.fn(() => true);

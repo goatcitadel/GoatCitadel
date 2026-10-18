@@ -1871,7 +1871,7 @@
       "maxHostCallbacks": 29,
       "maxDependencyMemberAccesses": 29,
       "reason": "Reviewed new explicit-context admission and dispatch guard owner. Verifies canonical durable identity, immutable admitted bytes and source visibility under the existing live write fence. Current source revalidation and admission-bound replay validation move verbatim from the source resolver and durable executor into this same owner. Historical frozen-profile replay remains in the durable executor; no new storage, transaction or execution owner is introduced. Original baseline and existing-owner limits remain unchanged.",
-      "evidence": "architecture-guard-tests.log passes175 tests with13 skips; durable-context-guard-tests.log passes147 tests. Context composition also moves here through a typed internal preparation port, keeping historical callback hosts compatible. context-preparation-tests.log passes89 with13 skips, and the actual owned-port path passes within9 current cases/13 historical skips in context-preparation-port-tests.log. Gateway typecheck passes; owner measures29/29, preparation returns to55/58 and two Gateway fa\u00e7ade methods become private. No original cap changes."
+      "evidence": "architecture-guard-tests.log passes175 tests with13 skips; durable-context-guard-tests.log passes147 tests. Context composition also moves here through a typed internal preparation port, keeping historical callback hosts compatible. context-preparation-tests.log passes89 with13 skips, and the actual owned-port path passes within9 current cases/13 historical skips in context-preparation-port-tests.log. Gateway typecheck passes; owner measures29/29, preparation returns to55/58 and two Gateway façade methods become private. No original cap changes."
     },
     {
       "planStep": "C1",
@@ -2472,6 +2472,14 @@
       "maxDependencyMemberAccesses": 1,
       "reason": "WS8 gap-closure replay program: the per-provider replay reconstruction for the sealed-record allowlist entries (Gmail send, Trello card create, Apple Notes/Reminders, Things 3 and Bear local-bridge writes) lives beside the replay job builder so that builder stays at its four-access baseline. Its single access is the host replay-record open; it validates the decrypted payload shape, rebuilds through the shared live writeback builders in replay mode with the run's idempotency key and actor scope, and refuses unless the rebuilt payload hashes to the run with the live destination fingerprint.",
       "evidence": "2026-10-16: external-side-effect-replay-job-service.writeback.test.ts drives the live invocation path against real SQLite storage and sealed replay records, then the replay worker: Gmail and Trello timeouts reconcile with exactly one provider send, an enforcing local bridge reconciles with the same Idempotency-Key and one effect, a non-enforcing bridge stays in manual review, a Gmail pre-boundary failure replays once, and tampered records, destination drift, lost credentials and a host without replay records are refused; replay-job, runner, reconciliation, integration-action and writeback-input suites pass; Gateway typecheck passes; repository counter measures 1 dependency access and 1 host callback."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/notion-integration-action.ts",
+      "maxHostCallbacks": 9,
+      "maxDependencyMemberAccesses": 11,
+      "reason": "WS6 gap-closure program: the Notion search, page read, page create and block append operator actions plus the users/me diagnostics probe live in their own module so integration-action-service keeps its 19-access budget and integration-writeback-run-inputs stays at 21. Its accesses are the connection token and config reads, the host fetch, the durable stores threaded into the shared idempotent runner input, and the diagnostics fetch/secret pair.",
+      "evidence": "2026-10-18: notion-integration-action.test.ts covers the exact search, page read, page create and block append requests and headers, the idempotency marker paragraph, 401 mapping to notion_auth_rejected without a token leak and without an unknown external outcome, ward deny, require_dry_run preview plus approval, duplicate replay without a fetch, the paged reconcile probe, and missing parent and token blocks; integration-catalog, integration-diagnostics and integration-action-service suites pass; Gateway typecheck passes; repository counter measures 11 dependency accesses and 9 host callbacks."
     }
   ]
 }

@@ -102,6 +102,50 @@ const OPERATOR_ACTIONS_BY_CATALOG_ID: Record<string, IntegrationOperatorAction[]
       ]),
     ),
   ],
+  "productivity.notion": [
+    action(
+      "search",
+      "Search Pages",
+      "Search the Notion pages and databases shared with the integration.",
+      "read",
+      formSchema("action:productivity.notion.search", "Search Notion", [
+        text("query", "Query", { placeholder: "roadmap" }),
+      ]),
+    ),
+    action(
+      "page_read",
+      "Read Page",
+      "Read a Notion page title and its first blocks.",
+      "read",
+      formSchema("action:productivity.notion.page_read", "Read Notion page", [
+        text("pageId", "Page ID", { placeholder: "Notion page ID", required: true }),
+      ]),
+    ),
+    action(
+      "page_create",
+      "Create Page",
+      "Create a Notion page under the chosen parent page.",
+      "write",
+      formSchema("action:productivity.notion.page_create", "Create Notion page", [
+        text("title", "Title", { placeholder: "GoatCitadel note", required: true }),
+        textarea("content", "Content", { placeholder: "Page body text." }),
+        text("parentPageId", "Parent Page ID", {
+          placeholder: "Optional override if defaultParentPageId is not set",
+          advanced: true,
+        }),
+      ]),
+    ),
+    action(
+      "block_append",
+      "Append Text",
+      "Append a paragraph to an existing Notion page or block.",
+      "write",
+      formSchema("action:productivity.notion.block_append", "Append to Notion page", [
+        text("blockId", "Page or Block ID", { placeholder: "Notion page or block ID", required: true }),
+        textarea("content", "Content", { placeholder: "Text to append.", required: true }),
+      ]),
+    ),
+  ],
   "automation.gif-search": [
     action(
       "search",

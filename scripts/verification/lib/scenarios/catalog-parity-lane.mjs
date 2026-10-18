@@ -22,6 +22,13 @@ export async function runCatalogParityLane(context, _options = {}, deps) {
         GOATCITADEL_TRELLO_API_BASE_URL: fixture.baseUrl,
         GOATCITADEL_TENOR_API_BASE_URL: fixture.baseUrl,
         GOATCITADEL_GMAIL_API_BASE_URL: fixture.baseUrl,
+        GOATCITADEL_NOTION_API_BASE_URL: fixture.baseUrl,
+        // Credentials reach the gateway as environment variables; connection config carries only the names.
+        TRELLO_API_KEY: "trello-key",
+        TRELLO_TOKEN: "trello-token",
+        NOTION_INTEGRATION_TOKEN: "notion-token",
+        GMAIL_ACCESS_TOKEN: "gmail-token",
+        GIF_SEARCH_API_KEY: "tenor-key",
       },
     });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-catalog-parity");
@@ -55,6 +62,7 @@ export async function runCatalogParityLane(context, _options = {}, deps) {
           "productivity.things3",
           "productivity.bear",
           "productivity.trello",
+          "productivity.notion",
           "automation.gmail",
           "automation.gif-search",
           "automation.peekaboo-screen",
@@ -68,6 +76,7 @@ export async function runCatalogParityLane(context, _options = {}, deps) {
           "productivity.things3",
           "productivity.bear",
           "productivity.trello",
+          "productivity.notion",
           "automation.gmail",
           "automation.gif-search",
           "automation.peekaboo-screen",
@@ -229,6 +238,22 @@ async function startCatalogParityFixtureServer() {
       response.end(JSON.stringify({ id: "card-1", name: "Verification Card", url: "https://trello.test/card-1" }));
       return;
     }
+    if (url.pathname === "/v1/search" && method === "POST") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          results: [
+            {
+              object: "page",
+              id: "notion-page-1",
+              url: "https://notion.test/notion-page-1",
+              properties: { title: { type: "title", title: [{ plain_text: "Verification Page" }] } },
+            },
+          ],
+        }),
+      );
+      return;
+    }
     if (url.pathname === "/v2/search" && method === "GET") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
@@ -282,18 +307,23 @@ function buildCatalogParityConnectionConfig(catalogId, fixtureBaseUrl) {
   switch (catalogId) {
     case "productivity.trello":
       return {
-        apiKey: "trello-key",
-        token: "trello-token",
+        apiKeyEnv: "TRELLO_API_KEY",
+        tokenEnv: "TRELLO_TOKEN",
         defaultListId: "list-123",
+      };
+    case "productivity.notion":
+      return {
+        tokenEnv: "NOTION_INTEGRATION_TOKEN",
+        defaultParentPageId: "notion-parent-1",
       };
     case "automation.gmail":
       return {
-        accessToken: "gmail-token",
+        accessTokenEnv: "GMAIL_ACCESS_TOKEN",
       };
     case "automation.gif-search":
       return {
         provider: "tenor",
-        apiKey: "tenor-key",
+        apiKeyEnv: "GIF_SEARCH_API_KEY",
       };
     case "platform.ios-canvas-camera-voice":
       return {
@@ -303,7 +333,6 @@ function buildCatalogParityConnectionConfig(catalogId, fixtureBaseUrl) {
     default:
       return {
         bridgeUrl: fixtureBaseUrl,
-        authToken: "fixture-bridge-token",
       };
   }
 }
@@ -314,6 +343,11 @@ function buildCatalogParityActionInput(catalogId, actionId) {
       to: "ops@example.com",
       subject: "GoatCitadel operator check",
       bodyText: "This is a GoatCitadel Gmail operator check.",
+    };
+  }
+  if (catalogId === "productivity.notion" && actionId === "search") {
+    return {
+      query: "verification",
     };
   }
   if (catalogId === "automation.gif-search" && actionId === "search") {

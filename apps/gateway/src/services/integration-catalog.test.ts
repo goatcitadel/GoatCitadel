@@ -371,6 +371,7 @@ describe("integration-catalog", () => {
       "productivity.things3",
       "productivity.bear",
       "productivity.trello",
+      "productivity.notion",
       "automation.gmail",
       "automation.activepieces",
       "automation.gif-search",
@@ -391,6 +392,27 @@ describe("integration-catalog", () => {
         expect.arrayContaining((entry.operatorActions ?? []).map((action) => action.capability)),
       );
     }
+  });
+
+  it("advertises Notion search first, then read and the two governed writes, behind a token form", () => {
+    const entry = requireCatalogEntry("productivity.notion");
+    expect(entry.description).toBe(
+      "Notion pages: search, read, create and append through an internal integration token.",
+    );
+    expect(entry.authMethods).toEqual(["token"]);
+    expect((entry.operatorActions ?? []).map((action) => [action.actionId, action.capability])).toEqual([
+      ["search", "read"],
+      ["page_read", "read"],
+      ["page_create", "write"],
+      ["block_append", "write"],
+    ]);
+    const fields = getIntegrationFormSchema("productivity.notion")?.fields ?? [];
+    expect(fields.map((field) => field.key)).toEqual(["label", "tokenEnv", "defaultParentPageId", "enabled"]);
+    expect(fields.find((field) => field.key === "tokenEnv")).toMatchObject({
+      required: true,
+      secretRef: true,
+      placeholder: "NOTION_INTEGRATION_TOKEN",
+    });
   });
 
   it("advertises Activepieces webhook trigger and explicit run-status read actions", () => {
