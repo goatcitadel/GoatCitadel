@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+const MAX_SYMLINK_HOPS = 40;
+
 export interface ReadPathAccessDecision {
   resolvedPath: string;
   withinRoots: boolean;
@@ -83,13 +85,31 @@ function assertWithinRoots(target: string, roots: string[], scope: string): void
 }
 
 function resolvePathViaExistingAncestor(targetPath: string, rootGuard?: { roots: string[]; scope: string }): string {
-  const absoluteTarget = path.resolve(targetPath);
+  let absoluteTarget = path.resolve(targetPath);
   const lexicalRoots = rootGuard ? matchingLexicalRoots(absoluteTarget, rootGuard.roots) : [];
 
   // Resolve symlinks for the closest existing ancestor so read/write checks
   // cannot escape via links inside an otherwise allowed directory.
   let probe = absoluteTarget;
+  let symlinkHops = 0;
   while (true) {
+    // A dangling symlink fails existsSync, so without this the walk would step past it to an
+    // in-jail parent while a later write follows the link out of the jail. Follow it lexically.
+    const link = fs.lstatSync(probe, { throwIfNoEntry: false });
+    if (link?.isSymbolicLink() && !fs.existsSync(probe)) {
+      symlinkHops += 1;
+      if (symlinkHops > MAX_SYMLINK_HOPS) {
+        throw new Error(`Path traverses too many symbolic links: ${targetPath}`);
+      }
+      // Relative link targets resolve against the link's real directory, not its written parent.
+      absoluteTarget = path.resolve(
+        fs.realpathSync(path.dirname(probe)),
+        fs.readlinkSync(probe),
+        path.relative(probe, absoluteTarget),
+      );
+      probe = absoluteTarget;
+      continue;
+    }
     if (fs.existsSync(probe)) {
       const realExisting = fs.realpathSync(probe);
       if (rootGuard) {

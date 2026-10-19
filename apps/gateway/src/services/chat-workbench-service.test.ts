@@ -487,7 +487,8 @@ describe("chat workbench helpers", () => {
           path: "dangling-create.md",
           content: "created outside\n",
         }),
-      ).rejects.toThrow(/target already exists/);
+        // The policy-engine path jail resolves the dangling link first and refuses its outside target.
+      ).rejects.toThrow(/target already exists|outside write jail/);
       await expect(fs.stat(createOutsideTarget)).rejects.toMatchObject({ code: "ENOENT" });
 
       const saveOutsideTarget = path.join(os.tmpdir(), `goatcitadel-workbench-save-${Date.now()}-${process.pid}.txt`);
@@ -499,7 +500,7 @@ describe("chat workbench helpers", () => {
             content: "saved outside\n",
             expectedRevision: null,
           }),
-        ).rejects.toThrow(/symbolic.link writes/);
+        ).rejects.toThrow(/symbolic.link writes|outside write jail/);
         await expect(fs.stat(saveOutsideTarget)).rejects.toMatchObject({ code: "ENOENT" });
       }
       await fs.rm(saveOutsideTarget, { force: true });
@@ -517,7 +518,7 @@ describe("chat workbench helpers", () => {
             path: "source.md",
             targetPath: "dangling-duplicate.md",
           }),
-        ).rejects.toThrow(/target already exists/);
+        ).rejects.toThrow(/target already exists|outside write jail/);
         await expect(fs.stat(duplicateOutsideTarget)).rejects.toMatchObject({ code: "ENOENT" });
       }
       await fs.rm(duplicateOutsideTarget, { force: true });

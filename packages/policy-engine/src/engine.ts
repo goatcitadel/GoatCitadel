@@ -2756,7 +2756,8 @@ function extractPathCandidates(args?: Record<string, unknown>): string[] {
   if (!args) {
     return [];
   }
-  return [args.path, args.from, args.to, args.relativePath, args.outputPath]
+  const listed = Array.isArray(args.paths) ? args.paths : [];
+  return [args.path, args.from, args.to, args.relativePath, args.outputPath, ...listed]
     .map((value) => (typeof value === "string" ? value.trim() : ""))
     .filter(Boolean);
 }
@@ -2874,7 +2875,7 @@ function requiresExplicitWritePath(toolName: string): boolean {
 }
 
 function requiresExplicitPathForGrantConstraints(toolName: string): boolean {
-  return toolName === "browser.screenshot";
+  return toolName === "browser.screenshot" || toolName === "git.add";
 }
 
 function matchesHostAllowlist(host: string, patterns: string[]): boolean {
