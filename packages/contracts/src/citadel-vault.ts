@@ -25,6 +25,7 @@ export const VAULT_ERROR_CODES = {
   rotationInProgress: "VAULT_ROTATION_IN_PROGRESS",
   keyChanged: "VAULT_KEY_CHANGED",
   legacySecretsPresent: "VAULT_LEGACY_SECRETS_PRESENT",
+  noKeyToRotate: "VAULT_NO_KEY_TO_ROTATE",
 } as const;
 
 export type VaultErrorCode = (typeof VAULT_ERROR_CODES)[keyof typeof VAULT_ERROR_CODES];

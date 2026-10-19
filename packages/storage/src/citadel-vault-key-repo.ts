@@ -127,6 +127,8 @@ const ROTATION_PHASES = new Set<CitadelVaultRotationPhase>([
 
 const scopeKeyOf = vaultScopeKey;
 
+const KEY_CHANGED_PHASES = new Set<CitadelVaultRotationPhase>(["resealing", "kek_staged", "rewrapped"]);
+
 function keyChanged(message: string): ConflictError {
   return new ConflictError({ code: "WRITE_CONFLICT", message, details: { reason: VAULT_ERROR_CODES.keyChanged } });
 }
@@ -140,16 +142,14 @@ export class CitadelVaultKeyRepository {
   // --- key state -------------------------------------------------------------
 
   public getKeyState(citadelId: string): VaultKeyStateRow | undefined {
-    const row = this.db
-      .prepare("SELECT * FROM citadel_vault_key_state WHERE citadel_id = @citadelId")
-      .get<{
-        citadel_id: string;
-        kek_version: number | string;
-        legacy_reads_closed: number | string;
-        kek_created_at: string;
-        kek_rotated_at: string | null;
-        updated_at: string;
-      }>({ citadelId });
+    const row = this.db.prepare("SELECT * FROM citadel_vault_key_state WHERE citadel_id = @citadelId").get<{
+      citadel_id: string;
+      kek_version: number | string;
+      legacy_reads_closed: number | string;
+      kek_created_at: string;
+      kek_rotated_at: string | null;
+      updated_at: string;
+    }>({ citadelId });
     if (!row) return undefined;
     return {
       citadelId: row.citadel_id,
@@ -250,6 +250,7 @@ export class CitadelVaultKeyRepository {
       if (this.getActiveKey(input.citadelId, input.chamberId)) {
         throw keyChanged("This scope already has a data key. Reload the Vault and try again.");
       }
+      this.assertCurrentKek(input.citadelId, input.kekVersion);
       this.insertKey(input, true);
       return this.getKey(input.citadelId, input.keyId)!;
     });
@@ -350,6 +351,17 @@ export class CitadelVaultKeyRepository {
           details: { reason: VAULT_ERROR_CODES.rotationInProgress },
         });
       }
+      const hasKey =
+        input.target === "kek"
+          ? this.getKeyState(input.citadelId) !== undefined
+          : this.getActiveKey(input.citadelId, input.chamberId) !== undefined;
+      if (!hasKey) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "There is no key to rotate yet. A key is created when the first secret is stored.",
+          details: { reason: VAULT_ERROR_CODES.noKeyToRotate },
+        });
+      }
       const rotationId = randomUUID();
       const now = new Date().toISOString();
       this.db
@@ -408,6 +420,10 @@ export class CitadelVaultKeyRepository {
     if (!existing) throw new NotFoundError({ entity: "Vault key rotation" });
     if (patch.phase && !ROTATION_PHASES.has(patch.phase))
       throw new ValidationError({ message: "Unsupported rotation phase." });
+    // Once key material changed, only resume can finish a rotation; it never becomes terminal-failed.
+    if ((patch.phase === "failed" || patch.phase === "cancelled") && KEY_CHANGED_PHASES.has(fromPhase)) {
+      throw new ValidationError({ message: "A rotation that already changed keys can only be resumed." });
+    }
     return this.context.withLock(existing.citadel_id, () =>
       this.updateRotation(existing.citadel_id, rotationId, fromPhase, patch),
     );
@@ -428,6 +444,7 @@ export class CitadelVaultKeyRepository {
       if (!current || next.dekVersion !== current.dekVersion + 1) {
         throw keyChanged("The scope's data key changed. Reload the Vault and try again.");
       }
+      this.assertCurrentKek(rotation.citadelId, next.kekVersion);
       this.db
         .prepare("UPDATE citadel_vault_keys SET active_scope_key = NULL, updated_at = @now WHERE key_id = @keyId")
         .run({ keyId: current.keyId, now: new Date().toISOString() });
@@ -514,6 +531,13 @@ export class CitadelVaultKeyRepository {
   }
 
   // --- internals -------------------------------------------------------------
+
+  /** A new data key must be wrapped under the Citadel's current KEK version. */
+  private assertCurrentKek(citadelId: string, kekVersion: number): void {
+    if (this.getKeyState(citadelId)?.kekVersion !== kekVersion) {
+      throw keyChanged("The Citadel key changed. Wrap the data key under the current key and try again.");
+    }
+  }
 
   private requireRotation(rotationId: string): VaultRotationRow {
     const row = this.db

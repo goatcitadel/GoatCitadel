@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { ConflictError, type SealedValueV2 } from "@goatcitadel/contracts";
+import { ConflictError, ValidationError, type SealedValueV2 } from "@goatcitadel/contracts";
 import { CitadelRepository } from "./citadel-repo.js";
 import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
@@ -142,6 +142,7 @@ test("closeLegacyReads is a no-op while a v1 row remains", () => {
 
 test("createRotation rejects a second open rotation and advanceRotation rejects a stale phase", () => {
   const { keys } = setup("gc-vault-keys-ledger");
+  addKey(keys, "k1");
   const rotation = keys.createRotation({
     citadelId: "c1",
     target: "dek",
@@ -252,6 +253,7 @@ test("hasSealedData sees key rows and secret rows", () => {
   seedLegacy(repo, "API");
   assert.equal(keys.hasSealedData("c1"), true);
   assert.equal(keys.hasSealedData("c2"), false);
+  keys.ensureKeyState("c2", 1);
   keys.insertActiveKey({
     citadelId: "c2",
     chamberId: null,
@@ -261,4 +263,113 @@ test("hasSealedData sees key rows and secret rows", () => {
     wrappedDek: wrapped,
   });
   assert.equal(keys.hasSealedData("c2"), true);
+});
+
+test("data key creation must carry the current KEK version", () => {
+  const { keys } = setup("gc-vault-keys-kek-cas");
+  assert.throws(
+    () =>
+      keys.insertActiveKey({
+        citadelId: "c1",
+        chamberId: null,
+        keyId: "k-stale",
+        dekVersion: 1,
+        kekVersion: 2,
+        wrappedDek: wrapped,
+      }),
+    reason("VAULT_KEY_CHANGED"),
+  );
+  assert.throws(
+    () =>
+      keys.insertActiveKey({
+        citadelId: "c-no-state",
+        chamberId: null,
+        keyId: "k-orphan",
+        dekVersion: 1,
+        kekVersion: 1,
+        wrappedDek: wrapped,
+      }),
+    reason("VAULT_KEY_CHANGED"),
+    "a data key needs recorded key state first",
+  );
+  addKey(keys, "k1");
+  const rotation = keys.createRotation({
+    citadelId: "c1",
+    target: "dek",
+    chamberId: null,
+    requestedBy: "operator",
+    reason: "scheduled",
+  });
+  keys.advanceRotation(rotation.rotationId, "awaiting_approval", { phase: "approved" });
+  assert.throws(
+    () =>
+      keys.startDekRotation(rotation.rotationId, { keyId: "k2", dekVersion: 2, kekVersion: 2, wrappedDek: wrapped }),
+    reason("VAULT_KEY_CHANGED"),
+  );
+  assert.equal(keys.getActiveKey("c1", null)?.keyId, "k1");
+});
+
+test("a rotation needs a key to rotate", () => {
+  const { keys } = setup("gc-vault-keys-nothing");
+  assert.throws(
+    () =>
+      keys.createRotation({
+        citadelId: "c1",
+        target: "dek",
+        chamberId: null,
+        requestedBy: "operator",
+        reason: "scheduled",
+      }),
+    reason("VAULT_NO_KEY_TO_ROTATE"),
+  );
+  assert.throws(
+    () =>
+      keys.createRotation({
+        citadelId: "c-no-state",
+        target: "kek",
+        chamberId: null,
+        requestedBy: "operator",
+        reason: "scheduled",
+      }),
+    reason("VAULT_NO_KEY_TO_ROTATE"),
+  );
+  addKey(keys, "k1");
+  keys.createRotation({
+    citadelId: "c1",
+    target: "dek",
+    chamberId: null,
+    requestedBy: "operator",
+    reason: "scheduled",
+  });
+});
+
+test("a rotation cannot fail or cancel once key material changed", () => {
+  const { keys } = setup("gc-vault-keys-no-terminal");
+  addKey(keys, "k1");
+  const rotation = keys.createRotation({
+    citadelId: "c1",
+    target: "dek",
+    chamberId: null,
+    requestedBy: "operator",
+    reason: "scheduled",
+  });
+  keys.advanceRotation(rotation.rotationId, "awaiting_approval", { phase: "approved" });
+  keys.startDekRotation(rotation.rotationId, { keyId: "k2", dekVersion: 2, kekVersion: 1, wrappedDek: wrapped });
+  for (const phase of ["failed", "cancelled"] as const) {
+    assert.throws(() => keys.advanceRotation(rotation.rotationId, "resealing", { phase }), ValidationError);
+  }
+  const recorded = keys.advanceRotation(rotation.rotationId, "resealing", { lastErrorCode: "open_failed" });
+  assert.equal(recorded.lastErrorCode, "open_failed");
+  assert.equal(keys.getOpenRotation("c1")?.rotationId, rotation.rotationId, "the rotation stays open for resume");
+  assert.throws(
+    () =>
+      keys.createRotation({
+        citadelId: "c1",
+        target: "kek",
+        chamberId: null,
+        requestedBy: "operator",
+        reason: "again",
+      }),
+    reason("VAULT_ROTATION_IN_PROGRESS"),
+  );
 });
