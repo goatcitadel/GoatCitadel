@@ -1,3 +1,4 @@
+import type { ChatApprovalWriteGrantChoice } from "./chat-approval-write-grant.js";
 import type {
   ApprovalBulkResolveInput,
   ApprovalBulkResolveResult,
@@ -80,6 +81,7 @@ export interface ApprovalRuntime {
     options?: {
       allowScope?: "once" | "session" | "workspace";
       resolvedBy?: string;
+      writeGrant?: ChatApprovalWriteGrantChoice;
     },
   ): Promise<{
     allowScope: "once" | "session" | "workspace";
@@ -204,6 +206,7 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     options?: {
       allowScope?: "once" | "session" | "workspace";
       resolvedBy?: string;
+      writeGrant?: ChatApprovalWriteGrantChoice;
     },
   ): Promise<{
     allowScope: "once" | "session" | "workspace";

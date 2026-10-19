@@ -152,6 +152,35 @@ describe("cockpit filesystem write roots", () => {
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
 
+  it("reviews letting Chat ask for outside-root writes and blocks them again directly", async () => {
+    api.fetchSettings.mockResolvedValue(settingsAt(4));
+    await render();
+    expect(text()).toContain("Writes outside the write roots");
+    expect(text()).toContain("Blocked. Chat's filesystem tools fail");
+    await click(button("Let Chat ask instead"));
+    expect(dialog()?.textContent).toContain("open one offered folder for that tool for 15 minutes to 8 hours");
+    expect(api.patchSettings).not.toHaveBeenCalled();
+    const asking = { ...settingsAt(5), outsideRootWriteMode: "approval_required" };
+    api.patchSettings.mockResolvedValue(asking);
+    api.fetchSettings.mockResolvedValueOnce(settingsAt(4)).mockResolvedValue(asking);
+    await click(button("Let Chat ask"));
+    await vi.waitFor(() =>
+      expect(api.patchSettings).toHaveBeenCalledWith({
+        expectedRevision: 4,
+        outsideRootWriteMode: "approval_required",
+      }),
+    );
+    await vi.waitFor(() => expect(text()).toContain("Chat now asks before writing outside the write roots."));
+    const blocked = { ...settingsAt(6), outsideRootWriteMode: "deny" };
+    api.patchSettings.mockResolvedValue(blocked);
+    api.fetchSettings.mockResolvedValueOnce(asking).mockResolvedValue(blocked);
+    await click(button("Block outside-root writes"));
+    await vi.waitFor(() =>
+      expect(api.patchSettings).toHaveBeenLastCalledWith({ expectedRevision: 5, outsideRootWriteMode: "deny" }),
+    );
+    await vi.waitFor(() => expect(text()).toContain("Folders opened from approvals stop working."));
+  });
+
   it("adds the OS temp preset and shows the folder the gateway resolved", async () => {
     api.fetchSettings.mockResolvedValue(settingsAt(4));
     const saved = settingsAt(5, { roots: [{ path: "/tmp/goat-runner", allowDelete: false, preset: "os_temp" }] });

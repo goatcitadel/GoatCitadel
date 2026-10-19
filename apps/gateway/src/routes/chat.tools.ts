@@ -7,6 +7,14 @@ const chatToolDecisionSchema = z.object({
   sessionId: z.string().min(1),
   approvalId: z.string().min(1),
   allowScope: z.enum(["once", "session", "workspace"]).optional(),
+  /** Outside-root write approvals only: open one server-offered folder for a bounded time. */
+  writeGrant: z
+    .object({
+      rootId: z.string().regex(/^owr_[a-f0-9]{16}$/u),
+      duration: z.enum(["15m", "1h", "8h"]),
+    })
+    .strict()
+    .optional(),
 });
 
 const chatToolApprovalsQuerySchema = z.object({
@@ -75,6 +83,7 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
         {
           allowScope: body.data.allowScope ?? "once",
           resolvedBy: resolveActorId(request),
+          ...(body.data.writeGrant ? { writeGrant: body.data.writeGrant } : {}),
         },
       );
       await markMutationCommitted(request);

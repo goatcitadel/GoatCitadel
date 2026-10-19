@@ -8,6 +8,7 @@ import {
   type GlobalToolAccessSummary,
   type OperatorWriteRootChange,
   type OperatorWriteRootSummary,
+  type OutsideRootWriteMode,
 } from "@goatcitadel/contracts";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 
@@ -26,7 +27,7 @@ export interface AddRootDraft {
 
 export const EMPTY_ADD_ROOT_DRAFT: AddRootDraft = { path: "", allowDelete: false };
 
-/** One governed settings save: an operator write-root change or one curated tool's global access. */
+/** One governed settings save: an operator write-root change, one curated tool's global access, or the outside-root write mode. */
 export type WriteAccessSubmission =
   | {
       readonly kind: "root";
@@ -40,6 +41,10 @@ export type WriteAccessSubmission =
       readonly change: GlobalToolAccessChange;
       readonly draft: ToolAccessDraft;
       readonly saved: ToolAccessDraft;
+    }
+  | {
+      readonly kind: "mode";
+      readonly mode: OutsideRootWriteMode;
     };
 
 export const TOOL_ACCESS_LABELS: Readonly<Record<GlobalToolAccessPosture, string>> = {
@@ -124,7 +129,13 @@ export function toolAccessConsequence(tool: CuratedFsMutationTool, next: GlobalT
 }
 
 export function writeAccessOperation(submission: WriteAccessSubmission) {
+  if (submission.kind === "mode") return "outside_root_write_policy";
   return submission.kind === "tool" ? "tool_global_access" : "operator_write_root";
+}
+
+/** The Gateway reports "deny" when the setting was never saved. */
+export function outsideRootWriteMode(settings: RuntimeSettingsResponse | undefined): OutsideRootWriteMode {
+  return settings?.outsideRootWriteMode === "approval_required" ? "approval_required" : "deny";
 }
 
 export function matchesWriteAccessPlan(plan: ChangePlanRecord, submission: WriteAccessSubmission): boolean {
@@ -141,6 +152,7 @@ export function writeAccessSaved(settings: RuntimeSettingsResponse, submission: 
   if (submission.kind === "tool") {
     return toolAccess(submission.change.toolName, settings.globalToolAccess) === submission.change.posture;
   }
+  if (submission.kind === "mode") return outsideRootWriteMode(settings) === submission.mode;
   const roots = operatorWriteRoots(settings);
   const { change } = submission;
   if (change.action === "remove") {

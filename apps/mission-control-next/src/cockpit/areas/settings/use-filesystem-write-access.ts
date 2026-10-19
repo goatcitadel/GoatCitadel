@@ -69,7 +69,8 @@ export function useFilesystemWriteAccess() {
           });
         return clean;
       }
-      if (submitted.draft) return addDraft.acceptSaved(EMPTY_ADD_ROOT_DRAFT, revision, submitted.draft);
+      if (submitted.kind === "root" && submitted.draft)
+        return addDraft.acceptSaved(EMPTY_ADD_ROOT_DRAFT, revision, submitted.draft);
       return true;
     },
     reload: () => settings.refetch(),
@@ -100,7 +101,9 @@ export function useFilesystemWriteAccess() {
         expectedRevision: baseRevision,
         ...(submission.kind === "tool"
           ? { globalToolAccessChange: submission.change }
-          : { operatorWriteRootChange: submission.change }),
+          : submission.kind === "mode"
+            ? { outsideRootWriteMode: submission.mode }
+            : { operatorWriteRootChange: submission.change }),
       });
       const saved = change.receive(response, submission, baseRevision);
       await settings.refetch();

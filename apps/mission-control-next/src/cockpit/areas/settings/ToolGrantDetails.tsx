@@ -49,6 +49,12 @@ export function ToolGrantDetails({ grant, onClose }: { grant: ToolGrantRecord | 
                 {grant.constraints.allowedPaths?.map((path) => (
                   <li key={path}>Path: {path}</li>
                 ))}
+                {grant.constraints.writeRoots?.map((root) => (
+                  <li key={`write:${root}`}>Write folder (outside the write roots): {root}</li>
+                ))}
+                {grant.constraints.writeRootsApprovalId ? (
+                  <li>Opened from approval: {grant.constraints.writeRootsApprovalId}</li>
+                ) : null}
                 {grant.constraints.referenceRoots?.map((root) => (
                   <li key={`${root.label}:${root.rootPath}`}>
                     Read-only reference: {root.label} · {root.rootPath}

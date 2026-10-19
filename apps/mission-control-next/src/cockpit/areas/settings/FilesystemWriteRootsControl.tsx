@@ -6,6 +6,7 @@ import { Field } from "../../ui/Field";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { FilesystemToolAccessPanel, type ToolAccessReviewRequest } from "./FilesystemToolAccessPanel";
+import { OutsideRootWriteModeControl } from "./OutsideRootWriteModeControl";
 import {
   ConfiguredFolders,
   WriteAccessOutcomeStatus,
@@ -328,6 +329,7 @@ export function FilesystemWriteRootsControl() {
             )}
           </form>
           <FilesystemToolAccessPanel control={control} onApply={applyTool} />
+          <OutsideRootWriteModeControl control={control} reviewOpen={Boolean(review)} onReview={setReview} />
         </>
       ) : null}
       <WriteAccessOutcomeStatus control={control} />

@@ -416,6 +416,8 @@ export { bootstrapDemo, fetchDemoState } from "./demo.js";
 export type { DemoBootstrapResponse, DemoBootstrapStateResponse } from "./demo.js";
 
 export type {
+  ApproveChatToolResult,
+  ChatApprovalWriteGrantChoice,
   ChatDelegationStreamChunk,
   ChatChangePlanRecord,
   ChangePlanRecord,
