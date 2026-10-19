@@ -417,6 +417,7 @@ export interface RuntimeSettingsResponse {
     automaticFanout: boolean;
     providerFallback: boolean;
     staticMcp?: boolean;
+    workspaceSnapshot?: boolean;
   };
   /** Opaque monotonic revision required by settings mutation requests. */
   revision: number;
@@ -613,6 +614,7 @@ export interface RuntimeSettingsResponse {
     commitmentScheduledTurnsV1Enabled?: boolean;
     chatMeshCapabilitiesV1Enabled?: boolean;
     chatRemotePlacementV1Enabled?: boolean;
+    chatWorkspaceSnapshotV1Enabled?: boolean;
     chatRequesterMcpV1Enabled?: boolean;
     chatStaticMcpV1Enabled?: boolean;
     evolutionControlPlaneV1Enabled?: boolean;

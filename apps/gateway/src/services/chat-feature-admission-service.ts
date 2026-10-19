@@ -27,6 +27,8 @@ import {
 } from "./chat-fanout-admission-reference.js";
 
 type FeatureBinding = { references: ChatTurnFeatureReferences; referenceSha256: string };
+/** Admitted evidence that does not depend on the provider route. */
+const ROUTE_INDEPENDENT_REFERENCE_KEYS: ReadonlySet<string> = new Set(["version", "workspaceSnapshot"]);
 export interface ChatFeatureAdmissionHost {
   storage: Pick<
     AsyncStorage,
@@ -67,6 +69,13 @@ export interface ChatFeatureAdmissionHost {
     admission: ActiveTurnAdmission;
     content: string;
   }): Promise<import("@goatcitadel/contracts").ChatSelectedMeshCapabilities | undefined>;
+  /** Server-owned, path-bridge-verified workspace/Git receipt for exactly one turn. */
+  captureWorkspaceSnapshot?(input: {
+    sessionId: string;
+    turnId: string;
+    workspaceId: string;
+    request: import("@goatcitadel/contracts").ChatWorkspaceSnapshotRequest;
+  }): Promise<import("@goatcitadel/contracts").ChatWorkspaceSnapshotRecord>;
   resolveRemotePlacement?(input: {
     admission: ActiveTurnAdmission;
     content: string;
@@ -196,6 +205,16 @@ export async function resolveChatFeatureAdmission(
       await renderAdmittedSkillInstructions(host, references, workspaceId);
     }
   }
+  const snapshotRequest = input.admission.admittedRequest.workspaceSnapshot;
+  if (snapshotRequest && (await host.isFeatureEnabled("chatWorkspaceSnapshotV1Enabled"))) {
+    if (!host.captureWorkspaceSnapshot)
+      throw new ConflictError({ message: "Workspace snapshot capture is unavailable in this runtime." });
+    const { workspaceId, sessionId, turnId } = input.admission.identity;
+    const snapshot = await host.captureWorkspaceSnapshot({ sessionId, turnId, workspaceId, request: snapshotRequest });
+    if (snapshot.workspaceId !== workspaceId || snapshot.requestId !== snapshotRequest.requestId)
+      throw new ConflictError({ message: "The workspace snapshot does not match the admitted turn." });
+    references.workspaceSnapshot = snapshot;
+  }
   if ((await host.isFeatureEnabled("chatRequesterMcpV1Enabled")) && host.resolveRequesterConnections) {
     const connections = await host.resolveRequesterConnections({ admission: input.admission, content: input.content });
     if (connections.length) references.requesterConnections = connections;
@@ -231,20 +250,27 @@ export async function resolveChatFeatureAdmission(
     !references.requesterConnections &&
     !references.selectedStaticMcp &&
     !references.selectedMeshCapabilities &&
-    !references.remotePlacement
+    !references.remotePlacement &&
+    !references.workspaceSnapshot
   )
     return undefined;
   // Every new restored-feature admission pins its route. Selected skill budgets,
   // requester schemas and scheduled scope must not silently move providers on replay.
+  // Route-independent evidence alone pins the route only when one resolves.
+  const routeIndependentOnly = Object.keys(references).every((key) => ROUTE_INDEPENDENT_REFERENCE_KEYS.has(key));
   if (!references.providerRoute) {
-    if (!route?.effectiveProviderId || !route.effectiveModel) {
-      throw new ConflictError({ message: "Chat feature admission requires an explicit provider route." });
-    }
-    const primary = { providerId: route.effectiveProviderId, model: route.effectiveModel };
-    const fingerprint = host.routeFingerprint(primary);
-    if (!fingerprint)
-      throw new ConflictError({ message: "Chat feature admission requires a verifiable provider route." });
-    references.providerRoute = { primary, fingerprint };
+    const primary =
+      route?.effectiveProviderId && route.effectiveModel
+        ? { providerId: route.effectiveProviderId, model: route.effectiveModel }
+        : undefined;
+    const fingerprint = primary ? host.routeFingerprint(primary) : undefined;
+    if (primary && fingerprint) references.providerRoute = { primary, fingerprint };
+    else if (!routeIndependentOnly)
+      throw new ConflictError({
+        message: primary
+          ? "Chat feature admission requires a verifiable provider route."
+          : "Chat feature admission requires an explicit provider route.",
+      });
   }
   await host.assertTurnAdmissionWrite(input.admission);
   if (input.deferBinding) {

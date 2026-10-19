@@ -7,6 +7,47 @@ const identifier = z
   .refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32));
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const routeTarget = z.object({ providerId: identifier, model: identifier }).strict();
+const nonNegativeInt = z.number().int().nonnegative();
+/** Content-free, point-in-time workspace/Git receipt captured once for the turn. */
+const workspaceSnapshotRecord = z
+  .object({
+    schemaVersion: z.literal("chat.workspace-snapshot.v1"),
+    snapshotId: identifier,
+    requestId: identifier,
+    workspaceId: identifier,
+    project: z.object({ projectId: identifier, projectRevision: nonNegativeInt }).strict().optional(),
+    status: z.enum(["captured", "unavailable"]),
+    reasonCode: z
+      .enum([
+        "workspace_unavailable",
+        "project_unbound",
+        "path_verification_failed",
+        "path_identity_changed",
+        "git_unavailable",
+        "git_not_repository",
+        "git_summary_failed",
+      ])
+      .optional(),
+    pathBinding: z
+      .object({ verificationId: identifier, fingerprintSha256: digest, gitIdentitySha256: digest })
+      .strict()
+      .optional(),
+    git: z
+      .object({
+        headSha: identifier,
+        branch: identifier.optional(),
+        trackedChangeCount: nonNegativeInt,
+        untrackedChangeCount: nonNegativeInt,
+        dirty: z.boolean(),
+        ahead: nonNegativeInt.optional(),
+        behind: nonNegativeInt.optional(),
+      })
+      .strict()
+      .optional(),
+    capturedAt: identifier,
+    snapshotHash: digest,
+  })
+  .strict();
 const ownerReference = z.object({ ownerId: identifier, revision: identifier, sha256: digest }).strict();
 export const mcpRequesterAdmissionScopeSchema = z
   .object({
@@ -258,6 +299,24 @@ const selectedSkill = z
   })
   .strict();
 
+/** Independent, default-off runtime switches that restore profile-free Chat features. */
+export const CHAT_RESTORATION_FEATURE_FLAGS = [
+  "chatProviderFallbackV1Enabled",
+  "chatSkillInstructionsV1Enabled",
+  "boundedToolExposureV1Enabled",
+  "scheduledChatTurnsV1Enabled",
+  "chatExplicitContextV1Enabled",
+  "chatAutomaticFanoutV1Enabled",
+  "chatDelegationControlsV1Enabled",
+  "proactiveHeartbeatTurnsV1Enabled",
+  "commitmentScheduledTurnsV1Enabled",
+  "chatMeshCapabilitiesV1Enabled",
+  "chatRemotePlacementV1Enabled",
+  "chatWorkspaceSnapshotV1Enabled",
+  "chatRequesterMcpV1Enabled",
+  "chatStaticMcpV1Enabled",
+] as const;
+
 /** Immutable feature evidence. These records never grant callable authority. */
 export const chatTurnFeatureReferencesSchema = z
   .object({
@@ -295,6 +354,8 @@ export const chatTurnFeatureReferencesSchema = z
       })
       .optional(),
     explicitContext: z.object({ snapshotId: identifier, snapshotHash: digest }).strict().optional(),
+    /** Turn-scoped workspace snapshot evidence; it grants no filesystem or tool authority. */
+    workspaceSnapshot: workspaceSnapshotRecord.optional(),
     childWork: ownerReference.optional(),
     scheduledOccurrence: ownerReference.optional(),
     heartbeatOccurrence: ownerReference.optional(),

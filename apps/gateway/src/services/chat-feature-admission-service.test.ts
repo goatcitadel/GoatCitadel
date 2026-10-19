@@ -246,3 +246,80 @@ describe("fresh Chat feature skill admission", () => {
     expect(h.bindFeatureReferences).not.toHaveBeenCalled();
   });
 });
+
+describe("fresh Chat workspace snapshot admission", () => {
+  const snapshot = {
+    schemaVersion: "chat.workspace-snapshot.v1" as const,
+    snapshotId: "chat-workspace-snapshot-1",
+    requestId: "snapshot-request-1",
+    workspaceId: "workspace",
+    project: { projectId: "project-1", projectRevision: 3 },
+    status: "captured" as const,
+    pathBinding: {
+      verificationId: "verification-1",
+      fingerprintSha256: "c".repeat(64),
+      gitIdentitySha256: "d".repeat(64),
+    },
+    git: { headSha: "e".repeat(40), branch: "main", trackedChangeCount: 1, untrackedChangeCount: 0, dirty: true },
+    capturedAt: "2026-10-19T00:00:00.000Z",
+    snapshotHash: "f".repeat(64),
+  };
+  async function snapshotHarness(enabled: boolean) {
+    const h = await harness();
+    const captureWorkspaceSnapshot = vi.fn(async () => structuredClone(snapshot));
+    h.host.captureWorkspaceSnapshot = captureWorkspaceSnapshot;
+    h.host.isFeatureEnabled = async (flag) => flag === "chatWorkspaceSnapshotV1Enabled" && enabled;
+    return { ...h, captureWorkspaceSnapshot };
+  }
+  function snapshotRequest(id: string) {
+    const req = request(id);
+    return {
+      ...req,
+      admission: {
+        ...req.admission,
+        admittedRequest: {
+          content: "Use reports",
+          workspaceSnapshot: { capture: true as const, requestId: "snapshot-request-1" },
+        },
+      },
+    };
+  }
+
+  it("captures one turn-scoped snapshot only when chatWorkspaceSnapshotV1Enabled is on", async () => {
+    const off = await snapshotHarness(false);
+    expect(await resolveChatFeatureAdmission(off.host, snapshotRequest("off"))).toBeUndefined();
+    expect(off.captureWorkspaceSnapshot).not.toHaveBeenCalled();
+    const on = await snapshotHarness(true);
+    const binding = await resolveChatFeatureAdmission(on.host, snapshotRequest("on"));
+    expect(on.captureWorkspaceSnapshot).toHaveBeenCalledWith({
+      sessionId: "session",
+      turnId: "on",
+      workspaceId: "workspace",
+      request: { capture: true, requestId: "snapshot-request-1" },
+    });
+    expect(binding?.references.workspaceSnapshot).toEqual(snapshot);
+  });
+
+  it("reuses the admitted snapshot on durable replay and never recaptures", async () => {
+    const h = await snapshotHarness(true);
+    const req = snapshotRequest("replay");
+    const binding = await resolveChatFeatureAdmission(h.host, req);
+    const replay = await resolveChatFeatureAdmission(h.host, {
+      ...req,
+      admission: { ...req.admission, durableClaim: { durableRunId: "run", leaseOwnerId: "worker", attemptCount: 1 } },
+      expectedReferenceSha256: binding!.referenceSha256,
+    });
+    expect(replay?.references.workspaceSnapshot).toEqual(snapshot);
+    expect(h.captureWorkspaceSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("binds without a route and refuses a snapshot from another workspace", async () => {
+    const h = await snapshotHarness(true);
+    const routeless = await resolveChatFeatureAdmission(h.host, { ...snapshotRequest("routeless"), route: undefined });
+    expect(routeless?.references.providerRoute).toBeUndefined();
+    h.captureWorkspaceSnapshot.mockResolvedValue({ ...structuredClone(snapshot), workspaceId: "other" });
+    await expect(resolveChatFeatureAdmission(h.host, snapshotRequest("foreign"))).rejects.toThrow(
+      /does not match the admitted turn/,
+    );
+  });
+});
