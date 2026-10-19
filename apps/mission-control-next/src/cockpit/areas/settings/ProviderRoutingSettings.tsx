@@ -7,10 +7,11 @@ import { useProviderPlanActions } from "../../../features/native-routes/settings
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import type { Notice } from "../../../features/native-routes/settings/SettingsShared";
 import { Button } from "../../ui/Button";
+import { Field } from "../../ui/Field";
 import { Dialog } from "../../ui/Dialog";
 import { ProviderChangeStatus } from "./ProviderChangeStatus";
 import { ProviderOutcomeCheck } from "./ProviderOutcomeCheck";
-import { providerFieldClass } from "./ProviderProfileFields";
+import { cockpitInputClass } from "../../ui/input-class";
 import { ProviderModelSearch } from "./ProviderModelSearch";
 import { useModelLabel } from "../../data/use-model-label";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
@@ -87,41 +88,45 @@ export function ProviderRoutingSettings() {
             routing.setRoutingModel(choice.model);
           }}
         />
-        <label className="block text-sm text-fg-secondary">
-          Default provider
-          <select
-            className={providerFieldClass}
-            value={routingProviderId}
-            disabled={locked || catalog.loading}
-            onChange={(event) => routing.setRoutingProviderId(event.target.value)}
-          >
-            {!routingProvider ? <option value={routingProviderId}>Selected provider unavailable</option> : null}
-            {catalog.providers.map((provider) => (
-              <option key={provider.providerId} value={provider.providerId}>
-                {provider.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block text-sm text-fg-secondary">
-          Default model
-          <select
-            className={providerFieldClass}
-            value={routingModel}
-            disabled={locked || catalog.loading}
-            onChange={(event) => routing.setRoutingModel(event.target.value)}
-          >
-            {!routingProvider?.models.includes(routingModel) ? (
-              <option value={routingModel}>
-                {routingModel || "Choose a model"}
-                {routingModel ? " · Not in current catalog" : ""}
-              </option>
-            ) : null}
-            {routingProvider?.models.map((model) => (
-              <option key={model}>{model}</option>
-            ))}
-          </select>
-        </label>
+        <Field label="Default provider">
+          {(fieldProps) => (
+            <select
+              {...fieldProps}
+              className={cockpitInputClass}
+              value={routingProviderId}
+              disabled={locked || catalog.loading}
+              onChange={(event) => routing.setRoutingProviderId(event.target.value)}
+            >
+              {!routingProvider ? <option value={routingProviderId}>Selected provider unavailable</option> : null}
+              {catalog.providers.map((provider) => (
+                <option key={provider.providerId} value={provider.providerId}>
+                  {provider.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+        <Field label="Default model">
+          {(fieldProps) => (
+            <select
+              {...fieldProps}
+              className={cockpitInputClass}
+              value={routingModel}
+              disabled={locked || catalog.loading}
+              onChange={(event) => routing.setRoutingModel(event.target.value)}
+            >
+              {!routingProvider?.models.includes(routingModel) ? (
+                <option value={routingModel}>
+                  {routingModel || "Choose a model"}
+                  {routingModel ? " · Not in current catalog" : ""}
+                </option>
+              ) : null}
+              {routingProvider?.models.map((model) => (
+                <option key={model}>{model}</option>
+              ))}
+            </select>
+          )}
+        </Field>
         <p className="text-xs text-fg-muted">
           Model list:{" "}
           {routingProvider?.modelProbeSource

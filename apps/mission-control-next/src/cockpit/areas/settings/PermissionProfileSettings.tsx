@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { PermissionSurface } from "@goatcitadel/contracts";
 import { fetchPermissionProfiles, fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
@@ -7,6 +7,8 @@ import { usePermissionProfileActivation } from "../../../features/native-routes/
 import { profileCanBeSelected } from "../../../features/native-routes/settings/permission-activation-binding";
 import { describeToolApprovalMode } from "../../../features/native-routes/settings/helpers/permission-helpers";
 import { Button } from "../../ui/Button";
+import { Field } from "../../ui/Field";
+import { cockpitInputClass } from "../../ui/input-class";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -16,6 +18,10 @@ import { readEffectivePermissionContexts } from "../../../features/native-routes
 import { PERMISSION_CONTEXT_PRESENTATION } from "../../../features/native-routes/settings/sections/PermissionProfileDraftFields";
 import { EffectivePermissionContexts } from "./EffectivePermissionContexts";
 import { AutonomousGrantsSettings } from "./AutonomousGrantsSettings";
+import { RulesPrecedenceExplainer } from "./RulesPrecedence";
+
+/** Current policy contexts. Legacy Cowork and Code keys stay readable under Advanced but are not offered here. */
+const SELECTABLE_CONTEXTS = ["chat", "tools", "mcp", "all"] as const;
 
 const PAGE_SIZE = 30;
 
@@ -26,6 +32,10 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
   const contextLabel = PERMISSION_CONTEXT_PRESENTATION[surface].label;
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(PAGE_SIZE);
+  const [changing, setChanging] = useState(false);
+  const changeButton = useRef<HTMLButtonElement>(null);
+  const firstChoice = useRef<HTMLSelectElement>(null);
+  const focusAfterToggle = useRef(false);
   const snapshot = useQuery({
     queryKey: ["settings", "permission-selection", workspaceId],
     enabled: Boolean(workspaceId),
@@ -63,6 +73,21 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
     `${item.label} ${item.description ?? ""}`.toLowerCase().includes(search.toLowerCase()),
   );
   const reviewed = control.review;
+  // Opening the choices moves focus to the first choice; closing them returns focus to the Change button.
+  useEffect(() => {
+    if (!focusAfterToggle.current) return;
+    focusAfterToggle.current = false;
+    (changing ? firstChoice.current : changeButton.current)?.focus();
+  }, [changing]);
+  const toggleChanging = (next: boolean) => {
+    control.clear();
+    if (!next) {
+      setSelectedId("");
+      setSurface("chat");
+    }
+    focusAfterToggle.current = true;
+    setChanging(next);
+  };
   return (
     <section
       id="permission-profile"
@@ -72,8 +97,8 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
       <header>
         <h3 className="text-base font-semibold text-fg">Chat permission profile</h3>
         <p className="mt-1 text-sm text-fg-secondary">
-          Choose an existing profile for a policy context in the selected workspace. Session-specific selections, hard
-          denies, scoped grants, auth and path boundaries still apply.
+          The profile sets which tools Chat can use in this workspace. Deny rules, tool grants, sign-in and path limits
+          still apply.
         </p>
       </header>
       <Button
@@ -95,54 +120,61 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
         </p>
       ) : null}
       {snapshot.data && !snapshot.isError ? (
-        <p className="text-sm text-fg-secondary">
-          Current effective workspace Chat profile:{" "}
-          <strong className="text-fg">
-            {snapshot.data.effective.find((item) => item.surface === "chat")?.profileLabel ?? "Unavailable"}
-          </strong>
-        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-sm text-fg-secondary">
+            Current effective workspace Chat profile:{" "}
+            <strong className="text-fg">
+              {snapshot.data.effective.find((item) => item.surface === "chat")?.profileLabel ?? "Unavailable"}
+            </strong>
+          </p>
+          <Button
+            ref={changeButton}
+            size="sm"
+            aria-expanded={changing}
+            disabled={control.pending}
+            onClick={() => toggleChanging(!changing)}
+          >
+            {changing ? "Close profile choices" : "Change profile"}
+          </Button>
+        </div>
       ) : null}
-      {available ? (
+      {available && changing ? (
         <>
-          <label className="block text-sm text-fg-secondary">
-            Selection policy context
-            <select
-              aria-label="Selection policy context"
-              value={surface}
-              disabled={control.locked || control.reviewing}
-              className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-fg"
-              onChange={(event) => {
-                control.clear();
-                setSurface(event.target.value as PermissionSurface);
-              }}
-            >
-              {(["chat", "tools", "mcp", "all"] as const).map((value) => (
-                <option key={value} value={value}>
-                  {PERMISSION_CONTEXT_PRESENTATION[value].label}
-                </option>
-              ))}
-              <optgroup label="Legacy compatibility only">
-                {(["cowork", "code"] as const).map((value) => (
+          <Field label="Selection policy context" help={PERMISSION_CONTEXT_PRESENTATION[surface].description}>
+            {(fieldProps) => (
+              <select
+                {...fieldProps}
+                ref={firstChoice}
+                value={surface}
+                disabled={control.locked || control.reviewing}
+                className={cockpitInputClass}
+                onChange={(event) => {
+                  control.clear();
+                  setSurface(event.target.value as PermissionSurface);
+                }}
+              >
+                {SELECTABLE_CONTEXTS.map((value) => (
                   <option key={value} value={value}>
                     {PERMISSION_CONTEXT_PRESENTATION[value].label}
                   </option>
                 ))}
-              </optgroup>
-            </select>
-          </label>
-          <p className="text-xs text-fg-muted">{PERMISSION_CONTEXT_PRESENTATION[surface].description}</p>
-          <label className="block text-sm text-fg-secondary">
-            Find permission profile
-            <input
-              type="search"
-              value={search}
-              onChange={(event) => {
-                setSearch(event.target.value);
-                setLimit(PAGE_SIZE);
-              }}
-              className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-fg"
-            />
-          </label>
+              </select>
+            )}
+          </Field>
+          <Field label="Find permission profile">
+            {(fieldProps) => (
+              <input
+                {...fieldProps}
+                type="search"
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setLimit(PAGE_SIZE);
+                }}
+                className={cockpitInputClass}
+              />
+            )}
+          </Field>
           <p className="text-xs text-fg-muted">
             Showing {Math.min(limit, filtered.length)} of {filtered.length} eligible loaded profiles.
           </p>
@@ -255,18 +287,25 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
           </div>
         </div>
       ) : null}
-      {snapshot.data && !snapshot.isError ? (
-        <EffectivePermissionContexts contexts={snapshot.data.effective} refreshing={snapshot.isFetching} />
-      ) : null}
-      <PermissionProfileEditor
-        workspaceId={workspaceId}
-        profiles={snapshot.data?.profiles ?? []}
-        available={available}
-        deploymentProfile={snapshot.data?.settings.deploymentProfile}
-        reload={() => snapshot.refetch()}
-      />
-      <LocalOperatorOverrides workspaceId={workspaceId} />
-      <AutonomousGrantsSettings workspaceId={workspaceId} />
+      <RulesPrecedenceExplainer />
+      {/* Expert detail stays mounted, so drafts and reviews survive, but it is collapsed until asked for. */}
+      <details className="border-t border-line-subtle pt-4">
+        <summary className="cursor-pointer text-sm font-medium text-fg">
+          Advanced: policy contexts, profiles, temporary overrides and autonomous grants
+        </summary>
+        {snapshot.data && !snapshot.isError ? (
+          <EffectivePermissionContexts contexts={snapshot.data.effective} refreshing={snapshot.isFetching} />
+        ) : null}
+        <PermissionProfileEditor
+          workspaceId={workspaceId}
+          profiles={snapshot.data?.profiles ?? []}
+          available={available}
+          deploymentProfile={snapshot.data?.settings.deploymentProfile}
+          reload={() => snapshot.refetch()}
+        />
+        <LocalOperatorOverrides workspaceId={workspaceId} />
+        <AutonomousGrantsSettings workspaceId={workspaceId} />
+      </details>
     </section>
   );
 }

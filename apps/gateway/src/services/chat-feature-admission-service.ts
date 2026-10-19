@@ -28,7 +28,7 @@ import {
 
 type FeatureBinding = { references: ChatTurnFeatureReferences; referenceSha256: string };
 /** Admitted evidence that does not depend on the provider route. */
-const ROUTE_INDEPENDENT_REFERENCE_KEYS: ReadonlySet<string> = new Set(["version", "workspaceSnapshot"]);
+const ROUTE_INDEPENDENT_REFERENCE_KEYS: ReadonlySet<string> = new Set(["version", "workPassport", "workspaceSnapshot"]);
 export interface ChatFeatureAdmissionHost {
   storage: Pick<
     AsyncStorage,
@@ -76,6 +76,11 @@ export interface ChatFeatureAdmissionHost {
     workspaceId: string;
     request: import("@goatcitadel/contracts").ChatWorkspaceSnapshotRequest;
   }): Promise<import("@goatcitadel/contracts").ChatWorkspaceSnapshotRecord>;
+  /** Local deterministic Work Passport classification; advisory evidence only. */
+  classifyWorkPassport?(
+    workspaceId: string,
+    content: string,
+  ): Promise<import("@goatcitadel/contracts").WorkPassportRecord>;
   resolveRemotePlacement?(input: {
     admission: ActiveTurnAdmission;
     content: string;
@@ -214,6 +219,9 @@ export async function resolveChatFeatureAdmission(
       throw new ConflictError({ message: "The workspace snapshot does not match the admitted turn." });
     references.workspaceSnapshot = snapshot;
   }
+  if ((await isEnabled("chatWorkPassportV1Enabled")) && host.classifyWorkPassport) {
+    references.workPassport = await host.classifyWorkPassport(input.admission.identity.workspaceId, input.content);
+  }
   if ((await isEnabled("chatRequesterMcpV1Enabled")) && host.resolveRequesterConnections) {
     const connections = await host.resolveRequesterConnections({ admission: input.admission, content: input.content });
     if (connections.length) references.requesterConnections = connections;
@@ -250,7 +258,8 @@ export async function resolveChatFeatureAdmission(
     !references.selectedStaticMcp &&
     !references.selectedMeshCapabilities &&
     !references.remotePlacement &&
-    !references.workspaceSnapshot
+    !references.workspaceSnapshot &&
+    !references.workPassport
   )
     return undefined;
   // Every new restored-feature admission pins its route. Selected skill budgets,

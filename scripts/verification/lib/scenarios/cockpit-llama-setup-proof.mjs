@@ -97,7 +97,7 @@ export async function runCockpitLlamaSetupProof({ context, browser, stack, citad
         });
         // An accidental diagnostic is always stopped before forwarding and fails the proof below.
         await page.route("**/api/v1/llamacpp/setup/chat-test", route => route.abort("failed"));
-        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/advanced?shell=cockpit"), { waitUntil: "domcontentloaded" });
+        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/models?shell=cockpit#local-ai"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         const panel = page.locator("#llamacpp-setup");
         const url = panel.getByRole("textbox", { name: "Server URL", exact: true });
@@ -225,8 +225,11 @@ export async function runCockpitLlamaSetupProof({ context, browser, stack, citad
         await returnToCockpit.click();
         await page.waitForFunction(() => document.documentElement.dataset.shell === "cockpit");
         await page.getByRole("tab", { name: "Appearance", exact: true }).waitFor();
+        // llama.cpp setup has one owner: Models › Local AI (the Models page opens on Providers by default).
         await page.getByRole("navigation", { name: "Settings pages", exact: true })
-          .getByRole("link", { name: "Advanced", exact: true }).click();
+          .getByRole("link", { name: "Models", exact: true }).click();
+        await page.getByRole("tablist", { name: "Models sections", exact: true })
+          .getByRole("tab", { name: "Local AI", exact: true }).click();
         await page.waitForURL(sourceUrl);
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         assert.equal(await page.evaluate(() => window.__llamaApprovalDocument), documentMarker, "Return from approval owner reloaded the document.");
@@ -278,8 +281,10 @@ export async function runCockpitLlamaSetupProof({ context, browser, stack, citad
         await reviewSetupNavigation(openGeneral, "Keep draft and close");
         await page.waitForURL(value => value.pathname === "/settings/general");
         await page.getByRole("tab", { name: "Appearance", exact: true }).waitFor();
-        await pages.getByRole("link", { name: "Advanced", exact: true }).click();
-        await page.waitForURL(value => value.pathname === "/settings/advanced");
+        await pages.getByRole("link", { name: "Models", exact: true }).click();
+        await page.getByRole("tablist", { name: "Models sections", exact: true })
+          .getByRole("tab", { name: "Local AI", exact: true }).click();
+        await page.waitForURL(value => value.pathname === "/settings/models" && value.hash === "#local-ai");
         await panel.getByRole("alert").filter({ hasText: "outcome is uncertain" }).waitFor();
         assert.equal(await url.inputValue(), stub.baseUrl);
         assert.equal(await panel.getByRole("combobox", { name: "Model for Chat", exact: true }).inputValue(), model);

@@ -111,7 +111,13 @@ void listen("desktop://runtime-status-requested", () => {
 
 void listen("desktop://runtime-restarted", () => {
   showToast("Runtime restarted. Refreshing Mission Control...");
-  void launchRuntime();
+  renderStarting();
+  // A read started before the restart may carry the old runtime's URL: discard it and read fresh.
+  // is-ready was just cleared, so a ready result reloads the frame onto the restarted runtime.
+  invalidateInFlightRuntimeStatus();
+  void refreshRuntimeStatus({ syncShell: true, notify: false });
+  // Re-arm polling (idempotent) in case a stop left it off and the refresh fails.
+  startRuntimeStatusPolling();
 });
 
 void listen("desktop://runtime-stopped", () => {
@@ -142,7 +148,10 @@ async function launchRuntime(): Promise<void> {
 function showReadyRuntime(result: DesktopRuntimeStatus): void {
   lastRuntime = result;
   renderRuntime(result);
-  frame.src = result.targetUrl;
+  // Assigning src reloads the iframe; only do it when coming back from a not-ready state.
+  if (!frame.classList.contains("is-ready")) {
+    frame.src = result.targetUrl;
+  }
   startup.classList.add("is-hidden");
   frame.classList.add("is-ready");
   recoveryActions.classList.add("is-hidden");
@@ -202,6 +211,13 @@ function renderStopped(): void {
     : "Use Retry to start GoatCitadel again.";
 }
 
+/** Drop any in-flight status read: its result and errors are ignored and a new read may start. */
+function invalidateInFlightRuntimeStatus(): void {
+  // Both must change together: the stale read's finally only clears the flag when its sequence still matches.
+  runtimeStatusRequestSequence += 1;
+  runtimeStatusInFlight = false;
+}
+
 async function refreshRuntimeStatus(options: { syncShell?: boolean; notify?: boolean } = {}): Promise<void> {
   if (runtimeStatusInFlight) {
     return;
@@ -231,6 +247,9 @@ async function refreshRuntimeStatus(options: { syncShell?: boolean; notify?: boo
       }
     }
   } catch (error) {
+    if (runtimeStatusRequestSequence !== requestId) {
+      return;
+    }
     const message = error instanceof Error ? error.message : String(error);
     if (notify) {
       showToast(message);
@@ -323,7 +342,9 @@ async function ensureNotificationPermission(): Promise<boolean> {
 }
 
 function openApprovalRoute(approvalId: string, workspaceId?: string): void {
-  openRoutePath(`/inbox?approvalId=${encodeURIComponent(approvalId)}${workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : ""}`);
+  openRoutePath(
+    `/inbox?approvalId=${encodeURIComponent(approvalId)}${workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : ""}`,
+  );
 }
 
 function openRoutePath(routePath: string): void {

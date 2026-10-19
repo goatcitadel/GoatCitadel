@@ -143,6 +143,31 @@ describe("GatewayAccessGate", () => {
     expect(markup).toContain("theme-signal-noir");
   });
 
+  it("follows the host colour scheme when no theme or Match system is saved", () => {
+    const render = () =>
+      renderToStaticMarkup(
+        <GatewayAccessGate
+          gatewayBaseUrl="http://localhost:8787"
+          access={{ status: "checking", message: "Booting" }}
+          busy={false}
+          onRetry={() => undefined}
+        />,
+      );
+    const prefersLight = (matches: boolean) =>
+      Object.assign(window, { matchMedia: vi.fn(() => ({ matches }) as MediaQueryList) });
+
+    window.localStorage.removeItem("goatcitadel.ui.theme.v1");
+    prefersLight(true);
+    expect(render()).toContain("theme-citadel-light");
+    prefersLight(false);
+    expect(render()).toContain("theme-signal-noir");
+    window.localStorage.setItem("goatcitadel.ui.theme.v1", "system");
+    prefersLight(true);
+    expect(render()).toContain("theme-citadel-light");
+    window.localStorage.setItem("goatcitadel.ui.theme.v1", "dark");
+    expect(render()).toContain("theme-signal-noir");
+  });
+
   it("renders startup and unreachable gateway states without credential controls", () => {
     const checking = renderToStaticMarkup(
       <GatewayAccessGate

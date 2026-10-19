@@ -7,15 +7,16 @@ import { Button } from "../../ui/Button";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { EmptyState } from "../../ui/EmptyState";
-import { StatusBadge } from "../../ui/StatusBadge";
 import { ApprovalModeEditor } from "./ApprovalModeControl";
 import { FirstRunModelStep } from "./FirstRunModelStep";
 import { FirstRunAdvanced } from "./FirstRunAdvanced";
 import { McpDraftLeave } from "./McpDraftLeave";
+import { SetupStepBadge } from "./GuidedModelSteps";
+import { firstRunModelSummary, firstRunSafetySummary } from "./first-run-summaries";
 import { useFirstRunSetup, type FirstRunStep } from "./use-first-run-setup";
 
 const STEPS: readonly { id: FirstRunStep; label: string; detail: string }[] = [
-  { id: "model", label: "Choose a model", detail: "Connect a provider and confirm the default model." },
+  { id: "model", label: "Choose a model", detail: "Use a cloud provider, try the demo, or run a local model." },
   { id: "safety", label: "Choose your safety settings", detail: "Review the approval rule before finishing setup." },
   {
     id: "message",
@@ -27,8 +28,8 @@ const STEPS: readonly { id: FirstRunStep; label: string; detail: string }[] = [
 const TITLE = "Your first answer";
 const DESCRIPTION = "Three steps to connect a model, choose how tools ask for approval, and verify a response.";
 
-/** The guided setup page. `embedded` renders it inside Settings › Models, under that page's header. */
-export function FirstRunArea({ embedded = false }: { embedded?: boolean }) {
+/** The guided setup page at Settings › First run. Settings › Get started shows FirstRunStatus instead. */
+export function FirstRunArea() {
   const { navigate } = useCockpitRoute();
   const { activeWorkspaceId } = useUiPreferences();
   const setup = useFirstRunSetup(activeWorkspaceId);
@@ -38,20 +39,13 @@ export function FirstRunArea({ embedded = false }: { embedded?: boolean }) {
   const finish = async () => {
     if (await setup.finish()) go("/chat");
   };
-  const exit = <Button onClick={() => go("/settings")}>Exit setup</Button>;
   return (
-    <section aria-label="First-run setup" className={embedded ? "mt-4 flex flex-col gap-5" : AREA_PAGE}>
-      {embedded ? (
-        <header className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-base font-semibold text-fg">{TITLE}</h2>
-            <p className="mt-1 text-sm text-fg-secondary">{DESCRIPTION}</p>
-          </div>
-          {exit}
-        </header>
-      ) : (
-        <AreaHeader title={TITLE} description={DESCRIPTION} actions={exit} />
-      )}
+    <section aria-label="First-run setup" className={AREA_PAGE}>
+      <AreaHeader
+        title={TITLE}
+        description={DESCRIPTION}
+        actions={<Button onClick={() => go("/settings")}>Exit setup</Button>}
+      />
       {query.isLoading ? (
         <p role="status" className="text-sm text-fg-muted">
           Checking setup state…
@@ -74,20 +68,30 @@ export function FirstRunArea({ embedded = false }: { embedded?: boolean }) {
                   : item.id === "message"
                     ? progress.firstResponseVerified
                     : setup.safetyConfirmed;
+              const current = step === item.id;
+              // A finished step collapses to what was chosen; the open step and later ones say what they need.
+              const summary =
+                done && !current
+                  ? item.id === "model"
+                    ? firstRunModelSummary(state)
+                    : item.id === "safety"
+                      ? firstRunSafetySummary(state)
+                      : `First response: ${progress.firstResponseLabel}`
+                  : item.detail;
               return (
                 <button
                   key={item.id}
                   type="button"
                   onClick={() => leave.request(() => setup.setStep(item.id))}
-                  aria-current={step === item.id ? "step" : undefined}
+                  aria-current={current ? "step" : undefined}
                   className="rounded-lg border border-line bg-raised p-3 text-left hover:border-accent aria-[current=step]:border-accent"
                 >
                   <span className="mb-2 flex items-center justify-between gap-2">
                     <span className="text-xs text-fg-muted">Step {index + 1}</span>
-                    <StatusBadge status={{ label: done ? "Done" : "Open", tone: done ? "done" : "neutral" }} />
+                    <SetupStepBadge phase={done ? "done" : current ? "current" : "not_started"} />
                   </span>
                   <span className="block text-sm font-semibold text-fg">{item.label}</span>
-                  <span className="mt-1 block text-xs text-fg-muted">{item.detail}</span>
+                  <span className="mt-1 block break-words text-xs text-fg-muted">{summary}</span>
                 </button>
               );
             })}
@@ -121,27 +125,31 @@ export function FirstRunArea({ embedded = false }: { embedded?: boolean }) {
                     Choose and save a rule that keeps approval prompts before finishing guided setup.
                   </p>
                 )}
-                <p className="text-xs text-fg-muted">
-                  After a saved change, refresh checks and review the current rule. Pending approvals and uncertain
-                  saves cannot finish setup.
-                </p>
               </div>
             ) : null}
             {step === "message" ? (
               <div className="space-y-4">
                 <h2 className="text-base font-semibold text-fg">Send a test message</h2>
                 <p className="text-sm text-fg-secondary">
-                  First response: {progress.firstResponseLabel}. The Gateway checks a completed Chat turn after setup,
-                  not a catalog entry or a test connection.
-                </p>
-                <p className="text-sm text-fg-secondary">
+                  First response: {progress.firstResponseLabel}.{" "}
                   {progress.firstResponseVerified
-                    ? "Your first provider-backed Chat response is recorded. Continue in Chat whenever you are ready."
-                    : "Finish setup, open Chat, ask a short question, then return here to review the verified response."}
+                    ? "Your first Chat answer is recorded."
+                    : "Ask a short question in Chat; a completed answer verifies your model."}
                 </p>
-                <Button variant="primary" disabled={!state.completed} onClick={() => go("/chat")}>
-                  Open Chat
+                <Button
+                  variant={state.completed ? "primary" : "secondary"}
+                  disabled={!state.completed}
+                  aria-describedby={state.completed ? undefined : "first-run-message-prerequisite"}
+                  onClick={() => go("/chat")}
+                >
+                  {progress.firstResponseVerified ? "Open Chat" : "Send a test message"}
                 </Button>
+                {!state.completed ? (
+                  <p id="first-run-message-prerequisite" className="text-sm text-fg-secondary">
+                    Finish setup first: choose a model, review the approval rule, then select Finish setup and open
+                    Chat.
+                  </p>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -163,9 +171,11 @@ export function FirstRunArea({ embedded = false }: { embedded?: boolean }) {
               </Button>
             ) : null}
           </div>
-          <p id="first-run-finish-prerequisite" className="text-sm text-fg-secondary">
-            {setup.finishPrerequisite}
-          </p>
+          {!state.completed ? (
+            <p id="first-run-finish-prerequisite" className="text-sm text-fg-secondary">
+              {setup.finishPrerequisite}
+            </p>
+          ) : null}
           {setup.notice || completion.notice ? (
             <p role="status" className="text-sm text-fg-secondary">
               {completion.notice ?? setup.notice}

@@ -24,7 +24,7 @@ export interface SettingsIndexPage {
 
 const CONTROL_TERMS: Record<string, string> = {
   general:
-    "theme color appearance light dark density guided expert technical details notifications notification routing desktop system permission sound unfocused updates download installer",
+    "theme color appearance light dark match system density guided expert technical details saved automatically notifications notification routing destination rule webhook test delivery desktop system permission sound unfocused updates download installer",
   personalities: "tone style overlay create edit delete work default personality",
   onboarding: "first run setup choose model test message safety network allowlist safe demo",
   providers:
@@ -34,7 +34,7 @@ const CONTROL_TERMS: Record<string, string> = {
   channels:
     "channel setup draft connect discord telegram slack oauth validate test finalize delivery disconnect disable remove delete",
   integrations:
-    "add create edit delete enable disable integration connection diagnostics operator actions external connector routing meet",
+    "add create edit delete enable disable integration connection diagnostics operator actions external connector meet",
   mcp: "register create edit delete server enable disable connect disconnect oauth tools health elicitation templates model context protocol stdio http sse transport",
   addons: "install update uninstall enable disable launch stop addon extension capability pack import export",
   permissions:
@@ -54,7 +54,7 @@ const CONTROL_TERMS: Record<string, string> = {
   "workspace-capabilities": "workspace skills plugins mcp selection reset inheritance",
   "citadel-capabilities": "citadel skills plugins mcp selection reset inheritance",
   access: "gateway authentication auth token basic password loopback install token device revoke",
-  runtime: "managed llama cpp command path alias enabled auto start daemon voice transcription install runtime",
+  runtime: "managed command path alias enabled auto start daemon voice transcription install runtime",
 };
 
 /** A destination describes the page opened, including its explicit detailed-owner links. */

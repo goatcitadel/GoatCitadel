@@ -112,11 +112,16 @@ describe("MobileTabBar", () => {
     expect(container.querySelector('button[aria-label="Inbox, 2 decisions"]')).not.toBeNull();
     await act(async () => button("More").click());
     expect(document.querySelector('[role="dialog"][aria-label="More"]')).not.toBeNull();
-    expect(button("Switch to light theme")).not.toBeNull();
+    // GL-15: the quick toggle offers the two theme choices that are not already saved.
+    expect(button("Use light theme")).not.toBeNull();
+    expect(button("Match system theme")).not.toBeNull();
+    expect(() => button("Use dark theme")).toThrow("Missing button");
 
-    await act(async () => button("Switch to light theme").click());
+    await act(async () => button("Use light theme").click());
+    expect(window.localStorage.getItem("goatcitadel.ui.theme.v1")).toBe("light");
     await act(async () => button("More").click());
-    expect(button("Switch to dark theme")).not.toBeNull();
+    expect(button("Use dark theme")).not.toBeNull();
+    expect(button("Match system theme")).not.toBeNull();
 
     await act(async () => button("System").click());
     expect(window.location.pathname).toBe("/system");

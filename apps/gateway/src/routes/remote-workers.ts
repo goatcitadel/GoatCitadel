@@ -35,23 +35,72 @@ const identifierSchema = z
 const paramsSchema = z.object({ workspaceId: identifierSchema }).strict();
 const detailParamsSchema = paramsSchema.extend({ workerId: identifierSchema }).strict();
 const assignmentParamsSchema = paramsSchema.extend({ assignmentId: identifierSchema }).strict();
-const nativeOutputParamsSchema = assignmentParamsSchema.extend({ nonce: z.string().regex(/^[0-9a-f]{64}$/u).refine(value => !/^0+$/u.test(value)) }).strict();
-const nativeOutputQuerySchema = z.object({ assignmentGeneration: z.string().regex(/^[1-9]\d{0,9}$/u).transform(Number)
-  .refine(value => Number.isSafeInteger(value) && value <= 2147483647) }).strict();
-const nativeFileQuerySchema = nativeOutputQuerySchema.extend({ fileIndex: z.string().regex(/^(?:0|[1-9]\d?)$/u).transform(Number)
-  .refine(value => value <= 63).optional() }).strict();
-const nativeReviewBodySchema = z.object({ assignmentGeneration: z.number().int().min(1).max(2147483647),
-  launch: z.unknown(), inventoryLimits: z.unknown(), fileStaging: z.unknown().optional(), discloseFilesToGateway: z.boolean().optional() }).strict();
-const nativeInstallationReviewBodySchema = z.object({ assignmentGeneration: z.number().int().min(1).max(2147483647),
-  controllerEnrollment: z.object({ publicPointHex: z.string().regex(/^04[0-9a-f]{128}$/u),
-    keySha256: z.string().regex(/^[0-9a-f]{64}$/u) }).strict().optional(),
-  packageSha256: z.string().regex(/^[0-9a-f]{64}$/u).refine(value => !/^0+$/u.test(value)),
-  runtimeBundle: z.unknown().transform((value, context) => {
-    try { return normalizeRemoteWorkerRuntimeBundleManifest(value); }
-    catch { context.addIssue({ code: "custom", message: "Invalid runtime bundle manifest." }); return z.NEVER; }
-  }) }).strict();
-const nativeInstallationRetentionParamsSchema = assignmentParamsSchema.extend({ approvalId: identifierSchema.refine(value => value.length <= 200) }).strict();
-const nativeInstallationRetentionBodySchema = z.object({ assignmentGeneration: z.number().int().min(1).max(2147483647) }).strict();
+const nativeOutputParamsSchema = assignmentParamsSchema
+  .extend({
+    nonce: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .refine((value) => !/^0+$/u.test(value)),
+  })
+  .strict();
+const nativeOutputQuerySchema = z
+  .object({
+    assignmentGeneration: z
+      .string()
+      .regex(/^[1-9]\d{0,9}$/u)
+      .transform(Number)
+      .refine((value) => Number.isSafeInteger(value) && value <= 2147483647),
+  })
+  .strict();
+const nativeFileQuerySchema = nativeOutputQuerySchema
+  .extend({
+    fileIndex: z
+      .string()
+      .regex(/^(?:0|[1-9]\d?)$/u)
+      .transform(Number)
+      .refine((value) => value <= 63)
+      .optional(),
+  })
+  .strict();
+const nativeReviewBodySchema = z
+  .object({
+    assignmentGeneration: z.number().int().min(1).max(2147483647),
+    launch: z.unknown(),
+    inventoryLimits: z.unknown(),
+    fileStaging: z.unknown().optional(),
+    discloseFilesToGateway: z.boolean().optional(),
+  })
+  .strict();
+const nativeInstallationReviewBodySchema = z
+  .object({
+    assignmentGeneration: z.number().int().min(1).max(2147483647),
+    controllerEnrollment: z
+      .object({
+        publicPointHex: z.string().regex(/^04[0-9a-f]{128}$/u),
+        keySha256: z.string().regex(/^[0-9a-f]{64}$/u),
+      })
+      .strict()
+      .optional(),
+    packageSha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .refine((value) => !/^0+$/u.test(value)),
+    runtimeBundle: z.unknown().transform((value, context) => {
+      try {
+        return normalizeRemoteWorkerRuntimeBundleManifest(value);
+      } catch {
+        context.addIssue({ code: "custom", message: "Invalid runtime bundle manifest." });
+        return z.NEVER;
+      }
+    }),
+  })
+  .strict();
+const nativeInstallationRetentionParamsSchema = assignmentParamsSchema
+  .extend({ approvalId: identifierSchema.refine((value) => value.length <= 200) })
+  .strict();
+const nativeInstallationRetentionBodySchema = z
+  .object({ assignmentGeneration: z.number().int().min(1).max(2147483647) })
+  .strict();
 const generationParamsSchema = detailParamsSchema
   .extend({
     workerGeneration: z
@@ -157,15 +206,17 @@ const joinAuthorityRevokeBodySchema = generationControlBodySchema
   .extend({ targetWorkspaceId: identifierSchema })
   .strict();
 
-const budgetBodySchema = z.object({
-  grantId: identifierSchema,
-  executionWorkspaceId: identifierSchema,
-  workerId: identifierSchema,
-  workerGeneration: z.number().int().safe().positive(),
-  maxRequests: z.number().int().min(1).max(100_000),
-  maxCostMicrousd: z.number().int().min(0).max(1_000_000_000_000),
-  expiresAt: z.string().datetime(),
-}).strict();
+const budgetBodySchema = z
+  .object({
+    grantId: identifierSchema,
+    executionWorkspaceId: identifierSchema,
+    workerId: identifierSchema,
+    workerGeneration: z.number().int().safe().positive(),
+    maxRequests: z.number().int().min(1).max(100_000),
+    maxCostMicrousd: z.number().int().min(0).max(1_000_000_000_000),
+    expiresAt: z.string().datetime(),
+  })
+  .strict();
 const budgetRevokeSchema = z.object({ expectedRevision: z.number().int().safe().positive() }).strict();
 
 const RATE_LIMIT_MAX = 120;
@@ -236,46 +287,65 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
     const service = resolveService(fastify.services);
     if (!service) return unavailable(reply);
     try {
-      return reply.send({ items: await service.budgetOperator.list(params.data.workspaceId, query.data.executionWorkspaceId) });
-    } catch (error) { return sendMutationError(reply, request.log, error); }
-  });
-
-  fastify.post("/api/v1/ops/workspaces/:workspaceId/remote-worker-budgets", operatorMutation, async (request, reply) => {
-    const params = paramsSchema.safeParse(request.params);
-    const query = emptyQuerySchema.safeParse(request.query);
-    const body = budgetBodySchema.safeParse(request.body);
-    const identity = mutationIdentity(request);
-    if (!params.success || !query.success || !body.success || !identity) return invalidRequest(reply);
-    const service = resolveService(fastify.services);
-    if (!service) return unavailable(reply);
-    try {
-      const grant = await service.budgetOperator.create({ ...body.data, registryWorkspaceId: params.data.workspaceId }, identity.actorId);
-      await markMutationCommitted(request);
-      return reply.send(grant);
+      return reply.send({
+        items: await service.budgetOperator.list(params.data.workspaceId, query.data.executionWorkspaceId),
+      });
     } catch (error) {
-      if (error instanceof TypeError) return invalidRequest(reply);
       return sendMutationError(reply, request.log, error);
     }
   });
 
-  fastify.post("/api/v1/ops/workspaces/:workspaceId/remote-worker-budgets/:grantId/revoke", operatorMutation, async (request, reply) => {
-    const params = paramsSchema.extend({ grantId: identifierSchema }).strict().safeParse(request.params);
-    const query = emptyQuerySchema.safeParse(request.query);
-    const body = budgetRevokeSchema.safeParse(request.body);
-    const identity = mutationIdentity(request);
-    if (!params.success || !query.success || !body.success || !identity) return invalidRequest(reply);
-    const service = resolveService(fastify.services);
-    if (!service) return unavailable(reply);
-    try {
-      const grant = await service.budgetOperator.revoke({ registryWorkspaceId: params.data.workspaceId,
-        grantId: params.data.grantId, expectedRevision: body.data.expectedRevision, actorId: identity.actorId });
-      await markMutationCommitted(request);
-      return reply.send(grant);
-    } catch (error) {
-      if (error instanceof TypeError) return invalidRequest(reply);
-      return sendMutationError(reply, request.log, error);
-    }
-  });
+  fastify.post(
+    "/api/v1/ops/workspaces/:workspaceId/remote-worker-budgets",
+    operatorMutation,
+    async (request, reply) => {
+      const params = paramsSchema.safeParse(request.params);
+      const query = emptyQuerySchema.safeParse(request.query);
+      const body = budgetBodySchema.safeParse(request.body);
+      const identity = mutationIdentity(request);
+      if (!params.success || !query.success || !body.success || !identity) return invalidRequest(reply);
+      const service = resolveService(fastify.services);
+      if (!service) return unavailable(reply);
+      try {
+        const grant = await service.budgetOperator.create(
+          { ...body.data, registryWorkspaceId: params.data.workspaceId },
+          identity.actorId,
+        );
+        await markMutationCommitted(request);
+        return reply.send(grant);
+      } catch (error) {
+        if (error instanceof TypeError) return invalidRequest(reply);
+        return sendMutationError(reply, request.log, error);
+      }
+    },
+  );
+
+  fastify.post(
+    "/api/v1/ops/workspaces/:workspaceId/remote-worker-budgets/:grantId/revoke",
+    operatorMutation,
+    async (request, reply) => {
+      const params = paramsSchema.extend({ grantId: identifierSchema }).strict().safeParse(request.params);
+      const query = emptyQuerySchema.safeParse(request.query);
+      const body = budgetRevokeSchema.safeParse(request.body);
+      const identity = mutationIdentity(request);
+      if (!params.success || !query.success || !body.success || !identity) return invalidRequest(reply);
+      const service = resolveService(fastify.services);
+      if (!service) return unavailable(reply);
+      try {
+        const grant = await service.budgetOperator.revoke({
+          registryWorkspaceId: params.data.workspaceId,
+          grantId: params.data.grantId,
+          expectedRevision: body.data.expectedRevision,
+          actorId: identity.actorId,
+        });
+        await markMutationCommitted(request);
+        return reply.send(grant);
+      } catch (error) {
+        if (error instanceof TypeError) return invalidRequest(reply);
+        return sendMutationError(reply, request.log, error);
+      }
+    },
+  );
 
   fastify.post(
     "/api/v1/ops/workspaces/:workspaceId/remote-workers/bootstrap",
@@ -500,7 +570,8 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.send(await service.getAssignmentRuntime(params.data));
       } catch (error) {
         if (error instanceof RemoteWorkerRegistryInputError) return invalidRequest(reply);
-        if (error instanceof RemoteWorkerRuntimeReadUnavailableError) return reply.code(503).send({ error: error.message });
+        if (error instanceof RemoteWorkerRuntimeReadUnavailableError)
+          return reply.code(503).send({ error: error.message });
         return sendRouteError(reply, error, request.log);
       }
     },
@@ -510,17 +581,42 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
     "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/native-runtime-reviews",
     { ...operatorMutation, bodyLimit: 512 * 1024 },
     async (request, reply) => {
-      const params = assignmentParamsSchema.safeParse(request.params), body = nativeReviewBodySchema.safeParse(request.body), query = emptyQuerySchema.safeParse(request.query);
-      if (!params.success || !body.success || !query.success || body.data.launch === undefined || body.data.inventoryLimits === undefined) return invalidRequest(reply);
+      const params = assignmentParamsSchema.safeParse(request.params),
+        body = nativeReviewBodySchema.safeParse(request.body),
+        query = emptyQuerySchema.safeParse(request.query);
+      if (
+        !params.success ||
+        !body.success ||
+        !query.success ||
+        body.data.launch === undefined ||
+        body.data.inventoryLimits === undefined
+      )
+        return invalidRequest(reply);
       const native = resolveService(fastify.services)?.nativeRuntime;
       if (!native) return reply.code(503).send({ error: "Native runtime review is unavailable." });
-      const stop = new AbortController(), disconnected = () => { if (!reply.raw.writableFinished) stop.abort(); }; reply.raw.once("close", disconnected);
+      const stop = new AbortController(),
+        disconnected = () => {
+          if (!reply.raw.writableFinished) stop.abort();
+        };
+      reply.raw.once("close", disconnected);
       try {
-        const result = await native.requestReview({ registryWorkspaceId: params.data.workspaceId, assignmentId: params.data.assignmentId, ...body.data,
-          launch: body.data.launch, inventoryLimits: body.data.inventoryLimits }, AbortSignal.any([stop.signal, AbortSignal.timeout(15000)]));
-        await markMutationCommitted(request); return reply.code(201).send(result);
-      } catch (error) { return sendRouteError(reply, error, request.log); }
-      finally { reply.raw.off("close", disconnected); }
+        const result = await native.requestReview(
+          {
+            registryWorkspaceId: params.data.workspaceId,
+            assignmentId: params.data.assignmentId,
+            ...body.data,
+            launch: body.data.launch,
+            inventoryLimits: body.data.inventoryLimits,
+          },
+          AbortSignal.any([stop.signal, AbortSignal.timeout(15000)]),
+        );
+        await markMutationCommitted(request);
+        return reply.code(201).send(result);
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      } finally {
+        reply.raw.off("close", disconnected);
+      }
     },
   );
 
@@ -528,34 +624,71 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
     "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/native-installation-reviews",
     { ...operatorMutation, bodyLimit: 512 * 1024 },
     async (request, reply) => {
-      const params = assignmentParamsSchema.safeParse(request.params), body = nativeInstallationReviewBodySchema.safeParse(request.body), query = emptyQuerySchema.safeParse(request.query);
-      if (!params.success || !body.success || !query.success || body.data.runtimeBundle === undefined) return invalidRequest(reply);
+      const params = assignmentParamsSchema.safeParse(request.params),
+        body = nativeInstallationReviewBodySchema.safeParse(request.body),
+        query = emptyQuerySchema.safeParse(request.query);
+      if (!params.success || !body.success || !query.success || body.data.runtimeBundle === undefined)
+        return invalidRequest(reply);
       const native = resolveService(fastify.services)?.nativeRuntime;
-      if (!native?.requestInstallationReview) return reply.code(503).send({ error: "Native installation review is unavailable." });
-      const stop = new AbortController(), disconnected = () => { if (!reply.raw.writableFinished) stop.abort(); }; reply.raw.once("close", disconnected);
+      if (!native?.requestInstallationReview)
+        return reply.code(503).send({ error: "Native installation review is unavailable." });
+      const stop = new AbortController(),
+        disconnected = () => {
+          if (!reply.raw.writableFinished) stop.abort();
+        };
+      reply.raw.once("close", disconnected);
       try {
-        const result = await native.requestInstallationReview({ registryWorkspaceId: params.data.workspaceId, assignmentId: params.data.assignmentId,
-          ...body.data, runtimeBundle: body.data.runtimeBundle }, AbortSignal.any([stop.signal, AbortSignal.timeout(15000)]));
-        await markMutationCommitted(request); return reply.code(201).send(result);
-      } catch (error) { return sendRouteError(reply, error, request.log); }
-      finally { reply.raw.off("close", disconnected); }
+        const result = await native.requestInstallationReview(
+          {
+            registryWorkspaceId: params.data.workspaceId,
+            assignmentId: params.data.assignmentId,
+            ...body.data,
+            runtimeBundle: body.data.runtimeBundle,
+          },
+          AbortSignal.any([stop.signal, AbortSignal.timeout(15000)]),
+        );
+        await markMutationCommitted(request);
+        return reply.code(201).send(result);
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      } finally {
+        reply.raw.off("close", disconnected);
+      }
     },
   );
   fastify.post(
     "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/native-installation-reviews/:approvalId/retention",
     { ...operatorMutation, bodyLimit: 4096 },
     async (request, reply) => {
-      const params = nativeInstallationRetentionParamsSchema.safeParse(request.params), body = nativeInstallationRetentionBodySchema.safeParse(request.body), query = emptyQuerySchema.safeParse(request.query);
+      const params = nativeInstallationRetentionParamsSchema.safeParse(request.params),
+        body = nativeInstallationRetentionBodySchema.safeParse(request.body),
+        query = emptyQuerySchema.safeParse(request.query);
       if (!params.success || !body.success || !query.success) return invalidRequest(reply);
       const native = resolveService(fastify.services)?.nativeRuntime;
-      if (!native?.retainInstallationReview) return reply.code(503).send({ error: "Native installation retention is unavailable." });
-      const stop = new AbortController(), disconnected = () => { if (!reply.raw.writableFinished) stop.abort(); }; reply.raw.once("close", disconnected);
+      if (!native?.retainInstallationReview)
+        return reply.code(503).send({ error: "Native installation retention is unavailable." });
+      const stop = new AbortController(),
+        disconnected = () => {
+          if (!reply.raw.writableFinished) stop.abort();
+        };
+      reply.raw.once("close", disconnected);
       try {
-        const result = await native.retainInstallationReview({ registryWorkspaceId: params.data.workspaceId, assignmentId: params.data.assignmentId,
-          approvalId: params.data.approvalId, assignmentGeneration: body.data.assignmentGeneration }, AbortSignal.any([stop.signal, AbortSignal.timeout(15000)]));
-        await markMutationCommitted(request); return reply.code(200).send(result);
-      } catch (error) { return sendRouteError(reply, error, request.log); }
-      finally { reply.raw.off("close", disconnected); }
+        const result = await native.retainInstallationReview(
+          {
+            registryWorkspaceId: params.data.workspaceId,
+            assignmentId: params.data.assignmentId,
+            approvalId: params.data.approvalId,
+            assignmentGeneration: body.data.assignmentGeneration,
+          },
+          AbortSignal.any([stop.signal, AbortSignal.timeout(15000)]),
+        );
+        await markMutationCommitted(request);
+        return reply.code(200).send(result);
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      } finally {
+        reply.raw.off("close", disconnected);
+      }
     },
   );
 
@@ -563,23 +696,37 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
     "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/native-file-artifacts/:nonce",
     operatorRead,
     async (request, reply) => {
-      const params = nativeOutputParamsSchema.safeParse(request.params), query = nativeFileQuerySchema.safeParse(request.query);
+      const params = nativeOutputParamsSchema.safeParse(request.params),
+        query = nativeFileQuerySchema.safeParse(request.query);
       if (!params.success || !query.success) return invalidRequest(reply);
       const files = resolveService(fastify.services)?.nativeFiles;
       if (!files) return reply.code(503).send({ error: "Native file artifacts are unavailable." });
-      const scope = { registryWorkspaceId: params.data.workspaceId, assignmentId: params.data.assignmentId,
-        assignmentGeneration: query.data.assignmentGeneration, nonce: params.data.nonce };
-      const stop = new AbortController(), disconnected = () => { if (!reply.raw.writableFinished) stop.abort(); };
+      const scope = {
+        registryWorkspaceId: params.data.workspaceId,
+        assignmentId: params.data.assignmentId,
+        assignmentGeneration: query.data.assignmentGeneration,
+        nonce: params.data.nonce,
+      };
+      const stop = new AbortController(),
+        disconnected = () => {
+          if (!reply.raw.writableFinished) stop.abort();
+        };
       reply.raw.once("close", disconnected);
       const signal = AbortSignal.any([stop.signal, AbortSignal.timeout(15000)]);
       try {
         reply.header("Cache-Control", "no-store").header("X-Content-Type-Options", "nosniff");
         if (query.data.fileIndex === undefined) return reply.send(await files.list(scope, signal));
         const artifact = await files.download({ ...scope, fileIndex: query.data.fileIndex }, signal);
-        return reply.header("Content-Disposition", `attachment; filename="${artifact.fileName}"`)
-          .header("X-Content-SHA256", artifact.sha256).type(artifact.contentType).send(artifact.content);
-      } catch (error) { return sendRouteError(reply, error, request.log); }
-      finally { reply.raw.off("close", disconnected); }
+        return reply
+          .header("Content-Disposition", `attachment; filename="${artifact.fileName}"`)
+          .header("X-Content-SHA256", artifact.sha256)
+          .type(artifact.contentType)
+          .send(artifact.content);
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      } finally {
+        reply.raw.off("close", disconnected);
+      }
     },
   );
 
@@ -587,18 +734,24 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
     "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/native-output-artifacts/:nonce",
     operatorRead,
     async (request, reply) => {
-      const params = nativeOutputParamsSchema.safeParse(request.params), query = nativeOutputQuerySchema.safeParse(request.query);
+      const params = nativeOutputParamsSchema.safeParse(request.params),
+        query = nativeOutputQuerySchema.safeParse(request.query);
       if (!params.success || !query.success) return invalidRequest(reply);
       const service = resolveService(fastify.services);
       if (!service) return reply.code(503).send({ error: "Remote worker runtime reads are unavailable." });
       try {
         const artifact = await service.getNativeOutputArtifact({ ...params.data, ...query.data });
-        return reply.header("Cache-Control", "no-store").header("X-Content-Type-Options", "nosniff")
+        return reply
+          .header("Cache-Control", "no-store")
+          .header("X-Content-Type-Options", "nosniff")
           .header("Content-Disposition", `attachment; filename="${artifact.fileName}"`)
-          .header("X-Content-SHA256", artifact.sha256).type(artifact.contentType).send(artifact.content);
+          .header("X-Content-SHA256", artifact.sha256)
+          .type(artifact.contentType)
+          .send(artifact.content);
       } catch (error) {
         if (error instanceof RemoteWorkerRegistryInputError) return invalidRequest(reply);
-        if (error instanceof RemoteWorkerRuntimeReadUnavailableError) return reply.code(503).send({ error: error.message });
+        if (error instanceof RemoteWorkerRuntimeReadUnavailableError)
+          return reply.code(503).send({ error: error.message });
         return sendRouteError(reply, error, request.log);
       }
     },
@@ -660,13 +813,13 @@ function sendMutationError(
     return invalidRequest(reply);
   }
   if (error instanceof RemoteWorkerMeshNodeJoinAuthorityError) return invalidRequest(reply);
-  if (
-    error instanceof RemoteWorkerOperatorControlUnavailableError ||
-    error instanceof RemoteWorkerManifestVerifierUnavailableError
-) {
   if (error instanceof RemoteWorkerBudgetConflictError) {
     return reply.code(409).send({ error: "Worker budget changed or expired. Refresh its status before retrying." });
   }
+  if (
+    error instanceof RemoteWorkerOperatorControlUnavailableError ||
+    error instanceof RemoteWorkerManifestVerifierUnavailableError
+  ) {
     return unavailable(reply);
   }
   return sendRouteError(reply, error, log);

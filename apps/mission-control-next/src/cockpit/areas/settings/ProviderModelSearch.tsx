@@ -4,7 +4,8 @@ import {
   type ProviderModelCatalogOption,
 } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { Button } from "../../ui/Button";
-import { providerFieldClass } from "./ProviderProfileFields";
+import { Field } from "../../ui/Field";
+import { cockpitInputClass } from "../../ui/input-class";
 
 const MAX_MATCHES = 50;
 const CODEX_PROVIDER_ID = "openai-codex";
@@ -72,16 +73,18 @@ export function ProviderModelSearch({
           ) : null}
         </div>
       ) : null}
-      <label className="block text-sm text-fg-secondary">
-        Search models across providers
-        <input
-          type="search"
-          className={providerFieldClass}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Provider or model name"
-        />
-      </label>
+      <Field label="Search models across providers">
+        {(fieldProps) => (
+          <input
+            {...fieldProps}
+            type="search"
+            className={cockpitInputClass}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Provider or model name"
+          />
+        )}
+      </Field>
       <p className="text-xs text-fg-muted">
         Choosing only fills the routing draft; review the routing change to apply it.
       </p>

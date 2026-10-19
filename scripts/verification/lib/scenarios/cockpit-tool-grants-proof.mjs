@@ -4,6 +4,27 @@ import { mkdir } from "node:fs/promises";
 import { reviewNavigationDraft } from "./cockpit-navigation-draft-proof.mjs";
 import { createReviewedMutationRecorder } from "./cockpit-reviewed-mutations.mjs";
 
+// Mirrors apps/mission-control-next/src/cockpit/areas/settings/tool-grant-labels.ts (TS + contracts types,
+// not importable from node). Grant buttons name the pattern, then presented decision and scope words.
+const TOOL_GRANT_DECISION_LABELS = { allow: "Allow", deny: "Deny" };
+const TOOL_GRANT_SCOPE_LABELS = {
+  global: "Global",
+  workspace: "Workspace",
+  session: "Session",
+  agent: "Agent",
+  task: "Task",
+  citadel: "Citadel",
+  chamber: "Chamber",
+};
+
+export function describeToolGrant(grant) {
+  return [
+    grant.toolPattern,
+    TOOL_GRANT_DECISION_LABELS[grant.decision] ?? "Unknown decision",
+    TOOL_GRANT_SCOPE_LABELS[grant.scope] ?? "Unknown scope",
+  ].join(" · ");
+}
+
 export function assertReviewedToolGrant(input, receipt, owner) {
   assert.ok(receipt.grantId && receipt.createdBy && Number.isFinite(Date.parse(receipt.createdAt)));
   for (const field of ["toolPattern", "decision", "scope", "grantType"]) assert.equal(receipt[field], input[field]);
@@ -114,7 +135,7 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
             .waitFor();
           await panel
             .getByRole("button", {
-              name: `Inspect grant: ${receipt.toolPattern} · ${receipt.decision} · ${receipt.scope}`,
+              name: `Inspect grant: ${describeToolGrant(receipt)}`,
               exact: true,
             })
             .click();
@@ -155,7 +176,7 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
           await detail.getByRole("button", { name: "Close dialog", exact: true }).click();
           await panel
             .getByRole("button", {
-              name: `Revoke grant: ${receipt.toolPattern} · ${receipt.decision} · ${receipt.scope}`,
+              name: `Revoke grant: ${describeToolGrant(receipt)}`,
               exact: true,
             })
             .click();

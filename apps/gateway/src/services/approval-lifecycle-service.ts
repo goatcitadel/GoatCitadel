@@ -980,17 +980,47 @@ export async function rejectPendingChatTurnApprovals(
   ]);
   // An approval can be committed before its tool/inline projection arrives.
   let cursor: string | undefined;
+  // A foreign approval with invalid lineage must not abort this cancellation, and
+  // each distinct foreign turn is resolved once across the whole scan.
+  const scannedOwners = new Map<string, { target: { sessionId: string; turnId: string } } | { skipped: string }>();
   do {
     const page = await storage.approvals.listPage({ status: "pending", limit: 200, cursor, includeExpired: true });
     for (const approval of page.items) {
       if (!approval.linkage?.sessionId || !approval.linkage.turnId) continue;
-      const target = await resolveChatTurnControlOwner(
-        storage,
-        approval.linkage.sessionId,
-        approval.linkage.turnId,
-        owner.turnId,
-      );
-      if (target.sessionId === owner.sessionId && target.turnId === owner.turnId) approvalIds.add(approval.approvalId);
+      const scanKey = `${approval.linkage.sessionId}\u0000${approval.linkage.turnId}`;
+      let scanned = scannedOwners.get(scanKey);
+      if (scanned === undefined) {
+        try {
+          scanned = {
+            target: await resolveChatTurnControlOwner(
+              storage,
+              approval.linkage.sessionId,
+              approval.linkage.turnId,
+              owner.turnId,
+            ),
+          };
+        } catch (error) {
+          if (!(error instanceof ConflictError)) throw error;
+          scanned = { skipped: error.message.slice(0, 200) };
+        }
+        scannedOwners.set(scanKey, scanned);
+      }
+      if ("skipped" in scanned) {
+        // Leave durable evidence for every approval skipped, not just the first lookup.
+        await storage.approvalEvents.append({
+          approvalId: approval.approvalId,
+          eventType: "cancellation_lineage_skipped",
+          actorId,
+          payload: {
+            reason: "invalid_delegation_lineage",
+            detail: scanned.skipped,
+            cancelledSessionId: owner.sessionId,
+            cancelledTurnId: owner.turnId,
+          },
+        });
+      } else if (scanned.target.sessionId === owner.sessionId && scanned.target.turnId === owner.turnId) {
+        approvalIds.add(approval.approvalId);
+      }
     }
     cursor = page.nextCursor;
   } while (cursor);

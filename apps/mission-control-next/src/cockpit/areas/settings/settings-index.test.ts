@@ -92,6 +92,11 @@ describe("cockpit settings index", () => {
   it("finds a setting by label or description across groups", () => {
     const pages = buildSettingsIndex();
     expect(searchSettingsPages(pages, "provider").map((page) => page.label)).toEqual(["Models"]);
+    // ST-09: notification routing lives beside General › Attention, so search sends it there and only there.
+    expect(searchSettingsPages(pages, "notification routing").map((page) => page.label)).toEqual(["General"]);
+    expect(
+      searchSettingsPages(pages, "routing").flatMap((page) => page.entries.map((entry) => entry.section)),
+    ).not.toContain("integrations");
     expect(
       searchSettingsPages(pages, "scoped allow")
         .flatMap((page) => page.entries)

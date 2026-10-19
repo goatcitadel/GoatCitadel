@@ -247,6 +247,66 @@ describe("fresh Chat feature skill admission", () => {
   });
 });
 
+describe("fresh Chat Work Passport admission", () => {
+  const passport = {
+    passportId: "passport-1",
+    schemaVersion: "work.passport.v1" as const,
+    classificationMode: "deterministic_local_v1" as const,
+    baseline: { configured: false, primaryDomains: [] },
+    taskSignals: [],
+    boundary: "generic_or_unclear" as const,
+    consequence: "low" as const,
+    review: { posture: "self_check" as const, reason: "Low consequence.", requirements: ["Check facts."] },
+    evidenceRequirements: ["Check material facts."],
+    actionPosture: "explore" as const,
+    limitations: ["Local heuristic."],
+    operatorCorrectionAllowed: true as const,
+  };
+  async function passportHarness(enabled: boolean) {
+    const h = await harness();
+    const classifyWorkPassport = vi.fn(async () => structuredClone(passport));
+    h.host.classifyWorkPassport = classifyWorkPassport;
+    h.host.isFeatureEnabled = async (flag) => flag === "chatWorkPassportV1Enabled" && enabled;
+    return { ...h, classifyWorkPassport };
+  }
+
+  it("computes a passport only when chatWorkPassportV1Enabled is on", async () => {
+    const off = await passportHarness(false);
+    expect(await resolveChatFeatureAdmission(off.host, request("off"))).toBeUndefined();
+    expect(off.classifyWorkPassport).not.toHaveBeenCalled();
+    const on = await passportHarness(true);
+    const binding = await resolveChatFeatureAdmission(on.host, request("on"));
+    expect(on.classifyWorkPassport).toHaveBeenCalledWith("workspace", "Use reports");
+    expect(binding?.references.workPassport).toEqual(passport);
+    expect(binding?.references.providerRoute?.primary).toEqual({ providerId: "local", model: "fixture" });
+  });
+
+  it("reuses the admitted passport on durable replay", async () => {
+    const h = await passportHarness(true);
+    const req = request("replay");
+    const binding = await resolveChatFeatureAdmission(h.host, req);
+    h.classifyWorkPassport.mockImplementation(async () => {
+      throw new Error("replay must not reclassify");
+    });
+    const replay = await resolveChatFeatureAdmission(h.host, {
+      ...req,
+      admission: { ...req.admission, durableClaim: { durableRunId: "run", leaseOwnerId: "worker", attemptCount: 1 } },
+      expectedReferenceSha256: binding!.referenceSha256,
+    });
+    expect(replay?.references.workPassport).toEqual(passport);
+  });
+
+  it("binds a passport-only admission without a route", async () => {
+    const h = await passportHarness(true);
+    const binding = await resolveChatFeatureAdmission(h.host, { ...request("routeless"), route: undefined });
+    expect(binding?.references.workPassport).toEqual(passport);
+    expect(binding?.references.providerRoute).toBeUndefined();
+    h.host.routeFingerprint = () => undefined;
+    const unverifiable = await resolveChatFeatureAdmission(h.host, request("unverifiable"));
+    expect(unverifiable?.references.providerRoute).toBeUndefined();
+  });
+});
+
 describe("fresh Chat workspace snapshot admission", () => {
   const snapshot = {
     schemaVersion: "chat.workspace-snapshot.v1" as const,

@@ -118,6 +118,118 @@ describe("desktop shell bootstrap", () => {
     expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
   });
 
+  it("keeps a ready Mission Control frame loaded across healthy status polls", async () => {
+    vi.useFakeTimers();
+    tauriMocks.invoke
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }))
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }));
+
+    await import("./main.js");
+    await flushPromises();
+    const deepLink = "http://127.0.0.1:5173/inbox?approvalId=a-1";
+    frameElement().src = deepLink;
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushPromises();
+
+    expect(readRuntimeStatusCalls()).toHaveLength(1);
+    expect(frameElement().src).toBe(deepLink);
+    expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
+  });
+
+  it("refreshes status instead of relaunching after a tray restart", async () => {
+    const listeners = new Map<string, () => void>();
+    tauriMocks.listen.mockImplementation((eventName: string, callback: () => void) => {
+      listeners.set(eventName, callback);
+      return Promise.resolve(() => undefined);
+    });
+    tauriMocks.invoke
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }))
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready", targetUrl: "http://127.0.0.1:5173/restarted" }));
+
+    await import("./main.js");
+    await flushPromises();
+    tauriMocks.invoke.mockClear();
+
+    listeners.get("desktop://runtime-restarted")?.();
+    await flushPromises();
+
+    expect(tauriMocks.invoke.mock.calls.filter(([command]) => command === "launch_runtime")).toHaveLength(0);
+    expect(readRuntimeStatusCalls()).toHaveLength(1);
+    expect(frameElement().src).toBe("http://127.0.0.1:5173/restarted");
+  });
+
+  it("re-arms status polling after a tray restart that follows a stop", async () => {
+    vi.useFakeTimers();
+    const listeners = new Map<string, () => void>();
+    tauriMocks.listen.mockImplementation((eventName: string, callback: () => void) => {
+      listeners.set(eventName, callback);
+      return Promise.resolve(() => undefined);
+    });
+    tauriMocks.invoke
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }))
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "stale", readiness: { gateway: false, ui: false } }))
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready", targetUrl: "http://127.0.0.1:5173/back" }));
+
+    await import("./main.js");
+    await flushPromises();
+
+    listeners.get("desktop://runtime-stopped")?.();
+    listeners.get("desktop://runtime-restarted")?.();
+    await flushPromises();
+    expect(readRuntimeStatusCalls()).toHaveLength(1);
+    expect(element("mission-control-frame").classList.contains("is-ready")).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushPromises();
+    expect(readRuntimeStatusCalls()).toHaveLength(2);
+    expect(frameElement().src).toBe("http://127.0.0.1:5173/back");
+    expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
+  });
+
+  it("reads fresh after a tray restart instead of applying a pre-restart read", async () => {
+    const listeners = new Map<string, () => void>();
+    tauriMocks.listen.mockImplementation((eventName: string, callback: () => void) => {
+      listeners.set(eventName, callback);
+      return Promise.resolve(() => undefined);
+    });
+    let resolvePreRestartRead!: (status: RuntimeStatus) => void;
+    let resolveFreshRead!: (status: RuntimeStatus) => void;
+    tauriMocks.invoke
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }))
+      .mockReturnValueOnce(
+        new Promise<RuntimeStatus>((resolve) => {
+          resolvePreRestartRead = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<RuntimeStatus>((resolve) => {
+          resolveFreshRead = resolve;
+        }),
+      );
+
+    await import("./main.js");
+    await flushPromises();
+
+    // A tray status request is still reading when the restart lands; the restart reads fresh.
+    listeners.get("desktop://runtime-status-requested")?.();
+    await flushPromises();
+    listeners.get("desktop://runtime-restarted")?.();
+    await flushPromises();
+    expect(readRuntimeStatusCalls()).toHaveLength(2);
+    expect(element("mission-control-frame").classList.contains("is-ready")).toBe(false);
+
+    // The pre-restart read settles late with the old URL and must be ignored.
+    resolvePreRestartRead(createRuntimeStatus({ status: "ready", targetUrl: "http://127.0.0.1:5173/old" }));
+    await flushPromises();
+    expect(element("mission-control-frame").classList.contains("is-ready")).toBe(false);
+
+    resolveFreshRead(createRuntimeStatus({ status: "ready", targetUrl: "http://127.0.0.1:5173/restarted" }));
+    await flushPromises();
+    expect(frameElement().src).toBe("http://127.0.0.1:5173/restarted");
+    expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
+  });
+
   it("single-flights native runtime status polling and times out hung reads", async () => {
     vi.useFakeTimers();
     const listeners = new Map<string, () => void>();

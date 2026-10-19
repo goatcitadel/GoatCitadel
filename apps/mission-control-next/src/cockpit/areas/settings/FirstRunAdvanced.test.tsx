@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingBootstrapInput } from "@goatcitadel/contracts";
 import { FirstRunAdvanced } from "./FirstRunAdvanced";
+import { FirstRunDemo } from "./FirstRunDemo";
 import { FirstRunVerification } from "./FirstRunVerification";
 import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import { gatewayAuthSettingsFixture } from "../../../features/native-routes/settings/gateway-auth.test-support";
@@ -88,7 +89,8 @@ describe("native advanced first-run disclosure", () => {
   it("keeps advanced owners and reads out of the primary initial flow", async () => {
     await render();
     expect(button("Optional bootstrap defaults").getAttribute("aria-expanded")).toBe("false");
-    expect(button("Explore sample records").getAttribute("aria-expanded")).toBe("false");
+    // The demo moved to step 1's "Try the demo" choice.
+    expect(button("Explore sample records")).toBeUndefined();
     expect(api.fetchSettings).not.toHaveBeenCalled();
     expect(api.fetchDemoState).not.toHaveBeenCalled();
     await open();
@@ -115,8 +117,13 @@ describe("native advanced first-run disclosure", () => {
   it("reviews demo side effects without executing on cancel and keeps evidence failures unavailable", async () => {
     api.fetchAgenticRuns.mockRejectedValue(new Error("unavailable"));
     api.fetchEvidenceEnvelopes.mockRejectedValue(new Error("unavailable"));
-    await render();
-    await click("Explore sample records");
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <FirstRunDemo workspaceId="workspace-a" />
+        </QueryClientProvider>,
+      ),
+    );
     await vi.waitFor(() => expect(button("Review demo preparation").disabled).toBe(false));
     await click("Review demo preparation");
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("durable memory example");

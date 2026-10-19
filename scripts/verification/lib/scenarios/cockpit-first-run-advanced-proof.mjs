@@ -126,10 +126,26 @@ export async function runCockpitFirstRunAdvancedProof({ context, browser, stack,
             waitUntil: "domcontentloaded",
           });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
-          const advanced = page.getByRole("button", { name: "Advanced setup and evidence", exact: true });
+          // Defaults sit behind "Optional bootstrap defaults" in Optional setup; the demo is Step 1's "Try the demo".
+          const firstRun = page.getByRole("region", { name: "First-run setup", exact: true });
+          const advanced = firstRun
+            .getByRole("region", { name: "Optional setup", exact: true })
+            .getByRole("button", { name: "Optional bootstrap defaults", exact: true });
+          const demoChoice = firstRun
+            .getByRole("group", { name: "How to start", exact: true })
+            .getByRole("button", { name: "Try the demo", exact: true });
+          const openDemoChoice = async () => {
+            const modelStep = firstRun
+              .getByRole("navigation", { name: "Setup steps", exact: true })
+              .getByRole("button")
+              .filter({ hasText: "Choose a model" });
+            if ((await modelStep.getAttribute("aria-current")) !== "step") await modelStep.click();
+            // An aria-pressed toggle: a second click would close the demo again.
+            if ((await demoChoice.getAttribute("aria-pressed")) !== "true") await demoChoice.click();
+          };
           await advanced.waitFor();
           assert.equal(await advanced.getAttribute("aria-expanded"), "false");
-          assert.equal(demoReads, 0, "Closed advanced disclosure read the demo owner.");
+          assert.equal(demoReads, 0, "Unchosen demo option read the demo owner.");
           const navigationBaseline = navigations;
           await advanced.click();
           const defaults = page.getByRole("region", { name: "Advanced first-run defaults", exact: true });
@@ -210,6 +226,7 @@ export async function runCockpitFirstRunAdvancedProof({ context, browser, stack,
           assert.equal(defaultsIntercepted, 1);
           assert.equal((await readOnboarding()).settings.revision, after.settings.revision);
           stage = "review demo consequences and cancel";
+          await openDemoChoice();
           await demo.getByRole("button", { name: "Review demo preparation", exact: true }).click();
           await demoReview.waitFor();
           assert.match(await demoReview.innerText(), /durable memory example/u);
@@ -275,8 +292,13 @@ export async function runCockpitFirstRunAdvancedProof({ context, browser, stack,
           await demo.getByText(/Demo preparation is unconfirmed/u).waitFor();
           assert.equal(demoIntercepted, 1);
           stage = "native remount and explicit read-only demo open";
+          // Remount both native owners: close and reopen the defaults disclosure and the Step 1 demo choice.
           await advanced.click();
           await advanced.click();
+          await demoChoice.click();
+          assert.equal(await demoChoice.getAttribute("aria-pressed"), "false");
+          await demo.waitFor({ state: "detached" });
+          await demoChoice.click();
           await defaults.getByText(/Defaults outcome is unconfirmed/u).waitFor();
           await demo.getByText(/Demo preparation is unconfirmed/u).waitFor();
           assert.equal(await defaults.getByRole("button", { name: "Review defaults", exact: true }).isDisabled(), true);

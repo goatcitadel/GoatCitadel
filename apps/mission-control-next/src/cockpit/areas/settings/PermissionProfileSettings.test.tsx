@@ -50,7 +50,8 @@ let view: ReactTestRenderer;
 const text = (node: ReactTestInstance | string): string =>
   typeof node === "string" ? node : node.children.map(text).join("");
 const button = (label: string) => view.root.findAllByType("button").find((item) => text(item) === label)!;
-async function mount(workspaceId = "work-a") {
+/** The profile choices sit behind Change profile; most cases open them first. */
+async function mount(workspaceId = "work-a", open = true) {
   await act(async () => {
     const tree = (
       <QueryClientProvider client={client}>
@@ -63,7 +64,13 @@ async function mount(workspaceId = "work-a") {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
   });
+  if (open && view.root.findAllByType("button").some((item) => text(item) === "Change profile"))
+    await act(async () => button("Change profile").props.onClick());
 }
+const contextSelect = () => {
+  const label = view.root.findAllByType("label").find((item) => text(item) === "Selection policy context")!;
+  return view.root.findAll((item) => item.type === "select" && item.props.id === label.props.htmlFor)[0]!;
+};
 async function select() {
   await act(async () => view.root.findAllByProps({ type: "radio" })[0]!.props.onChange());
 }
@@ -119,7 +126,7 @@ describe("native Chat permission profile", () => {
     expect(view.root.findByType(LocalOperatorOverrides).props.workspaceId).toBe("work-a");
     expect(view.root.findByType(AutonomousGrantsSettings).props.workspaceId).toBe("work-a");
     expect(button("New permission profile").props.disabled).toBe(false);
-    expect(text(view.root)).toContain("Temporary Local Operator Overrides");
+    expect(text(view.root)).toContain("Temporary local operator overrides");
     expect(text(view.root)).toContain("Autonomous activation grants");
     expect(view.root.findAllByType("a").some((item) => String(item.props.href).includes("shell=classic"))).toBe(false);
     await click("New permission profile");
@@ -237,10 +244,7 @@ describe("native Chat permission profile", () => {
     }));
     await mount();
     const checked = () => view.root.findAllByProps({ type: "radio" }).map((radio) => radio.props.checked);
-    const chooseContext = (value: string) =>
-      act(async () =>
-        view.root.findByProps({ "aria-label": "Selection policy context" }).props.onChange({ target: { value } }),
-      );
+    const chooseContext = (value: string) => act(async () => contextSelect().props.onChange({ target: { value } }));
     expect(checked()).toEqual([true, false]);
     await chooseContext("tools");
     expect(checked()).toEqual([false, true]);
@@ -262,16 +266,10 @@ describe("native Chat permission profile", () => {
     ["tools", "Direct tools"],
     ["mcp", "MCP"],
     ["all", "All policy contexts"],
-    ["cowork", "Legacy Cowork compatibility"],
-    ["code", "Legacy Code compatibility"],
   ])("reviews and applies exact %s context without broadening it", async (surface, label) => {
     await mount();
     await select();
-    await act(async () =>
-      view.root
-        .findByProps({ "aria-label": "Selection policy context" })
-        .props.onChange({ target: { value: surface } }),
-    );
+    await act(async () => contextSelect().props.onChange({ target: { value: surface } }));
     await click(`Review ${label} profile selection`);
     expect(api.activatePermissionProfile).not.toHaveBeenCalled();
     expect(api.reviewPermissionProfileSelection).toHaveBeenLastCalledWith({
@@ -305,14 +303,40 @@ describe("native Chat permission profile", () => {
     await select();
     await click("Review Chat profile selection");
     const confirm = button("Apply reviewed Chat profile").props.onClick;
-    await act(async () =>
-      view.root.findByProps({ "aria-label": "Selection policy context" }).props.onChange({ target: { value: "mcp" } }),
-    );
+    await act(async () => contextSelect().props.onChange({ target: { value: "mcp" } }));
     await act(async () => {
       await confirm();
     });
     expect(api.activatePermissionProfile).not.toHaveBeenCalled();
     expect(text(view.root)).not.toContain("Reviewed Chat profile selection");
+  });
+  it("shows the current profile with a Change control and keeps expert detail and legacy contexts out of the way", async () => {
+    await mount("work-a", false);
+    expect(text(view.root)).toContain("Current effective workspace Chat profile: Previous");
+    expect(view.root.findAllByProps({ type: "radio" })).toHaveLength(0);
+    expect(button("Change profile").props["aria-expanded"]).toBe(false);
+    // The precedence explainer is a plain section on this page; expert owners sit inside one closed disclosure.
+    expect(text(view.root)).toContain("How allow and deny rules combine");
+    const advanced = view.root.findAllByType("details")[0]!;
+    expect(advanced.props.open).toBeUndefined();
+    expect(text(advanced.findAllByType("summary")[0]!)).toContain("Advanced");
+    expect(advanced.findByType(LocalOperatorOverrides).props.workspaceId).toBe("work-a");
+    expect(advanced.findByType(AutonomousGrantsSettings).props.workspaceId).toBe("work-a");
+    expect(advanced.findByType(PermissionProfileEditor).props.workspaceId).toBe("work-a");
+    await click("Change profile");
+    expect(view.root.findAllByProps({ type: "radio" })).toHaveLength(1);
+    expect(
+      contextSelect()
+        .findAllByType("option")
+        .map((option) => option.props.value),
+    ).toEqual(["chat", "tools", "mcp", "all"]);
+    expect(view.root.findAllByType("optgroup")).toHaveLength(0);
+    await select();
+    await click("Close profile choices");
+    expect(view.root.findAllByProps({ type: "radio" })).toHaveLength(0);
+    await click("Change profile");
+    // Closing drops the unreviewed pick; the profile in effect is shown again.
+    expect(button("Review Chat profile selection").props.disabled).toBe(true);
   });
   it("does not invent a default workspace or perform reads without selection", async () => {
     await mount("");

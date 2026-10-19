@@ -1191,6 +1191,122 @@ describe("useChatSessionData", () => {
     await act(async () => renderer.unmount());
   });
 
+  it("ignores a background core load for a session that is no longer selected", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 10_800_000);
+    fetchChatThreadMock.mockImplementation(async (sessionId: string) => makeThread(sessionId));
+    fetchChatSessionBindingMock.mockImplementation(async (sessionId: string) => ({
+      item: { sessionId, target: null },
+    }));
+    fetchChatSessionPrefsMock.mockImplementation(async (sessionId: string) => ({ sessionId, mode: "chat" }));
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness workspaceId="workspace-background-core" initialSelectedSessionId="session-1" />);
+      await flushEffects(8);
+    });
+    await act(async () => {
+      await flushEffects(8);
+    });
+    expect(latestHarness?.result.thread?.sessionId).toBe("session-1");
+
+    let releaseSecond!: () => void;
+    fetchChatThreadMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseSecond = () => resolve(makeThread("session-2"));
+        }),
+    );
+    await act(async () => {
+      latestHarness!.setSelectedSessionId("session-2");
+      await flushEffects(8);
+    });
+    await act(async () => {
+      await latestHarness!.result.loadSessionCoreState("session-1", { background: true });
+      await flushEffects(8);
+    });
+    await act(async () => {
+      releaseSecond();
+      await flushEffects(8);
+    });
+    expect(latestHarness?.result.thread?.sessionId).toBe("session-2");
+    expect(latestHarness?.result.binding?.sessionId).toBe("session-2");
+    expect(latestHarness?.result.prefs?.sessionId).toBe("session-2");
+    expect(latestHarness?.result.messagesLoading).toBe(false);
+    await act(async () => renderer.unmount());
+  });
+
+  it("shows a session selected in the same tick as an explicit foreground load", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 14_400_000);
+    fetchChatThreadMock.mockImplementation(async (sessionId: string) => makeThread(sessionId));
+    fetchChatSessionBindingMock.mockImplementation(async (sessionId: string) => ({
+      item: { sessionId, target: null },
+    }));
+    fetchChatSessionPrefsMock.mockImplementation(async (sessionId: string) => ({ sessionId, mode: "chat" }));
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness workspaceId="workspace-same-tick" initialSelectedSessionId="session-1" />);
+      await flushEffects(8);
+    });
+    await act(async () => {
+      await flushEffects(8);
+    });
+    await act(async () => {
+      latestHarness!.setSelectedSessionId("session-3");
+      await latestHarness!.result.loadSessionState("session-3");
+      await flushEffects(8);
+    });
+    await act(async () => {
+      await flushEffects(8);
+    });
+    expect(latestHarness?.selectedSessionId).toBe("session-3");
+    expect(latestHarness?.result.thread?.sessionId).toBe("session-3");
+    expect(latestHarness?.result.prefs?.sessionId).toBe("session-3");
+    await act(async () => renderer.unmount());
+  });
+
+  it("ignores a background secondary load for a session that is no longer selected", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 18_000_000);
+    fetchChatThreadMock.mockImplementation(async (sessionId: string) => makeThread(sessionId));
+    fetchChatLearnedMemoryMock.mockImplementation(async (sessionId: string) => ({
+      items: [{ memoryId: `memory-${sessionId}`, content: sessionId }],
+    }));
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness workspaceId="workspace-background-secondary" initialSelectedSessionId="session-1" />);
+      await flushEffects(8);
+    });
+    await act(async () => {
+      await flushEffects(8);
+    });
+    expect(latestHarness?.result.learnedMemory?.[0]?.memoryId).toBe("memory-session-1");
+
+    let releaseSecond!: () => void;
+    fetchChatLearnedMemoryMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseSecond = () => resolve({ items: [{ memoryId: "memory-session-2", content: "session-2" }] });
+        }),
+    );
+    await act(async () => {
+      latestHarness!.setSelectedSessionId("session-2");
+      await flushEffects(8);
+    });
+    expect(fetchChatLearnedMemoryMock).toHaveBeenLastCalledWith("session-2", 80);
+    await act(async () => {
+      await latestHarness!.result.loadSessionSecondaryState("session-1", { background: true });
+      await flushEffects(8);
+    });
+    await act(async () => {
+      releaseSecond();
+      await flushEffects(8);
+    });
+    expect(latestHarness?.result.learnedMemory?.[0]?.memoryId).toBe("memory-session-2");
+    expect(latestHarness?.result.secondaryLoading).toBe(false);
+    await act(async () => renderer.unmount());
+  });
+
   it("ignores stale selected-session loads after the selection clears", async () => {
     let resolveThread!: (value: ChatThreadResponse) => void;
     fetchChatThreadMock.mockReturnValueOnce(

@@ -824,6 +824,47 @@ describe("profile-free routed-context admission", () => {
     expect(harness.host.bindChatFeatureAdmission).toHaveBeenCalledOnce();
   });
 
+  it("renders an admitted profile-free Work Passport into the prepared history exactly once", async () => {
+    const harness = admittedHarness();
+    const references = {
+      version: "chat.turn.feature-references.v1" as const,
+      providerRoute: { primary: { providerId: PROVIDER_ID, model: MODEL_ID }, fingerprint: "b".repeat(64) },
+      workPassport: {
+        passportId: "passport-1",
+        schemaVersion: "work.passport.v1" as const,
+        classificationMode: "deterministic_local_v1" as const,
+        baseline: { configured: false, primaryDomains: [] },
+        taskSignals: [],
+        boundary: "generic_or_unclear" as const,
+        consequence: "low" as const,
+        review: { posture: "self_check" as const, reason: "Low consequence.", requirements: [] },
+        evidenceRequirements: ["Check material facts."],
+        actionPosture: "explore" as const,
+        limitations: [],
+        operatorCorrectionAllowed: true as const,
+      },
+    };
+    harness.host.resolveChatFeatureAdmission = vi.fn(async () => ({ references, referenceSha256: digest(references) }));
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      SESSION_ID,
+      { content: "Summarize the plan." },
+      {
+        turnId: "turn-live",
+        turnAdmission: harness.admission,
+      },
+    );
+    expect(prepared.capabilityProfile).toBeUndefined();
+    const bindings = prepared.history.filter(
+      (message) =>
+        message.role === "system" &&
+        typeof message.content === "string" &&
+        message.content.startsWith("Server-owned turn bindings (advisory evidence, no authority):"),
+    );
+    expect(bindings).toHaveLength(1);
+    expect(String(bindings[0]!.content)).toContain("boundary=generic_or_unclear");
+  });
+
   it("accepts an admitted workspace snapshot for a new operator turn and renders it without authority", async () => {
     const harness = admittedHarness();
     harness.host.isFeatureEnabled = vi.fn(async (flag) => flag === "chatWorkspaceSnapshotV1Enabled");

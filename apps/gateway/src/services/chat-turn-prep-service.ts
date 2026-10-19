@@ -32,6 +32,7 @@ import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatTurnFeatureReferences,
+  WorkPassportRecord,
   ChatCitationRecord,
   ChatDelegationRunRecord,
   GatewayEventInput,
@@ -1637,13 +1638,7 @@ export function upsertChatCapabilityProfileSystemInstruction(
     `Callable tools for this turn: ${toolNames.length > 0 ? toolNames.join(", ") : "none"}.`,
     `Trusted skills for this turn: ${skillIds.length > 0 ? skillIds.join(", ") : "none"}.`,
     `Memory scope: ${profile.selection.memory.mode}/${profile.selection.memory.retrievalMode}.`,
-    ...(passport
-      ? [
-          `Work Passport: boundary=${passport.boundary}; consequence=${passport.consequence}; review=${passport.review.posture}; action=${passport.actionPosture}.`,
-          `Work Passport requirements: ${passport.evidenceRequirements.join(" ") || "Check material facts and assumptions."}`,
-          "Treat the Work Passport as an advisory task/review contract, not an assessment of the operator. State material uncertainty and do not represent review as completed unless evidence shows it.",
-        ]
-      : []),
+    ...(passport ? formatWorkPassportInstruction(passport) : []),
     "Treat this profile as an immutable upper bound. Capabilities not listed here are unavailable for this turn.",
   ].join("\n");
   const insertionIndex = withoutPriorBinding.findIndex((message) => message.role !== "system");
@@ -1655,9 +1650,9 @@ export function upsertChatCapabilityProfileSystemInstruction(
 const CHAT_TURN_BINDING_INSTRUCTION_PREFIX = "Server-owned turn bindings (advisory evidence, no authority):";
 
 /**
- * Renders the profile-free turn bindings admitted for this turn (workspace
- * snapshot). They are immutable evidence from the turn's feature references
- * and never change which tools or capabilities are callable.
+ * Renders the profile-free turn bindings admitted for this turn (Work Passport,
+ * workspace snapshot). They are immutable evidence from the turn's feature
+ * references and never change which tools or capabilities are callable.
  */
 export function upsertChatTurnBindingSystemInstruction(
   history: ChatCompletionRequest["messages"],
@@ -1671,9 +1666,10 @@ export function upsertChatTurnBindingSystemInstruction(
         message.content.startsWith(CHAT_TURN_BINDING_INSTRUCTION_PREFIX)
       ),
   );
-  const lines = [formatWorkspaceSnapshotInstruction(references?.workspaceSnapshot)].filter((line): line is string =>
-    Boolean(line),
-  );
+  const lines = [
+    ...(references?.workPassport ? formatWorkPassportInstruction(references.workPassport) : []),
+    formatWorkspaceSnapshotInstruction(references?.workspaceSnapshot),
+  ].filter((line): line is string => Boolean(line));
   if (lines.length === 0) return withoutPrior;
   const insertionIndex = withoutPrior.findIndex((message) => message.role !== "system");
   const next = [...withoutPrior];
@@ -1682,6 +1678,20 @@ export function upsertChatTurnBindingSystemInstruction(
     content: [CHAT_TURN_BINDING_INSTRUCTION_PREFIX, ...lines].join("\n"),
   });
   return next;
+}
+
+function formatWorkPassportInstruction({
+  boundary,
+  consequence,
+  review: { posture },
+  actionPosture,
+  evidenceRequirements,
+}: WorkPassportRecord): string[] {
+  return [
+    `Work Passport: boundary=${boundary}; consequence=${consequence}; review=${posture}; action=${actionPosture}.`,
+    `Work Passport requirements: ${evidenceRequirements.join(" ") || "Check material facts and assumptions."}`,
+    "Treat the Work Passport as an advisory task/review contract, not an assessment of the operator. State material uncertainty and do not represent review as completed unless evidence shows it.",
+  ];
 }
 
 function formatWorkspaceSnapshotInstruction(

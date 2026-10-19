@@ -162,6 +162,7 @@ export interface RuntimeSettings {
     chatMeshCapabilitiesV1Enabled?: boolean;
     chatRemotePlacementV1Enabled?: boolean;
     chatWorkspaceSnapshotV1Enabled?: boolean;
+    chatWorkPassportV1Enabled?: boolean;
     chatRequesterMcpV1Enabled?: boolean;
     chatStaticMcpV1Enabled?: boolean;
     /** Gateway-owned governed Change Plan authority. */

@@ -10,7 +10,9 @@ import {
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
-import { integrationInputClass } from "./IntegrationFormFields";
+import { Field } from "../../ui/Field";
+import { cockpitInputClass } from "../../ui/input-class";
+import { urlFieldError, useBlurValidation } from "./field-validation";
 import { HookRecordEvidence, HookRunEvidence } from "./HookEvidence";
 import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
@@ -27,9 +29,11 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
       .includes(query.trim().toLowerCase()),
   );
   const fields = s.form;
+  const labelCheck = useBlurValidation((value) => (value.trim() ? undefined : "Enter a hook label."));
+  const urlCheck = useBlurValidation((value) => urlFieldError(value, { required: true, protocols: ["https:"] }));
   return (
     <section id="hooks" aria-label="Governed hooks" className="space-y-4">
-      <h3 className="text-lg font-semibold">Governed hooks</h3>
+      <h3 className="text-md font-semibold text-fg">Governed hooks</h3>
       <p className="text-sm text-fg-secondary">
         Receive lifecycle events through configured hooks. Test and redrive actions can send real requests to the
         configured destination.
@@ -80,67 +84,92 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
           </p>
           <fieldset disabled={s.mutation.locked} className="grid gap-3 sm:grid-cols-2">
             <legend className="sr-only">Hook registration inputs</legend>
-            <label className="text-sm sm:col-span-2">
-              Hook label
-              <input
-                aria-label="Hook label"
-                className={integrationInputClass}
-                value={fields.label}
-                onChange={(e) => s.setForm({ ...fields, label: e.target.value })}
-              />
-            </label>
-            <label className="text-sm">
-              Lifecycle event
-              <select
-                aria-label="Lifecycle event"
-                className={integrationInputClass}
-                value={fields.trigger}
-                onChange={(e) => s.setForm({ ...fields, trigger: e.target.value as HookTrigger })}
-              >
-                {HOOK_TRIGGER_VALUES.map((value) => (
-                  <option key={value} value={value}>
-                    {presentHookTrigger(value)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-sm">
-              Hook mode
-              <select
-                aria-label="Hook mode"
-                className={integrationInputClass}
-                value={fields.mode}
-                onChange={(e) => s.setForm({ ...fields, mode: e.target.value as HookMode })}
-              >
-                {HOOK_MODES.map((value) => (
-                  <option key={value} value={value}>
-                    {HOOK_MODE_LABELS[value]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-sm sm:col-span-2">
-              HTTPS endpoint
-              <input
-                aria-label="HTTPS endpoint"
-                type="url"
-                autoComplete="off"
-                className={integrationInputClass}
-                value={fields.url}
-                onChange={(e) => s.setForm({ ...fields, url: e.target.value })}
-              />
-            </label>
-            <label className="text-sm sm:col-span-2">
-              Signing secret
-              <input
-                aria-label="Signing secret"
-                type="password"
-                autoComplete="new-password"
-                className={integrationInputClass}
-                value={fields.secret}
-                onChange={(e) => s.setForm({ ...fields, secret: e.target.value })}
-              />
-            </label>
+            <div className="sm:col-span-2">
+              <Field label="Hook label" required error={labelCheck.error}>
+                {(fieldProps) => (
+                  <input
+                    {...fieldProps}
+                    aria-label="Hook label"
+                    className={cockpitInputClass}
+                    value={fields.label}
+                    onBlur={(e) => labelCheck.onBlur(e.target.value)}
+                    onChange={(e) => {
+                      s.setForm({ ...fields, label: e.target.value });
+                      labelCheck.onChange(e.target.value);
+                    }}
+                  />
+                )}
+              </Field>
+            </div>
+            <Field label="Lifecycle event">
+              {(fieldProps) => (
+                <select
+                  {...fieldProps}
+                  aria-label="Lifecycle event"
+                  className={cockpitInputClass}
+                  value={fields.trigger}
+                  onChange={(e) => s.setForm({ ...fields, trigger: e.target.value as HookTrigger })}
+                >
+                  {HOOK_TRIGGER_VALUES.map((value) => (
+                    <option key={value} value={value}>
+                      {presentHookTrigger(value)}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
+            <Field label="Hook mode">
+              {(fieldProps) => (
+                <select
+                  {...fieldProps}
+                  aria-label="Hook mode"
+                  className={cockpitInputClass}
+                  value={fields.mode}
+                  onChange={(e) => s.setForm({ ...fields, mode: e.target.value as HookMode })}
+                >
+                  {HOOK_MODES.map((value) => (
+                    <option key={value} value={value}>
+                      {HOOK_MODE_LABELS[value]}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
+            <div className="sm:col-span-2">
+              <Field label="HTTPS endpoint" required error={urlCheck.error}>
+                {(fieldProps) => (
+                  <input
+                    {...fieldProps}
+                    aria-label="HTTPS endpoint"
+                    type="url"
+                    autoComplete="off"
+                    spellCheck={false}
+                    className={cockpitInputClass}
+                    value={fields.url}
+                    onBlur={(e) => urlCheck.onBlur(e.target.value)}
+                    onChange={(e) => {
+                      s.setForm({ ...fields, url: e.target.value });
+                      urlCheck.onChange(e.target.value);
+                    }}
+                  />
+                )}
+              </Field>
+            </div>
+            <div className="sm:col-span-2">
+              <Field label="Signing secret" required>
+                {(fieldProps) => (
+                  <input
+                    {...fieldProps}
+                    aria-label="Signing secret"
+                    type="password"
+                    autoComplete="new-password"
+                    className={cockpitInputClass}
+                    value={fields.secret}
+                    onChange={(e) => s.setForm({ ...fields, secret: e.target.value })}
+                  />
+                )}
+              </Field>
+            </div>
           </fieldset>
           <p className="text-xs text-fg-muted">
             Endpoint and secret inputs stay in this editor only and are discarded when leaving it. The saved private
@@ -154,19 +183,21 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
           </div>
         </section>
       ) : null}
-      <label className="block text-sm">
-        Find hooks
-        <input
-          aria-label="Find hooks"
-          type="search"
-          className={integrationInputClass}
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setLimit(10);
-          }}
-        />
-      </label>
+      <Field label="Find hooks">
+        {(fieldProps) => (
+          <input
+            {...fieldProps}
+            aria-label="Find hooks"
+            type="search"
+            className={`mt-1 ${cockpitInputClass}`}
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setLimit(10);
+            }}
+          />
+        )}
+      </Field>
       {!s.data?.issues.some((issue) => issue.label === "Hooks") && s.data ? (
         <>
           <p className="text-xs text-fg-muted">

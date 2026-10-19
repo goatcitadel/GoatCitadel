@@ -4,6 +4,8 @@ import { CommandPaletteCoverage, CommandPaletteResults, PALETTE_ITEM_CLASS } fro
 import type { PaletteObject } from "./command-palette-search";
 import type { useCommandPaletteSearch } from "./use-command-palette-search";
 import { TechnicalDetails } from "../ui/TechnicalDetails";
+import type { UiTheme } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { otherThemeOptions, THEME_SEARCH_TERMS } from "./theme-options";
 export { PaletteResourcePreview } from "./CommandPaletteResults";
 export interface CommandPaletteViewProps {
   query: string;
@@ -20,12 +22,12 @@ export interface CommandPaletteViewProps {
   noMatches: boolean;
   destinations: { area: string; label: string; path: string }[];
   settingsMatches: { section: string; label: string; href: string; releaseStatus?: string }[];
-  theme: string;
+  theme: UiTheme;
   density: string;
   search: ReturnType<typeof useCommandPaletteSearch>;
   onNewChat: () => void;
   onChooseModel: () => void;
-  onTheme: () => void;
+  onTheme: (theme: UiTheme) => void;
   onDensity: () => void;
   onClassic: () => void;
   onDestination: (path: string) => void;
@@ -119,11 +121,18 @@ export function CommandPaletteView({
           ) : null}
           {preferenceMatches ? (
             <Command.Group heading="Preferences" className="text-xs text-fg-muted">
-              {matches("Switch theme light dark") ? (
-                <Command.Item value="theme" onSelect={onTheme} className={PALETTE_ITEM_CLASS}>
-                  Switch to {theme === "dark" ? "light" : "dark"} theme
-                </Command.Item>
-              ) : null}
+              {matches(THEME_SEARCH_TERMS)
+                ? otherThemeOptions(theme).map((option) => (
+                    <Command.Item
+                      key={option.value}
+                      value={`theme-${option.value}`}
+                      onSelect={() => onTheme(option.value)}
+                      className={PALETTE_ITEM_CLASS}
+                    >
+                      {option.action}
+                    </Command.Item>
+                  ))
+                : null}
               {matches("Switch density comfortable compact") ? (
                 <Command.Item value="density" onSelect={onDensity} className={PALETTE_ITEM_CLASS}>
                   Switch to {density === "compact" ? "comfortable" : "compact"} density
