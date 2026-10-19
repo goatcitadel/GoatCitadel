@@ -22,6 +22,13 @@ export interface ToolPathResolutionContext {
    * filesystem roots are still rejected here.
    */
   outsideRootWrites?: "reject" | "defer_to_policy";
+  /**
+   * When set, every write target must also land inside one of these roots;
+   * the project root alone does not admit it. Set for delegated child sessions
+   * without an approved scope, so a project folder inside an operator write
+   * root cannot widen their writes.
+   */
+  confineWritesTo?: readonly string[];
 }
 
 const PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH = "__prompt_pack_repo__";
@@ -123,6 +130,9 @@ export function resolveToolRequestPaths<TRequest extends ToolPathRequest>(
             spec.kind,
             spec.deferOutsideRoot === true && context.outsideRootWrites === "defer_to_policy",
           );
+    if (spec.kind === "write") {
+      assertWriteWithinConfinement(resolvedValue, rawValue, context);
+    }
     if (resolvedValue === rawValue) {
       continue;
     }
@@ -283,6 +293,23 @@ function isWithinWriteRoots(resolvedPath: string, context: ToolPathResolutionCon
   return (context.writeRoots ?? []).some((root) => isWithinAnyRootVariant(root, normalizedPath));
 }
 
+function assertWriteWithinConfinement(
+  resolvedValue: string,
+  rawPath: string,
+  context: ToolPathResolutionContext,
+): void {
+  const roots = context.confineWritesTo;
+  if (!roots) {
+    return;
+  }
+  const resolvedTarget = resolvePathViaExistingAncestor(resolvedValue.trim());
+  if (!roots.some((root) => isWithinAnyRootVariant(root, resolvedTarget))) {
+    throw new ValidationError({
+      message: `Path "${rawPath}" is outside the workspace boundary and is not allowed for write operations.`,
+    });
+  }
+}
+
 function shouldPreferWorkspaceRoot(rawPath: string, projectWorkspacePath?: string): boolean {
   if (!projectWorkspacePath) {
     return true;
@@ -360,28 +387,58 @@ function rootVariantsForComparison(root: string): string[] {
   }
 }
 
-function resolvePathViaExistingAncestor(targetPath: string): string {
-  const absoluteTarget = path.resolve(targetPath);
-  let probe = absoluteTarget;
+const MAX_DANGLING_LINK_HOPS = 40;
 
+/**
+ * Resolve a path through its nearest existing ancestor. A dangling link (one
+ * whose target does not exist yet) is followed to its target instead of being
+ * skipped, since a write through it would land there; too many hops (a link
+ * cycle) refuses the path.
+ */
+function resolvePathViaExistingAncestor(targetPath: string): string {
+  let absoluteTarget = path.resolve(targetPath);
+  for (let hop = 0; hop <= MAX_DANGLING_LINK_HOPS; hop += 1) {
+    const step = resolveThroughNearestExistingAncestor(absoluteTarget);
+    if (step.danglingLinkTarget === undefined) {
+      return step.resolved;
+    }
+    absoluteTarget = step.danglingLinkTarget;
+  }
+  throw new ValidationError({
+    message: `Path "${targetPath}" passes through too many symbolic links and is not allowed.`,
+  });
+}
+
+function lstatOrUndefined(probe: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(probe);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveThroughNearestExistingAncestor(absoluteTarget: string): {
+  resolved: string;
+  danglingLinkTarget?: string;
+} {
+  let probe = absoluteTarget;
   while (true) {
-    if (fs.existsSync(probe)) {
-      const realExisting = fs.realpathSync(probe);
-      if (probe === absoluteTarget) {
-        return realExisting;
-      }
+    const stats = lstatOrUndefined(probe);
+    if (stats) {
       const relativeTail = path.relative(probe, absoluteTarget);
-      return path.resolve(realExisting, relativeTail);
+      if (stats.isSymbolicLink() && !fs.existsSync(probe)) {
+        const linkTarget = path.resolve(path.dirname(probe), fs.readlinkSync(probe));
+        return { resolved: absoluteTarget, danglingLinkTarget: path.resolve(linkTarget, relativeTail) };
+      }
+      return { resolved: path.resolve(fs.realpathSync(probe), relativeTail) };
     }
 
     const parent = path.dirname(probe);
     if (parent === probe) {
-      break;
+      return { resolved: absoluteTarget };
     }
     probe = parent;
   }
-
-  return absoluteTarget;
 }
 
 function finalizeResolvedToolPath(
