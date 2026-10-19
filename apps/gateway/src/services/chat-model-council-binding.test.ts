@@ -38,6 +38,12 @@ function llm(refusedProviders: string[] = []) {
         { providerId: "cloud", defaultModel: "large", baseUrl: "https://api.example.com/v1", hasApiKey: true },
         { providerId: "keyless", defaultModel: "medium", baseUrl: "https://api.example.org/v1", hasApiKey: false },
         { providerId: "xai", defaultModel: "grok-3", baseUrl: "https://api.x.ai/v1", hasApiKey: true },
+        {
+          providerId: "openrouter",
+          defaultModel: "x-ai/grok-4",
+          baseUrl: "https://openrouter.ai/api/v1",
+          hasApiKey: true,
+        },
       ],
     }),
     getModelContextWindow: () => 32_768,
@@ -59,6 +65,7 @@ describe("profile-free model council binding", () => {
     );
     expect(admitsDispatchWard).not.toHaveBeenCalledWith(expect.anything(), "keyless");
     expect(admitsDispatchWard).not.toHaveBeenCalledWith(expect.anything(), "xai");
+    expect(admitsDispatchWard).not.toHaveBeenCalledWith(expect.anything(), "openrouter");
   });
 
   it("carries the turn's route ward actions into every member recheck", async () => {
@@ -83,7 +90,7 @@ describe("profile-free model council binding", () => {
     );
     expect(ready).toEqual({
       bindingId: "feature-admission:admission-1",
-      bindingHash: "b".repeat(64),
+      bindingHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
       turnId: "turn-1",
       sessionId: "session-1",
       workspaceId: "workspace-1",
@@ -92,6 +99,12 @@ describe("profile-free model council binding", () => {
       thinkingLevel: "standard",
       primaryReady: true,
     });
+    expect(ready.bindingHash).not.toBe("b".repeat(64));
+    const deeper = resolveLiveModelCouncilBinding(
+      prepared({ prefs: { thinkingLevel: "deep" } } as Partial<PreparedAgentChatTurn>),
+      [],
+    );
+    expect(deeper.bindingHash).not.toBe(ready.bindingHash);
     const refused = resolveLiveModelCouncilBinding(
       turn,
       await selectModelCouncilCandidates(llm(["local"]).service, turn, { providerId: "local", model: "small" }),

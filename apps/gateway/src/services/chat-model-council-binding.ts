@@ -1,4 +1,5 @@
-import type { ModelUsageAttributionContext } from "@goatcitadel/contracts";
+import { createHash } from "node:crypto";
+import { canonicalJsonString, type ModelUsageAttributionContext } from "@goatcitadel/contracts";
 import type { ModelCouncilBinding, ModelCouncilProviderCandidate } from "./assembly-service.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import type { LlmService } from "./llm-service.js";
@@ -49,7 +50,7 @@ export async function selectModelCouncilCandidates(
   const candidates: ModelCouncilProviderCandidate[] = [];
   for (const provider of runtime.providers) {
     const model = provider.providerId === primary.providerId ? primary.model : provider.defaultModel;
-    if (!model || /(?:^|[-_.\s])(xai|grok)(?:$|[-_.\s])/i.test(`${provider.providerId} ${model}`)) continue;
+    if (!model || /(?:^|[-_./:\s])(x-?ai|grok)(?:$|[-_./:\s])/i.test(`${provider.providerId} ${model}`)) continue;
     const local = isLocalProviderUrl(provider.baseUrl);
     const contextWindowTokens = llm.getModelContextWindow(provider.providerId, model);
     const routeConfigFingerprint = llm.getProviderRouteConfigFingerprint(provider.providerId, model);
@@ -83,15 +84,20 @@ export function resolveLiveModelCouncilBinding(
   if (!admission?.references.modelCouncil || !identity || !primary) {
     throw new Error("Model council requires an admitted council request with a pinned provider route.");
   }
+  const thinkingLevel = prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel;
   return {
     bindingId: `feature-admission:${identity.admissionId}`,
-    bindingHash: admission.referenceSha256,
+    // The admission hash plus the effective thinking level, so recovery under a
+    // different synthesis reasoning budget is refused like any other drift.
+    bindingHash: createHash("sha256")
+      .update(canonicalJsonString({ referenceSha256: admission.referenceSha256, thinkingLevel: thinkingLevel ?? null }))
+      .digest("hex"),
     turnId: prepared.turnId,
     sessionId: prepared.session.sessionId,
     workspaceId: prepared.workspaceId,
     primaryProviderId: primary.providerId,
     primaryModel: primary.model,
-    thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
+    thinkingLevel,
     primaryReady: candidates.some(
       (candidate) => candidate.providerId === primary.providerId && candidate.model === primary.model,
     ),
