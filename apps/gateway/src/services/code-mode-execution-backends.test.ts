@@ -9,7 +9,7 @@ import {
 describe("code-mode-execution-backends", () => {
   const digestPinnedAiderImage =
     "ghcr.io/goatcitadel/aider-adapter@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-  it("keeps Docker preview-only without explicit enablement and image config", () => {
+  it("blocks Docker by configuration (not as a planned preview) without explicit enablement and image config", () => {
     const response = buildCodeModeExecutionBackends({
       codeModeEnabled: true,
       sandbox: sandboxMetadata(),
@@ -22,8 +22,10 @@ describe("code-mode-execution-backends", () => {
 
     expect(response.activeBackendId).toBe("trusted-code-host");
     expect(docker).toMatchObject({
-      status: "preview",
-      runtimeSupport: "preview_only",
+      status: "blocked",
+      runtimeSupport: "not_available",
+      description: expect.not.stringContaining("Planned"),
+      evaluation: expect.objectContaining({ requiredProofLanes: expect.arrayContaining(["verify:code-mode:docker"]) }),
       callable: false,
       blockers: expect.arrayContaining(["Docker backend is not enabled."]),
       governance: expect.arrayContaining([
@@ -33,7 +35,7 @@ describe("code-mode-execution-backends", () => {
     });
   });
 
-  it("keeps Aider preview-only until Docker and Aider image config are both present", () => {
+  it("keeps Aider blocked until Docker and Aider image config are both present", () => {
     const preview = buildCodeModeExecutionBackends({
       codeModeEnabled: true,
       sandbox: sandboxMetadata(),
@@ -47,8 +49,9 @@ describe("code-mode-execution-backends", () => {
     }).items.find((item) => item.backendId === CODE_MODE_AIDER_ADAPTER_ID);
 
     expect(preview).toMatchObject({
-      status: "preview",
-      runtimeSupport: "preview_only",
+      status: "blocked",
+      runtimeSupport: "not_available",
+      description: expect.not.stringContaining("Planned"),
       callable: false,
       blockers: expect.arrayContaining(["Aider adapter is enabled but no container image is configured."]),
     });
@@ -74,7 +77,7 @@ describe("code-mode-execution-backends", () => {
       adapterForBackendId: "docker-container",
       governance: expect.arrayContaining([
         "Runs only in run-temp/artifact space; the operator workspace changes only through an approved, hash-checked promote.",
-        "Replay posture stays non-replayable; a promoted patch is never re-applied.",
+        "Replay creates a new approval-gated run from the recorded request at the same pinned HEAD; a promoted patch is never re-applied.",
       ]),
     });
     expect(

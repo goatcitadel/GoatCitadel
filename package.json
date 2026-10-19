@@ -138,6 +138,7 @@
     "architecture:baseline:update": "node scripts/update-architecture-metrics-baseline.mjs",
     "verify:code-mode:sandbox": "node scripts/verification/run.mjs code-mode-sandbox",
     "verify:code-mode:hostile-sandbox": "node scripts/verification/run.mjs code-mode-hostile-sandbox",
+    "verify:code-mode:docker": "node scripts/verification/run.mjs code-mode-docker",
     "verify:mesh:readiness": "node scripts/verification/run.mjs mesh-readiness",
     "verify:mesh:capability-publication": "node --test scripts/verification/lib/scenarios/mesh-capability-publication-lane.test.mjs && node scripts/verification/mesh-capability-publication-proof.mjs",
     "verify:journey:producers": "node --test scripts/verification/lib/scenarios/journey-producers-lane.test.mjs && node scripts/verification/journey-producers-proof.mjs",

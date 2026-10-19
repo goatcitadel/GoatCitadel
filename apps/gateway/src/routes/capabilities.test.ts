@@ -1127,6 +1127,42 @@ describe("capabilities routes", () => {
     });
   });
 
+  it("POST /api/v1/code-mode/runs/:runId/replay creates a linked run in scope and maps refusals to 409", async () => {
+    const service = await registerCapabilitiesService({
+      replayCodeModeAiderRun: vi
+        .fn()
+        .mockResolvedValueOnce({
+          replayOfRunId: "code-run-1",
+          run: { runId: "code-run-replay-1", status: "approval_pending", approvalId: "approval-replay-1" },
+        })
+        .mockRejectedValueOnce(
+          new ConflictError({
+            message: "Chat workbench HEAD moved since the original run.",
+            details: { reason: "worktree_head_moved", runId: "code-run-1" },
+          }),
+        ),
+    });
+
+    const created = await app!.inject({
+      method: "POST",
+      url: "/api/v1/code-mode/runs/code-run-1/replay?sessionId=session-1",
+    });
+    const refused = await app!.inject({ method: "POST", url: "/api/v1/code-mode/runs/code-run-1/replay" });
+
+    expect(created.statusCode).toBe(201);
+    expect(service.replayCodeModeAiderRun).toHaveBeenCalledWith(
+      "code-run-1",
+      { workspaceId: "default", sessionId: "session-1" },
+      "operator-test",
+    );
+    expect(created.json()).toMatchObject({ replayOfRunId: "code-run-1", run: { status: "approval_pending" } });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toEqual({
+      error: "Chat workbench HEAD moved since the original run.",
+      details: { reason: "worktree_head_moved", runId: "code-run-1" },
+    });
+  });
+
   it("maps Aider promotion refusals to 409, typed errors to their status, and unexpected failures to 500", async () => {
     const service = await registerCapabilitiesService({
       requestCodeModeAiderPromotion: vi

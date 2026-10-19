@@ -124,7 +124,8 @@ export function toContainerRunPath(runTempRoot: string, hostPath: string): strin
 
 function buildRunMountSpec(runTempRoot: string): string {
   rejectUnsafeProfilePath(runTempRoot);
-  return `type=bind,src=${runTempRoot},dst=${CODE_MODE_DOCKER_CONTAINER_WORKDIR},rw`;
+  // Bind mounts are read-write by default; Docker rejects a bare `rw` field in --mount ("must be a key=value pair").
+  return `type=bind,src=${runTempRoot},dst=${CODE_MODE_DOCKER_CONTAINER_WORKDIR}`;
 }
 
 function normalizeDockerImageRef(value: string): string {
