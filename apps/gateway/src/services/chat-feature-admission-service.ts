@@ -28,7 +28,7 @@ import {
 
 type FeatureBinding = { references: ChatTurnFeatureReferences; referenceSha256: string };
 /** Admitted evidence that does not depend on the provider route. */
-const ROUTE_INDEPENDENT_REFERENCE_KEYS: ReadonlySet<string> = new Set(["version", "workPassport"]);
+const ROUTE_INDEPENDENT_REFERENCE_KEYS: ReadonlySet<string> = new Set(["version", "workPassport", "workspaceSnapshot"]);
 export interface ChatFeatureAdmissionHost {
   storage: Pick<
     AsyncStorage,
@@ -69,6 +69,13 @@ export interface ChatFeatureAdmissionHost {
     admission: ActiveTurnAdmission;
     content: string;
   }): Promise<import("@goatcitadel/contracts").ChatSelectedMeshCapabilities | undefined>;
+  /** Server-owned, path-bridge-verified workspace/Git receipt for exactly one turn. */
+  captureWorkspaceSnapshot?(input: {
+    sessionId: string;
+    turnId: string;
+    workspaceId: string;
+    request: import("@goatcitadel/contracts").ChatWorkspaceSnapshotRequest;
+  }): Promise<import("@goatcitadel/contracts").ChatWorkspaceSnapshotRecord>;
   /** Local deterministic Work Passport classification; advisory evidence only. */
   classifyWorkPassport?(
     workspaceId: string,
@@ -202,6 +209,16 @@ export async function resolveChatFeatureAdmission(
       await renderAdmittedSkillInstructions(host, references, workspaceId);
     }
   }
+  const snapshotRequest = input.admission.admittedRequest.workspaceSnapshot;
+  if (snapshotRequest && (await isEnabled("chatWorkspaceSnapshotV1Enabled"))) {
+    if (!host.captureWorkspaceSnapshot)
+      throw new ConflictError({ message: "Workspace snapshot capture is unavailable in this runtime." });
+    const { workspaceId, sessionId, turnId } = input.admission.identity;
+    const snapshot = await host.captureWorkspaceSnapshot({ sessionId, turnId, workspaceId, request: snapshotRequest });
+    if (snapshot.workspaceId !== workspaceId || snapshot.requestId !== snapshotRequest.requestId)
+      throw new ConflictError({ message: "The workspace snapshot does not match the admitted turn." });
+    references.workspaceSnapshot = snapshot;
+  }
   if (input.admission.admittedRequest.modelCouncil?.enabled && (await isEnabled("chatModelCouncilV1Enabled"))) {
     references.modelCouncil = { version: "chat.model-council.admission.v1" };
   }
@@ -244,6 +261,7 @@ export async function resolveChatFeatureAdmission(
     !references.selectedStaticMcp &&
     !references.selectedMeshCapabilities &&
     !references.remotePlacement &&
+    !references.workspaceSnapshot &&
     !references.modelCouncil &&
     !references.workPassport
   )

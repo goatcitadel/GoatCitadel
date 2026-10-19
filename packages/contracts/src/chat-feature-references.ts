@@ -8,6 +8,47 @@ const identifier = z
   .refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32));
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const routeTarget = z.object({ providerId: identifier, model: identifier }).strict();
+const nonNegativeInt = z.number().int().nonnegative();
+/** Content-free, point-in-time workspace/Git receipt captured once for the turn. */
+const workspaceSnapshotRecord = z
+  .object({
+    schemaVersion: z.literal("chat.workspace-snapshot.v1"),
+    snapshotId: identifier,
+    requestId: identifier,
+    workspaceId: identifier,
+    project: z.object({ projectId: identifier, projectRevision: nonNegativeInt }).strict().optional(),
+    status: z.enum(["captured", "unavailable"]),
+    reasonCode: z
+      .enum([
+        "workspace_unavailable",
+        "project_unbound",
+        "path_verification_failed",
+        "path_identity_changed",
+        "git_unavailable",
+        "git_not_repository",
+        "git_summary_failed",
+      ])
+      .optional(),
+    pathBinding: z
+      .object({ verificationId: identifier, fingerprintSha256: digest, gitIdentitySha256: digest })
+      .strict()
+      .optional(),
+    git: z
+      .object({
+        headSha: identifier,
+        branch: identifier.optional(),
+        trackedChangeCount: nonNegativeInt,
+        untrackedChangeCount: nonNegativeInt,
+        dirty: z.boolean(),
+        ahead: nonNegativeInt.optional(),
+        behind: nonNegativeInt.optional(),
+      })
+      .strict()
+      .optional(),
+    capturedAt: identifier,
+    snapshotHash: digest,
+  })
+  .strict();
 const workPassportRecord = z.custom<WorkPassportRecord>((value) => {
   try {
     assertWorkPassportRecord(value);
@@ -281,6 +322,7 @@ export const CHAT_RESTORATION_FEATURE_FLAGS = [
   "chatMeshCapabilitiesV1Enabled",
   "chatRemotePlacementV1Enabled",
   "chatExplicitContextBranchesV1Enabled",
+  "chatWorkspaceSnapshotV1Enabled",
   "chatModelCouncilV1Enabled",
   "chatWorkPassportV1Enabled",
   "chatRequesterMcpV1Enabled",
@@ -324,6 +366,8 @@ export const chatTurnFeatureReferencesSchema = z
       })
       .optional(),
     explicitContext: z.object({ snapshotId: identifier, snapshotHash: digest }).strict().optional(),
+    /** Turn-scoped workspace snapshot evidence; it grants no filesystem or tool authority. */
+    workspaceSnapshot: workspaceSnapshotRecord.optional(),
     /** The operator requested an advisory, tool-free model council for this turn. */
     modelCouncil: z
       .object({ version: z.literal("chat.model-council.admission.v1") })

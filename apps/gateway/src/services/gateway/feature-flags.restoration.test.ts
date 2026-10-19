@@ -40,6 +40,13 @@ describe("restored feature defaults and persistence", () => {
     ).toBe(false);
   });
 
+  it("defaults chatWorkspaceSnapshotV1Enabled on once its restoration proved green, and still supports revocation", () => {
+    const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
+    expect(defaults.chatWorkspaceSnapshotV1Enabled).toBe(true);
+    expect(
+      buildUpdatedFeatureFlags(defaults, { chatWorkspaceSnapshotV1Enabled: false }).chatWorkspaceSnapshotV1Enabled,
+    ).toBe(false);
+  });
   it("defaults chatModelCouncilV1Enabled on once its restoration proved green, and still supports revocation", () => {
     const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
     expect(defaults.chatModelCouncilV1Enabled).toBe(true);

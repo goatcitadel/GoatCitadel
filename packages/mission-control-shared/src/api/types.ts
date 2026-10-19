@@ -418,6 +418,7 @@ export interface RuntimeSettingsResponse {
     providerFallback: boolean;
     staticMcp?: boolean;
     explicitContextBranches?: boolean;
+    workspaceSnapshot?: boolean;
     modelCouncil?: boolean;
     workPassport?: boolean;
   };
@@ -619,6 +620,7 @@ export interface RuntimeSettingsResponse {
     chatMeshCapabilitiesV1Enabled?: boolean;
     chatRemotePlacementV1Enabled?: boolean;
     chatExplicitContextBranchesV1Enabled?: boolean;
+    chatWorkspaceSnapshotV1Enabled?: boolean;
     chatModelCouncilV1Enabled?: boolean;
     chatWorkPassportV1Enabled?: boolean;
     chatRequesterMcpV1Enabled?: boolean;

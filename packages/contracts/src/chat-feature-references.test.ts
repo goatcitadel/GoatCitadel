@@ -55,6 +55,29 @@ describe("Chat feature reference decoding", () => {
       readChatTurnFeatureReferences({ ...base, modelCouncil: { ...modelCouncil, participants: ["cloud"] } }),
     ).toThrow();
   });
+  it("keeps a content-free workspace snapshot and rejects extra fields", () => {
+    const workspaceSnapshot = {
+      schemaVersion: "chat.workspace-snapshot.v1" as const,
+      snapshotId: "chat-workspace-snapshot-1",
+      requestId: "snapshot-request-1",
+      workspaceId: "workspace",
+      project: { projectId: "project-1", projectRevision: 3 },
+      status: "captured" as const,
+      pathBinding: {
+        verificationId: "verification-1",
+        fingerprintSha256: "c".repeat(64),
+        gitIdentitySha256: "d".repeat(64),
+      },
+      git: { headSha: "e".repeat(40), branch: "main", trackedChangeCount: 1, untrackedChangeCount: 0, dirty: true },
+      capturedAt: "2026-10-19T00:00:00.000Z",
+      snapshotHash: "f".repeat(64),
+    };
+    expect(readChatTurnFeatureReferences({ ...base, workspaceSnapshot }).workspaceSnapshot).toEqual(workspaceSnapshot);
+    expect(() =>
+      readChatTurnFeatureReferences({ ...base, workspaceSnapshot: { ...workspaceSnapshot, diff: "secret" } }),
+    ).toThrow();
+  });
+
   it("keeps an advisory Work Passport and rejects a malformed one", () => {
     const workPassport = {
       passportId: "passport-1",

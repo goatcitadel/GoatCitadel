@@ -696,9 +696,17 @@ export async function prepareAgentChatTurn(
       message: "Explicit context requires enabled durable Chat admission. Start a fresh operator turn.",
     });
   }
-  if (!boundCapabilityProfile && input.workspaceSnapshot !== undefined) {
+  if (
+    !boundCapabilityProfile &&
+    input.workspaceSnapshot !== undefined &&
+    (!(await isFeatureEnabled("chatWorkspaceSnapshotV1Enabled")) ||
+      !(await isDurableChatExecution()) ||
+      !options?.turnAdmission ||
+      options.turnAdmission.requestActor.actorKind !== "operator" ||
+      input.parentDelegationStepId)
+  ) {
     throw new ConflictError({
-      message: "Workspace snapshots are temporarily unavailable while new Chat turns use live capabilities.",
+      message: "Workspace snapshots require enabled durable Chat admission. Start a fresh operator turn.",
     });
   }
   if (
@@ -969,6 +977,13 @@ export async function prepareAgentChatTurn(
           deferBinding: freshExplicitContext,
         })
       : undefined;
+  if (
+    !boundCapabilityProfile &&
+    input.workspaceSnapshot !== undefined &&
+    !featureAdmission?.references.workspaceSnapshot
+  ) {
+    throw new ConflictError({ message: "The workspace snapshot was not admitted for this turn. Start a fresh turn." });
+  }
   if (!boundCapabilityProfile && input.modelCouncil?.enabled && !featureAdmission?.references.modelCouncil) {
     throw new ConflictError({ message: "The model council was not admitted for this turn. Start a fresh turn." });
   }
@@ -1680,7 +1695,10 @@ export function upsertChatTurnBindingSystemInstruction(
         message.content.startsWith(CHAT_TURN_BINDING_INSTRUCTION_PREFIX)
       ),
   );
-  const lines = [...(references?.workPassport ? formatWorkPassportInstruction(references.workPassport) : [])];
+  const lines = [
+    ...(references?.workPassport ? formatWorkPassportInstruction(references.workPassport) : []),
+    formatWorkspaceSnapshotInstruction(references?.workspaceSnapshot),
+  ].filter((line): line is string => Boolean(line));
   if (lines.length === 0) return withoutPrior;
   const insertionIndex = withoutPrior.findIndex((message) => message.role !== "system");
   const next = [...withoutPrior];

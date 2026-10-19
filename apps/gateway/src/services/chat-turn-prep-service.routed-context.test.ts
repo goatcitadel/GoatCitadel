@@ -987,10 +987,86 @@ describe("profile-free routed-context admission", () => {
     ).rejects.toThrow(/Model council requires enabled durable Chat admission/);
   });
 
+  it("accepts an admitted workspace snapshot for a new operator turn and renders it without authority", async () => {
+    const harness = admittedHarness();
+    harness.host.isFeatureEnabled = vi.fn(async (flag) => flag === "chatWorkspaceSnapshotV1Enabled");
+    const workspaceSnapshot = {
+      schemaVersion: "chat.workspace-snapshot.v1" as const,
+      snapshotId: "chat-workspace-snapshot-1",
+      requestId: "snapshot-request-1",
+      workspaceId: WORKSPACE_ID,
+      project: { projectId: "project-1", projectRevision: 3 },
+      status: "captured" as const,
+      pathBinding: {
+        verificationId: "verification-1",
+        fingerprintSha256: "c".repeat(64),
+        gitIdentitySha256: "d".repeat(64),
+      },
+      git: { headSha: "e".repeat(40), branch: "main", trackedChangeCount: 1, untrackedChangeCount: 0, dirty: true },
+      capturedAt: "2026-10-19T00:00:00.000Z",
+      snapshotHash: "f".repeat(64),
+    };
+    const references = {
+      version: "chat.turn.feature-references.v1" as const,
+      providerRoute: { primary: { providerId: PROVIDER_ID, model: MODEL_ID }, fingerprint: "b".repeat(64) },
+      workspaceSnapshot,
+    };
+    harness.host.resolveChatFeatureAdmission = vi.fn(async () => ({ references, referenceSha256: digest(references) }));
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      SESSION_ID,
+      { content: "Check repository state.", workspaceSnapshot: { capture: true, requestId: "snapshot-request-1" } },
+      { turnId: "turn-live", turnAdmission: harness.admission },
+    );
+    expect(prepared.capabilityProfile).toBeUndefined();
+    const bindings = prepared.history.filter(
+      (message) =>
+        message.role === "system" &&
+        typeof message.content === "string" &&
+        message.content.startsWith("Server-owned turn bindings (advisory evidence, no authority):"),
+    );
+    expect(bindings).toHaveLength(1);
+    expect(String(bindings[0]!.content)).toContain("grants no filesystem authority");
+    expect(String(bindings[0]!.content)).toContain(`HEAD=${"e".repeat(40)}`);
+  });
+
+  it("rejects a snapshot for a system actor before ingestion and fails closed when it was not admitted", async () => {
+    const harness = admittedHarness();
+    harness.host.isFeatureEnabled = vi.fn(async (flag) => flag === "chatWorkspaceSnapshotV1Enabled");
+    const request = {
+      content: "Check repository state.",
+      workspaceSnapshot: { capture: true as const, requestId: "snapshot-1" },
+    };
+    harness.admission.requestActor = { ...harness.admission.requestActor, actorKind: "system" } as never;
+    await expect(
+      prepareAgentChatTurn(harness.host, SESSION_ID, request, {
+        turnId: "turn-live",
+        turnAdmission: harness.admission,
+      }),
+    ).rejects.toThrow(/Workspace snapshots require enabled durable Chat admission/);
+    expect(harness.host.ingestEvent).not.toHaveBeenCalled();
+    harness.admission.requestActor = { ...harness.admission.requestActor, actorKind: "operator" } as never;
+    harness.host.isDurableChatExecutionEnabled = vi.fn(async () => false);
+    await expect(
+      prepareAgentChatTurn(harness.host, SESSION_ID, request, {
+        turnId: "turn-live",
+        turnAdmission: harness.admission,
+      }),
+    ).rejects.toThrow(/Workspace snapshots require enabled durable Chat admission/);
+    expect(harness.host.ingestEvent).not.toHaveBeenCalled();
+    harness.host.isDurableChatExecutionEnabled = vi.fn(async () => true);
+    await expect(
+      prepareAgentChatTurn(harness.host, SESSION_ID, request, {
+        turnId: "turn-live",
+        turnAdmission: harness.admission,
+      }),
+    ).rejects.toThrow(/was not admitted for this turn/);
+  });
+
   it.each([
     [
       { workspaceSnapshot: { capture: true, requestId: "snapshot-disabled" } },
-      "Workspace snapshots are temporarily unavailable",
+      "Workspace snapshots require enabled durable Chat admission",
     ],
     [{ modelCouncil: { enabled: true } }, "Model council requires enabled durable Chat admission"],
     [{ parentDelegationStepId: "step-disabled" }, "Local delegated Chat requires current supervised parent"],

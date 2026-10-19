@@ -22,6 +22,7 @@ export function projectChatFeatureAvailability(
       durableExecution &&
       features.chatExplicitContextV1Enabled === true &&
       features.chatExplicitContextBranchesV1Enabled === true,
+    workspaceSnapshot: durableExecution && features.chatWorkspaceSnapshotV1Enabled === true,
     modelCouncil: durableExecution && features.chatModelCouncilV1Enabled === true,
     workPassport: durableExecution && features.chatWorkPassportV1Enabled === true,
   };
