@@ -111,7 +111,11 @@ export async function resolveInheritedChatContextRefs(
   const child = Boolean(request.parentDelegationStepId);
   const branch = (input.branchKind === "retry" || input.branchKind === "edit") && Boolean(input.sourceTurnId);
   if (!child && !branch) return undefined;
-  if (!(await host.isFeatureEnabled("chatExplicitContextBranchesV1Enabled"))) return undefined;
+  // Inherit only while explicit context itself is enabled, so a retry after
+  // explicit context was turned off proceeds without context instead of failing.
+  const isEnabled = (flag: string) => host.isFeatureEnabled(flag);
+  if (!(await isEnabled("chatExplicitContextV1Enabled")) || !(await isEnabled("chatExplicitContextBranchesV1Enabled")))
+    return undefined;
   const { storage } = host;
   if (child) {
     const refs = await resolveDelegatedParentContextRefs(storage, admission);

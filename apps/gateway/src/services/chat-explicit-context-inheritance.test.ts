@@ -53,7 +53,10 @@ function host(enabled = true) {
   return {
     storage,
     findByTurn,
-    isFeatureEnabled: vi.fn(async (flag: string) => enabled && flag === "chatExplicitContextBranchesV1Enabled"),
+    isFeatureEnabled: vi.fn(
+      async (flag: string) =>
+        enabled && (flag === "chatExplicitContextV1Enabled" || flag === "chatExplicitContextBranchesV1Enabled"),
+    ),
   };
 }
 
@@ -79,6 +82,12 @@ describe("explicit context inheritance for edit, retry and child turns", () => {
     }
     expect(await resolveInheritedChatContextRefs(h, { ...base, branchKind: "append" })).toBeUndefined();
     expect(await resolveInheritedChatContextRefs(host(false), { ...base, branchKind: "retry" })).toBeUndefined();
+    const baseOff = host();
+    baseOff.isFeatureEnabled.mockImplementation(
+      async (flag: string) => flag === "chatExplicitContextBranchesV1Enabled",
+    );
+    expect(await resolveInheritedChatContextRefs(baseOff, { ...base, branchKind: "retry" })).toBeUndefined();
+    expect(baseOff.findByTurn).not.toHaveBeenCalled();
   });
 
   it("never inherits for explicit refs, durable replay or historical profile turns", async () => {
