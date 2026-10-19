@@ -49,7 +49,7 @@ import { useRefreshSubscription } from "@goatcitadel/mission-control-shared/hook
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { recordChatRefreshPhase } from "./chat-causality";
 import { resolveChatRefreshPlan } from "./chat-page-pure-helpers";
-import { retainedReloadMode, type RetainedLoad } from "./retained-reload";
+import { retainedReloadMode, useCommitRefValue, type RetainedLoad } from "./retained-reload";
 import {
   historicalWindowIdentityMismatch,
   historicalTargetChanged,
@@ -140,9 +140,9 @@ export function useChatSessionData(input: ChatSessionDataInput) {
   const sidebarNextCursorRef = useRef<string | null>(null);
   const loadCoreGenerationRef = useRef(0);
   const loadSecondaryGenerationRef = useRef(0);
-  // Assigned during render so a load settling after a switch compares against the session shown now.
+  // Synced at commit, so a load settling after a switch compares against the session shown now.
   const selectedSessionIdRef = useRef(selectedSessionId);
-  selectedSessionIdRef.current = selectedSessionId;
+  useCommitRefValue(selectedSessionIdRef, selectedSessionId);
   const loadSidebarGenerationRef = useRef(0);
   const sidebarScopeKey = chatSidebarScopeKey(input);
   const sidebarScope = useRef({ key: sidebarScopeKey });

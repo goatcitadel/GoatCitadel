@@ -187,31 +187,44 @@ describe("desktop shell bootstrap", () => {
     expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
   });
 
-  it("applies a tray restart's shell sync to a status read already in flight", async () => {
+  it("reads fresh after a tray restart instead of applying a pre-restart read", async () => {
     const listeners = new Map<string, () => void>();
     tauriMocks.listen.mockImplementation((eventName: string, callback: () => void) => {
       listeners.set(eventName, callback);
       return Promise.resolve(() => undefined);
     });
-    let resolveTrayRead!: (status: RuntimeStatus) => void;
-    tauriMocks.invoke.mockResolvedValueOnce(createRuntimeStatus({ status: "ready" })).mockReturnValueOnce(
-      new Promise<RuntimeStatus>((resolve) => {
-        resolveTrayRead = resolve;
-      }),
-    );
+    let resolvePreRestartRead!: (status: RuntimeStatus) => void;
+    let resolveFreshRead!: (status: RuntimeStatus) => void;
+    tauriMocks.invoke
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }))
+      .mockReturnValueOnce(
+        new Promise<RuntimeStatus>((resolve) => {
+          resolvePreRestartRead = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<RuntimeStatus>((resolve) => {
+          resolveFreshRead = resolve;
+        }),
+      );
 
     await import("./main.js");
     await flushPromises();
 
-    // A tray status request (no shell sync) is still reading when the restart lands.
+    // A tray status request is still reading when the restart lands; the restart reads fresh.
     listeners.get("desktop://runtime-status-requested")?.();
     await flushPromises();
     listeners.get("desktop://runtime-restarted")?.();
     await flushPromises();
-    expect(readRuntimeStatusCalls()).toHaveLength(1);
+    expect(readRuntimeStatusCalls()).toHaveLength(2);
     expect(element("mission-control-frame").classList.contains("is-ready")).toBe(false);
 
-    resolveTrayRead(createRuntimeStatus({ status: "ready", targetUrl: "http://127.0.0.1:5173/restarted" }));
+    // The pre-restart read settles late with the old URL and must be ignored.
+    resolvePreRestartRead(createRuntimeStatus({ status: "ready", targetUrl: "http://127.0.0.1:5173/old" }));
+    await flushPromises();
+    expect(element("mission-control-frame").classList.contains("is-ready")).toBe(false);
+
+    resolveFreshRead(createRuntimeStatus({ status: "ready", targetUrl: "http://127.0.0.1:5173/restarted" }));
     await flushPromises();
     expect(frameElement().src).toBe("http://127.0.0.1:5173/restarted");
     expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);

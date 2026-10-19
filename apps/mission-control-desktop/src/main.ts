@@ -77,9 +77,6 @@ let toastTimer: number | undefined;
 let runtimeStatusPollTimer: number | undefined;
 let runtimeStatusInFlight = false;
 let runtimeStatusRequestSequence = 0;
-// Set when a shell-syncing refresh arrives while another read is in flight; that read
-// then syncs the shell when it settles, whichever caller started it.
-let runtimeStatusShellSyncPending = false;
 
 retryButton.addEventListener("click", () => {
   void launchRuntime();
@@ -115,8 +112,9 @@ void listen("desktop://runtime-status-requested", () => {
 void listen("desktop://runtime-restarted", () => {
   showToast("Runtime restarted. Refreshing Mission Control...");
   renderStarting();
-  // If another read is in flight, this request upgrades it to sync the shell; is-ready was
-  // just cleared, so a ready result reloads the frame onto the restarted runtime.
+  // A read started before the restart may carry the old runtime's URL: discard it and read fresh.
+  // is-ready was just cleared, so a ready result reloads the frame onto the restarted runtime.
+  invalidateInFlightRuntimeStatus();
   void refreshRuntimeStatus({ syncShell: true, notify: false });
   // Re-arm polling (idempotent) in case a stop left it off and the refresh fails.
   startRuntimeStatusPolling();
@@ -213,22 +211,21 @@ function renderStopped(): void {
     : "Use Retry to start GoatCitadel again.";
 }
 
+/** Drop any in-flight status read: its result and errors are ignored and a new read may start. */
+function invalidateInFlightRuntimeStatus(): void {
+  // Both must change together: the stale read's finally only clears the flag when its sequence still matches.
+  runtimeStatusRequestSequence += 1;
+  runtimeStatusInFlight = false;
+}
+
 async function refreshRuntimeStatus(options: { syncShell?: boolean; notify?: boolean } = {}): Promise<void> {
   if (runtimeStatusInFlight) {
-    if (options.syncShell) {
-      runtimeStatusShellSyncPending = true;
-    }
     return;
   }
   runtimeStatusInFlight = true;
   const requestId = runtimeStatusRequestSequence + 1;
   runtimeStatusRequestSequence = requestId;
   const notify = options.notify ?? true;
-  const shouldSyncShell = (): boolean => {
-    const syncShell = Boolean(options.syncShell) || runtimeStatusShellSyncPending;
-    runtimeStatusShellSyncPending = false;
-    return syncShell;
-  };
   try {
     const result = await readRuntimeStatusWithTimeout();
     if (runtimeStatusRequestSequence !== requestId) {
@@ -241,7 +238,7 @@ async function refreshRuntimeStatus(options: { syncShell?: boolean; notify?: boo
     if (notify) {
       showToast(message);
     }
-    if (shouldSyncShell()) {
+    if (options.syncShell) {
       if (isRuntimeReady(result)) {
         showReadyRuntime(result);
       } else {
@@ -250,11 +247,14 @@ async function refreshRuntimeStatus(options: { syncShell?: boolean; notify?: boo
       }
     }
   } catch (error) {
+    if (runtimeStatusRequestSequence !== requestId) {
+      return;
+    }
     const message = error instanceof Error ? error.message : String(error);
     if (notify) {
       showToast(message);
     }
-    if (shouldSyncShell()) {
+    if (options.syncShell) {
       renderRecovery(`Runtime status check failed: ${message}`);
     }
   } finally {
