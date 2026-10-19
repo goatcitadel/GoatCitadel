@@ -115,9 +115,13 @@ describe("native integration management", () => {
   it("cancels deletion without calling the owner", async () => {
     api.fetchIntegrationConnections.mockResolvedValue({ items: [saved] });
     await act(async () => {
-      view = create(<IntegrationManagementSettings workspaceId="default" />);
+      view = create(
+        <IntegrationManagementSettings
+          workspaceId="default"
+          selection={{ connectionId: saved.connectionId, nonce: 1 }}
+        />,
+      );
     });
-    await click("Reviewed fixture · Disabled");
     await click("Delete integration connection");
     expect(text(view.root)).toContain("Reviewed version:");
     await click("Keep integration");

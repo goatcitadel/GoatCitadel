@@ -71,6 +71,7 @@ vi.mock("./AddonsSettings", () => ({ AddonsSettings: () => <OwnerProbe name="Add
 vi.mock("./PortablePacksSettings", () => ({ PortablePacksSettings: () => <OwnerProbe name="Packs owner" /> }));
 vi.mock("./TrustPolicySettings", () => ({ TrustPolicySettings: () => <OwnerProbe name="Trust owner" /> }));
 vi.mock("./FirstRunArea", () => ({ FirstRunArea: () => <p>First run owner</p> }));
+vi.mock("./FirstRunStatus", () => ({ FirstRunStatus: () => <p>First run status</p> }));
 let root: Root, container: HTMLDivElement, queryClient: QueryClient;
 const settingsView = () => (
   <QueryClientProvider client={queryClient}>
@@ -114,19 +115,32 @@ afterEach(() => {
 });
 
 describe("Settings section tabs", () => {
-  it.each(["/settings/onboarding", "/settings/models#onboarding", "/settings/first-run"])(
-    "renders native first run at %s",
+  // ST-03: Get started shows a compact status with "Open setup"; only /settings/first-run mounts the full stepper.
+  it.each(["/settings/onboarding", "/settings/models#onboarding"])(
+    "renders the first-run status at %s",
     async (path) => {
       await render(path);
-      await vi.waitFor(() => expect(container.textContent).toContain("First run owner"));
+      await vi.waitFor(() => expect(container.textContent).toContain("First run status"));
+      expect(container.textContent).not.toContain("First run owner");
       expect(container.textContent).not.toContain("Models owner");
     },
   );
-  it("keeps Models default on the provider owner and opens native Get started from its tab", async () => {
+  // ST-09: notification routing lives beside Attention on General, so its deep link is a valid General section.
+  it("accepts the notification routing deep link on General", async () => {
+    await render("/settings/general?shell=cockpit#notification-routing");
+    await vi.waitFor(() => expect(container.textContent).toContain("Appearance owner"));
+    expect(container.textContent).not.toContain("does not match a section");
+  });
+  it("renders the full first run at /settings/first-run", async () => {
+    await render("/settings/first-run");
+    await vi.waitFor(() => expect(container.textContent).toContain("First run owner"));
+    expect(container.textContent).not.toContain("First run status");
+  });
+  it("keeps Models default on the provider owner and opens the Get started status from its tab", async () => {
     await render("/settings/models");
     await vi.waitFor(() => expect(container.textContent).toContain("Models owner"));
     await activate("Get started");
-    await vi.waitFor(() => expect(container.textContent).toContain("First run owner"));
+    await vi.waitFor(() => expect(container.textContent).toContain("First run status"));
     expect(window.location.hash).toBe("#onboarding");
   });
   it("keeps the real read-only Library inspection links in Tools and preserves unknown callability", async () => {
@@ -148,6 +162,29 @@ describe("Settings section tabs", () => {
     expect(catalog.read).toHaveBeenCalledTimes(1);
     await act(async () => tools.click());
     expect(window.location.pathname + window.location.search).toBe("/library?shell=cockpit&type=tool");
+  });
+  it("mounts llama.cpp setup and the managed runtime on one owner page each, linking from the other", async () => {
+    await render("/settings/models?shell=cockpit#local-ai");
+    await vi.waitFor(() => expect(container.textContent).toContain("Local AI owner"));
+    expect(container.textContent).toContain("Llama owner");
+    expect(container.textContent).not.toContain("Runtime owner");
+    expect(container.querySelector('a[href="/settings/advanced#managed-runtime"]')?.textContent).toBe(
+      "Advanced › Runtime configuration",
+    );
+    await render("/settings/advanced?shell=cockpit#managed-runtime");
+    await vi.waitFor(() => expect(container.textContent).toContain("Runtime owner"));
+    expect(container.textContent).not.toContain("Llama owner");
+    expect(container.querySelector('a[href="/settings/models#local-ai"]')?.textContent).toBe("Models › Local AI");
+    expect(owner.mounted.mock.calls.filter(([name]) => name === "Llama owner")).toHaveLength(1);
+  });
+  it("links Trust & policy to the one explanation of how rules combine", async () => {
+    await render("/settings/safety?shell=cockpit#trust-policy");
+    await vi.waitFor(() => expect(container.textContent).toContain("Trust owner"));
+    const link = container.querySelector<HTMLAnchorElement>('a[href="/settings/safety#permission-profile"]')!;
+    expect(link.textContent).toBe("See how rules combine in Permissions");
+    await act(async () => link.click());
+    expect(window.location.hash).toBe("#permission-profile");
+    await vi.waitFor(() => expect(container.textContent).toContain("Permission owner"));
   });
   it("withholds hidden capability owners on direct links and routes visible hooks to the active scope", async () => {
     await render("/settings/citadel?shell=cockpit#citadel-capabilities");

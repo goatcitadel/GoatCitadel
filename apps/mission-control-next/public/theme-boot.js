@@ -1,10 +1,12 @@
 /* global window, document, URLSearchParams */
-// Pre-paint theme boot, loaded synchronously from index.html (the Gateway CSP forbids inline scripts). Mirrors the
-// preference owner ("light", else "dark") and the access gate's ?theme= override; never throws.
+// Pre-paint theme (CSP forbids inline scripts): saved "light"/"dark", else Match system (dark if the host can't
+// say), then the ?theme= override. Mirrors ui-preferences; never throws.
 (function () {
   var theme = "dark";
   try {
-    if (window.localStorage.getItem("goatcitadel.ui.theme.v1") === "light") theme = "light";
+    var saved = window.localStorage.getItem("goatcitadel.ui.theme.v1");
+    if (saved === "light" || saved === "dark") theme = saved;
+    else if (window.matchMedia && !window.matchMedia("(prefers-color-scheme: dark)").matches) theme = "light";
   } catch {
     theme = "dark";
   }

@@ -1,6 +1,7 @@
 import { preloadable } from "../../app/preloadable";
 
 export const FirstRunArea = preloadable(async () => ({ default: (await import("./FirstRunArea")).FirstRunArea }));
+export const FirstRunStatus = preloadable(async () => ({ default: (await import("./FirstRunStatus")).FirstRunStatus }));
 export const AppearanceSettings = preloadable(async () => ({
   default: (await import("./AppearanceSettings")).AppearanceSettings,
 }));
@@ -87,6 +88,7 @@ export const PortablePacksSettings = preloadable(async () => ({
 }));
 
 const SECTION_CONTROLS: Record<string, readonly { preload: () => Promise<void> }[]> = {
+  onboarding: [FirstRunStatus],
   general: [AppearanceSettings],
   personalities: [PersonalitySettings],
   access: [DeviceAccessSettings],
@@ -103,9 +105,9 @@ const SECTION_CONTROLS: Record<string, readonly { preload: () => Promise<void> }
   channels: [ChannelsSettings],
   mcp: [McpServersSettings],
   addons: [AddonsSettings, PortablePacksSettings],
-  runtime: [ManagedRuntimeSettings, DaemonDiagnostics, VoiceRuntimeSettings, LlamaSetupSettings],
+  runtime: [ManagedRuntimeSettings, DaemonDiagnostics, VoiceRuntimeSettings],
   providers: [ModelsSettings],
-  "local-ai": [LocalAiSettings],
+  "local-ai": [LlamaSetupSettings, LocalAiSettings],
   permissions: [PermissionProfileSettings],
   hooks: [HooksSettings],
   tools: [ApprovalModeControl, FilesystemWriteRootsControl, ToolGrantSettings, SafetyCatalogSummary],

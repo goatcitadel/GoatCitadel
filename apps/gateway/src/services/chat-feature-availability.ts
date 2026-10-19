@@ -19,5 +19,6 @@ export function projectChatFeatureAvailability(
     providerFallback: durableExecution && features.chatProviderFallbackV1Enabled === true,
     staticMcp: durableExecution && features.chatStaticMcpV1Enabled === true,
     modelCouncil: durableExecution && features.chatModelCouncilV1Enabled === true,
+    workPassport: durableExecution && features.chatWorkPassportV1Enabled === true,
   };
 }

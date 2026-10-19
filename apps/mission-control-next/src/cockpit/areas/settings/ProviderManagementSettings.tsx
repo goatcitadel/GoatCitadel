@@ -12,7 +12,10 @@ import { useDraftLeave } from "../../../features/native-routes/library/DraftLeav
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
-import { ProviderProfileFields, providerFieldClass } from "./ProviderProfileFields";
+import { ProviderProfileFields } from "./ProviderProfileFields";
+import { ProviderList } from "./ProviderList";
+import { ProviderConnectionSettings } from "./ProviderConnectionSettings";
+import { credentialRemovalBlockedReason, ProviderSavedCredential } from "./ProviderSavedCredential";
 import { ProviderProfileReview } from "./ProviderProfileReview";
 import { ProviderChangeStatus } from "./ProviderChangeStatus";
 import { ProviderOutcomeCheck } from "./ProviderOutcomeCheck";
@@ -21,12 +24,14 @@ import { ProviderOAuthSettings } from "./ProviderOAuthSettings";
 import { useProviderCodexSetup } from "../../../features/native-routes/settings/sections/use-provider-codex-setup";
 
 export function ProviderManagementSettings() {
-  const providerLabelId = useId();
+  const addReasonId = useId();
+  const editReasonId = useId();
   const catalog = useProviderModelCatalog("system");
   const { activeWorkspaceId } = useUiPreferences();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"selected" | "new">("selected");
+  const [transportOpen, setTransportOpen] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [review, setReview] = useState<{ draft: ProviderSaveDraft; revision: number } | null>(null);
   const leave = useDraftLeave();
@@ -106,30 +111,62 @@ export function ProviderManagementSettings() {
       setOpen(false);
       setReview(null);
     }, [profile.providerEditor.key]);
-  const begin = (nextMode: "selected" | "new") =>
+  const begin = (nextMode: "selected" | "new", withTransport = false) =>
     leave.request(() => {
       setMode(nextMode);
+      setTransportOpen(withTransport);
       setOpen(true);
       setReview(null);
     }, [profile.providerEditor.key]);
+  const unavailableReason = catalog.loading
+    ? "Loading saved providers…"
+    : "Saved provider settings couldn't load. Refresh profiles, then try again.";
+  const busyReason = "Finish the provider change in progress first.";
+  const addReason = !ready ? unavailableReason : locked ? busyReason : undefined;
+  const editReason = !ready
+    ? unavailableReason
+    : !provider
+      ? "Select a saved provider first."
+      : locked
+        ? busyReason
+        : undefined;
+  const removalReason = credentialRemovalBlockedReason({
+    ready,
+    providerId: id,
+    hasProvider: Boolean(provider),
+    locked,
+    removalPending: credentials.secretRemoval.hasPending,
+    secret: credentials.secretState,
+  });
   return (
     <section
       aria-label="Provider profiles"
-      className="mt-4 space-y-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
+      className="mt-4 space-y-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
     >
       <header>
         <h3 className="text-md font-semibold text-fg">Provider profiles</h3>
         <p className="mt-1 text-sm text-fg-secondary">
-          Create and edit installation profiles. Connection and credential actions remain governed by the Gateway.
+          Pick a provider, then edit its profile, transport, connection, and credential in one place. The Gateway checks
+          and applies each change.
         </p>
       </header>
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={!ready || locked} onClick={() => begin("new")}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <Button
+          size="sm"
+          disabled={Boolean(addReason)}
+          aria-describedby={addReason ? addReasonId : undefined}
+          onClick={() => begin("new")}
+        >
           Add provider profile
         </Button>
         <Button size="sm" disabled={catalog.loading} onClick={() => void catalog.reload()}>
           Refresh profiles
         </Button>
+        {addReason ? (
+          <p id={addReasonId} className="text-xs text-fg-muted">
+            {addReason}
+          </p>
+        ) : null}
       </div>
       {catalog.loading ? (
         <p role="status" className="text-sm text-fg-muted">
@@ -139,64 +176,6 @@ export function ProviderManagementSettings() {
       {catalog.error ? (
         <p role="alert" className="text-sm text-status-failed">
           Provider profiles unavailable: {catalog.error}
-        </p>
-      ) : null}
-      <label className="block text-sm text-fg-secondary">
-        <span id={providerLabelId}>Manage provider</span>
-        <select
-          aria-labelledby={providerLabelId}
-          className={providerFieldClass}
-          value={id}
-          disabled={!ready || locked}
-          onChange={(event) => {
-            const next = event.target.value;
-            leave.request(() => {
-              setSelectedId(next);
-              setMode("selected");
-            }, [profile.providerEditor.key]);
-          }}
-        >
-          {!provider ? (
-            <option value={id}>{id ? "Selected provider unavailable" : "No configured provider"}</option>
-          ) : null}
-          {catalog.providers.map((item) => (
-            <option key={item.providerId} value={item.providerId}>
-              {item.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="flex flex-wrap gap-2">
-        <Button disabled={!ready || !provider || locked} onClick={() => begin("selected")}>
-          Edit provider profile
-        </Button>
-        <Button
-          variant="danger"
-          disabled={
-            !ready ||
-            !provider ||
-            locked ||
-            id === "openai-codex" ||
-            credentials.secretRemoval.hasPending ||
-            !credentials.secretState.data?.hasSecret
-          }
-          onClick={() => provider && credentials.setPendingDeleteSecret({ providerId: id, label: provider.label })}
-        >
-          Remove saved API credential
-        </Button>
-      </div>
-      {credentials.secretState.data ? (
-        <p className="text-xs text-fg-muted">
-          Saved credential:{" "}
-          {credentials.secretState.data.hasSecret
-            ? `Present (${credentials.secretState.data.source})`
-            : "No stored API credential"}
-          . Secret values are not returned.
-        </p>
-      ) : null}
-      {credentials.secretState.error ? (
-        <p role="alert" className="text-sm text-status-failed">
-          Credential status unavailable: {credentials.secretState.error}
         </p>
       ) : null}
       {notice ? (
@@ -215,6 +194,63 @@ export function ProviderManagementSettings() {
         onRefresh={credentials.secretRemoval.refresh}
         onReview={setPlan}
       />
+      <ProviderList
+        providers={catalog.providers}
+        selectedId={id}
+        activeProviderId={config?.activeProviderId}
+        disabled={!ready || locked}
+        disabledReason={!ready ? unavailableReason : busyReason}
+        onSelect={(next) =>
+          leave.request(() => {
+            setSelectedId(next);
+            setMode("selected");
+          }, [profile.providerEditor.key])
+        }
+      />
+      {provider ? (
+        <div aria-label={`${provider.label} settings`} role="group" className="space-y-4">
+          <div className="space-y-2">
+            <h4 className="text-base font-semibold text-fg">Profile and transport</h4>
+            <p className="text-sm text-fg-secondary">
+              The provider's label, API style, credential mode, and advanced request transport.
+            </p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <Button
+                disabled={Boolean(editReason)}
+                aria-describedby={editReason ? editReasonId : undefined}
+                onClick={() => begin("selected")}
+              >
+                Edit provider profile
+              </Button>
+              <Button
+                disabled={Boolean(editReason)}
+                aria-describedby={editReason ? editReasonId : undefined}
+                onClick={() => begin("selected", true)}
+              >
+                Edit request transport
+              </Button>
+              {editReason ? (
+                <p id={editReasonId} className="text-xs text-fg-muted">
+                  {editReason}
+                </p>
+              ) : null}
+            </div>
+          </div>
+          <ProviderConnectionSettings
+            providerId={id}
+            credentialActions={
+              <ProviderSavedCredential
+                credentials={credentials}
+                providerId={id}
+                providerLabel={provider.label}
+                blockedReason={removalReason}
+                locked={locked}
+                revision={config?.revision}
+              />
+            }
+          />
+        </div>
+      ) : null}
       <Dialog
         open={open && !review}
         onOpenChange={(next) => {
@@ -228,6 +264,7 @@ export function ProviderManagementSettings() {
             {...profile}
             disabled={!ready || locked}
             existing={mode === "selected"}
+            transportOpen={transportOpen}
             credentialStorage={profile.providerEditor.value.credentialStorage}
             onCredentialStorage={profile.setCredentialStorage}
           />
@@ -288,36 +325,6 @@ export function ProviderManagementSettings() {
           }
         }}
       />
-      <Dialog
-        open={Boolean(credentials.pendingDeleteSecret)}
-        onOpenChange={(next) => {
-          if (!next && !credentials.deleteSecretBusy) credentials.setPendingDeleteSecret(null);
-        }}
-        title="Remove saved API credential?"
-        description={`Remove the stored API credential for ${credentials.pendingDeleteSecret?.label ?? "this provider"}. Requests using it may fail until a replacement is configured.`}
-      >
-        <p className="mb-3 text-sm text-fg-secondary">
-          Reviewed settings version {credentials.pendingDeleteSecret?.revision}. The Gateway handles removal from each
-          place the API key is saved.
-        </p>
-        {credentials.pendingDeleteSecret?.revision !== config?.revision ? (
-          <p role="alert" className="mb-3 text-sm text-status-waiting">
-            Settings changed. Close and review removal again.
-          </p>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="danger"
-            disabled={locked || credentials.pendingDeleteSecret?.revision !== config?.revision}
-            onClick={() => void credentials.handleDeleteSecret()}
-          >
-            Request credential removal
-          </Button>
-          <Button disabled={credentials.deleteSecretBusy} onClick={() => credentials.setPendingDeleteSecret(null)}>
-            Keep credential
-          </Button>
-        </div>
-      </Dialog>
       <ProviderOAuthSettings
         oauth={oauth}
         setup={setup}

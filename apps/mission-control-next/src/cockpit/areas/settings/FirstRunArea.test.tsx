@@ -37,7 +37,10 @@ vi.mock("./CockpitGuidedModelSetup", () => ({
   },
 }));
 vi.mock("./LlamaSetupSettings", () => ({
-  LlamaSetupSettings: ({ workspaceId }: { workspaceId?: string }) => <p>Native llama setup for {workspaceId}</p>,
+  LlamaSetupSettings: () => <p>Native llama setup editor</p>,
+}));
+vi.mock("./FirstRunDemo", () => ({
+  FirstRunDemo: ({ workspaceId }: { workspaceId: string }) => <p>Local demo for {workspaceId}</p>,
 }));
 vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: api.navigate }) }));
 let owner: OnboardingState, root: Root, container: HTMLDivElement, queryClient: QueryClient;
@@ -54,7 +57,7 @@ async function render() {
       </QueryClientProvider>,
     ),
   );
-  await vi.waitFor(() => expect(container.textContent).toContain("Configured for a first send"));
+  await vi.waitFor(() => expect(container.querySelector('nav[aria-label="Setup steps"]')).not.toBeNull());
 }
 async function safety() {
   await act(async () =>
@@ -154,9 +157,11 @@ describe("native first-run setup", () => {
   it("connects through the guided model owner and moves on to safety when the model is ready", async () => {
     await render();
     expect(container.textContent).not.toContain("Guided model owner ready");
-    await click("Connect a provider");
+    await click("Use a cloud provider");
     expect(button("Guided model owner ready")).toBeDefined();
-    expect(guided.rendered).toHaveBeenCalledWith(expect.objectContaining({ enterChatLabel: "Continue to safety" }));
+    expect(guided.rendered).toHaveBeenCalledWith(
+      expect.objectContaining({ enterChatLabel: "Continue to safety", showSteps: false }),
+    );
     await click("Advanced: edit provider profiles");
     expect(api.navigate).toHaveBeenCalledWith("/settings/models?shell=cockpit#providers");
     await click("Guided model owner ready");
@@ -165,10 +170,12 @@ describe("native first-run setup", () => {
     expect(api.completeOnboarding).not.toHaveBeenCalled();
   });
 
-  it("still offers the local llama.cpp setup", async () => {
+  it("points to the one llama.cpp owner instead of mounting another copy (ST-08)", async () => {
     await render();
-    await click("Configure llama.cpp");
-    expect(container.textContent).toContain("Native llama setup for workspace-a");
+    const link = [...container.querySelectorAll("a")].find((item) => item.textContent === "Models › Local AI")!;
+    expect(link.getAttribute("href")).toBe("/settings/models#local-ai");
+    expect(container.textContent).toContain("To run a local model instead, llama.cpp setup is on");
+    expect(container.textContent).not.toContain("Native llama setup editor");
   });
   it("requires fresh safety review then exact owner completion before Chat", async () => {
     await render();
@@ -261,7 +268,46 @@ describe("native first-run setup", () => {
     expect(steps[1]?.textContent).toContain("Done");
     expect(steps[2]?.textContent).toContain("Done");
     await act(async () => (steps[2] as HTMLButtonElement).click());
-    expect(container.textContent).toContain("Your first provider-backed Chat response is recorded");
+    expect(container.textContent).toContain("Your first Chat answer is recorded");
     expect(button("Finish setup and open Chat")).toBeUndefined();
+  });
+  it("opens a recorded setup on the test message, with finished steps collapsed to summaries (VR-05)", async () => {
+    owner = { ...owner, completed: true, completedAt: "2026-09-30T00:00:00.000Z", completedBy: "operator" };
+    await render();
+    const steps = [...container.querySelectorAll('nav[aria-label="Setup steps"] button')];
+    expect(steps.map((step) => step.getAttribute("aria-current"))).toEqual([null, null, "step"]);
+    expect(steps[0]?.textContent).toContain("DoneChoose a modelProvider A");
+    expect(steps[1]?.textContent).toContain("Tool approval:");
+    expect(steps[2]?.textContent).toContain("Current");
+    expect(steps.map((step) => step.textContent)).not.toContainEqual(expect.stringContaining("Open"));
+    expect(button("Continue to safety")).toBeUndefined();
+    expect(container.textContent).not.toContain("Setup is already recorded");
+    const primaries = [...container.querySelectorAll("button")].filter((item) => item.className.includes("bg-accent"));
+    expect(primaries.map((item) => item.textContent)).toEqual(["Send a test message"]);
+    await click("Send a test message");
+    expect(api.navigate).toHaveBeenCalledExactlyOnceWith("/chat");
+  });
+  it("explains why the test message waits for setup (ST-18)", async () => {
+    await render();
+    await act(async () =>
+      [...container.querySelectorAll("button")].find((item) => item.textContent?.includes("Step 3"))!.click(),
+    );
+    const send = button("Send a test message");
+    expect(send.disabled).toBe(true);
+    expect(document.getElementById(send.getAttribute("aria-describedby")!)?.textContent).toContain(
+      "Finish setup first",
+    );
+  });
+  it("offers a cloud provider and the demo first, as one flat stepper (ST-03)", async () => {
+    await render();
+    const choices = [...container.querySelectorAll('[role="group"][aria-label="How to start"] button')];
+    expect(choices.map((item) => item.textContent)).toEqual(["Use a cloud provider", "Try the demo"]);
+    expect(button("Explore sample records")).toBeUndefined();
+    await click("Try the demo");
+    expect(container.textContent).toContain("Local demo for workspace-a");
+    await click("Use a cloud provider");
+    expect(container.textContent).not.toContain("Local demo for workspace-a");
+    expect(guided.rendered).toHaveBeenLastCalledWith(expect.objectContaining({ showSteps: false }));
+    expect(container.querySelectorAll("h1")).toHaveLength(1);
   });
 });

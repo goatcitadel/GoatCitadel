@@ -290,7 +290,8 @@ export interface ApprovalReplayEvent {
     | "replayed"
     | "explanation_requested"
     | "explanation_generated"
-    | "explanation_failed";
+    | "explanation_failed"
+    | "cancellation_lineage_skipped";
   actorId: string;
   timestamp: string;
   payload: Record<string, unknown>;

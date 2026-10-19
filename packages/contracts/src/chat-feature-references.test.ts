@@ -55,4 +55,24 @@ describe("Chat feature reference decoding", () => {
       readChatTurnFeatureReferences({ ...base, modelCouncil: { ...modelCouncil, participants: ["cloud"] } }),
     ).toThrow();
   });
+  it("keeps an advisory Work Passport and rejects a malformed one", () => {
+    const workPassport = {
+      passportId: "passport-1",
+      schemaVersion: "work.passport.v1",
+      classificationMode: "deterministic_local_v1",
+      baseline: { configured: false, primaryDomains: [] },
+      taskSignals: [{ domain: "legal", strength: "high", reasons: ["contract review"] }],
+      boundary: "baseline_not_configured",
+      consequence: "moderate",
+      review: { posture: "independent_review", reason: "Sensitive domain.", requirements: ["Get review."] },
+      evidenceRequirements: ["Cite sources."],
+      actionPosture: "ready_for_review",
+      limitations: ["Local heuristic."],
+      operatorCorrectionAllowed: true,
+    };
+    expect(readChatTurnFeatureReferences({ ...base, workPassport }).workPassport).toEqual(workPassport);
+    expect(() =>
+      readChatTurnFeatureReferences({ ...base, workPassport: { ...workPassport, operatorCorrectionAllowed: false } }),
+    ).toThrow();
+  });
 });

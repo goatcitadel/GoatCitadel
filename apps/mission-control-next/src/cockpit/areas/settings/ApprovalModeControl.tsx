@@ -4,7 +4,10 @@ import {
   describeToolApprovalModeHelp,
   TOOL_APPROVAL_MODE_OPTIONS,
 } from "../../../features/native-routes/settings/helpers/permission-helpers";
+import { useId } from "react";
 import { Button } from "../../ui/Button";
+import { Field } from "../../ui/Field";
+import { cockpitInputClass } from "../../ui/input-class";
 import { Dialog } from "../../ui/Dialog";
 import { isApprovalMode } from "./approval-mode-state";
 import { useApprovalModeControl } from "./use-approval-mode-control";
@@ -32,6 +35,7 @@ export function ApprovalModeEditor({
 }) {
   const { settings, ready, current, draft, change, uncertain, review, notice, locked, restricted } = control;
   const route = useCockpitRoute();
+  const bypassReasonId = useId();
   const parameters = new URLSearchParams(route.search);
   parameters.delete("shell");
   parameters.delete("shellScope");
@@ -46,7 +50,7 @@ export function ApprovalModeEditor({
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 id="approval-mode-title" className="text-base font-semibold text-fg">
+          <h3 id="approval-mode-title" className="text-md font-semibold text-fg">
             Tool approval rule
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
@@ -91,26 +95,35 @@ export function ApprovalModeEditor({
               Settings version {settings.data?.revision} · {settings.data?.deploymentProfile ?? "unknown"}
             </p>
           </TechnicalDetails>
-          <label className="mt-3 block max-w-sm text-sm font-medium text-fg">
-            Approval rule
-            <select
-              className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
-              value={draft.value}
-              disabled={locked || Boolean(review)}
-              onChange={(event) => {
-                if (isApprovalMode(event.target.value)) draft.setValue(event.target.value);
-              }}
-            >
-              {TOOL_APPROVAL_MODE_OPTIONS.map((mode) => (
-                <option key={mode} value={mode} disabled={restricted && mode === "bypass"}>
-                  {describeToolApprovalMode(mode)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="mt-2 text-sm text-fg-secondary">{describeToolApprovalModeHelp(draft.value)}</p>
+          <div className="mt-3 max-w-sm">
+            <Field label="Approval rule" help={describeToolApprovalModeHelp(draft.value)}>
+              {(fieldProps) => (
+                <select
+                  {...fieldProps}
+                  aria-describedby={
+                    restricted
+                      ? [fieldProps["aria-describedby"], bypassReasonId].filter(Boolean).join(" ")
+                      : fieldProps["aria-describedby"]
+                  }
+                  className={cockpitInputClass}
+                  value={draft.value}
+                  disabled={locked || Boolean(review)}
+                  onChange={(event) => {
+                    if (isApprovalMode(event.target.value)) draft.setValue(event.target.value);
+                  }}
+                >
+                  {TOOL_APPROVAL_MODE_OPTIONS.map((mode) => (
+                    <option key={mode} value={mode} disabled={restricted && mode === "bypass"}>
+                      {describeToolApprovalMode(mode)}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
+          </div>
           {restricted ? (
-            <p className="mt-2 text-sm text-status-waiting">
+            <p id={bypassReasonId} className="mt-2 text-sm text-status-waiting">
+              {describeToolApprovalMode("bypass")} is unavailable here.{" "}
               {safeOnly
                 ? "Guided setup requires an approval rule that keeps normal prompts available."
                 : "Remote Hardened keeps normal prompt skipping unavailable."}

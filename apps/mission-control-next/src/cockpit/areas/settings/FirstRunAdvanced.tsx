@@ -2,33 +2,15 @@ import { useState } from "react";
 import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { Button } from "../../ui/Button";
 import { FirstRunDefaults } from "./FirstRunDefaults";
-import { FirstRunDemo } from "./FirstRunDemo";
 import { McpDraftLeave } from "./McpDraftLeave";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 
+/** Optional installation defaults and the diagnostics link, below the setup steps. The demo is a step 1 choice. */
 export function FirstRunAdvanced({ workspaceId }: { workspaceId: string }) {
   const [open, setOpen] = useState(false),
     leave = useDraftLeave();
-  const [demoOpen, setDemoOpen] = useState(false);
   return (
     <section aria-label="Optional setup" className="grid gap-4 border-t border-line-subtle pt-4">
-      <div>
-        <Button
-          aria-expanded={demoOpen}
-          aria-controls="first-run-sample"
-          onClick={() => leave.request(() => setDemoOpen(!demoOpen))}
-        >
-          Explore sample records
-        </Button>
-        <p className="mt-2 text-xs text-fg-muted">
-          Review the local demo before preparing records. Opening these controls changes no data.
-        </p>
-      </div>
-      {demoOpen ? (
-        <div id="first-run-sample">
-          <FirstRunDemo workspaceId={workspaceId} />
-        </div>
-      ) : null}
       <div>
         <Button
           aria-expanded={open}

@@ -38,4 +38,11 @@ describe("restored feature defaults and persistence", () => {
       false,
     );
   });
+  it("defaults chatWorkPassportV1Enabled on once its restoration proved green, and still supports revocation", () => {
+    const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
+    expect(defaults.chatWorkPassportV1Enabled).toBe(true);
+    expect(buildUpdatedFeatureFlags(defaults, { chatWorkPassportV1Enabled: false }).chatWorkPassportV1Enabled).toBe(
+      false,
+    );
+  });
 });

@@ -825,6 +825,7 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
         message: `${item.action} action completed`,
       });
     } catch (err) {
+      // Custody is what keeps outbound errors on the shown session: a session switch ends it.
       if (!isCurrentCustody()) return;
       if (isAbortError(err)) {
         if (item.action === "send" && item.workspaceSnapshot && !canonicalTurnAccepted) {

@@ -6,7 +6,6 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { CockpitGuidedModelSetup } from "./CockpitGuidedModelSetup";
 import { ProviderCatalogSettings } from "./ProviderCatalogSettings";
-import { ProviderConnectionSettings } from "./ProviderConnectionSettings";
 import { ProviderManagementSettings } from "./ProviderManagementSettings";
 import { ProviderRoutingSettings } from "./ProviderRoutingSettings";
 import { ProviderAdviceSettings } from "./ProviderAdviceSettings";
@@ -88,13 +87,12 @@ export function ModelsSettings() {
           Advanced provider configuration
         </Button>
         <p className="mt-2 text-xs text-fg-muted">
-          Inspect catalogs, edit profiles, test connections, and review routing advice.
+          Edit each provider in one place, then inspect catalogs, routing, and advice.
         </p>
         {expertOpen ? (
           <div id="expert-provider-controls" className="mt-4 grid gap-4">
-            <ProviderCatalogSettings />
-            <ProviderConnectionSettings />
             <ProviderManagementSettings />
+            <ProviderCatalogSettings />
             <ProviderRoutingSettings />
             <ProviderAdviceSettings />
           </div>

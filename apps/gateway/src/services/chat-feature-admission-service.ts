@@ -27,6 +27,8 @@ import {
 } from "./chat-fanout-admission-reference.js";
 
 type FeatureBinding = { references: ChatTurnFeatureReferences; referenceSha256: string };
+/** Admitted evidence that does not depend on the provider route. */
+const ROUTE_INDEPENDENT_REFERENCE_KEYS: ReadonlySet<string> = new Set(["version", "workPassport"]);
 export interface ChatFeatureAdmissionHost {
   storage: Pick<
     AsyncStorage,
@@ -67,6 +69,11 @@ export interface ChatFeatureAdmissionHost {
     admission: ActiveTurnAdmission;
     content: string;
   }): Promise<import("@goatcitadel/contracts").ChatSelectedMeshCapabilities | undefined>;
+  /** Local deterministic Work Passport classification; advisory evidence only. */
+  classifyWorkPassport?(
+    workspaceId: string,
+    content: string,
+  ): Promise<import("@goatcitadel/contracts").WorkPassportRecord>;
   resolveRemotePlacement?(input: {
     admission: ActiveTurnAdmission;
     content: string;
@@ -198,6 +205,9 @@ export async function resolveChatFeatureAdmission(
   if (input.admission.admittedRequest.modelCouncil?.enabled && (await isEnabled("chatModelCouncilV1Enabled"))) {
     references.modelCouncil = { version: "chat.model-council.admission.v1" };
   }
+  if ((await isEnabled("chatWorkPassportV1Enabled")) && host.classifyWorkPassport) {
+    references.workPassport = await host.classifyWorkPassport(input.admission.identity.workspaceId, input.content);
+  }
   if ((await isEnabled("chatRequesterMcpV1Enabled")) && host.resolveRequesterConnections) {
     const connections = await host.resolveRequesterConnections({ admission: input.admission, content: input.content });
     if (connections.length) references.requesterConnections = connections;
@@ -234,20 +244,27 @@ export async function resolveChatFeatureAdmission(
     !references.selectedStaticMcp &&
     !references.selectedMeshCapabilities &&
     !references.remotePlacement &&
-    !references.modelCouncil
+    !references.modelCouncil &&
+    !references.workPassport
   )
     return undefined;
   // Every new restored-feature admission pins its route. Selected skill budgets,
   // requester schemas and scheduled scope must not silently move providers on replay.
+  // Route-independent evidence alone pins the route only when one resolves.
+  const routeIndependentOnly = Object.keys(references).every((key) => ROUTE_INDEPENDENT_REFERENCE_KEYS.has(key));
   if (!references.providerRoute) {
-    if (!route?.effectiveProviderId || !route.effectiveModel) {
-      throw new ConflictError({ message: "Chat feature admission requires an explicit provider route." });
-    }
-    const primary = { providerId: route.effectiveProviderId, model: route.effectiveModel };
-    const fingerprint = host.routeFingerprint(primary);
-    if (!fingerprint)
-      throw new ConflictError({ message: "Chat feature admission requires a verifiable provider route." });
-    references.providerRoute = { primary, fingerprint };
+    const primary =
+      route?.effectiveProviderId && route.effectiveModel
+        ? { providerId: route.effectiveProviderId, model: route.effectiveModel }
+        : undefined;
+    const fingerprint = primary ? host.routeFingerprint(primary) : undefined;
+    if (primary && fingerprint) references.providerRoute = { primary, fingerprint };
+    else if (!routeIndependentOnly)
+      throw new ConflictError({
+        message: primary
+          ? "Chat feature admission requires a verifiable provider route."
+          : "Chat feature admission requires an explicit provider route.",
+      });
   }
   await host.assertTurnAdmissionWrite(input.admission);
   if (input.deferBinding) {

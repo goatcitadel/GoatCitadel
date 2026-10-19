@@ -90,7 +90,7 @@ export async function runCockpitIntegrationManagementProof({ context, browser, s
         assert.equal(updated.label, editedLabel); assert.equal(updated.enabled, false);
         await management.getByText("Connection updated.", { exact: true }).waitFor();
         await edit.getByRole("button", { name: "Close editor", exact: true }).click();
-        await management.getByRole("button", { name: `${editedLabel} · Disabled`, exact: true }).click();
+        await page.getByRole("region", { name: "Integration connections", exact: true }).getByRole("button", { name: `Manage ${editedLabel}`, exact: true }).click();
         stage = "cancel deletion then confirm exact revision";
         await management.getByRole("button", { name: "Delete integration connection", exact: true }).click();
         const deletion = page.getByRole("dialog", { name: "Delete integration connection?", exact: true });

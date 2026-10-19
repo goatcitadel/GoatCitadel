@@ -1,32 +1,56 @@
-import { useId } from "react";
+import { useEffect, useRef } from "react";
 import type { LlmTransportDraft } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
+import { Field } from "../../ui/Field";
+import { cockpitInputClass } from "../../ui/input-class";
+import { jsonObjectFieldError, urlFieldError, useBlurValidation } from "./field-validation";
 
-const fieldClass =
-  "mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 py-1 text-sm text-fg disabled:opacity-60";
+/** Which field a transport validation message belongs to, so it is shown on that field. */
+export function transportErrorField(error: string | null | undefined): "headers" | "proxy-url" | "other" | null {
+  if (!error) return null;
+  if (/^Custom header/i.test(error)) return "headers";
+  if (/proxy URL/i.test(error)) return "proxy-url";
+  return "other";
+}
+
 export function ProviderTransportFields({
   draft,
   onChange,
   disabled,
+  error,
+  defaultOpen = false,
 }: {
   draft: LlmTransportDraft;
   onChange: (draft: LlmTransportDraft) => void;
   disabled: boolean;
+  /** The Gateway-side request validation message for the whole transport draft. */
+  error?: string | null;
+  defaultOpen?: boolean;
 }) {
-  const id = useId();
+  const details = useRef<HTMLDetailsElement>(null);
+  const headersCheck = useBlurValidation(jsonObjectFieldError);
+  const proxyCheck = useBlurValidation((value) => urlFieldError(value));
+  const errorField = transportErrorField(error);
+  // A message hidden in a closed group can't be acted on: open the group when one appears.
+  useEffect(() => {
+    if (errorField && details.current) details.current.open = true;
+  }, [errorField]);
   const field = (name: string, label: string, value: string, update: (value: string) => void) => (
-    <label key={name} className="block text-sm text-fg-secondary">
-      <span id={`${id}-${name}`}>{label}</span>
-      <input
-        aria-labelledby={`${id}-${name}`}
-        className={fieldClass}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => update(event.target.value)}
-      />
-    </label>
+    <Field key={name} label={label}>
+      {(fieldProps) => (
+        <input
+          {...fieldProps}
+          autoComplete="off"
+          spellCheck={false}
+          className={cockpitInputClass}
+          value={value}
+          disabled={disabled}
+          onChange={(event) => update(event.target.value)}
+        />
+      )}
+    </Field>
   );
   return (
-    <details className="rounded-md border border-line-subtle p-3">
+    <details ref={details} open={defaultOpen || undefined} className="rounded-md border border-line-subtle p-3">
       <summary className="cursor-pointer text-sm font-medium text-fg">Advanced request transport</summary>
       <p className="my-3 text-xs text-fg-muted">
         Transport sign-in accepts environment variable names only; inline tokens and credentials are rejected. File
@@ -37,22 +61,28 @@ export function ProviderTransportFields({
         then review transport separately. Saving adds or updates fields; clearing an existing field does not remove it.
       </p>
       <div className="space-y-3">
-        <label className="block text-sm text-fg-secondary">
-          <span id={`${id}-headers`}>Extra request headers</span>
-          <textarea
-            aria-labelledby={`${id}-headers`}
-            className={`${fieldClass} font-mono`}
-            rows={3}
-            disabled={disabled}
-            placeholder='{"X-Client": "GoatCitadel"}'
-            value={draft.headersJson}
-            onChange={(event) => onChange({ ...draft, headersJson: event.target.value })}
-          />
-        </label>
-        <p className="text-xs text-fg-muted">
-          Header configuration uses a JSON object. Do not enter credential values here; use the environment reference
-          fields below.
-        </p>
+        <Field
+          label="Extra request headers"
+          help="A JSON object. Do not enter credential values here; use the environment reference fields below."
+          error={headersCheck.error ?? (errorField === "headers" ? (error ?? undefined) : undefined)}
+        >
+          {(fieldProps) => (
+            <textarea
+              {...fieldProps}
+              className={`${cockpitInputClass} font-mono`}
+              rows={3}
+              disabled={disabled}
+              spellCheck={false}
+              placeholder='{"X-Client": "GoatCitadel"}'
+              value={draft.headersJson}
+              onBlur={(event) => headersCheck.onBlur(event.target.value)}
+              onChange={(event) => {
+                onChange({ ...draft, headersJson: event.target.value });
+                headersCheck.onChange(event.target.value);
+              }}
+            />
+          )}
+        </Field>
         {(["auth", "proxyAuth"] as const).map((key) => {
           const auth = draft[key];
           const label = key === "auth" ? "Request" : "Proxy";
@@ -61,21 +91,22 @@ export function ProviderTransportFields({
           return (
             <fieldset key={key} className="space-y-2 border-t border-line-subtle pt-3">
               <legend className="text-sm font-medium text-fg">{label} authentication</legend>
-              <label className="text-sm text-fg-secondary">
-                <span id={`${id}-${key}-mode`}>{label} auth mode</span>
-                <select
-                  aria-labelledby={`${id}-${key}-mode`}
-                  className={fieldClass}
-                  value={auth.mode}
-                  disabled={disabled}
-                  onChange={(event) => patch({ mode: event.target.value as typeof auth.mode })}
-                >
-                  <option value="none">None</option>
-                  <option value="bearer">Bearer environment token</option>
-                  <option value="header">Header environment value</option>
-                  {key === "auth" ? <option value="query">Query environment value</option> : null}
-                </select>
-              </label>
+              <Field label={`${label} auth mode`}>
+                {(fieldProps) => (
+                  <select
+                    {...fieldProps}
+                    className={cockpitInputClass}
+                    value={auth.mode}
+                    disabled={disabled}
+                    onChange={(event) => patch({ mode: event.target.value as typeof auth.mode })}
+                  >
+                    <option value="none">None</option>
+                    <option value="bearer">Bearer environment token</option>
+                    <option value="header">Header environment value</option>
+                    {key === "auth" ? <option value="query">Query environment value</option> : null}
+                  </select>
+                )}
+              </Field>
               {auth.mode === "bearer" ? (
                 <>
                   {field(`${key}-token-env`, `${label} token environment variable`, auth.tokenEnv, (tokenEnv) =>
@@ -113,7 +144,27 @@ export function ProviderTransportFields({
             </fieldset>
           );
         })}
-        {field("proxy-url", "Proxy URL", draft.proxyUrl, (proxyUrl) => onChange({ ...draft, proxyUrl }))}
+        <Field
+          label="Proxy URL"
+          error={proxyCheck.error ?? (errorField === "proxy-url" ? (error ?? undefined) : undefined)}
+        >
+          {(fieldProps) => (
+            <input
+              {...fieldProps}
+              type="url"
+              autoComplete="off"
+              spellCheck={false}
+              className={cockpitInputClass}
+              value={draft.proxyUrl}
+              disabled={disabled}
+              onBlur={(event) => proxyCheck.onBlur(event.target.value)}
+              onChange={(event) => {
+                onChange({ ...draft, proxyUrl: event.target.value });
+                proxyCheck.onChange(event.target.value);
+              }}
+            />
+          )}
+        </Field>
         {field("proxy-bypass", "Proxy bypass hosts", draft.proxyBypassHostsText, (proxyBypassHostsText) =>
           onChange({ ...draft, proxyBypassHostsText }),
         )}
@@ -141,6 +192,11 @@ export function ProviderTransportFields({
             </label>
           </fieldset>
         ))}
+        {errorField === "other" ? (
+          <p role="alert" className="text-sm text-status-failed">
+            {error}
+          </p>
+        ) : null}
       </div>
     </details>
   );

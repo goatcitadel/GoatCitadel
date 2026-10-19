@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import {
   useProviderModelCatalog,
   type ProviderModelCatalogOption,
 } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
 import { Button } from "../../ui/Button";
+import { Field } from "../../ui/Field";
+import { cockpitInputClass } from "../../ui/input-class";
+import { urlFieldError, useBlurValidation } from "./field-validation";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { RiskBadge } from "../../ui/RiskBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
@@ -21,10 +24,21 @@ import {
   PROVIDER_AUTH_MODE_LABELS,
 } from "./settings-vocabulary";
 
-export function ProviderConnectionSettings() {
+/**
+ * The Connection and Credential parts of the one provider editor. The provider page owns the selection and
+ * passes it in, so this panel never offers a second provider picker.
+ */
+export function ProviderConnectionSettings({
+  providerId,
+  credentialActions,
+}: {
+  providerId?: string;
+  /** Saved-credential status and removal, shown with the credential controls. */
+  credentialActions?: ReactNode;
+}) {
+  const titleId = useId();
   const catalog = useProviderModelCatalog("system");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const id = selectedId ?? catalog.config?.activeProviderId ?? catalog.providers[0]?.providerId;
+  const id = providerId ?? catalog.config?.activeProviderId ?? catalog.providers[0]?.providerId;
   const provider = catalog.providers.find((item) => item.providerId === id);
   const ready = Boolean(
     catalog.config &&
@@ -34,18 +48,14 @@ export function ProviderConnectionSettings() {
     catalog.config.revision > 0,
   );
   return (
-    <section
-      aria-labelledby="provider-connection-title"
-      className="mt-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
-    >
+    <section aria-labelledby={titleId} className="border-t border-line-subtle pt-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 id="provider-connection-title" className="text-md font-semibold text-fg">
+          <h4 id={titleId} className="text-base font-semibold text-fg">
             Provider connection
-          </h3>
+          </h4>
           <p className="mt-1 text-sm text-fg-secondary">
-            Review an endpoint or API credential change for this installation. The Gateway owns validation and
-            application.
+            The endpoint and API credential this provider uses. The Gateway checks and applies each change.
           </p>
         </div>
         <Button size="sm" disabled={catalog.loading} onClick={() => void catalog.reload()}>
@@ -62,24 +72,6 @@ export function ProviderConnectionSettings() {
           Current provider settings are unavailable. Refresh before editing.
         </p>
       ) : null}
-      <label className="mt-3 block text-sm font-medium text-fg">
-        Edit provider
-        <select
-          className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
-          value={id ?? ""}
-          disabled={!ready}
-          onChange={(event) => setSelectedId(event.target.value)}
-        >
-          {!provider ? (
-            <option value={id ?? ""}>{id ? "Selected provider unavailable" : "No provider configured"}</option>
-          ) : null}
-          {catalog.providers.map((item) => (
-            <option key={item.providerId} value={item.providerId}>
-              {item.label}
-            </option>
-          ))}
-        </select>
-      </label>
       {provider && catalog.config ? (
         <ProviderConnectionEditor
           key={provider.providerId}
@@ -90,9 +82,12 @@ export function ProviderConnectionSettings() {
           revision={catalog.config.revision}
           available={ready}
           reload={catalog.reload}
+          credentialActions={credentialActions}
         />
       ) : (
-        <p className="mt-3 text-sm text-fg-muted">Select a configured provider to edit its connection.</p>
+        <p className="mt-3 text-sm text-fg-muted">
+          {id ? "This provider is no longer saved. Refresh the connection." : "Select a saved provider first."}
+        </p>
       )}
     </section>
   );
@@ -104,14 +99,19 @@ function ProviderConnectionEditor({
   revision,
   available,
   reload,
+  credentialActions,
 }: {
   provider: ProviderModelCatalogOption;
   registeredEnvVar?: string;
   revision: number;
   available: boolean;
   reload: () => Promise<unknown>;
+  credentialActions?: ReactNode;
 }) {
   const editor = useProviderConnectionEditor(provider, revision, reload, available);
+  const draftReasonId = useId();
+  const envReasonId = useId();
+  const endpointCheck = useBlurValidation((value) => urlFieldError(value, { required: true }));
   const route = useCockpitRoute();
   const [credentialStorage, setCredentialStorage] = useState<"keychain" | "env">("keychain");
   const { draft, attempt, blocked } = editor;
@@ -155,22 +155,31 @@ function ProviderConnectionEditor({
         Settings version {revision} · Credential: {provider.hasApiKey ? "Configured" : "Not reported as configured"}.
         Saved values are never displayed.
       </p>
-      <label className="block text-sm font-medium text-fg">
-        Provider endpoint
-        <input
-          type="url"
-          autoComplete="off"
-          spellCheck={false}
-          value={draft.value}
-          disabled={disabled}
-          maxLength={2048}
-          onChange={(event) => draft.setValue(event.target.value)}
-          className="mt-1 block min-h-11 w-full min-w-0 rounded-md border border-line-control bg-canvas px-3 text-fg"
-        />
-      </label>
-      <p className="text-xs text-fg-muted">
-        Use the provider API base URL. Credentials belong in the secure credential step.
-      </p>
+      <Field
+        label="Provider endpoint"
+        required
+        help="Use the provider API base URL. Credentials belong in the secure credential step."
+        error={endpointCheck.error}
+      >
+        {(fieldProps) => (
+          <input
+            {...fieldProps}
+            aria-label="Provider endpoint"
+            type="url"
+            autoComplete="off"
+            spellCheck={false}
+            value={draft.value}
+            disabled={disabled}
+            maxLength={2048}
+            onBlur={(event) => endpointCheck.onBlur(event.target.value)}
+            onChange={(event) => {
+              draft.setValue(event.target.value);
+              endpointCheck.onChange(event.target.value);
+            }}
+            className={cockpitInputClass}
+          />
+        )}
+      </Field>
       {draft.isDirty ? (
         <p role="status" className="text-xs text-status-waiting">
           Unsaved endpoint draft
@@ -191,7 +200,7 @@ function ProviderConnectionEditor({
         <Button
           size="sm"
           variant="primary"
-          disabled={disabled || !draft.isDirty || draft.hasRemoteChanges}
+          disabled={disabled || !draft.isDirty || draft.hasRemoteChanges || Boolean(endpointCheck.error)}
           onClick={editor.prepareEndpoint}
         >
           Review endpoint change
@@ -209,49 +218,61 @@ function ProviderConnectionEditor({
             {sigV4 ? AWS_SIGV4_CREDENTIAL_LABEL : "API credential"}
           </legend>
           {sigV4 ? <p className="text-xs text-fg-muted">{AWS_SIGV4_CREDENTIAL_HELP}</p> : null}
-          <label className="block text-sm text-fg">
-            Credential storage
-            <select
-              className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
-              value={shownStorage}
-              onChange={(event) => setCredentialStorage(event.target.value as "keychain" | "env")}
-            >
-              <option value="keychain">OS keychain (default)</option>
-              <option value="env">Installation environment file (plaintext)</option>
-            </select>
-          </label>
+          <Field label="Credential storage">
+            {(fieldProps) => (
+              <select
+                {...fieldProps}
+                className={cockpitInputClass}
+                value={shownStorage}
+                onChange={(event) => setCredentialStorage(event.target.value as "keychain" | "env")}
+              >
+                <option value="keychain">OS keychain (default)</option>
+                <option value="env">Installation environment file (plaintext)</option>
+              </select>
+            )}
+          </Field>
           {shownStorage === "env" ? (
             <>
               <p className="text-sm text-status-waiting">
                 This explicitly saves the credential as plaintext in the installation's environment file. Anyone who can
                 read that file can read the credential.
               </p>
-              <label className="block text-sm text-fg">
-                Environment variable name
-                <input
-                  value={shownEnvVar}
-                  readOnly
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-3 text-fg"
-                />
-              </label>
-              <p className="text-xs text-fg-muted">
-                The Gateway owns this registered variable and checks reserved names and shared ownership before saving.
-              </p>
+              <Field
+                label="Environment variable name"
+                help="The Gateway owns this registered variable and checks reserved names and shared ownership before saving."
+              >
+                {(fieldProps) => (
+                  <input
+                    {...fieldProps}
+                    value={shownEnvVar}
+                    readOnly
+                    autoComplete="off"
+                    spellCheck={false}
+                    className={cockpitInputClass}
+                  />
+                )}
+              </Field>
               {!shownEnvVar ? (
-                <p className="text-sm text-status-waiting">
-                  No environment variable is registered. Configure the provider profile in the provider management
-                  controls below first.
+                <p id={envReasonId} className="text-sm text-status-waiting">
+                  No environment variable is registered. Set API key environment variable with Edit provider profile
+                  first.
                 </p>
               ) : null}
             </>
           ) : (
             <p className="text-xs text-fg-muted">A keychain failure will not switch storage automatically.</p>
           )}
+          {draft.isDirty ? (
+            <p id={draftReasonId} className="text-xs text-fg-muted">
+              Finish or discard the endpoint draft before replacing its credential.
+            </p>
+          ) : null}
           <Button
             size="sm"
             disabled={disabled || draft.isDirty || draft.hasRemoteChanges || (shownStorage === "env" && !shownEnvVar)}
+            aria-describedby={
+              draft.isDirty ? draftReasonId : shownStorage === "env" && !shownEnvVar ? envReasonId : undefined
+            }
             onClick={() => editor.prepareCredential(credentialStorage, shownEnvVar)}
           >
             {sigV4 ? `Replace ${AWS_SIGV4_CREDENTIAL_LABEL}` : "Replace API credential"}
@@ -265,9 +286,7 @@ function ProviderConnectionEditor({
           Use its existing authentication setup below.
         </p>
       ) : null}
-      {draft.isDirty ? (
-        <p className="text-xs text-fg-muted">Finish or discard the endpoint draft before replacing its credential.</p>
-      ) : null}
+      {credentialActions}
       {attempt ? (
         <div className="space-y-2 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
           <p role={attempt.uncertain ? "alert" : "status"}>{attempt.message}</p>

@@ -63,7 +63,13 @@ function resolveGatewayAccessThemeClass(): "theme-signal-noir" | "theme-citadel-
   if (storedTheme === "light") {
     return "theme-citadel-light";
   }
-  return "theme-signal-noir";
+  if (storedTheme === "dark") {
+    return "theme-signal-noir";
+  }
+  // Nothing saved, or "Match system": follow the host colour scheme, the same default as ui-preferences.
+  return typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: light)").matches
+    ? "theme-citadel-light"
+    : "theme-signal-noir";
 }
 
 export function GatewayAccessGate({

@@ -10,6 +10,7 @@ import { buildSettingsIndex, searchSettingsPages, type SettingsIndexEntry } from
 import { SettingsSectionTabs, selectedSettingsSection, useSettingsSectionHash } from "./SettingsSectionTabs";
 import {
   FirstRunArea,
+  FirstRunStatus,
   AppearanceSettings,
   DeviceAccessSettings,
   PersonalitySettings,
@@ -42,6 +43,8 @@ import {
   PortablePacksSettings,
   preloadSettingsSection,
 } from "./settings-controls";
+import { RulesPrecedenceLink } from "./RulesPrecedence";
+import { LLAMA_SETUP_HREF, MANAGED_RUNTIME_HREF, SettingsOwnerPointer } from "./SettingsOwnerPointer";
 
 const PAGES = buildSettingsIndex();
 const DISCOVERABLE_PAGES = buildSettingsIndex({ discovery: true });
@@ -83,7 +86,7 @@ export function SettingsArea() {
   const renderControls = (section: string) => {
     switch (section) {
       case "onboarding":
-        return <FirstRunArea embedded />;
+        return <FirstRunStatus />;
       case "general":
         return <AppearanceSettings />;
       case "personalities":
@@ -133,13 +136,14 @@ export function SettingsArea() {
             <PortablePacksSettings />
           </>
         );
+      // One owner page per editor: llama.cpp setup lives on Models › Local AI, the managed runtime on Advanced.
       case "runtime":
         return (
           <>
             <ManagedRuntimeSettings />
             <DaemonDiagnostics />
             <VoiceRuntimeSettings />
-            <LlamaSetupSettings workspaceId={activeWorkspaceId ?? ""} />
+            <SettingsOwnerPointer text="llama.cpp setup is on" label="Models › Local AI" href={LLAMA_SETUP_HREF} />
           </>
         );
       case "providers":
@@ -149,10 +153,11 @@ export function SettingsArea() {
           <>
             <LlamaSetupSettings workspaceId={activeWorkspaceId ?? ""} />
             <LocalAiSettings key={activeCitadelId} />
-            <details className="mt-4">
-              <summary className="cursor-pointer text-sm font-medium">Expert local runtime configuration</summary>
-              <ManagedRuntimeSettings />
-            </details>
+            <SettingsOwnerPointer
+              text="The managed local runtime is on"
+              label="Advanced › Runtime configuration"
+              href={MANAGED_RUNTIME_HREF}
+            />
           </>
         );
       case "permissions":
@@ -171,7 +176,12 @@ export function SettingsArea() {
       case "budget":
         return <BudgetModeControl />;
       case "trust-policy":
-        return <TrustPolicySettings />;
+        return (
+          <>
+            <RulesPrecedenceLink />
+            <TrustPolicySettings />
+          </>
+        );
       default:
         return null;
     }
@@ -195,7 +205,9 @@ export function SettingsArea() {
       : rest[0] && !PAGES.some((item) => item.id === rest[0] || item.entries.some((entry) => entry.section === rest[0]))
         ? "This link does not match a settings page. Choose a page from Settings."
         : hash &&
-            !["application-updates", "approval-mode", "filesystem-write-roots"].includes(hash) &&
+            !["application-updates", "approval-mode", "filesystem-write-roots", "notification-routing"].includes(
+              hash,
+            ) &&
             !page.entries.some((entry) => entry.anchor === hash || entry.section === hash)
           ? "This link does not match a section on this settings page. Choose a section from Settings."
           : undefined;

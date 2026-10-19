@@ -1,0 +1,314 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ChatThinkingLevel, ChangePlanRecord, OnboardingState } from "@goatcitadel/contracts";
+import { cancelChangePlan, createChangePlan, fetchChangePlans } from "@goatcitadel/mission-control-shared/api/client";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { deriveSetupProgress } from "@goatcitadel/mission-control-shared/content/setup-progress";
+import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
+import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
+import {
+  clampGuidedThinkingLevel,
+  GUIDED_THINKING_LEVELS,
+  localRuntimeSetupGuide,
+  pickDefaultGuidedProvider,
+  resolveGuidedProviderReadiness,
+  supportedGuidedThinkingLevels,
+} from "../../../features/native-routes/settings/sections/guided-model-setup-support";
+
+export const TERMINAL_CHANGE_PLAN_STATUSES = new Set<ChangePlanRecord["status"]>([
+  "completed",
+  "applied",
+  "manual_required",
+  "failed",
+  "cancelled",
+  "rolled_back",
+  "rollback_failed",
+]);
+
+const errorText = (error: unknown) => describeApiError(error).summary;
+
+/**
+ * The guided chat-model owner's state and Gateway calls: a provider connection plan, then an installation default
+ * model plan, both reviewed through Change Plans. The cockpit view renders it; the Classic view keeps its own copy.
+ */
+export function useGuidedModelSetup({
+  workspaceId,
+  onboarding,
+  reloadOnboarding,
+  setNotice,
+  onEnterChat,
+}: {
+  workspaceId: string;
+  onboarding: OnboardingState;
+  reloadOnboarding: () => Promise<void>;
+  setNotice: (message: string | null) => void;
+  onEnterChat: () => void;
+}) {
+  const catalog = useProviderModelCatalog("system");
+  const providers = catalog.providers;
+  const loadModelsForProvider = catalog.loadModelsForProvider;
+  // The typed contract requires settings.llm, but this is also the recovery surface for a partial Gateway payload.
+  const activeProviderId = onboarding.settings?.llm?.activeProviderId ?? "";
+  const activeModel = onboarding.settings?.llm?.activeModel ?? "";
+  const fallbackProvider = pickDefaultGuidedProvider(providers, activeProviderId);
+  const canonicalSelection = {
+    providerId: activeProviderId || fallbackProvider?.providerId || "",
+    model: activeModel || fallbackProvider?.defaultModel || "",
+    thinkingLevel: catalog.config?.defaultThinkingLevel ?? ("standard" as ChatThinkingLevel),
+  };
+  const modelDraft = useSessionDraft(
+    "onboarding:" + workspaceId + ":model",
+    canonicalSelection,
+    JSON.stringify(canonicalSelection),
+    { label: "First Chat model", available: !catalog.loading },
+  );
+  const { providerId, model, thinkingLevel: requestedThinkingLevel } = modelDraft.value;
+  const setProviderId = (id: string) =>
+    modelDraft.setValue((current) => ({
+      ...current,
+      providerId: id,
+      model: providers.find((provider) => provider.providerId === id)?.defaultModel ?? "",
+    }));
+  const setModel = (next: string) => modelDraft.setValue((current) => ({ ...current, model: next }));
+  const setThinkingLevel = (next: ChatThinkingLevel) =>
+    modelDraft.setValue((current) => ({ ...current, thinkingLevel: next }));
+  const busyRef = useRef(false);
+  const planLoadGeneration = useRef(0);
+  const [models, setModels] = useState<string[]>([]);
+  const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
+  const [dialogPlan, setDialogPlan] = useState<ChangePlanRecord | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [recheckingEndpoint, setRecheckingEndpoint] = useState(false);
+
+  const selectedProvider = useMemo(
+    () => providers.find((provider) => provider.providerId === providerId) ?? null,
+    [providers, providerId],
+  );
+  const supportedThinkingLevels = useMemo(
+    () => supportedGuidedThinkingLevels(selectedProvider?.capabilities),
+    [selectedProvider?.capabilities],
+  );
+  // Submit only an effort the provider accepts; the draft keeps the preference for a later reasoning provider.
+  const thinkingLevel = clampGuidedThinkingLevel(requestedThinkingLevel, supportedThinkingLevels);
+  const savedThinkingLevel = clampGuidedThinkingLevel(
+    catalog.config?.defaultThinkingLevel ?? "standard",
+    supportedThinkingLevels,
+  );
+  const readiness = resolveGuidedProviderReadiness(
+    selectedProvider && recheckingEndpoint ? { ...selectedProvider, modelProbeState: "not_checked" } : selectedProvider,
+  );
+  const providerReady = readiness.state === "ready";
+  // Local runtimes need no credential: the next step is re-checking the live endpoint, not a credential plan.
+  const verifiesLocalEndpoint =
+    selectedProvider?.localCostPosture === "zero_cost_local_runtime" && readiness.state !== "needs_setup";
+  const usesChatGptOAuth = selectedProvider?.authMode === "codex-oauth";
+  const defaultPlanCompleted =
+    providerReady &&
+    ((Boolean(activeProviderId && activeModel) &&
+      activeProviderId === providerId &&
+      activeModel === model &&
+      thinkingLevel === savedThinkingLevel) ||
+      (latestPlan?.request.kind === "installation_default_model" &&
+        latestPlan.status === "completed" &&
+        latestPlan.request.providerId === providerId &&
+        latestPlan.request.model === model &&
+        latestPlan.request.thinkingLevel === thinkingLevel));
+  const progress = deriveSetupProgress({
+    providerReady,
+    defaultPlanCompleted,
+    firstResponseVerified: onboarding.firstTask?.status === "verified",
+  });
+
+  useEffect(() => {
+    if (!providerId) return;
+    let cancelled = false;
+    const provider = providers.find((candidate) => candidate.providerId === providerId);
+    setModels(provider?.models ?? (provider?.defaultModel ? [provider.defaultModel] : []));
+    void loadModelsForProvider(providerId)
+      .then((items) => {
+        if (cancelled) return;
+        setModels([...new Set([provider?.defaultModel, ...items].filter((item): item is string => Boolean(item)))]);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setActionError(errorText(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [providers, loadModelsForProvider, activeModel, activeProviderId, providerId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const generation = ++planLoadGeneration.current;
+    busyRef.current = false;
+    setBusy(false);
+    setActionError(null);
+    setLatestPlan(null);
+    setDialogPlan(null);
+    void fetchChangePlans({ workspaceId }, { limit: 25 })
+      .then(({ items }) => {
+        if (cancelled) return;
+        const pending = items.find(
+          (plan) =>
+            plan.origin.surface === "settings" &&
+            ["provider_connection", "installation_default_model"].includes(plan.kind) &&
+            !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
+        );
+        if (pending && generation === planLoadGeneration.current) setLatestPlan(pending);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled && generation === planLoadGeneration.current) setActionError(errorText(error));
+      });
+    return () => {
+      cancelled = true;
+      planLoadGeneration.current += 1;
+    };
+  }, [workspaceId]);
+
+  const recordPlan = useCallback(
+    async (updated: ChangePlanRecord) => {
+      setLatestPlan(updated);
+      setDialogPlan(updated.requiredAction && !TERMINAL_CHANGE_PLAN_STATUSES.has(updated.status) ? updated : null);
+      if (updated.status === "completed") {
+        if (updated.request.kind === "installation_default_model") {
+          const saved = {
+            providerId: updated.request.providerId,
+            model: updated.request.model,
+            thinkingLevel: updated.request.thinkingLevel ?? ("standard" as ChatThinkingLevel),
+          };
+          modelDraft.acceptSaved(saved, JSON.stringify(saved), saved);
+        }
+        setNotice(updated.result?.summary ?? "Change applied and verified.");
+        await Promise.all([catalog.reload(), reloadOnboarding()]);
+      }
+      return updated;
+    },
+    [catalog, reloadOnboarding, setNotice, modelDraft],
+  );
+
+  const runAction = useCallback(
+    async (operation: () => Promise<ChangePlanRecord>) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      const generation = ++planLoadGeneration.current;
+      setBusy(true);
+      setActionError(null);
+      try {
+        const updated = await operation();
+        if (generation !== planLoadGeneration.current) return;
+        await recordPlan(updated);
+      } catch (error) {
+        if (generation === planLoadGeneration.current) setActionError(errorText(error));
+      } finally {
+        if (generation === planLoadGeneration.current) {
+          busyRef.current = false;
+          setBusy(false);
+        }
+      }
+    },
+    [recordPlan],
+  );
+
+  const pendingSetupPlan = latestPlan && !TERMINAL_CHANGE_PLAN_STATUSES.has(latestPlan.status) ? latestPlan : null;
+  const createPlan = async (request: Parameters<typeof createChangePlan>[0]["request"]) => {
+    if (pendingSetupPlan) {
+      setDialogPlan(pendingSetupPlan);
+      return;
+    }
+    await runAction(() => createChangePlan({ workspaceId, surface: "settings", request }));
+  };
+  const createProviderPlan = async () => {
+    if (!providerId && !pendingSetupPlan) {
+      setNotice("Choose a provider or local runtime first.");
+      return;
+    }
+    await createPlan({ kind: "provider_connection", providerId });
+  };
+  const createDefaultPlan = async () => {
+    if ((!providerId || !model) && !pendingSetupPlan) {
+      setNotice("Choose a verified provider and model first.");
+      return;
+    }
+    await createPlan({ kind: "installation_default_model", providerId, model, thinkingLevel });
+  };
+  const recheckLocalEndpoint = async () => {
+    if (!providerId || recheckingEndpoint) return;
+    setRecheckingEndpoint(true);
+    setActionError(null);
+    try {
+      // Bypass the catalog cache: a failed probe is cached like a result.
+      await loadModelsForProvider(providerId, { force: true });
+    } catch (error) {
+      setActionError(errorText(error));
+    } finally {
+      setRecheckingEndpoint(false);
+    }
+  };
+  const cancelPlan = (plan: ChangePlanRecord) => {
+    const action = plan.requiredAction;
+    if (!action) return;
+    const context = {
+      workspaceId,
+      ...(plan.origin.sessionId ? { sessionId: plan.origin.sessionId } : {}),
+      ...(plan.origin.turnId ? { turnId: plan.origin.turnId } : {}),
+    };
+    void runAction(() =>
+      cancelChangePlan(plan.planId, context, { expectedRevision: plan.revision, actionNonce: action.actionNonce }),
+    );
+  };
+  const enterChat = () => {
+    if (!defaultPlanCompleted) {
+      setNotice("Confirm and verify the future-Chat model default before entering Chat.");
+      return;
+    }
+    onEnterChat();
+  };
+  /** The one next action: connect, check a local endpoint, confirm the model, or move on. */
+  const primary = defaultPlanCompleted
+    ? { kind: "enter" as const, run: enterChat }
+    : providerReady
+      ? { kind: "confirm" as const, run: createDefaultPlan }
+      : verifiesLocalEndpoint
+        ? { kind: "check" as const, run: recheckLocalEndpoint }
+        : { kind: "connect" as const, run: createProviderPlan };
+  const primaryDisabled =
+    busy ||
+    !providerId ||
+    (providerReady && !model) ||
+    (!providerReady && verifiesLocalEndpoint && readiness.state === "checking");
+
+  return {
+    catalog,
+    providers,
+    draft: modelDraft,
+    providerId,
+    model,
+    models,
+    thinkingLevel,
+    setProviderId,
+    setModel,
+    setThinkingLevel,
+    selectedProvider,
+    supportedThinkingLevels,
+    effortLimited: supportedThinkingLevels.length < GUIDED_THINKING_LEVELS.length,
+    localGuide: localRuntimeSetupGuide(selectedProvider, model),
+    readiness,
+    providerReady,
+    usesChatGptOAuth,
+    defaultPlanCompleted,
+    progress,
+    busy,
+    actionError,
+    setActionError,
+    latestPlan,
+    dialogPlan,
+    setDialogPlan,
+    runAction,
+    createProviderPlan,
+    cancelPlan,
+    primary,
+    primaryDisabled,
+  };
+}
+
+export type GuidedModelSetupControl = ReturnType<typeof useGuidedModelSetup>;

@@ -20,6 +20,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
   ...(await original<object>()),
   ...api,
 }));
+// The connection details name the bound workspace through a query; this suite renders without a QueryClient.
+vi.mock("../../data/use-workspace-name", () => ({
+  useWorkspaceNameLookup: () => () => undefined,
+  useWorkspaceName: () => undefined,
+  useActiveWorkspaceLabel: () => "Current workspace",
+}));
 let view: ReactTestRenderer;
 const text = (node: ReactTestInstance | string): string =>
   typeof node === "string" ? node : node.children.map(text).join("");
@@ -28,7 +34,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it("keeps the selected Meet owner visible and its input intact while the connection list is paged and filtered", async () => {
+it("ST-21: keeps no second list or search, marks the open view pressed, and opens a connection the saved list selects", async () => {
   vi.clearAllMocks();
   __resetSessionViewStateForTests();
   __resetSessionDraftsForTests();
@@ -66,24 +72,30 @@ it("keeps the selected Meet owner visible and its input intact while the connect
     if (!button) throw new Error(`Missing ${label}`);
     await act(async () => button.props.onClick());
   };
-  expect(view.root.findAllByType("li")).toHaveLength(20);
-  await click("Google Meet preparation");
-  expect(api.fetchGoogleMeetSessions).toHaveBeenCalled();
-  const meetingInput = () => view.root.findByProps({ "aria-label": "Google Meet URL" });
-  expect(meetingInput()).toBeDefined();
-  await act(async () =>
-    meetingInput().props.onChange({ target: { value: "https://meet.google.com/fixture-meeting" } }),
-  );
-  await click("Show more managed integrations");
-  expect(view.root.findAllByType("li")).toHaveLength(25);
-  expect(meetingInput().props.value).toBe("https://meet.google.com/fixture-meeting");
-  await act(async () =>
-    view.root
-      .findByProps({ "aria-label": "Find managed integration" })
-      .props.onChange({ target: { value: "no matches" } }),
-  );
   expect(view.root.findAllByType("li")).toHaveLength(0);
-  expect(meetingInput().props.value).toBe("https://meet.google.com/fixture-meeting");
+  expect(view.root.findAllByType("input").filter((node) => node.props.type === "search")).toHaveLength(0);
+  expect(view.root.findAllByType("button").some((node) => text(node) === "Notification routing")).toBe(false);
+  const views = view.root.findByProps({ role: "group", "aria-label": "Management views" });
+  const pressed = () =>
+    views
+      .findAllByType("button")
+      .filter((node) => node.props["aria-pressed"] === true)
+      .map((node) => text(node));
+  expect(pressed()).toEqual([]);
+  await click("Google Meet preparation");
+  expect(pressed()).toEqual(["Google Meet preparation"]);
+  expect(api.fetchGoogleMeetSessions).toHaveBeenCalled();
+  expect(view.root.findByProps({ "aria-label": "Google Meet URL" })).toBeDefined();
+  await act(async () =>
+    view.update(
+      <IntegrationManagementSettings
+        workspaceId="fixture-workspace"
+        selection={{ connectionId: "connection-3", nonce: 1 }}
+      />,
+    ),
+  );
+  expect(pressed()).toEqual([]);
+  expect(text(view.root)).toContain("Fixture 3");
   expect(api.startGoogleMeetSession).not.toHaveBeenCalled();
   expect(api.createRealtimeVoiceClientSecret).not.toHaveBeenCalled();
   expect(fetch).not.toHaveBeenCalled();
