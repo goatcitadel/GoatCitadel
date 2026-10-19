@@ -38,12 +38,12 @@ function firstAnswer() {
     turn: { turnId: "t", trace: { sessionId: "s", status: "completed", model: "model", routing: { primaryProviderId: "stub" } },
       assistantMessage: { content: "Verification stub reply." } }, providerDispatches: 1 };
 }
-/** A page whose Cockpit composer (combobox "Message") mounts only after one of the given buttons starts a conversation. */
+/** A page whose Cockpit composer (textbox "Message") mounts only after one of the given buttons starts a conversation. */
 function cockpitPage({ composerMounted = false, buttons = ["New conversation"] } = {}) {
   const state = { composerMounted, clicks: [] };
   const locator = (role, name, within) => ({
     async waitFor({ timeout } = {}) {
-      if (role === "combobox" && name === "Message" && state.composerMounted) return;
+      if (role === "textbox" && name === "Message" && state.composerMounted) return;
       throw new Error(`Timeout ${timeout}ms waiting for ${role} ${name}${within ? ` in ${within}` : ""}`);
     },
     async isVisible() {
@@ -74,7 +74,7 @@ test("install UI smoke falls back to the conversation rail's New button", async 
 });
 test("install UI smoke reports a missing composer instead of hanging", async () => {
   const { page } = cockpitPage({ buttons: [] });
-  await assert.rejects(() => openCockpitComposer(page, { probeMs: 1, timeoutMs: 1 }), /combobox Message/u);
+  await assert.rejects(() => openCockpitComposer(page, { probeMs: 1, timeoutMs: 1 }), /textbox Message/u);
 });
 
 test("first answer requires exact canonical turn, actual provider dispatch and preserved settings", () => {

@@ -125,7 +125,7 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   const copied = forkThread.turns.find((turn) => turn.turnId === forkThread.activeLeafTurnId);
   await clickTurnAction(await lastTurn(page, copied.userMessage.content), "Edit and resend");
   const revised = `Independent fork sibling ${scope.variant} ${forkId}.`;
-  await page.getByRole("combobox", { name: "Message", exact: true }).fill(revised);
+  await page.getByRole("textbox", { name: "Message", exact: true }).fill(revised);
   const send = page.getByRole("button", { name: "Send edited message", exact: true });
   await waitUntil(() => send.isEnabled(), Boolean, page, "reviewed branch readiness");
   await send.click();
@@ -144,7 +144,7 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   await page.getByRole("button", { name: "Send", exact: true }).waitFor();
   await waitForTurnAction(await lastTurn(page, revised), "Edit and resend");
   await waitUntil(
-    () => page.getByRole("combobox", { name: "Message", exact: true }).inputValue(),
+    () => page.getByRole("textbox", { name: "Message", exact: true }).inputValue(),
     (value) => value === "",
     page,
     "settled branch composer",
@@ -233,7 +233,7 @@ async function timerActions({ api, page, scope, writes, capture, viewport, provi
   const providerBefore = providerSnapshot(providerStub);
   const timerWrites = () => writes.filter((write) => write.pathname.includes("/timers"));
   const open = async () => {
-    await page.getByRole("combobox", { name: "Message", exact: true }).fill("/timer");
+    await page.getByRole("textbox", { name: "Message", exact: true }).fill("/timer");
     await page.getByRole("button", { name: "Open timer", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Set a Chat timer", exact: true });
     await dialog.waitFor();

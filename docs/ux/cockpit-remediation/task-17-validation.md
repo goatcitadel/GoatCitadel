@@ -24,7 +24,7 @@ A second, clean `verify:fast` run after these fixes has not been run.
 ## Source fixes
 
 1. Docs-lane button types: `type="button"` on five buttons (including the product `ChatProjects` project row), plus a focus-return wait in `ShortcutHelp.test.tsx`.
-2. UX budget and proof helpers find the cockpit composer by its settled role (`combobox` named Message): `ux-budget-chat.mjs`, `ux-budget-idle-traffic.mjs`, `cockpit-shell-controls-proof.mjs`, `chat-async-clarification-proof.mjs`, with a contract test.
+2. UX budget and proof helpers find the cockpit composer by its settled role (`combobox` named Message; amended 2026-10-19 to `textbox` named Message, see task-13-validation.md CH-39 amendment): `ux-budget-chat.mjs`, `ux-budget-idle-traffic.mjs`, `cockpit-shell-controls-proof.mjs`, `chat-async-clarification-proof.mjs`, with a contract test.
 3. Memory approval review shows one label per target and the Gateway's own summary sentences (`approval-helpers.ts` `targetEntries`, `ApprovalReviewSummary.tsx`); user titles and reviewed material unchanged.
 4. `verify:fast` smoke isolation: `smoke.ts` copies only shipped config files; the fast lane gives smoke an empty root, pins every GoatCitadel path inside it and omits inherited GoatCitadel settings.
 5. UI parity lane isolation: fresh Testbench root (tracked example config and skills), path pins, local services off, inherited settings scrubbed from Gateway and UI; the lane pins the Classic shell it certifies and starts its UI inside the guarded teardown.

@@ -515,7 +515,11 @@ describe("cockpit text composer", () => {
       expect(container.querySelectorAll("[aria-activedescendant]")).toHaveLength(1);
       expect(owners[0]!.getAttribute("aria-activedescendant")).toBe("cockpit-suggestion-1");
       const textarea = container.querySelector("textarea")!;
-      expect(textarea.getAttribute("aria-expanded")).toBe(String(!globalOpen));
+      // A textarea keeps its implicit textbox role (HTML-ARIA allows no explicit role on it), so it never
+      // carries combobox-only aria-expanded; the listbox relationship rides on aria-controls/activedescendant.
+      expect(textarea.hasAttribute("role")).toBe(false);
+      expect(textarea.hasAttribute("aria-expanded")).toBe(false);
+      expect(textarea.getAttribute("aria-autocomplete")).toBe("list");
       const options = [...container.querySelectorAll<HTMLElement>('[role="option"]')];
       expect(options.map((option) => option.tabIndex)).toEqual([-1, -1]);
       expect(container.querySelector(".shadow-overlay")).toBeNull();

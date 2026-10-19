@@ -474,13 +474,13 @@ export function assertVerifiedFirstAnswer({ before, completed, after, verified, 
 }
 
 /**
- * Cockpit mounts the Message composer (a combobox, as in every cockpit proof) only once a
+ * Cockpit mounts the Message composer (a textbox named Message, as in every cockpit proof) only once a
  * conversation is selected; a fresh install lands on "Choose a conversation". When the composer is
  * not up within the probe window, start a conversation from the empty state (or the rail's New
  * button) and then wait for the composer.
  */
 export async function openCockpitComposer(page, { timeoutMs = 30_000, probeMs = 5_000 } = {}) {
-  const composer = page.getByRole("combobox", { name: "Message", exact: true });
+  const composer = page.getByRole("textbox", { name: "Message", exact: true });
   try {
     await composer.waitFor({ timeout: probeMs });
     return composer;

@@ -250,9 +250,7 @@ export function ChatTextComposer({
             id="cockpit-chat-draft"
             ref={props.composerRef}
             rows={2}
-            role="combobox"
             aria-autocomplete="list"
-            aria-expanded={ownsSuggestions}
             aria-controls={ownsSuggestions ? "cockpit-composer-suggestions" : undefined}
             aria-activedescendant={
               ownsSuggestions && props.commandSuggestions[props.commandIndex]

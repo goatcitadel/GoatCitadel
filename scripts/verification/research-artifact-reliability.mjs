@@ -459,9 +459,9 @@ export async function sendResearchTurnThroughPackagedChat({ stack, sessionId, sc
       timeout: 120_000,
     });
     // Cockpit is the default shell (no `?shell=` override, empty browser storage). Its composer is a
-    // combobox labelled "Message"; the Classic "Message composer" / `.mc-next-composer-primary`
+    // textbox labelled "Message"; the Classic "Message composer" / `.mc-next-composer-primary`
     // selectors never mount here.
-    const composer = page.getByRole("combobox", { name: "Message", exact: true });
+    const composer = page.getByRole("textbox", { name: "Message", exact: true });
     await composer.waitFor({ state: "visible", timeout: 120_000 });
     await composer.fill(PROMPT);
     await page.getByRole("button", { name: "Send", exact: true }).click();
