@@ -601,6 +601,7 @@ export async function prepareAgentChatTurn(
 ): Promise<PreparedAgentChatTurn> {
   const preparationStartedAt = performance.now();
   const turnId = options?.turnId ?? randomUUID();
+  const isFeatureEnabled = (flag: string) => host.isFeatureEnabled(flag);
   const systemHeartbeatPosture = readSystemHeartbeatTurnPrepPosture(input, options, turnId);
   await assertPrepTurnAdmission(host, options?.turnAdmission);
   const session = await host.getSession(sessionId);
@@ -666,7 +667,7 @@ export async function prepareAgentChatTurn(
   const freshExplicitContext = !boundCapabilityProfile && (input.contextRefs?.length ?? 0) > 0;
   if (
     freshExplicitContext &&
-    (!(await host.isFeatureEnabled("chatExplicitContextV1Enabled")) ||
+    (!(await isFeatureEnabled("chatExplicitContextV1Enabled")) ||
       !options?.turnAdmission ||
       options.turnAdmission.durableClaim ||
       input.parentDelegationStepId ||
@@ -680,11 +681,10 @@ export async function prepareAgentChatTurn(
   if (
     !boundCapabilityProfile &&
     input.workspaceSnapshot !== undefined &&
-    (!(await host.isFeatureEnabled("chatWorkspaceSnapshotV1Enabled")) ||
+    (!(await isFeatureEnabled("chatWorkspaceSnapshotV1Enabled")) ||
       !options?.turnAdmission ||
       options.turnAdmission.requestActor.actorKind !== "operator" ||
-      input.parentDelegationStepId ||
-      !host.resolveChatFeatureAdmission)
+      input.parentDelegationStepId)
   ) {
     throw new ConflictError({
       message: "Workspace snapshots require enabled durable Chat admission. Start a fresh operator turn.",
@@ -1031,7 +1031,7 @@ export async function prepareAgentChatTurn(
   // date) — the single biggest cause of thin cowork responses. With the base
   // system prompt enabled (default on; kill switch coworkRuntimeQualityV1Disabled)
   // we apply a real layered prompt, and the personality overlay, to every mode.
-  const baseSystemPromptEnabled = !(await host.isFeatureEnabled("coworkRuntimeQualityV1Disabled"));
+  const baseSystemPromptEnabled = !(await isFeatureEnabled("coworkRuntimeQualityV1Disabled"));
   const personalityOverlay = quickWebTurn
     ? undefined
     : baseSystemPromptEnabled || effectiveMode === "chat"
