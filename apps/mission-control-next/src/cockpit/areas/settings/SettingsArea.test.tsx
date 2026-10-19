@@ -265,10 +265,10 @@ describe("Settings section tabs", () => {
     expect(active()).toBe("Personalities · Experimental");
     expect(owner.unmounted).not.toHaveBeenCalled();
   });
-  it("keeps all grouped owner destinations in ordered tabs and preserves explicit detailed links", async () => {
+  it("keeps all grouped owner destinations in ordered tabs with native hrefs", async () => {
     const pages = buildSettingsIndex();
     expect(pages.flatMap((page) => page.entries)).toHaveLength(25);
-    expect(pages.flatMap((page) => page.entries).every((entry) => entry.destination === "cockpit")).toBe(true);
+    expect(pages.flatMap((page) => page.entries).every((entry) => !entry.href.includes("shell="))).toBe(true);
     for (const page of pages) {
       window.history.replaceState(null, "", `/settings/${page.id}?shell=cockpit`);
       await act(async () => window.dispatchEvent(new PopStateEvent("popstate")));
@@ -281,8 +281,6 @@ describe("Settings section tabs", () => {
               `${entry.tabLabel ?? entry.label}${entry.releaseStatus === "experimental" ? " · Experimental" : ""}`,
           ),
       );
-      for (const entry of page.entries.filter((item) => item.destination === "detailed"))
-        expect(container.querySelector(`a[href="${entry.href}"]`)).not.toBeNull();
     }
     expect(selectedSettingsSection(pages.find((page) => page.id === "safety")!, "safety", "approval-mode")).toBe(
       "tools",

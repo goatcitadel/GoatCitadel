@@ -46,7 +46,6 @@ describe("cockpit settings index", () => {
     );
     expect(pages.flatMap((page) => page.entries).find((entry) => entry.section === "providers")).toMatchObject({
       href: "/settings/models#providers",
-      destination: "cockpit",
       completeNative: true,
     });
     expect(pages.flatMap((page) => page.entries).some((entry) => entry.href === "/settings/first-run")).toBe(true);
@@ -72,11 +71,9 @@ describe("cockpit settings index", () => {
     ).toBe(true);
     expect(pages.flatMap((page) => page.entries).find((entry) => entry.section === "channels")).toMatchObject({
       href: "/settings/connections#channels",
-      destination: "cockpit",
     });
     expect(pages.flatMap((page) => page.entries).find((entry) => entry.section === "citadel-blueprint")).toMatchObject({
       href: "/settings/citadel#citadel-blueprint",
-      destination: "cockpit",
       completeNative: true,
     });
     expect(
@@ -84,7 +81,6 @@ describe("cockpit settings index", () => {
     ).toBe(true);
     expect(pages.flatMap((page) => page.entries).find((entry) => entry.section === "citadel-overview")).toMatchObject({
       href: "/settings/citadel#citadel-overview",
-      destination: "cockpit",
       completeNative: true,
     });
   });
@@ -105,19 +101,19 @@ describe("cockpit settings index", () => {
   });
 
   it.each([
-    ["desktop system permission", "General", "cockpit"],
-    ["archive restore", "Workspaces", "cockpit"],
-    ["operator actions", "Integrations", "cockpit"],
-    ["select activate chat", "Permissions", "cockpit"],
-    ["signing", "Hooks", "cockpit"],
-    ["basic password", "Access & devices", "cockpit"],
-    ["voice transcription", "Runtime configuration", "cockpit"],
-    ["write root", "Tools", "cockpit"],
-    ["temp cleanup", "Tools", "cockpit"],
-    ["fs.delete", "Tools", "cockpit"],
-  ])("finds actual control terms %s with an honest destination", (term, label, destination) => {
+    ["desktop system permission", "General"],
+    ["archive restore", "Workspaces"],
+    ["operator actions", "Integrations"],
+    ["select activate chat", "Permissions"],
+    ["signing", "Hooks"],
+    ["basic password", "Access & devices"],
+    ["voice transcription", "Runtime configuration"],
+    ["write root", "Tools"],
+    ["temp cleanup", "Tools"],
+    ["fs.delete", "Tools"],
+  ])("finds actual control terms %s on their native Cockpit owner", (term, label) => {
     const entries = searchSettingsPages(buildSettingsIndex(), term).flatMap((page) => page.entries);
-    expect(entries.find((entry) => entry.label === label)?.destination).toBe(destination);
+    expect(entries.find((entry) => entry.label === label)?.href).toMatch(/^\/settings\/[a-z-]+(#[a-z-]+)?$/u);
   });
 });
 

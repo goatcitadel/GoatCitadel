@@ -84,6 +84,8 @@ Implement `/chat/projects` and `/chat/projects/:projectId` alongside conversatio
 
 Port one capability at a time: Mail; browser sessions; Journey; Curator; Improvement reports; runtime authority/control, mesh activation/revocation, emergency takeover and remote-worker management; prompt-pack workbench and truthful daemon controls. Retain release restrictions and existing blocked reasons. Update each Classic link only after actions/errors/diagnostics/governance/deep links pass. Never ban all `src/app` or `src/features` imports: extract actual Classic composition/markup/CSS dependencies and preserve canonical shared owners.
 
+Gap-closure WS10 (#370, 2026-10-19): every Cockpit rail destination now resolves to a native owner, and the generic Classic fallback and the Settings "detailed" (`?shell=classic`) destination are removed. A test in `cockpit-compatibility.test.ts` keeps it that way. Classic stays reachable only through the explicit `?shell=classic` rollback and the saved preference. Vault per-Chamber keys and key rotation are out of scope: no Gateway API exists for them, so they stay a Gateway follow-up.
+
 ## Task 16: measured performance
 
 Eliminate duplicate boot/refetch; cache by Gateway/workspace/session/caller, invalidate on access/scope changes. Virtualize long lists with stable focus/scroll/follow. Lazy-load editors/workbenches/desktop code; audit side effects, scanning/chunks and actual initial Chat transfer. Targets: Chat <=20 startup requests under existing metric, idle <=12/2min, elsewhere turn <=10, initial Chat JS <=350KB gzip, CLS <=0.10 and correct theme first frame. Keep current startup guard until repeatable evidence supports tightening; no raised budgets or artificial request exclusions. Three matched cold runs.

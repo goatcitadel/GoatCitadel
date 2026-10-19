@@ -1,7 +1,7 @@
 import type { CapabilityKind } from "@goatcitadel/contracts";
 import { readCatalogLocation } from "../areas/library/capability-catalog-route";
 import { adaptLegacyUrl } from "../../app/legacy-route-adapter";
-import { buildAppHref, parseAppRoute, RAIL_ITEMS } from "../../app/route-model";
+import { buildAppHref, parseAppRoute } from "../../app/route-model";
 import { buildSettingsDestinations } from "../areas/settings/settings-destinations";
 import { parseCockpitLocation } from "./routes";
 import { isDevDiagnosticsEnabled } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
@@ -217,11 +217,7 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
     (parts.length === 1 ||
       (parts.length === 2 &&
         (section === "first-run" ||
-          settings.some(
-            (page) =>
-              page.id === section ||
-              page.entries.some((entry) => entry.section === section && entry.destination === "cockpit"),
-          ))))
+          settings.some((page) => page.id === section || page.entries.some((entry) => entry.section === section)))))
   )
     return native();
   // Browser sessions keep their separate grant and state owner.
@@ -253,6 +249,8 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
     url.searchParams.delete("runId");
     return native(`/work/runs/${encodeURIComponent(runId)}`);
   }
+  // Ops was split into System (evidence) and Work (execution); its root opens the System overview.
+  if (area === "ops" && parts.length === 1) return native("/system");
   if (area === "ops" && parts.length === 2 && section && opsNative[section]) {
     return native(opsNative[section]);
   }
@@ -261,12 +259,7 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
     return native(
       `/chat/projects${section ? `/${section}` : url.searchParams.get("projectId") ? `/${encodeURIComponent(url.searchParams.get("projectId")!)}` : ""}`,
     );
-  if (
-    (area === "ops" || area === "library" || area === "settings") &&
-    parts.length <= 2 &&
-    (!section || RAIL_ITEMS[area].some((item) => item.section === section))
-  )
-    return classic();
+  // Every rail destination has a native owner; Classic is reached only through the explicit `?shell=classic` rollback.
   return { kind: "missing" };
 }
 

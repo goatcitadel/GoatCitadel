@@ -1,5 +1,6 @@
 import { catalogHref } from "../areas/library/capability-catalog-route";
 import { describe, expect, it } from "vitest";
+import { RAIL_ITEMS } from "../../app/route-model";
 import { resolveCockpitCompatibility } from "./cockpit-compatibility";
 
 describe("Cockpit compatibility coverage", () => {
@@ -99,8 +100,27 @@ describe("Cockpit compatibility coverage", () => {
     "/work/unknown",
     "/library/unknown",
     "/cowork/unknown",
+    "/cowork/workspace",
+    "/ops/unknown",
+    "/settings/unknown",
   ])("reports missing %s", (href) => {
     expect(resolveCockpitCompatibility(href)).toMatchObject({ kind: "missing" });
+  });
+  // #370: no rail destination hands off to Classic; only the explicit `?shell=classic` rollback does.
+  it.each(
+    Object.values(RAIL_ITEMS)
+      .flat()
+      // The Cowork workspace is a Classic-only rail alias for Chat; Cockpit has no such path (pinned missing above).
+      .filter((item) => item.area !== "cowork" || item.section !== "workspace")
+      .map((item) => `/${item.area}${item.section ? `/${item.section}` : ""}`),
+  )("opens rail destination %s natively", (href) => {
+    expect(resolveCockpitCompatibility(href).kind).toBe("native");
+  });
+  it("opens the retired Ops root on the System overview", () => {
+    expect(resolveCockpitCompatibility("/ops?workspaceId=w")).toEqual({
+      kind: "native",
+      href: "/system?workspaceId=w",
+    });
   });
   it("opens saved boards and schedules natively now that their capabilities are native, keeping query and fragment", () => {
     expect(resolveCockpitCompatibility("/ops/boards?workspaceId=w#top")).toEqual({

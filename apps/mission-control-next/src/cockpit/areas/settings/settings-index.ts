@@ -10,7 +10,6 @@ export interface SettingsIndexEntry {
   description: string;
   href: string;
   searchTerms: string;
-  destination: "cockpit" | "detailed";
   discoverable: boolean;
   releaseStatus: ReleaseSurfaceStatus;
   releaseNote: string;
@@ -57,7 +56,7 @@ const CONTROL_TERMS: Record<string, string> = {
   runtime: "managed command path alias enabled auto start daemon voice transcription install runtime",
 };
 
-/** A destination describes the page opened, including its explicit detailed-owner links. */
+/** A destination describes the Cockpit settings page and anchor that own one rail section. */
 export function buildSettingsIndex({ discovery = false }: { discovery?: boolean } = {}): SettingsIndexPage[] {
   return buildSettingsDestinations({ discovery }).map((page) => ({
     ...page,
@@ -77,7 +76,6 @@ export function buildSettingsIndex({ discovery = false }: { discovery?: boolean 
         description: entry.description,
         href: entry.href,
         searchTerms: CONTROL_TERMS[entry.section] ?? "",
-        destination: entry.destination,
       };
     }),
   }));

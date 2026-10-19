@@ -64,9 +64,7 @@ export function retainsSettingsPage(from: string, to: string): boolean {
     page &&
     page.entries.some((entry) => {
       const entryHref = new URL(entry.href, "http://cockpit.invalid");
-      return (
-        entry.destination === "cockpit" && entryHref.pathname === target.pathname && entryHref.hash === target.hash
-      );
+      return entryHref.pathname === target.pathname && entryHref.hash === target.hash;
     }),
   );
 }

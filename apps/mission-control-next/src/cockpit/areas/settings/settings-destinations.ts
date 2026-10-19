@@ -15,7 +15,6 @@ export interface SettingsDestinationEntry {
   label: string;
   description: string;
   href: string;
-  destination: "cockpit" | "detailed";
   discoverable: boolean;
   releaseStatus: ReleaseSurfaceStatus;
 }
@@ -54,7 +53,7 @@ const NATIVE_SECTIONS = new Set([
   "onboarding",
 ]);
 
-/** A destination describes the page opened, including its explicit detailed-owner links. */
+/** A destination describes the Cockpit settings page and anchor that own one rail section. */
 export function buildSettingsDestinations({
   discovery = false,
 }: { discovery?: boolean } = {}): SettingsDestinationPage[] {
@@ -120,7 +119,7 @@ export function buildSettingsDestinations({
                                                           ? "/settings/connections#addons"
                                                           : section === "runtime"
                                                             ? "/settings/advanced#managed-runtime"
-                                                            : `${buildAppHref({ area: item.area, section })}?shell=classic`;
+                                                            : buildAppHref({ area: item.area, section });
         return [
           {
             section,
@@ -132,7 +131,6 @@ export function buildSettingsDestinations({
             label: item.label,
             description: item.description,
             href,
-            destination: href.includes("shell=classic") ? ("detailed" as const) : ("cockpit" as const),
           },
         ];
       }),
