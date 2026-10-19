@@ -4,6 +4,7 @@ import { adaptLegacyUrl } from "../../app/legacy-route-adapter";
 import { buildAppHref, parseAppRoute, RAIL_ITEMS } from "../../app/route-model";
 import { buildSettingsDestinations } from "../areas/settings/settings-destinations";
 import { parseCockpitLocation } from "./routes";
+import { isDevDiagnosticsEnabled } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 
 export type CockpitResolution =
   | { kind: "native"; href: string }
@@ -172,7 +173,8 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
       return { kind: "missing" };
     return native("/inbox");
   }
-  if (area === "__gallery" && parts.length === 1) return native();
+  // SH-35: the component gallery is a development and verification fixture, never part of a shipped cockpit.
+  if (area === "__gallery" && parts.length === 1) return isDevDiagnosticsEnabled() ? native() : { kind: "missing" };
   if (area === "system" && (parts.length === 1 || (parts.length === 2 && systemViews.has(section!)))) return native();
   if (area === "system" && section === "spend" && parts.length === 3 && parts[2] === "details") return native();
   if (area === "system" && section === "dashboards" && parts.length === 3) return native();

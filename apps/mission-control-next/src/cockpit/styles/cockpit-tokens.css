@@ -16,6 +16,8 @@
   --cockpit-border-control: var(--cockpit-text-muted);
   --cockpit-accent: #006f85;
   --cockpit-accent-ink: #f6fbff;
+  /* Primary hover: a deeper accent that keeps (and raises) contrast with the ink. */
+  --cockpit-accent-hover: #005566;
   --cockpit-running: #006f85;
   --cockpit-waiting: #855500;
   --cockpit-done: #08734e;
@@ -47,6 +49,7 @@
   --cockpit-border-control: var(--cockpit-text-muted);
   --cockpit-accent: #5ce9ff;
   --cockpit-accent-ink: #0c2530;
+  --cockpit-accent-hover: #9af1ff;
   --cockpit-running: #5ce9ff;
   --cockpit-waiting: #ffd166;
   --cockpit-done: #59e6aa;

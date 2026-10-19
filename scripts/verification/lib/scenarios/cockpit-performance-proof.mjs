@@ -85,7 +85,7 @@ export async function runCockpitPerformanceProof({ context,browser,stack,fixture
    measured.idleRequests=idleRequests;await save({passed:false,failures:["Measurement in progress"]});
    await inboxPage.close();
    const turnSessionId=await createCockpitPerformanceTurnSession({stack,fixture,requestJson,assertOk});
-   await page.getByRole("navigation",{name:"Areas",exact:true}).getByRole("button",{name:/^Inbox(?:,|$)/}).click();await page.waitForTimeout(10_000);
+   await page.getByRole("navigation",{name:"Areas",exact:true}).getByRole("link",{name:/^Inbox(?:,|$)/}).click();await page.waitForTimeout(10_000);
    const elsewhereStart=performance.now()-started;
    const turn={content:"Reply with PERFORMANCE_TURN_OK",webMode:"off",memoryMode:"off",thinkingLevel:"off",subagentPolicy:"off"};
    const preflight=await requestJson(stack.gatewayUrl,`/api/v1/chat/sessions/${encodeURIComponent(turnSessionId)}/route-preflight`,{method:"POST",body:{action:"send",...turn}});

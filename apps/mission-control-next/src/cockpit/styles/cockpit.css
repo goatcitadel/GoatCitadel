@@ -103,6 +103,7 @@ html[data-shell="cockpit"] body {
   --color-line-control: var(--cockpit-border-control);
   --color-accent: var(--cockpit-accent);
   --color-accent-ink: var(--cockpit-accent-ink);
+  --color-accent-hover: var(--cockpit-accent-hover);
   --color-status-running: var(--cockpit-running);
   --color-status-waiting: var(--cockpit-waiting);
   --color-status-done: var(--cockpit-done);
@@ -213,13 +214,6 @@ html[data-shell="cockpit"] .mc-dialog-content {
   html[data-shell="cockpit"] .mc-dialog-content.chat-change-plan-modal {
     translate: none;
   }
-}
-
-/* The shared loading state puts a "Chat" kicker above "Preparing Chat", and the threaded-surface stylesheet makes it
-   an uppercase, accent-tinted eyebrow (unlayered, so it beats the component layer below). DESIGN.md bans eyebrows and
-   the heading already names the surface, so the cockpit drops it. */
-html[data-shell="cockpit"] .cockpit-chat-host .mc-next-threaded-loading-copy > p {
-  display: none;
 }
 
 @layer components {
