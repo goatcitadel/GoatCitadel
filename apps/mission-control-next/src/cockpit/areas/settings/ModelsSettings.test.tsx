@@ -66,9 +66,21 @@ afterEach(() => {
 });
 
 describe("Models settings", () => {
-  it.each(["provider:system:test", "provider-secret:system:test", "provider-endpoint:system:test", "provider-routing:system", `caller-scope:${JSON.stringify(["verified-caller", "provider-endpoint:system:test"])}`])("shows guided setup first, mounts experts on expansion and guards dirty %s collapse", async (key) => {
+  it.each([
+    "provider:system:test",
+    "provider-secret:system:test",
+    "provider-endpoint:system:test",
+    "provider-routing:system",
+    `caller-scope:${JSON.stringify(["verified-caller", "provider-endpoint:system:test"])}`,
+  ])("shows guided setup first, mounts experts on expansion and guards dirty %s collapse", async (key) => {
     api.fetchOnboardingState.mockResolvedValue(onboardingFixture());
-    await act(async () => root.render(<QueryClientProvider client={client}><ModelsSettings /></QueryClientProvider>));
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ModelsSettings />
+        </QueryClientProvider>,
+      ),
+    );
     await settleUntil(() => button("Report change") !== undefined);
     expect(container.textContent).not.toContain("Expert catalog owner");
     const expand = button("Advanced provider configuration")!;
@@ -76,15 +88,21 @@ describe("Models settings", () => {
     expect(expand.getAttribute("aria-expanded")).toBe("false");
     await act(async () => expand.click());
     expect(container.textContent).toContain("Expert catalog owner");
-    expect(container.textContent!.indexOf("Guided model setup")).toBeLessThan(container.textContent!.indexOf("Expert catalog owner"));
+    expect(container.textContent!.indexOf("Guided model setup")).toBeLessThan(
+      container.textContent!.indexOf("Expert catalog owner"),
+    );
     setSectionDirty(key, true, "Provider profile");
     await act(async () => expand.click());
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Provider profile");
-    await act(async () => [...document.querySelectorAll("button")].find((item) => item.textContent === "Cancel")!.click());
+    await act(async () =>
+      [...document.querySelectorAll("button")].find((item) => item.textContent === "Cancel")!.click(),
+    );
     expect(expand.getAttribute("aria-expanded")).toBe("true");
     expect(container.textContent).toContain("Expert catalog owner");
     await act(async () => expand.click());
-    await act(async () => [...document.querySelectorAll("button")].find((item) => item.textContent === "Discard changes")!.click());
+    await act(async () =>
+      [...document.querySelectorAll("button")].find((item) => item.textContent === "Discard changes")!.click(),
+    );
     expect(expand.getAttribute("aria-expanded")).toBe("false");
     expect(container.textContent).not.toContain("Expert catalog owner");
     setSectionDirty("unrelated:editor", true, "Other editor");

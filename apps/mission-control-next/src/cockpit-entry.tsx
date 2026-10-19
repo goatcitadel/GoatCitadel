@@ -8,7 +8,8 @@ import "@next/cockpit/areas/chat/chat-utility-panels.css";
 import "@next/features/threaded-surface/styles/change-plans.css";
 
 export function mountCockpit(root: HTMLElement): void {
-  renderApplicationRoot(root,
+  renderApplicationRoot(
+    root,
     <React.StrictMode>
       <CockpitApp />
     </React.StrictMode>,
