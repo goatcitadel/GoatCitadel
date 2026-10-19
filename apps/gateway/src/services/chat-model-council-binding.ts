@@ -43,6 +43,8 @@ export async function selectModelCouncilCandidates(
     workspaceId: prepared.workspaceId,
     sessionId: prepared.session.sessionId,
     turnId: prepared.turnId,
+    // A route_local ward on the requested provider still binds every member.
+    ...(prepared.routeWardActions?.length ? { wardActions: [...prepared.routeWardActions] } : {}),
   };
   const candidates: ModelCouncilProviderCandidate[] = [];
   for (const provider of runtime.providers) {

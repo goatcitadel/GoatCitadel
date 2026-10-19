@@ -1473,9 +1473,18 @@ describe("AssemblyService", () => {
       thinkingLevel: "standard" as const,
       primaryReady: true,
     };
-    const input = createCouncilExecutionInput({ capabilityProfile: undefined, binding });
+    const input = createCouncilExecutionInput({
+      capabilityProfile: undefined,
+      binding,
+      wardActions: ["model.chat.cloud", "model.chat.openai"],
+    });
     const result = await service.executeChatModelCouncil(input);
     expect(result.answer).toBe("Canonical answer.");
+    for (const [, attribution] of createChatCompletion.mock.calls as unknown as Array<
+      [unknown, { wardActions?: string[] }]
+    >) {
+      expect(attribution.wardActions).toEqual(["model.chat.cloud", "model.chat.openai"]);
+    }
     expect(createChatCompletion).toHaveBeenCalledTimes(3);
     await expect(
       service.executeChatModelCouncil({ ...input, binding: { ...binding, bindingHash: "e".repeat(64) } }),

@@ -863,6 +863,18 @@ describe("profile-free routed-context admission", () => {
         { turnId: "turn-live", turnAdmission: harness.admission },
       ),
     ).rejects.toThrow(/model council was not admitted/);
+    harness.host.isDurableChatExecutionEnabled = vi.fn(async () => false);
+    await expect(
+      prepareAgentChatTurn(
+        harness.host,
+        SESSION_ID,
+        { content: "Compare the options.", modelCouncil: { enabled: true } },
+        {
+          turnId: "turn-live",
+          turnAdmission: harness.admission,
+        },
+      ),
+    ).rejects.toThrow(/Model council requires enabled durable Chat admission/);
   });
 
   it.each([

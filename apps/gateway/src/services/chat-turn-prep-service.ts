@@ -602,6 +602,7 @@ export async function prepareAgentChatTurn(
   const preparationStartedAt = performance.now();
   const turnId = options?.turnId ?? randomUUID();
   const isFeatureEnabled = (flag: string) => host.isFeatureEnabled(flag);
+  const isDurableChatExecution = async () => (await host.isDurableChatExecutionEnabled?.()) ?? false;
   const systemHeartbeatPosture = readSystemHeartbeatTurnPrepPosture(input, options, turnId);
   await assertPrepTurnAdmission(host, options?.turnAdmission);
   const session = await host.getSession(sessionId);
@@ -672,7 +673,7 @@ export async function prepareAgentChatTurn(
       options.turnAdmission.durableClaim ||
       input.parentDelegationStepId ||
       options.turnAdmission.requestActor.actorKind !== "operator" ||
-      !(await host.isDurableChatExecutionEnabled?.()))
+      !(await isDurableChatExecution()))
   ) {
     throw new ConflictError({
       message: "Explicit context requires enabled durable Chat admission. Start a fresh operator turn.",
@@ -687,6 +688,7 @@ export async function prepareAgentChatTurn(
     !boundCapabilityProfile &&
     input.modelCouncil?.enabled &&
     (!(await isFeatureEnabled("chatModelCouncilV1Enabled")) ||
+      !(await isDurableChatExecution()) ||
       !options?.turnAdmission ||
       options.turnAdmission.requestActor.actorKind !== "operator" ||
       input.parentDelegationStepId ||
@@ -980,7 +982,7 @@ export async function prepareAgentChatTurn(
   const sustainedExecutionProfile = resolveSustainedLocalCodingProfile({
     content: capabilityProfileContent ?? content,
     providerId: effectiveProviderId,
-    durableEnabled: (await host.isDurableChatExecutionEnabled?.()) ?? false,
+    durableEnabled: await isDurableChatExecution(),
     normalizationProfile: normalized.normalizationProfile,
     serverOnlyTurn: Boolean(systemHeartbeatPosture || input.parentDelegationStepId),
   });

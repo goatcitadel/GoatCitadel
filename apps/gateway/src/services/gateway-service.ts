@@ -8123,6 +8123,7 @@ export class GatewayService {
         ...(capabilityProfile ? { capabilityProfile } : {}),
         ...(binding ? { binding } : {}),
         providerCandidates,
+        ...(prepared.routeWardActions?.length ? { wardActions: prepared.routeWardActions } : {}),
         routedContextSnapshot: prepared.routedContextSnapshot,
         signal: signal ? AbortSignal.any([signal, lifecycleSignal]) : lifecycleSignal,
       }),

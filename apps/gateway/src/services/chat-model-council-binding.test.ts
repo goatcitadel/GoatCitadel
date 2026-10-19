@@ -61,6 +61,19 @@ describe("profile-free model council binding", () => {
     expect(admitsDispatchWard).not.toHaveBeenCalledWith(expect.anything(), "xai");
   });
 
+  it("carries the turn's route ward actions into every member recheck", async () => {
+    const { service, admitsDispatchWard } = llm();
+    await selectModelCouncilCandidates(
+      service,
+      prepared({ routeWardActions: ["model.chat.cloud", "model.chat.local"] } as Partial<PreparedAgentChatTurn>),
+      { providerId: "local", model: "small" },
+    );
+    expect(admitsDispatchWard).toHaveBeenCalledWith(
+      expect.objectContaining({ wardActions: ["model.chat.cloud", "model.chat.local"] }),
+      "cloud",
+    );
+  });
+
   it("binds a new turn to its feature admission and marks a ward-refused primary not ready", async () => {
     const turn = prepared();
     expect(resolveModelCouncilPrimaryRoute(turn)).toEqual({ providerId: "local", model: "small" });

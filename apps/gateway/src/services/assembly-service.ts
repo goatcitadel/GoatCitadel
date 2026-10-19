@@ -105,6 +105,8 @@ export interface ExecuteChatModelCouncilInput {
   /** Profile-free binding derived from the turn's immutable feature admission. */
   binding?: ModelCouncilBinding;
   providerCandidates: ModelCouncilProviderCandidate[];
+  /** Citadel Ward `model.chat.*` actions that governed the turn's route; every council dispatch carries them. */
+  wardActions?: readonly string[];
   routedContextSnapshot?: ChatRoutedContextSnapshotRecord;
   signal?: AbortSignal;
 }
@@ -1912,7 +1914,7 @@ class ModelCouncilExecutor {
           providerInvocationStarted = true;
           return this.options.createChatCompletion(
             request,
-            buildModelCouncilAttribution(run, participant, "C1_participate", attemptId),
+            buildModelCouncilAttribution(run, participant, "C1_participate", attemptId, input.wardActions),
           );
         });
         ownedRun = completedCall.run;
@@ -2041,7 +2043,7 @@ class ModelCouncilExecutor {
           providerInvocationStarted = true;
           return this.options.createChatCompletion(
             request,
-            buildModelCouncilAttribution(run, synthesisParticipant, "C3_synthesize", attemptId),
+            buildModelCouncilAttribution(run, synthesisParticipant, "C3_synthesize", attemptId, input.wardActions),
           );
         });
         ownedRun = completedCall.run;
@@ -3438,8 +3440,10 @@ function buildModelCouncilAttribution(
   participant: ModelCouncilParticipantResolution,
   stage: ModelCouncilAttemptEvidence["stage"],
   attemptId: string,
+  wardActions?: readonly string[],
 ): ModelUsageAttributionContext {
   return {
+    ...(wardActions?.length ? { wardActions: [...wardActions] } : {}),
     operationId: attemptId,
     parentOperationId: `assembly:${encodeURIComponent(run.runId)}`,
     callKind: "assembly_participant",
