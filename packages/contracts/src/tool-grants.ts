@@ -31,6 +31,8 @@ export interface ToolGrantConstraints {
    * approval or validated operator input; always time-limited.
    */
   writeRoots?: string[];
+  /** The approval a folder grant was minted from; each approval mints at most one. */
+  writeRootsApprovalId?: string;
 }
 
 export interface ToolGrantRecord {

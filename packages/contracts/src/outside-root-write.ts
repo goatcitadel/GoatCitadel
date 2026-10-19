@@ -17,6 +17,8 @@ export type OutsideRootWriteGrantDuration = keyof typeof OUTSIDE_ROOT_WRITE_GRAN
 export const OUTSIDE_ROOT_WRITE_GRANT_DEFAULT_DURATION: OutsideRootWriteGrantDuration = "1h";
 export const OUTSIDE_ROOT_WRITE_GRANT_MAX_TTL_MS = 24 * 60 * 60_000;
 export const OUTSIDE_ROOT_WRITE_GRANT_MAX_ROOTS = 4;
+/** A folder grant can only be minted this soon after its approval was granted. */
+export const OUTSIDE_ROOT_WRITE_GRANT_MINT_WINDOW_MS = 15 * 60_000;
 
 /** Write tools whose targets may be admitted outside the write roots. Deletes never are. */
 export const OUTSIDE_ROOT_WRITE_TOOLS = [

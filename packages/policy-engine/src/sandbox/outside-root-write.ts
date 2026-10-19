@@ -175,8 +175,9 @@ export function validateWriteRootsGrantInput(
   if (!isOutsideRootWriteTool(input.toolPattern)) fail("the tool pattern must name one outside-root write tool");
   if (input.scope !== "session" && input.scope !== "workspace") fail("scope must be session or workspace");
   if (!input.scopeRef?.trim()) fail("a scopeRef is required");
-  if (input.grantType !== "ttl" && input.grantType !== "one_time") fail("grants must be ttl or one_time");
-  if (input.grantType === "ttl") assertBoundedExpiry(input.expiresAt, nowMs, fail);
+  // Only ttl: a one_time grant is consumed before execution re-checks it.
+  if (input.grantType !== "ttl") fail("folder grants must be ttl grants");
+  assertBoundedExpiry(input.expiresAt, nowMs, fail);
   if (input.constraints?.allowedPaths?.length || input.constraints?.referenceRoots?.length) {
     fail("writeRoots cannot be combined with allowedPaths or referenceRoots");
   }

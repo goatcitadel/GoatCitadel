@@ -30,6 +30,7 @@ import {
   HEARTBEAT_PERMISSION_PROFILE_ID,
   HEARTBEAT_RESTRICTED_PROFILE,
   OUTSIDE_ROOT_WRITE_GRANT_DURATIONS,
+  OUTSIDE_ROOT_WRITE_GRANT_MINT_WINDOW_MS,
   isOutsideRootWriteGrantDuration,
   isOutsideRootWriteTool,
   splitUtf8HeadTail,
@@ -406,7 +407,10 @@ export class ToolPolicyEngine {
   /**
    * Mint an expiring folder grant for an approved outside-root write. The
    * folder is chosen by the server-issued rootId from the approval's
-   * registration event, re-canonicalized, and limited to the approved tool.
+   * registration event, re-canonicalized, and limited to the approved tool and
+   * to the approved request's own session or workspace. Each approval mints at
+   * most one grant, and only shortly after it was approved, so an old approval
+   * can never renew filesystem authority.
    */
   public async mintOutsideRootWriteGrant(input: {
     approvalId: string;
@@ -428,10 +432,18 @@ export class ToolPolicyEngine {
     if (approval?.status !== "approved") {
       throw new Error("A folder grant needs an approved outside-root write approval.");
     }
+    const resolvedAtMs = approval.resolvedAt ? Date.parse(approval.resolvedAt) : Number.NaN;
+    if (!Number.isFinite(resolvedAtMs) || Date.now() - resolvedAtMs > OUTSIDE_ROOT_WRITE_GRANT_MINT_WINDOW_MS) {
+      throw new Error("The approval is too old to open a folder; approve a new request instead.");
+    }
     const pending = await this.storage.pendingApprovalActions.find(input.approvalId);
-    const toolName = pending?.actionType === "tool.invoke" ? asToolInvokeRequest(pending.request).toolName : undefined;
-    if (!toolName || !isOutsideRootWriteTool(toolName)) {
+    const approvedRequest = pending?.actionType === "tool.invoke" ? asToolInvokeRequest(pending.request) : undefined;
+    if (!approvedRequest || !isOutsideRootWriteTool(approvedRequest.toolName)) {
       throw new Error("The approval is not an outside-root write.");
+    }
+    const approvedScopeRef = input.scope === "session" ? approvedRequest.sessionId : approvedRequest.workspaceId;
+    if (!approvedScopeRef || input.scopeRef !== approvedScopeRef) {
+      throw new Error(`A folder grant must be scoped to the approved request's own ${input.scope}.`);
     }
     const details = await this.describeOutsideRootWriteApproval(input.approvalId);
     const candidate = details?.candidates.find((entry) => entry.rootId === input.rootId);
@@ -442,28 +454,34 @@ export class ToolPolicyEngine {
     const ttlMs = OUTSIDE_ROOT_WRITE_GRANT_DURATIONS[input.duration];
     const validated = validateWriteRootsGrantInput(
       {
-        toolPattern: toolName,
+        toolPattern: approvedRequest.toolName,
         decision: "allow",
         scope: input.scope,
-        scopeRef: input.scopeRef,
+        scopeRef: approvedScopeRef,
         grantType: "ttl",
         expiresAt: new Date(Date.now() + ttlMs).toISOString(),
         createdBy: input.createdBy,
-        constraints: { writeRoots: roots },
+        constraints: { writeRoots: roots, writeRootsApprovalId: input.approvalId },
       },
       sandbox,
     );
-    return this.storage.toolGrants.createTtlForDuration(
-      {
-        toolPattern: validated.toolPattern,
-        decision: validated.decision,
-        scope: validated.scope,
-        scopeRef: validated.scopeRef,
-        createdBy: validated.createdBy,
-        constraints: validated.constraints,
-      },
-      ttlMs,
-    );
+    return this.storage.runImmediateTransaction(async () => {
+      const existing = await this.storage.toolGrants.list(input.scope, approvedScopeRef, 1000);
+      if (existing.some((grant) => grant.constraints?.writeRootsApprovalId === input.approvalId)) {
+        throw new Error("This approval already opened a folder; approve a new request to open another.");
+      }
+      return await this.storage.toolGrants.createTtlForDuration(
+        {
+          toolPattern: validated.toolPattern,
+          decision: validated.decision,
+          scope: validated.scope,
+          scopeRef: validated.scopeRef,
+          createdBy: validated.createdBy,
+          constraints: validated.constraints,
+        },
+        ttlMs,
+      );
+    });
   }
 
   public revokeGrant(grantId: string, revokedBy: string): Promise<boolean> {

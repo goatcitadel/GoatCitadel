@@ -165,6 +165,7 @@ describe("validateWriteRootsGrantInput", () => {
     ["global scope", { scope: "global" }],
     ["a missing scopeRef", { scopeRef: "" }],
     ["persistent grants", { grantType: "persistent" }],
+    ["one_time grants", { grantType: "one_time" }],
     ["a missing grant type", { grantType: undefined }],
     ["an expiry over 24 hours", { expiresAt: new Date(Date.now() + 25 * 60 * 60_000).toISOString() }],
     ["a past expiry", { expiresAt: new Date(Date.now() - 1000).toISOString() }],

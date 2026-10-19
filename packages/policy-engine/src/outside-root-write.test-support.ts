@@ -55,6 +55,7 @@ export function outsideRootConfig(
 interface StoredApproval {
   approvalId: string;
   status: string;
+  resolvedAt?: string;
   preview?: Record<string, unknown>;
   payload?: unknown;
   expiresAt?: string;
@@ -147,7 +148,9 @@ export function createOutsideRootStorage() {
       countWritesInLastHourInScope: vi.fn(async () => 0),
     },
     toolGrants: {
-      list: vi.fn(async () => grants),
+      list: vi.fn(async (scope?: string, scopeRef?: string) =>
+        grants.filter((grant) => (!scope || grant.scope === scope) && (scopeRef === undefined || grant.scopeRef === scopeRef)),
+      ),
       listActive: vi.fn(async (scope: string, scopeRef?: string) =>
         grants.filter((grant) => isActive(grant) && grant.scope === scope && grant.scopeRef === (scopeRef ?? "")),
       ),
@@ -170,9 +173,12 @@ export function createOutsideRootStorage() {
     events,
     pending,
     grants,
-    approve(approvalId: string) {
+    approve(approvalId: string, resolvedAt: string = new Date().toISOString()) {
       const record = approvals.get(approvalId);
-      if (record) record.status = "approved";
+      if (record) {
+        record.status = "approved";
+        record.resolvedAt = resolvedAt;
+      }
     },
     seedApproval(input: { approvalId: string; request: Record<string, unknown>; registration?: Record<string, unknown> }) {
       approvals.set(input.approvalId, { approvalId: input.approvalId, status: "approved" });
