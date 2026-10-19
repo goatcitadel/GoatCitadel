@@ -62,7 +62,6 @@ export function FirstRunVerification() {
   const verifiedTask = state?.firstTask?.status === "verified" ? state.firstTask : undefined;
   const firstTaskVerified = Boolean(verifiedTask);
   const firstTaskModel = useModelLabel(verifiedTask?.providerId, verifiedTask?.model, firstTaskVerified);
-  const activeModel = useModelLabel(state?.settings.llm.activeProviderId, state?.settings.llm.activeModel, !!state);
   return (
     <section
       aria-label="First-run checks"
@@ -83,7 +82,7 @@ export function FirstRunVerification() {
             {state.firstTask?.status === "verified" ? `verified by the Gateway with ${firstTaskModel}` : "not observed"}
             . Neither sample records nor configured credentials certify execution.
           </p>
-          <EvidenceList title="Setup Center" items={presentSetupCenterItems(state, activeModel)} />
+          <EvidenceList title="Setup Center" items={presentSetupCenterItems(state)} />
           <details className="rounded-md border border-line p-3">
             <summary className="cursor-pointer font-medium text-fg">Provider test results</summary>
             <EvidenceList title="Provider checks" items={deriveOnboardingProviderSmokeEvidenceItems(state)} />

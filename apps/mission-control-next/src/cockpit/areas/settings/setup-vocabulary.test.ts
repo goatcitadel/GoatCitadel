@@ -42,15 +42,15 @@ describe("presentSetupCenterItems", () => {
         providers: state.settings.llm.providers.map((provider) => ({ ...provider, hasApiKey: true })),
       },
     };
-    const items = presentSetupCenterItems(state, "Model A · Provider A");
+    const items = presentSetupCenterItems(state);
     const descriptionOf = (label: string) => items.find((item) => item.label === label)?.description;
     expect(descriptionOf("Local runtime")).toBe("Risky tool calls need approval · Balanced budget.");
     expect(descriptionOf("Access and auth")).toBe("Gateway sign-in: Access token.");
     expect(descriptionOf("Provider smoke")).toBe(
-      "1 provider credential source available. Active model: Model A · Provider A.",
+      "1 provider credential source available. Active model: model-a · Provider A.",
     );
     const text = items.map((item) => item.description).join(" ");
-    for (const raw of ["approve_risky", "balanced", "token gateway", "model-a"]) expect(text).not.toContain(raw);
+    for (const raw of ["approve_risky", "balanced", "token gateway"]) expect(text).not.toContain(raw);
   });
 
   it("keeps the shared guidance when the runtime step is not complete", () => {
@@ -58,7 +58,7 @@ describe("presentSetupCenterItems", () => {
     state.checklist = [
       { id: "runtime", label: "Runtime defaults", status: "needs_input", detail: "Choose a tool approval mode." },
     ];
-    const runtime = presentSetupCenterItems(state, "Model A").find((item) => item.label === "Local runtime");
+    const runtime = presentSetupCenterItems(state).find((item) => item.label === "Local runtime");
     expect(runtime?.description).toBe("Choose a tool approval mode.");
   });
 });

@@ -22,16 +22,17 @@ const api = vi.hoisted(() => ({
   fetchAgenticRuns: vi.fn(),
   fetchEvidenceEnvelopes: vi.fn(),
   navigate: vi.fn(),
+  fetchLlmModels: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   ...api,
 }));
-// The verification panel labels the active model; keep those catalog reads off the network.
+// Model catalog reads stay mocked; the verification panel must not start one for the active model.
 vi.mock("@goatcitadel/mission-control-shared/api/platform", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   fetchLlmConfig: async () => ({ providerConfigs: [] }),
-  fetchLlmModels: async () => ({ items: [] }),
+  fetchLlmModels: api.fetchLlmModels,
 }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ setActiveWorkspaceId: vi.fn(), setActiveCitadelId: vi.fn() }),
@@ -184,6 +185,7 @@ describe("first-run verification values", () => {
     await vi.waitFor(() => expect(container.textContent).toContain("Trusted local. Loopback/local trusted posture"));
     expect(container.textContent).toContain("Not needed. Tailnet is not required.");
     expect(container.textContent).toContain("Checked through: Chat, Chat turn trace");
+    expect(api.fetchLlmModels).not.toHaveBeenCalled();
     for (const raw of ["local_trusted:", "not_required", "chat.turn_trace", "Provider A: Connection verified"]) {
       expect(container.textContent).not.toContain(raw);
     }

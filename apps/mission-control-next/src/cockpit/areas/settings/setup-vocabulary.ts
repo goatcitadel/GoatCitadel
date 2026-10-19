@@ -106,7 +106,7 @@ export function presentReadinessValue(item: OnboardingSetupReadinessItem): strin
  * The shared helper's Setup Center rows, with the descriptions the Gateway composes from raw values (approval and
  * budget modes, the auth mode, the model id) restated in plain words.
  */
-export function presentSetupCenterItems(state: OnboardingState, activeModelLabel: string) {
+export function presentSetupCenterItems(state: OnboardingState) {
   const settings = state.settings;
   const runtimeComplete = state.checklist?.some((item) => item.id === "runtime" && item.status === "complete");
   const authMode = settings?.auth?.mode ?? "none";
@@ -114,7 +114,7 @@ export function presentSetupCenterItems(state: OnboardingState, activeModelLabel
   return deriveSetupCenterItems(state).map((item) => {
     if (item.label === "Provider smoke" && providersWithKeys > 0) {
       const sources = plural(providersWithKeys, "provider credential source");
-      return { ...item, description: `${sources} available. Active model: ${activeModelLabel}.` };
+      return { ...item, description: `${sources} available. Active model: ${activeModelLabel(state)}.` };
     }
     if (item.label === "Local runtime" && runtimeComplete) {
       const budget = presentSetupLabel(BUDGET_MODE, settings.budgetMode);
@@ -125,4 +125,15 @@ export function presentSetupCenterItems(state: OnboardingState, activeModelLabel
     }
     return item;
   });
+}
+
+/**
+ * The active model as the onboarding projection names it, with the provider's configured label. Diagnostics reads no
+ * model catalog for this: a cold catalog read can reach the provider with its credentials.
+ */
+function activeModelLabel(state: OnboardingState): string {
+  const llm = state.settings?.llm;
+  const provider = llm?.providers?.find((item) => item.providerId === llm.activeProviderId)?.label;
+  const model = llm?.activeModel || "Unknown model";
+  return provider ? `${model} · ${provider}` : model;
 }
