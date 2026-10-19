@@ -387,28 +387,58 @@ function rootVariantsForComparison(root: string): string[] {
   }
 }
 
-function resolvePathViaExistingAncestor(targetPath: string): string {
-  const absoluteTarget = path.resolve(targetPath);
-  let probe = absoluteTarget;
+const MAX_DANGLING_LINK_HOPS = 40;
 
+/**
+ * Resolve a path through its nearest existing ancestor. A dangling link (one
+ * whose target does not exist yet) is followed to its target instead of being
+ * skipped, since a write through it would land there; too many hops (a link
+ * cycle) refuses the path.
+ */
+function resolvePathViaExistingAncestor(targetPath: string): string {
+  let absoluteTarget = path.resolve(targetPath);
+  for (let hop = 0; hop <= MAX_DANGLING_LINK_HOPS; hop += 1) {
+    const step = resolveThroughNearestExistingAncestor(absoluteTarget);
+    if (step.danglingLinkTarget === undefined) {
+      return step.resolved;
+    }
+    absoluteTarget = step.danglingLinkTarget;
+  }
+  throw new ValidationError({
+    message: `Path "${targetPath}" passes through too many symbolic links and is not allowed.`,
+  });
+}
+
+function lstatOrUndefined(probe: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(probe);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveThroughNearestExistingAncestor(absoluteTarget: string): {
+  resolved: string;
+  danglingLinkTarget?: string;
+} {
+  let probe = absoluteTarget;
   while (true) {
-    if (fs.existsSync(probe)) {
-      const realExisting = fs.realpathSync(probe);
-      if (probe === absoluteTarget) {
-        return realExisting;
-      }
+    const stats = lstatOrUndefined(probe);
+    if (stats) {
       const relativeTail = path.relative(probe, absoluteTarget);
-      return path.resolve(realExisting, relativeTail);
+      if (stats.isSymbolicLink() && !fs.existsSync(probe)) {
+        const linkTarget = path.resolve(path.dirname(probe), fs.readlinkSync(probe));
+        return { resolved: absoluteTarget, danglingLinkTarget: path.resolve(linkTarget, relativeTail) };
+      }
+      return { resolved: path.resolve(fs.realpathSync(probe), relativeTail) };
     }
 
     const parent = path.dirname(probe);
     if (parent === probe) {
-      break;
+      return { resolved: absoluteTarget };
     }
     probe = parent;
   }
-
-  return absoluteTarget;
 }
 
 function finalizeResolvedToolPath(

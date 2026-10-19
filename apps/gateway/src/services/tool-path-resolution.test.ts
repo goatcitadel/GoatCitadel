@@ -829,6 +829,31 @@ describe("resolveToolRequestPathsForSessionScope operator write roots for delega
     ).rejects.toThrow(/outside the workspace boundary/u);
   });
 
+  it("follows a dangling link into an operator root for a delegated child without a scope", async () => {
+    const fixture = await createFixture();
+    const workspaceRoot = path.join(fixture.repoRoot, "workspace");
+    await createDirectoryLink(path.join(fixture.operatorRoot, "not-yet"), path.join(workspaceRoot, "dangling"));
+    const deps = depsFor(fixture, storageFor({ delegation: "unscoped" }));
+    for (const target of ["dangling/notes.txt", path.join(workspaceRoot, "dangling", "notes.txt")]) {
+      await expect(resolveToolRequestPathsForSessionScope(writeRequest("fs.write", target), deps)).rejects.toThrow(
+        /outside the workspace boundary/u,
+      );
+    }
+  });
+
+  it("refuses a write through a link cycle", async () => {
+    const fixture = await createFixture();
+    const workspaceRoot = path.join(fixture.repoRoot, "workspace");
+    const first = path.join(workspaceRoot, "loop-a");
+    const second = path.join(workspaceRoot, "loop-b");
+    await createDirectoryLink(second, first);
+    await createDirectoryLink(first, second);
+    const deps = depsFor(fixture, storageFor({ delegation: "unscoped" }));
+    await expect(
+      resolveToolRequestPathsForSessionScope(writeRequest("fs.write", path.join(first, "notes.txt")), deps),
+    ).rejects.toThrow(ValidationError);
+  });
+
   it("keeps operator roots and project folders inside them for ordinary sessions", async () => {
     const fixture = await createFixture();
     const deps = depsFor(
