@@ -65,10 +65,11 @@ export async function runCodeModeDockerProofLane(context, deps) {
           cwd: repoRoot,
           artifactRoot: diagnostics,
           logName: "code-mode-docker.proof",
-          env: { GOATCITADEL_CODE_MODE_DOCKER_PROOF_IMAGE: image },
+          env: { GOATCITADEL_CODE_MODE_DOCKER_PROOF_IMAGE: image, NO_COLOR: "1", FORCE_COLOR: "0" },
         },
       );
-      const output = `${result.stdout}\n${result.stderr}`;
+      // Strip ANSI styling: CI output can be colored, and the summary must match as plain text.
+      const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.replace(/\u001b\[[0-9;]*m/gu, "");
       const proved = result.code === 0 && /Tests\s+1 passed/u.test(output) && !/1 failed/u.test(output);
       return {
         status: proved ? "passed" : "failed",
