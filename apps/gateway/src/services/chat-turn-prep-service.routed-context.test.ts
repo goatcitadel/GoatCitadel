@@ -883,6 +883,15 @@ describe("profile-free routed-context admission", () => {
     ).rejects.toThrow(/Workspace snapshots require enabled durable Chat admission/);
     expect(harness.host.ingestEvent).not.toHaveBeenCalled();
     harness.admission.requestActor = { ...harness.admission.requestActor, actorKind: "operator" } as never;
+    harness.host.isDurableChatExecutionEnabled = vi.fn(async () => false);
+    await expect(
+      prepareAgentChatTurn(harness.host, SESSION_ID, request, {
+        turnId: "turn-live",
+        turnAdmission: harness.admission,
+      }),
+    ).rejects.toThrow(/Workspace snapshots require enabled durable Chat admission/);
+    expect(harness.host.ingestEvent).not.toHaveBeenCalled();
+    harness.host.isDurableChatExecutionEnabled = vi.fn(async () => true);
     await expect(
       prepareAgentChatTurn(harness.host, SESSION_ID, request, {
         turnId: "turn-live",
