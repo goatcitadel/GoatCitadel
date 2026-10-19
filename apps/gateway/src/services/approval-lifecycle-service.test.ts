@@ -399,6 +399,29 @@ describe("approval lifecycle service", () => {
     });
     await rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop");
     expect(host.storage.approvals.get("approval-1")).toMatchObject({ status: "rejected", resolvedBy: "operator-stop" });
+    expect(host.storage.approvals.get).not.toHaveBeenCalledWith("approval-bad");
+  });
+
+  it("reuses a cached invalid-lineage result for repeated foreign approvals", async () => {
+    const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
+    const approval = host.storage.approvals.get("approval-1");
+    const badLinkage = { sessionId: "session-x", turnId: "turn-bad" };
+    host.storage.approvals.listPage.mockReturnValue({
+      items: [
+        { ...approval, approvalId: "approval-bad-1", linkage: badLinkage },
+        { ...approval, approvalId: "approval-bad-2", linkage: badLinkage },
+        approval,
+      ],
+      nextCursor: undefined,
+    } as never);
+    host.storage.chatTurnTraces.get.mockImplementation((turnId: string) => {
+      if (turnId === "turn-bad") return { turnId: "turn-bad", sessionId: "session-elsewhere" };
+      throw new NotFoundError({ message: "missing" });
+    });
+    await rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop");
+    expect(host.storage.chatTurnTraces.get).toHaveBeenCalledTimes(1);
+    expect(host.storage.chatTurnTraces.get).toHaveBeenCalledWith("turn-bad");
+    expect(host.storage.approvals.get).not.toHaveBeenCalledWith(expect.stringMatching(/^approval-bad/));
   });
 
   it("resolves each foreign turn owner once per cancellation", async () => {
