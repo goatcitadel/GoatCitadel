@@ -111,7 +111,8 @@ void listen("desktop://runtime-status-requested", () => {
 
 void listen("desktop://runtime-restarted", () => {
   showToast("Runtime restarted. Refreshing Mission Control...");
-  void launchRuntime();
+  renderStarting();
+  void refreshRuntimeStatus({ syncShell: true, notify: false });
 });
 
 void listen("desktop://runtime-stopped", () => {
@@ -142,7 +143,10 @@ async function launchRuntime(): Promise<void> {
 function showReadyRuntime(result: DesktopRuntimeStatus): void {
   lastRuntime = result;
   renderRuntime(result);
-  frame.src = result.targetUrl;
+  // Assigning src reloads the iframe; only do it when coming back from a not-ready state.
+  if (!frame.classList.contains("is-ready")) {
+    frame.src = result.targetUrl;
+  }
   startup.classList.add("is-hidden");
   frame.classList.add("is-ready");
   recoveryActions.classList.add("is-hidden");
@@ -323,7 +327,9 @@ async function ensureNotificationPermission(): Promise<boolean> {
 }
 
 function openApprovalRoute(approvalId: string, workspaceId?: string): void {
-  openRoutePath(`/inbox?approvalId=${encodeURIComponent(approvalId)}${workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : ""}`);
+  openRoutePath(
+    `/inbox?approvalId=${encodeURIComponent(approvalId)}${workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : ""}`,
+  );
 }
 
 function openRoutePath(routePath: string): void {

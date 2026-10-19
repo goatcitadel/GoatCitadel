@@ -118,6 +118,47 @@ describe("desktop shell bootstrap", () => {
     expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
   });
 
+  it("keeps a ready Mission Control frame loaded across healthy status polls", async () => {
+    vi.useFakeTimers();
+    tauriMocks.invoke
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }))
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }));
+
+    await import("./main.js");
+    await flushPromises();
+    const deepLink = "http://127.0.0.1:5173/inbox?approvalId=a-1";
+    frameElement().src = deepLink;
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushPromises();
+
+    expect(readRuntimeStatusCalls()).toHaveLength(1);
+    expect(frameElement().src).toBe(deepLink);
+    expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
+  });
+
+  it("refreshes status instead of relaunching after a tray restart", async () => {
+    const listeners = new Map<string, () => void>();
+    tauriMocks.listen.mockImplementation((eventName: string, callback: () => void) => {
+      listeners.set(eventName, callback);
+      return Promise.resolve(() => undefined);
+    });
+    tauriMocks.invoke
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }))
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready", targetUrl: "http://127.0.0.1:5173/restarted" }));
+
+    await import("./main.js");
+    await flushPromises();
+    tauriMocks.invoke.mockClear();
+
+    listeners.get("desktop://runtime-restarted")?.();
+    await flushPromises();
+
+    expect(tauriMocks.invoke.mock.calls.filter(([command]) => command === "launch_runtime")).toHaveLength(0);
+    expect(readRuntimeStatusCalls()).toHaveLength(1);
+    expect(frameElement().src).toBe("http://127.0.0.1:5173/restarted");
+  });
+
   it("single-flights native runtime status polling and times out hung reads", async () => {
     vi.useFakeTimers();
     const listeners = new Map<string, () => void>();
