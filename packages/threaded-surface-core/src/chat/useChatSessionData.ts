@@ -49,7 +49,7 @@ import { useRefreshSubscription } from "@goatcitadel/mission-control-shared/hook
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { recordChatRefreshPhase } from "./chat-causality";
 import { resolveChatRefreshPlan } from "./chat-page-pure-helpers";
-import { retainedReloadMode, type RetainedLoad } from "./retained-reload";
+import { retainedReloadMode, useCommitRefValue, type RetainedLoad } from "./retained-reload";
 import {
   historicalWindowIdentityMismatch,
   historicalTargetChanged,
@@ -140,6 +140,9 @@ export function useChatSessionData(input: ChatSessionDataInput) {
   const sidebarNextCursorRef = useRef<string | null>(null);
   const loadCoreGenerationRef = useRef(0);
   const loadSecondaryGenerationRef = useRef(0);
+  // Synced at commit, so a load settling after a switch compares against the session shown now.
+  const selectedSessionIdRef = useRef(selectedSessionId);
+  useCommitRefValue(selectedSessionIdRef, selectedSessionId);
   const loadSidebarGenerationRef = useRef(0);
   const sidebarScopeKey = chatSidebarScopeKey(input);
   const sidebarScope = useRef({ key: sidebarScopeKey });
@@ -676,8 +679,12 @@ export function useChatSessionData(input: ChatSessionDataInput) {
 
   const loadSessionCoreStateInternal = useCallback(
     async (sessionId: string, options: ChatCoreLoadOptions = {}) => {
-      const generation = ++loadCoreGenerationRef.current;
       const background = options.background ?? false;
+      // A background refresh for a conversation that is no longer shown must not supersede the
+      // shown one's load. Foreground loads are never pre-filtered: a caller may select a session
+      // and load it in the same tick, before the selection has rendered.
+      if (background && sessionId !== selectedSessionIdRef.current) return false;
+      const generation = ++loadCoreGenerationRef.current;
       const includeThread = options.includeThread ?? true;
       const messageVersionAtStart = includeThread ? messageMutationVersionRef.current : null;
       if (!background) {
@@ -691,7 +698,7 @@ export function useChatSessionData(input: ChatSessionDataInput) {
         const nextThread = core.thread;
         const nextBinding = { item: core.binding };
         const nextPrefs = core.prefs;
-        if (generation !== loadCoreGenerationRef.current) return false;
+        if (generation !== loadCoreGenerationRef.current || sessionId !== selectedSessionIdRef.current) return false;
         if (nextThread) {
           applyFetchedThreadRef.current(nextThread, messageVersionAtStart);
         }
@@ -721,8 +728,10 @@ export function useChatSessionData(input: ChatSessionDataInput) {
   );
 
   const loadSessionSecondaryState = useCallback(async (sessionId: string, options: ChatSecondaryLoadOptions = {}) => {
-    const generation = ++loadSecondaryGenerationRef.current;
     const background = options.background ?? false;
+    // Same fence as the core loader: only foreground loads may target a session not yet shown.
+    if (background && sessionId !== selectedSessionIdRef.current) return;
+    const generation = ++loadSecondaryGenerationRef.current;
     if (!background) {
       setSecondaryLoading(true);
     }
@@ -742,7 +751,7 @@ export function useChatSessionData(input: ChatSessionDataInput) {
         fetchChatGeneratedArtifacts({ sessionId, limit: 200 }),
         fetchThreadKnowledgeAttachments(sessionId),
       ]);
-      if (generation !== loadSecondaryGenerationRef.current) return;
+      if (generation !== loadSecondaryGenerationRef.current || sessionId !== selectedSessionIdRef.current) return;
       setProactiveStatus(nextProactiveStatus.policy);
       setProactiveRuns(nextProactiveRuns.items);
       setLearnedMemory(nextMemory.items);

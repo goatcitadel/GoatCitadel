@@ -14,6 +14,7 @@ import {
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { otherThemeOptions } from "./theme-options";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
 import { inboxCountLabel, inboxMatchesWorkspace, inboxNavigationLabel } from "../areas/inbox/inbox-presentation";
 import { InboxCountBadge } from "./InboxCountBadge";
@@ -51,7 +52,7 @@ export function MobileTabBar({
   const shellSwitch = useCockpitShellSwitch();
   const { area: current, navigate } = useCockpitRoute();
   const preload = useCockpitPreload();
-  const { activeWorkspaceId, activeCitadelId, theme, setTheme } = useUiPreferences();
+  const { activeWorkspaceId, activeCitadelId, themePreference, setTheme } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
   const workspaceName = useWorkspaceName(activeCitadelId, activeWorkspaceId, phone);
   const citadelName = useCitadelName(activeCitadelId, phone);
@@ -196,16 +197,19 @@ export function MobileTabBar({
             <Search aria-hidden="true" className="size-4" />
             Search
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              setTheme(theme === "dark" ? "light" : "dark");
-              setMoreOpen(false);
-            }}
-            className="flex min-h-11 items-center rounded-md px-3 text-left text-fg hover:bg-sunken"
-          >
-            Switch to {theme === "dark" ? "light" : "dark"} theme
-          </button>
+          {otherThemeOptions(themePreference).map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => {
+                setTheme(option.value);
+                setMoreOpen(false);
+              }}
+              className="flex min-h-11 items-center rounded-md px-3 text-left text-fg hover:bg-sunken"
+            >
+              {option.action}
+            </button>
+          ))}
           <button
             type="button"
             onClick={() => {

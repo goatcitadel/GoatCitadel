@@ -90,10 +90,13 @@ export async function runCockpitIntegrationMeetProof({ context, browser, stack, 
                 response.request().method() === "POST" && new URL(response.url()).pathname === prerequisitePath,
             ),
           );
-          await page
+          // View buttons are aria-pressed toggles: a second click closes the view, so click exactly once.
+          const meetView = page
             .getByRole("region", { name: "Integration management", exact: true })
-            .getByRole("button", { name: "Google Meet preparation", exact: true })
-            .click();
+            .getByRole("group", { name: "Management views", exact: true })
+            .getByRole("button", { name: "Google Meet preparation", exact: true });
+          assert.equal(await meetView.getAttribute("aria-pressed"), "false");
+          await meetView.click();
           const response = await prerequisitesResponse;
           assert.equal(response.status(), 200);
           assert.deepEqual(response.request().postDataJSON(), {});

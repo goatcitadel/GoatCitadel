@@ -111,6 +111,7 @@ export interface FeatureFlagsConfig {
   chatMeshCapabilitiesV1Enabled?: boolean;
   chatRemotePlacementV1Enabled?: boolean;
   chatExplicitContextBranchesV1Enabled?: boolean;
+  chatWorkPassportV1Enabled?: boolean;
   chatRequesterMcpV1Enabled?: boolean;
   chatStaticMcpV1Enabled?: boolean;
   /** Gateway-owned governed Change Plan authority. Default-on after foundation proof, with an explicit kill switch. */
@@ -862,6 +863,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["chatMeshCapabilitiesV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_MESH_CAPABILITIES_V1_ENABLED],
     ["chatRemotePlacementV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_REMOTE_PLACEMENT_V1_ENABLED],
     ["chatExplicitContextBranchesV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_EXPLICIT_CONTEXT_BRANCHES_V1_ENABLED],
+    ["chatWorkPassportV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_WORK_PASSPORT_V1_ENABLED],
     ["chatRequesterMcpV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_REQUESTER_MCP_V1_ENABLED],
     ["chatStaticMcpV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_STATIC_MCP_V1_ENABLED],
     ["evolutionControlPlaneV1Enabled", process.env.GOATCITADEL_FEATURE_EVOLUTION_CONTROL_PLANE_V1_ENABLED],
@@ -1482,6 +1484,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       chatMeshCapabilitiesV1Enabled: featuresInput.chatMeshCapabilitiesV1Enabled ?? false,
       chatRemotePlacementV1Enabled: featuresInput.chatRemotePlacementV1Enabled ?? false,
       chatExplicitContextBranchesV1Enabled: featuresInput.chatExplicitContextBranchesV1Enabled ?? true,
+      chatWorkPassportV1Enabled: featuresInput.chatWorkPassportV1Enabled ?? true,
       chatRequesterMcpV1Enabled: featuresInput.chatRequesterMcpV1Enabled ?? false,
       chatStaticMcpV1Enabled: featuresInput.chatStaticMcpV1Enabled ?? false,
       evolutionControlPlaneV1Enabled: featuresInput.evolutionControlPlaneV1Enabled ?? true,

@@ -29,7 +29,13 @@ import {
   remoteWorkerAssignmentCanonicalSha256,
   HEARTBEAT_PERMISSION_PROFILE_ID,
   HEARTBEAT_RESTRICTED_PROFILE,
+  OUTSIDE_ROOT_WRITE_GRANT_DURATIONS,
+  OUTSIDE_ROOT_WRITE_GRANT_MINT_WINDOW_MS,
+  isOutsideRootWriteGrantDuration,
+  isOutsideRootWriteTool,
   splitUtf8HeadTail,
+  type OutsideRootWriteApprovalDetails,
+  type OutsideRootWriteGrantDuration,
 } from "@goatcitadel/contracts";
 import type { CitadelWardRecord, WardEffect } from "@goatcitadel/contracts";
 import type {
@@ -76,8 +82,19 @@ import {
   assertNotHardForbiddenWritePath,
   assertToolWritePath,
   toolReadableWriteRoots,
-  type ToolWriteIntent,
 } from "./sandbox/tool-write-gate.js";
+import { extractWritePathCandidates } from "./write-path-candidates.js";
+import {
+  evaluateOutsideRootWrites,
+  readRegisteredOutsideRootWrite,
+  type OutsideRootWriteEvaluation,
+} from "./outside-root-write-policy.js";
+import {
+  grantWriteRootsAdmit,
+  isOutsideRootWriteEnabled,
+  outsideRootWriteSafetyContext,
+  validateWriteRootsGrantInput,
+} from "./sandbox/outside-root-write.js";
 import {
   assertHostAllowed,
   assertNotPrivateOrReservedHost,
@@ -123,6 +140,12 @@ interface AccessEvaluation {
    * post-ward return path; never set on the two pre-ward early returns.
    */
   wardEffect?: WardEffect;
+  /**
+   * Engine-authored outside-root write record when this request needs an
+   * approval to write outside every write root. Copied into the approval's
+   * registration event (authoritative) and preview (display only).
+   */
+  outsideRootWrite?: OutsideRootWriteApprovalDetails;
 }
 
 type NativeExecutionReservation = Awaited<
@@ -290,6 +313,10 @@ interface GrantDecision {
 
 const HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE =
   "host-constrained browser.search grant requires an official or explicit outbound target";
+/** Newest-first grant scan bound for the one-grant-per-approval check. */
+const MINT_DUPLICATE_SCAN_LIMIT = 100_000;
+/** A folder (writeRoots) grant that does not admit this request is skipped, never a hard block. */
+const WRITE_ROOT_GRANT_INAPPLICABLE = "write-root grant does not apply to this request";
 
 export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
   /**
@@ -365,7 +392,113 @@ export class ToolPolicyEngine {
   }
 
   public createGrant(input: ToolGrantCreateInput): Promise<ToolGrantRecord> {
-    return this.storage.toolGrants.create(input);
+    let validated: ToolGrantCreateInput;
+    try {
+      validated = validateWriteRootsGrantInput(input, this.config.sandbox);
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    return this.storage.toolGrants.create(validated);
+  }
+
+  /** The engine-authored outside-root write record of an approval, if it has one. */
+  public async describeOutsideRootWriteApproval(
+    approvalId: string,
+  ): Promise<OutsideRootWriteApprovalDetails | undefined> {
+    return readRegisteredOutsideRootWrite(await this.storage.approvalEvents.listByApprovalId(approvalId));
+  }
+
+  /**
+   * Mint an expiring folder grant for an approved outside-root write. The
+   * folder is chosen by the server-issued rootId from the approval's
+   * registration event, re-canonicalized, and limited to the approved tool and
+   * to the approved request's own session or workspace. Each approval mints at
+   * most one grant, and only shortly after it was approved, so an old approval
+   * can never renew filesystem authority.
+   */
+  public async mintOutsideRootWriteGrant(input: {
+    approvalId: string;
+    rootId: string;
+    duration: OutsideRootWriteGrantDuration;
+    scope: "session" | "workspace";
+    scopeRef: string;
+    createdBy: string;
+  }): Promise<ToolGrantRecord> {
+    const sandbox = this.config.sandbox;
+    const ctx = outsideRootWriteSafetyContext(sandbox);
+    if (!ctx || !isOutsideRootWriteEnabled(sandbox)) {
+      throw new Error("Outside-root write approvals are disabled.");
+    }
+    if (!isOutsideRootWriteGrantDuration(input.duration)) {
+      throw new Error("Unsupported folder-grant duration.");
+    }
+    const approval = await this.storage.approvals.get(input.approvalId);
+    if (approval?.status !== "approved") {
+      throw new Error("A folder grant needs an approved outside-root write approval.");
+    }
+    const resolvedAtMs = approval.resolvedAt ? Date.parse(approval.resolvedAt) : Number.NaN;
+    if (!Number.isFinite(resolvedAtMs) || Date.now() - resolvedAtMs > OUTSIDE_ROOT_WRITE_GRANT_MINT_WINDOW_MS) {
+      throw new Error("The approval is too old to open a folder; approve a new request instead.");
+    }
+    const pending = await this.storage.pendingApprovalActions.find(input.approvalId);
+    const approvedRequest = pending?.actionType === "tool.invoke" ? asToolInvokeRequest(pending.request) : undefined;
+    if (!approvedRequest || !isOutsideRootWriteTool(approvedRequest.toolName)) {
+      throw new Error("The approval is not an outside-root write.");
+    }
+    const approvedScopeRef = input.scope === "session" ? approvedRequest.sessionId : approvedRequest.workspaceId;
+    if (!approvedScopeRef || input.scopeRef !== approvedScopeRef) {
+      throw new Error(`A folder grant must be scoped to the approved request's own ${input.scope}.`);
+    }
+    const details = await this.describeOutsideRootWriteApproval(input.approvalId);
+    const candidate = details?.candidates.find((entry) => entry.rootId === input.rootId);
+    const roots = candidate && details ? grantWriteRootsAdmit([candidate.path], details.targets, ctx) : undefined;
+    if (!roots) {
+      throw new Error("The chosen folder is not available for this approval.");
+    }
+    const ttlMs = OUTSIDE_ROOT_WRITE_GRANT_DURATIONS[input.duration];
+    const validated = validateWriteRootsGrantInput(
+      {
+        toolPattern: approvedRequest.toolName,
+        decision: "allow",
+        scope: input.scope,
+        scopeRef: approvedScopeRef,
+        grantType: "ttl",
+        expiresAt: new Date(Date.now() + ttlMs).toISOString(),
+        createdBy: input.createdBy,
+        constraints: { writeRoots: roots, writeRootsApprovalId: input.approvalId },
+      },
+      sandbox,
+    );
+    return this.storage.runImmediateTransaction(async () => {
+      // One grant per approval across both scopes it may target. Lists are
+      // newest-first and every grant from this approval is newer than its
+      // approval, so the generous limit cannot hide one.
+      const scopes: Array<[ToolGrantScope, string | undefined]> = [
+        ["session", approvedRequest.sessionId],
+        ["workspace", approvedRequest.workspaceId],
+      ];
+      const existing = (
+        await Promise.all(
+          scopes
+            .filter((entry): entry is [ToolGrantScope, string] => Boolean(entry[1]))
+            .map(([scope, scopeRef]) => this.storage.toolGrants.list(scope, scopeRef, MINT_DUPLICATE_SCAN_LIMIT)),
+        )
+      ).flat();
+      if (existing.some((grant) => grant.constraints?.writeRootsApprovalId === input.approvalId)) {
+        throw new Error("This approval already opened a folder; approve a new request to open another.");
+      }
+      return await this.storage.toolGrants.createTtlForDuration(
+        {
+          toolPattern: validated.toolPattern,
+          decision: validated.decision,
+          scope: validated.scope,
+          scopeRef: validated.scopeRef,
+          createdBy: validated.createdBy,
+          constraints: validated.constraints,
+        },
+        ttlMs,
+      );
+    });
   }
 
   public revokeGrant(grantId: string, revokedBy: string): Promise<boolean> {
@@ -570,7 +703,10 @@ export class ToolPolicyEngine {
           kind: request.toolName,
           riskLevel: evaluation.riskLevel,
           payload: request.args,
-          preview: this.buildApprovalPreview(request),
+          preview: {
+            ...this.buildApprovalPreview(request),
+            ...(evaluation.outsideRootWrite ? { outsideRootWrite: evaluation.outsideRootWrite } : {}),
+          },
           linkage: buildToolApprovalLinkage(request, evaluation),
         },
         async (createdApproval) => {
@@ -609,6 +745,7 @@ export class ToolPolicyEngine {
               matchedGrantId: evaluation.matchedGrantId,
               reasonCodes: evaluation.reasonCodes,
               wardEffect: evaluation.wardEffect,
+              ...(evaluation.outsideRootWrite ? { outsideRootWrite: evaluation.outsideRootWrite } : {}),
             },
           });
 
@@ -1134,7 +1271,8 @@ export class ToolPolicyEngine {
         ? (grantDecision.allowGrants ?? [grantDecision.grant])
         : undefined;
 
-    const structuralError = await this.validateStructuralSafety(request, policy, allowGrants);
+    const outsideRootWrite = await this.evaluateOutsideRootWritesFor(request, allowGrants);
+    const structuralError = await this.validateStructuralSafety(request, policy, allowGrants, outsideRootWrite);
     if (structuralError) {
       return withWard(withPolicy(deny(riskLevel, "structural_safety_block", structuralError)));
     }
@@ -1206,6 +1344,12 @@ export class ToolPolicyEngine {
     if (outsideRootsReadRequiresApproval) {
       requiresApproval = true;
     }
+    // Writing outside every write root needs the operator; neither bypass mode,
+    // a pre-approved Code Mode run, nor an unconstrained allow grant clears it.
+    const outsideRootWriteRequiresApproval = outsideRootWrite.status === "requires_approval";
+    if (outsideRootWriteRequiresApproval) {
+      requiresApproval = true;
+    }
     if (policy.approvalMode === "approve_risky" && riskLevel !== "safe" && !hasAllowGrant) {
       requiresApproval = true;
     }
@@ -1216,7 +1360,8 @@ export class ToolPolicyEngine {
       riskLevel !== "nuclear" &&
       !shellRisk?.risky &&
       !argumentRisk?.risky &&
-      !outsideRootsReadRequiresApproval
+      !outsideRootsReadRequiresApproval &&
+      !outsideRootWriteRequiresApproval
     ) {
       requiresApproval = false;
     }
@@ -1231,7 +1376,8 @@ export class ToolPolicyEngine {
       riskLevel !== "nuclear" &&
       !shellRisk?.risky &&
       !argumentRisk?.risky &&
-      !outsideRootsReadRequiresApproval
+      !outsideRootsReadRequiresApproval &&
+      !outsideRootWriteRequiresApproval
     ) {
       requiresApproval = false;
     }
@@ -1261,6 +1407,14 @@ export class ToolPolicyEngine {
       accessReason.reasonCodes.push("official_search_provider_consent_required");
       accessReason.policyReason = "official search provider consent is required";
     }
+    if (outsideRootWriteRequiresApproval) {
+      accessReason.reasonCodes.push("outside_root_write_requires_approval");
+      accessReason.policyReason = "writing outside the write roots requires approval";
+    } else if (outsideRootWrite.status === "admitted") {
+      accessReason.reasonCodes.push(
+        outsideRootWrite.source === "grant" ? "outside_root_write_grant" : "outside_root_write_approved_once",
+      );
+    }
 
     // A silent heartbeat has no operator waiting on an approval lifecycle. If
     // policy drift (for example a new Ward), argument classification, risk, or
@@ -1283,10 +1437,12 @@ export class ToolPolicyEngine {
 
     const effectiveAllowGrant = officialSearchRequest
       ? officialSearchConsentGrant
-      : grantDecision?.decision === "allow"
-        ? ((await this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants)) ??
-          grantDecision.grant)
-        : undefined;
+      : outsideRootWrite.status === "admitted" && outsideRootWrite.grant
+        ? outsideRootWrite.grant
+        : grantDecision?.decision === "allow"
+          ? ((await this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants)) ??
+            grantDecision.grant)
+          : undefined;
 
     return withWard({
       allowed: true,
@@ -1300,6 +1456,7 @@ export class ToolPolicyEngine {
       permissionProfileId: policy.permissionProfileId,
       localOperatorOverrideId: localOperatorOverrideAuditId,
       approvalMode: policy.approvalMode,
+      ...(outsideRootWrite.status === "requires_approval" ? { outsideRootWrite: outsideRootWrite.details } : {}),
     });
   }
 
@@ -1507,7 +1664,10 @@ export class ToolPolicyEngine {
         allowedGrants.push(grant);
         continue;
       }
-      if (constraintsError === HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE) {
+      if (
+        constraintsError === HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE ||
+        constraintsError === WRITE_ROOT_GRANT_INAPPLICABLE
+      ) {
         continue;
       }
       firstConstrainedAllow ??= { grant, constraintsError };
@@ -1541,6 +1701,16 @@ export class ToolPolicyEngine {
     const constraints = grant.constraints;
     if (!constraints) {
       return undefined;
+    }
+
+    // A folder grant only ever admits writes outside the write roots that land
+    // in its folders; for anything else it is skipped, so it can never make
+    // writes inside the jail approval-free or block an unrelated request.
+    if (constraints.writeRoots !== undefined) {
+      const admission = await this.evaluateOutsideRootWritesFor(request, [grant], { ignoreApproval: true });
+      if (admission.status !== "admitted" || admission.grant !== grant) {
+        return WRITE_ROOT_GRANT_INAPPLICABLE;
+      }
     }
 
     if (constraints.mutationAllowed === false && isMutationTool(toolDef)) {
@@ -1661,6 +1831,7 @@ export class ToolPolicyEngine {
     request: ToolAccessEvaluateRequest,
     policy?: EffectiveToolPolicy,
     allowGrants?: ToolGrantRecord[],
+    outsideRootWrite: OutsideRootWriteEvaluation = { status: "none" },
   ): Promise<string | undefined> {
     try {
       const readPathError = await this.validateReadPaths(
@@ -1679,7 +1850,14 @@ export class ToolPolicyEngine {
       for (const candidate of writePathCandidates) {
         const referenceRoots = getReferenceRootPaths(allowGrants?.[0]?.constraints);
         const targetsReferenceRoot = referenceRoots.length > 0 && isPathWithinAnyRoot(candidate.path, referenceRoots);
+        const outsideRoot = outsideRootWrite.status !== "none" && outsideRootWrite.outsidePaths.has(candidate.path);
         if (targetsReferenceRoot) {
+          assertNotHardForbiddenWritePath(path.resolve(candidate.path), this.config.sandbox);
+        } else if (outsideRoot && outsideRootWrite.status === "admitted") {
+          assertToolWritePath(candidate.path, this.config.sandbox, candidate.intent, { roots: outsideRootWrite.roots });
+        } else if (outsideRoot) {
+          // Pending approval: the target already resolved and passed the
+          // hard-forbidden check; execution re-checks it after approval.
           assertNotHardForbiddenWritePath(path.resolve(candidate.path), this.config.sandbox);
         } else {
           assertToolWritePath(candidate.path, this.config.sandbox, candidate.intent);
@@ -1764,6 +1942,20 @@ export class ToolPolicyEngine {
       return `Path is outside read allowlist: ${access.resolvedPath}`;
     }
     return undefined;
+  }
+
+  private evaluateOutsideRootWritesFor(
+    request: ToolAccessEvaluateRequest,
+    allowGrants: readonly ToolGrantRecord[] | undefined,
+    options: { ignoreApproval?: boolean } = {},
+  ): Promise<OutsideRootWriteEvaluation> {
+    return evaluateOutsideRootWrites(request, extractWritePathCandidates(request), allowGrants, {
+      sandbox: this.config.sandbox,
+      isEligible: async () => (await this.runtimeHooks.resolveOutsideRootWriteEligibility?.(request)) === true,
+      verifiedApprovalId: async () =>
+        options.ignoreApproval ? undefined : await getVerifiedApprovalBypassId(request, this.storage),
+      registeredDetails: (approvalId) => this.describeOutsideRootWriteApproval(approvalId),
+    });
   }
 
   private async requiresApprovalForOutsideRootsRead(
@@ -2829,44 +3021,6 @@ function readDocsIngestBackendIfValid(
     return readDocsIngestBackend(request);
   } catch {
     return undefined;
-  }
-}
-
-interface WritePathCandidate {
-  path: string;
-  intent: ToolWriteIntent;
-}
-
-function extractWritePathCandidates(request: ToolAccessEvaluateRequest): WritePathCandidate[] {
-  const args = request.args;
-  if (!args) {
-    return [];
-  }
-  const readString = (value: unknown): string | undefined =>
-    typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-  const candidates = (intent: ToolWriteIntent, ...values: unknown[]): WritePathCandidate[] =>
-    values
-      .map(readString)
-      .filter((value): value is string => Boolean(value))
-      .map((value) => ({ path: value, intent }));
-  switch (request.toolName) {
-    case "fs.write":
-    case "fs.patch":
-    case "artifacts.create":
-    case "documents.create":
-    case "presentations.create":
-      return candidates("write", args.path);
-    case "fs.delete":
-      return candidates("delete", args.path, args.from);
-    case "fs.copy":
-      return candidates("write", args.to);
-    case "fs.move":
-      return [...candidates("delete", args.from), ...candidates("write", args.to)];
-    case "browser.screenshot":
-    case "browser.interact":
-      return candidates("write", args.outputPath, args.path);
-    default:
-      return [];
   }
 }
 

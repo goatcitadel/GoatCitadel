@@ -34,6 +34,20 @@ describe("page-anatomy guard", () => {
     assert.deepEqual(checkSafeArea("app/MobileTabBar.tsx", '<nav className="flex cockpit-safe-bottom">'), []);
   });
 
+  it("counts Settings controls outside Field and any return of the model-setup sheet", () => {
+    const raw = '<input className="h-11" value={url} />\n<select value={mode}>\n<textarea value={json} />';
+    assert.deepEqual(countAnatomy("areas/settings/X.tsx", raw), { "settings-raw-control": 3 });
+    const fielded = [
+      "<Field label=\"Endpoint\">{(props) => <input {...props} value={url} />}</Field>",
+      '<Field label="Name">{(field) => <input {...field} value={name} />}</Field>',
+      '<input type="checkbox" checked={on} />',
+      '<input type="radio" name="mode" />',
+    ].join("\n");
+    assert.deepEqual(countAnatomy("areas/settings/X.tsx", fielded), {});
+    assert.deepEqual(countAnatomy("areas/system/X.tsx", raw), {});
+    assert.deepEqual(countAnatomy("areas/settings/X.tsx", 'import "./model-setup.css";'), { "model-setup-css": 1 });
+  });
+
   it("fails above the budget and asks for a lower budget below it", () => {
     const rules = [{ id: "card-surface", budget: 3, help: "flatten", count: () => 0 }];
     assert.deepEqual(evaluateAnatomy({ "card-surface": 3 }, rules), []);

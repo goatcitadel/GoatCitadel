@@ -27,6 +27,8 @@ import {
 } from "./chat-fanout-admission-reference.js";
 
 type FeatureBinding = { references: ChatTurnFeatureReferences; referenceSha256: string };
+/** Admitted evidence that does not depend on the provider route. */
+const ROUTE_INDEPENDENT_REFERENCE_KEYS: ReadonlySet<string> = new Set(["version", "workPassport"]);
 export interface ChatFeatureAdmissionHost {
   storage: Pick<
     AsyncStorage,
@@ -67,6 +69,11 @@ export interface ChatFeatureAdmissionHost {
     admission: ActiveTurnAdmission;
     content: string;
   }): Promise<import("@goatcitadel/contracts").ChatSelectedMeshCapabilities | undefined>;
+  /** Local deterministic Work Passport classification; advisory evidence only. */
+  classifyWorkPassport?(
+    workspaceId: string,
+    content: string,
+  ): Promise<import("@goatcitadel/contracts").WorkPassportRecord>;
   resolveRemotePlacement?(input: {
     admission: ActiveTurnAdmission;
     content: string;
@@ -80,6 +87,8 @@ export async function resolveChatFeatureAdmission(
   input: Parameters<NonNullable<ChatTurnPrepHost["resolveChatFeatureAdmission"]>>[0],
 ): Promise<FeatureBinding | undefined> {
   await host.assertTurnAdmissionWrite(input.admission);
+  // One reader for every restoration switch consulted during admission.
+  const isEnabled = (flag: string) => host.isFeatureEnabled(flag);
   const existing = await host.storage.sessionMutationAdmissions.findFeatureReferences(input.admission.identity);
   const scheduledOccurrence = existing?.references.scheduledOccurrence ?? input.scheduledOccurrence;
   if (scheduledOccurrence) {
@@ -130,13 +139,10 @@ export async function resolveChatFeatureAdmission(
   if (
     route?.effectiveProviderId &&
     route.effectiveModel &&
-    (input.explicitContextRequested ||
-      (route.providerFallback && (await host.isFeatureEnabled("chatProviderFallbackV1Enabled"))))
+    (input.explicitContextRequested || (route.providerFallback && (await isEnabled("chatProviderFallbackV1Enabled"))))
   ) {
     const primary = { providerId: route.effectiveProviderId, model: route.effectiveModel };
-    const fallback = (await host.isFeatureEnabled("chatProviderFallbackV1Enabled"))
-      ? route.providerFallback
-      : undefined;
+    const fallback = (await isEnabled("chatProviderFallbackV1Enabled")) ? route.providerFallback : undefined;
     const fingerprint = host.routeFingerprint(primary, fallback);
     if (fingerprint) references.providerRoute = { primary, ...(fallback ? { fallback } : {}), fingerprint };
     else if (input.explicitContextRequested)
@@ -147,7 +153,7 @@ export async function resolveChatFeatureAdmission(
     !input.explicitContextRequested &&
     !input.scheduledOccurrence &&
     !input.heartbeatOccurrence &&
-    (await host.isFeatureEnabled("chatAutomaticFanoutV1Enabled"))
+    (await isEnabled("chatAutomaticFanoutV1Enabled"))
   ) {
     const binding = await host.storage.chatSessionProjects.get(input.admission.identity.sessionId);
     const project = binding?.projectId ? await host.storage.chatProjects.find(binding.projectId) : undefined;
@@ -155,7 +161,7 @@ export async function resolveChatFeatureAdmission(
       throw new ConflictError({ message: "Automatic fanout requires an active project-bound Chat session." });
     references.childWork = buildFanoutAdmissionReference(input.admission, project);
   }
-  if (await host.isFeatureEnabled("chatSkillInstructionsV1Enabled")) {
+  if (await isEnabled("chatSkillInstructionsV1Enabled")) {
     const workspaceId = input.admission.identity.workspaceId;
     const decision = await host.resolveSkills(input.content, workspaceId);
     const selectedIds = new Set(
@@ -196,22 +202,25 @@ export async function resolveChatFeatureAdmission(
       await renderAdmittedSkillInstructions(host, references, workspaceId);
     }
   }
-  if ((await host.isFeatureEnabled("chatRequesterMcpV1Enabled")) && host.resolveRequesterConnections) {
+  if ((await isEnabled("chatWorkPassportV1Enabled")) && host.classifyWorkPassport) {
+    references.workPassport = await host.classifyWorkPassport(input.admission.identity.workspaceId, input.content);
+  }
+  if ((await isEnabled("chatRequesterMcpV1Enabled")) && host.resolveRequesterConnections) {
     const connections = await host.resolveRequesterConnections({ admission: input.admission, content: input.content });
     if (connections.length) references.requesterConnections = connections;
   }
-  if ((await host.isFeatureEnabled("chatStaticMcpV1Enabled")) && host.resolveStaticMcpConnections) {
+  if ((await isEnabled("chatStaticMcpV1Enabled")) && host.resolveStaticMcpConnections) {
     const connections = await host.resolveStaticMcpConnections({ admission: input.admission, content: input.content });
     if (connections.length) references.selectedStaticMcp = connections;
   }
-  if ((await host.isFeatureEnabled("chatMeshCapabilitiesV1Enabled")) && host.resolveMeshCapabilities) {
+  if ((await isEnabled("chatMeshCapabilitiesV1Enabled")) && host.resolveMeshCapabilities) {
     const mesh = await host.resolveMeshCapabilities({ admission: input.admission, content: input.content });
     if (mesh) references.selectedMeshCapabilities = mesh;
   }
   if (
     route?.effectiveProviderId &&
     route.effectiveModel &&
-    (await host.isFeatureEnabled("chatRemotePlacementV1Enabled")) &&
+    (await isEnabled("chatRemotePlacementV1Enabled")) &&
     host.resolveRemotePlacement
   ) {
     const placement = await host.resolveRemotePlacement({
@@ -231,20 +240,27 @@ export async function resolveChatFeatureAdmission(
     !references.requesterConnections &&
     !references.selectedStaticMcp &&
     !references.selectedMeshCapabilities &&
-    !references.remotePlacement
+    !references.remotePlacement &&
+    !references.workPassport
   )
     return undefined;
   // Every new restored-feature admission pins its route. Selected skill budgets,
   // requester schemas and scheduled scope must not silently move providers on replay.
+  // Route-independent evidence alone pins the route only when one resolves.
+  const routeIndependentOnly = Object.keys(references).every((key) => ROUTE_INDEPENDENT_REFERENCE_KEYS.has(key));
   if (!references.providerRoute) {
-    if (!route?.effectiveProviderId || !route.effectiveModel) {
-      throw new ConflictError({ message: "Chat feature admission requires an explicit provider route." });
-    }
-    const primary = { providerId: route.effectiveProviderId, model: route.effectiveModel };
-    const fingerprint = host.routeFingerprint(primary);
-    if (!fingerprint)
-      throw new ConflictError({ message: "Chat feature admission requires a verifiable provider route." });
-    references.providerRoute = { primary, fingerprint };
+    const primary =
+      route?.effectiveProviderId && route.effectiveModel
+        ? { providerId: route.effectiveProviderId, model: route.effectiveModel }
+        : undefined;
+    const fingerprint = primary ? host.routeFingerprint(primary) : undefined;
+    if (primary && fingerprint) references.providerRoute = { primary, fingerprint };
+    else if (!routeIndependentOnly)
+      throw new ConflictError({
+        message: primary
+          ? "Chat feature admission requires a verifiable provider route."
+          : "Chat feature admission requires an explicit provider route.",
+      });
   }
   await host.assertTurnAdmissionWrite(input.admission);
   if (input.deferBinding) {

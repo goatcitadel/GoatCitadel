@@ -25,6 +25,14 @@ export interface ToolGrantConstraints {
   maxWritesPerHour?: number;
   maxCallsPerHour?: number;
   mutationAllowed?: boolean;
+  /**
+   * Canonical folders outside the write roots this allow grant admits for
+   * write-intent targets (never deletes). Only minted from an outside-root write
+   * approval or validated operator input; always time-limited.
+   */
+  writeRoots?: string[];
+  /** The approval a folder grant was minted from; each approval mints at most one. */
+  writeRootsApprovalId?: string;
 }
 
 export interface ToolGrantRecord {

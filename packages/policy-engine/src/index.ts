@@ -30,6 +30,7 @@ export * from "./ingestion-source-type.js";
 export * from "./sandbox/path-jail.js";
 export * from "./sandbox/write-root-safety.js";
 export * from "./sandbox/tool-write-gate.js";
+export * from "./sandbox/outside-root-write.js";
 export * from "./sandbox/network-guard.js";
 export * from "./worker-cell-egress-proxy.js";
 export * from "./sandbox/shell-risk-gate.js";

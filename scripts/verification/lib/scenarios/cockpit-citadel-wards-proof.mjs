@@ -136,7 +136,7 @@ export async function runCockpitCitadelWardsProof({ context, browser, stack, vie
             waitUntil: "domcontentloaded",
           });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
-          panel = page.getByRole("region", { name: "Citadel Wards", exact: true });
+          panel = page.getByRole("region", { name: "Rules · Wards", exact: true });
           await panel.getByRole("button", { name: "Add Ward", exact: true }).waitFor();
           const selection = () =>
             page.evaluate(() => ({

@@ -20,12 +20,26 @@ afterEach(() => {
 });
 
 describe("first-frame theme boot", () => {
-  it("applies the saved theme before the app loads, defaulting to dark like the preference owner", () => {
-    expect(boot("/chat")).toBe("dark");
-    localStorage.setItem("goatcitadel.ui.theme.v1", "light");
-    expect(boot("/chat")).toBe("light");
-    localStorage.setItem("goatcitadel.ui.theme.v1", "unexpected");
-    expect(boot("/chat")).toBe("dark");
+  it("applies the saved theme before the app loads, else matches the system like the preference owner", () => {
+    const original = window.matchMedia;
+    let dark = false;
+    window.matchMedia = ((query: string) => ({ media: query, matches: dark })) as unknown as typeof window.matchMedia;
+    try {
+      expect(boot("/chat")).toBe("light");
+      dark = true;
+      expect(boot("/chat")).toBe("dark");
+      localStorage.setItem("goatcitadel.ui.theme.v1", "light");
+      expect(boot("/chat")).toBe("light");
+      localStorage.setItem("goatcitadel.ui.theme.v1", "system");
+      expect(boot("/chat")).toBe("dark");
+      localStorage.setItem("goatcitadel.ui.theme.v1", "unexpected");
+      dark = false;
+      expect(boot("/chat")).toBe("light");
+      localStorage.setItem("goatcitadel.ui.theme.v1", "dark");
+      expect(boot("/chat")).toBe("dark");
+    } finally {
+      window.matchMedia = original;
+    }
   });
 
   it("honours an explicit theme query the same way the access gate does", () => {
@@ -44,9 +58,14 @@ describe("first-frame theme boot", () => {
         throw new Error("blocked");
       },
     });
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = (() => {
+      throw new Error("blocked");
+    }) as unknown as typeof window.matchMedia;
     try {
       expect(boot("/chat")).toBe("dark");
     } finally {
+      window.matchMedia = originalMatchMedia;
       Object.defineProperty(window, "localStorage", original);
     }
   });

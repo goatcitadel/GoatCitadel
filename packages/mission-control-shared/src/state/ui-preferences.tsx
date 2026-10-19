@@ -1,11 +1,14 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { UiEffectsMode } from "./effects-mode";
 import type { OperatorAttentionSoundMode } from "./operator-attention";
 import type { ShellNavMode } from "../components/ShellNavRail";
 
 export type UiExperienceMode = "simple" | "advanced";
 export type UiDensity = "comfortable" | "default" | "compact";
-export type UiTheme = "dark" | "light";
+/** The saved theme choice. `system` follows `prefers-color-scheme` live and is the default when nothing is saved. */
+export type UiTheme = "dark" | "light" | "system";
+/** The theme actually painted after resolving `system`. */
+export type UiResolvedTheme = "dark" | "light";
 
 export interface UiNotificationPreferences {
   toastsEnabled: boolean;
@@ -38,7 +41,10 @@ interface UiPreferencesValue {
   activeWorkspaceId: string;
   setActiveWorkspaceId: (workspaceId: string) => void;
   setActiveScope: (scope: { citadelId: string; workspaceId: string }) => void;
-  theme: UiTheme;
+  /** The painted theme with `system` resolved, so `theme === "dark"` consumers (Classic included) keep working. */
+  theme: UiResolvedTheme;
+  /** The saved choice, including `system`. */
+  themePreference: UiTheme;
   setTheme: (theme: UiTheme) => void;
   notifications: UiNotificationPreferences;
   setNotificationToastsEnabled: (enabled: boolean) => void;
@@ -83,6 +89,7 @@ const UiPreferencesContext = createContext<UiPreferencesValue>({
   setActiveWorkspaceId: () => {},
   setActiveScope: () => {},
   theme: "dark",
+  themePreference: "system",
   setTheme: () => {},
   notifications: {
     toastsEnabled: true,
@@ -118,7 +125,9 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
     scopeGenerationRef.current += 1;
     setScopeGeneration(scopeGenerationRef.current);
   }, []);
-  const [theme, setThemeState] = useState<UiTheme>(() => readThemeFromStorage());
+  const [themePreference, setThemeState] = useState<UiTheme>(() => readThemeFromStorage());
+  const systemTheme = useSystemColorScheme(themePreference === "system");
+  const theme: UiResolvedTheme = themePreference === "system" ? systemTheme : themePreference;
   const [notifications, setNotificationsState] = useState<UiNotificationPreferences>(() =>
     readNotificationPreferencesFromStorage(),
   );
@@ -201,6 +210,7 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
       setActiveWorkspaceId,
       setActiveScope,
       theme,
+      themePreference,
       setTheme: (nextTheme) => {
         setThemeState(nextTheme);
         writeStorage(THEME_KEY, nextTheme);
@@ -238,6 +248,7 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
       setActiveWorkspaceId,
       setActiveScope,
       theme,
+      themePreference,
       notifications,
     ],
   );
@@ -374,10 +385,40 @@ function normalizeWorkspaceId(value: string | null | undefined): string {
 
 function readThemeFromStorage(): UiTheme {
   if (typeof window === "undefined") {
-    return "dark";
+    return "system";
   }
   const raw = readStorage(THEME_KEY);
-  return raw === "light" ? "light" : "dark";
+  return raw === "light" || raw === "dark" ? raw : "system";
+}
+
+const DARK_SCHEME_QUERY = "(prefers-color-scheme: dark)";
+
+/** Reads the host color scheme; dark when the host cannot say (no window or no `matchMedia`). */
+export function readSystemColorScheme(): UiResolvedTheme {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return "dark";
+  }
+  return window.matchMedia(DARK_SCHEME_QUERY).matches ? "dark" : "light";
+}
+
+/** Tracks `prefers-color-scheme` live while `active`, so Match system follows a host change without a reload. */
+function useSystemColorScheme(active: boolean): UiResolvedTheme {
+  const [scheme, setScheme] = useState<UiResolvedTheme>(() => readSystemColorScheme());
+  useEffect(() => {
+    if (!active || typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return undefined;
+    }
+    const query = window.matchMedia(DARK_SCHEME_QUERY);
+    const sync = () => setScheme(query.matches ? "dark" : "light");
+    sync();
+    if (typeof query.addEventListener === "function") {
+      query.addEventListener("change", sync);
+      return () => query.removeEventListener("change", sync);
+    }
+    query.addListener(sync);
+    return () => query.removeListener(sync);
+  }, [active]);
+  return scheme;
 }
 
 function readNotificationPreferencesFromStorage(): UiNotificationPreferences {

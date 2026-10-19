@@ -16,6 +16,7 @@ import { shortcutLabel } from "./platform-keys";
 import { fetchWorkspaces } from "@goatcitadel/mission-control-shared/api/workspaces";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { otherThemeOptions } from "./theme-options";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
 import { queryKeys } from "../data/query-keys";
 import { inboxCountLabel, inboxMatchesWorkspace, inboxNavigationLabel } from "../areas/inbox/inbox-presentation";
@@ -52,7 +53,7 @@ export function Sidebar({
   const shellSwitch = useCockpitShellSwitch();
   const { area: current, pathname, search, hash, navigate } = useCockpitRoute();
   const preload = useCockpitPreload();
-  const { activeCitadelId, activeWorkspaceId, theme, setTheme } = useUiPreferences();
+  const { activeCitadelId, activeWorkspaceId, themePreference, setTheme } = useUiPreferences();
   const workspaces = useQuery({
     queryKey: queryKeys.workspaces(activeCitadelId),
     queryFn: () => fetchWorkspaces("active", 200, activeCitadelId),
@@ -198,9 +199,11 @@ export function Sidebar({
           </MenuTrigger>
           <MenuContent align="end">
             <MenuItem onSelect={() => navigate("/settings/general")}>Settings</MenuItem>
-            <MenuItem onSelect={() => setTheme(theme === "dark" ? "light" : "dark")}>
-              Switch to {theme === "dark" ? "light" : "dark"} theme
-            </MenuItem>
+            {otherThemeOptions(themePreference).map((option) => (
+              <MenuItem key={option.value} onSelect={() => setTheme(option.value)}>
+                {option.action}
+              </MenuItem>
+            ))}
             <MenuItem onSelect={shellSwitch.request}>Switch to classic Mission Control</MenuItem>
           </MenuContent>
         </Menu>

@@ -107,7 +107,7 @@ async function click(label: string) {
 }
 async function chooseEnvironment() {
   await act(async () => {
-    const select = container.querySelectorAll("select")[1]!;
+    const select = container.querySelectorAll("select")[0]!;
     select.value = "env";
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
@@ -407,7 +407,7 @@ describe("cockpit provider connection editing", () => {
     expect(api.createChangePlan).toHaveBeenCalledTimes(1);
     expect(api.submitChangePlanProviderSecret).toHaveBeenCalledTimes(1);
     expect(api.confirmChangePlan).not.toHaveBeenCalled();
-    expect(container.querySelectorAll("select")[1]?.value).toBe("keychain");
+    expect(container.querySelectorAll("select")[0]?.value).toBe("keychain");
     expect(readProviderConnectionAttempt("provider-a")?.request.credentialStorage).toBe("keychain");
     expect(container.textContent).toContain("outcome is uncertain");
   });
@@ -468,7 +468,7 @@ describe("cockpit provider connection editing", () => {
     act(() => root.unmount());
     root = createRoot(container);
     await render();
-    expect(container.querySelectorAll("select")[1]?.value).toBe("env");
+    expect(container.querySelectorAll("select")[0]?.value).toBe("env");
     expect(container.querySelectorAll("input")[1]?.value).toBe("PROVIDER_TEST_KEY");
     expect(container.textContent).toContain("plaintext in the installation's environment file");
     await click("Review current step");
@@ -1025,5 +1025,51 @@ describe("cockpit provider connection editing", () => {
     } finally {
       window.history.replaceState(state, "", original);
     }
+  });
+});
+
+describe("cockpit provider connection inside the one provider editor", () => {
+  it("edits the provider the page selected and offers no provider picker of its own", async () => {
+    const other = { ...provider, providerId: "provider-b", label: "Provider B", baseUrl: "https://b.example.test/v1" };
+    catalog = { ...catalog, providers: [{ ...provider }, other] };
+    await act(async () =>
+      root.render(
+        <ProviderConnectionSettings providerId="provider-b" credentialActions={<p>Saved credential row</p>} />,
+      ),
+    );
+    expect(container.querySelectorAll("select")).toHaveLength(1);
+    expect(container.querySelector("select")?.id).toBe(
+      [...container.querySelectorAll("label")].find((node) => node.textContent === "Credential storage")?.htmlFor,
+    );
+    expect(container.querySelector<HTMLInputElement>("input[type=url]")?.value).toBe("https://b.example.test/v1");
+    expect(container.textContent).toContain("Saved credential row");
+  });
+
+  it("checks the endpoint on blur, ties the error to the field and holds the review until it is fixed", async () => {
+    await render();
+    await editEndpoint("not an endpoint");
+    const input = container.querySelector<HTMLInputElement>("input[type=url]")!;
+    expect(input.getAttribute("aria-required")).toBe("true");
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    await act(async () => {
+      input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    const [errorId] = input.getAttribute("aria-describedby")!.split(" ");
+    expect(document.getElementById(errorId!)?.textContent).toContain("Enter a full URL");
+    expect(button("Review endpoint change").disabled).toBe(true);
+    await editEndpoint("https://fixed.example.test/v1");
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    expect(button("Review endpoint change").disabled).toBe(false);
+  });
+
+  it("says why the credential can't be replaced while an endpoint draft is open", async () => {
+    await render();
+    await editEndpoint();
+    const replace = button("Replace API credential");
+    expect(replace.disabled).toBe(true);
+    expect(document.getElementById(replace.getAttribute("aria-describedby")!)?.textContent).toBe(
+      "Finish or discard the endpoint draft before replacing its credential.",
+    );
   });
 });

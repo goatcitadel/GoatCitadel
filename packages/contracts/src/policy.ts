@@ -7,6 +7,7 @@ import type {
 } from "./internal-tooling.js";
 import type { ContextSourceAttribution } from "./ingestion.js";
 import type { WardEffect } from "./citadel-wards.js";
+import type { OutsideRootWriteMode } from "./outside-root-write.js";
 
 export type ToolApprovalMode = "approve_all" | "approve_risky" | "bypass";
 
@@ -260,19 +261,21 @@ export interface PermissionProfileReviewedActivationInput extends PermissionProf
   expectedSelectionRevision: string;
 }
 
-export type PermissionProfileSelectionReviewRequest = {
-  operation: "activate";
-  profileId: string;
-  workspaceId?: string;
-  sessionId?: string;
-  surface?: PermissionSurface;
-} | {
-  operation: "defaults";
-  profileId?: string;
-  scope?: PermissionProfileCreateScope;
-  scopeRef?: string;
-  defaultForSurfaces: PermissionSurface[];
-};
+export type PermissionProfileSelectionReviewRequest =
+  | {
+      operation: "activate";
+      profileId: string;
+      workspaceId?: string;
+      sessionId?: string;
+      surface?: PermissionSurface;
+    }
+  | {
+      operation: "defaults";
+      profileId?: string;
+      scope?: PermissionProfileCreateScope;
+      scopeRef?: string;
+      defaultForSurfaces: PermissionSurface[];
+    };
 
 export type PermissionProfileSelectionReviewInput = PermissionProfileSelectionReviewRequest & { createdBy: string };
 
@@ -409,6 +412,11 @@ export interface ToolPolicyConfig {
     operatorWriteRoots?: OperatorWriteRoot[];
     /** Set by the gateway at config load from the runtime root; stripped before config is persisted. */
     runtimeWriteProtection?: RuntimeWriteProtection;
+    /**
+     * Whether a write outside every write root may raise an approval instead of
+     * a hard block. Defaults to "deny" (unchanged behavior).
+     */
+    outsideRootWriteMode?: OutsideRootWriteMode;
   };
   /**
    * Hooks-scoped webhook egress, distinct from tool-sandbox egress. Non-empty

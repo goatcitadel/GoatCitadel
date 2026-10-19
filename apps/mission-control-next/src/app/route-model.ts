@@ -578,14 +578,14 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "settings-runtime",
       label: "Runtime configuration",
-      description: "Managed local runtime, Gateway process, local voice, and llama.cpp setup.",
+      description: "Managed local runtime, Gateway process, and local voice.",
       area: "settings",
       section: "runtime",
     },
     {
       id: "settings-local-ai",
       label: "Local AI",
-      description: "Hardware readiness, model fit, local endpoints, and serve jobs.",
+      description: "llama.cpp setup, hardware readiness, model fit, local endpoints, and serve jobs.",
       area: "settings",
       section: "local-ai",
     },

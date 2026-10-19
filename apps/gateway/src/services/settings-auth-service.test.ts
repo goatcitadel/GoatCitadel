@@ -547,6 +547,7 @@ describe("settings-auth-service durable settings", () => {
       supervisedDelegation: false,
       staticMcp: false,
       explicitContextBranches: false,
+      workPassport: false,
     });
   });
 
