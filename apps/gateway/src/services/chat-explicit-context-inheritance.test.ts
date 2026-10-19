@@ -112,7 +112,8 @@ describe("explicit context inheritance for edit, retry and child turns", () => {
       profileBound: false,
     });
     expect(inherited?.source).toBe("parent");
-    expect(inherited?.refs).toHaveLength(2);
+    // The session-bound attachment stays with the parent session.
+    expect(inherited?.refs).toEqual([{ kind: "memory_item", ref: "memory-1" }]);
     readAuthority.mockReturnValue({
       turnId: "turn-parent",
       routedContextSnapshotId: "parent-snapshot",

@@ -7,6 +7,16 @@ import {
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { ActiveTurnAdmission } from "./chat-turn-types.js";
 
+/**
+ * Attachments are bound to the session they were attached in, and a delegated
+ * child always runs in its own session. Moving them would need a new transfer
+ * authority, so children inherit only session-independent sources.
+ */
+const SESSION_BOUND_CONTEXT_KINDS: ReadonlySet<ChatRoutedContextRef["kind"]> = new Set([
+  "attachment",
+  "external_attachment",
+]);
+
 export type ExplicitContextInheritanceStorage = Pick<
   AsyncStorage,
   "routedContextSnapshots" | "chatDelegationRuns" | "durableRuns"
@@ -68,7 +78,7 @@ export async function resolveDelegatedParentContextRefs(
   ) {
     throw new ConflictError({ message: "The parent turn's admitted context changed. Start a fresh delegated step." });
   }
-  return contextRefsFromSnapshot(snapshot);
+  return contextRefsFromSnapshot(snapshot).filter((ref) => !SESSION_BOUND_CONTEXT_KINDS.has(ref.kind));
 }
 
 export interface InheritedChatContextRefs {
