@@ -1481,7 +1481,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       commitmentScheduledTurnsV1Enabled: featuresInput.commitmentScheduledTurnsV1Enabled ?? false,
       chatMeshCapabilitiesV1Enabled: featuresInput.chatMeshCapabilitiesV1Enabled ?? false,
       chatRemotePlacementV1Enabled: featuresInput.chatRemotePlacementV1Enabled ?? false,
-      chatModelCouncilV1Enabled: featuresInput.chatModelCouncilV1Enabled ?? false,
+      chatModelCouncilV1Enabled: featuresInput.chatModelCouncilV1Enabled ?? true,
       chatRequesterMcpV1Enabled: featuresInput.chatRequesterMcpV1Enabled ?? false,
       chatStaticMcpV1Enabled: featuresInput.chatStaticMcpV1Enabled ?? false,
       evolutionControlPlaneV1Enabled: featuresInput.evolutionControlPlaneV1Enabled ?? true,
