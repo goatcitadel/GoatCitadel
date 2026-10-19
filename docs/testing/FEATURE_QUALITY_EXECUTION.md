@@ -884,7 +884,8 @@ Current skills, grants, requester generations, mesh publications and policy rema
 live authority checks. Changed admitted content fails closed instead of silently
 substituting bytes. Historical profile decoding remains available. Fresh explicit
 context restoration covers ordinary operator turns and edit/retry turns that carry refs.
-WS9 adds default-off `chatExplicitContextBranchesV1Enabled`: edit/retry without refs re-admits the
+WS9 adds `chatExplicitContextBranchesV1Enabled` (default on after its CI lanes passed; effective only with
+`chatExplicitContextV1Enabled`): edit/retry without refs re-admits the
 source turn's ids, and delegated children inherit the parent's ids, always as a fresh admission
 (child path not yet proven by an end-to-end delegated run). Code Mode retains trusted-code
 terminology, immutable artifacts and its existing approval/execution owners.
