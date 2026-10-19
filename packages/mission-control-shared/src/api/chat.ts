@@ -83,6 +83,7 @@ import type {
   LearnedMemoryConflictRecord,
   LearnedMemoryItemRecord,
   LearnedMemoryUpdateInput,
+  OutsideRootWriteGrantChoice,
   ProactivePolicy,
   ProactiveRunRecord,
   ResearchRunRecord,
@@ -1305,11 +1306,8 @@ export async function cancelChatTurn(
   );
 }
 
-/** The folder an outside-root write approval opens: a server-offered rootId and a lifetime. */
-export interface ChatApprovalWriteGrantChoice {
-  rootId: string;
-  duration: "15m" | "1h" | "8h";
-}
+/** The folder an outside-root write approval opens; owned by contracts so client and Gateway agree. */
+export type ChatApprovalWriteGrantChoice = OutsideRootWriteGrantChoice;
 
 export interface ApproveChatToolResult {
   ok: boolean;

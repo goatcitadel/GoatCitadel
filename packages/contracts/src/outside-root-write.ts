@@ -14,6 +14,13 @@ export const OUTSIDE_ROOT_WRITE_GRANT_DURATIONS = {
   "8h": 8 * 60 * 60_000,
 } as const;
 export type OutsideRootWriteGrantDuration = keyof typeof OUTSIDE_ROOT_WRITE_GRANT_DURATIONS;
+/** The duration choices as a non-empty tuple, for request validators such as zod enums. */
+export const OUTSIDE_ROOT_WRITE_GRANT_DURATION_CHOICES = Object.keys(OUTSIDE_ROOT_WRITE_GRANT_DURATIONS) as [
+  OutsideRootWriteGrantDuration,
+  ...OutsideRootWriteGrantDuration[],
+];
+/** The rootId format the policy engine issues for each candidate folder. */
+export const OUTSIDE_ROOT_WRITE_ROOT_ID_PATTERN = /^owr_[a-f0-9]{16}$/u;
 export const OUTSIDE_ROOT_WRITE_GRANT_DEFAULT_DURATION: OutsideRootWriteGrantDuration = "1h";
 export const OUTSIDE_ROOT_WRITE_GRANT_MAX_TTL_MS = 24 * 60 * 60_000;
 export const OUTSIDE_ROOT_WRITE_GRANT_MAX_ROOTS = 4;
@@ -42,6 +49,16 @@ export function isOutsideRootWriteTool(toolName: string): toolName is OutsideRoo
 export interface OutsideRootWriteCandidateRoot {
   rootId: string;
   path: string;
+}
+
+/**
+ * The folder an operator chose when approving an outside-root write: a
+ * server-issued rootId and a lifetime. Sent as `writeGrant` on the Chat
+ * approve route; the Gateway re-checks it against the approval it describes.
+ */
+export interface OutsideRootWriteGrantChoice {
+  rootId: string;
+  duration: OutsideRootWriteGrantDuration;
 }
 
 /**

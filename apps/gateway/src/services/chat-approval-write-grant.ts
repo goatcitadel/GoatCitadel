@@ -1,15 +1,13 @@
 import {
   isOutsideRootWriteGrantDuration,
   type OutsideRootWriteApprovalDetails,
+  type OutsideRootWriteGrantChoice,
   type OutsideRootWriteGrantDuration,
   type ToolGrantRecord,
 } from "@goatcitadel/contracts";
 
-/** The folder an operator chose on an outside-root write approval: a server-issued rootId and a lifetime. */
-export interface ChatApprovalWriteGrantChoice {
-  rootId: string;
-  duration: OutsideRootWriteGrantDuration;
-}
+/** The folder an operator chose on an outside-root write approval; owned by contracts. */
+export type ChatApprovalWriteGrantChoice = OutsideRootWriteGrantChoice;
 
 /** The slice of the policy engine this owner needs. */
 export interface ChatApprovalWriteGrantEngine {
