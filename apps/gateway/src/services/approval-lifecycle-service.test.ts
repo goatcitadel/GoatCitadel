@@ -400,6 +400,21 @@ describe("approval lifecycle service", () => {
     await rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop");
     expect(host.storage.approvals.get("approval-1")).toMatchObject({ status: "rejected", resolvedBy: "operator-stop" });
     expect(host.storage.approvals.get).not.toHaveBeenCalledWith("approval-bad");
+    const skipEvents = host.storage.approvalEvents.append.mock.calls.filter(
+      ([event]) => (event as { eventType: string }).eventType === "cancellation_lineage_skipped",
+    );
+    expect(skipEvents).toHaveLength(1);
+    expect(skipEvents[0]![0]).toMatchObject({
+      approvalId: "approval-bad",
+      eventType: "cancellation_lineage_skipped",
+      actorId: "operator-stop",
+      payload: {
+        reason: "invalid_delegation_lineage",
+        detail: "Chat turn belongs to another session.",
+        cancelledSessionId: "session-1",
+        cancelledTurnId: "turn-1",
+      },
+    });
   });
 
   it("reuses a cached invalid-lineage result for repeated foreign approvals", async () => {
@@ -422,6 +437,11 @@ describe("approval lifecycle service", () => {
     expect(host.storage.chatTurnTraces.get).toHaveBeenCalledTimes(1);
     expect(host.storage.chatTurnTraces.get).toHaveBeenCalledWith("turn-bad");
     expect(host.storage.approvals.get).not.toHaveBeenCalledWith(expect.stringMatching(/^approval-bad/));
+    const skippedIds = host.storage.approvalEvents.append.mock.calls
+      .map(([event]) => event as { approvalId: string; eventType: string })
+      .filter((event) => event.eventType === "cancellation_lineage_skipped")
+      .map((event) => event.approvalId);
+    expect(skippedIds).toEqual(["approval-bad-1", "approval-bad-2"]);
   });
 
   it("resolves each foreign turn owner once per cancellation", async () => {
