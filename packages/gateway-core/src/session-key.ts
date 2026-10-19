@@ -69,3 +69,14 @@ function normalizeSegment(value: string): string {
   // first keeps the transform reversible (no two inputs share an output).
   return trimmed.replaceAll("%", "%25").replaceAll(":", "%3A");
 }
+
+/**
+ * Inverts {@link normalizeSegment} for one `:`-separated session-key segment.
+ * Callers that rebuild a route from a stored session key must decode each
+ * segment; passing an encoded segment back into `resolveSessionRoute` would
+ * encode it twice (`%3A` -> `%253A`) and derive a different session id.
+ * `%3A` is decoded before `%25` so a literal `%3A` (stored as `%253A`) survives.
+ */
+export function decodeSessionKeySegment(segment: string): string {
+  return segment.replaceAll("%3A", ":").replaceAll("%25", "%");
+}

@@ -134,6 +134,7 @@ vi.mock("./chat-turn-trace-hydration.js", () => ({
 }));
 
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { resolveSessionRoute } from "@goatcitadel/gateway-core";
 import { ChatTurnExecutionRegistry, ChatTurnWriteConflictError } from "./chat-turn-execution-registry.js";
 import { GatewayService } from "./gateway-service.js";
 import { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
@@ -1658,6 +1659,26 @@ describe("GatewayService Loop 13 workspace and runtime helpers", () => {
         sessionKey: "sms:acct:room:thread",
       } as never),
     ).toEqual({ channel: "sms", account: "acct", room: "room", threadId: "thread" });
+    // Matrix room and event ids contain `:`, which the session key stores percent-encoded;
+    // the rebuilt route must carry the raw ids so it re-derives the same session.
+    const matrixRoute = { channel: "matrix", account: "conn", room: "!room:example.org", threadId: "$evt:example.org" };
+    const matrixKey = resolveSessionRoute(matrixRoute);
+    const rebuiltMatrixRoute = GatewayService.prototype.routeFromSession.call(gateway, {
+      kind: "thread",
+      channel: "matrix",
+      account: "conn",
+      sessionKey: matrixKey.sessionKey,
+    } as never);
+    expect(rebuiltMatrixRoute).toEqual(matrixRoute);
+    expect(resolveSessionRoute(rebuiltMatrixRoute).sessionId).toBe(matrixKey.sessionId);
+    expect(
+      GatewayService.prototype.routeFromSession.call(gateway, {
+        kind: "group",
+        channel: "matrix",
+        account: "conn",
+        sessionKey: "matrix:conn:!room%3Aexample.org",
+      } as never),
+    ).toEqual({ channel: "matrix", account: "conn", room: "!room:example.org" });
     expect(await GatewayService.prototype.isReplayScratchSession.call(gateway, "session-1")).toBe(true);
     await expect(GatewayService.prototype.resolveRuntimeGuidance.call(gateway, "workspace-a")).resolves.toEqual({
       workspaceId: "workspace-a",
