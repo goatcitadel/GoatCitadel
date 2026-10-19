@@ -261,19 +261,21 @@ export interface PermissionProfileReviewedActivationInput extends PermissionProf
   expectedSelectionRevision: string;
 }
 
-export type PermissionProfileSelectionReviewRequest = {
-  operation: "activate";
-  profileId: string;
-  workspaceId?: string;
-  sessionId?: string;
-  surface?: PermissionSurface;
-} | {
-  operation: "defaults";
-  profileId?: string;
-  scope?: PermissionProfileCreateScope;
-  scopeRef?: string;
-  defaultForSurfaces: PermissionSurface[];
-};
+export type PermissionProfileSelectionReviewRequest =
+  | {
+      operation: "activate";
+      profileId: string;
+      workspaceId?: string;
+      sessionId?: string;
+      surface?: PermissionSurface;
+    }
+  | {
+      operation: "defaults";
+      profileId?: string;
+      scope?: PermissionProfileCreateScope;
+      scopeRef?: string;
+      defaultForSurfaces: PermissionSurface[];
+    };
 
 export type PermissionProfileSelectionReviewInput = PermissionProfileSelectionReviewRequest & { createdBy: string };
 

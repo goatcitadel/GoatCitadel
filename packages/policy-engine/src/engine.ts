@@ -402,7 +402,9 @@ export class ToolPolicyEngine {
   }
 
   /** The engine-authored outside-root write record of an approval, if it has one. */
-  public async describeOutsideRootWriteApproval(approvalId: string): Promise<OutsideRootWriteApprovalDetails | undefined> {
+  public async describeOutsideRootWriteApproval(
+    approvalId: string,
+  ): Promise<OutsideRootWriteApprovalDetails | undefined> {
     return readRegisteredOutsideRootWrite(await this.storage.approvalEvents.listByApprovalId(approvalId));
   }
 
@@ -1438,9 +1440,9 @@ export class ToolPolicyEngine {
       : outsideRootWrite.status === "admitted" && outsideRootWrite.grant
         ? outsideRootWrite.grant
         : grantDecision?.decision === "allow"
-        ? ((await this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants)) ??
-          grantDecision.grant)
-        : undefined;
+          ? ((await this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants)) ??
+            grantDecision.grant)
+          : undefined;
 
     return withWard({
       allowed: true,

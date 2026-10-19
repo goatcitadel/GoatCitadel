@@ -24,12 +24,29 @@ afterEach(() => {
 const hooks = { resolveOutsideRootWriteEligibility: async () => true };
 
 function writeRequest(target: string, extra: Partial<ToolInvokeRequest> = {}): ToolInvokeRequest {
-  return { toolName: "fs.write", args: { path: target, content: "hello" }, agentId: "agent", sessionId: "session-1", ...extra };
+  return {
+    toolName: "fs.write",
+    args: { path: target, content: "hello" },
+    agentId: "agent",
+    sessionId: "session-1",
+    ...extra,
+  };
 }
 
-async function folderGrant(fake: ReturnType<typeof createOutsideRootStorage>, scope: "session" | "workspace", scopeRef: string) {
+async function folderGrant(
+  fake: ReturnType<typeof createOutsideRootStorage>,
+  scope: "session" | "workspace",
+  scopeRef: string,
+) {
   return await fake.storage.toolGrants.createTtlForDuration(
-    { toolPattern: "fs.write", decision: "allow", scope, scopeRef, createdBy: "operator", constraints: { writeRoots: [fixture.outside] } },
+    {
+      toolPattern: "fs.write",
+      decision: "allow",
+      scope,
+      scopeRef,
+      createdBy: "operator",
+      constraints: { writeRoots: [fixture.outside] },
+    },
     60 * 60_000,
   );
 }
@@ -53,7 +70,12 @@ describe("executeTool outside-root write admission", () => {
     const grant = await folderGrant(fake, "session", "session-other");
     const target = path.join(fixture.outside, "report.txt");
     await expect(
-      executeTool(writeRequest(target, { policyContext: { matchedGrantId: grant.grantId } }), outsideRootConfig(fixture), fake.storage, hooks),
+      executeTool(
+        writeRequest(target, { policyContext: { matchedGrantId: grant.grantId } }),
+        outsideRootConfig(fixture),
+        fake.storage,
+        hooks,
+      ),
     ).rejects.toThrow(/outside write jail/iu);
     expect(fs.existsSync(target)).toBe(false);
   });
@@ -64,14 +86,24 @@ describe("executeTool outside-root write admission", () => {
     const target = path.join(fixture.outside, "report.txt");
     const config = outsideRootConfig(fixture);
     await expect(
-      executeTool(writeRequest(target, { policyContext: { matchedGrantId: "grant-forged" } }), config, fake.storage, hooks),
+      executeTool(
+        writeRequest(target, { policyContext: { matchedGrantId: "grant-forged" } }),
+        config,
+        fake.storage,
+        hooks,
+      ),
     ).rejects.toThrow(/outside write jail/iu);
     await expect(
       executeTool(writeRequest(target, { policyContext: { matchedGrantId: grant.grantId } }), config, fake.storage, {}),
     ).rejects.toThrow(/outside write jail/iu);
     await fake.storage.toolGrants.revoke(grant.grantId, undefined, "operator");
     await expect(
-      executeTool(writeRequest(target, { policyContext: { matchedGrantId: grant.grantId } }), config, fake.storage, hooks),
+      executeTool(
+        writeRequest(target, { policyContext: { matchedGrantId: grant.grantId } }),
+        config,
+        fake.storage,
+        hooks,
+      ),
     ).rejects.toThrow(/outside write jail/iu);
     expect(fs.existsSync(target)).toBe(false);
   });
@@ -90,7 +122,9 @@ describe("executeTool outside-root write admission", () => {
       }),
     };
     fake.seedApproval({ approvalId: "approval-once", request: { ...request }, registration });
-    const consent = { consentContext: { source: "ui", reason: "approval:approval-once" } } as Partial<ToolInvokeRequest>;
+    const consent = {
+      consentContext: { source: "ui", reason: "approval:approval-once" },
+    } as Partial<ToolInvokeRequest>;
     await executeTool({ ...request, ...consent }, outsideRootConfig(fixture), fake.storage, hooks);
     expect(fs.readFileSync(target, "utf8")).toBe("hello");
 

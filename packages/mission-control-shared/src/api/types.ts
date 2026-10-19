@@ -417,6 +417,7 @@ export interface RuntimeSettingsResponse {
     automaticFanout: boolean;
     providerFallback: boolean;
     staticMcp?: boolean;
+    modelCouncil?: boolean;
     workPassport?: boolean;
   };
   /** Opaque monotonic revision required by settings mutation requests. */
@@ -614,6 +615,7 @@ export interface RuntimeSettingsResponse {
     commitmentScheduledTurnsV1Enabled?: boolean;
     chatMeshCapabilitiesV1Enabled?: boolean;
     chatRemotePlacementV1Enabled?: boolean;
+    chatModelCouncilV1Enabled?: boolean;
     chatWorkPassportV1Enabled?: boolean;
     chatRequesterMcpV1Enabled?: boolean;
     chatStaticMcpV1Enabled?: boolean;

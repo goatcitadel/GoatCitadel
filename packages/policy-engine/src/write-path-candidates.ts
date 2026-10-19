@@ -34,9 +34,15 @@ export function extractWritePathCandidates(
     case "artifacts.create":
       return candidates("write", args.path);
     case "documents.create":
-      return candidates("write", outputPathOrRaw(() => resolveDocumentOutputPath(args), args.path));
+      return candidates(
+        "write",
+        outputPathOrRaw(() => resolveDocumentOutputPath(args), args.path),
+      );
     case "presentations.create":
-      return candidates("write", outputPathOrRaw(() => resolvePresentationOutputPath(args), args.path));
+      return candidates(
+        "write",
+        outputPathOrRaw(() => resolvePresentationOutputPath(args), args.path),
+      );
     case "fs.delete":
       return candidates("delete", args.path, args.from);
     case "fs.copy":

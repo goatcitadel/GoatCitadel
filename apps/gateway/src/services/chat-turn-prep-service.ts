@@ -603,6 +603,7 @@ export async function prepareAgentChatTurn(
   const preparationStartedAt = performance.now();
   const turnId = options?.turnId ?? randomUUID();
   const isFeatureEnabled = (flag: string) => host.isFeatureEnabled(flag);
+  const isDurableChatExecution = async () => (await host.isDurableChatExecutionEnabled?.()) ?? false;
   const systemHeartbeatPosture = readSystemHeartbeatTurnPrepPosture(input, options, turnId);
   await assertPrepTurnAdmission(host, options?.turnAdmission);
   const session = await host.getSession(sessionId);
@@ -673,7 +674,7 @@ export async function prepareAgentChatTurn(
       options.turnAdmission.durableClaim ||
       input.parentDelegationStepId ||
       options.turnAdmission.requestActor.actorKind !== "operator" ||
-      !(await host.isDurableChatExecutionEnabled?.()))
+      !(await isDurableChatExecution()))
   ) {
     throw new ConflictError({
       message: "Explicit context requires enabled durable Chat admission. Start a fresh operator turn.",
@@ -684,9 +685,19 @@ export async function prepareAgentChatTurn(
       message: "Workspace snapshots are temporarily unavailable while new Chat turns use live capabilities.",
     });
   }
-  if (!boundCapabilityProfile && input.modelCouncil?.enabled) {
+  if (
+    !boundCapabilityProfile &&
+    input.modelCouncil?.enabled &&
+    (!(await isFeatureEnabled("chatModelCouncilV1Enabled")) ||
+      !(await isDurableChatExecution()) ||
+      !options?.turnAdmission ||
+      options.turnAdmission.requestActor.actorKind !== "operator" ||
+      input.parentDelegationStepId ||
+      (input.contextRefs?.length ?? 0) > 0)
+  ) {
     throw new ConflictError({
-      message: "Model council is temporarily unavailable while new Chat turns use live capabilities.",
+      message:
+        "Model council requires enabled durable Chat admission without explicit context. Start a fresh operator turn.",
     });
   }
   if (!boundCapabilityProfile && input.parentDelegationStepId) {
@@ -942,6 +953,9 @@ export async function prepareAgentChatTurn(
           deferBinding: freshExplicitContext,
         })
       : undefined;
+  if (!boundCapabilityProfile && input.modelCouncil?.enabled && !featureAdmission?.references.modelCouncil) {
+    throw new ConflictError({ message: "The model council was not admitted for this turn. Start a fresh turn." });
+  }
   if (!boundCapabilityProfile && featureAdmission?.references.childWork?.revision === "chat.automatic-fanout.v1") {
     normalized = { ...normalized, subagentPolicy: "auto_when_useful" };
     prefs.subagentPolicy = "auto_when_useful";
@@ -969,7 +983,7 @@ export async function prepareAgentChatTurn(
   const sustainedExecutionProfile = resolveSustainedLocalCodingProfile({
     content: capabilityProfileContent ?? content,
     providerId: effectiveProviderId,
-    durableEnabled: (await host.isDurableChatExecutionEnabled?.()) ?? false,
+    durableEnabled: await isDurableChatExecution(),
     normalizationProfile: normalized.normalizationProfile,
     serverOnlyTurn: Boolean(systemHeartbeatPosture || input.parentDelegationStepId),
   });

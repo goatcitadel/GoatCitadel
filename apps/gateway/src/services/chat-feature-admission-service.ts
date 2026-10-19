@@ -202,6 +202,9 @@ export async function resolveChatFeatureAdmission(
       await renderAdmittedSkillInstructions(host, references, workspaceId);
     }
   }
+  if (input.admission.admittedRequest.modelCouncil?.enabled && (await isEnabled("chatModelCouncilV1Enabled"))) {
+    references.modelCouncil = { version: "chat.model-council.admission.v1" };
+  }
   if ((await isEnabled("chatWorkPassportV1Enabled")) && host.classifyWorkPassport) {
     references.workPassport = await host.classifyWorkPassport(input.admission.identity.workspaceId, input.content);
   }
@@ -241,6 +244,7 @@ export async function resolveChatFeatureAdmission(
     !references.selectedStaticMcp &&
     !references.selectedMeshCapabilities &&
     !references.remotePlacement &&
+    !references.modelCouncil &&
     !references.workPassport
   )
     return undefined;

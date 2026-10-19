@@ -865,12 +865,65 @@ describe("profile-free routed-context admission", () => {
     expect(String(bindings[0]!.content)).toContain("boundary=generic_or_unclear");
   });
 
+  it("accepts an admitted model council for a new operator turn and refuses it with explicit context", async () => {
+    const harness = admittedHarness();
+    harness.host.isFeatureEnabled = vi.fn(
+      async (flag) => flag === "chatModelCouncilV1Enabled" || flag === "chatExplicitContextV1Enabled",
+    );
+    const references = {
+      version: "chat.turn.feature-references.v1" as const,
+      providerRoute: { primary: { providerId: PROVIDER_ID, model: MODEL_ID }, fingerprint: "b".repeat(64) },
+      modelCouncil: { version: "chat.model-council.admission.v1" as const },
+    };
+    harness.host.resolveChatFeatureAdmission = vi.fn(async () => ({ references, referenceSha256: digest(references) }));
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      SESSION_ID,
+      { content: "Compare the options.", modelCouncil: { enabled: true } },
+      { turnId: "turn-live", turnAdmission: harness.admission },
+    );
+    expect(prepared.capabilityProfile).toBeUndefined();
+    expect(prepared.featureAdmission?.references.modelCouncil).toEqual({ version: "chat.model-council.admission.v1" });
+    await expect(
+      prepareAgentChatTurn(
+        harness.host,
+        SESSION_ID,
+        { ...routedRequest(), modelCouncil: { enabled: true } },
+        { turnId: "turn-live", turnAdmission: harness.admission },
+      ),
+    ).rejects.toThrow(/without explicit context/);
+    harness.host.resolveChatFeatureAdmission = vi.fn(async () => ({
+      references: { version: references.version, providerRoute: references.providerRoute },
+      referenceSha256: digest(references),
+    }));
+    await expect(
+      prepareAgentChatTurn(
+        harness.host,
+        SESSION_ID,
+        { content: "Compare the options.", modelCouncil: { enabled: true } },
+        { turnId: "turn-live", turnAdmission: harness.admission },
+      ),
+    ).rejects.toThrow(/model council was not admitted/);
+    harness.host.isDurableChatExecutionEnabled = vi.fn(async () => false);
+    await expect(
+      prepareAgentChatTurn(
+        harness.host,
+        SESSION_ID,
+        { content: "Compare the options.", modelCouncil: { enabled: true } },
+        {
+          turnId: "turn-live",
+          turnAdmission: harness.admission,
+        },
+      ),
+    ).rejects.toThrow(/Model council requires enabled durable Chat admission/);
+  });
+
   it.each([
     [
       { workspaceSnapshot: { capture: true, requestId: "snapshot-disabled" } },
       "Workspace snapshots are temporarily unavailable",
     ],
-    [{ modelCouncil: { enabled: true } }, "Model council is temporarily unavailable"],
+    [{ modelCouncil: { enabled: true } }, "Model council requires enabled durable Chat admission"],
     [{ parentDelegationStepId: "step-disabled" }, "Local delegated Chat requires current supervised parent"],
   ] as const)("rejects %s before user ingestion", async (requestPatch, reason) => {
     const harness = createHarness();

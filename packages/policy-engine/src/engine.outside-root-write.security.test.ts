@@ -22,7 +22,13 @@ afterEach(() => {
 const eligible: ToolPolicyEngineRuntimeHooks = { resolveOutsideRootWriteEligibility: async () => true };
 
 function writeRequest(target: string, extra: Partial<ToolInvokeRequest> = {}): ToolInvokeRequest {
-  return { toolName: "fs.write", args: { path: target, content: "x" }, agentId: "agent", sessionId: "session-1", ...extra };
+  return {
+    toolName: "fs.write",
+    args: { path: target, content: "x" },
+    agentId: "agent",
+    sessionId: "session-1",
+    ...extra,
+  };
 }
 
 function engineWith(config: ToolPolicyConfig, hooks: ToolPolicyEngineRuntimeHooks = eligible) {
@@ -66,7 +72,9 @@ describe("outside-root writes: when an approval is offered", () => {
   it("blocks A2A peers and mesh nodes even when the hook would allow", async () => {
     const { engine } = engineWith(outsideRootConfig(fixture));
     for (const authActorSource of ["a2a_peer", "mesh_node"] as const) {
-      const request = writeRequest(path.join(fixture.outside, "a.txt"), { policyContext: { authActorSource } } as never);
+      const request = writeRequest(path.join(fixture.outside, "a.txt"), {
+        policyContext: { authActorSource },
+      } as never);
       expect((await engine.evaluateAccess(request)).reasonCodes).toEqual(["structural_safety_block"]);
     }
   });
@@ -149,7 +157,9 @@ describe("outside-root writes: approve once", () => {
   it("admits exactly the registered target for the approved request", async () => {
     const target = path.join(fixture.outside, "a.txt");
     const { engine, approvalId } = await approvedOnce(target);
-    const result = await engine.evaluateAccess(writeRequest(target, { consentContext: { reason: `approval:${approvalId}` } } as never));
+    const result = await engine.evaluateAccess(
+      writeRequest(target, { consentContext: { reason: `approval:${approvalId}` } } as never),
+    );
     expect(result.allowed).toBe(true);
     expect(result.reasonCodes).toContain("outside_root_write_approved_once");
   });
@@ -169,7 +179,10 @@ describe("outside-root writes: approve once", () => {
     const target = path.join(fixture.outside, "a.txt");
     const request = writeRequest(target);
     fake.seedApproval({ approvalId: "approval-unrelated", request: { ...request } });
-    const result = await engine.evaluateAccess({ ...request, consentContext: { reason: "approval:approval-unrelated" } } as never);
+    const result = await engine.evaluateAccess({
+      ...request,
+      consentContext: { reason: "approval:approval-unrelated" },
+    } as never);
     expect(result.reasonCodes).not.toContain("outside_root_write_approved_once");
   });
 });
@@ -275,7 +288,11 @@ describe("outside-root writes: folder grants", () => {
     stale.fake.approve(staleId, new Date(Date.now() - 16 * 60_000).toISOString());
     const staleDetails = await stale.engine.describeOutsideRootWriteApproval(staleId);
     await expect(
-      stale.engine.mintOutsideRootWriteGrant({ ...again, approvalId: staleId, rootId: staleDetails!.candidates[0]!.rootId }),
+      stale.engine.mintOutsideRootWriteGrant({
+        ...again,
+        approvalId: staleId,
+        rootId: staleDetails!.candidates[0]!.rootId,
+      }),
     ).rejects.toThrow(/too old/u);
   });
 
@@ -287,9 +304,9 @@ describe("outside-root writes: folder grants", () => {
     const details = await setup.engine.describeOutsideRootWriteApproval(approvalId);
     const base = { approvalId, rootId: details!.candidates[0]!.rootId, duration: "1h" as const, createdBy: "operator" };
     await setup.engine.mintOutsideRootWriteGrant({ ...base, scope: "session", scopeRef: "session-1" });
-    await expect(setup.engine.mintOutsideRootWriteGrant({ ...base, scope: "workspace", scopeRef: "ws-1" })).rejects.toThrow(
-      /already opened a folder/u,
-    );
+    await expect(
+      setup.engine.mintOutsideRootWriteGrant({ ...base, scope: "workspace", scopeRef: "ws-1" }),
+    ).rejects.toThrow(/already opened a folder/u);
     expect(setup.fake.grants).toHaveLength(1);
   });
 

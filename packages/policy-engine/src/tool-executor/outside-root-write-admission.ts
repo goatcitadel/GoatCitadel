@@ -29,17 +29,27 @@ export async function resolveExecutionWriteAdmission(
   storage: AsyncStorage | undefined,
   isEligible: EligibilityHook | undefined,
 ): Promise<ToolWriteAdmission | undefined> {
-  if (!storage || !isEligible || !isOutsideRootWriteTool(request.toolName) || !isOutsideRootWriteEnabled(config.sandbox)) {
+  if (
+    !storage ||
+    !isEligible ||
+    !isOutsideRootWriteTool(request.toolName) ||
+    !isOutsideRootWriteEnabled(config.sandbox)
+  ) {
     return undefined;
   }
   const grant = await resolveScopedFolderGrant(request, storage);
-  const evaluation = await evaluateOutsideRootWrites(request, extractWritePathCandidates(request), grant ? [grant] : [], {
-    sandbox: config.sandbox,
-    isEligible: async () => (await isEligible(request)) === true,
-    verifiedApprovalId: () => getVerifiedApprovalBypassId(request, storage),
-    registeredDetails: async (approvalId) =>
-      readRegisteredOutsideRootWrite(await storage.approvalEvents.listByApprovalId(approvalId)),
-  });
+  const evaluation = await evaluateOutsideRootWrites(
+    request,
+    extractWritePathCandidates(request),
+    grant ? [grant] : [],
+    {
+      sandbox: config.sandbox,
+      isEligible: async () => (await isEligible(request)) === true,
+      verifiedApprovalId: () => getVerifiedApprovalBypassId(request, storage),
+      registeredDetails: async (approvalId) =>
+        readRegisteredOutsideRootWrite(await storage.approvalEvents.listByApprovalId(approvalId)),
+    },
+  );
   return evaluation.status === "admitted" ? { roots: evaluation.roots } : undefined;
 }
 

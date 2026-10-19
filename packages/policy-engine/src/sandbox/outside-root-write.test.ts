@@ -170,7 +170,9 @@ describe("validateWriteRootsGrantInput", () => {
     ["an expiry over 24 hours", { expiresAt: new Date(Date.now() + 25 * 60 * 60_000).toISOString() }],
     ["a past expiry", { expiresAt: new Date(Date.now() - 1000).toISOString() }],
   ])("rejects %s", (_label, overrides) => {
-    expect(() => validateWriteRootsGrantInput(grantInput(overrides), fixture.sandbox)).toThrow(/Invalid write-root grant/u);
+    expect(() => validateWriteRootsGrantInput(grantInput(overrides), fixture.sandbox)).toThrow(
+      /Invalid write-root grant/u,
+    );
   });
 
   it.each<[string, string[]]>([

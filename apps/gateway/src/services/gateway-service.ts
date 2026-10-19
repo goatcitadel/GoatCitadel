@@ -660,6 +660,11 @@ import * as chatDurableRunService from "./chat-durable-run-service.js";
 import * as chatRoutedContextService from "./chat-routed-context-service.js";
 import { createModelChatWardDispatchGuard } from "./chat-route-local-ward.js";
 import {
+  resolveLiveModelCouncilBinding,
+  resolveModelCouncilPrimaryRoute,
+  selectModelCouncilCandidates,
+} from "./chat-model-council-binding.js";
+import {
   assertAdmittedExplicitContextCurrent,
   prepareRoutedContextAdmission,
   type ExplicitContextPreparationPort,
@@ -8103,49 +8108,12 @@ export class GatewayService {
     signal?: AbortSignal,
   ): Promise<Awaited<ReturnType<AssemblyService["executeChatModelCouncil"]>>> {
     const capabilityProfile = prepared.capabilityProfile;
-    const primaryProviderId = capabilityProfile?.selection.effectiveProviderId;
-    const primaryModel = capabilityProfile?.selection.effectiveModel;
-    if (!capabilityProfile || !primaryProviderId || !primaryModel) {
-      return Promise.reject(new Error("Model council requires a frozen governed Chat capability profile."));
+    const primary = resolveModelCouncilPrimaryRoute(prepared);
+    if (!primary) {
+      return Promise.reject(new Error("Model council requires a frozen profile or an admitted provider route."));
     }
-    const runtime = this.llmService.getRuntimeConfig({
-      includeKeychainForActiveProvider: true,
-      useCache: true,
-    });
-    const providerCandidates = runtime.providers
-      .map((provider) => {
-        const model = provider.providerId === primaryProviderId ? primaryModel : provider.defaultModel;
-        const excluded = /(?:^|[-_.])(xai|grok)(?:$|[-_.])/i.test(`${provider.providerId} ${model}`);
-        const normalizedUrl = (provider.baseUrl ?? "").trim();
-        let local: boolean;
-        try {
-          const hostname = new URL(normalizedUrl).hostname.replace(/^\[|\]$/gu, "").toLowerCase();
-          local =
-            hostname === "localhost" ||
-            hostname === "127.0.0.1" ||
-            hostname === "0.0.0.0" ||
-            hostname === "::1" ||
-            hostname.startsWith("10.") ||
-            hostname.startsWith("192.168.") ||
-            /^172\.(?:1[6-9]|2\d|3[0-1])\./u.test(hostname);
-        } catch {
-          local = false;
-        }
-        const contextWindowTokens = this.llmService.getModelContextWindow(provider.providerId, model);
-        const routeConfigFingerprint = this.llmService.getProviderRouteConfigFingerprint(provider.providerId, model);
-        if (excluded || (!provider.hasApiKey && !local) || !contextWindowTokens || !routeConfigFingerprint) {
-          return undefined;
-        }
-        return {
-          providerId: provider.providerId,
-          model,
-          apiStyle: this.llmService.resolveExecutionApiStyle(provider.providerId, model),
-          contextWindowTokens,
-          routeConfigFingerprint,
-        };
-      })
-      .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
-      .sort((left, right) => `${left.providerId}:${left.model}`.localeCompare(`${right.providerId}:${right.model}`));
+    const providerCandidates = await selectModelCouncilCandidates(this.llmService, prepared, primary);
+    const binding = capabilityProfile ? undefined : resolveLiveModelCouncilBinding(prepared, providerCandidates);
     return await this.runWithSharedHostWork("agent", "assembly-model-council", (lifecycleSignal) =>
       this.assemblyService.executeChatModelCouncil({
         turnId: prepared.turnId,
@@ -8153,8 +8121,10 @@ export class GatewayService {
         workspaceId: prepared.workspaceId,
         content: prepared.content,
         history: prepared.history,
-        capabilityProfile,
+        ...(capabilityProfile ? { capabilityProfile } : {}),
+        ...(binding ? { binding } : {}),
         providerCandidates,
+        ...(prepared.routeWardActions?.length ? { wardActions: prepared.routeWardActions } : {}),
         routedContextSnapshot: prepared.routedContextSnapshot,
         signal: signal ? AbortSignal.any([signal, lifecycleSignal]) : lifecycleSignal,
       }),

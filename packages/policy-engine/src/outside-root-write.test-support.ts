@@ -34,7 +34,11 @@ export function createOutsideRootFixture(): OutsideRootFixture {
 
 export function outsideRootConfig(
   fixture: OutsideRootFixture,
-  overrides: { mode?: "deny" | "approval_required"; deny?: string[]; approvalMode?: "approve_all" | "approve_risky" | "bypass" } = {},
+  overrides: {
+    mode?: "deny" | "approval_required";
+    deny?: string[];
+    approvalMode?: "approve_all" | "approve_risky" | "bypass";
+  } = {},
 ): ToolPolicyConfig {
   return {
     tools: { approvalMode: overrides.approvalMode ?? "approve_risky", allow: ["*"], deny: overrides.deny ?? [] },
@@ -135,9 +139,11 @@ export function createOutsideRootStorage() {
     audit: { append: vi.fn(async () => undefined) },
     db: { prepare: vi.fn(() => ({ run: vi.fn(async () => undefined) })) },
     pendingApprovalActions: {
-      upsertPending: vi.fn(async (input: { approvalId: string; actionType: string; request: Record<string, unknown> }) => {
-        pending.set(input.approvalId, { ...input, resolutionStatus: "pending" });
-      }),
+      upsertPending: vi.fn(
+        async (input: { approvalId: string; actionType: string; request: Record<string, unknown> }) => {
+          pending.set(input.approvalId, { ...input, resolutionStatus: "pending" });
+        },
+      ),
       find: vi.fn(async (approvalId: string) => pending.get(approvalId)),
       findFreshPending: vi.fn(async (approvalId: string) => pending.get(approvalId)),
       markResolved: vi.fn(async () => undefined),
@@ -149,12 +155,16 @@ export function createOutsideRootStorage() {
     },
     toolGrants: {
       list: vi.fn(async (scope?: string, scopeRef?: string) =>
-        grants.filter((grant) => (!scope || grant.scope === scope) && (scopeRef === undefined || grant.scopeRef === scopeRef)),
+        grants.filter(
+          (grant) => (!scope || grant.scope === scope) && (scopeRef === undefined || grant.scopeRef === scopeRef),
+        ),
       ),
       listActive: vi.fn(async (scope: string, scopeRef?: string) =>
         grants.filter((grant) => isActive(grant) && grant.scope === scope && grant.scopeRef === (scopeRef ?? "")),
       ),
-      findActive: vi.fn(async (grantId: string) => grants.find((grant) => grant.grantId === grantId && isActive(grant))),
+      findActive: vi.fn(async (grantId: string) =>
+        grants.find((grant) => grant.grantId === grantId && isActive(grant)),
+      ),
       consumeOne: vi.fn(async () => true),
       create: vi.fn(async (input: ToolGrantCreateInput) => createGrant(input)),
       createTtlForDuration: vi.fn(async (input: ToolGrantCreateInput, ttlMs: number) =>
@@ -180,7 +190,11 @@ export function createOutsideRootStorage() {
         record.resolvedAt = resolvedAt;
       }
     },
-    seedApproval(input: { approvalId: string; request: Record<string, unknown>; registration?: Record<string, unknown> }) {
+    seedApproval(input: {
+      approvalId: string;
+      request: Record<string, unknown>;
+      registration?: Record<string, unknown>;
+    }) {
       approvals.set(input.approvalId, { approvalId: input.approvalId, status: "approved" });
       pending.set(input.approvalId, {
         approvalId: input.approvalId,
@@ -188,7 +202,11 @@ export function createOutsideRootStorage() {
         request: input.request,
         resolutionStatus: "pending",
       });
-      events.push({ approvalId: input.approvalId, eventType: "pending_action_registered", payload: input.registration ?? {} });
+      events.push({
+        approvalId: input.approvalId,
+        eventType: "pending_action_registered",
+        payload: input.registration ?? {},
+      });
     },
   };
 }

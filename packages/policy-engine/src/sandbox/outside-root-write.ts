@@ -42,9 +42,30 @@ export type OutsideRootWriteTargetResolution =
 
 const MAX_CANDIDATE_DEPTH = 3;
 const WINDOWS_RESERVED_DEVICE_NAMES = new Set([
-  "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
-  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+  "CON",
+  "PRN",
+  "AUX",
+  "NUL",
+  "CONIN$",
+  "CONOUT$",
+  "COM1",
+  "COM2",
+  "COM3",
+  "COM4",
+  "COM5",
+  "COM6",
+  "COM7",
+  "COM8",
+  "COM9",
+  "LPT1",
+  "LPT2",
+  "LPT3",
+  "LPT4",
+  "LPT5",
+  "LPT6",
+  "LPT7",
+  "LPT8",
+  "LPT9",
 ]);
 
 /** Outside-root writes are possible only when opted in and runtime protection exists. */
@@ -209,7 +230,10 @@ function classifyWindowsLexicalTarget(value: string): OutsideRootWriteRefusal | 
   if (/^[\\/]{2}[?.][\\/]/u.test(value)) return "device_namespace";
   if (isNetworkPath(value)) return "network_path";
   const absolute = path.win32.resolve(value);
-  const segments = absolute.slice(path.win32.parse(absolute).root.length).split(/[\\/]+/u).filter(Boolean);
+  const segments = absolute
+    .slice(path.win32.parse(absolute).root.length)
+    .split(/[\\/]+/u)
+    .filter(Boolean);
   for (const segment of segments) {
     if (segment.includes(":")) return "alternate_data_stream";
     const baseName = segment.split(".")[0]?.trimEnd().toUpperCase() ?? "";
