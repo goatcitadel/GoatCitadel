@@ -253,7 +253,9 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
       needs_attention: [],
       closed: [],
     };
-    for (const card of cards.filter(card => `${card.title} ${card.statusLabel} ${card.surfaceLabel}`.toLowerCase().includes(search.toLowerCase()))) {
+    for (const card of cards.filter((card) =>
+      `${card.title} ${card.statusLabel} ${card.surfaceLabel}`.toLowerCase().includes(search.toLowerCase()),
+    )) {
       groups[card.column].push(card);
     }
     return groups;
@@ -460,7 +462,14 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
         </>
       }
     >
-      <label className="mc-next-field">Search loaded tasks and runs<input aria-label="Search loaded tasks and runs" value={search} onChange={event => setSearch(event.target.value)} /></label>
+      <label className="mc-next-field">
+        Search loaded tasks and runs
+        <input
+          aria-label="Search loaded tasks and runs"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+      </label>
       {hasSelection ? (
         <div className="mc-next-kanban-toolbar" role="toolbar" aria-label="Agentic run bulk actions">
           <NativeButton
@@ -613,7 +622,7 @@ function KanbanColumn({ column, cards, selected, onToggleSelect, onInspect }: Ka
   return (
     <section className="mc-next-kanban-column" data-testid={`kanban-column-${column.id}`}>
       <header>
-        <h3>{column.label}</h3>
+        <h2>{column.label}</h2>
         <span className="count">{cards.length}</span>
       </header>
       {cards.length === 0 ? (

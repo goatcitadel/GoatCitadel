@@ -36,9 +36,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
   createChatSession: api.createSession,
 }));
 vi.mock("./ProjectRecents", () => ({ ProjectRecents: () => <p>Recent project history</p> }));
-const workspaceNames = vi.hoisted(() => ({ byId: { "workspace-a": "Alpha workspace" } as Record<string, string | undefined> }));
+const workspaceNames = vi.hoisted(() => ({
+  byId: { "workspace-a": "Alpha workspace" } as Record<string, string | undefined>,
+}));
 vi.mock("../../data/use-workspace-name", () => ({
-  useWorkspaceName: (_citadelId: string | undefined, workspaceId: string | undefined) => workspaceNames.byId[workspaceId ?? ""],
+  useWorkspaceName: (_citadelId: string | undefined, workspaceId: string | undefined) =>
+    workspaceNames.byId[workspaceId ?? ""],
 }));
 vi.mock("../../ui/ClassicOwnerLink", () => ({
   ClassicOwnerLink: ({ href, label }: { href: string; label: string }) => <a href={href}>{label}</a>,
@@ -141,15 +144,19 @@ afterEach(async () => {
 it("keeps one project overview and fanout sibling through repeated revision and caller changes", async () => {
   window.history.replaceState(null, "", "/chat/projects/project-a");
   await render();
-  for (const revision of [3,4,5]) {
-    records = [project({revision})];
-    await act(async () => { await client.invalidateQueries(); }); await flush();
+  for (const revision of [3, 4, 5]) {
+    records = [project({ revision })];
+    await act(async () => {
+      await client.invalidateQueries();
+    });
+    await flush();
     expect(host.querySelectorAll('[aria-label="Project overview"]')).toHaveLength(1);
     expect(host.querySelectorAll('[aria-label="Automatic fan-out"]')).toHaveLength(1);
   }
-  await act(async () => notifyGatewayAccessChanged()); await flush();
+  await act(async () => notifyGatewayAccessChanged());
+  await flush();
   expect(host.querySelectorAll('[aria-label="Project overview"]')).toHaveLength(1);
-  expect(window.location.pathname).toBe('/chat/projects/project-a');
+  expect(window.location.pathname).toBe("/chat/projects/project-a");
 });
 it("reads only the scoped canonical list, creates all public fields, and opens the returned detail", async () => {
   await render();
@@ -294,7 +301,9 @@ it("opens the exact conversation for the existing reviewed assignment owner", as
   // selecting a value the <select> does not list yet leaves the assignment empty and the review button disabled.
   const option = await vi.waitFor(
     () => {
-      const node = host.querySelector<HTMLOptionElement>('[aria-label="Conversation to assign"] option[value="conversation-a"]');
+      const node = host.querySelector<HTMLOptionElement>(
+        '[aria-label="Conversation to assign"] option[value="conversation-a"]',
+      );
       expect(node, "assignable conversation option").not.toBeNull();
       return node!;
     },
@@ -319,4 +328,15 @@ it("names the workspace in the Projects intro and keeps its id only as a technic
   workspaceNames.byId = {};
   await render();
   expect(intro()?.textContent).toBe("Organize Chat context for workspace workspace-a.");
+});
+
+it("renders the recents and import siblings without a duplicate React key", async () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    await render();
+    const messages = errors.mock.calls.map((call) => call.map(String).join(" "));
+    expect(messages.filter((message) => message.includes("same key"))).toEqual([]);
+  } finally {
+    errors.mockRestore();
+  }
 });

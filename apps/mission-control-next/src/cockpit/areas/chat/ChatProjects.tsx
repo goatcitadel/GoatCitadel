@@ -96,8 +96,13 @@ function ProjectsWorkspace({ workspaceId, citadelId }: { workspaceId: string; ci
           Start here
         </NativeOwnerLink>
       </nav>
-      <ProjectRecents key={access.identity} workspaceId={workspaceId} />
-      <ProjectImport key={access.identity} workspaceId={workspaceId} citadelId={citadelId} refresh={refresh} />
+      <ProjectRecents key={`recents:${access.identity}`} workspaceId={workspaceId} />
+      <ProjectImport
+        key={`import:${access.identity}`}
+        workspaceId={workspaceId}
+        citadelId={citadelId}
+        refresh={refresh}
+      />
       {projects.isPending ? <p role="status">Reading projects…</p> : null}
       {projects.error ? (
         <Callout tone="error">

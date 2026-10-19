@@ -28,6 +28,8 @@ export function LibraryGovernanceRoute({
         title={GOVERNANCE_SECTIONS[section]}
         description="Governance for the active Citadel. Settings › Citadel lists every Citadel page."
       />
+      {/* The Citadel pages open at h3, as they do under Settings' per-page h2; this keeps the outline one level deep. */}
+      <h2 className="sr-only">{GOVERNANCE_SECTIONS[section]}</h2>
       {section === "citadel-overview" ? (
         <CitadelOverviewSettings key={citadelId} citadelId={citadelId} />
       ) : section === "citadel-blueprint" ? (

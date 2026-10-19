@@ -207,6 +207,7 @@ export function ChatTranscript({
         tabIndex={0}
         className="min-h-0 flex-1 overflow-y-auto p-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       >
+        <h2 className="sr-only">Historical messages</h2>
         <HistoricalConversationView props={props} />
       </div>
     );
@@ -252,6 +253,7 @@ export function ChatTranscript({
   };
   return (
     <div role="region" className="relative h-full min-h-0 flex-1" aria-label="Messages">
+      <h2 className="sr-only">Messages</h2>
       <span role="status" aria-live="polite" className="sr-only">
         {announcement}
       </span>

@@ -66,7 +66,11 @@ export function GatewayAuthEditor({
       install.hide();
     }, [draft.key, `${control.key}:credential`, `${control.key}:continuation-credential`]);
   return (
-    <section aria-label="Gateway authentication" className={cockpit ? "space-y-3" : "mc-next-settings-stack"}>
+    // In the cockpit, the enclosing Gateway authentication section already names this region.
+    <section
+      aria-label={cockpit ? undefined : "Gateway authentication"}
+      className={cockpit ? "space-y-3" : "mc-next-settings-stack"}
+    >
       <p>
         Gateway authentication applies to this installation and every workspace. Current mode:{" "}
         {settings?.auth?.mode ?? "Unavailable"}.
