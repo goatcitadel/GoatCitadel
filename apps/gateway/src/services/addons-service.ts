@@ -162,6 +162,10 @@ export class AddonsService {
     this.catalog = (options.catalog ?? ADDON_CATALOG).map((item) => structuredClone(item));
   }
 
+  private unregisterSlots(addonId: string): void {
+    this.slotService?.unregister(addonId);
+  }
+
   public listCatalog(): AddonCatalogEntry[] {
     return this.catalog.map((item) => structuredClone(item));
   }
@@ -240,7 +244,7 @@ export class AddonsService {
       await removeNewAddonInstall(targetDir, this.addonsRootDir, addonId);
       throw error;
     }
-    this.slotService?.unregister(addonId);
+    this.unregisterSlots(addonId);
     return {
       status: await this.getStatus(addonId),
     };
@@ -287,7 +291,7 @@ export class AddonsService {
       lastError: undefined,
     };
     await this.writeManifest(manifest);
-    this.slotService?.unregister(addonId);
+    this.unregisterSlots(addonId);
     return {
       status: await this.getStatus(addonId),
     };
@@ -484,7 +488,7 @@ export class AddonsService {
     await fs.rm(installedPath, { recursive: true, force: true });
     delete manifest.items[addonId];
     await this.writeManifest(manifest);
-    this.slotService?.unregister(addonId);
+    this.unregisterSlots(addonId);
     return {
       addonId,
       removed: true,
