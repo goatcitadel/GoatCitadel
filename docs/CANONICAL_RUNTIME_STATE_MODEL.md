@@ -109,12 +109,13 @@ A content-free, point-in-time workspace/project identity and bounded Git posture
 Authority:
 - Request and immutable record contract: `packages/contracts/src/chat-workspace-snapshot.ts`
 - Verified capture owner: `apps/gateway/src/services/chat-workspace-snapshot-service.ts`
-- Turn binding and persistence: `ChatTurnCapabilityProfileSelection.workspaceSnapshot` in the immutable capability profile
+- Turn binding and persistence for new turns (`chatWorkspaceSnapshotV1Enabled`): `ChatTurnFeatureReferences.workspaceSnapshot`, bound once with the turn admission and reused on durable replay without recapture
+- Historical turn binding: `ChatTurnCapabilityProfileSelection.workspaceSnapshot` in the immutable capability profile
 
 Notes:
 - The one-shot request carries only `capture: true` and a request ID; it carries no path authority. The Gateway resolves the active workspace/project, verifies the bound path before and after Git inspection, and binds the result to project revision and path-identity hashes.
 - The Git summary contains head, optional branch, aggregate tracked and untracked change counts, dirty posture, and optional ahead/behind counts. It stores no file names, diff bytes, transcript content, or source content.
-- Route preflight and send reuse one request-bound capture. Refresh uses a new request ID for a new turn; an existing turn profile is never mutated.
+- Route preflight and send reuse one request-bound capture. Refresh uses a new request ID for a new turn; an existing turn's feature references or historical profile are never mutated.
 - Missing workspace/project/repository data, unavailable Git, failed verification, Git-summary failure, or changed path identity persists as an explicit `unavailable` record. The UI must not infer a clean or healthy repository.
 - Workspace snapshots are context evidence only. They do not expand filesystem scope, grant tools, satisfy approval, or bypass deny-wins policy.
 
