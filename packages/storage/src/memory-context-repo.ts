@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type {
   MemoryCitation,
+  MemoryContextAccessReceipt,
   MemoryContextPack,
   MemoryContextQuality,
   MemoryContextScope,
@@ -247,6 +248,32 @@ function toMemoryContextRows(value: unknown): MemoryContextRow[] {
   return Array.isArray(value) ? value.filter(isMemoryContextRow) : [];
 }
 
+function parseAccessReceipt(value: unknown): MemoryContextAccessReceipt | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  if (
+    typeof raw.policyVersion !== "string" ||
+    typeof raw.fingerprint !== "string" ||
+    typeof raw.failClosed !== "boolean" ||
+    (raw.mode !== "workspace_private" && raw.mode !== "session_only")
+  ) {
+    return undefined;
+  }
+  const sessionKind = raw.sessionKind;
+  if (sessionKind !== undefined && sessionKind !== "dm" && sessionKind !== "group" && sessionKind !== "thread") {
+    return undefined;
+  }
+  return {
+    policyVersion: raw.policyVersion,
+    mode: raw.mode,
+    ...(sessionKind !== undefined ? { sessionKind } : {}),
+    failClosed: raw.failClosed,
+    fingerprint: raw.fingerprint,
+  };
+}
+
 function mapRow(row: MemoryContextRow): MemoryContextPack {
   const quality = safeJsonParse<Partial<MemoryContextQuality>>(row.quality_json, {});
   return {
@@ -264,6 +291,7 @@ function mapRow(row: MemoryContextRow): MemoryContextPack {
       status: quality.status ?? "generated",
       reason: quality.reason,
       assembly: quality.assembly,
+      accessReceipt: parseAccessReceipt(quality.accessReceipt),
     },
     originalTokenEstimate: row.original_token_estimate,
     distilledTokenEstimate: row.distilled_token_estimate,

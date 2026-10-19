@@ -85,6 +85,59 @@ describe("MemoryContextRepository", () => {
     assert.equal(repo.listByRun("missing-run").length, 0);
   });
 
+  it("round-trips the access receipt through upsert and cache reads", () => {
+    const repo = createRepo();
+    const accessReceipt = {
+      policyVersion: "v1",
+      mode: "session_only" as const,
+      sessionKind: "dm" as const,
+      failClosed: true,
+      fingerprint: "fp-1",
+    };
+    const inserted = repo.upsert({
+      cacheKey: "cache-receipt",
+      scope: "chat",
+      sessionId: "session-1",
+      queryHash: "q",
+      sourcesHash: "s",
+      contextText: "context",
+      citations: [],
+      quality: { status: "generated", accessReceipt },
+      originalTokenEstimate: 10,
+      distilledTokenEstimate: 5,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    assert.deepEqual(inserted.quality.accessReceipt, accessReceipt);
+
+    const fetched = repo.findFreshByCacheKey(
+      { cacheKey: "cache-receipt", scope: "chat", sessionId: "session-1" },
+      "2026-01-01T00:00:00.000Z",
+    );
+    assert.deepEqual(fetched?.quality.accessReceipt, accessReceipt);
+  });
+
+  it("drops a malformed stored access receipt on read", () => {
+    const repo = createRepo();
+    const inserted = repo.upsert({
+      cacheKey: "cache-bad-receipt",
+      scope: "chat",
+      sessionId: "session-1",
+      queryHash: "q",
+      sourcesHash: "s",
+      contextText: "context",
+      citations: [],
+      quality: {
+        status: "generated",
+        accessReceipt: { mode: 3 } as unknown as never,
+      },
+      originalTokenEstimate: 10,
+      distilledTokenEstimate: 5,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    assert.equal(inserted.quality.accessReceipt, undefined);
+    assert.equal(repo.get(inserted.contextId).quality.accessReceipt, undefined);
+  });
+
   it("keeps same raw cache keys isolated across sessions", () => {
     const repo = createRepo();
     repo.upsert({
