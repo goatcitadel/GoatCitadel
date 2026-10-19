@@ -63,7 +63,14 @@ describe("cockpit budget preference", () => {
         ),
       );
       await vi.waitFor(() => expect(container.textContent).toContain("Current: Balanced"));
+      // Each mode says what it means, and the help says none of them switches models or caps spending.
+      expect(container.querySelector("dl")?.textContent).toBe(
+        "Saver: Your preference is lower cost.Balanced: The everyday default: no lean toward cost or quality.Power: Your preference is answer quality over cost.",
+      );
       const select = container.querySelector("select")!;
+      expect(document.getElementById(select.getAttribute("aria-describedby")!)?.textContent).toBe(
+        "Saved as a preference only: no mode switches models or caps spending today.",
+      );
       await act(async () => {
         select.value = "saver";
         select.dispatchEvent(new Event("change", { bubbles: true }));

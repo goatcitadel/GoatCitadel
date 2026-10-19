@@ -308,11 +308,54 @@ describe("ui preferences", () => {
       navMode: "compact",
       showTechnicalDetails: true,
       theme: "dark",
+      themePreference: "system",
       notifications: {
         soundMode: "off",
       },
     });
     hook.renderer.unmount();
+  });
+
+  it("GL-15: matches the system scheme by default and follows a live host change", () => {
+    const storage = installWindow();
+    let dark = false;
+    const listeners = new Set<() => void>();
+    Object.assign(globalThis.window, {
+      matchMedia: (query: string) => ({
+        media: query,
+        get matches() {
+          return dark;
+        },
+        addEventListener: (_type: string, listener: () => void) => listeners.add(listener),
+        removeEventListener: (_type: string, listener: () => void) => listeners.delete(listener),
+      }),
+    });
+    const hook = renderPreferences();
+    expect(hook.result.themePreference).toBe("system");
+    expect(hook.result.theme).toBe("light");
+    expect(storage.getItem("goatcitadel.ui.theme.v1")).toBeNull();
+
+    act(() => {
+      dark = true;
+      listeners.forEach((listener) => listener());
+    });
+    expect(hook.result.theme).toBe("dark");
+
+    // An explicit choice wins over the host and stops listening; choosing system again resumes it.
+    act(() => hook.result.setTheme("light"));
+    expect(hook.result).toMatchObject({ theme: "light", themePreference: "light" });
+    expect(listeners.size).toBe(0);
+    act(() => hook.result.setTheme("system"));
+    expect(hook.result).toMatchObject({ theme: "dark", themePreference: "system" });
+    expect(storage.getItem("goatcitadel.ui.theme.v1")).toBe("system");
+    act(() => {
+      dark = false;
+      listeners.forEach((listener) => listener());
+    });
+    expect(hook.result.theme).toBe("light");
+
+    hook.renderer.unmount();
+    expect(listeners.size).toBe(0);
   });
 
   it("uses provider defaults without window and accepts alternate valid stored values", () => {

@@ -8,7 +8,11 @@ import {
   assertTemporaryOverrideWrite,
   assertTemporaryOverrideEnded,
 } from "./cockpit-permission-management-assertions.mjs";
-import { inspectPermissionContexts, revokeDisposableAutonomousGrant } from "./cockpit-permission-context-proof.mjs";
+import {
+  inspectPermissionContexts,
+  openPermissionAdvanced,
+  revokeDisposableAutonomousGrant,
+} from "./cockpit-permission-context-proof.mjs";
 
 /** Real policy-record writes only in a new disposable workspace; never activates a profile or invokes a tool. */
 export async function runCockpitPermissionManagementProof({ context, browser, stack, citadelId, viewports, deps }) {
@@ -110,6 +114,8 @@ export async function runCockpitPermissionManagementProof({ context, browser, st
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
           panel = page.getByRole("region", { name: "Manage permission profiles", exact: true });
           const fullPanel = page.getByRole("region", { name: "Chat permission profile", exact: true });
+          // Profile management, overrides and autonomous grants sit in the collapsed "Advanced:" disclosure.
+          await openPermissionAdvanced(fullPanel);
           const review = (target) => target.getByRole("region", { name: "Review permission change", exact: true });
           const selection = () =>
             page.evaluate(() => ({
@@ -250,8 +256,11 @@ export async function runCockpitPermissionManagementProof({ context, browser, st
           assertPermissionProfileArchive({ before: current, ...result, owner: await readProfile(current.profileId) });
           await panel.getByRole("button", { name: `Edit ${renamed}`, exact: true }).waitFor({ state: "hidden" });
           stage = "review, cancel, start and end a disposable workspace override";
-          const overrides = page.getByRole("region", { name: "Temporary Local Operator Overrides", exact: true });
+          await openPermissionAdvanced(fullPanel);
+          const overrides = page.getByRole("region", { name: "Temporary local operator overrides", exact: true });
           const reason = `Disposable verification override ${suffix}`;
+          // Duration is a whole-minute select (1, 5, 10, 15, 30, 60); the default stays 600 s = 10 minutes.
+          assert.equal(await overrides.getByLabel("Override duration", { exact: true }).inputValue(), "600");
           await overrides.getByLabel("Override reason", { exact: true }).fill(reason);
           await overrides.getByRole("checkbox", { name: /I understand this grants broad local tool access/ }).check();
           await overrides.getByRole("button", { name: "Review temporary override", exact: true }).click();

@@ -21,7 +21,9 @@ export function useFirstRunSetup(workspaceId: string | undefined) {
   });
   const state = query.isError ? undefined : query.data;
   const progress = state ? projectFirstRunState(state) : null;
-  const [step, setStep] = useState<FirstRunStep>("model");
+  // Until the operator picks a step, a recorded setup opens on the test message instead of the model chooser.
+  const [chosenStep, setStep] = useState<FirstRunStep | null>(null);
+  const step: FirstRunStep = chosenStep ?? (state?.completed ? "message" : "model");
   const [confirmed, setConfirmed] = useState<{ scope: string; binding: string } | null>(null);
   const [checking, setChecking] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);

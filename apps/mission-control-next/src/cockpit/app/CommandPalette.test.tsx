@@ -47,6 +47,7 @@ vi.mock("../data/use-model-label", () => ({
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({
     theme: "dark",
+    themePreference: "dark",
     density: "comfortable",
     activeWorkspaceId: "workspace-a",
     activeCitadelId: "citadel-a",
@@ -344,6 +345,12 @@ describe("CommandPalette", () => {
     expect(controls.navigate).toHaveBeenCalledWith("/settings/models?shell=cockpit#providers");
     click("Switch to compact density");
     expect(controls.setDensity).toHaveBeenCalledWith("compact");
+    // GL-15: the palette offers the theme choices that are not already saved, including Match system.
+    expect(document.body.textContent).not.toContain("Use dark theme");
+    click("Match system theme");
+    expect(controls.setTheme).toHaveBeenCalledWith("system");
+    click("Use light theme");
+    expect(controls.setTheme).toHaveBeenCalledWith("light");
     click("Switch to classic");
     expect(controls.switchShell).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledWith(false);

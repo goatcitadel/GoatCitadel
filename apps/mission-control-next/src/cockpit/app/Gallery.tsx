@@ -12,6 +12,7 @@ import { Skeleton } from "../ui/Skeleton";
 import { StatusBadge } from "../ui/StatusBadge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/Tabs";
 import { Tooltip } from "../ui/Tooltip";
+import { THEME_OPTIONS } from "./theme-options";
 
 const STATUSES = [
   { label: "Running", tone: "running" },
@@ -25,7 +26,7 @@ const STATUSES = [
 export function Gallery() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
-  const { theme, setTheme } = useUiPreferences();
+  const { themePreference, setTheme } = useUiPreferences();
   return (
     <div className="flex flex-col gap-8 p-6" data-cockpit-gallery="true">
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -33,9 +34,17 @@ export function Gallery() {
           <h1 className="font-display text-xl text-fg">Cockpit components</h1>
           <p className="text-sm text-fg-secondary">Interactive design review</p>
         </div>
-        <Button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
-          Preview {theme === "dark" ? "light" : "dark"} theme
-        </Button>
+        <div role="group" aria-label="Preview theme" className="flex flex-wrap gap-2">
+          {THEME_OPTIONS.map((option) => (
+            <Button
+              key={option.value}
+              aria-pressed={themePreference === option.value}
+              onClick={() => setTheme(option.value)}
+            >
+              {option.label}
+            </Button>
+          ))}
+        </div>
       </header>
       <section aria-label="Buttons" className="flex flex-wrap gap-2">
         <Button variant="primary">Primary</Button>

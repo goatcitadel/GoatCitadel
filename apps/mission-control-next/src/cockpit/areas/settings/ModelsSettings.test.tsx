@@ -3,7 +3,6 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Notice } from "../../../features/native-routes/settings/SettingsShared";
 import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import { ModelsSettings } from "./ModelsSettings";
 import { clearAllDirty, setSectionDirty } from "../../../features/native-routes/library/use-form-dirty";
@@ -15,21 +14,23 @@ vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
 }));
 vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: vi.fn() }) }));
 vi.mock("./ProviderCatalogSettings", () => ({ ProviderCatalogSettings: () => <p>Expert catalog owner</p> }));
-vi.mock("./ProviderConnectionSettings", () => ({ ProviderConnectionSettings: () => null }));
-vi.mock("./ProviderManagementSettings", () => ({ ProviderManagementSettings: () => null }));
+vi.mock("./ProviderConnectionSettings", () => ({
+  ProviderConnectionSettings: () => <p>Standalone connection editor</p>,
+}));
+vi.mock("./ProviderManagementSettings", () => ({ ProviderManagementSettings: () => <p>One provider page</p> }));
 vi.mock("./ProviderRoutingSettings", () => ({ ProviderRoutingSettings: () => null }));
 vi.mock("./ProviderAdviceSettings", () => ({ ProviderAdviceSettings: () => null }));
 // Like the real owner after a completed change: it reports the result, then re-reads onboarding.
-vi.mock("../../../features/native-routes/settings/sections/GuidedModelSetup", () => ({
-  GuidedModelSetup: ({
-    setNotice,
+vi.mock("./CockpitGuidedModelSetup", () => ({
+  CockpitGuidedModelSetup: ({
+    onNoticeChange,
     reloadOnboarding,
   }: {
-    setNotice: (notice: Notice | null) => void;
+    onNoticeChange?: (notice: string | null) => void;
     reloadOnboarding: () => Promise<void>;
   }) => (
     <>
-      <button type="button" onClick={() => setNotice({ tone: "success", message: "Change applied and verified." })}>
+      <button type="button" onClick={() => onNoticeChange?.("Change applied and verified.")}>
         Report change
       </button>
       <button type="button" onClick={() => void reloadOnboarding()}>
@@ -130,5 +131,21 @@ describe("Models settings", () => {
     expect(container.textContent).toContain("Model setup unavailable");
     expect(button("Report change")).toBeUndefined();
     expect(statusLines()).toEqual(["Change applied and verified."]);
+  });
+  it("mounts one provider page first and no standalone connection editor beside it", async () => {
+    api.fetchOnboardingState.mockResolvedValue(onboardingFixture());
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ModelsSettings />
+        </QueryClientProvider>,
+      ),
+    );
+    await settleUntil(() => button("Report change") !== undefined);
+    await act(async () => button("Advanced provider configuration")!.click());
+    const text = container.textContent!;
+    expect(text).toContain("One provider page");
+    expect(text).not.toContain("Standalone connection editor");
+    expect(text.indexOf("One provider page")).toBeLessThan(text.indexOf("Expert catalog owner"));
   });
 });

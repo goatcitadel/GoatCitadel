@@ -2,47 +2,89 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Notice } from "../../../features/native-routes/settings/SettingsShared";
+import type { OnboardingState } from "@goatcitadel/contracts";
 import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
+import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { CockpitGuidedModelSetup } from "./CockpitGuidedModelSetup";
 
-const guided = vi.hoisted(() => ({ rendered: vi.fn() }));
-vi.mock("../../../features/native-routes/settings/sections/GuidedModelSetup", () => ({
-  GuidedModelSetup: (props: object) => {
-    guided.rendered(props);
-    return null;
-  },
+const mocks = vi.hoisted(() => ({
+  catalog: vi.fn(),
+  models: vi.fn(),
+  reload: vi.fn(),
+  plans: vi.fn(),
+  create: vi.fn(),
+}));
+vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
+  useProviderModelCatalog: mocks.catalog,
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  fetchChangePlans: mocks.plans,
+  createChangePlan: mocks.create,
+  cancelChangePlan: vi.fn(),
+  completeChangePlanProviderOAuth: vi.fn(),
+  confirmChangePlan: vi.fn(),
+  pollChangePlanProviderOAuth: vi.fn(),
+  respondToChangePlan: vi.fn(),
+  startChangePlanProviderOAuth: vi.fn(),
+  submitChangePlanProviderSecret: vi.fn(),
+}));
+vi.mock("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog", () => ({
+  ChatChangePlanActionDialog: () => null,
+}));
+vi.mock("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard", () => ({
+  ChatChangePlanCard: (props: { plan: { status: string } }) => <p>Plan card: {props.plan.status}</p>,
 }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: undefined }),
 }));
 vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: vi.fn() }) }));
 
-let root: Root, container: HTMLDivElement;
-const onboarding = onboardingFixture();
-const reloadOnboarding = async () => {};
-const onEnterChat = () => {};
-const mountGuided = (enterChatLabel?: string, onNoticeChange?: (notice: string | null) => void) =>
+let root: Root, container: HTMLDivElement, onboarding: OnboardingState;
+const button = (label: string) =>
+  [...container.querySelectorAll("button")].find((item) => item.textContent?.trim() === label);
+const catalog = (status: string) =>
+  mocks.catalog.mockReturnValue({
+    providers: [
+      {
+        providerId: "test",
+        label: "Test provider",
+        hasApiKey: status === "ready",
+        authReadiness: { status },
+        defaultModel: "test-model",
+      },
+    ],
+    config: { defaultThinkingLevel: "standard" },
+    loadModelsForProvider: mocks.models,
+    reload: mocks.reload,
+    loading: false,
+  });
+const mount = (props: Partial<Parameters<typeof CockpitGuidedModelSetup>[0]> = {}) =>
   act(async () => {
     root.render(
       <CockpitGuidedModelSetup
         onboarding={onboarding}
-        reloadOnboarding={reloadOnboarding}
-        onEnterChat={onEnterChat}
-        enterChatLabel={enterChatLabel}
-        onNoticeChange={onNoticeChange}
+        reloadOnboarding={async () => {}}
+        onEnterChat={() => {}}
+        {...props}
       />,
     );
   });
-const reportNotice = (message: string) =>
-  act(async () => {
-    (guided.rendered.mock.lastCall?.[0] as { setNotice: (notice: Notice | null) => void }).setNotice({
-      tone: "success",
-      message,
-    });
-  });
 beforeEach(() => {
   vi.resetAllMocks();
+  __resetSessionDraftsForTests();
+  onboarding = onboardingFixture();
+  onboarding.settings.llm.activeProviderId = "test";
+  onboarding.settings.llm.activeModel = "test-model";
+  mocks.models.mockResolvedValue(["test-model", "other-model"]);
+  mocks.plans.mockResolvedValue({ items: [] });
+  mocks.create.mockImplementation(async (input: { request: object }) => ({
+    planId: "plan-1",
+    status: "completed",
+    revision: 1,
+    origin: { workspaceId: "default", surface: "settings" },
+    request: input.request,
+    result: { summary: "Change applied and verified." },
+  }));
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -53,32 +95,79 @@ afterEach(() => {
 });
 
 describe("shared guided model setup", () => {
-  it("passes the host's wiring and its own button label to the guided owner", async () => {
-    await mountGuided("Continue to safety");
-    expect(guided.rendered).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceId: "default",
-        onboarding,
-        reloadOnboarding,
-        onEnterChat,
-        enterChatLabel: "Continue to safety",
-      }),
-    );
+  it("numbers every step, marks the current one and states each step in words", async () => {
+    onboarding.settings.llm.activeModel = "";
+    catalog("ready");
+    await mount();
+    const steps = [...container.querySelectorAll('ol[aria-label="Model setup steps"] > li')];
+    expect(steps.map((step) => step.textContent)).toEqual([
+      expect.stringMatching(/^Step 1Done.*Connect a provider/u),
+      expect.stringMatching(/^Step 2Current.*Confirm your model/u),
+      expect.stringMatching(/^Step 3Not started.*Start the first Chat/u),
+    ]);
+    expect(steps.map((step) => step.getAttribute("aria-current"))).toEqual([null, "step", null]);
   });
-  it("leaves the guided owner's own button text when the host gives no label", async () => {
-    await mountGuided();
-    expect(guided.rendered.mock.lastCall?.[0].enterChatLabel).toBeUndefined();
+  it("is built from cockpit fields: each select is labelled and described, with no Classic classes", async () => {
+    catalog("ready");
+    await mount();
+    const provider = container.querySelector<HTMLSelectElement>("select")!;
+    expect(container.querySelector(`label[for="${provider.id}"]`)?.textContent).toBe("Provider or local runtime");
+    expect(document.getElementById(provider.getAttribute("aria-describedby")!)?.textContent).toContain("Gateway");
+    expect(container.querySelector('[class*="mc-next"]')).toBeNull();
   });
-  it("shows its own notice when the host keeps none, as first run does", async () => {
-    await mountGuided();
-    await reportNotice("Change applied and verified.");
+  it("connects a provider that is not ready through a provider connection plan", async () => {
+    catalog("missing");
+    await mount();
+    await act(async () => button("Connect provider")!.click());
+    expect(mocks.create).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "default",
+      surface: "settings",
+      request: { kind: "provider_connection", providerId: "test" },
+    });
+  });
+  it("confirms a changed model through an installation default plan and shows the result", async () => {
+    catalog("ready");
+    await mount();
+    const model = container.querySelectorAll("select")[1]!;
+    await vi.waitFor(() => expect(model.querySelector('option[value="other-model"]')).not.toBeNull());
+    await act(async () => {
+      model.value = "other-model";
+      model.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => button("Confirm model")!.click());
+    expect(mocks.create).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "default",
+      surface: "settings",
+      request: {
+        kind: "installation_default_model",
+        providerId: "test",
+        model: "other-model",
+        thinkingLevel: "standard",
+      },
+    });
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Change applied and verified.");
+    expect(mocks.reload).toHaveBeenCalled();
+  });
+  it("moves on with the host's own label once the default is confirmed", async () => {
+    catalog("ready");
+    const onEnterChat = vi.fn();
+    await mount({ onEnterChat, enterChatLabel: "Continue to safety" });
+    await act(async () => button("Continue to safety")!.click());
+    expect(onEnterChat).toHaveBeenCalledTimes(1);
+  });
+  it("hides its step list for first run, which shows one flat stepper of its own", async () => {
+    catalog("ready");
+    await mount({ showSteps: false });
+    expect(container.querySelector('ol[aria-label="Model setup steps"]')).toBeNull();
+    expect(button("Enter Chat")).toBeDefined();
   });
   it("hands the notice to a host that keeps it and shows no second copy", async () => {
+    onboarding.settings.llm.activeModel = "";
+    catalog("ready");
     const onNoticeChange = vi.fn();
-    await mountGuided(undefined, onNoticeChange);
-    await reportNotice("Change applied and verified.");
-    expect(onNoticeChange).toHaveBeenCalledExactlyOnceWith("Change applied and verified.");
+    await mount({ onNoticeChange });
+    await act(async () => button("Confirm model")!.click());
+    expect(onNoticeChange).toHaveBeenCalledWith("Change applied and verified.");
     expect(container.querySelector('[role="status"]')).toBeNull();
   });
 });

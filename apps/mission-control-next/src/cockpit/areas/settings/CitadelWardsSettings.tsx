@@ -6,6 +6,7 @@ import { Dialog } from "../../ui/Dialog";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { CitadelAccessReview } from "./CitadelAccessReview";
 import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
+import { RulesPrecedenceLink } from "./RulesPrecedence";
 
 export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
   const c = useCitadelWards(citadelId),
@@ -28,13 +29,18 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
     </>
   );
   return (
-    <section id="citadel-wards" aria-label="Citadel Wards" className="mt-4 space-y-4 border-t border-line-subtle pt-4">
+    <section
+      id="citadel-wards"
+      aria-label={CITADEL_PAGE_LABELS["citadel-wards"]}
+      className="mt-4 space-y-4 border-t border-line-subtle pt-4"
+    >
       <header>
         <h3 className="text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-wards"]}</h3>
         <p className="mt-1 text-sm text-fg-secondary">
-          Access policy for this Citadel. Deny wins when several Wards match. Testing evaluates policy without executing
-          the action.
+          Rules that allow, deny or require approval for actions in this Citadel. Deny wins when several rules match.
+          Testing checks the rules without running the action.
         </p>
+        <RulesPrecedenceLink />
         <p className="break-all text-xs text-fg-muted">Citadel: {citadelId}</p>
       </header>
       {c.access.loading ? (
@@ -86,7 +92,9 @@ export function CitadelWardsSettings({ citadelId }: { citadelId: string }) {
         ))}
       </ul>
       {!c.wards.items.length && !c.access.loading ? (
-        <p className="text-sm text-fg-muted">No rules yet. The Gatehouse default settings apply.</p>
+        <p className="text-sm text-fg-muted">
+          No rules yet. This Citadel&apos;s default sharing and external-write settings apply; see Citadel overview.
+        </p>
       ) : null}
       <Dialog
         open={c.view === "new"}

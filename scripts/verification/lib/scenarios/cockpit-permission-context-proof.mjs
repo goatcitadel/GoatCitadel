@@ -60,20 +60,35 @@ export function assertAutonomousGrantRevocation({ before, request, receipt, owne
   assert.equal(receipt.usedBudgetUsd, 0);
 }
 
+/** Profile choices (context combobox, search, radios) render only after "Change profile"; idempotent. */
+export async function openPermissionProfileChoices(panel) {
+  const toggle = panel.getByRole("button", { name: /^(?:Change profile|Close profile choices)$/u });
+  await toggle.waitFor();
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+}
+
+/** Expert permission detail sits in a collapsed <details> whose summary starts "Advanced:"; idempotent. */
+export async function openPermissionAdvanced(panel) {
+  const advanced = panel.locator("details", { has: panel.page().locator("summary", { hasText: /^\s*Advanced:/u }) });
+  await advanced.waitFor({ state: "attached" });
+  if (!(await advanced.evaluate((node) => node.open))) await advanced.locator(":scope > summary").click();
+}
+
 export async function inspectPermissionContexts({ page, api, workspaceId, writes, capture }) {
   const full = page.getByRole("region", { name: "Chat permission profile", exact: true });
+  await openPermissionProfileChoices(full);
   const contextChoice = full.getByRole("combobox", { name: "Selection policy context", exact: true });
   await contextChoice.waitFor();
+  // Legacy Cowork/Code keys are no longer selectable; they remain as read-only evidence rows below.
   assert.deepEqual(await contextChoice.locator("option").evaluateAll((nodes) => nodes.map((node) => node.value)), [
     "chat",
     "tools",
     "mcp",
     "all",
-    "cowork",
-    "code",
   ]);
   const count = writes.length;
-  for (const context of ["tools", "mcp", "all", "cowork", "code", "chat"]) await contextChoice.selectOption(context);
+  for (const context of ["tools", "mcp", "all", "chat"]) await contextChoice.selectOption(context);
+  await openPermissionAdvanced(full);
   const evidence = full.getByRole("region", { name: "Effective policy contexts", exact: true });
   await evidence.getByText("Legacy compatibility policy contexts", { exact: true }).click();
   const snapshot = {};
@@ -129,6 +144,7 @@ export async function revokeDisposableAutonomousGrant({ page, api, workspaceId, 
       prior,
       catalog,
     });
+    await openPermissionAdvanced(page.getByRole("region", { name: "Chat permission profile", exact: true }));
     const region = page.getByRole("region", { name: "Autonomous activation grants", exact: true });
     await region.getByRole("button", { name: "Refresh autonomous grants", exact: true }).click();
     const row = region

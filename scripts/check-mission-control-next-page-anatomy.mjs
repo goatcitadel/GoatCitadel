@@ -58,6 +58,28 @@ export const ANATOMY_RULES = [
         /(?:^|\s)text-(?:xs|sm)(?=\s|$)/.test(match[1] ?? match[2] ?? ""),
       ).length,
   },
+  {
+    id: "settings-raw-control",
+    // Workstream G moved the provider, MCP, hooks, budget, approval, permission, tool and appearance forms onto Field;
+    // the rest (mostly Citadel editors) ratchet down from here.
+    budget: 82,
+    help: "wrap Settings inputs in ui/Field so the label, help, required marker and error stay tied to the control",
+    // A text-like control in Settings that does not spread Field's render props ({...props}, {...fieldProps}, {...field}).
+    // Checkboxes, radios, hidden and file inputs carry their own label pattern and stay out.
+    count: (relative, contents) =>
+      relative.startsWith("areas/settings/") && relative.endsWith(".tsx")
+        ? [...contents.matchAll(/<(?:input|select|textarea)\b([^>]*)>/gs)].filter(
+            (match) =>
+              !/\{\.\.\.(?:field|\w*[pP]rops)\b/.test(match[1]) && !/type=["'](?:checkbox|radio|hidden|file)["']/.test(match[1]),
+          ).length
+        : 0,
+  },
+  {
+    id: "model-setup-css",
+    budget: 0,
+    help: "the guided model setup is built from cockpit primitives; do not bring back the Classic override sheet",
+    count: (_relative, contents) => contents.match(/model-setup\.css/g)?.length ?? 0,
+  },
 ];
 
 /** Phone chrome at the bottom edge must clear the home indicator (viewport-fit=cover). */

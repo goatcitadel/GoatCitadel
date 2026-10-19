@@ -6,7 +6,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchLlmConfig } from "@goatcitadel/mission-control-shared/api/platform";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
-import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useUiPreferences, type UiTheme } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { THEME_SEARCH_TERMS } from "./theme-options";
 import { buildSettingsIndex } from "../areas/settings/settings-index";
 import { resourceTitle } from "../areas/library/resource-title";
 import { Dialog } from "../ui/Dialog";
@@ -51,7 +52,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const shellSwitch = useCockpitShellSwitch();
   const { navigate, requestTransition } = useCockpitRoute();
   const inspector = useInspector();
-  const { theme, setTheme, density, setDensity, activeWorkspaceId, activeCitadelId } = useUiPreferences();
+  const { themePreference, setTheme, density, setDensity, activeWorkspaceId, activeCitadelId } = useUiPreferences();
   const viewCode = useCommandPaletteViewCode(
     open,
     activeWorkspaceId,
@@ -112,7 +113,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const settingsMatches = SETTINGS.filter((entry) => matches(`settings ${entry.label} ${entry.searchTerms}`));
   const commandMatches = matches("New chat conversation") || matches("Choose default model provider models switch");
   const preferenceMatches =
-    matches("Switch theme light dark") ||
+    matches(THEME_SEARCH_TERMS) ||
     matches("Switch density comfortable compact") ||
     matches("Switch to classic Mission Control");
   const noMatches =
@@ -136,7 +137,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     });
   };
   const onChooseModel = () => run(() => navigate("/settings/models?shell=cockpit#providers"));
-  const onTheme = () => run(() => setTheme(theme === "dark" ? "light" : "dark"));
+  const onTheme = (next: UiTheme) => run(() => setTheme(next));
   const onDensity = () => run(() => setDensity(density === "compact" ? "comfortable" : "compact"));
   const onClassic = () => run(shellSwitch.request);
   const onDestination = (path: string) => run(() => navigate(`${path}?shell=cockpit`));
@@ -204,7 +205,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
             noMatches={noMatches}
             destinations={destinations}
             settingsMatches={settingsMatches}
-            theme={theme}
+            theme={themePreference}
             density={density}
             search={search}
             onNewChat={onNewChat}
