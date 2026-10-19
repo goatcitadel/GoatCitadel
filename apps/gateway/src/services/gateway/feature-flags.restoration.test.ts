@@ -15,6 +15,7 @@ const restored = [
   "chatStaticMcpV1Enabled",
   "chatMeshCapabilitiesV1Enabled",
   "chatRemotePlacementV1Enabled",
+  "chatModelCouncilV1Enabled",
 ] as const;
 describe("restored feature defaults and persistence", () => {
   it("leaves every new restoration disabled when historical configuration omits it", () => {

@@ -258,6 +258,24 @@ const selectedSkill = z
   })
   .strict();
 
+/** Independent, default-off runtime switches that restore profile-free Chat features. */
+export const CHAT_RESTORATION_FEATURE_FLAGS = [
+  "chatProviderFallbackV1Enabled",
+  "chatSkillInstructionsV1Enabled",
+  "boundedToolExposureV1Enabled",
+  "scheduledChatTurnsV1Enabled",
+  "chatExplicitContextV1Enabled",
+  "chatAutomaticFanoutV1Enabled",
+  "chatDelegationControlsV1Enabled",
+  "proactiveHeartbeatTurnsV1Enabled",
+  "commitmentScheduledTurnsV1Enabled",
+  "chatMeshCapabilitiesV1Enabled",
+  "chatRemotePlacementV1Enabled",
+  "chatModelCouncilV1Enabled",
+  "chatRequesterMcpV1Enabled",
+  "chatStaticMcpV1Enabled",
+] as const;
+
 /** Immutable feature evidence. These records never grant callable authority. */
 export const chatTurnFeatureReferencesSchema = z
   .object({
@@ -295,6 +313,11 @@ export const chatTurnFeatureReferencesSchema = z
       })
       .optional(),
     explicitContext: z.object({ snapshotId: identifier, snapshotHash: digest }).strict().optional(),
+    /** The operator requested an advisory, tool-free model council for this turn. */
+    modelCouncil: z
+      .object({ version: z.literal("chat.model-council.admission.v1") })
+      .strict()
+      .optional(),
     childWork: ownerReference.optional(),
     scheduledOccurrence: ownerReference.optional(),
     heartbeatOccurrence: ownerReference.optional(),

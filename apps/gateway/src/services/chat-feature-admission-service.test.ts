@@ -246,3 +246,34 @@ describe("fresh Chat feature skill admission", () => {
     expect(h.bindFeatureReferences).not.toHaveBeenCalled();
   });
 });
+
+describe("fresh Chat model council admission", () => {
+  async function councilHarness(enabled: boolean) {
+    const h = await harness();
+    h.host.isFeatureEnabled = async (flag) => flag === "chatModelCouncilV1Enabled" && enabled;
+    return h;
+  }
+  function councilRequest(id: string) {
+    const req = request(id);
+    return {
+      ...req,
+      admission: { ...req.admission, admittedRequest: { content: "Use reports", modelCouncil: { enabled: true } } },
+    };
+  }
+
+  it("records the admitted council request with a pinned route only when chatModelCouncilV1Enabled is on", async () => {
+    expect(
+      await resolveChatFeatureAdmission((await councilHarness(false)).host, councilRequest("off")),
+    ).toBeUndefined();
+    const binding = await resolveChatFeatureAdmission((await councilHarness(true)).host, councilRequest("on"));
+    expect(binding?.references.modelCouncil).toEqual({ version: "chat.model-council.admission.v1" });
+    expect(binding?.references.providerRoute?.primary).toEqual({ providerId: "local", model: "fixture" });
+  });
+
+  it("requires a provider route for a council admission", async () => {
+    const h = await councilHarness(true);
+    await expect(
+      resolveChatFeatureAdmission(h.host, { ...councilRequest("routeless"), route: undefined }),
+    ).rejects.toThrow(/explicit provider route/);
+  });
+});

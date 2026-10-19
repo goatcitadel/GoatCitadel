@@ -1445,6 +1445,53 @@ describe("AssemblyService", () => {
     expect(createChatCompletion).toHaveBeenCalledTimes(3);
   });
 
+  it("runs a live admission binding without a profile and refuses recovery under a different binding", async () => {
+    const storage = createStorage();
+    let ordinal = 0;
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest) => {
+      ordinal += 1;
+      return createCouncilCompletion(
+        request,
+        request.metadata?.stage === "C3_synthesize" ? "Canonical answer." : `Advisory ${ordinal}.`,
+        `usage-${ordinal}`,
+      );
+    });
+    const service = new AssemblyService({
+      storage: storage as never,
+      rootDir: os.tmpdir(),
+      createChatCompletion,
+      publishRealtime: vi.fn(),
+    });
+    const binding = {
+      bindingId: "feature-admission:admission-1",
+      bindingHash: "d".repeat(64),
+      turnId: "turn-1",
+      sessionId: "session-1",
+      workspaceId: "default",
+      primaryProviderId: "openai",
+      primaryModel: "gpt-5.4",
+      thinkingLevel: "standard" as const,
+      primaryReady: true,
+    };
+    const input = createCouncilExecutionInput({ capabilityProfile: undefined, binding });
+    const result = await service.executeChatModelCouncil(input);
+    expect(result.answer).toBe("Canonical answer.");
+    expect(createChatCompletion).toHaveBeenCalledTimes(3);
+    await expect(
+      service.executeChatModelCouncil({ ...input, binding: { ...binding, bindingHash: "e".repeat(64) } }),
+    ).rejects.toThrow(/conflicts with its immutable resolution/);
+    await expect(
+      service.executeChatModelCouncil(
+        createCouncilExecutionInput({
+          turnId: "turn-2",
+          capabilityProfile: undefined,
+          binding: { ...binding, turnId: "turn-2", primaryReady: false },
+        }),
+      ),
+    ).rejects.toThrow(/primary provider is not ready/);
+    expect(createChatCompletion).toHaveBeenCalledTimes(3);
+  });
+
   it("fails before provider dispatch when a legacy council lacks the immutable reasoning route binding", async () => {
     const storage = createStorage();
     const createChatCompletion = vi.fn(async () => {

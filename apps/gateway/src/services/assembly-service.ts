@@ -100,10 +100,56 @@ export interface ExecuteChatModelCouncilInput {
   workspaceId: string;
   content: string;
   history: ChatCompletionRequest["messages"];
-  capabilityProfile: ChatTurnCapabilityProfileRecord;
+  /** Historical profile-bound turns. New turns pass `binding` instead. */
+  capabilityProfile?: ChatTurnCapabilityProfileRecord;
+  /** Profile-free binding derived from the turn's immutable feature admission. */
+  binding?: ModelCouncilBinding;
   providerCandidates: ModelCouncilProviderCandidate[];
   routedContextSnapshot?: ChatRoutedContextSnapshotRecord;
   signal?: AbortSignal;
+}
+
+/**
+ * The identity a council resolution is bound to. It names the turn scope and
+ * primary route only; council members are tool-free and get no catalog.
+ */
+export interface ModelCouncilBinding {
+  bindingId: string;
+  bindingHash: string;
+  turnId: string;
+  sessionId: string;
+  workspaceId: string;
+  primaryProviderId: string;
+  primaryModel: string;
+  thinkingLevel?: ChatTurnCapabilityProfileRecord["selection"]["thinkingLevel"];
+  primaryReady: boolean;
+}
+
+/** Derives the council binding from a historical profile or the live admission binding. */
+export function resolveModelCouncilBinding(input: ExecuteChatModelCouncilInput): ModelCouncilBinding {
+  if (input.binding && input.capabilityProfile) {
+    throw new Error("Model council accepts one binding: a historical profile or a live admission binding.");
+  }
+  if (input.binding) return input.binding;
+  const profile = input.capabilityProfile;
+  if (!profile) throw new Error("Model council requires a historical profile or a live admission binding.");
+  const providerId = profile.selection.effectiveProviderId;
+  if (!providerId || !profile.selection.effectiveModel) {
+    throw new Error("Model council requires a frozen provider/model in the governed capability profile.");
+  }
+  return {
+    bindingId: profile.profileId,
+    bindingHash: profile.hashes.profileHash,
+    turnId: profile.identity.turnId,
+    sessionId: profile.identity.sessionId,
+    workspaceId: profile.identity.workspaceId,
+    primaryProviderId: providerId,
+    primaryModel: profile.selection.effectiveModel,
+    thinkingLevel: profile.selection.thinkingLevel,
+    primaryReady:
+      profile.governance.authReadiness.find((item) => item.kind === "provider" && item.ref === providerId)?.status ===
+      "ready",
+  };
 }
 
 const MODEL_COUNCIL_LEASE_TTL_MS = 120_000;
@@ -1730,7 +1776,7 @@ class ModelCouncilExecutor {
             synthesisParticipant.providerId,
             synthesisParticipant.apiStyle,
             synthesisParticipant.model,
-            input.capabilityProfile.selection.thinkingLevel,
+            resolveModelCouncilBinding(input).thinkingLevel,
           ).max_tokens!,
         costBudgetUsd: 0,
         domainPreset: "analysis",
@@ -1958,7 +2004,7 @@ class ModelCouncilExecutor {
         synthesisParticipant.providerId,
         resolveCouncilExecutionApiStyle(synthesisParticipant, input),
         synthesisParticipant.model,
-        input.capabilityProfile.selection.thinkingLevel,
+        resolveModelCouncilBinding(input).thinkingLevel,
       );
       const request: ChatCompletionRequest = {
         providerId: synthesisParticipant.providerId,
@@ -2297,12 +2343,9 @@ export function buildModelCouncilSynthesisThinkingOptions(
 
 function buildModelCouncilResolution(input: ExecuteChatModelCouncilInput): ModelCouncilResolution {
   assertModelCouncilInputScope(input);
-  const profile = input.capabilityProfile;
-  const primaryProviderId = profile.selection.effectiveProviderId;
-  const primaryModel = profile.selection.effectiveModel;
-  if (!primaryProviderId || !primaryModel) {
-    throw new Error("Model council requires a frozen provider/model in the governed capability profile.");
-  }
+  const binding = resolveModelCouncilBinding(input);
+  const primaryProviderId = binding.primaryProviderId;
+  const primaryModel = binding.primaryModel;
   const uniqueCandidates = dedupeCouncilCandidates(input.providerCandidates);
   const primary = uniqueCandidates.find(
     (candidate) => candidate.providerId === primaryProviderId && candidate.model === primaryModel,
@@ -2334,7 +2377,7 @@ function buildModelCouncilResolution(input: ExecuteChatModelCouncilInput): Model
       contextWindowTokens: candidate.contextWindowTokens,
       ...(candidate.apiStyle ? { apiStyle: candidate.apiStyle } : {}),
       routeConfigFingerprint: candidate.routeConfigFingerprint,
-      capabilityProfileHash: profile.hashes.profileHash,
+      capabilityProfileHash: binding.bindingHash,
     }),
     advisoryOnly: true,
     toolsAllowed: false,
@@ -2347,8 +2390,10 @@ function buildModelCouncilResolution(input: ExecuteChatModelCouncilInput): Model
     turnId: input.turnId,
     sessionId: input.sessionId,
     workspaceId: input.workspaceId,
-    capabilityProfileId: profile.profileId,
-    capabilityProfileHash: profile.hashes.profileHash,
+    // These persisted columns hold the council binding: a historical profile
+    // id/hash, or the live feature-admission id and reference hash.
+    capabilityProfileId: binding.bindingId,
+    capabilityProfileHash: binding.bindingHash,
     historyHash,
     participants,
     synthesisParticipantId: participants[0]!.participantId,
@@ -2367,8 +2412,8 @@ function assertExistingModelCouncilResolution(run: AssemblyRunRecord, input: Exe
     resolution.turnId !== input.turnId ||
     resolution.sessionId !== input.sessionId ||
     resolution.workspaceId !== input.workspaceId ||
-    resolution.capabilityProfileId !== input.capabilityProfile.profileId ||
-    resolution.capabilityProfileHash !== input.capabilityProfile.hashes.profileHash ||
+    resolution.capabilityProfileId !== resolveModelCouncilBinding(input).bindingId ||
+    resolution.capabilityProfileHash !== resolveModelCouncilBinding(input).bindingHash ||
     resolution.historyHash !== digest(canonicalJsonString(input.history))
   ) {
     throw new Error(`Model council ${run.runId} recovery input conflicts with its immutable resolution.`);
@@ -2408,26 +2453,26 @@ function assertExistingModelCouncilResolution(run: AssemblyRunRecord, input: Exe
 }
 
 function assertModelCouncilInputScope(input: ExecuteChatModelCouncilInput): void {
+  const binding = resolveModelCouncilBinding(input);
   const profile = input.capabilityProfile;
   if (
-    profile.identity.turnId !== input.turnId ||
-    profile.identity.sessionId !== input.sessionId ||
-    profile.identity.workspaceId !== input.workspaceId
+    binding.turnId !== input.turnId ||
+    binding.sessionId !== input.sessionId ||
+    binding.workspaceId !== input.workspaceId
   ) {
-    throw new Error("Model council capability profile does not match the current Chat turn scope.");
+    throw new Error("Model council binding does not match the current Chat turn scope.");
   }
-  const providerId = profile.selection.effectiveProviderId;
-  const primaryReadiness = profile.governance.authReadiness.find(
-    (item) => item.kind === "provider" && item.ref === providerId,
-  );
-  if (!providerId || primaryReadiness?.status !== "ready") {
-    throw new Error("Model council primary provider is not ready in the governed capability profile.");
+  if (!binding.primaryReady) {
+    throw new Error("Model council primary provider is not ready under the council binding.");
   }
   if (input.history.length === 0) {
     throw new Error("Model council requires the prepared Chat history.");
   }
   if (input.routedContextSnapshot) {
     const snapshot = input.routedContextSnapshot;
+    if (!profile) {
+      throw new Error("Model council routed context is limited to historical profile-bound turns.");
+    }
     if (
       snapshot.turnId !== input.turnId ||
       snapshot.sessionId !== input.sessionId ||
@@ -2516,7 +2561,7 @@ function assertCouncilRequestBudgets(
       synthesisParticipant.providerId,
       synthesisParticipant.apiStyle,
       synthesisParticipant.model,
-      input.capabilityProfile.selection.thinkingLevel,
+      resolveModelCouncilBinding(input).thinkingLevel,
     ).max_tokens!;
   const requiredTokens = Math.max(participantRequiredTokens, synthesisRequiredTokens);
   if (participant.contextWindowTokens < requiredTokens) {
@@ -2570,7 +2615,7 @@ async function assertLegacyCouncilReasoningRecoverySafe(
   );
   if (
     synthesisParticipant?.apiStyle === undefined &&
-    resolveChatReasoningEffort(input.capabilityProfile.selection.thinkingLevel ?? "standard") !== "none" &&
+    resolveChatReasoningEffort(resolveModelCouncilBinding(input).thinkingLevel ?? "standard") !== "none" &&
     !(await getCouncilSynthesisArtifact(storage, run))
   ) {
     throw new Error(

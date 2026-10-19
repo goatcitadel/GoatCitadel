@@ -874,7 +874,9 @@ Restoration flags are independent and default off:
 `chatDelegationControlsV1Enabled`, `chatAutomaticFanoutV1Enabled`,
 `scheduledChatTurnsV1Enabled`, `proactiveHeartbeatTurnsV1Enabled`,
 `commitmentScheduledTurnsV1Enabled`, `chatRequesterMcpV1Enabled`, `chatStaticMcpV1Enabled`,
-`chatMeshCapabilitiesV1Enabled`, and `chatRemotePlacementV1Enabled`. Automatic fanout also requires the existing
+`chatMeshCapabilitiesV1Enabled`, `chatRemotePlacementV1Enabled`, and `chatModelCouncilV1Enabled`
+(WS9: an operator council request recorded in feature references; tool-free members rechecked against
+readiness and the Citadel Ward at resolution; no explicit context or delegated children). Automatic fanout also requires the existing
 durable fanout switch, explicit session policy and a current exact-project grant.
 Read-only `chatFeatureAvailability` derives UI availability from actual settings;
 it does not confer permission or report successful execution.

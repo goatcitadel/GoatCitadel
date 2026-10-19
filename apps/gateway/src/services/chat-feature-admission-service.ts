@@ -196,6 +196,12 @@ export async function resolveChatFeatureAdmission(
       await renderAdmittedSkillInstructions(host, references, workspaceId);
     }
   }
+  if (
+    input.admission.admittedRequest.modelCouncil?.enabled &&
+    (await host.isFeatureEnabled("chatModelCouncilV1Enabled"))
+  ) {
+    references.modelCouncil = { version: "chat.model-council.admission.v1" };
+  }
   if ((await host.isFeatureEnabled("chatRequesterMcpV1Enabled")) && host.resolveRequesterConnections) {
     const connections = await host.resolveRequesterConnections({ admission: input.admission, content: input.content });
     if (connections.length) references.requesterConnections = connections;
@@ -231,7 +237,8 @@ export async function resolveChatFeatureAdmission(
     !references.requesterConnections &&
     !references.selectedStaticMcp &&
     !references.selectedMeshCapabilities &&
-    !references.remotePlacement
+    !references.remotePlacement &&
+    !references.modelCouncil
   )
     return undefined;
   // Every new restored-feature admission pins its route. Selected skill budgets,
