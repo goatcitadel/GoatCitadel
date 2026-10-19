@@ -8,6 +8,7 @@ import {
   vaultSecretAad,
   wrapKey,
 } from "./citadel-vault-node.js";
+import { toVaultSecretMetadata, type CitadelVaultSecretRecord } from "./citadel-vault.js";
 
 describe("citadel-vault", () => {
   describe("generateVaultKey", () => {
@@ -123,6 +124,47 @@ describe("citadel-vault", () => {
 
     it("refuses to wrap a key that is not 32 bytes", () => {
       expect(() => wrapKey(Buffer.alloc(16, 1), generateVaultKey(), vaultDekWrapAad(aadInput))).toThrow(/32 bytes/);
+    });
+  });
+
+  describe("toVaultSecretMetadata", () => {
+    it("maps scope and key version and never copies the sealed value", () => {
+      const record: CitadelVaultSecretRecord = {
+        secretId: "s1",
+        citadelId: "c1",
+        secretName: "API",
+        chamberId: "ch1",
+        keyId: "k1",
+        envelopeVersion: 2,
+        sealedValue: { iv: "aXY=", ciphertext: "Y3Q=", tag: "dGFn" },
+        createdAt: "2026-10-19T00:00:00.000Z",
+        updatedAt: "2026-10-19T00:00:01.000Z",
+      };
+      const metadata = toVaultSecretMetadata(record, 3);
+      expect(metadata).toEqual({
+        secretId: "s1",
+        secretName: "API",
+        createdAt: "2026-10-19T00:00:00.000Z",
+        updatedAt: "2026-10-19T00:00:01.000Z",
+        chamberId: "ch1",
+        keyVersion: 3,
+      });
+      expect(JSON.stringify(metadata)).not.toContain("Y3Q=");
+    });
+
+    it("reports a legacy envelope with a null key version", () => {
+      const legacy: CitadelVaultSecretRecord = {
+        secretId: "s2",
+        citadelId: "c1",
+        secretName: "Old",
+        chamberId: null,
+        keyId: null,
+        envelopeVersion: 1,
+        sealedValue: { iv: "aXY=", ciphertext: "Y3Q=", tag: "dGFn" },
+        createdAt: "t",
+        updatedAt: "t",
+      };
+      expect(toVaultSecretMetadata(legacy)).toMatchObject({ chamberId: null, keyVersion: null });
     });
   });
 });
