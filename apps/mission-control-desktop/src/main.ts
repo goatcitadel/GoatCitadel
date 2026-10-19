@@ -112,7 +112,11 @@ void listen("desktop://runtime-status-requested", () => {
 void listen("desktop://runtime-restarted", () => {
   showToast("Runtime restarted. Refreshing Mission Control...");
   renderStarting();
+  // If an in-flight poll makes this refresh a no-op, it still lands: that poll has
+  // syncShell and is-ready was just cleared, so a ready result reloads the frame.
   void refreshRuntimeStatus({ syncShell: true, notify: false });
+  // Re-arm polling (idempotent) in case a stop left it off and the refresh fails.
+  startRuntimeStatusPolling();
 });
 
 void listen("desktop://runtime-stopped", () => {

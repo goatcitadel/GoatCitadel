@@ -159,6 +159,34 @@ describe("desktop shell bootstrap", () => {
     expect(frameElement().src).toBe("http://127.0.0.1:5173/restarted");
   });
 
+  it("re-arms status polling after a tray restart that follows a stop", async () => {
+    vi.useFakeTimers();
+    const listeners = new Map<string, () => void>();
+    tauriMocks.listen.mockImplementation((eventName: string, callback: () => void) => {
+      listeners.set(eventName, callback);
+      return Promise.resolve(() => undefined);
+    });
+    tauriMocks.invoke
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }))
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "stale", readiness: { gateway: false, ui: false } }))
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready", targetUrl: "http://127.0.0.1:5173/back" }));
+
+    await import("./main.js");
+    await flushPromises();
+
+    listeners.get("desktop://runtime-stopped")?.();
+    listeners.get("desktop://runtime-restarted")?.();
+    await flushPromises();
+    expect(readRuntimeStatusCalls()).toHaveLength(1);
+    expect(element("mission-control-frame").classList.contains("is-ready")).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushPromises();
+    expect(readRuntimeStatusCalls()).toHaveLength(2);
+    expect(frameElement().src).toBe("http://127.0.0.1:5173/back");
+    expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
+  });
+
   it("single-flights native runtime status polling and times out hung reads", async () => {
     vi.useFakeTimers();
     const listeners = new Map<string, () => void>();

@@ -1235,7 +1235,7 @@ describe("useChatSessionData", () => {
     await act(async () => renderer.unmount());
   });
 
-  it("loads a session selected in the same tick as its foreground load", async () => {
+  it("shows a session selected in the same tick as an explicit foreground load", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 14_400_000);
     fetchChatThreadMock.mockImplementation(async (sessionId: string) => makeThread(sessionId));
