@@ -693,9 +693,19 @@ export async function prepareAgentChatTurn(
       message: "Workspace snapshots require enabled durable Chat admission. Start a fresh operator turn.",
     });
   }
-  if (!boundCapabilityProfile && input.modelCouncil?.enabled) {
+  if (
+    !boundCapabilityProfile &&
+    input.modelCouncil?.enabled &&
+    (!(await isFeatureEnabled("chatModelCouncilV1Enabled")) ||
+      !(await isDurableChatExecution()) ||
+      !options?.turnAdmission ||
+      options.turnAdmission.requestActor.actorKind !== "operator" ||
+      input.parentDelegationStepId ||
+      (input.contextRefs?.length ?? 0) > 0)
+  ) {
     throw new ConflictError({
-      message: "Model council is temporarily unavailable while new Chat turns use live capabilities.",
+      message:
+        "Model council requires enabled durable Chat admission without explicit context. Start a fresh operator turn.",
     });
   }
   if (!boundCapabilityProfile && input.parentDelegationStepId) {
@@ -957,6 +967,9 @@ export async function prepareAgentChatTurn(
     !featureAdmission?.references.workspaceSnapshot
   ) {
     throw new ConflictError({ message: "The workspace snapshot was not admitted for this turn. Start a fresh turn." });
+  }
+  if (!boundCapabilityProfile && input.modelCouncil?.enabled && !featureAdmission?.references.modelCouncil) {
+    throw new ConflictError({ message: "The model council was not admitted for this turn. Start a fresh turn." });
   }
   if (!boundCapabilityProfile && featureAdmission?.references.childWork?.revision === "chat.automatic-fanout.v1") {
     normalized = { ...normalized, subagentPolicy: "auto_when_useful" };

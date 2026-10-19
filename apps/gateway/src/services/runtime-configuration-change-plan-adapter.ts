@@ -336,6 +336,8 @@ function settingsPatch(request: ChangePlanRuntimeConfigurationRequest): Omit<Upd
       return { deploymentProfile: request.change.profile };
     case "read_access_policy":
       return { readAccessMode: request.change.mode };
+    case "outside_root_write_policy":
+      return { outsideRootWriteMode: request.change.mode };
     case "network_allowlist":
       return { networkAllowlist: [...request.change.entries] };
     case "utility_model":
@@ -379,6 +381,8 @@ function matches(request: ChangePlanRuntimeConfigurationRequest, settings: Runti
       return settings.deploymentProfile === request.change.profile;
     case "read_access_policy":
       return settings.readAccessMode === request.change.mode;
+    case "outside_root_write_policy":
+      return (settings.outsideRootWriteMode ?? "deny") === request.change.mode;
     case "network_allowlist":
       return sameList(settings.networkAllowlist, request.change.entries);
     case "utility_model":
@@ -468,6 +472,24 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
           "Future file reads use the new policy; write access (the workspace jail and operator write roots) and deny-wins policy remain unchanged.",
         risk: request.change.mode === "roots_only" ? ("caution" as const) : ("danger" as const),
       };
+    case "outside_root_write_policy":
+      return request.change.mode === "approval_required"
+        ? {
+            title: "Let Chat ask to write outside the write roots",
+            summary: "Writes outside every write root raise an approval instead of a hard block.",
+            completedSummary: "Chat can now ask to write outside the write roots.",
+            impact:
+              "An approval can admit one exact write or open one folder for 15 minutes to 8 hours, for the approved tool and session or workspace only. Deletes outside the roots, protected runtime paths, network shares and delegated sessions stay blocked; deny-wins and Citadel Wards still apply.",
+            risk: "danger" as const,
+          }
+        : {
+            title: "Block writes outside the write roots",
+            summary: "Writes outside every write root are blocked again.",
+            completedSummary: "Writes outside the write roots are blocked; existing folder grants stop working.",
+            impact:
+              "Existing outside-root folder grants become inert immediately. Writes inside the write roots are unchanged.",
+            risk: "safe" as const,
+          };
     case "network_allowlist":
       return {
         title: "Change the network allowlist",

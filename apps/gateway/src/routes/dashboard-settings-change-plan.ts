@@ -15,6 +15,7 @@ export interface SettingsChangePlanInput {
   readonly budgetMode?: RuntimeChangeFor<"budget_mode">["mode"];
   readonly deploymentProfile?: RuntimeChangeFor<"deployment_profile">["profile"];
   readonly readAccessMode?: RuntimeChangeFor<"read_access_policy">["mode"];
+  readonly outsideRootWriteMode?: RuntimeChangeFor<"outside_root_write_policy">["mode"];
   readonly networkAllowlist?: readonly string[];
   readonly operatorWriteRootChange?: Omit<RuntimeChangeFor<"operator_write_root">, "operation">;
   readonly globalToolAccessChange?: Omit<RuntimeChangeFor<"tool_global_access">, "operation">;
@@ -82,6 +83,13 @@ export function settingsChangePlanRequest(input: SettingsChangePlanInput): Chang
     case "readAccessMode":
       return input.readAccessMode
         ? { kind: "runtime_configuration", change: { operation: "read_access_policy", mode: input.readAccessMode } }
+        : null;
+    case "outsideRootWriteMode":
+      return input.outsideRootWriteMode
+        ? {
+            kind: "runtime_configuration",
+            change: { operation: "outside_root_write_policy", mode: input.outsideRootWriteMode },
+          }
         : null;
     case "networkAllowlist":
       return input.networkAllowlist

@@ -259,8 +259,9 @@ async function sandboxSend(
   token: string,
   probe: ChannelProbeReport,
 ): Promise<void> {
+  const steps = probe.steps;
   if (!input.target?.trim()) {
-    probe.steps.push({
+    steps.push({
       key: "wecom_sandbox_send",
       label: "Sandbox send",
       status: "skipped",
@@ -274,7 +275,7 @@ async function sandboxSend(
   try {
     recipient = parseWecomTarget(input.target).field;
   } catch (error) {
-    probe.steps.push({
+    steps.push({
       key: "wecom_sandbox_send",
       label: "Sandbox send",
       status: "fail",
@@ -297,7 +298,7 @@ async function sandboxSend(
       }),
     });
     if (!response.ok) {
-      probe.steps.push({
+      steps.push({
         key: "wecom_sandbox_send",
         label: "Sandbox send",
         status: response.status >= 500 ? "warn" : "fail",
@@ -310,7 +311,7 @@ async function sandboxSend(
     const body = record(await readBoundedResponseJson(response, { ...READ_LIMITS, label: "WeCom send probe" }));
     const errcode = Number(body.errcode);
     if (errcode !== 0) {
-      probe.steps.push({
+      steps.push({
         key: "wecom_sandbox_send",
         label: "Sandbox send",
         status: "fail",
@@ -322,7 +323,7 @@ async function sandboxSend(
     }
     const invalid = readInvalidRecipient(body);
     if (invalid) {
-      probe.steps.push({
+      steps.push({
         key: "wecom_sandbox_send",
         label: "Sandbox send",
         status: "fail",
@@ -332,7 +333,7 @@ async function sandboxSend(
       });
       return;
     }
-    probe.steps.push({
+    steps.push({
       key: "wecom_sandbox_send",
       label: "Sandbox send",
       status: "pass",
@@ -341,7 +342,7 @@ async function sandboxSend(
       message: "WeCom accepted the sandbox message. Confirm receipt manually.",
     });
   } catch {
-    probe.steps.push({
+    steps.push({
       key: "wecom_sandbox_send",
       label: "Sandbox send",
       status: "warn",

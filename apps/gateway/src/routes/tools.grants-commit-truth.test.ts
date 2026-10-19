@@ -95,6 +95,41 @@ describe("tool grant route commit truth", () => {
     expect(createToolGrant).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts folder (writeRoots) grants only as ttl grants and never forwards a minting approval id", async () => {
+    const createToolGrant = vi.fn((input) => ({
+      grantId: "b7bb54a8-b436-42e4-82f2-044b770be239",
+      status: "active",
+      createdAt: "2026-10-19T00:00:00.000Z",
+      ...input,
+    }));
+    const app = await buildApp({ createToolGrant, revokeToolGrant: vi.fn() }, "/never-fail-on-send");
+    const base = { toolPattern: "fs.write", decision: "allow", scope: "session", scopeRef: "session-1" };
+
+    const persistent = await app.inject({
+      method: "POST",
+      url: "/api/v1/tools/grants",
+      headers: { "idempotency-key": "folder-grant-persistent" },
+      payload: { ...base, constraints: { writeRoots: ["/srv/reports"] } },
+    });
+    expect(persistent.statusCode).toBe(400);
+
+    const ttl = await app.inject({
+      method: "POST",
+      url: "/api/v1/tools/grants",
+      headers: { "idempotency-key": "folder-grant-ttl" },
+      payload: {
+        ...base,
+        grantType: "ttl",
+        expiresAt: "2999-01-01T00:00:00.000Z",
+        constraints: { writeRoots: ["/srv/reports"], writeRootsApprovalId: "approval-forged" },
+      },
+    });
+    expect(ttl.statusCode).toBeLessThan(300);
+    expect(createToolGrant).toHaveBeenCalledTimes(1);
+    const forwarded = createToolGrant.mock.calls[0]![0] as { constraints?: Record<string, unknown> };
+    expect(forwarded.constraints).toEqual({ writeRoots: ["/srv/reports"] });
+  });
+
   it("does not revoke a grant twice when response projection fails after commit", async () => {
     const revokeToolGrant = vi.fn(() => true);
     const app = await buildApp(
@@ -196,7 +231,12 @@ describe("tool grant route commit truth", () => {
         label: "permission profile activation",
         route: "/api/v1/tools/permission-profiles/activate",
         method: "POST" as const,
-        payload: { expectedProfileRevision: "a".repeat(64), expectedSelectionRevision: "b".repeat(64), profileId: "profile-owned", surface: "chat" },
+        payload: {
+          expectedProfileRevision: "a".repeat(64),
+          expectedSelectionRevision: "b".repeat(64),
+          profileId: "profile-owned",
+          surface: "chat",
+        },
         mutation: vi.fn(() => ({ activationId: "activation-1" })),
         tools: { listPermissionProfiles: vi.fn(() => [ownedProfile]) } as Record<string, unknown>,
         mutationName: "activatePermissionProfile",

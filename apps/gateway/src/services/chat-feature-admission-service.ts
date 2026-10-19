@@ -219,6 +219,9 @@ export async function resolveChatFeatureAdmission(
       throw new ConflictError({ message: "The workspace snapshot does not match the admitted turn." });
     references.workspaceSnapshot = snapshot;
   }
+  if (input.admission.admittedRequest.modelCouncil?.enabled && (await isEnabled("chatModelCouncilV1Enabled"))) {
+    references.modelCouncil = { version: "chat.model-council.admission.v1" };
+  }
   if ((await isEnabled("chatWorkPassportV1Enabled")) && host.classifyWorkPassport) {
     references.workPassport = await host.classifyWorkPassport(input.admission.identity.workspaceId, input.content);
   }
@@ -259,6 +262,7 @@ export async function resolveChatFeatureAdmission(
     !references.selectedMeshCapabilities &&
     !references.remotePlacement &&
     !references.workspaceSnapshot &&
+    !references.modelCouncil &&
     !references.workPassport
   )
     return undefined;

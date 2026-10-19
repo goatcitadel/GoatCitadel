@@ -86,6 +86,25 @@ describe("buildDelegatedSessionToolGrantCopies", () => {
     ]);
   });
 
+  it("never lets a delegated child inherit an outside-root folder grant", () => {
+    const copies = buildDelegatedSessionToolGrantCopies({
+      parentSessionId: "parent-session",
+      childSessionId: "child-session",
+      parentGrants: [
+        createGrant({
+          grantId: "folder-grant",
+          toolPattern: "fs.write",
+          decision: "allow",
+          grantType: "ttl",
+          expiresAt: "2999-01-01T00:00:00.000Z",
+          constraints: { writeRoots: ["/tmp/reports"], writeRootsApprovalId: "approval-1" },
+        }),
+        createGrant({ grantId: "plain-allow", toolPattern: "fs.read", decision: "allow" }),
+      ],
+    });
+    expect(copies.map((copy) => copy.toolPattern)).toEqual(["fs.read"]);
+  });
+
   it("does not inherit allows that overlap an active deny", () => {
     const copies = buildDelegatedSessionToolGrantCopies({
       parentSessionId: "parent-session",

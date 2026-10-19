@@ -201,6 +201,12 @@ const requestSchema = z.discriminatedUnion("kind", [
           .strict(),
         z
           .object({
+            operation: z.literal("outside_root_write_policy"),
+            mode: z.enum(["deny", "approval_required"]),
+          })
+          .strict(),
+        z
+          .object({
             operation: z.literal("network_allowlist"),
             entries: z.array(z.string().trim().min(1).max(512)).max(256),
           })
