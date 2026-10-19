@@ -91,6 +91,23 @@ describe("General › Appearance and attention", () => {
     expect(text(view.root.findByProps({ "data-settings-save-model": "automatic" }))).not.toContain("Density saved.");
   });
 
+  it("ST-16: never claims a change was saved when the browser refuses to store settings", async () => {
+    await mount();
+    const setItem = vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+    try {
+      await act(async () => select("Density").props.onChange({ target: { value: "compact" } }));
+      const note = text(view.root.findByProps({ "data-settings-save-model": "automatic" }));
+      expect(note).toContain("Not saved in this browser");
+      expect(note).toContain("Density applied for this visit.");
+      expect(note).not.toContain("Density saved.");
+      expect(note).not.toContain("Saved automatically");
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
   it("ST-09: renders notification routing beside Attention for the active workspace", async () => {
     await mount();
     expect(view.root.findAllByProps({ "aria-label": "Notification routing" })).toHaveLength(1);

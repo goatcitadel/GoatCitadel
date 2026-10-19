@@ -13,6 +13,22 @@ import { THEME_OPTIONS } from "../../app/theme-options";
 /** How long the inline "saved" confirmation stays after an instant-apply change. */
 const SAVED_CONFIRMATION_MS = 4000;
 
+const STORAGE_PROBE_KEY = "goatcitadel.ui.storage-probe";
+
+/**
+ * The preference owner keeps a change in memory even when the browser refuses to store it (private mode, blocked
+ * site data, a full quota), so the page checks that storage accepts a write before it claims a change was saved.
+ */
+export function browserCanSavePreferences(): boolean {
+  try {
+    window.localStorage.setItem(STORAGE_PROBE_KEY, "1");
+    window.localStorage.removeItem(STORAGE_PROBE_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * ST-16: this page applies each change immediately (no drafts or Save button), so it says so up front and
  * confirms the last change inline. The confirmation is plain text, not a live region; the changed control
@@ -20,12 +36,18 @@ const SAVED_CONFIRMATION_MS = 4000;
  */
 function useSavedConfirmation() {
   const [saved, setSaved] = useState<string | null>(null);
+  const [persistent, setPersistent] = useState(browserCanSavePreferences);
   useEffect(() => {
     if (!saved) return undefined;
     const timer = window.setTimeout(() => setSaved(null), SAVED_CONFIRMATION_MS);
     return () => window.clearTimeout(timer);
   }, [saved]);
-  return { saved, confirm: (label: string) => setSaved(`${label} saved.`) };
+  const confirm = (label: string) => {
+    const stored = browserCanSavePreferences();
+    setPersistent(stored);
+    setSaved(stored ? `${label} saved.` : `${label} applied for this visit.`);
+  };
+  return { saved, persistent, confirm };
 }
 
 export function AppearanceSettings() {
@@ -41,8 +63,17 @@ export function AppearanceSettings() {
       className="mt-4 grid gap-4 border-t border-line-subtle pt-4 sm:grid-cols-2"
     >
       <p className="text-xs text-fg-muted sm:col-span-2" data-settings-save-model="automatic">
-        <span className="font-semibold text-fg-secondary">Saved automatically</span> · Changes on this page apply right
-        away and are saved in this browser.
+        {savedConfirmation.persistent ? (
+          <>
+            <span className="font-semibold text-fg-secondary">Saved automatically</span> · Changes on this page apply
+            right away and are saved in this browser.
+          </>
+        ) : (
+          <>
+            <span className="font-semibold text-fg-secondary">Not saved in this browser</span> · Changes on this page
+            apply right away, but this browser is not storing settings, so they reset when the page reloads.
+          </>
+        )}
         {savedConfirmation.saved ? <span className="text-fg-secondary"> {savedConfirmation.saved}</span> : null}
       </p>
       <div className="space-y-3">
