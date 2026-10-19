@@ -50,10 +50,10 @@ Operator write roots also count as readable roots, so filesystem tools can list 
 
 ## Opening a folder from a Chat approval
 
-Off by default. After **Let Chat ask instead** under **Writes outside the write roots** (`outsideRootWriteMode: "approval_required"`), a Chat write that lands outside every write root raises an approval instead of failing. The approval card offers two choices:
+Off by default. After **Let Chat ask instead** under **Writes outside the write roots** (`outsideRootWriteMode: "approval_required"`), a Chat write that lands outside every write root raises an approval instead of failing. The approval card offers:
 
 - **Approve once** admits that one exact write, once. The policy engine checks the retried call against the targets it recorded when it raised the approval.
-- **Approve and open folder** also opens one folder for a limited time. The Gateway offers up to three folders: the closest existing folder above the target and up to two of its parents, each one passing the same safety rules as an operator write root. You pick one folder, a duration (15 minutes, 1 hour by default, or 8 hours) and a scope (**This chat** or **This workspace**).
+- **Approve and open folder**, only when the Gateway can offer a safe folder, also opens one folder for a limited time. The Gateway offers up to three folders: the closest existing folder above the target and up to two of its parents, keeping only those that pass the same safety rules as an operator write root. When none pass (for example a target directly inside a user profile or at a drive root), the card offers only **Approve once**. You pick one folder, a duration (15 minutes, 1 hour by default, or 8 hours) and a scope (**This chat** or **This workspace**).
 
 An opened folder is an expiring `ttl` tool grant whose `writeRoots` constraint holds the folder:
 
