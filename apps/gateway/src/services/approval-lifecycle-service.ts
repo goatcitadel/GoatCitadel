@@ -980,17 +980,32 @@ export async function rejectPendingChatTurnApprovals(
   ]);
   // An approval can be committed before its tool/inline projection arrives.
   let cursor: string | undefined;
+  // A foreign approval with invalid lineage must not abort this cancellation, and
+  // each distinct foreign turn is resolved once across the whole scan.
+  const scannedOwners = new Map<string, { sessionId: string; turnId: string } | null>();
   do {
     const page = await storage.approvals.listPage({ status: "pending", limit: 200, cursor, includeExpired: true });
     for (const approval of page.items) {
       if (!approval.linkage?.sessionId || !approval.linkage.turnId) continue;
-      const target = await resolveChatTurnControlOwner(
-        storage,
-        approval.linkage.sessionId,
-        approval.linkage.turnId,
-        owner.turnId,
-      );
-      if (target.sessionId === owner.sessionId && target.turnId === owner.turnId) approvalIds.add(approval.approvalId);
+      const scanKey = `${approval.linkage.sessionId}\u0000${approval.linkage.turnId}`;
+      let target = scannedOwners.get(scanKey);
+      if (target === undefined) {
+        try {
+          target = await resolveChatTurnControlOwner(
+            storage,
+            approval.linkage.sessionId,
+            approval.linkage.turnId,
+            owner.turnId,
+          );
+        } catch (error) {
+          if (!(error instanceof ConflictError)) throw error;
+          target = null;
+        }
+        scannedOwners.set(scanKey, target);
+      }
+      if (target && target.sessionId === owner.sessionId && target.turnId === owner.turnId) {
+        approvalIds.add(approval.approvalId);
+      }
     }
     cursor = page.nextCursor;
   } while (cursor);

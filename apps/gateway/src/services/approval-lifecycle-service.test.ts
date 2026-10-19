@@ -383,6 +383,62 @@ describe("approval lifecycle service", () => {
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
   });
 
+  it("skips a foreign approval with invalid lineage and still withdraws the cancelled turn's approval", async () => {
+    const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
+    const approval = host.storage.approvals.get("approval-1");
+    host.storage.approvals.listPage.mockReturnValue({
+      items: [
+        { ...approval, approvalId: "approval-bad", linkage: { sessionId: "session-x", turnId: "turn-bad" } },
+        approval,
+      ],
+      nextCursor: undefined,
+    } as never);
+    host.storage.chatTurnTraces.get.mockImplementation((turnId: string) => {
+      if (turnId === "turn-bad") return { turnId: "turn-bad", sessionId: "session-elsewhere" };
+      throw new NotFoundError({ message: "missing" });
+    });
+    await rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop");
+    expect(host.storage.approvals.get("approval-1")).toMatchObject({ status: "rejected", resolvedBy: "operator-stop" });
+  });
+
+  it("resolves each foreign turn owner once per cancellation", async () => {
+    const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-2", turnId: "turn-2" } });
+    const approval = host.storage.approvals.get("approval-1");
+    host.storage.approvals.listPage.mockReturnValue({
+      items: [approval, { ...approval, approvalId: "approval-2" }],
+      nextCursor: undefined,
+    } as never);
+    host.storage.chatTurnTraces.get.mockImplementation(() => {
+      throw new NotFoundError({ message: "missing" });
+    });
+    await rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop");
+    expect(host.storage.chatTurnTraces.get).toHaveBeenCalledTimes(1);
+    expect(host.storage.chatTurnTraces.get).toHaveBeenCalledWith("turn-2");
+  });
+
+  it("still rejects when the cancelled turn's own lineage is invalid", async () => {
+    const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
+    host.storage.chatTurnTraces.get.mockReturnValue({ turnId: "turn-1", sessionId: "session-elsewhere" } as never);
+    await expect(rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop", true)).rejects.toThrow(
+      ConflictError,
+    );
+    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+  });
+
+  it("still propagates non-conflict errors from a foreign approval's lineage", async () => {
+    const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-2", turnId: "turn-2" } });
+    host.storage.approvals.listPage.mockReturnValue({
+      items: [host.storage.approvals.get("approval-1")],
+      nextCursor: undefined,
+    } as never);
+    host.storage.chatTurnTraces.get.mockImplementation(() => {
+      throw new Error("storage offline");
+    });
+    await expect(rejectPendingChatTurnApprovals(host, "session-1", "turn-1", "operator-stop")).rejects.toThrow(
+      /storage offline/,
+    );
+  });
+
   it("settles the cancelled tool row without changing another session's projection", async () => {
     const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
     host.storage.chatToolRuns.listByTurn.mockReturnValue([
