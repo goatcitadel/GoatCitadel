@@ -250,9 +250,11 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
     try {
       this.requestSync({ kind: "session_end", sessionId, destroy: this.activeSessionMustBeDestroyed });
     } catch (error) {
-      this.closed = true;
-      this.fatalError = error instanceof Error ? error : new Error(String(error));
-      this.retireWorker();
+      if (!this.closed) {
+        this.closed = true;
+        this.fatalError = error instanceof Error ? error : new Error(String(error));
+        this.retireWorker();
+      }
       if (!hasPrimaryError) {
         primaryError = error;
         hasPrimaryError = true;
@@ -315,7 +317,10 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
 
   private requestSync(request: PostgresWorkerRequest): unknown {
     if (this.closed) {
-      throw new Error("Postgres database client is already closed.");
+      throw new Error(
+        "Postgres database client is already closed.",
+        this.fatalError ? { cause: this.fatalError } : undefined,
+      );
     }
     if (this.fatalError) {
       throw this.fatalError;

@@ -302,6 +302,40 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
     assert.throws(() => timedOut.client.exec("SELECT 1"), /already closed/);
   });
 
+  it("keeps the retirement cause on later closed-client errors", () => {
+    const timedOut = createSyncHarness(() => ({ ok: true, result: undefined }));
+    const waitMock = mock.method(Atomics, "wait", () => "timed-out");
+    try {
+      assert.throws(() => timedOut.client.transaction("immediate", () => 1), /(tx_begin)/);
+    } finally {
+      waitMock.mock.restore();
+    }
+    assert.throws(
+      () => timedOut.client.exec("SELECT 1"),
+      (error: unknown) =>
+        error instanceof Error &&
+        /already closed/.test(error.message) &&
+        /(tx_begin)/.test((error.cause as Error | undefined)?.message ?? ""),
+    );
+  });
+
+  it("preserves the begin timeout cause when a pinned session cleans up after a retired worker", () => {
+    const harness = createSyncHarness(() => ({ ok: true, result: undefined }));
+    const waitMock = mock.method(Atomics, "wait", (...args: unknown[]) =>
+      (args[2] as number | undefined) !== undefined && harness.requests.length >= 2 ? "timed-out" : "ok",
+    );
+    try {
+      assert.throws(
+        () => harness.client.withPinnedSession(() => harness.client.transaction("immediate", () => 1)),
+        /(tx_begin)/,
+      );
+    } finally {
+      waitMock.mock.restore();
+    }
+    assert.match(harness.internals.fatalError?.message ?? "", /(tx_begin)/);
+    assert.equal(harness.internals.worker.terminate.mock.callCount(), 1);
+  });
+
   it("retires the worker when a compatibility transaction begin times out", () => {
     const timedOut = createSyncHarness(() => ({ ok: true, result: undefined }));
     const waitMock = mock.method(Atomics, "wait", () => "timed-out");
