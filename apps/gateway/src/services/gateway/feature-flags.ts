@@ -117,7 +117,7 @@ export function resolveGatewayFeatureFlags(
     chatContextBudgetVisibilityV1Enabled:
       stored?.chatContextBudgetVisibilityV1Enabled ?? fromConfig.chatContextBudgetVisibilityV1Enabled ?? false,
     chatAsyncClarificationV1Enabled:
-      stored?.chatAsyncClarificationV1Enabled ?? fromConfig.chatAsyncClarificationV1Enabled ?? false,
+      stored?.chatAsyncClarificationV1Enabled ?? fromConfig.chatAsyncClarificationV1Enabled ?? true,
     unifiedComposerPaletteV1Enabled:
       stored?.unifiedComposerPaletteV1Enabled ?? fromConfig.unifiedComposerPaletteV1Enabled,
     attachedContextToolsV1Enabled: stored?.attachedContextToolsV1Enabled ?? fromConfig.attachedContextToolsV1Enabled,

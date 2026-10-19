@@ -505,4 +505,31 @@ describe("loadGatewayConfig", () => {
       expect((await loadGatewayConfig(rootDir)).assistant.features.channelVoiceInboundV1Enabled).toBe(false);
     });
   });
+
+  describe("chatAsyncClarificationV1Enabled default", () => {
+    const ENV_KEY = "GOATCITADEL_FEATURE_CHAT_ASYNC_CLARIFICATION_V1_ENABLED";
+    let previous: string | undefined;
+
+    afterEach(() => {
+      if (previous === undefined) {
+        delete process.env[ENV_KEY];
+      } else {
+        process.env[ENV_KEY] = previous;
+      }
+    });
+
+    it("is on when neither the env var nor a stored value is present", async () => {
+      const { rootDir } = await createConfigFixture();
+      previous = process.env[ENV_KEY];
+      delete process.env[ENV_KEY];
+      expect((await loadGatewayConfig(rootDir)).assistant.features.chatAsyncClarificationV1Enabled).toBe(true);
+    });
+
+    it("stays off when the env var is false", async () => {
+      const { rootDir } = await createConfigFixture();
+      previous = process.env[ENV_KEY];
+      process.env[ENV_KEY] = "false";
+      expect((await loadGatewayConfig(rootDir)).assistant.features.chatAsyncClarificationV1Enabled).toBe(false);
+    });
+  });
 });

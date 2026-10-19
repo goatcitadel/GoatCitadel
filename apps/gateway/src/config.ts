@@ -1438,7 +1438,9 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // this flag left at its default, runtime behavior is byte-identical to today.
       chatThinkingStreamV1Enabled: featuresInput.chatThinkingStreamV1Enabled ?? false,
       chatContextBudgetVisibilityV1Enabled: featuresInput.chatContextBudgetVisibilityV1Enabled ?? false,
-      chatAsyncClarificationV1Enabled: featuresInput.chatAsyncClarificationV1Enabled ?? false,
+      // Graduated (#345): optional `user_input.request` is on by default; operators opt out with an
+      // explicit false in config, env, or stored settings.
+      chatAsyncClarificationV1Enabled: featuresInput.chatAsyncClarificationV1Enabled ?? true,
       // Server-authored rollout gate. The focused palette proof is green; operators
       // can still disable the surface explicitly while retaining legacy paths.
       unifiedComposerPaletteV1Enabled: featuresInput.unifiedComposerPaletteV1Enabled ?? true,
