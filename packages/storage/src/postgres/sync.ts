@@ -114,12 +114,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
   public transaction<T>(mode: DbTransactionMode, callback: () => T): T {
     if (!this.activeTransactionId) {
       const txId = randomUUID();
-      this.requestSync({
-        kind: "tx_begin",
-        txId,
-        mode,
-        sessionId: this.activeSessionId,
-      });
+      this.beginTransactionRequest(txId, mode);
       this.activeTransactionId = txId;
       try {
         const result = callback();
@@ -167,12 +162,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
     if (this.activeTransactionId) {
       throw new Error("A compatibility transaction is already active.");
     }
-    this.requestSync({
-      kind: "tx_begin",
-      txId: transactionId,
-      mode,
-      sessionId: this.activeSessionId,
-    });
+    this.beginTransactionRequest(transactionId, mode);
     this.activeTransactionId = transactionId;
   }
 
@@ -198,6 +188,31 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
     }
   }
 
+  private beginTransactionRequest(txId: string, mode: DbTransactionMode): void {
+    try {
+      this.requestSync({
+        kind: "tx_begin",
+        txId,
+        mode,
+        sessionId: this.activeSessionId,
+      });
+    } catch (error) {
+      // A timed-out tx_begin may still complete in the worker and retain an
+      // idle-in-transaction client. Never race tx_rollback against it; retire
+      // the worker. A deterministic rejection leaves the client usable.
+      if (isIndeterminateSyncWaitError(error)) {
+        this.retireAfterIndeterminateBegin(error);
+      }
+      throw error;
+    }
+  }
+
+  private retireAfterIndeterminateBegin(error: unknown): void {
+    this.closed = true;
+    this.fatalError = error instanceof Error ? error : new Error(String(error));
+    this.retireWorker();
+  }
+
   public withPinnedSession<T>(callback: (controls: PostgresPinnedSessionControls) => T): T {
     if (this.activeSessionId || this.activeTransactionId) {
       throw new Error("Postgres pinned sessions cannot be nested or opened inside a transaction.");
@@ -209,9 +224,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
       // A host timeout cannot prove whether the worker checked out and retained
       // the client before its response was lost. Do not race session_end against
       // an in-flight begin; retire the worker so the server releases any socket.
-      this.closed = true;
-      this.fatalError = error instanceof Error ? error : new Error(String(error));
-      this.retireWorker();
+      this.retireAfterIndeterminateBegin(error);
       throw error;
     }
     this.activeSessionId = sessionId;
@@ -432,6 +445,14 @@ function isCloseTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.message === "Timed out waiting for Postgres response (close).";
 }
 
+function isIndeterminateSyncWaitError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message.startsWith("Timed out waiting for Postgres response (") ||
+      error.message === "Postgres sync worker did not return a response.")
+  );
+}
+
 function resolveSyncWaitTimeoutMs(configured: number | undefined): number {
   if (typeof configured !== "number" || !Number.isFinite(configured)) {
     return DEFAULT_SYNC_TIMEOUT_MS;
@@ -446,5 +467,6 @@ export const __postgresSyncInternals = {
   deserializeWorkerError,
   isRecord,
   isCloseTimeoutError,
+  isIndeterminateSyncWaitError,
   resolveSyncWaitTimeoutMs,
 };

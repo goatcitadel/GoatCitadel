@@ -285,6 +285,63 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
     assert.match(rejected.internals.fatalError?.message ?? "", /session checkout failed/);
   });
 
+  it("retires the worker when a transaction begin times out", () => {
+    const timedOut = createSyncHarness(() => ({ ok: true, result: undefined }));
+    const waitMock = mock.method(Atomics, "wait", () => "timed-out");
+
+    try {
+      assert.throws(() => timedOut.client.transaction("immediate", () => 1), /\(tx_begin\)/);
+    } finally {
+      waitMock.mock.restore();
+    }
+
+    assert.equal(timedOut.requests.length, 1);
+    assert.equal((timedOut.requests[0] as { kind: string }).kind, "tx_begin");
+    assert.equal(timedOut.internals.closed, true);
+    assert.equal(timedOut.internals.worker.terminate.mock.callCount(), 1);
+    assert.throws(() => timedOut.client.exec("SELECT 1"), /already closed/);
+  });
+
+  it("retires the worker when a compatibility transaction begin times out", () => {
+    const timedOut = createSyncHarness(() => ({ ok: true, result: undefined }));
+    const waitMock = mock.method(Atomics, "wait", () => "timed-out");
+
+    try {
+      assert.throws(() => timedOut.client.beginCompatibilityTransaction("tx-1", "immediate"), /\(tx_begin\)/);
+    } finally {
+      waitMock.mock.restore();
+    }
+
+    assert.equal(timedOut.requests.length, 1);
+    assert.equal((timedOut.requests[0] as { kind: string }).kind, "tx_begin");
+    assert.equal(timedOut.internals.closed, true);
+    assert.equal(timedOut.internals.worker.terminate.mock.callCount(), 1);
+    assert.equal(timedOut.internals.activeTransactionId, undefined);
+    assert.throws(() => timedOut.client.exec("SELECT 1"), /already closed/);
+  });
+
+  it("keeps the client usable when the worker deterministically rejects a transaction begin", () => {
+    const { client, internals } = createSyncHarness((request) => {
+      if ((request as { kind?: string }).kind === "tx_begin") {
+        return { ok: false, error: { name: "ConnectionError", message: "pool connect failed" } };
+      }
+      return { ok: true, result: undefined };
+    });
+
+    assert.throws(() => client.transaction("immediate", () => 1), /pool connect failed/);
+    assert.equal(internals.closed, false);
+    assert.equal(internals.worker.terminate.mock.callCount(), 0);
+    assert.doesNotThrow(() => client.exec("SELECT 1"));
+  });
+
+  it("classifies only timeout and no-response waits as indeterminate", () => {
+    const { isIndeterminateSyncWaitError } = __postgresSyncInternals;
+    assert.equal(isIndeterminateSyncWaitError(new Error("Timed out waiting for Postgres response (tx_begin).")), true);
+    assert.equal(isIndeterminateSyncWaitError(new Error("Postgres sync worker did not return a response.")), true);
+    assert.equal(isIndeterminateSyncWaitError(new Error("pool connect failed")), false);
+    assert.equal(isIndeterminateSyncWaitError("Timed out waiting for Postgres response (x)"), false);
+  });
+
   it("preserves a pinned-session primary error and retires the worker when session cleanup fails", () => {
     const { client, internals } = createSyncHarness((request) => {
       if ((request as { kind?: string }).kind === "session_end") {
