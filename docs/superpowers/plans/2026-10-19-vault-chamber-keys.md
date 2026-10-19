@@ -59,6 +59,8 @@
 
 ## PR 2 — Contracts and storage (no Gateway behavior change)
 
+> **As delivered (#445):** storage keeps the legacy `store` change beside `store_bound` so the Gateway keeps working; PR 3 removes it and adds the v1-write rejection (Task 8). The Vault client's strict snapshot allowlist (`citadel-vault-binding.ts`) and the Vault proof scenario's item allowlist had to accept `keys`, `chamberId` and `keyVersion`, and write/reveal confirmation now compares only reviewed fields. `citadel-repo.ts` row types and mappers moved to `citadel-repo-rows.ts` for its line budget. Shared helpers live in `citadel-vault-shared.ts`; key rows mark "active" with a nullable `active_scope_key` and open rotations with `open_citadel_id` (plain unique indexes) instead of status columns.
+
 ### Task 2: Crypto primitives with AAD
 
 **Files:** Modify `packages/contracts/src/citadel-vault-node.ts`, `packages/contracts/src/citadel-vault.ts`; Test `packages/contracts/src/citadel-vault.test.ts`
