@@ -135,7 +135,8 @@ export function verifyCitadelVaultScopes(db: DatabaseClient): void {
   );
   assert.deepEqual(repo.getVaultSnapshot(citadelId), current, "refused writes do not consume the review");
 
-  // move re-scopes the secret under the target scope's active key
+  // move re-scopes the secret under the target scope's active key and records an update time
+  const beforeMove = current.items.find((item) => item.secretId === "s-api")!;
   current = mutate(current, {
     type: "move",
     secretId: "s-api",
@@ -147,6 +148,11 @@ export function verifyCitadelVaultScopes(db: DatabaseClient): void {
     [[null, 1]],
   );
   assert.equal(repo.getVaultSecret(citadelId, "s-api")?.keyId, "k-citadel");
+  assert.ok(
+    current.items[0]!.updatedAt > beforeMove.updatedAt,
+    "a move reseals the secret, so its update time advances",
+  );
+  assert.equal(current.items[0]!.createdAt, beforeMove.createdAt);
   assert.throws(
     () => mutate(current, { type: "move", secretId: "missing", chamberId: null, sealedValue: bound("k-citadel") }),
     NotFoundError,
@@ -218,4 +224,21 @@ export function verifyCitadelVaultScopes(db: DatabaseClient): void {
   const upgraded = repo.getVaultSnapshot(citadelId);
   assert.equal(upgraded.keys.legacySecretCount, 0);
   assert.equal(upgraded.revision, withLegacy.revision, "the background upgrade never 409s an operator");
+
+  // once legacy reads are closed, no legacy v1 write can reopen the downgrade path
+  assert.equal(keys.closeLegacyReads(citadelId), true);
+  assert.throws(
+    () => repo.storeVaultSecret({ citadelId, secretName: "Old", sealedValue: legacy }),
+    reason("VAULT_KEY_CHANGED"),
+  );
+  assert.throws(
+    () => mutate(upgraded, { type: "store", secretName: "New legacy", sealedValue: legacy }),
+    reason("VAULT_KEY_CHANGED"),
+  );
+  assert.equal(
+    repo.getVaultSecret(citadelId, legacyRow.secretId)?.envelopeVersion,
+    2,
+    "the upgraded row is not downgraded",
+  );
+  assert.equal(keys.countLegacy(citadelId), 0);
 }

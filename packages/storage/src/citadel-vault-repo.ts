@@ -139,8 +139,17 @@ export class CitadelVaultRepository {
 
   /** Legacy v1 store, sealed directly under the Citadel key. */
   public store(input: CitadelVaultSecretInput): CitadelVaultSecretRecord {
-    return this.context.withLock(input.citadelId, () =>
-      this.write({
+    return this.context.withLock(input.citadelId, () => {
+      // Once every legacy envelope is upgraded the v1 path is closed; a new v1 write
+      // (or a downgrade of an upgraded row by name) would reopen it.
+      if (this.context.keys().getKeyState(input.citadelId)?.legacyReadsClosed) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "This Vault seals values under data keys now. Seal the value again.",
+          details: { reason: VAULT_ERROR_CODES.keyChanged },
+        });
+      }
+      return this.write({
         secretId: randomUUID(),
         citadelId: input.citadelId,
         secretName: input.secretName,
@@ -148,8 +157,8 @@ export class CitadelVaultRepository {
         keyId: null,
         envelopeVersion: 1,
         sealedValue: input.sealedValue,
-      }),
-    );
+      });
+    });
   }
 
   public get(citadelId: string, secretId: string): CitadelVaultSecretRecord | undefined {
@@ -204,7 +213,7 @@ export class CitadelVaultRepository {
     this.db
       .prepare(
         `UPDATE citadel_vault_secrets SET chamber_id = @chamberId, key_id = @keyId, envelope_version = 2,
-        sealed_value_json = @sealed WHERE citadel_id = @citadelId AND secret_id = @secretId`,
+        sealed_value_json = @sealed, updated_at = @now WHERE citadel_id = @citadelId AND secret_id = @secretId`,
       )
       .run({
         citadelId,
@@ -212,14 +221,14 @@ export class CitadelVaultRepository {
         chamberId: change.chamberId,
         keyId: change.sealedValue.keyId,
         sealed: JSON.stringify(change.sealedValue),
+        now: nextUpdateTime(existing.updated_at),
       });
     advanceCitadelVaultGeneration(this.db, citadelId);
   }
 
   private write(row: StoreRow): CitadelVaultSecretRecord {
     const previous = this.getByNameStmt.get<VaultSecretRow>({ citadelId: row.citadelId, secretName: row.secretName });
-    const last = Date.parse(previous?.updated_at ?? "");
-    const now = new Date(Math.max(Date.now(), Number.isFinite(last) ? last + 1 : 0)).toISOString();
+    const now = nextUpdateTime(previous?.updated_at);
     this.storeStmt.run({
       secretId: row.secretId,
       citadelId: row.citadelId,
@@ -333,6 +342,12 @@ export class CitadelVaultRepository {
       ...(rotation ? { rotation } : {}),
     };
   }
+}
+
+/** Monotonic update time: never earlier than, nor equal to, the previous one. */
+function nextUpdateTime(previous: string | undefined): string {
+  const last = Date.parse(previous ?? "");
+  return new Date(Math.max(Date.now(), Number.isFinite(last) ? last + 1 : 0)).toISOString();
 }
 
 function revisionConflict(): ConflictError {
