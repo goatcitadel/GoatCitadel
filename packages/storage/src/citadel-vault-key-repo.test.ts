@@ -373,3 +373,15 @@ test("a rotation cannot fail or cancel once key material changed", () => {
     reason("VAULT_ROTATION_IN_PROGRESS"),
   );
 });
+
+test("ensureKeyState never changes the KEK version while sealed data exists", () => {
+  const { repo, keys } = setup("gc-vault-keys-state");
+  assert.equal(keys.ensureKeyState("c1", 1).kekVersion, 1, "re-asserting the same version is a no-op");
+  seedLegacy(repo, "API");
+  assert.throws(() => keys.ensureKeyState("c1", 2), reason("VAULT_KEY_CHANGED"));
+  assert.equal(keys.getKeyState("c1")?.kekVersion, 1);
+
+  keys.ensureKeyState("c-empty", 3);
+  assert.throws(() => keys.ensureKeyState("c-empty", 2), ValidationError, "never a downgrade");
+  assert.equal(keys.ensureKeyState("c-empty", 4).kekVersion, 4, "a regenerated KEK after deletions moves forward");
+});

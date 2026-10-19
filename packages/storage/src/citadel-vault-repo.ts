@@ -149,6 +149,19 @@ export class CitadelVaultRepository {
           details: { reason: VAULT_ERROR_CODES.keyChanged },
         });
       }
+      // A legacy envelope only ever lives at Citadel scope; it must not replace a
+      // Chamber-scoped secret of the same name and pull it back under the Citadel key.
+      const existing = this.getByNameStmt.get<VaultSecretRow>({
+        citadelId: input.citadelId,
+        secretName: input.secretName,
+      });
+      if (existing?.chamber_id) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "This secret belongs to a Chamber. Seal the value under its Chamber key.",
+          details: { reason: VAULT_ERROR_CODES.keyChanged },
+        });
+      }
       return this.write({
         secretId: randomUUID(),
         citadelId: input.citadelId,

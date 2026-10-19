@@ -71,6 +71,18 @@ export function verifyCitadelVaultScopes(db: DatabaseClient): void {
   );
   assert.doesNotMatch(JSON.stringify(current), /synthetic-|ciphertext|sealedValue|wrapped/);
 
+  // a legacy write by name cannot pull a Chamber-scoped secret back to the Citadel key
+  assert.throws(
+    () => repo.storeVaultSecret({ citadelId, secretName: "API", sealedValue: legacy }),
+    reason("VAULT_KEY_CHANGED"),
+  );
+  assert.throws(
+    () => mutate(current, { type: "store", secretName: "API", sealedValue: legacy }),
+    reason("VAULT_KEY_CHANGED"),
+  );
+  assert.equal(repo.getVaultSecret(citadelId, "s-api")?.chamberId, chamber.chamberId);
+  assert.deepEqual(repo.getVaultSnapshot(citadelId), current, "the refused legacy write consumed nothing");
+
   // store with a mismatched secretId is a revision conflict
   assert.throws(
     () =>

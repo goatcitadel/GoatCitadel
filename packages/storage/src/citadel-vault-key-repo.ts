@@ -165,6 +165,17 @@ export class CitadelVaultKeyRepository {
   public ensureKeyState(citadelId: string, kekVersion: number): VaultKeyStateRow {
     assertPositiveInteger(kekVersion, "KEK version");
     return this.context.withLock(citadelId, () => {
+      const existing = this.getKeyState(citadelId);
+      if (existing && existing.kekVersion !== kekVersion) {
+        // A real KEK change is a rotation (rewrapAll). Only a Citadel with nothing sealed
+        // may record a regenerated KEK, and only at a higher version.
+        if (this.hasSealedData(citadelId)) {
+          throw keyChanged("This Vault already holds sealed data. Change its key through rotation.");
+        }
+        if (kekVersion < existing.kekVersion) {
+          throw new ValidationError({ message: "A Vault key version never moves backwards." });
+        }
+      }
       const now = new Date().toISOString();
       this.db
         .prepare(
