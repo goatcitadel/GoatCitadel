@@ -546,6 +546,7 @@ describe("settings-auth-service durable settings", () => {
       automaticFanout: false,
       supervisedDelegation: false,
       staticMcp: false,
+      explicitContextBranches: false,
     });
   });
 
