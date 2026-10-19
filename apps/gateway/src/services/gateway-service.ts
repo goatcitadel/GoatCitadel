@@ -7676,6 +7676,7 @@ export class GatewayService {
       getModelContextWindow: (providerId, model) => this.llmService.getModelContextWindow(providerId, model),
       routeFingerprint: (primary, fallback) => fingerprintChatProviderFallbackRoute(this.llmService, primary, fallback),
       resolveRemotePlacement: (input) => this.selectRemoteWorkerAdmission(input),
+      classifyWorkPassport: (workspaceId, content) => this.workPassportService.classify(workspaceId, content),
       resolveStaticMcpConnections: (input) =>
         selectSavedMcpChatAdmission(
           {

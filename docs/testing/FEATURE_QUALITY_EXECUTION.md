@@ -874,7 +874,9 @@ Restoration flags are independent and default off:
 `chatDelegationControlsV1Enabled`, `chatAutomaticFanoutV1Enabled`,
 `scheduledChatTurnsV1Enabled`, `proactiveHeartbeatTurnsV1Enabled`,
 `commitmentScheduledTurnsV1Enabled`, `chatRequesterMcpV1Enabled`, `chatStaticMcpV1Enabled`,
-`chatMeshCapabilitiesV1Enabled`, and `chatRemotePlacementV1Enabled`. Automatic fanout also requires the existing
+`chatMeshCapabilitiesV1Enabled`, `chatRemotePlacementV1Enabled`, and `chatWorkPassportV1Enabled`
+(WS9: a passport recorded in feature references; a passport-only admission pins the route only when one
+resolves). Automatic fanout also requires the existing
 durable fanout switch, explicit session policy and a current exact-project grant.
 Read-only `chatFeatureAvailability` derives UI availability from actual settings;
 it does not confer permission or report successful execution.

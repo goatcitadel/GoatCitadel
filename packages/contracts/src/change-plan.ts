@@ -1,4 +1,5 @@
 import type { ChatThinkingLevel } from "./chat.js";
+import { CHAT_RESTORATION_FEATURE_FLAGS } from "./chat-feature-references.js";
 import { LLM_API_STYLES, LLM_PROVIDER_AUTH_MODES } from "./llm.js";
 import type { LlmApiStyle, LlmProviderAuthMode, LlmProviderCapabilities, LlmProviderGoogleCloudConfig } from "./llm.js";
 import { isRuntimeWriteAccessOperation, type RuntimeWriteAccessOperation } from "./operator-write-access.js";
@@ -163,19 +164,7 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAGS = [
   "plannerFanoutV1Disabled",
   "subagentFanoutV1Disabled",
   "durableChatFanoutV1Enabled",
-  "chatProviderFallbackV1Enabled",
-  "chatSkillInstructionsV1Enabled",
-  "boundedToolExposureV1Enabled",
-  "scheduledChatTurnsV1Enabled",
-  "chatExplicitContextV1Enabled",
-  "chatAutomaticFanoutV1Enabled",
-  "chatDelegationControlsV1Enabled",
-  "proactiveHeartbeatTurnsV1Enabled",
-  "commitmentScheduledTurnsV1Enabled",
-  "chatMeshCapabilitiesV1Enabled",
-  "chatRemotePlacementV1Enabled",
-  "chatRequesterMcpV1Enabled",
-  "chatStaticMcpV1Enabled",
+  ...CHAT_RESTORATION_FEATURE_FLAGS,
   "evolutionControlPlaneV1Enabled",
   "improvementLocalObservationV1Enabled",
   "improvementModelEvaluationV1Enabled",

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assertWorkPassportRecord, type WorkPassportRecord } from "./work-passport.js";
 
 const identifier = z
   .string()
@@ -7,6 +8,14 @@ const identifier = z
   .refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32));
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const routeTarget = z.object({ providerId: identifier, model: identifier }).strict();
+const workPassportRecord = z.custom<WorkPassportRecord>((value) => {
+  try {
+    assertWorkPassportRecord(value);
+    return true;
+  } catch {
+    return false;
+  }
+}, "Invalid Work Passport record");
 const ownerReference = z.object({ ownerId: identifier, revision: identifier, sha256: digest }).strict();
 export const mcpRequesterAdmissionScopeSchema = z
   .object({
@@ -258,6 +267,24 @@ const selectedSkill = z
   })
   .strict();
 
+/** Independent, default-off runtime switches that restore profile-free Chat features. */
+export const CHAT_RESTORATION_FEATURE_FLAGS = [
+  "chatProviderFallbackV1Enabled",
+  "chatSkillInstructionsV1Enabled",
+  "boundedToolExposureV1Enabled",
+  "scheduledChatTurnsV1Enabled",
+  "chatExplicitContextV1Enabled",
+  "chatAutomaticFanoutV1Enabled",
+  "chatDelegationControlsV1Enabled",
+  "proactiveHeartbeatTurnsV1Enabled",
+  "commitmentScheduledTurnsV1Enabled",
+  "chatMeshCapabilitiesV1Enabled",
+  "chatRemotePlacementV1Enabled",
+  "chatWorkPassportV1Enabled",
+  "chatRequesterMcpV1Enabled",
+  "chatStaticMcpV1Enabled",
+] as const;
+
 /** Immutable feature evidence. These records never grant callable authority. */
 export const chatTurnFeatureReferencesSchema = z
   .object({
@@ -295,6 +322,8 @@ export const chatTurnFeatureReferencesSchema = z
       })
       .optional(),
     explicitContext: z.object({ snapshotId: identifier, snapshotHash: digest }).strict().optional(),
+    /** Advisory task/review contract classified once at admission; it grants nothing. */
+    workPassport: workPassportRecord.optional(),
     childWork: ownerReference.optional(),
     scheduledOccurrence: ownerReference.optional(),
     heartbeatOccurrence: ownerReference.optional(),
