@@ -49,6 +49,7 @@ import {
   type DeviceAccessRequestStatus,
   type DeviceAccessRequestStatusResponse,
   type FilesystemReadAccessMode,
+  type OutsideRootWriteMode,
   type GlobalToolAccessChange,
   type LlmProviderConfig,
   type LlmProviderRequestConfig,
@@ -213,6 +214,7 @@ export async function getSettings(deps: SettingsRuntimeDependencies): Promise<Ru
     operatorWriteRoots: projectOperatorWriteRoots(toolPolicy),
     globalToolAccess: projectGlobalToolAccess(toolPolicy),
     readAccessMode: toolPolicy.sandbox.readAccessMode ?? "roots_only",
+    outsideRootWriteMode: toolPolicy.sandbox.outsideRootWriteMode ?? "deny",
     networkAllowlist: toolPolicy.sandbox.networkAllowlist,
     approvalExplainer: deps.config.assistant.approvalExplainer,
     memory: {
@@ -289,6 +291,8 @@ export interface UpdateSettingsInput {
   toolApprovalMode?: ToolApprovalMode;
   budgetMode?: "saver" | "balanced" | "power";
   readAccessMode?: FilesystemReadAccessMode;
+  /** Whether writes outside every write root may raise an approval. */
+  outsideRootWriteMode?: OutsideRootWriteMode;
   networkAllowlist?: string[];
   /** Add or remove one operator write root; validated against the write-root safety rules. */
   operatorWriteRootChange?: OperatorWriteRootChange;
@@ -530,10 +534,11 @@ export async function updateSettings(
     });
   }
 
-  if (input.operatorWriteRootChange || input.globalToolAccessChange) {
+  if (input.operatorWriteRootChange || input.globalToolAccessChange || input.outsideRootWriteMode) {
     const toolPolicy = deps.config.toolPolicy;
     if (input.operatorWriteRootChange) applyOperatorWriteRootChange(toolPolicy, input.operatorWriteRootChange);
     if (input.globalToolAccessChange) applyGlobalToolAccessChange(toolPolicy, input.globalToolAccessChange);
+    if (input.outsideRootWriteMode) toolPolicy.sandbox.outsideRootWriteMode = input.outsideRootWriteMode;
   }
 
   if (input.auth) {

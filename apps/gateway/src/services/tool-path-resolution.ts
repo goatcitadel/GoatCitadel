@@ -14,6 +14,14 @@ export interface ToolPathResolutionContext {
    * the policy would admit. Never applies to reads or cwd.
    */
   writeRoots?: readonly string[];
+  /**
+   * "defer_to_policy" passes absolute write targets outside every root through
+   * unchanged for tools that may ask the operator (outside-root write
+   * approvals), so the policy engine decides instead of this resolver. Only set
+   * for ordinary sessions when the operator opted in; relative escapes and
+   * filesystem roots are still rejected here.
+   */
+  outsideRootWrites?: "reject" | "defer_to_policy";
 }
 
 const PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH = "__prompt_pack_repo__";
@@ -31,12 +39,14 @@ interface ToolPathSpec {
    * workspace instead of in a nested `workspace/workspace` folder.
    */
   workspaceDirPrefix?: boolean;
+  /** An absolute target outside every root may be deferred to policy (outside-root write approvals). */
+  deferOutsideRoot?: boolean;
   when?: (request: ToolPathRequest) => boolean;
 }
 
-const OUTPUT_PATH_SPEC: ToolPathSpec = { key: "path", kind: "write", workspaceDirPrefix: true };
+const OUTPUT_PATH_SPEC: ToolPathSpec = { key: "path", kind: "write", workspaceDirPrefix: true, deferOutsideRoot: true };
 const BROWSER_OUTPUT_PATH_SPECS: ToolPathSpec[] = [
-  { key: "outputPath", kind: "write", workspaceDirPrefix: true },
+  { key: "outputPath", kind: "write", workspaceDirPrefix: true, deferOutsideRoot: true },
   OUTPUT_PATH_SPEC,
 ];
 
@@ -48,8 +58,8 @@ const TOOL_PATH_SPECS: Record<string, ToolPathSpec[]> = {
   "file.find": [{ key: "path", kind: "read" }],
   "code.search": [{ key: "path", kind: "read" }],
   "code.search_files": [{ key: "path", kind: "read" }],
-  "fs.write": [{ key: "path", kind: "write" }],
-  "fs.patch": [{ key: "path", kind: "write" }],
+  "fs.write": [{ key: "path", kind: "write", deferOutsideRoot: true }],
+  "fs.patch": [{ key: "path", kind: "write", deferOutsideRoot: true }],
   "artifacts.create": [OUTPUT_PATH_SPEC],
   "documents.create": [OUTPUT_PATH_SPEC],
   "presentations.create": [OUTPUT_PATH_SPEC],
@@ -59,11 +69,11 @@ const TOOL_PATH_SPECS: Record<string, ToolPathSpec[]> = {
   "fs.stat": [{ key: "path", kind: "read", injectDefault: true }],
   "fs.copy": [
     { key: "from", kind: "read" },
-    { key: "to", kind: "write" },
+    { key: "to", kind: "write", deferOutsideRoot: true },
   ],
   "fs.move": [
     { key: "from", kind: "write" },
-    { key: "to", kind: "write" },
+    { key: "to", kind: "write", deferOutsideRoot: true },
   ],
   "fs.delete": [{ key: "path", kind: "write" }],
   "shell.exec": [{ key: "cwd", kind: "cwd", injectDefault: true }],
@@ -107,7 +117,12 @@ export function resolveToolRequestPaths<TRequest extends ToolPathRequest>(
             context,
             spec.kind,
           )
-        : resolveRelativeToolPath(rawValue, context, spec.kind);
+        : resolveRelativeToolPath(
+            rawValue,
+            context,
+            spec.kind,
+            spec.deferOutsideRoot === true && context.outsideRootWrites === "defer_to_policy",
+          );
     if (resolvedValue === rawValue) {
       continue;
     }
@@ -144,6 +159,7 @@ function resolveRelativeToolPath(
   rawPath: string,
   context: ToolPathResolutionContext,
   kind: PathResolutionKind,
+  deferOutsideRoot = false,
 ): string {
   // Cross-runtime cwd values must reach the execution bridge byte-for-byte.
   // In particular, path.resolve() on Windows would reinterpret /mnt/c, /c,
@@ -158,7 +174,7 @@ function resolveRelativeToolPath(
     return rawPath;
   }
   if (path.isAbsolute(trimmed)) {
-    return resolveAbsoluteToolPath(trimmed, context, kind);
+    return resolveAbsoluteToolPath(trimmed, context, kind, deferOutsideRoot);
   }
 
   if (isDotPath(trimmed)) {
@@ -201,6 +217,7 @@ function resolveAbsoluteToolPath(
   rawPath: string,
   context: ToolPathResolutionContext,
   kind: PathResolutionKind,
+  deferOutsideRoot = false,
 ): string {
   const absoluteTarget = path.resolve(rawPath);
   if (isFilesystemRootPath(absoluteTarget)) {
@@ -220,6 +237,10 @@ function resolveAbsoluteToolPath(
     return resolvedTarget;
   }
   if (kind === "write" && isWithinWriteRoots(resolvedTarget, context)) {
+    return absoluteTarget;
+  }
+  if (kind === "write" && deferOutsideRoot) {
+    // Outside-root write approvals: the policy engine and executor decide.
     return absoluteTarget;
   }
 

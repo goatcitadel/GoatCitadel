@@ -28,6 +28,9 @@ export function buildDelegatedSessionToolGrantCopies(input: {
       .filter(isActiveToolGrant)
       // One-time approvals should stay bound to the original session.
       .filter((grant) => grant.grantType !== "one_time")
+      // Folder grants for writes outside the write roots belong to the session
+      // the operator approved; a delegated child never inherits them.
+      .filter((grant) => grant.constraints?.writeRoots === undefined)
       .filter(
         (grant) =>
           grant.decision !== "allow" ||

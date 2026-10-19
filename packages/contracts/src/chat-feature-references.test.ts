@@ -48,6 +48,13 @@ describe("Chat feature reference decoding", () => {
       }),
     ).toThrow(/exact trusted/u);
   });
+  it("records an operator model council request and rejects any other council shape", () => {
+    const modelCouncil = { version: "chat.model-council.admission.v1" };
+    expect(readChatTurnFeatureReferences({ ...base, modelCouncil }).modelCouncil).toEqual(modelCouncil);
+    expect(() =>
+      readChatTurnFeatureReferences({ ...base, modelCouncil: { ...modelCouncil, participants: ["cloud"] } }),
+    ).toThrow();
+  });
   it("keeps an advisory Work Passport and rejects a malformed one", () => {
     const workPassport = {
       passportId: "passport-1",

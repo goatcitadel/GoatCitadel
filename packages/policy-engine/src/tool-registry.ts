@@ -288,6 +288,15 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
                     {
                       type: "object",
                       properties: {
+                        operation: { const: "outside_root_write_policy" },
+                        mode: { type: "string", enum: ["deny", "approval_required"] },
+                      },
+                      required: ["operation", "mode"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
                         operation: { const: "network_allowlist" },
                         entries: {
                           type: "array",

@@ -281,6 +281,7 @@ export const CHAT_RESTORATION_FEATURE_FLAGS = [
   "chatMeshCapabilitiesV1Enabled",
   "chatRemotePlacementV1Enabled",
   "chatExplicitContextBranchesV1Enabled",
+  "chatModelCouncilV1Enabled",
   "chatWorkPassportV1Enabled",
   "chatRequesterMcpV1Enabled",
   "chatStaticMcpV1Enabled",
@@ -323,6 +324,11 @@ export const chatTurnFeatureReferencesSchema = z
       })
       .optional(),
     explicitContext: z.object({ snapshotId: identifier, snapshotHash: digest }).strict().optional(),
+    /** The operator requested an advisory, tool-free model council for this turn. */
+    modelCouncil: z
+      .object({ version: z.literal("chat.model-council.admission.v1") })
+      .strict()
+      .optional(),
     /** Advisory task/review contract classified once at admission; it grants nothing. */
     workPassport: workPassportRecord.optional(),
     childWork: ownerReference.optional(),

@@ -64,6 +64,7 @@ export async function patchSettings(input: {
   toolApprovalMode?: "approve_all" | "approve_risky" | "bypass";
   budgetMode?: "saver" | "balanced" | "power";
   readAccessMode?: "roots_only" | "approval_required" | "full_disk";
+  outsideRootWriteMode?: "deny" | "approval_required";
   networkAllowlist?: string[];
   operatorWriteRootChange?: OperatorWriteRootChange;
   globalToolAccessChange?: GlobalToolAccessChange;
