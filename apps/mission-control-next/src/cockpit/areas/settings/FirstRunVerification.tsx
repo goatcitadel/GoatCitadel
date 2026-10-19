@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import type { OnboardingFirstRunProofRef } from "@goatcitadel/contracts";
 import {
   fetchOnboardingState,
   fetchAgenticRuns,
@@ -7,7 +8,6 @@ import {
 import {
   deriveEcosystemProofLaneItems,
   deriveOnboardingProviderSmokeEvidenceItems,
-  deriveSetupCenterItems,
 } from "../../../features/native-routes/settings/helpers/onboarding-readiness";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
@@ -21,6 +21,8 @@ import {
   CHECKLIST_STATUS_LABELS,
   DEPLOYMENT_POSTURE_LABELS,
   EVIDENCE_EVENT_KIND_LABELS,
+  presentReadinessValue,
+  presentSetupCenterItems,
   presentSetupLabel,
   READINESS_STATUS_LABELS,
   SETUP_STEP_STATE_LABELS,
@@ -60,6 +62,7 @@ export function FirstRunVerification() {
   const verifiedTask = state?.firstTask?.status === "verified" ? state.firstTask : undefined;
   const firstTaskVerified = Boolean(verifiedTask);
   const firstTaskModel = useModelLabel(verifiedTask?.providerId, verifiedTask?.model, firstTaskVerified);
+  const activeModel = useModelLabel(state?.settings.llm.activeProviderId, state?.settings.llm.activeModel, !!state);
   return (
     <section
       aria-label="First-run checks"
@@ -80,7 +83,7 @@ export function FirstRunVerification() {
             {state.firstTask?.status === "verified" ? `verified by the Gateway with ${firstTaskModel}` : "not observed"}
             . Neither sample records nor configured credentials certify execution.
           </p>
-          <EvidenceList title="Setup Center" items={deriveSetupCenterItems(state)} />
+          <EvidenceList title="Setup Center" items={presentSetupCenterItems(state, activeModel)} />
           <details className="rounded-md border border-line p-3">
             <summary className="cursor-pointer font-medium text-fg">Provider test results</summary>
             <EvidenceList title="Provider checks" items={deriveOnboardingProviderSmokeEvidenceItems(state)} />
@@ -101,16 +104,20 @@ export function FirstRunVerification() {
                   {presentSetupLabel(DEPLOYMENT_POSTURE_LABELS, state.setupReadiness.profile.deploymentPosture)}
                 </p>
                 <ul className="grid gap-3">
-                  {state.setupReadiness.items.map((item) => (
-                    <li key={item.id}>
-                      <p className="font-medium text-fg">
-                        {item.label} — {presentSetupLabel(READINESS_STATUS_LABELS, item.status)}
-                      </p>
-                      <p className="break-words">
-                        {item.value}: {item.detail}
-                      </p>
-                    </li>
-                  ))}
+                  {state.setupReadiness.items.map((item) => {
+                    const value = presentReadinessValue(item);
+                    return (
+                      <li key={item.id}>
+                        <p className="font-medium text-fg">
+                          {item.label} — {presentSetupLabel(READINESS_STATUS_LABELS, item.status)}
+                        </p>
+                        <p className="break-words">{value ? `${value}. ${item.detail}` : item.detail}</p>
+                        <TechnicalDetails label={`${item.label} technical details`}>
+                          <ProofRefList value={item.value} refs={item.proofRefs ?? []} />
+                        </TechnicalDetails>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ) : (
@@ -126,13 +133,12 @@ export function FirstRunVerification() {
                     {item.label} — {presentSetupLabel(CHECKLIST_STATUS_LABELS, item.status)}
                   </p>
                   <p>{item.detail}</p>
-                  <ul className="mt-1 grid gap-1">
-                    {item.proofRefs.map((ref, index) => (
-                      <li key={index}>
-                        {ref.label} <span className="break-all font-mono text-xs">{ref.ref}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  {item.proofRefs.length ? (
+                    <p className="mt-1">Checked through: {item.proofRefs.map((ref) => ref.label).join(", ")}</p>
+                  ) : null}
+                  <TechnicalDetails label={`${item.label} proof references`}>
+                    <ProofRefList refs={item.proofRefs} />
+                  </TechnicalDetails>
                 </li>
               ))}
             </ul>
@@ -201,6 +207,19 @@ export function FirstRunVerification() {
       ) : null}
       <McpDraftLeave {...leave.dialogProps} />
     </section>
+  );
+}
+/** Raw readiness values and proof references (routes, lanes, trace kinds) for the technical-details slot. */
+function ProofRefList({ value, refs }: { value?: string; refs: OnboardingFirstRunProofRef[] }) {
+  return (
+    <ul className="grid gap-1 font-mono text-xs">
+      {value ? <li className="break-all">value: {value}</li> : null}
+      {refs.map((ref, index) => (
+        <li key={`${ref.kind}:${ref.ref}:${index}`} className="break-all">
+          {ref.kind}: {ref.ref}
+        </li>
+      ))}
+    </ul>
   );
 }
 function EvidenceList({

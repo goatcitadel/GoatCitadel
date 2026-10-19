@@ -332,7 +332,7 @@
   margin-bottom: 0.5rem;
 }
 
-.mc-next-kanban-column header h3 {
+.mc-next-kanban-column header h2 {
   font-size: var(--text-md);
   text-transform: uppercase;
   letter-spacing: 0.05em;

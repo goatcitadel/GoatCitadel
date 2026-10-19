@@ -329,3 +329,14 @@ it("names the workspace in the Projects intro and keeps its id only as a technic
   await render();
   expect(intro()?.textContent).toBe("Organize Chat context for workspace workspace-a.");
 });
+
+it("renders the recents and import siblings without a duplicate React key", async () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    await render();
+    const messages = errors.mock.calls.map((call) => call.map(String).join(" "));
+    expect(messages.filter((message) => message.includes("same key"))).toEqual([]);
+  } finally {
+    errors.mockRestore();
+  }
+});

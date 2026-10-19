@@ -27,6 +27,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal)
   ...(await importOriginal<object>()),
   ...api,
 }));
+// The verification panel labels the active model; keep those catalog reads off the network.
+vi.mock("@goatcitadel/mission-control-shared/api/platform", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchLlmConfig: async () => ({ providerConfigs: [] }),
+  fetchLlmModels: async () => ({ items: [] }),
+}));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ setActiveWorkspaceId: vi.fn(), setActiveCitadelId: vi.fn() }),
 }));
@@ -142,5 +148,44 @@ describe("native advanced first-run disclosure", () => {
     await vi.waitFor(() => expect(container.textContent).toContain("Recent runs could not load"));
     expect(container.textContent).toContain("Recent runs could not load");
     expect(container.textContent).toContain("Installation records could not load");
+  });
+});
+describe("first-run verification values", () => {
+  it("presents readiness values and proof references without raw Gateway codes", async () => {
+    state.setupReadiness!.items.push(
+      {
+        id: "remote_posture",
+        label: "Remote posture",
+        status: "ready",
+        value: "local_trusted",
+        detail: "Loopback/local trusted posture is active.",
+      },
+      { id: "tailnet", label: "Tailnet", status: "ready", value: "not_required", detail: "Tailnet is not required." },
+    );
+    state.firstRunChecklist = [
+      {
+        id: "first_chat",
+        label: "First Chat",
+        status: "complete",
+        detail: "A Chat reply was recorded.",
+        proofRefs: [
+          { kind: "route", label: "Chat", ref: "/chat" },
+          { kind: "runtime_evidence", label: "Chat turn trace", ref: "chat.turn_trace" },
+        ],
+      },
+    ];
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <FirstRunVerification />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.textContent).toContain("Trusted local. Loopback/local trusted posture"));
+    expect(container.textContent).toContain("Not needed. Tailnet is not required.");
+    expect(container.textContent).toContain("Checked through: Chat, Chat turn trace");
+    for (const raw of ["local_trusted:", "not_required", "chat.turn_trace", "Provider A: Connection verified"]) {
+      expect(container.textContent).not.toContain(raw);
+    }
   });
 });

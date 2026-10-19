@@ -622,7 +622,7 @@ function KanbanColumn({ column, cards, selected, onToggleSelect, onInspect }: Ka
   return (
     <section className="mc-next-kanban-column" data-testid={`kanban-column-${column.id}`}>
       <header>
-        <h3>{column.label}</h3>
+        <h2>{column.label}</h2>
         <span className="count">{cards.length}</span>
       </header>
       {cards.length === 0 ? (
