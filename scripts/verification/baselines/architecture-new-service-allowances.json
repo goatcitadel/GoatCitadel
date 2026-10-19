@@ -1915,6 +1915,14 @@
     },
     {
       "planStep": "C1",
+      "path": "apps/gateway/src/services/chat-explicit-context-inheritance.ts",
+      "maxHostCallbacks": 2,
+      "maxDependencyMemberAccesses": 2,
+      "reason": "WS9.4 owner for server-derived explicit-context ids on edit/retry and delegated child turns. Reads only the routed-context snapshot, delegation run and parent durable run records plus one rollout switch; inherited ids are re-admitted through the existing explicit-context admission owner. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "chat-explicit-context-inheritance.test.ts and chat-turn-prep-service.routed-context.test.ts retry inheritance cases; named architecture-metrics lane measures 2/2 for this file."
+    },
+    {
+      "planStep": "C1",
       "path": "apps/gateway/src/services/chat-provider-fallback-admission.ts",
       "maxHostCallbacks": 13,
       "maxDependencyMemberAccesses": 13,

@@ -67,6 +67,8 @@ export function buildUpdatedFeatureFlags(
     chatMeshCapabilitiesV1Enabled:
       patch.chatMeshCapabilitiesV1Enabled ?? current.chatMeshCapabilitiesV1Enabled ?? false,
     chatRemotePlacementV1Enabled: patch.chatRemotePlacementV1Enabled ?? current.chatRemotePlacementV1Enabled ?? false,
+    chatExplicitContextBranchesV1Enabled:
+      patch.chatExplicitContextBranchesV1Enabled ?? current.chatExplicitContextBranchesV1Enabled ?? true,
     chatWorkspaceSnapshotV1Enabled:
       patch.chatWorkspaceSnapshotV1Enabled ?? current.chatWorkspaceSnapshotV1Enabled ?? true,
     chatModelCouncilV1Enabled: patch.chatModelCouncilV1Enabled ?? current.chatModelCouncilV1Enabled ?? true,
@@ -160,6 +162,8 @@ export function resolveGatewayFeatureFlags(
       stored?.chatMeshCapabilitiesV1Enabled ?? fromConfig.chatMeshCapabilitiesV1Enabled ?? false,
     chatRemotePlacementV1Enabled:
       stored?.chatRemotePlacementV1Enabled ?? fromConfig.chatRemotePlacementV1Enabled ?? false,
+    chatExplicitContextBranchesV1Enabled:
+      stored?.chatExplicitContextBranchesV1Enabled ?? fromConfig.chatExplicitContextBranchesV1Enabled ?? true,
     chatWorkspaceSnapshotV1Enabled:
       stored?.chatWorkspaceSnapshotV1Enabled ?? fromConfig.chatWorkspaceSnapshotV1Enabled ?? true,
     chatModelCouncilV1Enabled: stored?.chatModelCouncilV1Enabled ?? fromConfig.chatModelCouncilV1Enabled ?? true,

@@ -18,6 +18,10 @@ export function projectChatFeatureAvailability(
       features.subagentFanoutV1Disabled !== true,
     providerFallback: durableExecution && features.chatProviderFallbackV1Enabled === true,
     staticMcp: durableExecution && features.chatStaticMcpV1Enabled === true,
+    explicitContextBranches:
+      durableExecution &&
+      features.chatExplicitContextV1Enabled === true &&
+      features.chatExplicitContextBranchesV1Enabled === true,
     workspaceSnapshot: durableExecution && features.chatWorkspaceSnapshotV1Enabled === true,
     modelCouncil: durableExecution && features.chatModelCouncilV1Enabled === true,
     workPassport: durableExecution && features.chatWorkPassportV1Enabled === true,

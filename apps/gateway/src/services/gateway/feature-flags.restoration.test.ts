@@ -31,6 +31,15 @@ describe("restored feature defaults and persistence", () => {
     expect(restoredSettings[key]).toBe(true);
     expect(buildUpdatedFeatureFlags(restoredSettings, { [key]: false })[key]).toBe(false);
   });
+  it("defaults chatExplicitContextBranchesV1Enabled on once its restoration proved green, and still supports revocation", () => {
+    const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
+    expect(defaults.chatExplicitContextBranchesV1Enabled).toBe(true);
+    expect(
+      buildUpdatedFeatureFlags(defaults, { chatExplicitContextBranchesV1Enabled: false })
+        .chatExplicitContextBranchesV1Enabled,
+    ).toBe(false);
+  });
+
   it("defaults chatWorkspaceSnapshotV1Enabled on once its restoration proved green, and still supports revocation", () => {
     const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
     expect(defaults.chatWorkspaceSnapshotV1Enabled).toBe(true);

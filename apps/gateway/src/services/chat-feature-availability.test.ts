@@ -30,6 +30,7 @@ describe("effective restored Chat availability", () => {
       automaticFanout: false,
       providerFallback: false,
       staticMcp: false,
+      explicitContextBranches: false,
       workspaceSnapshot: false,
       modelCouncil: false,
       workPassport: false,
@@ -53,6 +54,16 @@ describe("effective restored Chat availability", () => {
       ).staticMcp,
     ).toBe(false);
   });
+  it("advertises explicit context on edit/retry/child only with explicit context itself", () => {
+    const durable = { enabled: true, executionEnabled: true };
+    const branches = { ...features, chatExplicitContextBranchesV1Enabled: true };
+    expect(projectChatFeatureAvailability(durable, branches).explicitContextBranches).toBe(true);
+    expect(
+      projectChatFeatureAvailability(durable, { ...branches, chatExplicitContextV1Enabled: false })
+        .explicitContextBranches,
+    ).toBe(false);
+  });
+
   it("advertises workspaceSnapshot only after explicit opt-in with durable execution", () => {
     const durable = { enabled: true, executionEnabled: true };
     expect(projectChatFeatureAvailability(durable, features).workspaceSnapshot).toBe(false);

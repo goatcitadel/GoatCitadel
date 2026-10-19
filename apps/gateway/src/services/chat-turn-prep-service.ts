@@ -62,6 +62,10 @@ import {
 } from "./chat-turn-execution-profile.js";
 import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
 import { admitChatRouteWard, routeWardActionsFor } from "./chat-route-local-ward.js";
+import {
+  resolveInheritedChatContextRefs,
+  type ExplicitContextInheritanceStorage,
+} from "./chat-explicit-context-inheritance.js";
 import { assertChatSessionActive, splitChatPrefsPatch } from "./chat-session-utils.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import type { ResolvedChatRouteDescriptor } from "./chat-route-resolution.js";
@@ -160,6 +164,7 @@ export interface ChatTurnSessionState {
 }
 
 type ChatTurnPrepStorage = LocalDelegationAuthorityStorage &
+  ExplicitContextInheritanceStorage &
   Pick<
     Storage,
     | "chatAttachments"
@@ -666,13 +671,24 @@ export async function prepareAgentChatTurn(
       turnId,
     });
   }
+  // Edit/retry re-admits the source turn's context and a delegated child
+  // inherits its parent's; both are server-derived and re-admitted below.
+  const requestedInput = input;
+  const inheritedContext = await resolveInheritedChatContextRefs(host, {
+    request: input,
+    branchKind: options?.branchKind ?? "append",
+    sourceTurnId: options?.sourceTurnId,
+    admission: options?.turnAdmission,
+    profileBound: Boolean(boundCapabilityProfile),
+  });
+  if (inheritedContext) input = { ...input, contextRefs: inheritedContext.refs };
   const freshExplicitContext = !boundCapabilityProfile && (input.contextRefs?.length ?? 0) > 0;
   if (
     freshExplicitContext &&
     (!(await isFeatureEnabled("chatExplicitContextV1Enabled")) ||
       !options?.turnAdmission ||
       options.turnAdmission.durableClaim ||
-      input.parentDelegationStepId ||
+      (input.parentDelegationStepId && inheritedContext?.source !== "parent") ||
       options.turnAdmission.requestActor.actorKind !== "operator" ||
       !(await isDurableChatExecution()))
   ) {
@@ -714,7 +730,7 @@ export async function prepareAgentChatTurn(
       {
         sessionId,
         turnId,
-        request: input,
+        request: requestedInput,
         admission: options?.turnAdmission,
         userMessageId: existingUserMessage?.messageId ?? options?.userMessageId ?? "",
         assistantMessageId: options?.assistantMessageId ?? "",

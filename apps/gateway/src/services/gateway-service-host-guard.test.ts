@@ -228,8 +228,10 @@ describe("gateway service host guard", () => {
 
     expect(prep).not.toContain("readonly storage: Storage;");
     const prepStorage = prep.match(/type ChatTurnPrepStorage\s*=[\s\S]*?\r?\n\s*\};/)?.[0] ?? "";
-    expect(normalizeTypeAlias(prepStorage)).toBe(normalizeTypeAlias(`
+    expect(normalizeTypeAlias(prepStorage)).toBe(
+      normalizeTypeAlias(`
       type ChatTurnPrepStorage = LocalDelegationAuthorityStorage &
+        ExplicitContextInheritanceStorage &
         Pick<
           Storage,
           | "chatAttachments"
@@ -248,10 +250,12 @@ describe("gateway service host guard", () => {
         > & {
           audit?: Pick<Storage["audit"], "append">;
         };
-    `));
+    `),
+    );
     const delegationStorage =
       delegationAuthority.match(/export type LocalDelegationAuthorityStorage\s*=[\s\S]*?;/)?.[0] ?? "";
-    expect(normalizeTypeAlias(delegationStorage)).toBe(normalizeTypeAlias(`
+    expect(normalizeTypeAlias(delegationStorage)).toBe(
+      normalizeTypeAlias(`
       export type LocalDelegationAuthorityStorage = Pick<
         AsyncStorage,
         | "chatDelegationRuns"
@@ -266,7 +270,8 @@ describe("gateway service host guard", () => {
         | "tasks"
         | "runImmediateTransaction"
       >;
-    `));
+    `),
+    );
     expect(prep).toMatch(
       /import\s*\{[^}]*\btype LocalDelegationAuthorityStorage\b[^}]*\}\s*from "\.\/chat-local-delegation-authority\.js";/,
     );

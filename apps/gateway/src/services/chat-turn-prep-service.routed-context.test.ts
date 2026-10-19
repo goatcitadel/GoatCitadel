@@ -824,6 +824,75 @@ describe("profile-free routed-context admission", () => {
     expect(harness.host.bindChatFeatureAdmission).toHaveBeenCalledOnce();
   });
 
+  it("re-admits the source turn's context on a retry that sends no refs, as a fresh turn-bound snapshot", async () => {
+    const harness = admittedHarness();
+    harness.host.isFeatureEnabled = vi.fn(
+      async (flag) => flag === "chatExplicitContextV1Enabled" || flag === "chatExplicitContextBranchesV1Enabled",
+    );
+    const findByTurn = vi.fn(async () => ({
+      snapshotId: "source-snapshot",
+      turnId: "turn-source",
+      entries: [{ index: 0, kind: "memory_item", ref: "memory-1", label: "Memory one" }],
+    }));
+    (harness.host.storage as unknown as Record<string, unknown>).routedContextSnapshots = { findByTurn };
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      SESSION_ID,
+      { content: "Use the routed context." },
+      {
+        turnId: "turn-live",
+        turnAdmission: harness.admission,
+        branchKind: "retry",
+        sourceTurnId: "turn-source",
+      },
+    );
+    expect(findByTurn).toHaveBeenCalledWith("turn-source");
+    expect(harness.resolveSources).toHaveBeenCalledOnce();
+    expect(prepared.routedContextSnapshot).toMatchObject({
+      schemaVersion: "chat.routed-context-snapshot.v3",
+      turnId: "turn-live",
+      admissionBinding: { admissionId: "admission-1" },
+    });
+    expect(prepared.routedContextSnapshot?.snapshotId).not.toBe("source-snapshot");
+  });
+
+  it("does not inherit context on retry when the branch flag is off or the retry opts out with an empty list", async () => {
+    const harness = admittedHarness();
+    const findByTurn = vi.fn(async () => ({
+      entries: [{ index: 0, kind: "memory_item", ref: "memory-1", label: "Memory one" }],
+    }));
+    (harness.host.storage as unknown as Record<string, unknown>).routedContextSnapshots = { findByTurn };
+    const off = await prepareAgentChatTurn(
+      harness.host,
+      SESSION_ID,
+      { content: "Use the routed context." },
+      {
+        turnId: "turn-live",
+        turnAdmission: harness.admission,
+        branchKind: "retry",
+        sourceTurnId: "turn-source",
+      },
+    );
+    expect(off.routedContextSnapshot).toBeUndefined();
+    harness.host.isFeatureEnabled = vi.fn(
+      async (flag) => flag === "chatExplicitContextV1Enabled" || flag === "chatExplicitContextBranchesV1Enabled",
+    );
+    const optOut = await prepareAgentChatTurn(
+      harness.host,
+      SESSION_ID,
+      { content: "Use the routed context.", contextRefs: [] },
+      {
+        turnId: "turn-live",
+        turnAdmission: harness.admission,
+        branchKind: "retry",
+        sourceTurnId: "turn-source",
+      },
+    );
+    expect(optOut.routedContextSnapshot).toBeUndefined();
+    expect(findByTurn).not.toHaveBeenCalled();
+    expect(harness.resolveSources).not.toHaveBeenCalled();
+  });
+
   it("renders an admitted profile-free Work Passport into the prepared history exactly once", async () => {
     const harness = admittedHarness();
     const references = {

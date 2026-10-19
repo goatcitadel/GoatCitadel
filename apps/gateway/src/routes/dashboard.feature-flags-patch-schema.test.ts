@@ -70,6 +70,7 @@ describe("settings PATCH schema feature-flag coverage (Phase 3.2)", () => {
       chatStaticMcpV1Enabled: true,
       chatMeshCapabilitiesV1Enabled: true,
       chatRemotePlacementV1Enabled: true,
+      chatExplicitContextBranchesV1Enabled: true,
       chatWorkspaceSnapshotV1Enabled: true,
       chatModelCouncilV1Enabled: true,
       chatWorkPassportV1Enabled: true,

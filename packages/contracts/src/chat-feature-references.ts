@@ -321,6 +321,7 @@ export const CHAT_RESTORATION_FEATURE_FLAGS = [
   "commitmentScheduledTurnsV1Enabled",
   "chatMeshCapabilitiesV1Enabled",
   "chatRemotePlacementV1Enabled",
+  "chatExplicitContextBranchesV1Enabled",
   "chatWorkspaceSnapshotV1Enabled",
   "chatModelCouncilV1Enabled",
   "chatWorkPassportV1Enabled",
