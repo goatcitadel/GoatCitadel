@@ -8,7 +8,7 @@ import {
 import { useSessionDraft } from "./session-drafts";
 import { useDraftLeave } from "./DraftLeaveDialog";
 import { describeVaultError, useCitadelVaultReview } from "./useCitadelVaultReview";
-import { hasVaultSnapshot, sameVaultValue } from "./citadel-vault-binding";
+import { hasVaultSnapshot, sameVaultReview } from "./citadel-vault-binding";
 
 const EMPTY_SECRET = { name: "", value: "" };
 /** Shares only app-session input; plaintext never enters review or admission registries. */
@@ -122,14 +122,15 @@ export function useCitadelVaultEditor(citadelId: string) {
       if (
         !hasVaultSnapshot(before, citadelId) ||
         !before.items.some((item) => item.secretId === secretId) ||
-        !sameVaultValue(before, vault.snapshot)
+        !vault.snapshot ||
+        !sameVaultReview(before, vault.snapshot)
       )
         throw new Error("Changed metadata");
       const value = await revealCitadelVaultSecret(citadelId, secretId);
       if (!current()) return;
       const after = await getCitadelVaultSnapshot(citadelId);
       if (!current()) return;
-      if (typeof value !== "string" || !hasVaultSnapshot(after, citadelId) || !sameVaultValue(before, after))
+      if (typeof value !== "string" || !hasVaultSnapshot(after, citadelId) || !sameVaultReview(before, after))
         throw new Error("Changed metadata");
       setRevealed({ [secretId]: value });
     } catch (error) {

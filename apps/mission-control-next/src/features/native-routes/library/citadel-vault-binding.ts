@@ -5,12 +5,41 @@ import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/clien
 export type VaultChange = { type: "store"; name: string } | { type: "delete"; secretId: string };
 export const sameVaultValue = (left: unknown, right: unknown) =>
   canonicalJsonString(left) === canonicalJsonString(right);
+const ITEM_KEYS = ["secretId", "secretName", "createdAt", "updatedAt", "chamberId", "keyVersion"];
+const isOptionalNumber = (value: unknown) =>
+  value === null || (typeof value === "number" && Number.isInteger(value) && value > 0);
+function hasVaultKeyMetadata(keys: CitadelVaultSnapshot["keys"] | undefined): boolean {
+  return Boolean(
+    keys &&
+    typeof keys === "object" &&
+    isOptionalNumber(keys.kekVersion) &&
+    typeof keys.legacySecretCount === "number" &&
+    Array.isArray(keys.scopes) &&
+    keys.scopes.every(
+      (scope) =>
+        scope &&
+        (scope.chamberId === null || typeof scope.chamberId === "string") &&
+        isOptionalNumber(scope.activeKeyVersion) &&
+        typeof scope.secretCount === "number",
+    ),
+  );
+}
+/** Key versions change under a background upgrade or rotation; write confirmation ignores them. */
+const reviewedItems = (items: CitadelVaultSnapshot["items"]) =>
+  items.map(({ keyVersion: _keyVersion, ...item }) => item);
+/** The reviewed part of a snapshot: what its revision binds, not key versions or counts. */
+export const sameVaultReview = (left: CitadelVaultSnapshot, right: CitadelVaultSnapshot) =>
+  left.citadelId === right.citadelId &&
+  left.revision === right.revision &&
+  sameVaultValue(left.record, right.record) &&
+  sameVaultValue(reviewedItems(left.items), reviewedItems(right.items));
 export function hasVaultSnapshot(value: CitadelVaultSnapshot, citadelId: string): boolean {
   return Boolean(
     value &&
     value.citadelId === citadelId &&
     /^[a-f0-9]{64}$/u.test(value.revision) &&
-    Object.keys(value).every((key) => ["citadelId", "revision", "record", "items"].includes(key)) &&
+    Object.keys(value).every((key) => ["citadelId", "revision", "record", "items", "keys"].includes(key)) &&
+    hasVaultKeyMetadata(value.keys) &&
     (!value.record || value.record.citadelId === citadelId) &&
     Array.isArray(value.items) &&
     value.items.every(
@@ -22,7 +51,9 @@ export function hasVaultSnapshot(value: CitadelVaultSnapshot, citadelId: string)
         item.secretName.length > 0 &&
         typeof item.createdAt === "string" &&
         typeof item.updatedAt === "string" &&
-        Object.keys(item).every((key) => ["secretId", "secretName", "createdAt", "updatedAt"].includes(key)),
+        (item.chamberId === null || typeof item.chamberId === "string") &&
+        isOptionalNumber(item.keyVersion) &&
+        Object.keys(item).every((key) => ITEM_KEYS.includes(key)),
     ) &&
     new Set(value.items.map((item) => item.secretId)).size === value.items.length &&
     new Set(value.items.map((item) => item.secretName)).size === value.items.length,
@@ -39,8 +70,8 @@ export function vaultMutationMatches(before: CitadelVaultSnapshot, after: Citade
     return (
       before.items.some((item) => item.secretId === change.secretId) &&
       sameVaultValue(
-        after.items,
-        before.items.filter((item) => item.secretId !== change.secretId),
+        reviewedItems(after.items),
+        reviewedItems(before.items.filter((item) => item.secretId !== change.secretId)),
       )
     );
   const prior = before.items.find((item) => item.secretName === change.name);
@@ -48,8 +79,8 @@ export function vaultMutationMatches(before: CitadelVaultSnapshot, after: Citade
   if (
     !saved ||
     !sameVaultValue(
-      before.items.filter((item) => item.secretName !== change.name),
-      after.items.filter((item) => item.secretName !== change.name),
+      reviewedItems(before.items.filter((item) => item.secretName !== change.name)),
+      reviewedItems(after.items.filter((item) => item.secretName !== change.name)),
     )
   )
     return false;

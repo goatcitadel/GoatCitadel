@@ -39,7 +39,12 @@ beforeEach(() => {
   vi.resetAllMocks();
   __resetCitadelVaultAttemptsForTests();
   __resetSessionDraftsForTests();
-  owner = { citadelId: "citadel", revision: "a".repeat(64), items: [] };
+  owner = {
+    citadelId: "citadel",
+    revision: "a".repeat(64),
+    items: [],
+    keys: { kekVersion: 1, scopes: [], legacySecretCount: 0 },
+  };
   api.read.mockImplementation(async () => owner);
 });
 afterEach(async () => {
@@ -52,6 +57,8 @@ it("renders bounded public names and explicit native reveal inspection without f
     secretName: `Name ${index}`,
     createdAt: "2026-09-30T00:00:00Z",
     updatedAt: "2026-09-30T00:00:00Z",
+    chamberId: null,
+    keyVersion: 1,
   }));
   await mount();
   expect(renderer!.root.findAllByType("li")).toHaveLength(50);
@@ -127,7 +134,14 @@ it("toggles the secret entry between hidden and shown with a pressed Show contro
 });
 it("copies a revealed value and counts down visibly before hiding it at zero (ST-19)", async () => {
   owner.items = [
-    { secretId: "secret-1", secretName: "Token", createdAt: "2026-09-30T00:00:00Z", updatedAt: "2026-09-30T00:00:00Z" },
+    {
+      secretId: "secret-1",
+      secretName: "Token",
+      createdAt: "2026-09-30T00:00:00Z",
+      updatedAt: "2026-09-30T00:00:00Z",
+      chamberId: null,
+      keyVersion: 1,
+    },
   ];
   api.reveal.mockResolvedValue("synthetic-revealed");
   const writeText = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("denied"));
