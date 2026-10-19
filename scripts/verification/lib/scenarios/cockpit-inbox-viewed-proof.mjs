@@ -225,7 +225,7 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
           await inspector.waitFor();
           await closeDetails();
           await row.waitFor();
-          const navCount = await nav.getByRole("button", { name: /^Inbox/u }).innerText();
+          const navCount = await nav.getByRole("link", { name: /^Inbox/u }).innerText();
           const ownerCount = before.counts.updates;
           const countLabel = ownerCount.complete
             ? String(ownerCount.known)
@@ -246,7 +246,7 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
           await closeDetails();
           await row.waitFor({ state: "hidden" });
           await updates.getByRole("button", { name: "Show read updates (1)", exact: true }).waitFor();
-          assert.equal(await nav.getByRole("button", { name: /^Inbox/u }).innerText(), navCount);
+          assert.equal(await nav.getByRole("link", { name: /^Inbox/u }).innerText(), navCount);
           assert.equal(await updates.locator('[data-inbox-count="updates"]').innerText(), countLabel);
           assertInboxOwnerUnchanged(before, await readInbox());
           await capture("hidden");
@@ -256,9 +256,9 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
           await updates.getByRole("button", { name: "Hide read updates", exact: true }).click();
           await row.waitFor({ state: "hidden" });
           stage = "same-document remount retains viewed state";
-          await nav.getByRole("button", { name: "Work", exact: true }).click();
+          await nav.getByRole("link", { name: "Work", exact: true }).click();
           await page.getByRole("heading", { name: "Work", exact: true }).waitFor();
-          await nav.getByRole("button", { name: /^Inbox/u }).click();
+          await nav.getByRole("link", { name: /^Inbox/u }).click();
           await updates.getByRole("button", { name: "Show read updates (1)", exact: true }).waitFor();
           await row.waitFor({ state: "hidden" });
           assert.equal(navigations, navigationBaseline);
@@ -295,7 +295,7 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
           await row.waitFor();
           await row.getByText(changedItem.summary, { exact: true }).waitFor();
           assert.ok((await updates.innerText()).includes("0 read from shown updates"));
-          assert.equal(await nav.getByRole("button", { name: /^Inbox/u }).innerText(), navCount);
+          assert.equal(await nav.getByRole("link", { name: /^Inbox/u }).innerText(), navCount);
           await capture("new-version");
           await row.getByRole("button", { name: "Details", exact: true }).click();
           await inspector.waitFor();

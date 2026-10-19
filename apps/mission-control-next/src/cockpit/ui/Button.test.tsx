@@ -23,7 +23,9 @@ describe("cockpit buttons", () => {
     const classes = renderer.root.findByType("button").props.className.split(" ");
     expect(classes).toContain("bg-accent");
     expect(classes).toContain("text-accent-ink");
-    expect(classes).toContain("hover:underline");
+    // SH-34: hover changes the surface through a token whose ink contrast the contrast guard checks.
+    expect(classes).toContain("hover:bg-accent-hover");
+    expect(classes).not.toContain("hover:underline");
     expect(
       classes.some((value: string) => value.startsWith("hover:opacity-") || value.startsWith("hover:brightness-")),
     ).toBe(false);

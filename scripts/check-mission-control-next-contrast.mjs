@@ -224,6 +224,7 @@ export function collectCockpitContrastViolations(themes) {
   for (const [theme, tokens] of Object.entries(themes)) {
     const pairs = foregrounds.flatMap((fg) => backgrounds.map((bg) => [fg, bg]));
     pairs.push(["--cockpit-accent-ink", "--cockpit-accent"]);
+    pairs.push(["--cockpit-accent-ink", "--cockpit-accent-hover"]);
     for (const [fg, bg] of pairs) {
       const foreground = resolveValue(`var(${fg})`, tokens);
       const background = resolveValue(`var(${bg})`, tokens);

@@ -2590,15 +2590,6 @@ details.mc-next-thread-action-menu:not([open]) > .mc-next-thread-action-menu-bod
   max-width: 42rem;
 }
 
-.mc-next-threaded-loading-copy p {
-  margin: 0;
-  color: color-mix(in oklab, var(--mc-area-color) 64%, var(--foreground));
-  font-size: var(--text-xs);
-  font-weight: 800;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
 .mc-next-threaded-loading-copy h2 {
   margin: 0;
   color: var(--foreground);

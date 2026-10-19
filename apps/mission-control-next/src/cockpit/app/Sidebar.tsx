@@ -110,14 +110,19 @@ export function Sidebar({
         {COCKPIT_AREAS.map((entry) => {
           const Icon = AREA_ICONS[entry.area];
           return (
-            <button
+            <a
               key={entry.area}
-              type="button"
+              href={entry.path}
               aria-label={entry.area === "inbox" ? inboxNavigationLabel(inboxCount) : entry.label}
               title={`${entry.label} (g then ${entry.shortcut})`}
               aria-current={current === entry.area ? "page" : undefined}
               aria-describedby={entry.area === "work" ? "cockpit-work-running-summary" : undefined}
-              onClick={() => navigate(entry.path)}
+              onClick={(event) => {
+                // SH-28: a real link, so Ctrl/Cmd-click and middle-click open the area in a new tab.
+                if (isModifiedClick(event)) return;
+                event.preventDefault();
+                navigate(entry.path);
+              }}
               onPointerEnter={() => preload(entry.area)}
               onFocus={() => preload(entry.area)}
               onPointerDown={() => preload(entry.area)}
@@ -129,7 +134,7 @@ export function Sidebar({
               {entry.area === "inbox" && inboxCount ? (
                 <InboxCountBadge count={inboxCount} className={collapsed ? "absolute -top-1 right-0" : ""} />
               ) : null}
-            </button>
+            </a>
           );
         })}
       </nav>

@@ -196,7 +196,8 @@ describe("CockpitShell", () => {
       );
     });
     const nav = container.querySelector('nav[aria-label="Areas"]');
-    expect([...nav!.querySelectorAll("button")].map((node) => node.getAttribute("aria-label"))).toEqual([
+    // SH-28: area items are real links (new-tab capable), not buttons.
+    expect([...nav!.querySelectorAll("a[href]")].map((node) => node.getAttribute("aria-label"))).toEqual([
       "Chat",
       "Inbox",
       "Work",
@@ -349,10 +350,10 @@ describe("CockpitShell", () => {
     });
     const sidebar = container.querySelector('[aria-label="Cockpit sidebar"]')!;
     expect(sidebar.getAttribute("data-collapsed")).toBe("true");
-    for (const icon of sidebar.querySelectorAll('nav[aria-label="Areas"] button > svg')) {
+    for (const icon of sidebar.querySelectorAll('nav[aria-label="Areas"] a > svg')) {
       expect(icon.getAttribute("class")).toContain("shrink-0");
     }
-    const inbox = sidebar.querySelector('nav[aria-label="Areas"] button[aria-label^="Inbox"]')!;
+    const inbox = sidebar.querySelector('nav[aria-label="Areas"] a[aria-label^="Inbox"]')!;
     expect(inbox.getAttribute("aria-label")).toBe("Inbox, 1 decision");
     const badge = inbox.querySelector('[title="Outstanding decisions"]')!;
     expect(badge.textContent).toBe("1");
@@ -632,7 +633,7 @@ describe("CockpitShell", () => {
       expect(failedView("Chat")).toBe(true);
       expect(container.querySelector('main [role="alert"]')?.textContent).toContain("Chat couldn't be shown");
       const nav = container.querySelector('nav[aria-label="Areas"]')!;
-      await act(async () => nav.querySelector<HTMLButtonElement>('button[aria-label^="Inbox"]')!.click());
+      await act(async () => nav.querySelector<HTMLAnchorElement>('a[aria-label^="Inbox"]')!.click());
       expect(window.location.pathname).toBe("/inbox");
       expect(nav.querySelector('[aria-current="page"]')?.getAttribute("aria-label")).toMatch(/^Inbox/);
     } finally {

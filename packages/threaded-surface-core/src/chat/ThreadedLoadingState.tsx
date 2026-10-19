@@ -24,7 +24,6 @@ export function ThreadedLoadingState({
   return (
     <section className="mc-next-threaded-loading" aria-live="polite" aria-busy="true">
       <div className="mc-next-threaded-loading-copy">
-        <p>{label}</p>
         <h2>Preparing {label}</h2>
         <span>{focus}</span>
       </div>

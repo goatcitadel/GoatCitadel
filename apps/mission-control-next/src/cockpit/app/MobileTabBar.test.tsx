@@ -69,6 +69,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function tab(label: string): HTMLAnchorElement {
+  const match = [...document.querySelectorAll("nav a")].find((element) => element.textContent?.trim() === label);
+  if (!(match instanceof HTMLAnchorElement)) throw new Error(`Missing area link: ${label}`);
+  return match;
+}
 function button(label: string): HTMLButtonElement {
   const match = [...document.querySelectorAll("button")].find((element) => element.textContent?.trim() === label);
   if (!(match instanceof HTMLButtonElement)) throw new Error(`Missing button: ${label}`);
@@ -88,12 +93,12 @@ describe("MobileTabBar", () => {
         </QueryClientProvider>,
       ),
     );
-    act(() => button("Work").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })));
+    act(() => tab("Work").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })));
     expect(preload).toHaveBeenLastCalledWith("work");
-    act(() => button("Library").focus());
+    act(() => tab("Library").focus());
     expect(preload).toHaveBeenLastCalledWith("library");
     expect(window.location.pathname).toBe("/chat");
-    await act(async () => button("Work").click());
+    await act(async () => tab("Work").click());
     expect(window.location.pathname).toBe("/work");
   });
   it("opens More as a sheet with System and appearance controls", async () => {
@@ -109,7 +114,7 @@ describe("MobileTabBar", () => {
       ),
     );
     expect(container.querySelector('[title="Outstanding decisions"]')?.textContent).toBe("2");
-    expect(container.querySelector('button[aria-label="Inbox, 2 decisions"]')).not.toBeNull();
+    expect(container.querySelector('a[aria-label="Inbox, 2 decisions"]')).not.toBeNull();
     await act(async () => button("More").click());
     expect(document.querySelector('[role="dialog"][aria-label="More"]')).not.toBeNull();
     // GL-15: the quick toggle offers the two theme choices that are not already saved.

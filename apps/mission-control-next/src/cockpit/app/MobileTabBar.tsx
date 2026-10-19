@@ -31,6 +31,7 @@ import { WorkRunningIndicator } from "./WorkRunningIndicator";
 import { useWorkspaceName } from "../data/use-workspace-name";
 import { useCitadelName } from "../data/use-citadel-name";
 import { TechnicalDetails } from "../ui/TechnicalDetails";
+import { isModifiedClick } from "../lib/modified-click";
 
 const TABS = [
   { area: "chat", label: "Chat", path: "/chat", Icon: MessageSquare },
@@ -79,13 +80,18 @@ export function MobileTabBar({
       <div className="cockpit-safe-bottom shrink-0 border-t border-line-subtle bg-raised sm:hidden">
         <nav aria-label="Areas on small screens" data-cockpit-tabbar="" className="flex">
           {TABS.map(({ area, label, path, Icon }) => (
-            <button
+            <a
               key={area}
-              type="button"
+              href={path}
               aria-current={current === area ? "page" : undefined}
               aria-label={area === "inbox" && inboxCount ? inboxNavigationLabel(inboxCount) : undefined}
               aria-describedby={area === "work" && phone ? "cockpit-work-running-summary" : undefined}
-              onClick={() => navigate(path)}
+              onClick={(event) => {
+                // SH-28: a real link, so a modified click or long-press menu can open the area in a new tab.
+                if (isModifiedClick(event)) return;
+                event.preventDefault();
+                navigate(path);
+              }}
               onPointerEnter={() => preload(area)}
               onFocus={() => preload(area)}
               onPointerDown={() => preload(area)}
@@ -103,7 +109,7 @@ export function MobileTabBar({
                 ) : null}
               </span>
               {label}
-            </button>
+            </a>
           ))}
           <button
             ref={moreButton}
