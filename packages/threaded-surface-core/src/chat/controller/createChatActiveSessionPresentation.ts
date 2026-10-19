@@ -344,6 +344,10 @@ export function createChatActiveSessionPresentation({
           coordination,
           planningPreferences: actions.planningPreferences,
           oneShotContext,
+          modelCouncilAvailable: session.sessionData.settings?.chatFeatureAvailability?.modelCouncil === true,
+          workspaceSnapshotAvailable:
+            session.sessionData.settings?.chatFeatureAvailability?.workspaceSnapshot === true &&
+            !submission.orchestration.editingTurnId,
         }),
         ...createChatMediaProps({
           selectedSessionId: selection.selectedSessionId,

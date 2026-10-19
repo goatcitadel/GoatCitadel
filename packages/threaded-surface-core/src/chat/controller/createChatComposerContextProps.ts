@@ -132,6 +132,8 @@ export function createChatComposerContextProps({
   | "currentWebMode"
   | "currentReviewDepth"
   | "modelCouncilEnabled"
+  | "modelCouncilAvailable"
+  | "workspaceSnapshotAvailable"
   | "workspaceSnapshotRequest"
   | "fullWebAccess"
   | "currentThinkingLevel"
@@ -242,6 +244,9 @@ export function createChatComposerContextProps({
     currentWebMode: sessionData.prefs?.webMode ?? "auto",
     currentReviewDepth: sessionData.prefs?.orchestrationReviewDepth ?? "off",
     modelCouncilEnabled: oneShotContext.modelCouncilEnabled,
+    modelCouncilAvailable: sessionData.settings?.chatFeatureAvailability?.modelCouncil === true,
+    workspaceSnapshotAvailable:
+      sessionData.settings?.chatFeatureAvailability?.workspaceSnapshot === true && !editingTurnId,
     workspaceSnapshotRequest: oneShotContext.workspaceSnapshotRequest,
     fullWebAccess: oneShotContext.fullWebAccess,
     currentThinkingLevel: sessionData.prefs?.thinkingLevel ?? "standard",

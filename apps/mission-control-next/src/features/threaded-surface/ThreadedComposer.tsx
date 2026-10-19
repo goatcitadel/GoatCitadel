@@ -342,12 +342,17 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       disabled: composerActionDisabled,
       onSelect: props.onRunQuickResearch,
     },
-    {
-      label: workspaceSnapshotArmed ? "Remove workspace snapshot" : "Workspace snapshots temporarily unavailable",
-      disabled: composerActionDisabled || !workspaceSnapshotArmed,
-      active: workspaceSnapshotArmed,
-      onSelect: props.onToggleWorkspaceSnapshot,
-    },
+    // Shown only while the Gateway reports snapshots available, or while a saved request still needs removing.
+    ...(workspaceSnapshotArmed || props.workspaceSnapshotAvailable
+      ? [
+          {
+            label: workspaceSnapshotArmed ? "Remove workspace snapshot" : "Include workspace snapshot",
+            disabled: composerActionDisabled,
+            active: workspaceSnapshotArmed,
+            onSelect: props.onToggleWorkspaceSnapshot,
+          },
+        ]
+      : []),
     ...(props.onReviewRunDetails
       ? [
           {
@@ -492,8 +497,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       />
       {projectReview.notice ? <p role="status">{projectReview.notice}</p> : null}
 
-      {props.attachmentUpload?.pending ? <p role="status">Uploading {props.attachmentUpload.pending} attachment(s)…</p> : null}
-      {props.attachmentUpload?.error ? <p role="status">Attachment upload failed: {props.attachmentUpload.error}. Select the file again to retry.</p> : null}
+      {props.attachmentUpload?.pending ? (
+        <p role="status">Uploading {props.attachmentUpload.pending} attachment(s)…</p>
+      ) : null}
+      {props.attachmentUpload?.error ? (
+        <p role="status">Attachment upload failed: {props.attachmentUpload.error}. Select the file again to retry.</p>
+      ) : null}
       {props.pendingAttachments.length > 0 ? (
         <div className="mc-next-composer-attachments">
           {props.pendingAttachments.map((item) => (

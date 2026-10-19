@@ -101,11 +101,29 @@ export function ThreadedComposerBanners({
       ) : null}
 
       {props.workspaceSnapshotRequest ? (
-        <div className="mc-next-composer-banner info" aria-label="Workspace snapshot unavailable">
-          <StatusChip tone="warning">Unavailable</StatusChip>
-          <p>
-            <strong>Workspace snapshot is temporarily unavailable.</strong> Remove this saved request before sending.
-          </p>
+        <div
+          className="mc-next-composer-banner info"
+          aria-label={
+            props.workspaceSnapshotAvailable ? "Workspace snapshot requested" : "Workspace snapshot unavailable"
+          }
+        >
+          {props.workspaceSnapshotAvailable ? (
+            <>
+              <StatusChip tone="muted">Snapshot</StatusChip>
+              <p>
+                <strong>Workspace snapshot requested.</strong> The Gateway records the project's Git posture (head,
+                branch, change counts; no file names or contents) with this send.
+              </p>
+            </>
+          ) : (
+            <>
+              <StatusChip tone="warning">Unavailable</StatusChip>
+              <p>
+                <strong>Workspace snapshot is temporarily unavailable.</strong> Remove this saved request before
+                sending.
+              </p>
+            </>
+          )}
           <div className="mc-next-composer-action-row">
             <button
               type="button"

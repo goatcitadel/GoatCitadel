@@ -298,6 +298,12 @@ export function useChatSurfaceComposition({
       session.sessionData.historicalWindowLoading ||
       session.sessionData.historicalWindowError,
     );
+  // An armed Council or snapshot only blocks Send when its rollout is not currently available.
+  const modelCouncilBlocked =
+    oneShotContext.modelCouncilEnabled && session.sessionData.settings?.chatFeatureAvailability?.modelCouncil !== true;
+  const workspaceSnapshotBlocked =
+    Boolean(oneShotContext.workspaceSnapshotRequest) &&
+    session.sessionData.settings?.chatFeatureAvailability?.workspaceSnapshot !== true;
   const composerAdmissionReady =
     Boolean(
       resolveOutboundDraftContent(
@@ -314,8 +320,8 @@ export function useChatSurfaceComposition({
     !historicalModeActive &&
     // HX-411: external control owns the mutation generation → operator send fails closed.
     !session.externalControl.sessionControlSendLocked &&
-    !oneShotContext.modelCouncilEnabled &&
-    !oneShotContext.workspaceSnapshotRequest &&
+    !modelCouncilBlocked &&
+    !workspaceSnapshotBlocked &&
     ((session.explicitContextEnabled && !submission.orchestration.editingTurnId) ||
       (session.externalSourceAttachments.selectedAttachmentIds.length === 0 &&
         session.documentContext.pendingDocumentContextRefs.length === 0)) &&
@@ -326,9 +332,9 @@ export function useChatSurfaceComposition({
     sending &&
     Boolean(coordination.activeStreamRef.current) &&
     !submission.orchestration.editingTurnId;
-  const profileDependentAdmissionBlockReason = oneShotContext.modelCouncilEnabled
+  const profileDependentAdmissionBlockReason = modelCouncilBlocked
     ? "Model council is temporarily unavailable. Turn Council off to send."
-    : oneShotContext.workspaceSnapshotRequest
+    : workspaceSnapshotBlocked
       ? "Workspace snapshots are temporarily unavailable. Remove the snapshot to send."
       : (!session.explicitContextEnabled || submission.orchestration.editingTurnId) &&
           session.externalSourceAttachments.selectedAttachmentIds.length > 0
