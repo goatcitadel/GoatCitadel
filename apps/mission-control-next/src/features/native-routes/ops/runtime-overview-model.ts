@@ -3,6 +3,7 @@ import type {
   RuntimeSnapshotSourceStatus,
 } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
 import type { AppRoute } from "@next/app/route-model";
+import { describeRuntimeService } from "@goatcitadel/mission-control-shared/content/runtime-service";
 import type { NativePageMetric } from "../NativeRoutePageLayout";
 import type { ChipTone } from "../primitives";
 import { capitalize, formatDateTime, formatLoadAverage } from "./runtime-formatters";
@@ -56,11 +57,11 @@ export function labelForOpsSection(section: NonNullable<AppRoute["section"]>) {
 
 export function buildNeedsAttentionItems(
   data: OpsRuntimeData,
-  pendingApprovals: number,
+  pendingApprovals: number | undefined,
   theme: AppRoute["theme"],
 ): OpsAttentionItem[] {
   const items: OpsAttentionItem[] = [];
-  const pendingApprovalCount = data.dashboard?.pendingApprovals ?? pendingApprovals;
+  const pendingApprovalCount = data.dashboard?.pendingApprovals ?? pendingApprovals ?? 0;
   const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
   const daemonRunning = daemonRuntimeUnavailable ? null : (data.daemon?.running ?? data.health?.daemonStatus?.running);
   const latestBackup = data.health?.backups?.latest;
@@ -87,7 +88,7 @@ export function buildNeedsAttentionItems(
     });
   }
 
-  if (daemonRuntimeUnavailable || daemonRunning === false) {
+  if (daemonRuntimeUnavailable || (daemonRunning === false && presentRuntimeDaemon(data).label !== "Unavailable")) {
     items.push({
       id: "daemon-runtime",
       title: "Daemon/runtime issue",
@@ -192,12 +193,10 @@ export function buildNeedsAttentionItems(
 export function buildOpsHeadMetrics(
   section: NonNullable<AppRoute["section"]>,
   data: NonNullable<ReturnType<typeof useOpsRuntimeSnapshot>["data"]>,
-  pendingApprovals: number,
+  pendingApprovals: number | undefined,
 ): NativePageMetric[] {
-  const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
-  const daemonRunning = daemonRuntimeUnavailable ? null : (data.daemon?.running ?? data.health?.daemonStatus?.running);
-  const daemonValue = daemonRunning == null ? "unknown" : daemonRunning ? "running" : "stopped";
-  const pendingValue = String(data.dashboard?.pendingApprovals ?? pendingApprovals);
+  const daemonValue = presentRuntimeDaemon(data).label;
+  const pendingMetric: NativePageMetric = presentPendingApprovals(data, pendingApprovals);
   const subagentsValue = String(data.dashboard?.activeSubagents ?? 0);
   const daySpendValue = formatCostMetric(data.dashboard?.dailyCostUsd, readCurrentDayCostCompleteness(data));
 
@@ -209,23 +208,23 @@ export function buildOpsHeadMetrics(
         // returning {}) can omit it at runtime — count a missing list as 0.
         { label: "Visible", value: String(data.sessions.length || data.dashboard?.sessions?.length || 0) },
         { label: "Active subagents", value: subagentsValue },
-        { label: "Pending approvals", value: pendingValue },
+        pendingMetric,
       ];
     case "schedules":
       return [
         { label: "Jobs", value: String(data.timeline?.scheduler?.jobs?.length ?? 0) },
         { label: "Review queue", value: String(data.timeline?.scheduler?.reviewQueue?.length ?? 0) },
-        { label: "Pending approvals", value: pendingValue },
+        pendingMetric,
       ];
     case "improvement":
       return [
         { label: "Reports", value: String(data.timeline?.improvement?.reports?.length ?? 0) },
         { label: "Replay runs", value: String(data.timeline?.improvement?.replayRuns?.length ?? 0) },
-        { label: "Pending approvals", value: pendingValue },
+        pendingMetric,
       ];
     case "notifications":
       return [
-        { label: "Pending approvals", value: pendingValue },
+        pendingMetric,
         { label: "Daemon", value: daemonValue },
         { label: "Active subagents", value: subagentsValue },
       ];
@@ -239,19 +238,22 @@ export function buildOpsHeadMetrics(
       return [
         { label: "Daemon", value: daemonValue },
         { label: "MCP servers", value: String(data.mcpServers.length) },
-        { label: "Backups", value: String(data.backups.length) },
-        { label: "Pending approvals", value: pendingValue },
+        { label: "Backups", value: sourceFailed(data, "backups") ? "Unknown" : String(data.backups.length) },
+        pendingMetric,
       ];
     case "diagnostics":
       return [
         { label: "Hostname", value: data.health?.systemVitals?.hostname ?? "Unknown" },
-        { label: "CPU", value: String(data.health?.systemVitals?.cpuCount ?? 0) },
+        {
+          label: "CPU",
+          value: data.health?.systemVitals?.cpuCount == null ? "Unknown" : String(data.health.systemVitals.cpuCount),
+        },
         { label: "Load", value: formatLoadAverage(data.health?.systemVitals?.loadAverage ?? []) },
       ];
     case "activity":
     default:
       return [
-        { label: "Pending approvals", value: pendingValue },
+        pendingMetric,
         { label: "Active subagents", value: subagentsValue },
         { label: "Day spend", value: daySpendValue },
         { label: "Daemon", value: daemonValue },
@@ -278,6 +280,26 @@ export function descriptionForOpsSection(section: NonNullable<AppRoute["section"
     default:
       return "Operational signal grouped for quick scanning.";
   }
+}
+
+/**
+ * The Runtime tab's daemon wording: the same derivation as System › Health (shared describeRuntimeService), so the
+ * two never disagree (SY-01). Unknown when both the daemon and health sources failed.
+ */
+export function presentRuntimeDaemon(data: OpsRuntimeData): ReturnType<typeof describeRuntimeService> {
+  const unavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
+  const status = unavailable ? undefined : (data.daemon ?? data.health?.daemonStatus);
+  return describeRuntimeService(status as Parameters<typeof describeRuntimeService>[0]);
+}
+
+/**
+ * Pending approvals, presented once for every Runtime surface (SY-R05, SY-L01). The dashboard count is
+ * installation-wide and says so; a host-supplied count is the current workspace's; a missing count is Unknown, never 0.
+ */
+export function presentPendingApprovals(data: OpsRuntimeData, hostCount: number | undefined): NativePageMetric {
+  const dashboardCount = data.dashboard?.pendingApprovals;
+  if (dashboardCount != null) return { label: "Pending approvals, all workspaces", value: String(dashboardCount) };
+  return { label: "Pending approvals", value: hostCount == null ? "Unknown" : String(hostCount) };
 }
 
 export function sourceFailed(

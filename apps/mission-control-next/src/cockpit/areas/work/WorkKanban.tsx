@@ -9,6 +9,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_COLUMN } from "../../ui/area-layout";
+import { EmbeddedClassicPage } from "../../ui/EmbeddedClassicPage";
 import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
 import { WorkArchive } from "./WorkArchive";
 import { useOperatorInbox } from "../../data/use-operator-inbox";
@@ -26,7 +27,9 @@ export function WorkKanban() {
   // WK-01: the embedded page gets the shell's own decision count for this workspace, not a hard-coded zero.
   const inbox = useOperatorInbox(workspaceId);
   const pendingApprovals =
-    !inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data.counts.needs_decision.known : 0;
+    !inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId)
+      ? inbox.data.counts.needs_decision.known
+      : undefined;
   const access = useProjectAccess(JSON.stringify(["work-kanban", activeCitadelId, workspaceId, taskId]));
   const props: NativeRoutePagesProps = {
     activeWorkspaceId: workspaceId,
@@ -41,14 +44,10 @@ export function WorkKanban() {
     <section className="min-w-0">
       {/* The classic owner below keeps its own page header; this one carries the Work tabs. */}
       <div className={`${AREA_COLUMN} flex flex-col gap-3 px-4 pt-4 sm:px-6 sm:pt-6`}>
-        {/* On a run, the embedded run page drops its own h1, so the header names the run the way that page did. */}
+        {/* On a run, the embedded run page drops its own h1; its id stays in the run page technical details (WK-R03). */}
         <AreaHeader
           title={
-            route.runId || route.view === "run-detail"
-              ? route.runId
-                ? `Run ${route.runId}`
-                : "Run detail"
-              : OLDER_KANBAN_VIEW.label
+            route.runId || route.view === "run-detail" ? (route.runId ? "Run" : "Run detail") : OLDER_KANBAN_VIEW.label
           }
           description={
             route.runId || route.view === "run-detail"
@@ -57,20 +56,23 @@ export function WorkKanban() {
           }
         />
         <p className="text-sm text-fg-secondary">
-          {"Runs keep their saved state; editing a task does not start or prove a run. "}
-          <NativeOwnerLink href="/work/archive" scope={workspaceId}>
-            Archived tasks
+          {"Editing a task here does not start a run. Archived tasks are in "}
+          <NativeOwnerLink href="/work/archive" scope={workspaceId} className="font-medium text-accent hover:underline">
+            Work › Archived tasks
           </NativeOwnerLink>
+          .
         </p>
       </div>
-      {route.runId || route.view === "run-detail" ? (
-        <>
-          <ReleaseScopeBadge status={getRouteReleaseScope(route).status} />
-          <RunDetailRoutePage key={access.identity} {...props} />
-        </>
-      ) : (
-        <KanbanRoutePage key={access.identity} {...props} />
-      )}
+      <EmbeddedClassicPage>
+        {route.runId || route.view === "run-detail" ? (
+          <>
+            <ReleaseScopeBadge status={getRouteReleaseScope(route).status} />
+            <RunDetailRoutePage key={access.identity} {...props} />
+          </>
+        ) : (
+          <KanbanRoutePage key={access.identity} {...props} />
+        )}
+      </EmbeddedClassicPage>
     </section>
   );
 }

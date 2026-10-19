@@ -12,6 +12,7 @@ import {
 } from "../primitives";
 import {
   describeOpsDegradedSources,
+  presentRuntimeDaemon,
   sourceFailed,
   type OpsAttentionItem,
   type OpsDegradedSource,
@@ -31,7 +32,7 @@ export function RuntimeHeroLead({
   compact,
 }: {
   data: OpsRuntimeData;
-  pendingApprovals: number;
+  pendingApprovals?: number;
   compact: boolean;
 }) {
   const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
@@ -58,7 +59,7 @@ export function RuntimeHeroLead({
   const metrics = [
     {
       label: "Serving posture",
-      value: daemonRunning === null ? "unavailable" : daemonRunning ? "running" : "stopped",
+      value: presentRuntimeDaemon(data).label,
       meta: `${daemonHost} · ${daemonState}`,
     },
     {
@@ -82,8 +83,10 @@ export function RuntimeHeroLead({
         <StatusChip tone={mcpCount !== null && mcpCount > 0 ? "default" : "muted"}>
           {mcpCount === null ? "MCP evidence not loaded" : `${mcpCount} MCP configured`}
         </StatusChip>
-        <StatusChip tone={pendingApprovalCount > 0 ? "warning" : "muted"}>
-          {pendingApprovalCount} pending {pendingApprovalCount === 1 ? "approval" : "approvals"}
+        <StatusChip tone={(pendingApprovalCount ?? 0) > 0 ? "warning" : "muted"}>
+          {pendingApprovalCount == null
+            ? "Pending approvals unknown"
+            : `${pendingApprovalCount} pending ${pendingApprovalCount === 1 ? "approval" : "approvals"}`}
         </StatusChip>
       </div>
       <p className="mc-next-settings-field-note">{readinessLine}</p>

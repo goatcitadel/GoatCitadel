@@ -27,6 +27,10 @@ vi.mock("../chat/SessionControlManager", () => ({
     return <p>Canonical control owner</p>;
   },
 }));
+vi.mock("../../data/use-workspace-name", () => ({
+  useWorkspaceName: (_citadel: string | undefined, id: string | undefined) =>
+    id === "workspace-a" ? "Workspace A" : undefined,
+}));
 vi.mock("../../../features/native-routes/ops/RunDetailRoutePage", () => ({
   RunDetailRoutePage: (props: unknown) => {
     fixture.run(props);
@@ -91,7 +95,7 @@ it.each(["?runId=r%2F1&sessionId=s", "?view=run-detail"])("preserves the existin
   render();
   expect(host.textContent).toContain("Existing run evidence owner");
   // The embedded run page drops its own h1, so the cockpit header names the selected run.
-  expect(host.querySelector("h1")?.textContent).toBe(search.includes("runId") ? "Run r/1" : "Run detail");
+  expect(host.querySelector("h1")?.textContent).toBe(search.includes("runId") ? "Run" : "Run detail");
   expect(fixture.control).not.toHaveBeenCalled();
   expect(fixture.run).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -107,4 +111,27 @@ it("keeps a failed session source visible as degraded instead of a clean empty l
   render();
   expect(host.textContent).toContain("Live runtime data is degraded");
   expect(fixture.control).not.toHaveBeenCalled();
+});
+it("passes the workspace name, never the id, to the embedded session pages", () => {
+  render();
+  expect(host.textContent).toContain("Workspace A");
+  expect(host.textContent).not.toMatch(/Workspace\s*workspace-a/);
+});
+it("contains the embedded session pages", () => {
+  render();
+  const inspect = host.querySelector('[aria-label="Inspect Owner conversation"]');
+  expect(inspect?.closest(".cockpit-embedded-classic")).not.toBeNull();
+});
+it("titles a run detail with Run and names the workspace", () => {
+  fixture.search = "?workspaceId=workspace-a&runId=run_0123456789abcdef";
+  render();
+  expect(host.querySelector("h1")?.textContent).toBe("Run");
+  expect(fixture.run).toHaveBeenCalledWith(expect.objectContaining({ activeWorkspaceName: "Workspace A" }));
+  expect(host.querySelector("h1")?.closest(".cockpit-embedded-classic")).toBeNull();
+  expect(host.textContent).toContain("Existing run evidence owner");
+});
+it("labels the installation-wide approval count in the session panel", () => {
+  render();
+  expect(host.textContent).toContain("Pending approvals, all workspaces");
+  expect(host.textContent).not.toContain("Decision queue pressure");
 });

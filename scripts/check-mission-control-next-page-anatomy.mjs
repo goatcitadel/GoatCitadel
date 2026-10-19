@@ -82,6 +82,16 @@ export const ANATOMY_RULES = [
     help: "the guided model setup is built from cockpit primitives; do not bring back the Classic override sheet",
     count: (_relative, contents) => contents.match(/model-setup\.css/g)?.length ?? 0,
   },
+  {
+    id: "unwrapped-classic-page",
+    budget: 0,
+    help: "render Classic route and workbench pages inside ui/EmbeddedClassicPage so they keep the cockpit column and lose Classic-only chrome",
+    // A Classic page (…RoutePage or …WorkbenchPage) rendered by an area file that never uses the containment wrapper.
+    count: (relative, contents) =>
+      relative.startsWith("areas/") && relative.endsWith(".tsx") && !/<EmbeddedClassicPage\b/.test(contents)
+        ? (contents.match(/<[A-Z][A-Za-z]*(?:RoutePage|WorkbenchPage)\b/g)?.length ?? 0)
+        : 0,
+  },
 ];
 
 /** Phone chrome at the bottom edge must clear the home indicator (viewport-fit=cover). */

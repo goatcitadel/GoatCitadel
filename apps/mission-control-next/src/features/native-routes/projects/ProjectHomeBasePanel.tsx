@@ -36,7 +36,7 @@ export function ProjectHomeBasePanel({
   onOpenArtifacts,
 }: {
   home: ProjectHome;
-  pendingApprovals: number;
+  pendingApprovals?: number;
   projectName: string;
   onContinue: (mode: ChatMode) => void;
   onNewChat: () => void;
@@ -146,7 +146,11 @@ export function ProjectHomeBasePanel({
                 : "Generated outputs referenced by project threads."
             }
           />
-          <ProjectMetric label="Approvals" value={String(pendingApprovals)} detail="Workspace-wide approval queue." />
+          <ProjectMetric
+            label="Approvals"
+            value={pendingApprovals == null ? "Unknown" : String(pendingApprovals)}
+            detail="Workspace-wide approval queue."
+          />
           <ProjectMetric
             label="Last activity"
             value={home.lastActivityLabel}

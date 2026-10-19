@@ -33,7 +33,7 @@ export function ApprovalsRoutePage({
   route,
   activeWorkspaceId,
   activeWorkspaceName,
-  pendingApprovals,
+  pendingApprovals = 0,
   navigate,
 }: NativeRoutePagesProps) {
   const [pendingConfirmation, setPendingConfirmation] = useState<ApprovalConfirmation | null>(null);

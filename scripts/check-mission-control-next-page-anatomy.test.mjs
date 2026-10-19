@@ -54,4 +54,19 @@ describe("page-anatomy guard", () => {
     assert.match(evaluateAnatomy({ "card-surface": 4 }, rules)[0], /4 uses, budget 3/);
     assert.match(evaluateAnatomy({ "card-surface": 1 }, rules)[0], /lower the budget to 1/);
   });
+  it("counts a Classic route page rendered outside EmbeddedClassicPage", () => {
+    const bare = [
+      'import { KanbanRoutePage } from "../../../features/native-routes/ops/KanbanRoutePage";',
+      "export const X = () => <KanbanRoutePage {...props} />;",
+    ].join("\n");
+    assert.deepEqual(countAnatomy("areas/work/X.tsx", bare), { "unwrapped-classic-page": 1 });
+    const wrapped = bare.replace(
+      "<KanbanRoutePage {...props} />",
+      "<EmbeddedClassicPage><KanbanRoutePage {...props} /></EmbeddedClassicPage>",
+    );
+    assert.deepEqual(countAnatomy("areas/work/X.tsx", wrapped), {});
+    assert.deepEqual(countAnatomy("areas/library/X.tsx", "<PromptPacksWorkbenchPage workspaceId={id} />"), {
+      "unwrapped-classic-page": 1,
+    });
+  });
 });

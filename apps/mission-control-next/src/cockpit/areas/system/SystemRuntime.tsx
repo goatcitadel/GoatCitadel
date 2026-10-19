@@ -14,6 +14,7 @@ import { useWorkspaceName } from "../../data/use-workspace-name";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
+import { EmbeddedClassicPage } from "../../ui/EmbeddedClassicPage";
 
 const RemoteWorkersRoutePage = lazy(async () => ({
   default: (await import("../../../features/native-routes/ops/RemoteWorkersRoutePage")).RemoteWorkersRoutePage,
@@ -96,40 +97,44 @@ export function SystemRuntime({ section = "runtime" }: { section?: "runtime" | "
             </NativeOwnerLink>
           </div>
         ) : (
-          <Suspense
-            fallback={
-              <p role="status" className="p-4 text-sm text-fg-secondary">
-                Loading worker inspection…
-              </p>
-            }
-          >
-            <RemoteWorkersRoutePage
-              key={
-                access.identity + ":workers:" + JSON.stringify([workerSelection.workerId, workerSelection.assignmentId])
+          <EmbeddedClassicPage>
+            <Suspense
+              fallback={
+                <p role="status" className="p-4 text-sm text-fg-secondary">
+                  Loading worker inspection…
+                </p>
               }
-              initialWorkerId={workerSelection.workerId}
-              initialAssignmentId={workerSelection.assignmentId}
-              route={route}
-              activeWorkspaceId={workspaceId}
-              activeWorkspaceName={workspaceName ?? "Current workspace"}
-              activeCitadelId={preferences.activeCitadelId ?? undefined}
-              setActiveWorkspaceId={preferences.setActiveWorkspaceId}
-              pendingApprovals={0}
-              navigate={navigate}
-            />
-          </Suspense>
+            >
+              <RemoteWorkersRoutePage
+                key={
+                  access.identity +
+                  ":workers:" +
+                  JSON.stringify([workerSelection.workerId, workerSelection.assignmentId])
+                }
+                initialWorkerId={workerSelection.workerId}
+                initialAssignmentId={workerSelection.assignmentId}
+                route={route}
+                activeWorkspaceId={workspaceId}
+                activeWorkspaceName={workspaceName ?? "Current workspace"}
+                activeCitadelId={preferences.activeCitadelId ?? undefined}
+                setActiveWorkspaceId={preferences.setActiveWorkspaceId}
+                navigate={navigate}
+              />
+            </Suspense>
+          </EmbeddedClassicPage>
         )
       ) : (
-        <RuntimeRoutePage
-          key={access.identity + ":" + section}
-          route={route}
-          activeWorkspaceId={workspaceId}
-          activeWorkspaceName={workspaceName ?? "Current workspace"}
-          activeCitadelId={preferences.activeCitadelId ?? undefined}
-          setActiveWorkspaceId={preferences.setActiveWorkspaceId}
-          pendingApprovals={0}
-          navigate={navigate}
-        />
+        <EmbeddedClassicPage>
+          <RuntimeRoutePage
+            key={access.identity + ":" + section}
+            route={route}
+            activeWorkspaceId={workspaceId}
+            activeWorkspaceName={workspaceName ?? "Current workspace"}
+            activeCitadelId={preferences.activeCitadelId ?? undefined}
+            setActiveWorkspaceId={preferences.setActiveWorkspaceId}
+            navigate={navigate}
+          />
+        </EmbeddedClassicPage>
       )}
     </section>
   );

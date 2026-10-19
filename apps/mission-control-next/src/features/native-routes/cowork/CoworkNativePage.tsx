@@ -81,7 +81,7 @@ export function CoworkNativePage({
   activeCitadelId,
   activeWorkspaceId,
   activeWorkspaceName,
-  pendingApprovals,
+  pendingApprovals = 0,
   navigate,
 }: NativeRoutePagesProps) {
   const section = route.section ?? "workspace";
