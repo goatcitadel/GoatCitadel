@@ -1922,38 +1922,40 @@ describe("settings-auth-service device access lifecycle", () => {
   });
 
   it("terminalizes malformed and boundary-expired device requests using database timestamp parsing", async () => {
-    const malformedHarness = buildAuthHarness();
-    const malformed = await createDeviceAccessRequest(malformedHarness.deps, { deviceType: "desktop" }, {});
-    malformedHarness.storage.gatewaySql
+    // One harness serves all three requests. Every fresh Storage replays the whole
+    // migration chain, so building one per scenario risked the test timeout on
+    // contended CI runners. Each scenario expires its own request before the next
+    // is created, so the per-scenario expiry counts stay exact.
+    const harness = buildAuthHarness();
+    const malformed = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    harness.storage.gatewaySql
       .prepare("UPDATE auth_device_requests SET expires_at = 'not-a-timestamp' WHERE request_id = @requestId")
       .run({ requestId: malformed.requestId });
 
-    await expect(expirePendingDeviceAccessRequests(malformedHarness.deps, 10)).resolves.toBe(1);
-    expect((await getAuthDeviceRequestById(malformedHarness.deps, malformed.requestId))?.status).toBe("expired");
-    expect(malformedHarness.storage.approvals.get(malformed.approvalId).status).toBe("rejected");
+    await expect(expirePendingDeviceAccessRequests(harness.deps, 10)).resolves.toBe(1);
+    expect((await getAuthDeviceRequestById(harness.deps, malformed.requestId))?.status).toBe("expired");
+    expect(harness.storage.approvals.get(malformed.approvalId).status).toBe("rejected");
 
-    const boundaryHarness = buildAuthHarness();
-    const boundary = await createDeviceAccessRequest(boundaryHarness.deps, { deviceType: "desktop" }, {});
-    const databaseNow = boundaryHarness.storage.gatewaySql.readDatabaseNow();
-    boundaryHarness.storage.gatewaySql
+    const boundary = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    const databaseNow = harness.storage.gatewaySql.readDatabaseNow();
+    harness.storage.gatewaySql
       .prepare("UPDATE auth_device_requests SET expires_at = @expiresAt WHERE request_id = @requestId")
       .run({ requestId: boundary.requestId, expiresAt: databaseNow.replace("Z", "+00:00") });
 
-    await expect(expirePendingDeviceAccessRequests(boundaryHarness.deps, 10)).resolves.toBe(1);
-    expect((await getAuthDeviceRequestById(boundaryHarness.deps, boundary.requestId))?.status).toBe("expired");
+    await expect(expirePendingDeviceAccessRequests(harness.deps, 10)).resolves.toBe(1);
+    expect((await getAuthDeviceRequestById(harness.deps, boundary.requestId))?.status).toBe("expired");
 
-    const futureHarness = buildAuthHarness();
-    const future = await createDeviceAccessRequest(futureHarness.deps, { deviceType: "desktop" }, {});
-    futureHarness.storage.gatewaySql
+    const future = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    harness.storage.gatewaySql
       .prepare("UPDATE auth_device_requests SET expires_at = @expiresAt WHERE request_id = @requestId")
       .run({
         requestId: future.requestId,
-        expiresAt: new Date(Date.parse(futureHarness.storage.gatewaySql.readDatabaseNow()) + 60_000)
+        expiresAt: new Date(Date.parse(harness.storage.gatewaySql.readDatabaseNow()) + 60_000)
           .toISOString()
           .replace("Z", "+00:00"),
       });
-    await expect(expirePendingDeviceAccessRequests(futureHarness.deps, 10)).resolves.toBe(0);
-    expect((await getAuthDeviceRequestById(futureHarness.deps, future.requestId))?.status).toBe("pending");
+    await expect(expirePendingDeviceAccessRequests(harness.deps, 10)).resolves.toBe(0);
+    expect((await getAuthDeviceRequestById(harness.deps, future.requestId))?.status).toBe("pending");
   });
 
   it("rolls back the device grant, request, approval, and plaintext handoff when effect enqueue fails", async () => {
@@ -2330,12 +2332,15 @@ describe("settings-auth-service device access lifecycle", () => {
   });
 
   it("handles status-delivery races, cleanup failures, and inactive device grants", async () => {
-    const deliveryHarness = buildAuthHarness();
-    const request = await createDeviceAccessRequest(deliveryHarness.deps, { deviceType: "desktop" }, {});
-    await approveDeviceRequest(deliveryHarness, request.approvalId);
-    const originalPrepare = deliveryHarness.storage.gatewaySql.prepare.bind(deliveryHarness.storage.gatewaySql);
+    // One harness serves all three scenarios. Every fresh Storage replays the whole
+    // migration chain, so building one per scenario risked the test timeout on
+    // contended CI runners. Each prepare() spy is restored before the next one.
+    const harness = buildAuthHarness();
+    const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
+    const deliveryGrantId = await approveDeviceRequest(harness, request.approvalId);
+    const originalPrepare = harness.storage.gatewaySql.prepare.bind(harness.storage.gatewaySql);
     let interceptedDeliveryUpdate = false;
-    vi.spyOn(deliveryHarness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
+    const deliveryPrepareSpy = vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
       const statement = originalPrepare(sql);
       if (
         !interceptedDeliveryUpdate &&
@@ -2368,44 +2373,46 @@ describe("settings-auth-service device access lifecycle", () => {
       return statement;
     });
 
-    const racedStatus = await getDeviceAccessRequestStatus(
-      deliveryHarness.deps,
-      request.requestId,
-      request.requestSecret,
-    );
+    const racedStatus = await getDeviceAccessRequestStatus(harness.deps, request.requestId, request.requestSecret);
     expect(racedStatus).toMatchObject({ status: "approved" });
     expect(racedStatus.deviceToken).toBeUndefined();
+    expect(interceptedDeliveryUpdate).toBe(true);
+    deliveryPrepareSpy.mockRestore();
+    // Revoke the delivery grant so it sorts last and the grant scenario below
+    // always resolves its own newest grant.
+    await revokeDeviceAccessGrant(harness.deps, deliveryGrantId, "operator:test");
 
-    const cleanupHarness = buildAuthHarness();
-    const cleanupPrepare = cleanupHarness.storage.gatewaySql.prepare.bind(cleanupHarness.storage.gatewaySql);
-    vi.spyOn(cleanupHarness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
+    const countDeviceRequests = () =>
+      harness.storage.gatewaySql.prepare("SELECT COUNT(*) AS count FROM auth_device_requests").get<{ count: number }>()
+        ?.count;
+    const countDeviceApprovals = () =>
+      harness.storage.gatewaySql
+        .prepare("SELECT COUNT(*) AS count FROM approvals WHERE kind = @kind")
+        .get<{ count: number }>({ kind: DEVICE_ACCESS_APPROVAL_KIND })?.count;
+    const requestsBeforeCleanup = countDeviceRequests();
+    const approvalsBeforeCleanup = countDeviceApprovals();
+    expect(requestsBeforeCleanup).toBe(1);
+    expect(approvalsBeforeCleanup).toBe(1);
+    const cleanupPrepareSpy = vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
       if (sql.includes("INSERT INTO auth_device_requests")) {
         throw new Error("sqlite write failed");
       }
-      return cleanupPrepare(sql);
+      return originalPrepare(sql);
     });
-    await expect(createDeviceAccessRequest(cleanupHarness.deps, { deviceType: "desktop" }, {})).rejects.toThrow(
+    await expect(createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {})).rejects.toThrow(
       "sqlite write failed",
     );
-    expect(
-      cleanupHarness.storage.gatewaySql
-        .prepare("SELECT COUNT(*) AS count FROM auth_device_requests")
-        .get<{ count: number }>()?.count,
-    ).toBe(0);
-    expect(
-      cleanupHarness.storage.gatewaySql
-        .prepare("SELECT COUNT(*) AS count FROM approvals WHERE kind = @kind")
-        .get<{ count: number }>({ kind: DEVICE_ACCESS_APPROVAL_KIND })?.count,
-    ).toBe(0);
+    cleanupPrepareSpy.mockRestore();
+    expect(countDeviceRequests()).toBe(requestsBeforeCleanup);
+    expect(countDeviceApprovals()).toBe(approvalsBeforeCleanup);
 
-    const grantHarness = buildAuthHarness();
-    const grant = await createApprovedDeviceGrant(grantHarness);
-    expect(await getActiveAuthDeviceGrantById(grantHarness.deps, grant.grantId)).toBeDefined();
-    await revokeDeviceAccessGrant(grantHarness.deps, grant.grantId, "operator:test");
-    expect(await getActiveAuthDeviceGrantById(grantHarness.deps, grant.grantId)).toBeUndefined();
+    const grant = await createApprovedDeviceGrant(harness);
+    expect(await getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeDefined();
+    await revokeDeviceAccessGrant(harness.deps, grant.grantId, "operator:test");
+    expect(await getActiveAuthDeviceGrantById(harness.deps, grant.grantId)).toBeUndefined();
 
-    const expiredGrant = await createApprovedDeviceGrant(grantHarness);
-    grantHarness.storage.gatewaySql
+    const expiredGrant = await createApprovedDeviceGrant(harness);
+    harness.storage.gatewaySql
       .prepare(
         `
         UPDATE auth_device_grants
@@ -2417,7 +2424,7 @@ describe("settings-auth-service device access lifecycle", () => {
         grantId: expiredGrant.grantId,
         expiresAt: new Date(Date.now() - 1_000).toISOString(),
       });
-    expect(await getActiveAuthDeviceGrantById(grantHarness.deps, expiredGrant.grantId)).toBeUndefined();
+    expect(await getActiveAuthDeviceGrantById(harness.deps, expiredGrant.grantId)).toBeUndefined();
   });
 });
 
