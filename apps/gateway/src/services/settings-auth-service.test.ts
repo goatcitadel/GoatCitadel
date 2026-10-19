@@ -3327,23 +3327,27 @@ describe("settings-auth-service companion session lifecycle", () => {
   });
 
   it("surfaces companion refresh/revoke races and filters audit events by session and grant", async () => {
-    const refreshHarness = buildAuthHarness();
-    const refreshGrant = await createApprovedDeviceGrant(refreshHarness);
-    const refreshKeys = createCompanionSigningKeys();
-    const refreshSession = await exchangeCompanionSessionFromDeviceGrant(refreshHarness.deps, refreshGrant.grantId, {
-      signingPublicKeyPem: refreshKeys.publicKeyPem,
+    // One harness serves all three scenarios. Every fresh Storage replays the whole
+    // migration chain, and building three of them pushed this test past its
+    // timeout on contended CI runners. The refresh race rolls back, so the same
+    // session then serves the revoke race.
+    const harness = buildAuthHarness();
+    const grant = await createApprovedDeviceGrant(harness);
+    const keys = createCompanionSigningKeys();
+    const session = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grant.grantId, {
+      signingPublicKeyPem: keys.publicKeyPem,
     });
-    const originalRefreshPrepare = refreshHarness.storage.gatewaySql.prepare.bind(refreshHarness.storage.gatewaySql);
+    const originalPrepare = harness.storage.gatewaySql.prepare.bind(harness.storage.gatewaySql);
     let interceptedRefresh = false;
-    vi.spyOn(refreshHarness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
-      const statement = originalRefreshPrepare(sql);
+    const refreshPrepareSpy = vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
+      const statement = originalPrepare(sql);
       if (!interceptedRefresh && sql.includes("SET access_token_hash = @accessTokenHash")) {
         interceptedRefresh = true;
         return new Proxy(statement, {
           get(target, prop, receiver) {
             if (prop === "run") {
               return (params: { sessionId: string }) => {
-                originalRefreshPrepare(
+                originalPrepare(
                   `
                   UPDATE companion_sessions
                   SET refresh_token_hash = 'rotated-before-refresh'
@@ -3359,20 +3363,15 @@ describe("settings-auth-service companion session lifecycle", () => {
       }
       return statement;
     });
-    await expect(
-      rotateCompanionSession(refreshHarness.deps, { refreshToken: refreshSession.refreshToken }),
-    ).rejects.toThrow("Companion session refresh token has already been rotated.");
+    await expect(rotateCompanionSession(harness.deps, { refreshToken: session.refreshToken })).rejects.toThrow(
+      "Companion session refresh token has already been rotated.",
+    );
+    expect(interceptedRefresh).toBe(true);
+    refreshPrepareSpy.mockRestore();
 
-    const revokeHarness = buildAuthHarness();
-    const revokeGrant = await createApprovedDeviceGrant(revokeHarness);
-    const revokeKeys = createCompanionSigningKeys();
-    const revokeSession = await exchangeCompanionSessionFromDeviceGrant(revokeHarness.deps, revokeGrant.grantId, {
-      signingPublicKeyPem: revokeKeys.publicKeyPem,
-    });
-    const originalRevokePrepare = revokeHarness.storage.gatewaySql.prepare.bind(revokeHarness.storage.gatewaySql);
     let interceptedRevoke = false;
-    vi.spyOn(revokeHarness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
-      const statement = originalRevokePrepare(sql);
+    vi.spyOn(harness.storage.gatewaySql, "prepare").mockImplementation((sql: string) => {
+      const statement = originalPrepare(sql);
       if (!interceptedRevoke && sql.includes("SET revoked_at = COALESCE(revoked_at, @revokedAt)")) {
         interceptedRevoke = true;
         return new Proxy(statement, {
@@ -3380,7 +3379,7 @@ describe("settings-auth-service companion session lifecycle", () => {
             if (prop === "run") {
               return (params: { sessionId: string }) => {
                 const result = target.run(params);
-                originalRevokePrepare("DELETE FROM companion_sessions WHERE session_id = @sessionId").run({
+                originalPrepare("DELETE FROM companion_sessions WHERE session_id = @sessionId").run({
                   sessionId: params.sessionId,
                 });
                 return result;
@@ -3393,14 +3392,17 @@ describe("settings-auth-service companion session lifecycle", () => {
       return statement;
     });
 
-    const revoked = await revokeCompanionSession(revokeHarness.deps, revokeSession.sessionId, "operator:test");
+    const revoked = await revokeCompanionSession(harness.deps, session.sessionId, "operator:test");
+    expect(interceptedRevoke).toBe(true);
     expect(revoked.session).toMatchObject({
-      sessionId: revokeSession.sessionId,
+      sessionId: session.sessionId,
       revokedAt: expect.any(String),
     });
 
-    const auditHarness = buildAuthHarness();
-    auditHarness.auditRecords.push(
+    // Swap the real exchange/revoke audit records for fixed ones so the filter
+    // assertion sees only the rows it is about.
+    harness.auditRecords.splice(0);
+    harness.auditRecords.push(
       {
         timestamp: "2026-05-10T00:00:03.000Z",
         event: "auth.companion_session.exchange",
@@ -3428,7 +3430,7 @@ describe("settings-auth-service companion session lifecycle", () => {
     );
 
     await expect(
-      listCompanionAuditEvents(auditHarness.deps, {
+      listCompanionAuditEvents(harness.deps, {
         sessionId: "session-target",
         grantId: "grant-target",
         limit: 10,
