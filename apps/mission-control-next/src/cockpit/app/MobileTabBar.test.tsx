@@ -98,6 +98,9 @@ describe("MobileTabBar", () => {
     act(() => tab("Library").focus());
     expect(preload).toHaveBeenLastCalledWith("library");
     expect(window.location.pathname).toBe("/chat");
+    // SH-28: a new tab opened from an area link stays in Cockpit, even when the saved shell is Classic.
+    expect(new URL(tab("Library").href).searchParams.get("shell")).toBe("cockpit");
+    expect(new URL(tab("Library").href).pathname).toBe("/library");
     await act(async () => tab("Work").click());
     expect(window.location.pathname).toBe("/work");
   });

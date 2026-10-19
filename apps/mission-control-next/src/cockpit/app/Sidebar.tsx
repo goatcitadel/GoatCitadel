@@ -12,6 +12,7 @@ import {
   Settings,
 } from "lucide-react";
 import { isModifiedClick } from "../lib/modified-click";
+import { cockpitHref } from "./cockpit-history";
 import { shortcutLabel } from "./platform-keys";
 import { fetchWorkspaces } from "@goatcitadel/mission-control-shared/api/workspaces";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
@@ -112,7 +113,8 @@ export function Sidebar({
           return (
             <a
               key={entry.area}
-              href={entry.path}
+              // The canonical cockpit URL, so a new tab opens Cockpit even when the saved shell is Classic.
+              href={cockpitHref(entry.path) ?? entry.path}
               aria-label={entry.area === "inbox" ? inboxNavigationLabel(inboxCount) : entry.label}
               title={`${entry.label} (g then ${entry.shortcut})`}
               aria-current={current === entry.area ? "page" : undefined}
@@ -157,7 +159,7 @@ export function Sidebar({
         </div>
       ) : (
         <a
-          href="/system"
+          href={cockpitHref("/system") ?? "/system"}
           title={healthStatus.title}
           onPointerEnter={() => preload("system")}
           onFocus={() => preload("system")}

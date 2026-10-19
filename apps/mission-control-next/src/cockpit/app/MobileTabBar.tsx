@@ -32,6 +32,7 @@ import { useWorkspaceName } from "../data/use-workspace-name";
 import { useCitadelName } from "../data/use-citadel-name";
 import { TechnicalDetails } from "../ui/TechnicalDetails";
 import { isModifiedClick } from "../lib/modified-click";
+import { cockpitHref } from "./cockpit-history";
 
 const TABS = [
   { area: "chat", label: "Chat", path: "/chat", Icon: MessageSquare },
@@ -82,7 +83,8 @@ export function MobileTabBar({
           {TABS.map(({ area, label, path, Icon }) => (
             <a
               key={area}
-              href={path}
+              // The canonical cockpit URL, so a new tab opens Cockpit even when the saved shell is Classic.
+              href={cockpitHref(path) ?? path}
               aria-current={current === area ? "page" : undefined}
               aria-label={area === "inbox" && inboxCount ? inboxNavigationLabel(inboxCount) : undefined}
               aria-describedby={area === "work" && phone ? "cockpit-work-running-summary" : undefined}
