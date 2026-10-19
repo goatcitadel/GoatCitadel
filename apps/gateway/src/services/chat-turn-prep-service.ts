@@ -602,6 +602,7 @@ export async function prepareAgentChatTurn(
 ): Promise<PreparedAgentChatTurn> {
   const preparationStartedAt = performance.now();
   const turnId = options?.turnId ?? randomUUID();
+  const isFeatureEnabled = (flag: string) => host.isFeatureEnabled(flag);
   const systemHeartbeatPosture = readSystemHeartbeatTurnPrepPosture(input, options, turnId);
   await assertPrepTurnAdmission(host, options?.turnAdmission);
   const session = await host.getSession(sessionId);
@@ -667,7 +668,7 @@ export async function prepareAgentChatTurn(
   const freshExplicitContext = !boundCapabilityProfile && (input.contextRefs?.length ?? 0) > 0;
   if (
     freshExplicitContext &&
-    (!(await host.isFeatureEnabled("chatExplicitContextV1Enabled")) ||
+    (!(await isFeatureEnabled("chatExplicitContextV1Enabled")) ||
       !options?.turnAdmission ||
       options.turnAdmission.durableClaim ||
       input.parentDelegationStepId ||
@@ -1017,7 +1018,7 @@ export async function prepareAgentChatTurn(
   // date) — the single biggest cause of thin cowork responses. With the base
   // system prompt enabled (default on; kill switch coworkRuntimeQualityV1Disabled)
   // we apply a real layered prompt, and the personality overlay, to every mode.
-  const baseSystemPromptEnabled = !(await host.isFeatureEnabled("coworkRuntimeQualityV1Disabled"));
+  const baseSystemPromptEnabled = !(await isFeatureEnabled("coworkRuntimeQualityV1Disabled"));
   const personalityOverlay = quickWebTurn
     ? undefined
     : baseSystemPromptEnabled || effectiveMode === "chat"
@@ -1660,10 +1661,16 @@ export function upsertChatTurnBindingSystemInstruction(
   return next;
 }
 
-function formatWorkPassportInstruction(passport: WorkPassportRecord): string[] {
+function formatWorkPassportInstruction({
+  boundary,
+  consequence,
+  review: { posture },
+  actionPosture,
+  evidenceRequirements,
+}: WorkPassportRecord): string[] {
   return [
-    `Work Passport: boundary=${passport.boundary}; consequence=${passport.consequence}; review=${passport.review.posture}; action=${passport.actionPosture}.`,
-    `Work Passport requirements: ${passport.evidenceRequirements.join(" ") || "Check material facts and assumptions."}`,
+    `Work Passport: boundary=${boundary}; consequence=${consequence}; review=${posture}; action=${actionPosture}.`,
+    `Work Passport requirements: ${evidenceRequirements.join(" ") || "Check material facts and assumptions."}`,
     "Treat the Work Passport as an advisory task/review contract, not an assessment of the operator. State material uncertainty and do not represent review as completed unless evidence shows it.",
   ];
 }

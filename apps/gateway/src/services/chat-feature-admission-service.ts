@@ -87,6 +87,8 @@ export async function resolveChatFeatureAdmission(
   input: Parameters<NonNullable<ChatTurnPrepHost["resolveChatFeatureAdmission"]>>[0],
 ): Promise<FeatureBinding | undefined> {
   await host.assertTurnAdmissionWrite(input.admission);
+  // One reader for every restoration switch consulted during admission.
+  const isEnabled = (flag: string) => host.isFeatureEnabled(flag);
   const existing = await host.storage.sessionMutationAdmissions.findFeatureReferences(input.admission.identity);
   const scheduledOccurrence = existing?.references.scheduledOccurrence ?? input.scheduledOccurrence;
   if (scheduledOccurrence) {
@@ -137,13 +139,10 @@ export async function resolveChatFeatureAdmission(
   if (
     route?.effectiveProviderId &&
     route.effectiveModel &&
-    (input.explicitContextRequested ||
-      (route.providerFallback && (await host.isFeatureEnabled("chatProviderFallbackV1Enabled"))))
+    (input.explicitContextRequested || (route.providerFallback && (await isEnabled("chatProviderFallbackV1Enabled"))))
   ) {
     const primary = { providerId: route.effectiveProviderId, model: route.effectiveModel };
-    const fallback = (await host.isFeatureEnabled("chatProviderFallbackV1Enabled"))
-      ? route.providerFallback
-      : undefined;
+    const fallback = (await isEnabled("chatProviderFallbackV1Enabled")) ? route.providerFallback : undefined;
     const fingerprint = host.routeFingerprint(primary, fallback);
     if (fingerprint) references.providerRoute = { primary, ...(fallback ? { fallback } : {}), fingerprint };
     else if (input.explicitContextRequested)
@@ -154,7 +153,7 @@ export async function resolveChatFeatureAdmission(
     !input.explicitContextRequested &&
     !input.scheduledOccurrence &&
     !input.heartbeatOccurrence &&
-    (await host.isFeatureEnabled("chatAutomaticFanoutV1Enabled"))
+    (await isEnabled("chatAutomaticFanoutV1Enabled"))
   ) {
     const binding = await host.storage.chatSessionProjects.get(input.admission.identity.sessionId);
     const project = binding?.projectId ? await host.storage.chatProjects.find(binding.projectId) : undefined;
@@ -162,7 +161,7 @@ export async function resolveChatFeatureAdmission(
       throw new ConflictError({ message: "Automatic fanout requires an active project-bound Chat session." });
     references.childWork = buildFanoutAdmissionReference(input.admission, project);
   }
-  if (await host.isFeatureEnabled("chatSkillInstructionsV1Enabled")) {
+  if (await isEnabled("chatSkillInstructionsV1Enabled")) {
     const workspaceId = input.admission.identity.workspaceId;
     const decision = await host.resolveSkills(input.content, workspaceId);
     const selectedIds = new Set(
@@ -203,25 +202,25 @@ export async function resolveChatFeatureAdmission(
       await renderAdmittedSkillInstructions(host, references, workspaceId);
     }
   }
-  if ((await host.isFeatureEnabled("chatWorkPassportV1Enabled")) && host.classifyWorkPassport) {
+  if ((await isEnabled("chatWorkPassportV1Enabled")) && host.classifyWorkPassport) {
     references.workPassport = await host.classifyWorkPassport(input.admission.identity.workspaceId, input.content);
   }
-  if ((await host.isFeatureEnabled("chatRequesterMcpV1Enabled")) && host.resolveRequesterConnections) {
+  if ((await isEnabled("chatRequesterMcpV1Enabled")) && host.resolveRequesterConnections) {
     const connections = await host.resolveRequesterConnections({ admission: input.admission, content: input.content });
     if (connections.length) references.requesterConnections = connections;
   }
-  if ((await host.isFeatureEnabled("chatStaticMcpV1Enabled")) && host.resolveStaticMcpConnections) {
+  if ((await isEnabled("chatStaticMcpV1Enabled")) && host.resolveStaticMcpConnections) {
     const connections = await host.resolveStaticMcpConnections({ admission: input.admission, content: input.content });
     if (connections.length) references.selectedStaticMcp = connections;
   }
-  if ((await host.isFeatureEnabled("chatMeshCapabilitiesV1Enabled")) && host.resolveMeshCapabilities) {
+  if ((await isEnabled("chatMeshCapabilitiesV1Enabled")) && host.resolveMeshCapabilities) {
     const mesh = await host.resolveMeshCapabilities({ admission: input.admission, content: input.content });
     if (mesh) references.selectedMeshCapabilities = mesh;
   }
   if (
     route?.effectiveProviderId &&
     route.effectiveModel &&
-    (await host.isFeatureEnabled("chatRemotePlacementV1Enabled")) &&
+    (await isEnabled("chatRemotePlacementV1Enabled")) &&
     host.resolveRemotePlacement
   ) {
     const placement = await host.resolveRemotePlacement({
