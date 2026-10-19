@@ -108,15 +108,15 @@ export async function resolveInheritedChatContextRefs(
 ): Promise<InheritedChatContextRefs | undefined> {
   const { request, admission } = input;
   if (input.profileBound || request.contextRefs !== undefined || !admission || admission.durableClaim) return undefined;
+  const child = Boolean(request.parentDelegationStepId);
+  const branch = (input.branchKind === "retry" || input.branchKind === "edit") && Boolean(input.sourceTurnId);
+  if (!child && !branch) return undefined;
   if (!(await host.isFeatureEnabled("chatExplicitContextBranchesV1Enabled"))) return undefined;
   const { storage } = host;
-  if (request.parentDelegationStepId) {
+  if (child) {
     const refs = await resolveDelegatedParentContextRefs(storage, admission);
     return refs?.length ? { refs, source: "parent" } : undefined;
   }
-  if ((input.branchKind === "retry" || input.branchKind === "edit") && input.sourceTurnId) {
-    const refs = await resolveBranchInheritedContextRefs(storage, input.sourceTurnId);
-    return refs?.length ? { refs, source: "branch" } : undefined;
-  }
-  return undefined;
+  const refs = await resolveBranchInheritedContextRefs(storage, input.sourceTurnId!);
+  return refs?.length ? { refs, source: "branch" } : undefined;
 }
