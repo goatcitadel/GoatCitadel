@@ -71,6 +71,7 @@ import { createMemoryItemEnumerationSchema } from "./memory-item-enumeration-sch
 import { createPermissionProfileSelectionSchema } from "./permission-profile-selection-schema.js";
 import { createCitadelAccessRevisionSchema } from "./citadel-access-revision-schema.js";
 import { createCitadelVaultRevisionSchema } from "./citadel-vault-revision-schema.js";
+import { CITADEL_VAULT_KEYS_SQLITE_SQL, CITADEL_VAULT_SECRET_SCOPE_COLUMNS } from "./citadel-vault-key-schema.js";
 import { upgradeRemoteWorkerCancellationSettlement } from "./remote-worker-cancellation-settlement-schema.js";
 import { MANAGED_SOURCE_INSTALL_SQL } from "./managed-source-install-repo.js";
 import { PRODUCT_SOURCE_UPDATE_SQLITE_SCHEMA_SQL } from "./product-source-update-repo.js";
@@ -7480,6 +7481,21 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         name: "external_side_effect_replay_record",
         up: (db) => {
           addColumnIfMissingIfTableExists(db, "external_side_effect_runs", "replay_record_json", "TEXT");
+        },
+      },
+      // Vault per-Chamber keys: scope/key columns on secrets plus wrapped data keys,
+      // per-Citadel key state and the rotation ledger. Additive; no plaintext.
+      {
+        version: 269,
+        name: "citadel_vault_chamber_keys",
+        up: (db) => {
+          if (!tableExists(db, "citadel_vault_secrets")) {
+            return;
+          }
+          for (const [column, definition] of CITADEL_VAULT_SECRET_SCOPE_COLUMNS) {
+            addColumnIfMissingIfTableExists(db, "citadel_vault_secrets", column, definition);
+          }
+          db.exec(CITADEL_VAULT_KEYS_SQLITE_SQL);
         },
       },
     ],

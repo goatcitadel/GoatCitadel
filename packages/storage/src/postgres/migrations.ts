@@ -62,6 +62,10 @@ import { MEMORY_ITEM_ENUMERATION_POSTGRES_SQL } from "../memory-item-enumeration
 import { PERMISSION_PROFILE_SELECTION_POSTGRES_SQL } from "../permission-profile-selection-schema.js";
 import { CITADEL_ACCESS_REVISION_POSTGRES_SQL } from "../citadel-access-revision-schema.js";
 import { CITADEL_VAULT_REVISION_POSTGRES_SQL } from "../citadel-vault-revision-schema.js";
+import {
+  CITADEL_VAULT_KEYS_POSTGRES_SQL,
+  CITADEL_VAULT_KEYS_SCHEMA_CONVERGENCE_POSTGRES_SQL,
+} from "../citadel-vault-key-schema.js";
 import { REMOTE_WORKER_CANCELLATION_SETTLEMENT_POSTGRES_SQL } from "../remote-worker-cancellation-settlement-schema.js";
 import { MANAGED_SOURCE_INSTALL_SQL } from "../managed-source-install-repo.js";
 import { PRODUCT_SOURCE_UPDATE_POSTGRES_SCHEMA_SQL } from "../product-source-update-repo.js";
@@ -15224,6 +15228,21 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       ALTER TABLE external_side_effect_runs ADD COLUMN IF NOT EXISTS replay_record_json TEXT;
     `,
     integritySha256: "1368d55a32906a665fd9209b3346e9667242b705d200a2fc19238a462f65649d",
+  },
+  {
+    // Parity with SQLite v269: Vault per-Chamber keys. Written in the v2 render's form.
+    version: 217,
+    name: "citadel_vault_chamber_keys",
+    sql: CITADEL_VAULT_KEYS_POSTGRES_SQL,
+    integritySha256: "2f6d9ffdd937e4445c7fde3f3b0ec13a97e6fe83143e81f3d8fc28aeaa32ae1a",
+  },
+  {
+    // Fresh installs get the v2-rendered tables, upgraded installs get v217;
+    // converge both for the canonical shape gate.
+    version: 218,
+    name: "citadel_vault_chamber_keys_schema_convergence",
+    sql: CITADEL_VAULT_KEYS_SCHEMA_CONVERGENCE_POSTGRES_SQL,
+    integritySha256: "a80c3efa7adb6246a127793838e95491c974f429c67045a7edf8384cbed8a7aa",
   },
 ];
 
