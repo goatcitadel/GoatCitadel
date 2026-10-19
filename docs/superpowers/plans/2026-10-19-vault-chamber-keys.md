@@ -19,7 +19,7 @@
 - No plaintext, key bytes, wrapped DEKs or ciphertext in logs, audit, realtime, idempotency records, errors or responses. Synthetic token fixtures only.
 - AAD JSON exactly as spec §4 (`purpose` `goatcitadel.vault.dek-wrap` / `goatcitadel.vault.secret`, `v: 2`, fixed key order).
 - Keychain accounts: KEK v1 = `citadel:<citadelId>:vault_master_key`; v≥2 = `citadel:<citadelId>:vault_kek:v<n>`.
-- Error codes verbatim: `VAULT_KEYCHAIN_UNAVAILABLE` (503), `VAULT_KEY_MISSING`, `VAULT_ROTATION_IN_PROGRESS`, `VAULT_KEY_CHANGED`, `VAULT_LEGACY_SECRETS_PRESENT`, `CITADEL_ARCHIVED` (409); ledger codes `unwrap_failed`, `open_failed`, `keychain_unavailable`, `keychain_write_unverified`, `kek_rotation_unavailable`.
+- Error codes verbatim: `VAULT_KEYCHAIN_UNAVAILABLE` (503), `VAULT_KEY_MISSING`, `VAULT_ROTATION_IN_PROGRESS`, `VAULT_KEY_CHANGED`, `VAULT_LEGACY_SECRETS_PRESENT`, `VAULT_NO_KEY_TO_ROTATE`, `CITADEL_ARCHIVED` (409); ledger codes `unwrap_failed`, `open_failed`, `keychain_unavailable`, `keychain_write_unverified`, `kek_rotation_unavailable`.
 - Approval kind `citadel.vault.key_rotation`, risk `danger`. Revision schema `citadel.vault.v2`.
 - No personal paths in tracked files. PRs against main, each `Refs #443` and `Refs #341`; only the last says `Closes #443`. Security-reviewer pass before opening PR 3 and PR 4. Read `DESIGN.md` and `PRODUCT.md` before PR 5.
 - Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; push with `git -c credential.helper='!gh auth git-credential' push`.
