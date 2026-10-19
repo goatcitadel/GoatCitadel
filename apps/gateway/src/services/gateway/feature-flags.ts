@@ -68,7 +68,7 @@ export function buildUpdatedFeatureFlags(
       patch.chatMeshCapabilitiesV1Enabled ?? current.chatMeshCapabilitiesV1Enabled ?? false,
     chatRemotePlacementV1Enabled: patch.chatRemotePlacementV1Enabled ?? current.chatRemotePlacementV1Enabled ?? false,
     chatWorkspaceSnapshotV1Enabled:
-      patch.chatWorkspaceSnapshotV1Enabled ?? current.chatWorkspaceSnapshotV1Enabled ?? false,
+      patch.chatWorkspaceSnapshotV1Enabled ?? current.chatWorkspaceSnapshotV1Enabled ?? true,
     chatRequesterMcpV1Enabled: patch.chatRequesterMcpV1Enabled ?? current.chatRequesterMcpV1Enabled ?? false,
     chatStaticMcpV1Enabled: patch.chatStaticMcpV1Enabled ?? current.chatStaticMcpV1Enabled ?? false,
     evolutionControlPlaneV1Enabled: patch.evolutionControlPlaneV1Enabled ?? current.evolutionControlPlaneV1Enabled,
@@ -159,7 +159,7 @@ export function resolveGatewayFeatureFlags(
     chatRemotePlacementV1Enabled:
       stored?.chatRemotePlacementV1Enabled ?? fromConfig.chatRemotePlacementV1Enabled ?? false,
     chatWorkspaceSnapshotV1Enabled:
-      stored?.chatWorkspaceSnapshotV1Enabled ?? fromConfig.chatWorkspaceSnapshotV1Enabled ?? false,
+      stored?.chatWorkspaceSnapshotV1Enabled ?? fromConfig.chatWorkspaceSnapshotV1Enabled ?? true,
     chatRequesterMcpV1Enabled: stored?.chatRequesterMcpV1Enabled ?? fromConfig.chatRequesterMcpV1Enabled ?? false,
     chatStaticMcpV1Enabled: stored?.chatStaticMcpV1Enabled ?? fromConfig.chatStaticMcpV1Enabled ?? false,
     evolutionControlPlaneV1Enabled:

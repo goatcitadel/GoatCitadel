@@ -15,7 +15,6 @@ const restored = [
   "chatStaticMcpV1Enabled",
   "chatMeshCapabilitiesV1Enabled",
   "chatRemotePlacementV1Enabled",
-  "chatWorkspaceSnapshotV1Enabled",
 ] as const;
 describe("restored feature defaults and persistence", () => {
   it("leaves every new restoration disabled when historical configuration omits it", () => {
@@ -31,5 +30,12 @@ describe("restored feature defaults and persistence", () => {
     const restoredSettings = resolveGatewayFeatureFlags(unrelated, defaults);
     expect(restoredSettings[key]).toBe(true);
     expect(buildUpdatedFeatureFlags(restoredSettings, { [key]: false })[key]).toBe(false);
+  });
+  it("defaults chatWorkspaceSnapshotV1Enabled on once its restoration proved green, and still supports revocation", () => {
+    const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
+    expect(defaults.chatWorkspaceSnapshotV1Enabled).toBe(true);
+    expect(
+      buildUpdatedFeatureFlags(defaults, { chatWorkspaceSnapshotV1Enabled: false }).chatWorkspaceSnapshotV1Enabled,
+    ).toBe(false);
   });
 });
