@@ -148,7 +148,7 @@ describe("OutsideRootWriteGrantOptions", () => {
     api.approveChatTool.mockRejectedValue(new Error("network down"));
     const onResolved = await render(approvalWith(OUTSIDE_ROOT_PREVIEW));
     await click(button("Approve and open folder"));
-    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+    await vi.waitFor(() => expect(text()).toContain("network down"));
     expect(onResolved).not.toHaveBeenCalled();
     expect(button("Approve and open folder").disabled).toBe(true);
   });
