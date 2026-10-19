@@ -93,104 +93,266 @@ describe("remote worker operator registry routes HX-507A", () => {
   });
 
   it("creates a native review with URL-owned scope and requires an idempotency key", async () => {
-    const requestReview = vi.fn(async () => ({ approvalId: "review", status: "pending", expiresAt: null, requestSha256: "ab".repeat(32) }));
+    const requestReview = vi.fn(async () => ({
+      approvalId: "review",
+      status: "pending",
+      expiresAt: null,
+      requestSha256: "ab".repeat(32),
+    }));
     app = await buildOperatorMutationHarness({ nativeRuntime: { requestReview } });
     const url = "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-runtime-reviews";
-    const payload = { assignmentGeneration: 2, launch: { image: "bounded-runtime" }, inventoryLimits: { maxEntries: 1 } };
+    const payload = {
+      assignmentGeneration: 2,
+      launch: { image: "bounded-runtime" },
+      inventoryLimits: { maxEntries: 1 },
+    };
     expect((await app.inject({ method: "POST", url, payload })).statusCode).toBe(400);
     expect(requestReview).not.toHaveBeenCalled();
-    const response = await app.inject({ method: "POST", url, payload, headers: { "Idempotency-Key": "native-review" } });
+    const response = await app.inject({
+      method: "POST",
+      url,
+      payload,
+      headers: { "Idempotency-Key": "native-review" },
+    });
     expect(response.statusCode).toBe(201);
     expect(response.headers["cache-control"]).toBe("no-store");
-    expect(requestReview).toHaveBeenCalledWith({ ...payload, registryWorkspaceId: "workspace-a", assignmentId: "assign-a" }, expect.any(AbortSignal));
-    expect(response.json()).toEqual({ approvalId: "review", status: "pending", expiresAt: null, requestSha256: "ab".repeat(32) });
+    expect(requestReview).toHaveBeenCalledWith(
+      { ...payload, registryWorkspaceId: "workspace-a", assignmentId: "assign-a" },
+      expect.any(AbortSignal),
+    );
+    expect(response.json()).toEqual({
+      approvalId: "review",
+      status: "pending",
+      expiresAt: null,
+      requestSha256: "ab".repeat(32),
+    });
     for (const extra of [{ registryWorkspaceId: "other" }, { leaseTokenSha256: "forged" }, { approved: true }]) {
-      expect((await app.inject({ method: "POST", url, payload: { ...payload, ...extra }, headers: { "Idempotency-Key": `reject-${Object.keys(extra)[0]}` } })).statusCode).toBe(400);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url,
+            payload: { ...payload, ...extra },
+            headers: { "Idempotency-Key": `reject-${Object.keys(extra)[0]}` },
+          })
+        ).statusCode,
+      ).toBe(400);
     }
     expect(requestReview).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])("routes installation review retention=%s with operator scope and idempotency", async retain => {
-    const method = vi.fn(async () => ({ approvalId: "review", requestSha256: "ab".repeat(32) }));
-    app = await buildOperatorMutationHarness({ nativeRuntime: retain ? { retainInstallationReview: method } : { requestInstallationReview: method } });
-    const url = "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-installation-reviews" + (retain ? "/review/retention" : "");
-    const payload = retain ? { assignmentGeneration: 2 } : { assignmentGeneration: 2, packageSha256: "cd".repeat(32),
-      runtimeBundle: { schemaVersion: "goatcitadel.worker-runtime-bundle.v1", files: [{ relativePath: "node.exe", bytes: 10, sha256: "ef".repeat(32) }] } };
-    expect((await app.inject({ method: "POST", url, payload })).statusCode).toBe(400);
-    expect(method).not.toHaveBeenCalled();
-    const response = await app.inject({ method: "POST", url, payload, headers: { "Idempotency-Key": "installation-review" } });
-    expect(response.statusCode).toBe(retain ? 200 : 201); expect(response.headers["cache-control"]).toBe("no-store");
-    expect(method).toHaveBeenCalledWith({ ...payload, registryWorkspaceId: "workspace-a", assignmentId: "assign-a",
-      ...(retain ? { approvalId: "review" } : {}) }, expect.any(AbortSignal));
-    for (const extra of [{ registryWorkspaceId: "other" }, { leaseTokenSha256: "forged" }, { approved: true }, { request: "injected" }]) {
-      expect((await app.inject({ method: "POST", url, payload: { ...payload, ...extra }, headers: { "Idempotency-Key": `reject-${Object.keys(extra)[0]}` } })).statusCode).toBe(400);
-    }
-    expect(method).toHaveBeenCalledOnce();
-  });
+  it.each([false, true])(
+    "routes installation review retention=%s with operator scope and idempotency",
+    async (retain) => {
+      const method = vi.fn(async () => ({ approvalId: "review", requestSha256: "ab".repeat(32) }));
+      app = await buildOperatorMutationHarness({
+        nativeRuntime: retain ? { retainInstallationReview: method } : { requestInstallationReview: method },
+      });
+      const url =
+        "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-installation-reviews" +
+        (retain ? "/review/retention" : "");
+      const payload = retain
+        ? { assignmentGeneration: 2 }
+        : {
+            assignmentGeneration: 2,
+            packageSha256: "cd".repeat(32),
+            runtimeBundle: {
+              schemaVersion: "goatcitadel.worker-runtime-bundle.v1",
+              files: [{ relativePath: "node.exe", bytes: 10, sha256: "ef".repeat(32) }],
+            },
+          };
+      expect((await app.inject({ method: "POST", url, payload })).statusCode).toBe(400);
+      expect(method).not.toHaveBeenCalled();
+      const response = await app.inject({
+        method: "POST",
+        url,
+        payload,
+        headers: { "Idempotency-Key": "installation-review" },
+      });
+      expect(response.statusCode).toBe(retain ? 200 : 201);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(method).toHaveBeenCalledWith(
+        {
+          ...payload,
+          registryWorkspaceId: "workspace-a",
+          assignmentId: "assign-a",
+          ...(retain ? { approvalId: "review" } : {}),
+        },
+        expect.any(AbortSignal),
+      );
+      for (const extra of [
+        { registryWorkspaceId: "other" },
+        { leaseTokenSha256: "forged" },
+        { approved: true },
+        { request: "injected" },
+      ]) {
+        expect(
+          (
+            await app.inject({
+              method: "POST",
+              url,
+              payload: { ...payload, ...extra },
+              headers: { "Idempotency-Key": `reject-${Object.keys(extra)[0]}` },
+            })
+          ).statusCode,
+        ).toBe(400);
+      }
+      expect(method).toHaveBeenCalledOnce();
+    },
+  );
 
   it("refuses malformed installation manifests and unavailable installation owners", async () => {
     app = await buildOperatorMutationHarness({});
     const url = "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-installation-reviews";
-    for (const runtimeBundle of [undefined, {}, { schemaVersion: "goatcitadel.worker-runtime-bundle.v1", files: [{ relativePath: "../escape", bytes: 1, sha256: "ab".repeat(32) }] }]) {
-      expect((await app.inject({ method: "POST", url, payload: { assignmentGeneration: 1, packageSha256: "cd".repeat(32), runtimeBundle },
-        headers: { "Idempotency-Key": "malformed-installation" } })).statusCode).toBe(400);
+    for (const runtimeBundle of [
+      undefined,
+      {},
+      {
+        schemaVersion: "goatcitadel.worker-runtime-bundle.v1",
+        files: [{ relativePath: "../escape", bytes: 1, sha256: "ab".repeat(32) }],
+      },
+    ]) {
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url,
+            payload: { assignmentGeneration: 1, packageSha256: "cd".repeat(32), runtimeBundle },
+            headers: { "Idempotency-Key": "malformed-installation" },
+          })
+        ).statusCode,
+      ).toBe(400);
     }
-    expect((await app.inject({ method: "POST", url: `${url}/review/retention`, payload: { assignmentGeneration: 1 },
-      headers: { "Idempotency-Key": "missing-installation-owner" } })).statusCode).toBe(503);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `${url}/review/retention`,
+          payload: { assignmentGeneration: 1 },
+          headers: { "Idempotency-Key": "missing-installation-owner" },
+        })
+      ).statusCode,
+    ).toBe(503);
   });
 
   it("rejects incomplete native review bodies and reports a missing owner", async () => {
     app = await buildOperatorMutationHarness({});
     const url = "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-runtime-reviews";
     for (const payload of [{ assignmentGeneration: 1 }, { assignmentGeneration: 0, launch: {}, inventoryLimits: {} }]) {
-      expect((await app.inject({ method: "POST", url, payload, headers: { "Idempotency-Key": JSON.stringify(payload) } })).statusCode).toBe(400);
+      expect(
+        (await app.inject({ method: "POST", url, payload, headers: { "Idempotency-Key": JSON.stringify(payload) } }))
+          .statusCode,
+      ).toBe(400);
     }
-    expect((await app.inject({ method: "POST", url, payload: { assignmentGeneration: 1, launch: {}, inventoryLimits: {} },
-      headers: { "Idempotency-Key": "unavailable-native-review" } })).statusCode).toBe(503);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url,
+          payload: { assignmentGeneration: 1, launch: {}, inventoryLimits: {} },
+          headers: { "Idempotency-Key": "unavailable-native-review" },
+        })
+      ).statusCode,
+    ).toBe(503);
   });
-  it.each([false, true])("awaits native review idempotency completion (failure=%s)", async failure => {
-    const requestReview = vi.fn(async () => ({ approvalId: "review", status: "pending", expiresAt: null, requestSha256: "ab".repeat(32) }));
+  it.each([false, true])("awaits native review idempotency completion (failure=%s)", async (failure) => {
+    const requestReview = vi.fn(async () => ({
+      approvalId: "review",
+      status: "pending",
+      expiresAt: null,
+      requestSha256: "ab".repeat(32),
+    }));
     app = await buildOperatorMutationHarness({ nativeRuntime: { requestReview } });
     let release!: () => void;
-    const commit = vi.fn(async () => { await new Promise<void>(resolve => { release = resolve; }); if (failure) throw new Error("commit unavailable"); });
-    app.addHook("preHandler", async request => { request.mutationIdempotencyCommit = commit; });
+    const commit = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      if (failure) throw new Error("commit unavailable");
+    });
+    app.addHook("preHandler", async (request) => {
+      request.mutationIdempotencyCommit = commit;
+    });
     let settled = false;
-    const pending = app.inject({ method: "POST",
-      url: "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-runtime-reviews",
-      payload: { assignmentGeneration: 1, launch: {}, inventoryLimits: {} }, headers: { "Idempotency-Key": "native-review-commit" } })
-      .then(response => { settled = true; return response; });
+    const pending = app
+      .inject({
+        method: "POST",
+        url: "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-runtime-reviews",
+        payload: { assignmentGeneration: 1, launch: {}, inventoryLimits: {} },
+        headers: { "Idempotency-Key": "native-review-commit" },
+      })
+      .then((response) => {
+        settled = true;
+        return response;
+      });
     await vi.waitFor(() => expect(commit).toHaveBeenCalledOnce());
-    expect(settled).toBe(false); release();
+    expect(settled).toBe(false);
+    release();
     expect((await pending).statusCode).toBe(failure ? 500 : 201);
     expect(requestReview).toHaveBeenCalledOnce();
   });
 
   it("binds budget limits to the authenticated operator and path workspace", async () => {
-    const budgetOperator = { create: vi.fn(async () => ({ grantId: "grant-a" })), list: vi.fn(async () => []), revoke: vi.fn(async () => ({ revision: 2 })) };
+    const budgetOperator = {
+      create: vi.fn(async () => ({ grantId: "grant-a" })),
+      list: vi.fn(async () => []),
+      revoke: vi.fn(async () => ({ revision: 2 })),
+    };
     app = await buildOperatorMutationHarness({ budgetOperator });
-    const body = { grantId: "grant-a", executionWorkspaceId: "workspace-b", workerId: "worker-a", workerGeneration: 2,
-      maxRequests: 40, maxCostMicrousd: 5_000_000, expiresAt: "2099-01-01T00:00:00.000Z" };
-    const response = await app.inject({ method: "POST", url: "/api/v1/ops/workspaces/workspace-a/remote-worker-budgets",
-      headers: { "Idempotency-Key": "budget-request" }, payload: body });
+    const body = {
+      grantId: "grant-a",
+      executionWorkspaceId: "workspace-b",
+      workerId: "worker-a",
+      workerGeneration: 2,
+      maxRequests: 40,
+      maxCostMicrousd: 5_000_000,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    };
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/ops/workspaces/workspace-a/remote-worker-budgets",
+      headers: { "Idempotency-Key": "budget-request" },
+      payload: body,
+    });
     expect(response.statusCode).toBe(200);
     expect(response.headers["cache-control"]).toBe("no-store");
     expect(budgetOperator.create).toHaveBeenCalledWith({ ...body, registryWorkspaceId: "workspace-a" }, "operator-a");
-    const forged = await app.inject({ method: "POST", url: "/api/v1/ops/workspaces/workspace-a/remote-worker-budgets",
-      headers: { "Idempotency-Key": "budget-forged" }, payload: { ...body, actorId: "another-operator" } });
+    const forged = await app.inject({
+      method: "POST",
+      url: "/api/v1/ops/workspaces/workspace-a/remote-worker-budgets",
+      headers: { "Idempotency-Key": "budget-forged" },
+      payload: { ...body, actorId: "another-operator" },
+    });
     expect(forged.statusCode).toBe(400);
     expect(budgetOperator.create).toHaveBeenCalledTimes(1);
-    const revoke = await app.inject({ method: "POST", url: "/api/v1/ops/workspaces/workspace-a/remote-worker-budgets/grant-a/revoke",
-      headers: { "Idempotency-Key": "budget-revoke" }, payload: { expectedRevision: 1 } });
+    const revoke = await app.inject({
+      method: "POST",
+      url: "/api/v1/ops/workspaces/workspace-a/remote-worker-budgets/grant-a/revoke",
+      headers: { "Idempotency-Key": "budget-revoke" },
+      payload: { expectedRevision: 1 },
+    });
     expect(revoke.statusCode).toBe(200);
-    expect(budgetOperator.revoke).toHaveBeenCalledWith({ registryWorkspaceId: "workspace-a", grantId: "grant-a", expectedRevision: 1, actorId: "operator-a" });
+    expect(budgetOperator.revoke).toHaveBeenCalledWith({
+      registryWorkspaceId: "workspace-a",
+      grantId: "grant-a",
+      expectedRevision: 1,
+      actorId: "operator-a",
+    });
   });
 
   it("rejects device, companion and peer principals at the budget authorization route", async () => {
     app = await buildAuthenticatedHarness(vi.fn());
-    for (const headers of [{ authorization: "Bearer device-bearer" }, { authorization: "Bearer companion-bearer" },
-      { authorization: "Bearer operator-token", "x-test-a2a-peer": "peer-a" }]) {
-      const response = await app.inject({ method: "POST", url: "/api/v1/ops/workspaces/workspace-a/remote-worker-budgets",
-        headers: { ...headers, "Idempotency-Key": "untrusted-budget" }, payload: {} });
+    for (const headers of [
+      { authorization: "Bearer device-bearer" },
+      { authorization: "Bearer companion-bearer" },
+      { authorization: "Bearer operator-token", "x-test-a2a-peer": "peer-a" },
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/ops/workspaces/workspace-a/remote-worker-budgets",
+        headers: { ...headers, "Idempotency-Key": "untrusted-budget" },
+        payload: {},
+      });
       expect([401, 403]).toContain(response.statusCode);
     }
   });
@@ -330,15 +492,19 @@ describe("remote worker operator registry routes HX-507A", () => {
     ] as const;
 
     for (const probe of probes) {
-      const review = await app.inject({ method: "POST",
+      const review = await app.inject({
+        method: "POST",
         url: "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-runtime-reviews",
         headers: { ...probe.headers, "Idempotency-Key": `native-${probe.label}` },
-        payload: { assignmentGeneration: 1, launch: {}, inventoryLimits: {} } });
+        payload: { assignmentGeneration: 1, launch: {}, inventoryLimits: {} },
+      });
       expect(review.statusCode, probe.label).toBe(probe.expectedStatus);
-      for (const url of ["/api/v1/ops/workspaces/workspace-a/remote-workers",
+      for (const url of [
+        "/api/v1/ops/workspaces/workspace-a/remote-workers",
         "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/runtime",
         `/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-file-artifacts/${"ab".repeat(32)}?assignmentGeneration=1&fileIndex=0`,
-        `/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-output-artifacts/${"ab".repeat(32)}?assignmentGeneration=1`]) {
+        `/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-output-artifacts/${"ab".repeat(32)}?assignmentGeneration=1`,
+      ]) {
         const response = await app.inject({ method: "GET", url, headers: probe.headers });
         expect(response.statusCode, probe.label).toBe(probe.expectedStatus);
         expect(response.headers["cache-control"], probe.label).toBe("no-store");
@@ -505,7 +671,10 @@ describe("remote worker operator assignment + reconciliation routes HX-507B", ()
     expect(response.statusCode).toBe(200);
     expect(response.headers["cache-control"]).toBe("no-store");
     expect(response.json()).toEqual({ readOnly: true, mutationSemantics: "none" });
-    expect(getAssignmentRuntime).toHaveBeenCalledExactlyOnceWith({ workspaceId: "workspace-a", assignmentId: "assign-a" });
+    expect(getAssignmentRuntime).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "workspace-a",
+      assignmentId: "assign-a",
+    });
     for (const query of ["?assignmentGeneration=2", "?raw=true", "?private-token=secret"]) {
       const invalid = await instance.inject({ method: "GET", url: url + query });
       expect(invalid.statusCode).toBe(400);
@@ -515,25 +684,49 @@ describe("remote worker operator assignment + reconciliation routes HX-507B", ()
   });
 
   it("lists verified native files and downloads exact binary content behind operator access", async () => {
-    const nonce = "ab".repeat(32), sha256 = "cd".repeat(32), content = Buffer.from([0, 255, 1]);
-    const nativeFiles = { list: vi.fn(async () => ({ files: [{ fileIndex: 0, logicalPath: "out/report.txt", byteCount: 3, sha256 }] })),
-      download: vi.fn(async () => ({ content, fileName: "native-safe-0.bin", sha256, contentType: "application/octet-stream" })) };
+    const nonce = "ab".repeat(32),
+      sha256 = "cd".repeat(32),
+      content = Buffer.from([0, 255, 1]);
+    const nativeFiles = {
+      list: vi.fn(async () => ({ files: [{ fileIndex: 0, logicalPath: "out/report.txt", byteCount: 3, sha256 }] })),
+      download: vi.fn(async () => ({
+        content,
+        fileName: "native-safe-0.bin",
+        sha256,
+        contentType: "application/octet-stream",
+      })),
+    };
     const { app: instance } = await harness({ nativeFiles });
     const url = `/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-file-artifacts/${nonce}?assignmentGeneration=2`;
-    expect((await instance.inject({ method: "GET", url })).json()).toEqual(await nativeFiles.list()); nativeFiles.list.mockClear();
+    expect((await instance.inject({ method: "GET", url })).json()).toEqual(await nativeFiles.list());
+    nativeFiles.list.mockClear();
     const response = await instance.inject({ method: "GET", url: url + "&fileIndex=0" });
-    expect(response.statusCode).toBe(200); expect(response.rawPayload).toEqual(content);
-    expect(response.headers["content-type"]).toBe("application/octet-stream"); expect(response.headers["cache-control"]).toBe("no-store");
-    expect(response.headers["x-content-type-options"]).toBe("nosniff"); expect(response.headers["x-content-sha256"]).toBe(sha256);
+    expect(response.statusCode).toBe(200);
+    expect(response.rawPayload).toEqual(content);
+    expect(response.headers["content-type"]).toBe("application/octet-stream");
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["x-content-sha256"]).toBe(sha256);
     expect(response.headers["content-disposition"]).toBe('attachment; filename="native-safe-0.bin"');
-    expect(nativeFiles.download).toHaveBeenCalledWith({ registryWorkspaceId: "workspace-a", assignmentId: "assign-a", assignmentGeneration: 2, nonce, fileIndex: 0 }, expect.any(AbortSignal));
+    expect(nativeFiles.download).toHaveBeenCalledWith(
+      { registryWorkspaceId: "workspace-a", assignmentId: "assign-a", assignmentGeneration: 2, nonce, fileIndex: 0 },
+      expect.any(AbortSignal),
+    );
     for (const query of ["&fileIndex=-1", "&fileIndex=64", "&fileIndex=1.1", "&fileIndex=00", "&raw=true"])
       expect((await instance.inject({ method: "GET", url: url + query })).statusCode).toBe(400);
-    expect(nativeFiles.download).toHaveBeenCalledOnce(); expect(nativeFiles.list).not.toHaveBeenCalled();
+    expect(nativeFiles.download).toHaveBeenCalledOnce();
+    expect(nativeFiles.list).not.toHaveBeenCalled();
   });
   it("downloads native output as raw JSON with fixed attachment headers and exact generation scope", async () => {
-    const nonce = "ab".repeat(32), sha256 = "cd".repeat(32), content = '{"evidence":"retained"}\n';
-    const getNativeOutputArtifact = vi.fn(async () => ({ content, fileName: `native-output-${sha256}.json`, sha256, contentType: "application/json" }));
+    const nonce = "ab".repeat(32),
+      sha256 = "cd".repeat(32),
+      content = '{"evidence":"retained"}\n';
+    const getNativeOutputArtifact = vi.fn(async () => ({
+      content,
+      fileName: `native-output-${sha256}.json`,
+      sha256,
+      contentType: "application/json",
+    }));
     const { app: instance } = await harness({ getNativeOutputArtifact });
     const url = `/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/native-output-artifacts/${nonce}`;
     const response = await instance.inject({ method: "GET", url: url + "?assignmentGeneration=2" });
@@ -543,8 +736,18 @@ describe("remote worker operator assignment + reconciliation routes HX-507B", ()
     expect(response.headers["x-content-type-options"]).toBe("nosniff");
     expect(response.headers["x-content-sha256"]).toBe(sha256);
     expect(response.headers["content-disposition"]).toBe(`attachment; filename="native-output-${sha256}.json"`);
-    expect(getNativeOutputArtifact).toHaveBeenCalledExactlyOnceWith({ workspaceId: "workspace-a", assignmentId: "assign-a", assignmentGeneration: 2, nonce });
-    for (const query of ["", "?assignmentGeneration=0", "?assignmentGeneration=2147483648", "?assignmentGeneration=2&raw=true"]) {
+    expect(getNativeOutputArtifact).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "workspace-a",
+      assignmentId: "assign-a",
+      assignmentGeneration: 2,
+      nonce,
+    });
+    for (const query of [
+      "",
+      "?assignmentGeneration=0",
+      "?assignmentGeneration=2147483648",
+      "?assignmentGeneration=2&raw=true",
+    ]) {
       expect((await instance.inject({ method: "GET", url: url + query })).statusCode).toBe(400);
     }
     expect(getNativeOutputArtifact).toHaveBeenCalledTimes(1);
@@ -557,8 +760,15 @@ describe("remote worker operator assignment + reconciliation routes HX-507B", ()
     ["generation conflict", new ConflictError({ message: "Remote worker assignment generation changed" }), 409],
     ["unexpected secret-bearing error", new Error("secret=private-provider-value"), 500],
   ])("maps runtime read failures without exposing owner details: %s", async (_label, error, status) => {
-    const { app: instance } = await harness({ getAssignmentRuntime: vi.fn(async () => { throw error; }) });
-    const response = await instance.inject({ method: "GET", url: "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/runtime" });
+    const { app: instance } = await harness({
+      getAssignmentRuntime: vi.fn(async () => {
+        throw error;
+      }),
+    });
+    const response = await instance.inject({
+      method: "GET",
+      url: "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/runtime",
+    });
     expect(response.statusCode).toBe(status);
     expect(response.headers["cache-control"]).toBe("no-store");
     expect(response.body).not.toContain("private-provider-value");
