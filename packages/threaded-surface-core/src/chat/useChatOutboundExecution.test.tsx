@@ -726,6 +726,7 @@ describe("useChatOutboundExecution", () => {
   });
 
   it("does not set editingTurnId or error for a failing edit that settles after switching sessions", async () => {
+    // Guards the outbound custody check in the catch: a session switch ends custody, so the late failure stays silent.
     const setEditingTurnId = vi.fn();
     const failure = createDeferred<never>();
     editChatTurnMock.mockReturnValueOnce(failure.promise);
@@ -3003,7 +3004,7 @@ describe("useChatOutboundExecution", () => {
     await act(async () => {
       await latest?.execute({
         id: "queue-no-session",
-        sessionId: "session-1",
+        sessionId: "queued-session",
         action: "send",
         content: "cannot resolve session",
         attachments: [],
