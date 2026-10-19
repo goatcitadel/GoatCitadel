@@ -78,9 +78,12 @@ export function OutsideRootWriteGrantOptions({
         writeGrant: { rootId: chosen.rootId, duration },
       });
       const where = scope === "workspace" ? "this workspace" : "this chat";
+      // No grant and no grantError means the approval was already decided elsewhere; this click decided nothing.
       message = result.grant
         ? `Approved. ${chosen.path} is open to ${toolName} in ${where} for ${DURATION_LABELS[duration]}.`
-        : `Approved this write once. The folder was not opened${result.grantError ? `: ${result.grantError}` : "."}`;
+        : result.grantError
+          ? `Approved this write once. The folder was not opened: ${result.grantError}`
+          : "This approval was already decided elsewhere, so nothing was opened. Check the recorded decision below.";
       updateInboxApprovalAttempt(workspaceId, approval.approvalId, token, "resolved", message);
     } catch (cause) {
       updateInboxApprovalAttempt(

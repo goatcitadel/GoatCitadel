@@ -63,6 +63,7 @@ import { buildApprovalResolveResult, withApprovalFollowUp } from "./approval-fol
 import { parseApprovalCreateHookPatch } from "./hook-patch-helpers.js";
 import {
   mintChatApprovalFolderGrant,
+  publishToolGrantCreated,
   resolveOutsideRootWriteApprovalChoice,
   type ChatApprovalWriteGrantChoice,
 } from "./chat-approval-write-grant.js";
@@ -363,20 +364,7 @@ export async function createToolGrant(
   input: ToolGrantCreateInput,
 ): Promise<ToolGrantRecord> {
   const grant = await host.policyEngine.createGrant(input);
-  try {
-    await host.publishRealtime("system", "tools", {
-      type: "tool_grant_created",
-      grantId: grant.grantId,
-      toolPattern: grant.toolPattern,
-      decision: grant.decision,
-      scope: grant.scope,
-      scopeRef: grant.scopeRef,
-      expiresAt: grant.expiresAt,
-    });
-  } catch (realtimeError) {
-    void realtimeError;
-    // The policy mutation is canonical; realtime is an advisory projection.
-  }
+  await publishToolGrantCreated((event) => host.publishRealtime("system", "tools", event), grant);
   return grant;
 }
 

@@ -171,6 +171,7 @@ describe("cockpit filesystem write roots", () => {
       }),
     );
     await vi.waitFor(() => expect(text()).toContain("Chat now asks before writing outside the write roots."));
+    expect(text()).toContain("or elsewhere after you approve the write.");
     const blocked = { ...settingsAt(6), outsideRootWriteMode: "deny" };
     api.patchSettings.mockResolvedValue(blocked);
     api.fetchSettings.mockResolvedValueOnce(asking).mockResolvedValue(blocked);

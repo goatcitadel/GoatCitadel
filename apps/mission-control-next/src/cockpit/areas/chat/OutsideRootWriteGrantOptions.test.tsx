@@ -133,6 +133,17 @@ describe("OutsideRootWriteGrantOptions", () => {
     });
   });
 
+  it("does not claim an approval when the request was already decided elsewhere", async () => {
+    api.approveChatTool.mockResolvedValue({ ok: true, approvalId: "approval-1", resumed: false });
+    const onResolved = await render(approvalWith(OUTSIDE_ROOT_PREVIEW));
+    await click(button("Approve and open folder"));
+    await vi.waitFor(() =>
+      expect(onResolved).toHaveBeenCalledWith(
+        "This approval was already decided elsewhere, so nothing was opened. Check the recorded decision below.",
+      ),
+    );
+  });
+
   it("keeps the decision locked and shows the error when the outcome is uncertain", async () => {
     api.approveChatTool.mockRejectedValue(new Error("network down"));
     const onResolved = await render(approvalWith(OUTSIDE_ROOT_PREVIEW));

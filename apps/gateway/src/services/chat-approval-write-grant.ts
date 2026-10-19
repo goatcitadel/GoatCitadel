@@ -83,8 +83,17 @@ export async function mintChatApprovalFolderGrant(
   } catch (error) {
     return { grantError: error instanceof Error ? error.message : String(error) };
   }
+  await publishToolGrantCreated(publishGrantCreated, grant);
+  return { grant };
+}
+
+/** Announce a new grant on the tools channel. The grant is canonical; realtime is an advisory projection. */
+export async function publishToolGrantCreated(
+  publish: (event: Record<string, unknown>) => Promise<unknown>,
+  grant: ToolGrantRecord,
+): Promise<void> {
   try {
-    await publishGrantCreated({
+    await publish({
       type: "tool_grant_created",
       grantId: grant.grantId,
       toolPattern: grant.toolPattern,
@@ -95,7 +104,5 @@ export async function mintChatApprovalFolderGrant(
     });
   } catch (realtimeError) {
     void realtimeError;
-    // The grant is canonical; realtime is an advisory projection.
   }
-  return { grant };
 }

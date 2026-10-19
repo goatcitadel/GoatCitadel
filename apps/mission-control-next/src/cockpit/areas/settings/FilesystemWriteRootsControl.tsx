@@ -17,6 +17,7 @@ import {
   DENY_WINS_COPY,
   TOOL_ACCESS_LABELS,
   operatorWriteRoots,
+  outsideRootWriteMode,
   readdRootChange,
   removeRootChange,
   rootName,
@@ -225,7 +226,10 @@ export function FilesystemWriteRootsControl() {
           </h4>
           {roots.length === 0 ? (
             <p className="mt-1 text-sm text-fg-secondary">
-              None yet. Chat's filesystem tools can write only inside the workspace write folders.
+              None yet. Chat's filesystem tools can write only inside the workspace write folders
+              {outsideRootWriteMode(settings.data) === "approval_required"
+                ? ", or elsewhere after you approve the write."
+                : "."}
             </p>
           ) : (
             <ul aria-labelledby="operator-write-roots-title" className="mt-2 divide-y divide-line-subtle">
