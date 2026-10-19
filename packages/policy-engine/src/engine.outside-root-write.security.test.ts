@@ -98,6 +98,26 @@ describe("outside-root writes: when an approval is offered", () => {
   });
 });
 
+describe("outside-root writes: target extraction", () => {
+  it("does not throw for an unsupported document or presentation format", async () => {
+    const { engine } = engineWith(outsideRootConfig(fixture));
+    const document = await engine.evaluateAccess({
+      toolName: "documents.create",
+      args: { path: path.join(fixture.jailRoot, "report.xyz") },
+      agentId: "agent",
+      sessionId: "session-1",
+    });
+    expect(document.allowed).toBe(true);
+    const deck = await engine.evaluateAccess({
+      toolName: "presentations.create",
+      args: { path: path.join(fixture.jailRoot, "deck"), format: "keynote" },
+      agentId: "agent",
+      sessionId: "session-1",
+    });
+    expect(deck.allowed).toBe(true);
+  });
+});
+
 describe("outside-root writes: approval record", () => {
   it("records targets and server-derived folder candidates in the registration event and preview", async () => {
     const { engine, fake } = engineWith(outsideRootConfig(fixture));
@@ -257,6 +277,20 @@ describe("outside-root writes: folder grants", () => {
     await expect(
       stale.engine.mintOutsideRootWriteGrant({ ...again, approvalId: staleId, rootId: staleDetails!.candidates[0]!.rootId }),
     ).rejects.toThrow(/too old/u);
+  });
+
+  it("allows only one grant per approval even across session and workspace scopes", async () => {
+    const setup = engineWith(outsideRootConfig(fixture));
+    await setup.engine.invoke({ ...writeRequest(path.join(fixture.outside, "a.txt"), { workspaceId: "ws-1" }) });
+    const approvalId = [...setup.fake.approvals.keys()][0]!;
+    setup.fake.approve(approvalId);
+    const details = await setup.engine.describeOutsideRootWriteApproval(approvalId);
+    const base = { approvalId, rootId: details!.candidates[0]!.rootId, duration: "1h" as const, createdBy: "operator" };
+    await setup.engine.mintOutsideRootWriteGrant({ ...base, scope: "session", scopeRef: "session-1" });
+    await expect(setup.engine.mintOutsideRootWriteGrant({ ...base, scope: "workspace", scopeRef: "ws-1" })).rejects.toThrow(
+      /already opened a folder/u,
+    );
+    expect(setup.fake.grants).toHaveLength(1);
   });
 
   it("refuses unknown folders and unapproved approvals when minting", async () => {

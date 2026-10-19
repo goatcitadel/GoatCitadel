@@ -313,6 +313,8 @@ interface GrantDecision {
 
 const HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE =
   "host-constrained browser.search grant requires an official or explicit outbound target";
+/** Newest-first grant scan bound for the one-grant-per-approval check. */
+const MINT_DUPLICATE_SCAN_LIMIT = 100_000;
 /** A folder (writeRoots) grant that does not admit this request is skipped, never a hard block. */
 const WRITE_ROOT_GRANT_INAPPLICABLE = "write-root grant does not apply to this request";
 
@@ -466,7 +468,20 @@ export class ToolPolicyEngine {
       sandbox,
     );
     return this.storage.runImmediateTransaction(async () => {
-      const existing = await this.storage.toolGrants.list(input.scope, approvedScopeRef, 1000);
+      // One grant per approval across both scopes it may target. Lists are
+      // newest-first and every grant from this approval is newer than its
+      // approval, so the generous limit cannot hide one.
+      const scopes: Array<[ToolGrantScope, string | undefined]> = [
+        ["session", approvedRequest.sessionId],
+        ["workspace", approvedRequest.workspaceId],
+      ];
+      const existing = (
+        await Promise.all(
+          scopes
+            .filter((entry): entry is [ToolGrantScope, string] => Boolean(entry[1]))
+            .map(([scope, scopeRef]) => this.storage.toolGrants.list(scope, scopeRef, MINT_DUPLICATE_SCAN_LIMIT)),
+        )
+      ).flat();
       if (existing.some((grant) => grant.constraints?.writeRootsApprovalId === input.approvalId)) {
         throw new Error("This approval already opened a folder; approve a new request to open another.");
       }

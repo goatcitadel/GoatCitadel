@@ -34,9 +34,9 @@ export function extractWritePathCandidates(
     case "artifacts.create":
       return candidates("write", args.path);
     case "documents.create":
-      return candidates("write", resolveDocumentOutputPath(args));
+      return candidates("write", outputPathOrRaw(() => resolveDocumentOutputPath(args), args.path));
     case "presentations.create":
-      return candidates("write", resolvePresentationOutputPath(args));
+      return candidates("write", outputPathOrRaw(() => resolvePresentationOutputPath(args), args.path));
     case "fs.delete":
       return candidates("delete", args.path, args.from);
     case "fs.copy":
@@ -48,5 +48,18 @@ export function extractWritePathCandidates(
       return candidates("write", args.outputPath, args.path);
     default:
       return [];
+  }
+}
+
+/**
+ * Model-supplied arguments may carry an unsupported format. Extraction must
+ * never throw before policy runs, so fall back to the raw path; the executor
+ * still rejects the format and records the failure.
+ */
+function outputPathOrRaw(resolve: () => string | undefined, rawPath: unknown): unknown {
+  try {
+    return resolve() ?? rawPath;
+  } catch {
+    return rawPath;
   }
 }
