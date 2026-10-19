@@ -867,7 +867,7 @@ describe("profile-free routed-context admission", () => {
     expect(String(bindings[0]!.content)).toContain(`HEAD=${"e".repeat(40)}`);
   });
 
-  it("rejects a workspace snapshot for a system actor or an unadmitted snapshot before user ingestion", async () => {
+  it("rejects a snapshot for a system actor before ingestion and fails closed when it was not admitted", async () => {
     const harness = admittedHarness();
     harness.host.isFeatureEnabled = vi.fn(async (flag) => flag === "chatWorkspaceSnapshotV1Enabled");
     const request = {
@@ -881,6 +881,7 @@ describe("profile-free routed-context admission", () => {
         turnAdmission: harness.admission,
       }),
     ).rejects.toThrow(/Workspace snapshots require enabled durable Chat admission/);
+    expect(harness.host.ingestEvent).not.toHaveBeenCalled();
     harness.admission.requestActor = { ...harness.admission.requestActor, actorKind: "operator" } as never;
     await expect(
       prepareAgentChatTurn(harness.host, SESSION_ID, request, {
@@ -888,7 +889,6 @@ describe("profile-free routed-context admission", () => {
         turnAdmission: harness.admission,
       }),
     ).rejects.toThrow(/was not admitted for this turn/);
-    expect(harness.host.ingestEvent).not.toHaveBeenCalled();
   });
 
   it.each([
