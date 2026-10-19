@@ -860,11 +860,15 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
         if (item.action === "send" && item.workspaceSnapshot && !canonicalTurnAccepted) {
           onWorkspaceSnapshotFailedRef.current?.(item);
         }
+      }
+      // A failure for a conversation that is no longer shown must not mark the shown one. A first
+      // send queues without a session id, so a failure before one exists matches an empty selection.
+      if (selectedSessionIdRef.current === (session?.sessionId ?? item.sessionId ?? null)) {
         if (item.action === "edit" && item.targetTurnId) {
           setEditingTurnId(item.targetTurnId);
         }
+        setError((err as Error).message, getOutboundErrorSource(item.action));
       }
-      setError((err as Error).message, getOutboundErrorSource(item.action));
       recordChatOutboundPhase({
         phase: "failed",
         action: item.action,

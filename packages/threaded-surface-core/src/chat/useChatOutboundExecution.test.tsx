@@ -168,6 +168,7 @@ function Harness(props: {
   prefs?: any;
   selectedSession?: any | null;
   selectedSessionId?: string | null;
+  setEditingTurnId?: (turnId: string | null) => void;
   streamEnabled?: boolean;
   surfaceMode?: "chat" | "cowork" | "code";
   fullWebAccess?: boolean;
@@ -284,7 +285,7 @@ function Harness(props: {
       setSending,
       setDraft,
       setPendingAttachments,
-      setEditingTurnId: vi.fn(),
+      setEditingTurnId: props.setEditingTurnId ?? vi.fn(),
       setCapabilitySuggestions,
       setSpecialistSuggestions,
     },
@@ -724,6 +725,66 @@ describe("useChatOutboundExecution", () => {
     );
   });
 
+  it("does not set editingTurnId or error for a failing edit that settles after switching sessions", async () => {
+    const setEditingTurnId = vi.fn();
+    const failure = createDeferred<never>();
+    editChatTurnMock.mockReturnValueOnce(failure.promise);
+    let renderer!: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<Harness setEditingTurnId={setEditingTurnId} />);
+    });
+
+    let execution!: Promise<void>;
+    await act(async () => {
+      execution = latest!.execute({
+        id: "queue-edit-switch",
+        action: "edit",
+        sessionId: "session-1",
+        targetTurnId: "turn-1",
+        content: "Edited prompt",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+      await vi.waitFor(() => expect(editChatTurnMock).toHaveBeenCalled());
+    });
+    expect(editChatTurnMock).toHaveBeenCalledWith("session-1", "turn-1", expect.anything(), expect.anything());
+
+    await act(async () => {
+      renderer.update(<Harness selectedSessionId="session-2" setEditingTurnId={setEditingTurnId} />);
+    });
+    await act(async () => {
+      failure.reject(new Error("edit failed for session-1"));
+      await execution;
+    });
+
+    expect(setEditingTurnId).not.toHaveBeenCalledWith("turn-1");
+    expect(latest?.getSnapshot().error).toBeNull();
+  });
+
+  it("reports a first-send failure before any session exists", async () => {
+    await act(async () => {
+      create(
+        <Harness
+          selectedSessionId={null}
+          selectedSession={null}
+          ensureSession={vi.fn(async () => {
+            throw new Error("session unavailable");
+          })}
+        />,
+      );
+    });
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-first-send-failure",
+        action: "send",
+        content: "first message",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+    expect(latest?.getSnapshot().error).toBe("session unavailable");
+  });
+
   it("coerces a locked Cowork surface stream to Chat", async () => {
     streamAgentChatMessageMock.mockImplementation(async (_sessionId, _payload, onChunk) => {
       onChunk({
@@ -897,17 +958,29 @@ describe("useChatOutboundExecution", () => {
 
     await act(async () => {
       onReplayChunk?.({
-        type: "message_start", eventId: "replay-1", sequence: 1, sessionId: "session-1",
-        turnId: "turn-1", messageId: "assistant-1", branchKind: "append",
+        type: "message_start",
+        eventId: "replay-1",
+        sequence: 1,
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        branchKind: "append",
       });
       onReplayChunk?.({
-        type: "delta", eventId: "replay-2", sequence: 2, sessionId: "session-1",
-        turnId: "turn-1", messageId: "assistant-1", delta: "Saved partial answer.",
+        type: "delta",
+        eventId: "replay-2",
+        sequence: 2,
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        delta: "Saved partial answer.",
       });
       await vi.advanceTimersByTimeAsync(260);
     });
     expect(getChatStreamingPreview("session-1")).toMatchObject({
-      turnId: "turn-1", text: "Saved partial answer.", visibleText: "Saved partial answer.",
+      turnId: "turn-1",
+      text: "Saved partial answer.",
+      visibleText: "Saved partial answer.",
     });
     expect(streamAgentChatMessageMock).not.toHaveBeenCalled();
 
@@ -2930,7 +3003,7 @@ describe("useChatOutboundExecution", () => {
     await act(async () => {
       await latest?.execute({
         id: "queue-no-session",
-        sessionId: "queued-session",
+        sessionId: "session-1",
         action: "send",
         content: "cannot resolve session",
         attachments: [],
