@@ -164,6 +164,7 @@ export interface RuntimeSettings {
     commitmentScheduledTurnsV1Enabled?: boolean;
     chatMeshCapabilitiesV1Enabled?: boolean;
     chatRemotePlacementV1Enabled?: boolean;
+    chatWorkspaceSnapshotV1Enabled?: boolean;
     chatModelCouncilV1Enabled?: boolean;
     chatWorkPassportV1Enabled?: boolean;
     chatRequesterMcpV1Enabled?: boolean;

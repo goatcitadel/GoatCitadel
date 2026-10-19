@@ -71,7 +71,9 @@ export function isRuntimeWriteAccessOperation(value: unknown): value is RuntimeW
   const { operation, ...change } = value;
   if (operation === "operator_write_root") return isOperatorWriteRootChange(change);
   if (operation === "outside_root_write_policy") {
-    return hasOnlyKeys(change, ["mode"]) && (OUTSIDE_ROOT_WRITE_MODES as readonly string[]).includes(String(change.mode));
+    return (
+      hasOnlyKeys(change, ["mode"]) && (OUTSIDE_ROOT_WRITE_MODES as readonly string[]).includes(String(change.mode))
+    );
   }
   return operation === "tool_global_access" && isGlobalToolAccessChange(change);
 }

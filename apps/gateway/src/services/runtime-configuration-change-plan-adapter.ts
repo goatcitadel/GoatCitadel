@@ -486,7 +486,8 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
             title: "Block writes outside the write roots",
             summary: "Writes outside every write root are blocked again.",
             completedSummary: "Writes outside the write roots are blocked; existing folder grants stop working.",
-            impact: "Existing outside-root folder grants become inert immediately. Writes inside the write roots are unchanged.",
+            impact:
+              "Existing outside-root folder grants become inert immediately. Writes inside the write roots are unchanged.",
             risk: "safe" as const,
           };
     case "network_allowlist":

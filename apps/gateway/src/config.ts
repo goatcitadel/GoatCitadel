@@ -110,6 +110,7 @@ export interface FeatureFlagsConfig {
   commitmentScheduledTurnsV1Enabled?: boolean;
   chatMeshCapabilitiesV1Enabled?: boolean;
   chatRemotePlacementV1Enabled?: boolean;
+  chatWorkspaceSnapshotV1Enabled?: boolean;
   chatModelCouncilV1Enabled?: boolean;
   chatWorkPassportV1Enabled?: boolean;
   chatRequesterMcpV1Enabled?: boolean;
@@ -862,6 +863,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["commitmentScheduledTurnsV1Enabled", process.env.GOATCITADEL_FEATURE_COMMITMENT_SCHEDULED_TURNS_V1_ENABLED],
     ["chatMeshCapabilitiesV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_MESH_CAPABILITIES_V1_ENABLED],
     ["chatRemotePlacementV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_REMOTE_PLACEMENT_V1_ENABLED],
+    ["chatWorkspaceSnapshotV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_WORKSPACE_SNAPSHOT_V1_ENABLED],
     ["chatModelCouncilV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_MODEL_COUNCIL_V1_ENABLED],
     ["chatWorkPassportV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_WORK_PASSPORT_V1_ENABLED],
     ["chatRequesterMcpV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_REQUESTER_MCP_V1_ENABLED],
@@ -1483,6 +1485,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       commitmentScheduledTurnsV1Enabled: featuresInput.commitmentScheduledTurnsV1Enabled ?? false,
       chatMeshCapabilitiesV1Enabled: featuresInput.chatMeshCapabilitiesV1Enabled ?? false,
       chatRemotePlacementV1Enabled: featuresInput.chatRemotePlacementV1Enabled ?? false,
+      chatWorkspaceSnapshotV1Enabled: featuresInput.chatWorkspaceSnapshotV1Enabled ?? true,
       chatModelCouncilV1Enabled: featuresInput.chatModelCouncilV1Enabled ?? true,
       chatWorkPassportV1Enabled: featuresInput.chatWorkPassportV1Enabled ?? true,
       chatRequesterMcpV1Enabled: featuresInput.chatRequesterMcpV1Enabled ?? false,

@@ -156,7 +156,10 @@ const profileParamsSchema = z.object({
 });
 
 const createPermissionProfileSchema = z.object({
-  expectedSelectionRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  expectedSelectionRevision: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
   label: z.string().trim().min(1),
   description: z.string().optional(),
   scope: permissionScopeSchema.optional(),
@@ -172,7 +175,10 @@ const createPermissionProfileSchema = z.object({
 
 const permissionProfileRevisionSchema = z.object({ expectedRevision: z.string().regex(/^[a-f0-9]{64}$/) });
 const updatePermissionProfileSchema = permissionProfileRevisionSchema.extend({
-  expectedSelectionRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  expectedSelectionRevision: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
   label: z.string().trim().min(1).optional(),
   description: z.string().optional(),
   approvalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
@@ -194,10 +200,16 @@ const activatePermissionProfileSchema = z.object({
 });
 
 const permissionSelectionReviewSchema = z.discriminatedUnion("operation", [
-  activatePermissionProfileSchema.omit({ expectedProfileRevision: true, expectedSelectionRevision: true }).extend({ operation: z.literal("activate") }),
-  z.object({ operation: z.literal("defaults"), profileId: z.string().trim().min(1).optional(),
-    scope: permissionScopeSchema.optional(), scopeRef: z.string().trim().min(1).optional(),
-    defaultForSurfaces: z.array(permissionSurfaceSchema) }),
+  activatePermissionProfileSchema
+    .omit({ expectedProfileRevision: true, expectedSelectionRevision: true })
+    .extend({ operation: z.literal("activate") }),
+  z.object({
+    operation: z.literal("defaults"),
+    profileId: z.string().trim().min(1).optional(),
+    scope: permissionScopeSchema.optional(),
+    scopeRef: z.string().trim().min(1).optional(),
+    defaultForSurfaces: z.array(permissionSurfaceSchema),
+  }),
 ]);
 
 const effectivePermissionQuerySchema = z.object({
@@ -317,16 +329,26 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ items });
   });
 
-  fastify.post("/api/v1/tools/permission-profiles/selection-review",
-    { config: { rateLimit: { max: RATE_LIMIT_MUTATION_MAX } } }, async (request, reply) => {
+  fastify.post(
+    "/api/v1/tools/permission-profiles/selection-review",
+    { config: { rateLimit: { max: RATE_LIMIT_MUTATION_MAX } } },
+    async (request, reply) => {
       await fastify.requireOperatorAuth(request, reply);
       if (reply.sent) return reply;
       const parsed = permissionSelectionReviewSchema.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
       try {
-        return reply.send(await fastify.services.tools.reviewPermissionProfileSelection({ ...parsed.data, createdBy: request.authActorId }));
-      } catch (error) { return sendRouteError(reply, error, request.log); }
-    });
+        return reply.send(
+          await fastify.services.tools.reviewPermissionProfileSelection({
+            ...parsed.data,
+            createdBy: request.authActorId,
+          }),
+        );
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
 
   fastify.get("/api/v1/tools/permission-profiles/effective", async (request, reply) => {
     const parsed = effectivePermissionQuerySchema.safeParse(request.query);
@@ -390,7 +412,8 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(201).send(created);
       } catch (error) {
         await markMutationCommittedFromError(request, error);
-        if (error instanceof ConflictError && error.code === "WRITE_CONFLICT") return sendRouteError(reply, error, request.log);
+        if (error instanceof ConflictError && error.code === "WRITE_CONFLICT")
+          return sendRouteError(reply, error, request.log);
         return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
@@ -432,7 +455,8 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.send(updated);
       } catch (error) {
         await markMutationCommittedFromError(request, error);
-        if (error instanceof ConflictError && error.code === "WRITE_CONFLICT") return sendRouteError(reply, error, request.log);
+        if (error instanceof ConflictError && error.code === "WRITE_CONFLICT")
+          return sendRouteError(reply, error, request.log);
         return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
@@ -476,7 +500,8 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
               .send({ error: `Permission profile ${params.data.profileId} not found or already archived` });
       } catch (error) {
         await markMutationCommittedFromError(request, error);
-        if (error instanceof ConflictError && error.code === "WRITE_CONFLICT") return sendRouteError(reply, error, request.log);
+        if (error instanceof ConflictError && error.code === "WRITE_CONFLICT")
+          return sendRouteError(reply, error, request.log);
         return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },
@@ -508,7 +533,8 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.send(activation);
       } catch (error) {
         await markMutationCommittedFromError(request, error);
-        if (error instanceof ConflictError && error.code === "WRITE_CONFLICT") return sendRouteError(reply, error, request.log);
+        if (error instanceof ConflictError && error.code === "WRITE_CONFLICT")
+          return sendRouteError(reply, error, request.log);
         return reply.code(request.mutationCommitted ? 500 : 400).send({ error: (error as Error).message });
       }
     },

@@ -417,6 +417,7 @@ export interface RuntimeSettingsResponse {
     automaticFanout: boolean;
     providerFallback: boolean;
     staticMcp?: boolean;
+    workspaceSnapshot?: boolean;
     modelCouncil?: boolean;
     workPassport?: boolean;
   };
@@ -617,6 +618,7 @@ export interface RuntimeSettingsResponse {
     commitmentScheduledTurnsV1Enabled?: boolean;
     chatMeshCapabilitiesV1Enabled?: boolean;
     chatRemotePlacementV1Enabled?: boolean;
+    chatWorkspaceSnapshotV1Enabled?: boolean;
     chatModelCouncilV1Enabled?: boolean;
     chatWorkPassportV1Enabled?: boolean;
     chatRequesterMcpV1Enabled?: boolean;

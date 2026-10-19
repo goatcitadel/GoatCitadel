@@ -254,6 +254,7 @@ export const updateSettingsSchema = z.object({
       commitmentScheduledTurnsV1Enabled: z.boolean().optional(),
       chatMeshCapabilitiesV1Enabled: z.boolean().optional(),
       chatRemotePlacementV1Enabled: z.boolean().optional(),
+      chatWorkspaceSnapshotV1Enabled: z.boolean().optional(),
       chatModelCouncilV1Enabled: z.boolean().optional(),
       chatWorkPassportV1Enabled: z.boolean().optional(),
       chatRequesterMcpV1Enabled: z.boolean().optional(),

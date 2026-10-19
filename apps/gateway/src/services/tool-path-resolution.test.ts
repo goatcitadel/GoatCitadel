@@ -590,8 +590,12 @@ describe("resolveToolRequestPaths outside-root write deferral", () => {
     const outsideFile = path.join(repoRoot, "elsewhere", "x.txt");
     const inside = path.join(workspaceRoot, "inside.txt");
     const context = { workspaceRoot, outsideRootWrites: "defer_to_policy" as const };
-    expect(resolveToolRequestPaths(request("fs.copy", { from: inside, to: outsideFile }), context).args.to).toBe(outsideFile);
-    expect(resolveToolRequestPaths(request("fs.move", { from: inside, to: outsideFile }), context).args.to).toBe(outsideFile);
+    expect(resolveToolRequestPaths(request("fs.copy", { from: inside, to: outsideFile }), context).args.to).toBe(
+      outsideFile,
+    );
+    expect(resolveToolRequestPaths(request("fs.move", { from: inside, to: outsideFile }), context).args.to).toBe(
+      outsideFile,
+    );
     expect(
       resolveToolRequestPaths(request("browser.screenshot", { outputPath: outsideFile }), context).args.outputPath,
     ).toBe(outsideFile);
@@ -606,10 +610,12 @@ describe("resolveToolRequestPaths outside-root write deferral", () => {
   it("still rejects relative escapes and filesystem roots while deferring", async () => {
     const { workspaceRoot } = await createWorkspaceFixture();
     const context = { workspaceRoot, outsideRootWrites: "defer_to_policy" as const };
-    expect(() => resolveToolRequestPaths(request("fs.write", { path: "../../escape.txt" }), context)).toThrow(ValidationError);
-    expect(() => resolveToolRequestPaths(request("fs.write", { path: path.parse(workspaceRoot).root }), context)).toThrow(
-      /filesystem root/u,
+    expect(() => resolveToolRequestPaths(request("fs.write", { path: "../../escape.txt" }), context)).toThrow(
+      ValidationError,
     );
+    expect(() =>
+      resolveToolRequestPaths(request("fs.write", { path: path.parse(workspaceRoot).root }), context),
+    ).toThrow(/filesystem root/u);
   });
 });
 
@@ -643,11 +649,18 @@ describe("resolveToolRequestPathsForSessionScope", () => {
     const elsewhere = path.join(repoRoot, "elsewhere", "out.txt");
     const write = { toolName: "fs.write", args: { path: elsewhere }, agentId: "agent", sessionId: "session" };
     const optedIn = { ...sandboxFor(jailRoot, outsideRoot), outsideRootWriteMode: "approval_required" as const };
-    const ordinary: SessionToolPathScopeDeps = { rootDir: repoRoot, workspaceDir: "workspace", sandbox: optedIn, storage: storageFor(false) };
+    const ordinary: SessionToolPathScopeDeps = {
+      rootDir: repoRoot,
+      workspaceDir: "workspace",
+      sandbox: optedIn,
+      storage: storageFor(false),
+    };
     expect((await resolveToolRequestPathsForSessionScope(write, ordinary)).args.path).toBe(elsewhere);
 
     const notOptedIn = { ...ordinary, sandbox: sandboxFor(jailRoot, outsideRoot) };
-    await expect(resolveToolRequestPathsForSessionScope(write, notOptedIn)).rejects.toThrow(/outside the workspace boundary/u);
+    await expect(resolveToolRequestPathsForSessionScope(write, notOptedIn)).rejects.toThrow(
+      /outside the workspace boundary/u,
+    );
 
     const delegatedWithoutScope: SessionToolPathScopeDeps["storage"] = {
       chatSessionProjects: { get: async () => undefined },

@@ -231,7 +231,12 @@ describe("tool grant route commit truth", () => {
         label: "permission profile activation",
         route: "/api/v1/tools/permission-profiles/activate",
         method: "POST" as const,
-        payload: { expectedProfileRevision: "a".repeat(64), expectedSelectionRevision: "b".repeat(64), profileId: "profile-owned", surface: "chat" },
+        payload: {
+          expectedProfileRevision: "a".repeat(64),
+          expectedSelectionRevision: "b".repeat(64),
+          profileId: "profile-owned",
+          surface: "chat",
+        },
         mutation: vi.fn(() => ({ activationId: "activation-1" })),
         tools: { listPermissionProfiles: vi.fn(() => [ownedProfile]) } as Record<string, unknown>,
         mutationName: "activatePermissionProfile",

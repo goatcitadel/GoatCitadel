@@ -30,6 +30,7 @@ describe("effective restored Chat availability", () => {
       automaticFanout: false,
       providerFallback: false,
       staticMcp: false,
+      workspaceSnapshot: false,
       modelCouncil: false,
       workPassport: false,
     });
@@ -51,6 +52,13 @@ describe("effective restored Chat availability", () => {
         { ...features, chatStaticMcpV1Enabled: true },
       ).staticMcp,
     ).toBe(false);
+  });
+  it("advertises workspaceSnapshot only after explicit opt-in with durable execution", () => {
+    const durable = { enabled: true, executionEnabled: true };
+    expect(projectChatFeatureAvailability(durable, features).workspaceSnapshot).toBe(false);
+    expect(
+      projectChatFeatureAvailability(durable, { ...features, chatWorkspaceSnapshotV1Enabled: true }).workspaceSnapshot,
+    ).toBe(true);
   });
   it("advertises modelCouncil only after explicit opt-in with durable execution", () => {
     const durable = { enabled: true, executionEnabled: true };
