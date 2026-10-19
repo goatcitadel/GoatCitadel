@@ -48,7 +48,10 @@ type Input = {
   goalActions: Pick<ReturnType<typeof useChatGoalActions>, "handleSteerMidTurn">;
   oneShotContext: Pick<
     ReturnType<typeof useChatOneShotContext>,
-    "consumeModelCouncilArming" | "modelCouncilEnabledRef"
+    | "consumeModelCouncilArming"
+    | "modelCouncilEnabledRef"
+    | "consumeWorkspaceSnapshotRequest"
+    | "workspaceSnapshotRequestRef"
   >;
   selection: Pick<ReturnType<typeof useChatSessionSelection>, "selectedSessionId">;
   pendingAttachments: ChatAttachmentRecord[];
@@ -97,7 +100,9 @@ export function useChatComposerSendIntent({
   multimodal,
   errorState,
 }: Input) {
-  const access = getGatewayAccessRevision(); const caller = getGatewayCallerScope(); const gateway = getGatewayApiBaseUrl();
+  const access = getGatewayAccessRevision();
+  const caller = getGatewayCallerScope();
+  const gateway = getGatewayApiBaseUrl();
   const identity = JSON.stringify([workspaceId, selection.selectedSessionId, gateway, access, caller]);
   const scopeRef = useRef({ identity });
   if (scopeRef.current.identity !== identity) scopeRef.current = { identity };
@@ -108,6 +113,7 @@ export function useChatComposerSendIntent({
   const { setUiError } = scopedErrors;
   const { handleSteerMidTurn } = goalActions;
   const { consumeModelCouncilArming } = oneShotContext;
+  const { consumeWorkspaceSnapshotRequest } = oneShotContext;
   const { setQueuedOutbound } = orchestration;
   const { setFailedAutoImageRecovery } = errorState;
   const { handleGenerateImage } = multimodal;
@@ -144,11 +150,15 @@ export function useChatComposerSendIntent({
     const queueCommand = parseQueueCommand(draft);
     const btwCommand = parseBtwCommand(draft);
     if (btwCommand) {
-      const isCurrent = () => scopeRef.current === scope && getGatewayAccessRevision() === access && getGatewayCallerScope() === caller && getGatewayApiBaseUrl() === gateway;
+      const isCurrent = () =>
+        scopeRef.current === scope &&
+        getGatewayAccessRevision() === access &&
+        getGatewayCallerScope() === caller &&
+        getGatewayApiBaseUrl() === gateway;
       if (!isCurrent()) return;
       // Consume only the submitted command synchronously. Child creation/inline
       // side sends may finish after the operator has authored a new parent draft.
-      setDraft((current) => isCurrent() && current === draft ? "" : current);
+      setDraft((current) => (isCurrent() && current === draft ? "" : current));
       await openBtwSideChat(btwCommand.text);
       return;
     }
@@ -179,6 +189,8 @@ export function useChatComposerSendIntent({
         return;
       }
       const modelCouncil = consumeModelCouncilArming();
+      // Freeze an armed snapshot with the queued send, as handleSend does, so it cannot leak into a later turn.
+      const workspaceSnapshot = consumeWorkspaceSnapshotRequest();
       setQueuedOutbound((current) => [
         ...current,
         {
@@ -190,6 +202,7 @@ export function useChatComposerSendIntent({
           createdAt: new Date().toISOString(),
           paused: queueCommand.kind === "collect",
           ...(modelCouncil ? { modelCouncil } : {}),
+          ...(workspaceSnapshot ? { workspaceSnapshot } : {}),
         },
       ]);
       setDraft("");
@@ -219,6 +232,7 @@ export function useChatComposerSendIntent({
       !researchModeActive &&
       !reviewModeActive &&
       !oneShotContext.modelCouncilEnabledRef.current &&
+      !oneShotContext.workspaceSnapshotRequestRef.current &&
       !orchestration.editingTurnId &&
       pendingAttachments.length === 0 &&
       !hasArmedPerTurnContext &&
@@ -248,8 +262,12 @@ export function useChatComposerSendIntent({
 
     await sendDraftAsChat();
   }, [
-    scope, access, caller, gateway,
+    scope,
+    access,
+    caller,
+    gateway,
     consumeModelCouncilArming,
+    consumeWorkspaceSnapshotRequest,
     draft,
     orchestration.editingTurnId,
     conversationContext.activeOutboundContext,
@@ -277,6 +295,7 @@ export function useChatComposerSendIntent({
     setUiError,
     coordination.activeStreamRef,
     oneShotContext.modelCouncilEnabledRef,
+    oneShotContext.workspaceSnapshotRequestRef,
     setFailedAutoImageRecovery,
     setFollowThreadOutput,
   ]);

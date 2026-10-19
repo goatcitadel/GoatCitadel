@@ -82,7 +82,22 @@ type Input = {
     | "setWorkspaceSnapshotRequest"
     | "setFullWebAccess"
   >;
+  /** `chatFeatureAvailability.modelCouncil`; arming fails closed without it. */
+  modelCouncilAvailable: boolean;
+  /** `chatFeatureAvailability.workspaceSnapshot` for a new send (never an edit). */
+  workspaceSnapshotAvailable: boolean;
 };
+
+let fallbackSnapshotRequestCounter = 0;
+
+function createWorkspaceSnapshotRequestId(): string {
+  const randomUUID = globalThis.crypto?.randomUUID?.();
+  if (randomUUID) {
+    return `snapshot-${randomUUID}`;
+  }
+  fallbackSnapshotRequestCounter = (fallbackSnapshotRequestCounter + 1) % Number.MAX_SAFE_INTEGER;
+  return `snapshot-${Date.now()}-${fallbackSnapshotRequestCounter}`;
+}
 
 /** Keeps historical mutation guards on composer actions and preserves stop controls. */
 export function createChatComposerActionProps({
@@ -114,6 +129,8 @@ export function createChatComposerActionProps({
   coordination,
   planningPreferences,
   oneShotContext,
+  modelCouncilAvailable,
+  workspaceSnapshotAvailable,
 }: Input): Pick<
   MissionControlActiveSessionSurfaceProps,
   | "sessionControlBanner"
@@ -237,17 +254,24 @@ export function createChatComposerActionProps({
       if (!blockHistoricalMutation()) handleToggleReviewMode();
     },
     onToggleModelCouncil: () => {
-      if (!blockHistoricalMutation()) {
-        oneShotContext.modelCouncilEnabledRef.current = false;
-        setModelCouncilEnabled(false);
-      }
+      if (blockHistoricalMutation()) return;
+      // Turning Council off always works; arming it requires current rollout availability.
+      const next = !oneShotContext.modelCouncilEnabledRef.current && modelCouncilAvailable;
+      oneShotContext.modelCouncilEnabledRef.current = next;
+      setModelCouncilEnabled(next);
     },
     onToggleWorkspaceSnapshot: () => {
       if (blockHistoricalMutation()) return;
       if (oneShotContext.workspaceSnapshotRequestRef.current) {
         oneShotContext.workspaceSnapshotRequestRef.current = undefined;
         setWorkspaceSnapshotRequest(undefined);
+        return;
       }
+      if (!workspaceSnapshotAvailable) return;
+      // The request id only binds preflight and send to one Gateway-owned capture; it carries no path authority.
+      const request = { capture: true, requestId: createWorkspaceSnapshotRequestId() } as const;
+      oneShotContext.workspaceSnapshotRequestRef.current = request;
+      setWorkspaceSnapshotRequest(request);
     },
     onRefreshWorkspaceSnapshot: () => {},
     onSetDeepMode: () => {

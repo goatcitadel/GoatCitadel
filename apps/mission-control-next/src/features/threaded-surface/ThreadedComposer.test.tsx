@@ -394,7 +394,9 @@ describe("ThreadedComposer", () => {
     expect(markup).toContain(">Plan<");
     expect(markup).toContain(">Research<");
     expect(markup).toContain(">Review<");
-    expect(markup).toContain(">Council<");
+    // Council appears only while the Gateway reports it available.
+    expect(markup).not.toContain(">Council<");
+    expect(buildMarkup({ planningMode: "off", modelCouncilAvailable: true })).toContain(">Council<");
     expect(markup).toContain(">Attach context<");
     expect(markup).not.toContain("Subagent policy");
     expect(markup).not.toContain("Thinking level");
@@ -461,13 +463,60 @@ describe("ThreadedComposer", () => {
     expect(callbacks.onSend).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks new workspace snapshots and lets a saved request be removed", async () => {
+  it("arms an available Council, and keeps a stale arming removable when it is unavailable", async () => {
+    const onToggleModelCouncil = vi.fn();
+    const available = await renderComposer({ modelCouncilAvailable: true, onToggleModelCouncil });
+    const council = findSuggestionButton(available.root, "Council");
+    expect(council.props.disabled).toBe(false);
+    expect(council.props["aria-pressed"]).toBe(false);
+    expect(council.props.title).toBe("Ask a model council with the next send");
+    await click(council);
+    expect(onToggleModelCouncil).toHaveBeenCalledTimes(1);
+    available.unmount();
+
+    const stale = await renderComposer({
+      modelCouncilEnabled: true,
+      modelCouncilAvailable: false,
+      onToggleModelCouncil,
+    });
+    const staleCouncil = findSuggestionButton(stale.root, "Council");
+    expect(staleCouncil.props.disabled).toBe(false);
+    expect(staleCouncil.props["aria-pressed"]).toBe(true);
+    expect(staleCouncil.props.title).toBe("Model council is temporarily unavailable; click to turn it off");
+    stale.unmount();
+  });
+
+  it("requests an available workspace snapshot and explains what the Gateway records", async () => {
+    const onToggleWorkspaceSnapshot = vi.fn();
+    const unarmed = await renderComposer({ workspaceSnapshotAvailable: true, onToggleWorkspaceSnapshot });
+    const include = findButton(unarmed.root, "Include workspace snapshot");
+    expect(include.props.disabled).toBeFalsy();
+    await click(include);
+    expect(onToggleWorkspaceSnapshot).toHaveBeenCalledTimes(1);
+    unarmed.unmount();
+
+    const armed = await renderComposer({
+      workspaceSnapshotAvailable: true,
+      workspaceSnapshotRequest: { capture: true, requestId: "snapshot-request-1" },
+      onToggleWorkspaceSnapshot,
+    });
+    const text = collectText(armed.root);
+    expect(text).toContain("Workspace snapshot requested.");
+    expect(text).toContain("no file names or contents");
+    expect(text).not.toContain("temporarily unavailable");
+    expect(findButtons(armed.root, "Remove workspace snapshot")).toHaveLength(1);
+    await click(findButton(armed.root, "Remove snapshot"));
+    expect(onToggleWorkspaceSnapshot).toHaveBeenCalledTimes(2);
+    armed.unmount();
+  });
+
+  it("hides new workspace snapshots while unavailable and lets a saved request be removed", async () => {
     const onToggleWorkspaceSnapshot = vi.fn();
     const onRefreshWorkspaceSnapshot = vi.fn();
     const unarmed = await renderComposer({ onToggleWorkspaceSnapshot, onRefreshWorkspaceSnapshot });
-    expect(collectText(unarmed.root)).toContain("Workspace snapshots temporarily unavailable");
+    expect(findButtons(unarmed.root, "Include workspace snapshot")).toHaveLength(0);
     expect(findButtons(unarmed.root, "Refresh snapshot")).toHaveLength(0);
-    expect(findButton(unarmed.root, "Workspace snapshots temporarily unavailable").props.disabled).toBe(true);
+    expect(collectText(unarmed.root)).not.toContain("Workspace snapshot");
     expect(onToggleWorkspaceSnapshot).not.toHaveBeenCalled();
     unarmed.unmount();
 
@@ -490,7 +539,8 @@ describe("ThreadedComposer", () => {
   it("explains why a saved routed-context selection blocks Send", () => {
     const markup = buildMarkup({
       canSend: false,
-      profileDependentAdmissionBlockReason: "Routed documents are temporarily unavailable. Remove the document selection to send.",
+      profileDependentAdmissionBlockReason:
+        "Routed documents are temporarily unavailable. Remove the document selection to send.",
     });
     expect(markup).toContain("Routed documents are temporarily unavailable.");
     expect(markup).toContain("Remove the document selection to send.");
@@ -1183,7 +1233,16 @@ describe("ThreadedComposer", () => {
       projectSwitchContext: {
         workspaceId: "default",
         session: { sessionId: "session-1", workspaceId: "default", revision: 7 },
-        projects: [{ projectId: "project-1", workspaceId: "default", revision: 1, name: "GoatCitadel", workspacePath: "F:/code/goat", lifecycleStatus: "active" }],
+        projects: [
+          {
+            projectId: "project-1",
+            workspaceId: "default",
+            revision: 1,
+            name: "GoatCitadel",
+            workspacePath: "F:/code/goat",
+            lifecycleStatus: "active",
+          },
+        ],
         mutationPending: false,
       },
       composerPalette: {
@@ -1250,8 +1309,20 @@ describe("ThreadedComposer", () => {
 
   it("offers explicit approval for an available supervised delegation", async () => {
     const onAcceptDelegation = vi.fn(async () => undefined);
-    const renderer = await renderComposer({ supervisedDelegationAvailable: true, onAcceptDelegation,
-      delegationSuggestion: { suggestionId: "suggestion-1", sessionId: "session-1", objective: "Review the change", roles: ["QA"], mode: "parallel", confidence: 0.8, source: "heuristic", createdAt: "2026-10-11T00:00:00Z" } });
+    const renderer = await renderComposer({
+      supervisedDelegationAvailable: true,
+      onAcceptDelegation,
+      delegationSuggestion: {
+        suggestionId: "suggestion-1",
+        sessionId: "session-1",
+        objective: "Review the change",
+        roles: ["QA"],
+        mode: "parallel",
+        confidence: 0.8,
+        source: "heuristic",
+        createdAt: "2026-10-11T00:00:00Z",
+      },
+    });
     const button = findButton(renderer.root, "Approve delegation");
     expect(button.props.disabled).toBe(false);
     await click(button);
@@ -1951,7 +2022,9 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
   it("keeps an empty source strip hidden until the attach action is opened and closes cleanly", async () => {
     const controls = externalControls({ attachments: [], candidates: [], candidatesSupported: true });
     const renderer = await renderComposer({ externalSourceControls: controls });
-    expect(renderer.root.findAll((node) => node.type === "section" && hasClass(node, "mc-next-composer-external-strip"))).toHaveLength(0);
+    expect(
+      renderer.root.findAll((node) => node.type === "section" && hasClass(node, "mc-next-composer-external-strip")),
+    ).toHaveLength(0);
 
     await click(findButton(renderer.root, "Attach imported item"));
     expect(renderer.root.findAll((node) => node.props.role === "dialog")).toHaveLength(1);
@@ -1959,7 +2032,9 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     await click(findButton(renderer.root, "Close"));
 
     expect(renderer.root.findAll((node) => node.props.role === "dialog")).toHaveLength(0);
-    expect(renderer.root.findAll((node) => node.type === "section" && hasClass(node, "mc-next-composer-external-strip"))).toHaveLength(0);
+    expect(
+      renderer.root.findAll((node) => node.type === "section" && hasClass(node, "mc-next-composer-external-strip")),
+    ).toHaveLength(0);
     renderer.unmount();
   });
 

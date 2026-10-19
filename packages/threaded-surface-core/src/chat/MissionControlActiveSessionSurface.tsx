@@ -292,6 +292,10 @@ export interface MissionControlActiveSessionSurfaceProps {
   currentWebMode: ChatWebMode;
   currentReviewDepth: ChatOrchestrationReviewDepth;
   modelCouncilEnabled?: boolean;
+  /** Effective rollout availability for arming Council on the next send (`chatFeatureAvailability.modelCouncil`). */
+  modelCouncilAvailable?: boolean;
+  /** Effective rollout availability for requesting a workspace snapshot on the next new send. */
+  workspaceSnapshotAvailable?: boolean;
   /** One-shot, point-in-time workspace context captured by the Gateway for the next send. */
   workspaceSnapshotRequest?: ChatWorkspaceSnapshotRequest;
   onToggleWorkspaceSnapshot: () => void;

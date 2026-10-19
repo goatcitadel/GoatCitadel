@@ -8,6 +8,11 @@ interface SendOptionsProps {
   contextArmed: boolean;
 }
 
+function describeCouncilControl(armed: boolean, available: boolean): string {
+  if (!available) return "Model council is temporarily unavailable; click to turn it off";
+  return armed ? "Model council is armed for Send" : "Ask a model council with the next send";
+}
+
 export function ThreadedComposerSendOptions({
   props,
   composerActionDisabled,
@@ -47,20 +52,19 @@ export function ThreadedComposerSendOptions({
       >
         Review
       </button>
-      <button
-        type="button"
-        className="mc-next-composer-suggestion"
-        aria-pressed={Boolean(props.modelCouncilEnabled)}
-        disabled={composerActionDisabled || !props.onToggleModelCouncil || !props.modelCouncilEnabled}
-        onClick={props.onToggleModelCouncil}
-        title={
-          props.modelCouncilEnabled
-            ? "Model council is temporarily unavailable; click to turn it off"
-            : "Model council is temporarily unavailable"
-        }
-      >
-        Council
-      </button>
+      {props.modelCouncilAvailable || props.modelCouncilEnabled ? (
+        // Shown only while the Gateway reports Council available, or while a stale arming still needs turning off.
+        <button
+          type="button"
+          className="mc-next-composer-suggestion"
+          aria-pressed={Boolean(props.modelCouncilEnabled)}
+          disabled={composerActionDisabled || !props.onToggleModelCouncil}
+          onClick={props.onToggleModelCouncil}
+          title={describeCouncilControl(Boolean(props.modelCouncilEnabled), Boolean(props.modelCouncilAvailable))}
+        >
+          Council
+        </button>
+      ) : null}
       <button
         type="button"
         className="mc-next-composer-suggestion"
