@@ -422,6 +422,8 @@ describe("chat rendering tail coverage", () => {
     expect(renderer.root.findAllByProps({ className: "mc-assistant-code-shell" })).toHaveLength(1);
 
     vi.stubGlobal("__GOATCITADEL_OPENUI_RENDERER__", true);
+    // Load the lazy renderer chunk up front: a cold import under coverage on CI outlasts the bounded wait below.
+    await import("./OpenUiStructuredBlock");
     renderer.unmount();
     renderer = create(<AssistantMessageRenderer role="assistant" content={`\`\`\`openui\n${openUiProgram}\n\`\`\``} />);
     // The renderer loads lazily, and the program text already shows in the code fallback; wait for the renderer itself.
