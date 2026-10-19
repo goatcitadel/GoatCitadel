@@ -26,7 +26,8 @@ import {
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
-import { toolReadableWriteRoots } from "./sandbox/tool-write-gate.js";
+import { toolReadableWriteRoots, withExecutionWriteAdmission } from "./sandbox/tool-write-gate.js";
+import { resolveExecutionWriteAdmission } from "./tool-executor/outside-root-write-admission.js";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "./sandbox/network-guard.js";
 import {
   assertSafeRedirectTransition,
@@ -127,6 +128,14 @@ export function setShellOutputRetentionBytesForTesting(
 }
 
 export interface ToolExecutorRuntimeHooks {
+  /**
+   * Gateway-owned eligibility for writes outside every write root (an ordinary
+   * interactive session, not a delegated child, A2A peer, or mesh node). Absent
+   * means ineligible, so outside-root writes stay blocked.
+   */
+  resolveOutsideRootWriteEligibility?: (
+    request: Pick<ToolInvokeRequest, "sessionId" | "workspaceId" | "agentId" | "policyContext">,
+  ) => Promise<boolean>;
   /** Read-only, server-scoped callable metadata. Discovery never grants invocation authority. */
   searchCapabilities?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
   /** Read-only exact-byte skill content; Gateway revalidates callable state and tree integrity. */
@@ -299,8 +308,15 @@ export async function executeTool(
     );
   }
 
+  // Writes outside every write root reach the write gate only with an
+  // admission re-derived from storage (verified folder grant or approve-once).
+  const writeConfig = withExecutionWriteAdmission(
+    config,
+    await resolveExecutionWriteAdmission(request, config, storage, runtimeHooks.resolveOutsideRootWriteEligibility),
+  );
+
   if (isBrowserToolName(request.toolName)) {
-    const rawResult = await executeBrowserTool(request.toolName, request.args, config, {
+    const rawResult = await executeBrowserTool(request.toolName, request.args, writeConfig, {
       sessionId: request.sessionId,
       signal: request.signal,
       matchedGrantAllowedHosts: await resolveExecutionGrantAllowedHosts(request, storage),
@@ -314,14 +330,14 @@ export async function executeTool(
   }
   if (isFilesystemToolName(request.toolName)) {
     return finalizeToolResult(
-      await executeFilesystemTool(request, config, storage, {
+      await executeFilesystemTool(request, writeConfig, storage, {
         assertReadPathAllowedForRequest,
       }),
     );
   }
   if (isArtifactToolName(request.toolName)) {
     return finalizeToolResult(
-      await executeArtifactTool(request.toolName, request.args, config, {
+      await executeArtifactTool(request.toolName, request.args, writeConfig, {
         request,
         preparePresentationVisuals: runtimeHooks.preparePresentationVisuals,
       }),

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { OUTSIDE_ROOT_WRITE_MODES } from "./outside-root-write.js";
 
 // ---------------------------------------------------------------------------
 // Tool Policy
@@ -152,6 +153,8 @@ export const ToolPolicyConfigSchema = z
           )
           .max(32)
           .default([]),
+        /** Outside-root writes raise an approval only when "approval_required". */
+        outsideRootWriteMode: z.enum(OUTSIDE_ROOT_WRITE_MODES).default("deny"),
       })
       .passthrough(),
     /**

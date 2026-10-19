@@ -20,6 +20,8 @@ import {
  *   database/audit paths) are refused everywhere, even inside an allowed root.
  * - A delete may not remove a write root itself, nor any folder that contains
  *   a runtime-protected path.
+ * - An optional admission (a verified outside-root folder grant or approve-once
+ *   target) adds folders for write intent only; hard-forbidden checks still run.
  */
 export type ToolWriteIntent = "write" | "delete";
 
@@ -49,13 +51,50 @@ export function toolReadableWriteRoots(sandbox: ToolSandbox): string[] {
   return effectiveToolWriteRoots(sandbox, "write");
 }
 
+/**
+ * Extra folders admitted for write-intent targets of one evaluation or one
+ * execution: a verified outside-root folder grant, or the exact targets of a
+ * verified approve-once outside-root write. Never applies to deletes and never
+ * widens reads.
+ */
+export interface ToolWriteAdmission {
+  roots: readonly string[];
+}
+
+/**
+ * Process-local key for an execution-scoped admission. A symbol key cannot be
+ * produced by parsed configuration, so a config file can never pre-admit
+ * folders; only `withExecutionWriteAdmission` attaches it to a per-call copy.
+ */
+const EXECUTION_WRITE_ADMISSION = Symbol("goatcitadel.executionWriteAdmission");
+
+type AdmissionCarrier = { [EXECUTION_WRITE_ADMISSION]?: ToolWriteAdmission };
+
+/** Copy `config` with an execution-scoped admission for the write gate (or return it unchanged). */
+export function withExecutionWriteAdmission(
+  config: ToolPolicyConfig,
+  admission: ToolWriteAdmission | undefined,
+): ToolPolicyConfig {
+  if (!admission || admission.roots.length === 0) return config;
+  const sandbox: ToolSandbox & AdmissionCarrier = { ...config.sandbox, [EXECUTION_WRITE_ADMISSION]: admission };
+  return { ...config, sandbox };
+}
+
+function admittedWriteRoots(sandbox: ToolSandbox, admission: ToolWriteAdmission | undefined): string[] {
+  const carried = (sandbox as ToolSandbox & AdmissionCarrier)[EXECUTION_WRITE_ADMISSION];
+  return [...(admission?.roots ?? []), ...(carried?.roots ?? [])];
+}
+
 /** Assert a tool may write or delete `targetPath`; returns the resolved target. */
 export function assertToolWritePath(
   targetPath: string,
   sandbox: ToolSandbox,
   intent: ToolWriteIntent = "write",
+  admission?: ToolWriteAdmission,
 ): string {
-  const resolvedTarget = assertWritePathInJail(targetPath, effectiveToolWriteRoots(sandbox, intent));
+  const roots = effectiveToolWriteRoots(sandbox, intent);
+  if (intent === "write") roots.push(...admittedWriteRoots(sandbox, admission));
+  const resolvedTarget = assertWritePathInJail(targetPath, roots);
   assertNotHardForbiddenWritePath(resolvedTarget, sandbox);
   if (intent === "delete") {
     assertNotWriteRootItself(resolvedTarget, sandbox);

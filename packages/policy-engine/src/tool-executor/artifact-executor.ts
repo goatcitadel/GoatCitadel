@@ -693,6 +693,23 @@ function resolveDocumentFormat(rawFormat: string | undefined, requestedPath: str
   }
 }
 
+/**
+ * The path documents.create will actually write for these args (extension
+ * applied), so policy checks and approvals see the same target as execution.
+ */
+export function resolveDocumentOutputPath(args: Record<string, unknown>): string | undefined {
+  const requestedPath = typeof args.path === "string" ? args.path.trim() : "";
+  if (!requestedPath) return undefined;
+  return ensureDocumentPath(requestedPath, resolveDocumentFormat(asString(args.format), requestedPath));
+}
+
+/** The path presentations.create will actually write for these args (extension applied). */
+export function resolvePresentationOutputPath(args: Record<string, unknown>): string | undefined {
+  const requestedPath = typeof args.path === "string" ? args.path.trim() : "";
+  if (!requestedPath) return undefined;
+  return ensurePresentationPath(requestedPath, resolvePresentationFormat(asString(args.format), requestedPath));
+}
+
 function ensureDocumentPath(value: string, format: DocumentArtifactFormat): string {
   const extension = documentArtifactExtension(format);
   if (new RegExp(`${escapeRegExp(extension)}$`, "i").test(value)) {
