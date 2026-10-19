@@ -696,8 +696,8 @@
       "declarations": ["ROUTE_RELEASE_SCOPE", "LibrarySection"],
       "legacy_url": "/library/agents",
       "classic_fallback": "/library/agents?shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/library/agents",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "area": "library",
         "section": "agents",
@@ -733,7 +733,7 @@
         "deep_links": "Load /library/agents with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 10,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -807,6 +807,14 @@
         "original_status_and_owner_retained": true,
         "full_capability_verified": false,
         "classic_continuation_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -1139,8 +1147,8 @@
       "declarations": ["ROUTE_RELEASE_SCOPE", "LibrarySection"],
       "legacy_url": "/library/journey",
       "classic_fallback": "/library/journey?shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/library/journey",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "area": "library",
         "section": "journey",
@@ -1168,7 +1176,7 @@
         "deep_links": "Load /library/journey with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 15,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -1201,6 +1209,14 @@
         "original_status_and_owner_retained": true,
         "full_capability_verified": false,
         "classic_continuation_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -1209,8 +1225,8 @@
       "declarations": ["ROUTE_RELEASE_SCOPE", "LibrarySection"],
       "legacy_url": "/library/knowledge",
       "classic_fallback": "/library/knowledge?shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/library/knowledge",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "area": "library",
         "section": "knowledge",
@@ -1250,7 +1266,7 @@
         "deep_links": "Load /library/knowledge with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found. Knowledge views sources/context/learnings preserve selection/scope; disabled learnings never render action controls and must expose an explicit disabled/unavailable result."
       },
       "owner_task": 10,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -1391,6 +1407,14 @@
         "original_status_and_owner_retained": true,
         "full_capability_verified": false,
         "classic_continuation_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -1499,8 +1523,8 @@
       "declarations": ["ROUTE_RELEASE_SCOPE", "LibrarySection"],
       "legacy_url": "/library/communications",
       "classic_fallback": "/library/communications?shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/library/communications",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "area": "library",
         "section": "communications",
@@ -1526,7 +1550,7 @@
         "deep_links": "Load /library/communications with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 15,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -1559,6 +1583,14 @@
         "original_status_and_owner_retained": true,
         "full_capability_verified": false,
         "classic_continuation_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -1761,8 +1793,8 @@
       "declarations": ["ROUTE_RELEASE_SCOPE", "LibrarySection"],
       "legacy_url": "/library/prompt-packs",
       "classic_fallback": "/library/prompt-packs?shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/library/prompt-packs",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "area": "library",
         "section": "prompt-packs",
@@ -1800,7 +1832,7 @@
         "deep_links": "Load /library/prompt-packs with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 15,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -1833,6 +1865,14 @@
         "original_status_and_owner_retained": true,
         "full_capability_verified": false,
         "classic_continuation_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -1841,8 +1881,8 @@
       "declarations": ["ROUTE_RELEASE_SCOPE", "LibrarySection"],
       "legacy_url": "/library/curator",
       "classic_fallback": "/library/curator?shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/library/curator",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "area": "library",
         "section": "curator",
@@ -1870,7 +1910,7 @@
         "deep_links": "Load /library/curator with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 15,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -1903,6 +1943,14 @@
         "original_status_and_owner_retained": true,
         "full_capability_verified": false,
         "classic_continuation_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -2662,8 +2710,8 @@
       "declarations": ["ROUTE_RELEASE_SCOPE", "OpsSection"],
       "legacy_url": "/ops/sessions",
       "classic_fallback": "/ops/sessions?shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/system/sessions",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "area": "ops",
         "section": "sessions",
@@ -2698,7 +2746,7 @@
         "deep_links": "Load /ops/sessions with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 15,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -2731,6 +2779,14 @@
         "original_status_and_owner_retained": true,
         "full_capability_verified": false,
         "classic_continuation_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -2882,8 +2938,8 @@
       "declarations": ["ROUTE_RELEASE_SCOPE", "OpsSection"],
       "legacy_url": "/ops/workers",
       "classic_fallback": "/ops/workers?shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/system/runtime/workers",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "area": "ops",
         "section": "workers",
@@ -2914,7 +2970,7 @@
         "deep_links": "Load /ops/workers with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 15,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -2956,6 +3012,14 @@
         "original_status_and_owner_retained": true,
         "full_capability_verified": false,
         "classic_continuation_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -2964,8 +3028,8 @@
       "declarations": ["ROUTE_RELEASE_SCOPE", "OpsSection"],
       "legacy_url": "/ops/improvement",
       "classic_fallback": "/ops/improvement?shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/system/improvement",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "area": "ops",
         "section": "improvement",
@@ -3000,7 +3064,7 @@
         "deep_links": "Load /ops/improvement with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 15,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -3033,6 +3097,14 @@
         "original_status_and_owner_retained": true,
         "full_capability_verified": false,
         "classic_continuation_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -3507,8 +3579,8 @@
       "declarations": ["ROUTE_RELEASE_SCOPE", "OpsSection"],
       "legacy_url": "/ops/runtime",
       "classic_fallback": "/ops/runtime?shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/system/runtime",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "area": "ops",
         "section": "runtime",
@@ -3548,7 +3620,7 @@
         "deep_links": "Load /ops/runtime with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 15,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -3581,6 +3653,14 @@
         "original_status_and_owner_retained": true,
         "full_capability_verified": false,
         "classic_continuation_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -5453,8 +5533,8 @@
       "declarations": ["PrimaryArea root"],
       "legacy_url": "/library",
       "classic_fallback": "/library?shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/library",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "status": "hide",
         "note": "No explicit release row; route-model fallback is hidden. Root resolves its area default."
@@ -5476,7 +5556,7 @@
         "deep_links": "Load /library with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 10,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -5535,6 +5615,14 @@
         "original_status_and_owner_retained": true,
         "full_capability_verified": false,
         "classic_continuation_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -5543,8 +5631,8 @@
       "declarations": ["PrimaryArea root"],
       "legacy_url": "/ops",
       "classic_fallback": "/ops?shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/system",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "status": "hide",
         "note": "No explicit release row; route-model fallback is hidden. Root resolves its area default."
@@ -5575,7 +5663,7 @@
         "deep_links": "Load /ops with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 11,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -5648,6 +5736,14 @@
         "notes": "Existing native area default/explicit Classic root routing retained; no native root parity certification.",
         "full_native_parity": false,
         "classic_fallback_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -5656,8 +5752,8 @@
       "declarations": ["PrimaryArea root"],
       "legacy_url": "/settings",
       "classic_fallback": "/settings?shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/settings",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "status": "hide",
         "note": "No explicit release row; route-model fallback is hidden. Root resolves its area default."
@@ -5679,7 +5775,7 @@
         "deep_links": "Load /settings with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 12,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -5723,6 +5819,14 @@
         "scoped_review": ".superpowers/sdd/2026-10-05-cockpit-remediation/task-12-fix-3-review.md",
         "result": "Fresh phone Settings current-area/More visibility accepted; native Basic/Token access recovery accepted without replacing current caller with saved configuration.",
         "boundary": "Additive acceptance evidence; original statuses, owners, criteria, prior evidence and parity flags remain unchanged. Windows Chromium loaded-state proof is not global contrast, Ubuntu, installed hosting, live-provider/audio/inference or positive OS-custody certification. Residual provider/access/runtime ports remain Task15; FR-02 stays OPEN/partial and blocks full Classic parity."
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -5961,8 +6065,8 @@
       "declarations": ["NativeRoutePages view branch"],
       "legacy_url": "/ops/sessions?view=browser-sessions",
       "classic_fallback": "/ops/sessions?view=browser-sessions&shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/system/browser-sessions",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "area": "ops",
         "section": "sessions",
@@ -5999,7 +6103,7 @@
         "deep_links": "Load /ops/sessions with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 15,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -6025,6 +6129,14 @@
         "original_status_and_owner_retained": true,
         "full_capability_verified": false,
         "classic_continuation_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -6034,7 +6146,7 @@
       "legacy_url": "/ops/:section?runId=:runId&view=run-detail",
       "classic_fallback": "/ops/sessions?runId=:runId&shell=classic&shellScope=visit",
       "native_destination": "/work/runs/:runId",
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "area": "ops",
         "section": "sessions",
@@ -6136,6 +6248,14 @@
         ],
         "classic_fallback_retained": true,
         "parity_verified": false
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     },
     {
@@ -6144,8 +6264,8 @@
       "declarations": ["legacy catalog view"],
       "legacy_url": "/library/agents?view=catalog",
       "classic_fallback": "/library/agents?view=catalog&shell=classic&shellScope=visit",
-      "native_destination": null,
-      "destination_status": "explicit_classic_fallback_until_ported",
+      "native_destination": "/library/agents?view=catalog",
+      "destination_status": "native_candidate_requires_action_parity",
       "release_scope": {
         "area": "library",
         "section": "agents",
@@ -6181,7 +6301,7 @@
         "deep_links": "Load /library/agents with relevant IDs, query/hash and history; reach the correct native record or an explicit Classic fallback with scope handoff; unknown record/route is not-found."
       },
       "owner_task": 10,
-      "current_implementation_status": "needs_recheck",
+      "current_implementation_status": "implemented_pending_independent_verification",
       "evidence_references": [
         {
           "kind": "pinned_source",
@@ -6243,6 +6363,14 @@
         "original_status_and_owner_retained": true,
         "full_capability_verified": false,
         "classic_continuation_retained": true
+      },
+      "ws10_recheck": {
+        "date": "2026-10-19",
+        "result": "rail_destination_resolves_native_classic_rollback_only",
+        "evidence": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.test.ts",
+        "boundary": "Routing coverage only: the legacy URL now resolves to its native Cockpit owner and Classic is reached only through the explicit ?shell=classic rollback. Action parity is not independently verified by this recheck.",
+        "classic_parity_verified": false,
+        "classic_fallback_retained": true
       }
     }
   ],
@@ -9284,5 +9412,21 @@
     "full_parity_certified": false,
     "classic_retirement_certified": false,
     "classic_rollback_retained": true
+  },
+  "ws10_classic_handoff_slice": {
+    "date": "2026-10-19",
+    "issue": "https://github.com/goatcitadel/GoatCitadel/issues/370",
+    "result": "no_rail_destination_hands_off_to_classic",
+    "removed": [
+      "settings-destinations ?shell=classic fallthrough and the 'detailed' destination kind",
+      "cockpit-compatibility generic Classic fallback for Ops, Library and Settings rail sections",
+      "unused features/native-routes/library/external-source-launch.ts"
+    ],
+    "guard": "cockpit-compatibility.test.ts asserts every rail destination resolves native",
+    "out_of_scope": [
+      "Vault per-Chamber keys and key rotation: no Gateway API exists in Classic or Cockpit (packages/contracts/src/citadel-vault.ts defers them); recorded as Gateway follow-up work"
+    ],
+    "classic_rollback_retained": true,
+    "full_parity_certified": false
   }
 }

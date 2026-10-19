@@ -1,5 +1,5 @@
 import { Suspense, useMemo, useState } from "react";
-import { ArrowRight, ArrowUpRight, Search } from "lucide-react";
+import { ArrowRight, Search } from "lucide-react";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { AreaHeader, AreaTabsProvider } from "../../ui/AreaHeader";
@@ -307,29 +307,23 @@ function SettingsDestinations({
     <ul className="mt-3 grid gap-2 sm:grid-cols-2">
       {entries.map((entry) => (
         <li key={entry.href} className="min-w-0 rounded-md border border-line-subtle bg-sunken">
-          {entry.destination === "detailed" ? (
-            <a href={entry.href} className="flex min-h-20 items-start gap-3 p-3 hover:bg-canvas">
-              <SettingsDestinationContent entry={entry} />
-            </a>
-          ) : (
-            <a
-              href={entry.href}
-              onPointerEnter={() => preloadSettingsSection(entry.section)}
-              onFocus={() => preloadSettingsSection(entry.section)}
-              onPointerDown={() => preloadSettingsSection(entry.section)}
-              className="flex min-h-20 items-start gap-3 p-3 hover:bg-canvas"
-              onClick={(event) => {
-                if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
-                event.preventDefault();
-                onNavigate(entry.href);
-                const sectionId = entry.href.split("#")[1];
-                if (sectionId)
-                  requestAnimationFrame(() => document.getElementById(sectionId)?.scrollIntoView({ block: "start" }));
-              }}
-            >
-              <SettingsDestinationContent entry={entry} />
-            </a>
-          )}
+          <a
+            href={entry.href}
+            onPointerEnter={() => preloadSettingsSection(entry.section)}
+            onFocus={() => preloadSettingsSection(entry.section)}
+            onPointerDown={() => preloadSettingsSection(entry.section)}
+            className="flex min-h-20 items-start gap-3 p-3 hover:bg-canvas"
+            onClick={(event) => {
+              if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+              event.preventDefault();
+              onNavigate(entry.href);
+              const sectionId = entry.href.split("#")[1];
+              if (sectionId)
+                requestAnimationFrame(() => document.getElementById(sectionId)?.scrollIntoView({ block: "start" }));
+            }}
+          >
+            <SettingsDestinationContent entry={entry} />
+          </a>
         </li>
       ))}
     </ul>
@@ -360,18 +354,10 @@ function SettingsDestinationContent({ entry }: { entry: SettingsIndexEntry }) {
         {entry.releaseStatus === "experimental" ? <span className="text-xs text-fg-muted">Experimental</span> : null}
         <span className="mt-1 block text-xs text-fg-muted">{entry.description}</span>
         <span className="mt-1 block text-xs text-fg-secondary">
-          {entry.destination === "detailed"
-            ? `${entry.label} controls are only in the classic view. Opens the classic view`
-            : entry.completeNative
-              ? "Opens cockpit controls"
-              : "Opens cockpit controls and management links"}
+          {entry.completeNative ? "Opens cockpit controls" : "Opens cockpit controls and management links"}
         </span>
       </span>
-      {entry.href.includes("shell=classic") ? (
-        <ArrowUpRight aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-accent" />
-      ) : (
-        <ArrowRight aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-accent" />
-      )}
+      <ArrowRight aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-accent" />
     </>
   );
 }
