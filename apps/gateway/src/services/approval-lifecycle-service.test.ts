@@ -8,6 +8,7 @@ import type {
   ApprovalEffectRecord,
   ApprovalRequest,
   CodeModeRunRecord,
+  OutsideRootWriteApprovalDetails,
   ToolGrantCreateInput,
 } from "@goatcitadel/contracts";
 import {
@@ -2875,6 +2876,10 @@ describe("approval lifecycle service", () => {
       policyEngine: {
         listGrants: vi.fn(() => []),
         listActiveGrants: vi.fn(() => []),
+        describeOutsideRootWriteApproval: vi.fn(
+          async (_approvalId: string): Promise<OutsideRootWriteApprovalDetails | undefined> => undefined,
+        ),
+        mintOutsideRootWriteGrant: vi.fn(),
         createGrant: vi.fn(),
       },
       resolveApproval: vi.fn(async () => ({
@@ -2971,6 +2976,10 @@ describe("approval lifecycle service", () => {
       policyEngine: {
         listGrants: vi.fn(() => []),
         listActiveGrants: vi.fn(() => []),
+        describeOutsideRootWriteApproval: vi.fn(
+          async (_approvalId: string): Promise<OutsideRootWriteApprovalDetails | undefined> => undefined,
+        ),
+        mintOutsideRootWriteGrant: vi.fn(),
         createGrant,
       },
       publishRealtime: vi.fn(),
@@ -3077,6 +3086,10 @@ describe("approval lifecycle service", () => {
       policyEngine: {
         listGrants: vi.fn(() => []),
         listActiveGrants: vi.fn(() => []),
+        describeOutsideRootWriteApproval: vi.fn(
+          async (_approvalId: string): Promise<OutsideRootWriteApprovalDetails | undefined> => undefined,
+        ),
+        mintOutsideRootWriteGrant: vi.fn(),
         createGrant,
       },
       publishRealtime: vi.fn(),
@@ -3169,6 +3182,10 @@ describe("approval lifecycle service", () => {
       policyEngine: {
         listGrants: vi.fn(() => []),
         listActiveGrants: vi.fn(() => []),
+        describeOutsideRootWriteApproval: vi.fn(
+          async (_approvalId: string): Promise<OutsideRootWriteApprovalDetails | undefined> => undefined,
+        ),
+        mintOutsideRootWriteGrant: vi.fn(),
         createGrant,
       },
       resolveApproval: vi.fn(async () => {
@@ -3958,6 +3975,10 @@ function createApprovalHarness(input?: {
     policyEngine: {
       listGrants: vi.fn(() => []),
       listActiveGrants: vi.fn(() => []),
+      describeOutsideRootWriteApproval: vi.fn(
+        async (_approvalId: string): Promise<OutsideRootWriteApprovalDetails | undefined> => undefined,
+      ),
+      mintOutsideRootWriteGrant: vi.fn(),
       createGrant: vi.fn(),
       revokeGrant: vi.fn(),
       executeApprovedAction: vi.fn(),
@@ -4278,3 +4299,135 @@ function createInMemoryApprovalEffectsStore(effectRows: ApprovalEffectRecord[]) 
     ),
   };
 }
+
+describe("resolveChatToolApproval outside-root write folder grants", () => {
+  const rootId = "owr_0123456789abcdef";
+  const details: OutsideRootWriteApprovalDetails = {
+    kind: "outside_root_write",
+    targets: ["C:/Scratch/report/out.txt"],
+    candidates: [{ rootId, path: "C:/Scratch/report" }],
+    durations: ["15m", "1h", "8h"],
+    defaultDuration: "1h",
+  };
+
+  function createOutsideRootWriteHarness(input?: { outsideRoot?: boolean }) {
+    const host = createApprovalHarness({
+      approvalKind: "fs.write",
+      approvalPayload: { sessionId: "session-1", path: "C:/Scratch/report/out.txt", content: "x" },
+      chatToolName: "fs.write",
+    });
+    const approval = host.storage.approvals.get("approval-1");
+    host.resolveApproval.mockResolvedValue({
+      approval: { ...approval, status: "approved", resolvedBy: "operator-test" },
+      resolutionEffects: { proactiveRunIds: [], chatTurnResume: { resumed: false } },
+    } as never);
+    host.policyEngine.describeOutsideRootWriteApproval.mockResolvedValue(
+      input?.outsideRoot === false ? undefined : details,
+    );
+    host.policyEngine.mintOutsideRootWriteGrant.mockImplementation(
+      async (mint: { scope: string; scopeRef: string; duration: string }) =>
+        ({
+          grantId: "grant-folder-1",
+          toolPattern: "fs.write",
+          decision: "allow",
+          scope: mint.scope,
+          scopeRef: mint.scopeRef,
+          grantType: "ttl",
+          constraints: { writeRoots: ["C:/Scratch/report"], writeRootsApprovalId: "approval-1" },
+          createdAt: "2026-10-19T00:00:00.000Z",
+          createdBy: "operator-test",
+          expiresAt: "2026-10-19T01:00:00.000Z",
+        }) as never,
+    );
+    return host;
+  }
+
+  it("opens the chosen folder for the chat and never mints an unconstrained grant", async () => {
+    const host = createOutsideRootWriteHarness();
+    const result = await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "session",
+      resolvedBy: "operator-test",
+      writeGrant: { rootId, duration: "1h" },
+    });
+    expect(host.policyEngine.mintOutsideRootWriteGrant).toHaveBeenCalledWith({
+      approvalId: "approval-1",
+      rootId,
+      duration: "1h",
+      scope: "session",
+      scopeRef: "session-1",
+      createdBy: "operator-test",
+    });
+    expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
+    expect(result.grant?.grantId).toBe("grant-folder-1");
+    expect(result.grantError).toBeUndefined();
+    expect(host.publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "tools",
+      expect.objectContaining({ type: "tool_grant_created", grantId: "grant-folder-1" }),
+    );
+  });
+
+  it("approves an outside-root write once without opening a folder", async () => {
+    const host = createOutsideRootWriteHarness();
+    const result = await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "once",
+      resolvedBy: "operator-test",
+    });
+    expect(result.allowScope).toBe("once");
+    expect(host.policyEngine.mintOutsideRootWriteGrant).not.toHaveBeenCalled();
+    expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a scoped approval without a folder", { allowScope: "session" as const }, "Choose a folder to open"],
+    [
+      "a folder with approve-once",
+      { allowScope: "once" as const, writeGrant: { rootId, duration: "1h" as const } },
+      "needs an approval scoped",
+    ],
+    [
+      "a folder the approval did not offer",
+      { allowScope: "session" as const, writeGrant: { rootId: "owr_ffffffffffffffff", duration: "1h" as const } },
+      "not offered by this approval",
+    ],
+    [
+      "an unsupported duration",
+      { allowScope: "session" as const, writeGrant: { rootId, duration: "24h" as never } },
+      "Unsupported folder-grant duration",
+    ],
+  ])("refuses %s before resolving anything", async (_label, options, message) => {
+    const host = createOutsideRootWriteHarness();
+    await expect(
+      resolveChatToolApproval(host, "session-1", "approval-1", "approve", { ...options, resolvedBy: "operator-test" }),
+    ).rejects.toThrow(message);
+    expect(host.resolveApproval).not.toHaveBeenCalled();
+    expect(host.policyEngine.mintOutsideRootWriteGrant).not.toHaveBeenCalled();
+  });
+
+  it("refuses a folder choice on an approval that is not an outside-root write", async () => {
+    const host = createOutsideRootWriteHarness({ outsideRoot: false });
+    await expect(
+      resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+        allowScope: "session",
+        resolvedBy: "operator-test",
+        writeGrant: { rootId, duration: "1h" },
+      }),
+    ).rejects.toThrow("cannot open a folder");
+    expect(host.resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed mint as grantError while the approval stands", async () => {
+    const host = createOutsideRootWriteHarness();
+    host.policyEngine.mintOutsideRootWriteGrant.mockRejectedValueOnce(
+      new Error("Approval is too old to open a folder."),
+    );
+    const result = await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "session",
+      resolvedBy: "operator-test",
+      writeGrant: { rootId, duration: "15m" },
+    });
+    expect(host.resolveApproval).toHaveBeenCalledTimes(1);
+    expect(result.grant).toBeUndefined();
+    expect(result.grantError).toBe("Approval is too old to open a folder.");
+  });
+});

@@ -505,6 +505,10 @@ describe("chat API origin surface headers", () => {
       await chat.cancelChatTurn(sessionId, turnId);
       await chat.approveChatTool(sessionId, "approval 1", { allowScope: "session" });
       await chat.approveChatTool(sessionId, "approval 2");
+      await chat.approveChatTool(sessionId, "approval 3", {
+        allowScope: "workspace",
+        writeGrant: { rootId: "owr_0123456789abcdef", duration: "8h" },
+      });
       await chat.denyChatTool(sessionId, "approval 1");
       await chat.fetchChatToolArtifact("artifact 1", "workspace 1");
       await chat.uploadChatAttachment({
@@ -633,6 +637,11 @@ describe("chat API origin surface headers", () => {
             ) &&
             init?.method === "POST" &&
             String(init.body) === JSON.stringify({ candidateIds: ["a".repeat(64)] }),
+        ),
+      ).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(([, init]) =>
+          String(init?.body).includes('"writeGrant":{"rootId":"owr_0123456789abcdef","duration":"8h"}'),
         ),
       ).toBe(true);
       expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(true);

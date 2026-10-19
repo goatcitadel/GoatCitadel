@@ -2592,6 +2592,14 @@
       "maxDependencyMemberAccesses": 1,
       "reason": "Reviewed new owner for outside-root write eligibility (operator write-roots program PR6b, plan approved 2026-10-18): the gateway-side hook the policy engine and executor call before admitting a write outside every write root. Reads one narrowed storage repository (chat delegation steps) so delegated child sessions, A2A peers and mesh nodes are never eligible; fails closed on lookup errors. Keeps the logic out of GatewayService, which only wires a one-line hook.",
       "evidence": "2026-10-19: outside-root-write-eligibility.test.ts covers ordinary sessions, delegated children, A2A and mesh actors, blank session ids and lookup failure; repository counter measures 1 dependency access and 0 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/chat-approval-write-grant.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 0,
+      "reason": "Reviewed new owner for opening a folder from a Chat outside-root write approval (operator write-roots program PR7, plan approved 2026-10-18): validates the operator folder choice against the engine-described approval before resolution and mints the bounded folder grant after it. It takes the policy-engine slice and realtime publisher as arguments and reads no host, keeping approval-lifecycle-service under its limits.",
+      "evidence": "2026-10-19: approval-lifecycle-service.test.ts covers minting for the chat scope, approve-once, refusals before resolution (no folder, folder with once, unoffered folder, bad duration, non-outside-root approval) and mint failure as grantError; repository counters measure 0 dependency accesses and 0 host callbacks."
     }
   ]
 }

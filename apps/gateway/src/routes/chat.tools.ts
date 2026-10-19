@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { OUTSIDE_ROOT_WRITE_GRANT_DURATION_CHOICES, OUTSIDE_ROOT_WRITE_ROOT_ID_PATTERN } from "@goatcitadel/contracts";
 import type { CodeModeApprovalQueueItem } from "../services/capability-system-service.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 
@@ -7,6 +8,14 @@ const chatToolDecisionSchema = z.object({
   sessionId: z.string().min(1),
   approvalId: z.string().min(1),
   allowScope: z.enum(["once", "session", "workspace"]).optional(),
+  /** Outside-root write approvals only: open one server-offered folder for a bounded time. */
+  writeGrant: z
+    .object({
+      rootId: z.string().regex(OUTSIDE_ROOT_WRITE_ROOT_ID_PATTERN),
+      duration: z.enum(OUTSIDE_ROOT_WRITE_GRANT_DURATION_CHOICES),
+    })
+    .strict()
+    .optional(),
 });
 
 const chatToolApprovalsQuerySchema = z.object({
@@ -75,6 +84,7 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
         {
           allowScope: body.data.allowScope ?? "once",
           resolvedBy: resolveActorId(request),
+          ...(body.data.writeGrant ? { writeGrant: body.data.writeGrant } : {}),
         },
       );
       await markMutationCommitted(request);

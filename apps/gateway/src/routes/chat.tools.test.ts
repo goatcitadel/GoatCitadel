@@ -163,4 +163,42 @@ describe("chat tool routes", () => {
     expect(failedDenial.statusCode).toBe(400);
     expect(failedDenial.json()).toEqual({ error: "approval already resolved" });
   });
+
+  it("passes a strict outside-root folder choice through and rejects malformed ones", async () => {
+    const resolveChatToolApproval = vi.fn(async (_sessionId, _approvalId, _decision, options) => ({
+      allowScope: options?.allowScope ?? "once",
+      grant: { grantId: "grant-folder-1" },
+    }));
+    createApp({ resolveChatToolApproval });
+    const writeGrant = { rootId: "owr_0123456789abcdef", duration: "8h" };
+
+    const accepted = await app!.inject({
+      method: "POST",
+      url: "/api/v1/chat/tools/approve",
+      payload: { sessionId: "session-1", approvalId: "approval-1", allowScope: "session", writeGrant },
+    });
+    const rejected = await Promise.all(
+      [
+        { rootId: "C:/Windows", duration: "1h" },
+        { rootId: "owr_0123456789abcdef", duration: "24h" },
+        { ...writeGrant, path: "C:/Windows" },
+      ].map((bad) =>
+        app!.inject({
+          method: "POST",
+          url: "/api/v1/chat/tools/approve",
+          payload: { sessionId: "session-1", approvalId: "approval-2", allowScope: "session", writeGrant: bad },
+        }),
+      ),
+    );
+
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toMatchObject({ grant: { grantId: "grant-folder-1" } });
+    expect(resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-1", "approve", {
+      allowScope: "session",
+      resolvedBy: "operator-test",
+      writeGrant,
+    });
+    expect(rejected.map((response) => response.statusCode)).toEqual([400, 400, 400]);
+    expect(resolveChatToolApproval).toHaveBeenCalledTimes(1);
+  });
 });

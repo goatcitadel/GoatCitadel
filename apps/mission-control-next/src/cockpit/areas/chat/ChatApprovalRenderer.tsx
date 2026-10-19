@@ -23,6 +23,7 @@ import {
 import { readCockpitHistory, subscribeCockpitHistory } from "../../app/cockpit-history";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { OutsideRootWriteGrantOptions } from "./OutsideRootWriteGrantOptions";
 
 type RendererCode = typeof import("./ChatApprovalRendererBody");
 type DecisionProps = ComponentProps<RendererCode["ApprovalDecisionBar"]>;
@@ -219,7 +220,18 @@ export function ChatApprovalRenderer({
               {record.status === "pending" ? "Loading approval controls…" : "Loading follow-on work…"}
             </p>
           ) : record.status === "pending" ? (
-            <code.ApprovalDecisionBar key={scope} {...decisionProps} approval={record} />
+            <>
+              <code.ApprovalDecisionBar key={scope} {...decisionProps} approval={record} />
+              {decisionProps.sessionId ? (
+                <OutsideRootWriteGrantOptions
+                  key={`folder-${scope}`}
+                  approval={record}
+                  workspaceId={decisionProps.workspaceId}
+                  sessionId={decisionProps.sessionId}
+                  onResolved={decisionProps.onResolved}
+                />
+              ) : null}
+            </>
           ) : (
             <code.ApprovalSettlement key={scope} approval={record} workspaceId={decisionProps.workspaceId} />
           )}

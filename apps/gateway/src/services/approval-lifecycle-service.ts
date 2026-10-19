@@ -62,6 +62,12 @@ import { withCanonicalApprovalOutcome } from "./approval-canonical-outcome.js";
 import { buildApprovalResolveResult, withApprovalFollowUp } from "./approval-follow-up.js";
 import { parseApprovalCreateHookPatch } from "./hook-patch-helpers.js";
 import {
+  mintChatApprovalFolderGrant,
+  publishToolGrantCreated,
+  resolveOutsideRootWriteApprovalChoice,
+  type ChatApprovalWriteGrantChoice,
+} from "./chat-approval-write-grant.js";
+import {
   isOfficialResearchSearchInvocation,
   resolveOfficialSearchProviders,
   type ApprovalCreateAuthority,
@@ -134,7 +140,13 @@ export interface ApprovalLifecycleHost {
   // ── services ───────────────────────────────────────────────────────
   readonly policyEngine: Pick<
     ToolPolicyEngine,
-    "listGrants" | "listActiveGrants" | "createGrant" | "revokeGrant" | "executeApprovedAction"
+    | "listGrants"
+    | "listActiveGrants"
+    | "createGrant"
+    | "revokeGrant"
+    | "executeApprovedAction"
+    | "describeOutsideRootWriteApproval"
+    | "mintOutsideRootWriteGrant"
   >;
   readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
   readonly approvalWaitRunService: Pick<
@@ -352,20 +364,7 @@ export async function createToolGrant(
   input: ToolGrantCreateInput,
 ): Promise<ToolGrantRecord> {
   const grant = await host.policyEngine.createGrant(input);
-  try {
-    await host.publishRealtime("system", "tools", {
-      type: "tool_grant_created",
-      grantId: grant.grantId,
-      toolPattern: grant.toolPattern,
-      decision: grant.decision,
-      scope: grant.scope,
-      scopeRef: grant.scopeRef,
-      expiresAt: grant.expiresAt,
-    });
-  } catch (realtimeError) {
-    void realtimeError;
-    // The policy mutation is canonical; realtime is an advisory projection.
-  }
+  await publishToolGrantCreated((event) => host.publishRealtime("system", "tools", event), grant);
   return grant;
 }
 
@@ -1409,6 +1408,8 @@ export async function resolveChatToolApproval(
   options?: {
     allowScope?: "once" | "session" | "workspace";
     resolvedBy?: string;
+    /** Outside-root write approvals only: the server-offered folder to open, and for how long. */
+    writeGrant?: ChatApprovalWriteGrantChoice;
   },
 ): Promise<{
   allowScope: "once" | "session" | "workspace";
@@ -1446,8 +1447,17 @@ export async function resolveChatToolApproval(
   const toolPattern = turn?.toolName ?? existingInlineApproval?.toolName ?? approval.kind;
   let grant: ToolGrantRecord | undefined;
   let grantError: string | undefined;
+  const policyEngine = host.policyEngine;
+  // Outside-root writes open at most one server-offered folder (or run once);
+  // they never get the unconstrained session or workspace grant below.
+  const outsideRootWrite = await resolveOutsideRootWriteApprovalChoice(policyEngine, {
+    approvalId,
+    decision,
+    allowScope,
+    writeGrant: options?.writeGrant,
+  });
   const persistentGrantScope =
-    decision === "approve" && allowScope !== "once"
+    !outsideRootWrite && decision === "approve" && allowScope !== "once"
       ? allowScope === "workspace"
         ? ("workspace" as const)
         : ("session" as const)
@@ -1478,6 +1488,28 @@ export async function resolveChatToolApproval(
             ? [await resolveChatApprovalWorkspaceScopeRef(host, resolution.approval, sessionId)]
             : await resolveChatApprovalSessionGrantScopeRefs(host, resolution.approval, sessionId),
       };
+    } catch (error) {
+      grantError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  if (outsideRootWrite && options?.writeGrant && decision === "approve" && allowScope !== "once") {
+    try {
+      const folderGrant = await mintChatApprovalFolderGrant(
+        policyEngine,
+        (event) => host.publishRealtime("system", "tools", event),
+        {
+          approvalId,
+          choice: options.writeGrant,
+          scope: allowScope === "workspace" ? "workspace" : "session",
+          scopeRef:
+            allowScope === "workspace"
+              ? await resolveChatApprovalWorkspaceScopeRef(host, resolution.approval, sessionId)
+              : sessionId,
+          createdBy: resolvedBy,
+        },
+      );
+      grant = folderGrant.grant;
+      grantError = folderGrant.grantError;
     } catch (error) {
       grantError = error instanceof Error ? error.message : String(error);
     }

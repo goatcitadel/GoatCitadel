@@ -83,6 +83,7 @@ import type {
   LearnedMemoryConflictRecord,
   LearnedMemoryItemRecord,
   LearnedMemoryUpdateInput,
+  OutsideRootWriteGrantChoice,
   ProactivePolicy,
   ProactiveRunRecord,
   ResearchRunRecord,
@@ -90,6 +91,7 @@ import type {
   ResearchSummaryRecord,
   ThreadKnowledgeAttachmentRecord,
   ThreadKnowledgeRetrievalMode,
+  ToolGrantRecord,
 } from "@goatcitadel/contracts";
 export type { ChatChangePlanRecord, ChatProjectImportResult } from "@goatcitadel/contracts";
 export type { ChangePlanRecord } from "@goatcitadel/contracts";
@@ -1304,28 +1306,35 @@ export async function cancelChatTurn(
   );
 }
 
-export async function approveChatTool(
-  sessionId: string,
-  approvalId: string,
-  options?: { allowScope?: "once" | "session" | "workspace" },
-): Promise<{
+/** The folder an outside-root write approval opens; owned by contracts so client and Gateway agree. */
+export type ChatApprovalWriteGrantChoice = OutsideRootWriteGrantChoice;
+
+export interface ApproveChatToolResult {
   ok: boolean;
   approvalId: string;
   allowScope?: "once" | "session" | "workspace";
   resumed?: boolean;
   resumedTurnId?: string;
   resumedRunId?: string;
-}> {
-  return request<{
-    ok: boolean;
-    approvalId: string;
-    allowScope?: "once" | "session" | "workspace";
-    resumed?: boolean;
-    resumedTurnId?: string;
-    resumedRunId?: string;
-  }>("/api/v1/chat/tools/approve", {
+  /** The grant minted by a scoped approval (an opened folder for outside-root writes). */
+  grant?: ToolGrantRecord;
+  /** Why a scoped grant could not be minted; the exact approved action still ran once. */
+  grantError?: string;
+}
+
+export async function approveChatTool(
+  sessionId: string,
+  approvalId: string,
+  options?: { allowScope?: "once" | "session" | "workspace"; writeGrant?: ChatApprovalWriteGrantChoice },
+): Promise<ApproveChatToolResult> {
+  return request<ApproveChatToolResult>("/api/v1/chat/tools/approve", {
     method: "POST",
-    body: JSON.stringify({ sessionId, approvalId, ...(options?.allowScope ? { allowScope: options.allowScope } : {}) }),
+    body: JSON.stringify({
+      sessionId,
+      approvalId,
+      ...(options?.allowScope ? { allowScope: options.allowScope } : {}),
+      ...(options?.writeGrant ? { writeGrant: options.writeGrant } : {}),
+    }),
   });
 }
 
