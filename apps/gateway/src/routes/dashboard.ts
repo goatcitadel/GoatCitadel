@@ -121,6 +121,7 @@ export const updateSettingsSchema = z.object({
   defaultToolProfile: z.never().optional(),
   budgetMode: z.enum(["saver", "balanced", "power"]).optional(),
   readAccessMode: z.enum(["roots_only", "approval_required", "full_disk"]).optional(),
+  outsideRootWriteMode: z.enum(["deny", "approval_required"]).optional(),
   networkAllowlist: z.array(z.string().min(1)).optional(),
   operatorWriteRootChange: operatorWriteRootChangeSchema.optional(),
   globalToolAccessChange: globalToolAccessChangeSchema.optional(),

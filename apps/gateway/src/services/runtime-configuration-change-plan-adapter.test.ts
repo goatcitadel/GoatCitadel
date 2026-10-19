@@ -434,6 +434,19 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
       expect(prepared.target.resourceId).toBe(`tool_global_access:${toolName}`);
     });
 
+    it.each([
+      ["approval_required", "danger"],
+      ["deny", "safe"],
+    ] as const)("classifies the outside-root write policy %s as %s", async (mode, risk) => {
+      const { adapter } = writeAccessAdapter(() => writeAccessSettings());
+      const prepared = await adapter.prepare(context, {
+        kind: "runtime_configuration",
+        change: { operation: "outside_root_write_policy", mode },
+      });
+      expect(prepared.risk).toBe(risk);
+      if (mode === "approval_required") expect(prepared.impact).toContain("deny-wins and Citadel Wards still apply");
+    });
+
     it("says un-denying makes the tool callable with approval in every write root", async () => {
       const { adapter } = writeAccessAdapter(() => writeAccessSettings());
       const prepared = await adapter.prepare(context, {

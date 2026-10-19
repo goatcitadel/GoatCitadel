@@ -6,6 +6,7 @@ import type {
   LlamaCppRuntimeStatus,
   LlmRuntimeConfig,
   NpuRuntimeStatus,
+  OutsideRootWriteMode,
   OperatorWriteRootSummary,
   ToolApprovalMode,
 } from "@goatcitadel/contracts";
@@ -26,6 +27,8 @@ export interface RuntimeSettings {
   /** The global tool allow and deny lists (agent and permission-profile lists are separate). */
   globalToolAccess: GlobalToolAccessSummary;
   readAccessMode: FilesystemReadAccessMode;
+  /** Whether writes outside every write root may raise an approval ("deny" by default). */
+  outsideRootWriteMode?: OutsideRootWriteMode;
   networkAllowlist: string[];
   approvalExplainer: {
     enabled: boolean;

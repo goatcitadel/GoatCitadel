@@ -71,6 +71,9 @@ const createGrantSchema = z
         maxWritesPerHour: z.number().int().positive().optional(),
         maxCallsPerHour: z.number().int().positive().optional(),
         mutationAllowed: z.boolean().optional(),
+        // Folders outside the write roots; the policy engine re-validates and
+        // canonicalizes them. The minting approval id is server-only.
+        writeRoots: z.array(z.string().min(1).max(1024)).min(1).max(4).optional(),
       })
       .optional(),
     expiresAt: z.string().datetime().optional(),
@@ -78,6 +81,14 @@ const createGrantSchema = z
   })
   .superRefine((value, ctx) => {
     const grantType = value.grantType ?? "persistent";
+    if (value.constraints?.writeRoots && grantType !== "ttl") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["grantType"],
+        message: "Folder (writeRoots) grants must be ttl grants.",
+      });
+      return;
+    }
     if (value.decision === "deny" && grantType === "one_time") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

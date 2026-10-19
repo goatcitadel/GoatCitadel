@@ -164,6 +164,11 @@ describe("Evolution Control Plane Change Plan contract", () => {
     expect(runtime({ operation: "tool_global_access", toolName: "shell.exec", posture: "available" })).toBe(false);
     expect(runtime({ operation: "tool_global_access", toolName: "fs.*", posture: "denied" })).toBe(false);
     expect(runtime({ operation: "tool_global_access", toolName: "fs.write", posture: "allowed" })).toBe(false);
+
+    expect(runtime({ operation: "outside_root_write_policy", mode: "approval_required" })).toBe(true);
+    expect(runtime({ operation: "outside_root_write_policy", mode: "deny" })).toBe(true);
+    expect(runtime({ operation: "outside_root_write_policy", mode: "full_disk" })).toBe(false);
+    expect(runtime({ operation: "outside_root_write_policy", mode: "deny", extra: true })).toBe(false);
   });
 
   it("rejects credentials, paths, patches, and extra fields from persisted intent", () => {

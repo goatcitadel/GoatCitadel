@@ -213,6 +213,10 @@ describe("dashboard settings routes", () => {
       { globalToolAccessChange: { toolName: "fs.delete", posture: "available" } },
       { operation: "tool_global_access", toolName: "fs.delete", posture: "available" },
     ],
+    [
+      { outsideRootWriteMode: "approval_required" },
+      { operation: "outside_root_write_policy", mode: "approval_required" },
+    ],
   ])("routes write-access Settings save %o through one Change Plan", async (patch, change) => {
     const updateSettings = vi.fn();
     const create = vi.fn(async (input: Record<string, unknown>) => ({

@@ -766,6 +766,7 @@ import {
 } from "./chat-turn-execution-registry.js";
 import { buildDelegatedSessionToolGrantCopies } from "./delegated-session-tool-grants.js";
 import { resolveToolRequestPathsForSessionScope } from "./tool-path-session-scope.js";
+import { isOutsideRootWriteEligible } from "./outside-root-write-eligibility.js";
 import {
   buildUpdatedFeatureFlags,
   didDisengageAutonomyKillSwitch,
@@ -1410,6 +1411,7 @@ export class GatewayService {
       // retryable approval observability envelope.
       createApproval: async (input, onCreated, authority) => await this.createApproval(input, onCreated, authority),
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
+      resolveOutsideRootWriteEligibility: (request) => isOutsideRootWriteEligible(request, { storage: this.storage }),
       resolveCredential: (provider) => this.runtimeConfigurationService.resolveOfficialSearchCredential(provider),
       configureRuntime: (_request, targetId) => this.runtimeConfigurationService.assertConfigurationAvailable(targetId),
       resolveApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.resolve(secretRef),
