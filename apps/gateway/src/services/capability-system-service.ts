@@ -1840,11 +1840,6 @@ export class CapabilitySystemService {
     validateGuestSource(source);
     await this.ensureSkillLifecycleBackfill();
 
-    const snapshot = await this.freezeCatalogSnapshot();
-    const createdAt = new Date().toISOString();
-    const wrapperManifest = this.buildWrapperManifest(snapshot, createdAt);
-    const codeHash = sha256Text(source);
-    const wrapperManifestHash = sha256Text(JSON.stringify(wrapperManifest));
     const runId = `code-run-${randomUUID()}`;
     const runInput = request.input ?? {};
     const sandbox = this.resolveCurrentSandboxMetadata();
@@ -1906,6 +1901,12 @@ export class CapabilitySystemService {
     if (internal.replayOf) {
       assertReplayPinUnchanged(internal.replayOf, aiderWorkspacePin);
     }
+    // Frozen only after every refusal above, so a refused replay leaves no orphan catalog snapshot.
+    const snapshot = await this.freezeCatalogSnapshot();
+    const createdAt = new Date().toISOString();
+    const wrapperManifest = this.buildWrapperManifest(snapshot, createdAt);
+    const codeHash = sha256Text(source);
+    const wrapperManifestHash = sha256Text(JSON.stringify(wrapperManifest));
     const runInputHash = hashCodeModeInputBinding(
       runInput,
       normalizedAiderRequest,

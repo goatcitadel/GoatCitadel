@@ -1343,6 +1343,8 @@ describe("CapabilitySystemService", () => {
     );
 
     expect(replay.replayOfRunId).toBe(original.runId);
+    // The replay runs as the actor who requested it, not the original run's operator.
+    expect(replay.run.operatorId).toBe("operator-replay");
     expect(replay.run).toMatchObject({ status: "approval_pending", sessionId: "session-pin" });
     expect(replay.run.runId).not.toBe(original.runId);
     expect(replay.run.approvalId).toBeDefined();

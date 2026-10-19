@@ -73,7 +73,9 @@ describe("code-mode-docker-launch", () => {
         `${CODE_MODE_DOCKER_CONTAINER_WORKDIR}/child/harness.mjs`,
       ]),
     );
-    expect(launch.args).toContain(`type=bind,src=${root},dst=${CODE_MODE_DOCKER_CONTAINER_WORKDIR},rw`);
+    expect(launch.args).toContain(`type=bind,src=${root},dst=${CODE_MODE_DOCKER_CONTAINER_WORKDIR}`);
+    // Docker rejects a bare `rw` field in --mount; read-write is the bind default.
+    expect(launch.args.some((arg) => /(^|,)rw($|,)/u.test(arg))).toBe(false);
     expect(JSON.stringify(launch.args)).not.toContain("must-not-leak");
     expect(launch.env).toEqual({ PATH: "/usr/bin" });
   });

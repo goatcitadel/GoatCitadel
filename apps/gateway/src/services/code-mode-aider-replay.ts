@@ -99,7 +99,8 @@ export async function prepareCodeModeAiderReplay(
       executionBackendId: CODE_MODE_AIDER_ADAPTER_ID,
       ...(original.originSurface ? { originSurface: original.originSurface } : {}),
       ...(original.workspaceId ? { workspaceId: original.workspaceId } : {}),
-      ...(operatorId ? { operatorId } : original.operatorId ? { operatorId: original.operatorId } : {}),
+      // The replay runs as the actor who requested it, never as the original run's operator.
+      ...(operatorId ? { operatorId } : {}),
       input,
       sessionId: pin.sessionId,
       aider,

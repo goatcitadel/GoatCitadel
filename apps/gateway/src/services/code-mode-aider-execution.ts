@@ -283,7 +283,7 @@ function buildAiderDockerCommand(input: {
       "--label",
       `goatcitadel.code-mode.aider-run=${input.runId}`,
       "--mount",
-      `type=bind,src=${input.runRoot},dst=${AIDER_CONTAINER_ROOT},rw`,
+      `type=bind,src=${input.runRoot},dst=${AIDER_CONTAINER_ROOT}`,
       "--workdir",
       path.posix.join(AIDER_CONTAINER_ROOT, input.repositoryRootRelPath),
       "--env",
