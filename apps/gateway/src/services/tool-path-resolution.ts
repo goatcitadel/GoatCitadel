@@ -22,6 +22,13 @@ export interface ToolPathResolutionContext {
    * filesystem roots are still rejected here.
    */
   outsideRootWrites?: "reject" | "defer_to_policy";
+  /**
+   * When set, every write target must also land inside one of these roots;
+   * the project root alone does not admit it. Set for delegated child sessions
+   * without an approved scope, so a project folder inside an operator write
+   * root cannot widen their writes.
+   */
+  confineWritesTo?: readonly string[];
 }
 
 const PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH = "__prompt_pack_repo__";
@@ -123,6 +130,9 @@ export function resolveToolRequestPaths<TRequest extends ToolPathRequest>(
             spec.kind,
             spec.deferOutsideRoot === true && context.outsideRootWrites === "defer_to_policy",
           );
+    if (spec.kind === "write") {
+      assertWriteWithinConfinement(resolvedValue, rawValue, context);
+    }
     if (resolvedValue === rawValue) {
       continue;
     }
@@ -281,6 +291,23 @@ function isWithinWorkspaceBounds(resolvedPath: string, context: ToolPathResoluti
 function isWithinWriteRoots(resolvedPath: string, context: ToolPathResolutionContext): boolean {
   const normalizedPath = path.resolve(resolvedPath);
   return (context.writeRoots ?? []).some((root) => isWithinAnyRootVariant(root, normalizedPath));
+}
+
+function assertWriteWithinConfinement(
+  resolvedValue: string,
+  rawPath: string,
+  context: ToolPathResolutionContext,
+): void {
+  const roots = context.confineWritesTo;
+  if (!roots) {
+    return;
+  }
+  const resolvedTarget = resolvePathViaExistingAncestor(resolvedValue.trim());
+  if (!roots.some((root) => isWithinAnyRootVariant(root, resolvedTarget))) {
+    throw new ValidationError({
+      message: `Path "${rawPath}" is outside the workspace boundary and is not allowed for write operations.`,
+    });
+  }
 }
 
 function shouldPreferWorkspaceRoot(rawPath: string, projectWorkspacePath?: string): boolean {
