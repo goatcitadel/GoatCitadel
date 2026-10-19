@@ -73,7 +73,9 @@ The v1 taxonomy is:
 
 ### Immutable turn binding
 
-The record is stored at `ChatTurnCapabilityProfileSelection.workPassport`. The existing capability-profile canonical JSON, section hashes, preflight fingerprint, insert-only persistence, and verification cover it. Adding the optional selection field requires no database migration because the repository already stores and verifies the complete profile JSON.
+Since the 2026-09-25 profile-free transition, new Chat turns no longer freeze a capability profile. With `chatWorkPassportV1Enabled` (on by default; operators can turn it off), a new operator turn instead classifies its passport once at turn admission and records it as `workPassport` in the turn's immutable feature references (`ChatTurnFeatureReferences`). Durable replay reuses that record and never reclassifies, so a later baseline change does not alter an admitted turn. A passport-only admission does not need a provider route. The Chat preflight card above still reads historical profile-bound passports; projecting the feature-reference passport into the card and run detail is a follow-up.
+
+For historical profile-bound turns, the record is stored at `ChatTurnCapabilityProfileSelection.workPassport`. The existing capability-profile canonical JSON, section hashes, preflight fingerprint, insert-only persistence, and verification cover it. Adding the optional selection field requires no database migration because the repository already stores and verifies the complete profile JSON.
 
 The model receives a concise server-owned instruction containing boundary, consequence, review posture, action posture, and evidence requirements. The instruction explicitly says that the passport is advisory and that review must not be represented as completed without evidence.
 

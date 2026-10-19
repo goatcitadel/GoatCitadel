@@ -651,8 +651,16 @@ describe("profile-free routed-context admission", () => {
   function admittedHarness() {
     const harness = createHarness();
     const admission: ActiveTurnAdmission = {
-      identity: { admissionId: "admission-1", sessionIncarnationId: "incarnation-1", workspaceId: WORKSPACE_ID,
-        sessionId: SESSION_ID, turnId: "turn-live", aggregateRevision: 1, controllerGeneration: 1, materialSha256: "a".repeat(64) },
+      identity: {
+        admissionId: "admission-1",
+        sessionIncarnationId: "incarnation-1",
+        workspaceId: WORKSPACE_ID,
+        sessionId: SESSION_ID,
+        turnId: "turn-live",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: "a".repeat(64),
+      },
       admittedRequest: { content: "Use the routed context." },
       requestActor: { actorKind: "operator", actorId: "operator-1", operatorId: "operator-1" },
     } as ActiveTurnAdmission;
@@ -660,66 +668,108 @@ describe("profile-free routed-context admission", () => {
     harness.host.isDurableChatExecutionEnabled = vi.fn(async () => true);
     harness.host.assertTurnAdmissionWrite = vi.fn(async () => undefined);
     harness.host.storage.runImmediateTransaction = vi.fn(async (work) => work()) as never;
-    harness.host.ingestEvent = vi.fn(async (_id, _event, options) => { await options?.onCommit?.(); await options?.afterCommit?.(); });
-    const references = { version: "chat.turn.feature-references.v1" as const,
-      providerRoute: { primary: { providerId: PROVIDER_ID, model: MODEL_ID }, fingerprint: "b".repeat(64) } };
+    harness.host.ingestEvent = vi.fn(async (_id, _event, options) => {
+      await options?.onCommit?.();
+      await options?.afterCommit?.();
+    });
+    const references = {
+      version: "chat.turn.feature-references.v1" as const,
+      providerRoute: { primary: { providerId: PROVIDER_ID, model: MODEL_ID }, fingerprint: "b".repeat(64) },
+    };
     harness.host.resolveChatFeatureAdmission = vi.fn(async () => ({ references, referenceSha256: digest(references) }));
-    harness.host.bindChatFeatureAdmission = vi.fn(async (_admission, refs) => ({ references: refs, referenceSha256: digest(refs) }));
+    harness.host.bindChatFeatureAdmission = vi.fn(async (_admission, refs) => ({
+      references: refs,
+      referenceSha256: digest(refs),
+    }));
     harness.host.resolveExplicitContextToolDefinitions = vi.fn(async () => []);
     return { ...harness, admission };
   }
 
   it("uses the internal preparation port without exposing the two legacy façade callbacks", async () => {
     const harness = admittedHarness();
-    const bind = harness.host.bindChatFeatureAdmission!, definitions = harness.host.resolveExplicitContextToolDefinitions!;
-    const owner = { llmService: harness.host.llmService, resolveChatRoutedContextSources: harness.host.resolveChatRoutedContextSources,
-      bindChatFeatureAdmission: bind, resolveExplicitContextToolDefinitions: definitions };
-    const prepare = vi.fn((input: Parameters<typeof prepareRoutedContextAdmission>[1]) => prepareRoutedContextAdmission(owner, input));
-    harness.host = { ...harness.host, explicitContextPreparation: { prepare }, bindChatFeatureAdmission: undefined, resolveExplicitContextToolDefinitions: undefined };
+    const bind = harness.host.bindChatFeatureAdmission!,
+      definitions = harness.host.resolveExplicitContextToolDefinitions!;
+    const owner = {
+      llmService: harness.host.llmService,
+      resolveChatRoutedContextSources: harness.host.resolveChatRoutedContextSources,
+      bindChatFeatureAdmission: bind,
+      resolveExplicitContextToolDefinitions: definitions,
+    };
+    const prepare = vi.fn((input: Parameters<typeof prepareRoutedContextAdmission>[1]) =>
+      prepareRoutedContextAdmission(owner, input),
+    );
+    harness.host = {
+      ...harness.host,
+      explicitContextPreparation: { prepare },
+      bindChatFeatureAdmission: undefined,
+      resolveExplicitContextToolDefinitions: undefined,
+    };
     const prepared = await prepareAgentChatTurn(harness.host, SESSION_ID, routedRequest(), {
-      turnId: "turn-live", turnAdmission: harness.admission,
+      turnId: "turn-live",
+      turnAdmission: harness.admission,
     });
     expect(prepare).toHaveBeenCalledOnce();
     expect(bind).toHaveBeenCalledOnce();
     expect(definitions).toHaveBeenCalledOnce();
     expect(prepared.routedContextSnapshot?.schemaVersion).toBe("chat.routed-context-snapshot.v3");
-    expect(prepared.featureAdmission?.references.explicitContext?.snapshotHash).toBe(prepared.routedContextSnapshot?.snapshotHash);
+    expect(prepared.featureAdmission?.references.explicitContext?.snapshotHash).toBe(
+      prepared.routedContextSnapshot?.snapshotHash,
+    );
   });
 
   it("binds one immutable v3 receipt after exact source resolution without constructing a profile", async () => {
     const harness = admittedHarness();
     const prepared = await prepareAgentChatTurn(harness.host, SESSION_ID, routedRequest(), {
-      turnId: "turn-live", turnAdmission: harness.admission,
+      turnId: "turn-live",
+      turnAdmission: harness.admission,
     });
     expect(prepared.capabilityProfile).toBeUndefined();
     expect(harness.resolveCapability).not.toHaveBeenCalled();
-    expect(harness.host.resolveChatFeatureAdmission).toHaveBeenCalledWith(expect.objectContaining({
-      content: "Use the routed context.", explicitContextRequested: true, deferBinding: true,
-    }));
+    expect(harness.host.resolveChatFeatureAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Use the routed context.",
+        explicitContextRequested: true,
+        deferBinding: true,
+      }),
+    );
     expect(JSON.stringify(vi.mocked(harness.host.resolveChatFeatureAdmission!).mock.calls)).not.toContain(ROUTED_TEXT);
-    expect(prepared.routedContextSnapshot).toMatchObject({ schemaVersion: "chat.routed-context-snapshot.v3",
-      admissionBinding: { admissionId: "admission-1", materialSha256: "a".repeat(64) } });
+    expect(prepared.routedContextSnapshot).toMatchObject({
+      schemaVersion: "chat.routed-context-snapshot.v3",
+      admissionBinding: { admissionId: "admission-1", materialSha256: "a".repeat(64) },
+    });
     expect(harness.host.bindChatFeatureAdmission).toHaveBeenCalledOnce();
     expect(prepared.featureAdmission?.references.explicitContext).toEqual({
-      snapshotId: prepared.routedContextSnapshot!.snapshotId, snapshotHash: prepared.routedContextSnapshot!.snapshotHash,
+      snapshotId: prepared.routedContextSnapshot!.snapshotId,
+      snapshotHash: prepared.routedContextSnapshot!.snapshotHash,
     });
-    expect(prepared.history.filter((message) => message.role === "system" &&
-      typeof message.content === "string" && message.content.startsWith("Routed context snapshot (immutable).")))
-      .toEqual([{ role: "system", content: prepared.routedContextSnapshot!.contextText }]);
+    expect(
+      prepared.history.filter(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.startsWith("Routed context snapshot (immutable)."),
+      ),
+    ).toEqual([{ role: "system", content: prepared.routedContextSnapshot!.contextText }]);
   });
 
   it("refuses system admission and absent current tool-schema ownership", async () => {
     const harness = admittedHarness();
     harness.admission.requestActor = { ...harness.admission.requestActor, actorKind: "system" } as never;
-    await expect(prepareAgentChatTurn(harness.host, SESSION_ID, routedRequest(), {
-      turnId: "turn-live", turnAdmission: harness.admission,
-    })).rejects.toThrow(/fresh operator turn/);
+    await expect(
+      prepareAgentChatTurn(harness.host, SESSION_ID, routedRequest(), {
+        turnId: "turn-live",
+        turnAdmission: harness.admission,
+      }),
+    ).rejects.toThrow(/fresh operator turn/);
     expect(harness.resolveSources).not.toHaveBeenCalled();
     harness.admission.requestActor = { ...harness.admission.requestActor, actorKind: "operator" } as never;
     harness.host.resolveExplicitContextToolDefinitions = undefined;
-    await expect(prepareAgentChatTurn(harness.host, SESSION_ID, routedRequest(), {
-      turnId: "turn-live", turnAdmission: harness.admission,
-    })).rejects.toThrow(/admission owners are unavailable/);
+    await expect(
+      prepareAgentChatTurn(harness.host, SESSION_ID, routedRequest(), {
+        turnId: "turn-live",
+        turnAdmission: harness.admission,
+      }),
+    ).rejects.toThrow(/admission owners are unavailable/);
     expect(harness.host.bindChatFeatureAdmission).not.toHaveBeenCalled();
   });
 
@@ -728,28 +778,98 @@ describe("profile-free routed-context admission", () => {
     const prefs = harness.host.ensureChatSessionModelDefaults(SESSION_ID, createPrefs());
     prefs.toolAutonomy = "safe_auto";
     const initial = await harness.host.resolveChatFeatureAdmission!({} as never);
-    const material = { version: "mcp.static.admission.v1" as const,
+    const material = {
+      version: "mcp.static.admission.v1" as const,
       scope: { ...harness.admission.identity, actorId: "operator-1", actorSource: "loopback" as const },
-      serverId: "static", transport: "http" as const, configurationBindingId: "configuration",
-      connectionRevision: "c".repeat(64), serverRevision: "d".repeat(64), selectedTools: [{ rawRemoteToolName: "read",
-        canonicalToolName: "mcp.static.read", modelName: `mcp_s_${"e".repeat(56)}`,
-        inputSchema: { type: "object", description: "Bounded schema bytes. ".repeat(50) }, toolDefinitionSha256: "f".repeat(64) }] };
-    const references: ChatTurnFeatureReferences = { ...initial!.references,
-      selectedStaticMcp: [{ ...material, bindingSha256: digest(material) }] };
-    vi.mocked(harness.host.resolveChatFeatureAdmission!).mockResolvedValue({ references, referenceSha256: digest(references) });
-    const prepared = await prepareAgentChatTurn(harness.host, SESSION_ID, routedRequest({ toolAutonomy: "safe_auto" }), {
-      turnId: "turn-live", turnAdmission: harness.admission,
+      serverId: "static",
+      transport: "http" as const,
+      configurationBindingId: "configuration",
+      connectionRevision: "c".repeat(64),
+      serverRevision: "d".repeat(64),
+      selectedTools: [
+        {
+          rawRemoteToolName: "read",
+          canonicalToolName: "mcp.static.read",
+          modelName: `mcp_s_${"e".repeat(56)}`,
+          inputSchema: { type: "object", description: "Bounded schema bytes. ".repeat(50) },
+          toolDefinitionSha256: "f".repeat(64),
+        },
+      ],
+    };
+    const references: ChatTurnFeatureReferences = {
+      ...initial!.references,
+      selectedStaticMcp: [{ ...material, bindingSha256: digest(material) }],
+    };
+    vi.mocked(harness.host.resolveChatFeatureAdmission!).mockResolvedValue({
+      references,
+      referenceSha256: digest(references),
     });
-    expect(harness.host.resolveExplicitContextToolDefinitions).toHaveBeenCalledWith(expect.not.objectContaining({ featureAdmission: expect.anything() }));
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      SESSION_ID,
+      routedRequest({ toolAutonomy: "safe_auto" }),
+      {
+        turnId: "turn-live",
+        turnAdmission: harness.admission,
+      },
+    );
+    expect(harness.host.resolveExplicitContextToolDefinitions).toHaveBeenCalledWith(
+      expect.not.objectContaining({ featureAdmission: expect.anything() }),
+    );
     const tools = projectMcpAdmissionContextBudgetTools([], references);
     expect(prepared.routedContextSnapshot?.budget.promptReservedTokens).toBe(
-      estimateTokensFromText(canonicalJsonString({ messages: harness.baseHistory, tools }), { model: MODEL_ID }) + CHAT_ROUTED_CONTEXT_PROMPT_SAFETY_TOKENS,
+      estimateTokensFromText(canonicalJsonString({ messages: harness.baseHistory, tools }), { model: MODEL_ID }) +
+        CHAT_ROUTED_CONTEXT_PROMPT_SAFETY_TOKENS,
     );
     expect(harness.host.bindChatFeatureAdmission).toHaveBeenCalledOnce();
   });
 
+  it("renders an admitted profile-free Work Passport into the prepared history exactly once", async () => {
+    const harness = admittedHarness();
+    const references = {
+      version: "chat.turn.feature-references.v1" as const,
+      providerRoute: { primary: { providerId: PROVIDER_ID, model: MODEL_ID }, fingerprint: "b".repeat(64) },
+      workPassport: {
+        passportId: "passport-1",
+        schemaVersion: "work.passport.v1" as const,
+        classificationMode: "deterministic_local_v1" as const,
+        baseline: { configured: false, primaryDomains: [] },
+        taskSignals: [],
+        boundary: "generic_or_unclear" as const,
+        consequence: "low" as const,
+        review: { posture: "self_check" as const, reason: "Low consequence.", requirements: [] },
+        evidenceRequirements: ["Check material facts."],
+        actionPosture: "explore" as const,
+        limitations: [],
+        operatorCorrectionAllowed: true as const,
+      },
+    };
+    harness.host.resolveChatFeatureAdmission = vi.fn(async () => ({ references, referenceSha256: digest(references) }));
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      SESSION_ID,
+      { content: "Summarize the plan." },
+      {
+        turnId: "turn-live",
+        turnAdmission: harness.admission,
+      },
+    );
+    expect(prepared.capabilityProfile).toBeUndefined();
+    const bindings = prepared.history.filter(
+      (message) =>
+        message.role === "system" &&
+        typeof message.content === "string" &&
+        message.content.startsWith("Server-owned turn bindings (advisory evidence, no authority):"),
+    );
+    expect(bindings).toHaveLength(1);
+    expect(String(bindings[0]!.content)).toContain("boundary=generic_or_unclear");
+  });
+
   it.each([
-    [{ workspaceSnapshot: { capture: true, requestId: "snapshot-disabled" } }, "Workspace snapshots are temporarily unavailable"],
+    [
+      { workspaceSnapshot: { capture: true, requestId: "snapshot-disabled" } },
+      "Workspace snapshots are temporarily unavailable",
+    ],
     [{ modelCouncil: { enabled: true } }, "Model council is temporarily unavailable"],
     [{ parentDelegationStepId: "step-disabled" }, "Local delegated Chat requires current supervised parent"],
   ] as const)("rejects %s before user ingestion", async (requestPatch, reason) => {

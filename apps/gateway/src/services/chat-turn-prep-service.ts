@@ -32,6 +32,7 @@ import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatTurnFeatureReferences,
+  WorkPassportRecord,
   ChatCitationRecord,
   ChatDelegationRunRecord,
   GatewayEventInput,
@@ -601,6 +602,7 @@ export async function prepareAgentChatTurn(
 ): Promise<PreparedAgentChatTurn> {
   const preparationStartedAt = performance.now();
   const turnId = options?.turnId ?? randomUUID();
+  const isFeatureEnabled = (flag: string) => host.isFeatureEnabled(flag);
   const systemHeartbeatPosture = readSystemHeartbeatTurnPrepPosture(input, options, turnId);
   await assertPrepTurnAdmission(host, options?.turnAdmission);
   const session = await host.getSession(sessionId);
@@ -666,7 +668,7 @@ export async function prepareAgentChatTurn(
   const freshExplicitContext = !boundCapabilityProfile && (input.contextRefs?.length ?? 0) > 0;
   if (
     freshExplicitContext &&
-    (!(await host.isFeatureEnabled("chatExplicitContextV1Enabled")) ||
+    (!(await isFeatureEnabled("chatExplicitContextV1Enabled")) ||
       !options?.turnAdmission ||
       options.turnAdmission.durableClaim ||
       input.parentDelegationStepId ||
@@ -1016,7 +1018,7 @@ export async function prepareAgentChatTurn(
   // date) — the single biggest cause of thin cowork responses. With the base
   // system prompt enabled (default on; kill switch coworkRuntimeQualityV1Disabled)
   // we apply a real layered prompt, and the personality overlay, to every mode.
-  const baseSystemPromptEnabled = !(await host.isFeatureEnabled("coworkRuntimeQualityV1Disabled"));
+  const baseSystemPromptEnabled = !(await isFeatureEnabled("coworkRuntimeQualityV1Disabled"));
   const personalityOverlay = quickWebTurn
     ? undefined
     : baseSystemPromptEnabled || effectiveMode === "chat"
@@ -1239,6 +1241,7 @@ export async function prepareAgentChatTurn(
     }
     history = upsertChatActivatedSkillSystemInstruction(history, activatedSkillInstructions);
   }
+  history = upsertChatTurnBindingSystemInstruction(history, featureAdmission?.references);
   if (hasRoutedContextRefs) {
     ({ routedContextSnapshot, featureAdmission, history } = await prepareChatRoutedContextAdmission(host, {
       capabilityProfile,
@@ -1317,6 +1320,7 @@ export async function prepareAgentChatTurn(
     if (capabilityProfile) {
       history = upsertChatCapabilityProfileSystemInstruction(history, capabilityProfile);
     }
+    history = upsertChatTurnBindingSystemInstruction(history, featureAdmission?.references);
     if (routedContextSnapshot) {
       history = upsertChatRoutedContextSystemInstruction(history, routedContextSnapshot.contextText);
     }
@@ -1611,20 +1615,14 @@ export function upsertChatCapabilityProfileSystemInstruction(
   const instruction = [
     [
       `Server-owned capability profile: ${profile.profileId} (${profile.hashes.profileHash}).`,
-      formatWorkspaceSnapshotInstruction(profile),
+      formatWorkspaceSnapshotInstruction(profile.selection.workspaceSnapshot),
     ]
       .filter(Boolean)
       .join("\n"),
     `Callable tools for this turn: ${toolNames.length > 0 ? toolNames.join(", ") : "none"}.`,
     `Trusted skills for this turn: ${skillIds.length > 0 ? skillIds.join(", ") : "none"}.`,
     `Memory scope: ${profile.selection.memory.mode}/${profile.selection.memory.retrievalMode}.`,
-    ...(passport
-      ? [
-          `Work Passport: boundary=${passport.boundary}; consequence=${passport.consequence}; review=${passport.review.posture}; action=${passport.actionPosture}.`,
-          `Work Passport requirements: ${passport.evidenceRequirements.join(" ") || "Check material facts and assumptions."}`,
-          "Treat the Work Passport as an advisory task/review contract, not an assessment of the operator. State material uncertainty and do not represent review as completed unless evidence shows it.",
-        ]
-      : []),
+    ...(passport ? formatWorkPassportInstruction(passport) : []),
     "Treat this profile as an immutable upper bound. Capabilities not listed here are unavailable for this turn.",
   ].join("\n");
   const insertionIndex = withoutPriorBinding.findIndex((message) => message.role !== "system");
@@ -1633,8 +1631,53 @@ export function upsertChatCapabilityProfileSystemInstruction(
   return next;
 }
 
-function formatWorkspaceSnapshotInstruction(profile: ChatTurnCapabilityProfileRecord): string | undefined {
-  const snapshot = profile.selection.workspaceSnapshot;
+const CHAT_TURN_BINDING_INSTRUCTION_PREFIX = "Server-owned turn bindings (advisory evidence, no authority):";
+
+/**
+ * Renders the profile-free turn bindings admitted for this turn (Work Passport,
+ * workspace snapshot). They are immutable evidence from the turn's feature
+ * references and never change which tools or capabilities are callable.
+ */
+export function upsertChatTurnBindingSystemInstruction(
+  history: ChatCompletionRequest["messages"],
+  references: ChatTurnFeatureReferences | undefined,
+): ChatCompletionRequest["messages"] {
+  const withoutPrior = history.filter(
+    (message) =>
+      !(
+        message.role === "system" &&
+        typeof message.content === "string" &&
+        message.content.startsWith(CHAT_TURN_BINDING_INSTRUCTION_PREFIX)
+      ),
+  );
+  const lines = [...(references?.workPassport ? formatWorkPassportInstruction(references.workPassport) : [])];
+  if (lines.length === 0) return withoutPrior;
+  const insertionIndex = withoutPrior.findIndex((message) => message.role !== "system");
+  const next = [...withoutPrior];
+  next.splice(insertionIndex < 0 ? next.length : insertionIndex, 0, {
+    role: "system",
+    content: [CHAT_TURN_BINDING_INSTRUCTION_PREFIX, ...lines].join("\n"),
+  });
+  return next;
+}
+
+function formatWorkPassportInstruction({
+  boundary,
+  consequence,
+  review: { posture },
+  actionPosture,
+  evidenceRequirements,
+}: WorkPassportRecord): string[] {
+  return [
+    `Work Passport: boundary=${boundary}; consequence=${consequence}; review=${posture}; action=${actionPosture}.`,
+    `Work Passport requirements: ${evidenceRequirements.join(" ") || "Check material facts and assumptions."}`,
+    "Treat the Work Passport as an advisory task/review contract, not an assessment of the operator. State material uncertainty and do not represent review as completed unless evidence shows it.",
+  ];
+}
+
+function formatWorkspaceSnapshotInstruction(
+  snapshot: ChatTurnCapabilityProfileRecord["selection"]["workspaceSnapshot"],
+): string | undefined {
   if (!snapshot) return undefined;
   if (snapshot.status !== "captured" || !snapshot.project || !snapshot.git) {
     return `Point-in-time workspace snapshot requested at ${snapshot.capturedAt}, but unavailable (${snapshot.reasonCode ?? "unknown"}). Do not infer repository health or state.`;

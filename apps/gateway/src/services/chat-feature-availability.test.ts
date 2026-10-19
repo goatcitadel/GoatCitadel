@@ -30,6 +30,7 @@ describe("effective restored Chat availability", () => {
       automaticFanout: false,
       providerFallback: false,
       staticMcp: false,
+      workPassport: false,
     });
     expect(projectChatFeatureAvailability(durable, { ...features, subagentFanoutV1Disabled: true })).toMatchObject({
       supervisedDelegation: true,
@@ -49,5 +50,12 @@ describe("effective restored Chat availability", () => {
         { ...features, chatStaticMcpV1Enabled: true },
       ).staticMcp,
     ).toBe(false);
+  });
+  it("advertises Work Passport only after explicit opt-in with durable execution", () => {
+    const durable = { enabled: true, executionEnabled: true };
+    expect(projectChatFeatureAvailability(durable, features).workPassport).toBe(false);
+    expect(projectChatFeatureAvailability(durable, { ...features, chatWorkPassportV1Enabled: true }).workPassport).toBe(
+      true,
+    );
   });
 });
