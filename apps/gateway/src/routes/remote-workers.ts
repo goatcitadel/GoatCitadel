@@ -813,13 +813,13 @@ function sendMutationError(
     return invalidRequest(reply);
   }
   if (error instanceof RemoteWorkerMeshNodeJoinAuthorityError) return invalidRequest(reply);
+  if (error instanceof RemoteWorkerBudgetConflictError) {
+    return reply.code(409).send({ error: "Worker budget changed or expired. Refresh its status before retrying." });
+  }
   if (
     error instanceof RemoteWorkerOperatorControlUnavailableError ||
     error instanceof RemoteWorkerManifestVerifierUnavailableError
   ) {
-    if (error instanceof RemoteWorkerBudgetConflictError) {
-      return reply.code(409).send({ error: "Worker budget changed or expired. Refresh its status before retrying." });
-    }
     return unavailable(reply);
   }
   return sendRouteError(reply, error, log);

@@ -9,6 +9,7 @@ import {
   canonicalJsonString,
 } from "@goatcitadel/contracts";
 import { createHash } from "node:crypto";
+import { RemoteWorkerBudgetConflictError } from "@goatcitadel/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthConfig } from "../config.js";
 import { authPlugin } from "../plugins/auth.js";
@@ -927,6 +928,26 @@ describe("remote worker M2 operator control routes", () => {
     expect(unavailable.statusCode).toBe(503);
     expect(unavailable.headers["cache-control"]).toBe("no-store");
     expect(unavailable.json()).toEqual({ error: "Remote worker operator control is unavailable." });
+  });
+
+  it("maps a worker budget conflict to a no-store 409", async () => {
+    const issueBootstrap = vi
+      .fn()
+      .mockRejectedValueOnce(new RemoteWorkerBudgetConflictError("Worker budget revision changed."));
+    app = await buildLoopbackBootstrapHarness(issueBootstrap);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/ops/workspaces/workspace-a/remote-workers/bootstrap",
+      headers: { "Idempotency-Key": "bootstrap-budget-conflict" },
+      payload: bootstrapRequestBody(),
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toEqual({
+      error: "Worker budget changed or expired. Refresh its status before retrying.",
+    });
   });
 
   it("binds quarantine and revoke to the path workspace, generation, actor, and idempotency identity", async () => {
