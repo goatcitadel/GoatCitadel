@@ -38,7 +38,7 @@ describe("page-anatomy guard", () => {
     const raw = '<input className="h-11" value={url} />\n<select value={mode}>\n<textarea value={json} />';
     assert.deepEqual(countAnatomy("areas/settings/X.tsx", raw), { "settings-raw-control": 3 });
     const fielded = [
-      "<Field label=\"Endpoint\">{(props) => <input {...props} value={url} />}</Field>",
+      '<Field label="Endpoint">{(props) => <input {...props} value={url} />}</Field>',
       '<Field label="Name">{(field) => <input {...field} value={name} />}</Field>',
       '<input type="checkbox" checked={on} />',
       '<input type="radio" name="mode" />',

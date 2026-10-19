@@ -115,7 +115,12 @@ export function ProjectHomeBasePanel({
         </div>
         {home.recentSessions.length ? (
           home.recentSessions.map((session) => (
-            <button type="button" key={session.sessionId} className="mc-next-project-recent-item" onClick={() => onOpenSession(session.sessionId)}>
+            <button
+              type="button"
+              key={session.sessionId}
+              className="mc-next-project-recent-item"
+              onClick={() => onOpenSession(session.sessionId)}
+            >
               <span>{labelForMode(normalizeMode(session.mode))}</span>
               <strong>{session.title?.trim() || session.sessionKey}</strong>
               <p>
@@ -128,38 +133,38 @@ export function ProjectHomeBasePanel({
         )}
       </div>
 
-      <details className="mc-next-project-evidence"><summary>Project status and readiness</summary>
-      <div className="mc-next-project-home-metrics">
-        <ProjectMetric label="Active threads" value={String(home.activeCount)} detail="Chat work still in motion." />
-        <ProjectMetric
-          label="Artifacts"
-          value={String(home.artifactCount)}
-          detail={
-            home.artifactCountSource === "records"
-              ? "Generated outputs with project ownership recorded."
-              : "Generated outputs referenced by project threads."
-          }
-        />
-        <ProjectMetric label="Approvals" value={String(pendingApprovals)} detail="Workspace-wide approval queue." />
-        <ProjectMetric
-          label="Last activity"
-          value={home.lastActivityLabel}
-          detail="Most recent project thread update."
-        />
-      </div>
+      <details className="mc-next-project-evidence">
+        <summary>Project status and readiness</summary>
+        <div className="mc-next-project-home-metrics">
+          <ProjectMetric label="Active threads" value={String(home.activeCount)} detail="Chat work still in motion." />
+          <ProjectMetric
+            label="Artifacts"
+            value={String(home.artifactCount)}
+            detail={
+              home.artifactCountSource === "records"
+                ? "Generated outputs with project ownership recorded."
+                : "Generated outputs referenced by project threads."
+            }
+          />
+          <ProjectMetric label="Approvals" value={String(pendingApprovals)} detail="Workspace-wide approval queue." />
+          <ProjectMetric
+            label="Last activity"
+            value={home.lastActivityLabel}
+            detail="Most recent project thread update."
+          />
+        </div>
 
-      <div className="mc-next-project-readiness-list">
-        {home.readiness.map((item) => (
-          <div key={item.id} className={`mc-next-project-readiness-item is-${item.status}`}>
-            {item.status === "ready" ? <CheckCircle2 size={16} /> : <CircleAlert size={16} />}
-            <div>
-              <strong>{item.label}</strong>
-              <p>{item.detail}</p>
+        <div className="mc-next-project-readiness-list">
+          {home.readiness.map((item) => (
+            <div key={item.id} className={`mc-next-project-readiness-item is-${item.status}`}>
+              {item.status === "ready" ? <CheckCircle2 size={16} /> : <CircleAlert size={16} />}
+              <div>
+                <strong>{item.label}</strong>
+                <p>{item.detail}</p>
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
-
+          ))}
+        </div>
       </details>
 
       <div className="mc-next-settings-button-row">
