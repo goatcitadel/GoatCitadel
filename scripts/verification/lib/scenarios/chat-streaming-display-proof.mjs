@@ -129,7 +129,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
             } while (Date.now() < deadline);
             throw new Error(`Canonical ${userContent} status expected ${status}, observed ${observed}`);
           };
-          const composer = page.getByRole("combobox", { name: "Message", exact: true });
+          const composer = page.getByRole("textbox", { name: "Message", exact: true });
           const send = page.getByRole("button", { name: "Send", exact: true });
           const messages = page.getByLabel("Messages", { exact: true });
           const scroller = messages.locator("[data-transcript-scroller]");

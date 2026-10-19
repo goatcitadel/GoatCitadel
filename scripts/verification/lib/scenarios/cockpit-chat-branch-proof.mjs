@@ -40,7 +40,7 @@ export async function runCockpitChatBranchProof({ context, browser, stack, citad
           await clickTurnAction(messages, "Edit and resend", { timeout: 10_000 });
           await page.getByRole("status").getByText("Editing a new version of this message.").waitFor();
           const revised = `Branch proof ${variant} revised message.`;
-          await page.getByRole("combobox", { name: "Message" }).fill(revised);
+          await page.getByRole("textbox", { name: "Message", exact: true }).fill(revised);
           const send = page.getByRole("button", { name: "Send edited message" });
           await send.waitFor();
           for (let attempt = 0; attempt < 40 && !(await send.isEnabled()); attempt += 1) {

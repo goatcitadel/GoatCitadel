@@ -149,7 +149,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
           await page.goto(buildVerificationUiUrl(stack.uiUrl, `/chat?sessionId=${sessionId}&shell=cockpit`), {
             waitUntil: "domcontentloaded",
           });
-          await page.getByRole("combobox", { name: "Message", exact: true }).waitFor({ timeout: 30_000 });
+          await page.getByRole("textbox", { name: "Message", exact: true }).waitFor({ timeout: 30_000 });
           stage = "Markdown and code rendering";
           const markdown = await send(`COCKPIT_RENDER_MARKDOWN ${token}`, RENDER_MARKDOWN);
           let article = await findTurn(markdown.userMessage.content);
@@ -412,7 +412,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
         }
 
         async function send(content, reply) {
-          await page.getByRole("combobox", { name: "Message", exact: true }).fill(content);
+          await page.getByRole("textbox", { name: "Message", exact: true }).fill(content);
           const button = page.getByRole("button", { name: "Send", exact: true });
           await poll(() => button.isEnabled(), "Send is unavailable");
           await button.click();

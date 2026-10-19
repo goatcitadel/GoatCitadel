@@ -190,7 +190,7 @@ export async function runCockpitChatProjectProof({ context, browser, stack, cita
             buildVerificationUiUrl(stack.uiUrl, `/chat?sessionId=${sessions[0].sessionId}&shell=cockpit`),
             { waitUntil: "domcontentloaded" },
           );
-          await page.getByRole("combobox", { name: "Message", exact: true }).waitFor({ timeout: 30_000 });
+          await page.getByRole("textbox", { name: "Message", exact: true }).waitFor({ timeout: 30_000 });
           stage = "select exact project";
           let filters = await openFilters();
           await filters

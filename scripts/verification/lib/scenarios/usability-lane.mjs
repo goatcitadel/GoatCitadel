@@ -714,7 +714,7 @@ async function runChatBrowserLeg(context, input) {
     });
     await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 60_000 });
     await input.deps.setBrowserCorrelation(page, input.correlationId, input.sessionId);
-    const composer = page.getByRole("combobox", { name: "Message", exact: true });
+    const composer = page.getByRole("textbox", { name: "Message", exact: true });
     await composer.waitFor({ timeout: 60_000 });
     if (input.sendPrompt) {
       await composer.fill(FOUNDATION_PROMPT);

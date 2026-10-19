@@ -112,7 +112,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
               { waitUntil: "domcontentloaded" },
             );
             assert.equal((await threadReady).ok(), true, "Conversation owner could not hydrate the requested scope");
-            await page.getByRole("combobox", { name: "Message", exact: true }).waitFor({ timeout: 30_000 });
+            await page.getByRole("textbox", { name: "Message", exact: true }).waitFor({ timeout: 30_000 });
             assert.equal(new URL(page.url()).searchParams.get("sessionId"), id);
           };
           const switchSession = async (target) => {
@@ -141,7 +141,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
               documentAfter: await page.evaluate(() => performance.timeOrigin),
             });
           };
-          const draft = page.getByRole("combobox", { name: "Message", exact: true });
+          const draft = page.getByRole("textbox", { name: "Message", exact: true });
           await openSession(sessionId);
 
           stage = "slash keyboard palette";
