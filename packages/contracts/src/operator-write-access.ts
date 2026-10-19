@@ -1,3 +1,4 @@
+import { OUTSIDE_ROOT_WRITE_MODES, type OutsideRootWriteMode } from "./outside-root-write.js";
 /**
  * Governed operator changes to where model-driven filesystem tools may write
  * and to the global posture of the curated filesystem mutation tools. The
@@ -46,7 +47,8 @@ export interface GlobalToolAccessChange {
 /** The runtime-configuration Change Plan operations that carry these changes. */
 export type RuntimeWriteAccessOperation =
   | ({ readonly operation: "operator_write_root" } & OperatorWriteRootChange)
-  | ({ readonly operation: "tool_global_access" } & GlobalToolAccessChange);
+  | ({ readonly operation: "tool_global_access" } & GlobalToolAccessChange)
+  | { readonly operation: "outside_root_write_policy"; readonly mode: OutsideRootWriteMode };
 
 /** Public projection of one configured operator write root. */
 export interface OperatorWriteRootSummary {
@@ -68,6 +70,9 @@ export function isRuntimeWriteAccessOperation(value: unknown): value is RuntimeW
   if (!isRecord(value)) return false;
   const { operation, ...change } = value;
   if (operation === "operator_write_root") return isOperatorWriteRootChange(change);
+  if (operation === "outside_root_write_policy") {
+    return hasOnlyKeys(change, ["mode"]) && (OUTSIDE_ROOT_WRITE_MODES as readonly string[]).includes(String(change.mode));
+  }
   return operation === "tool_global_access" && isGlobalToolAccessChange(change);
 }
 

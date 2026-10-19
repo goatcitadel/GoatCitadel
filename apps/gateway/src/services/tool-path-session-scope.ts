@@ -22,23 +22,29 @@ export interface SessionToolPathScopeDeps {
 /**
  * Resolve a tool request's paths for the session's scope: its project (or the
  * workspace), or the approved scope of a delegated child session. Ordinary
- * sessions may also write by absolute path into the configured write roots;
- * delegated child sessions stay confined to their approved scope.
+ * sessions may also write by absolute path into the configured write roots,
+ * and, when the operator opted into outside-root write approvals, may pass an
+ * absolute write target outside every root through to policy. Delegated child
+ * sessions (with or without an approved scope) never get either widening.
  */
 export async function resolveToolRequestPathsForSessionScope<TRequest extends ToolPathRequest>(
   request: TRequest,
   deps: SessionToolPathScopeDeps,
 ): Promise<TRequest> {
-  const rootDir = deps.rootDir.trim() ? deps.rootDir : process.cwd();
-  const workspaceDir = deps.workspaceDir.trim() ? deps.workspaceDir : "workspace";
+  const configuredRootDir = deps.rootDir;
+  const configuredWorkspaceDir = deps.workspaceDir;
+  const sandbox = deps.sandbox;
+  const storage = deps.storage;
+  const rootDir = configuredRootDir.trim() ? configuredRootDir : process.cwd();
+  const workspaceDir = configuredWorkspaceDir.trim() ? configuredWorkspaceDir : "workspace";
   const workspaceRoot = path.resolve(rootDir, workspaceDir);
-  const projectId = (await deps.storage.chatSessionProjects.get(request.sessionId))?.projectId;
-  const project = projectId ? await deps.storage.chatProjects.find(projectId) : undefined;
-  const delegatedParent = (
-    await deps.storage.chatDelegationSteps.listParentsByChildSessionIds([request.sessionId])
-  ).get(request.sessionId);
+  const projectId = (await storage.chatSessionProjects.get(request.sessionId))?.projectId;
+  const project = projectId ? await storage.chatProjects.find(projectId) : undefined;
+  const delegatedParent = (await storage.chatDelegationSteps.listParentsByChildSessionIds([request.sessionId])).get(
+    request.sessionId,
+  );
   const delegatedScope = delegatedParent
-    ? (await deps.storage.chatDelegationSteps.get(delegatedParent.stepId)).scopeControl
+    ? (await storage.chatDelegationSteps.get(delegatedParent.stepId)).scopeControl
     : undefined;
   if (delegatedScope) {
     return resolveToolRequestPaths(request, {
@@ -54,10 +60,12 @@ export async function resolveToolRequestPathsForSessionScope<TRequest extends To
     repoRoot: rootDir,
     projectWorkspacePath: project?.workspacePath,
   });
+  const deferOutsideRootWrites = !delegatedParent && sandbox?.outsideRootWriteMode === "approval_required";
   return resolveToolRequestPaths(request, {
     workspaceRoot,
     projectRoot,
     projectWorkspacePath: project?.workspacePath,
-    writeRoots: deps.sandbox ? effectiveToolWriteRoots(deps.sandbox, "write") : [],
+    writeRoots: sandbox ? effectiveToolWriteRoots(sandbox, "write") : [],
+    outsideRootWrites: deferOutsideRootWrites ? "defer_to_policy" : "reject",
   });
 }

@@ -443,6 +443,8 @@ export interface RuntimeSettingsResponse {
   /** Global tool allow and deny lists (agent and permission-profile lists are separate). */
   globalToolAccess?: import("@goatcitadel/contracts").GlobalToolAccessSummary;
   readAccessMode?: "roots_only" | "approval_required" | "full_disk";
+  /** Whether writes outside every write root may raise an approval. */
+  outsideRootWriteMode?: "deny" | "approval_required";
   networkAllowlist: string[];
   approvalExplainer: {
     enabled: boolean;

@@ -791,7 +791,7 @@ function isRuntimeConfigurationOperation(value: unknown): value is ChangePlanRun
         )
       );
     default:
-      // operator_write_root and tool_global_access; any other operation is rejected.
+      // operator_write_root, tool_global_access and outside_root_write_policy; anything else is rejected.
       return isRuntimeWriteAccessOperation(value);
   }
 }
