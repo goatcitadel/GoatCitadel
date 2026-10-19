@@ -30,6 +30,7 @@ describe("effective restored Chat availability", () => {
       automaticFanout: false,
       providerFallback: false,
       staticMcp: false,
+      explicitContextBranches: false,
     });
     expect(projectChatFeatureAvailability(durable, { ...features, subagentFanoutV1Disabled: true })).toMatchObject({
       supervisedDelegation: true,
@@ -48,6 +49,15 @@ describe("effective restored Chat availability", () => {
         { ...durable, executionEnabled: false },
         { ...features, chatStaticMcpV1Enabled: true },
       ).staticMcp,
+    ).toBe(false);
+  });
+  it("advertises explicit context on edit/retry/child only with explicit context itself", () => {
+    const durable = { enabled: true, executionEnabled: true };
+    const branches = { ...features, chatExplicitContextBranchesV1Enabled: true };
+    expect(projectChatFeatureAvailability(durable, branches).explicitContextBranches).toBe(true);
+    expect(
+      projectChatFeatureAvailability(durable, { ...branches, chatExplicitContextV1Enabled: false })
+        .explicitContextBranches,
     ).toBe(false);
   });
 });

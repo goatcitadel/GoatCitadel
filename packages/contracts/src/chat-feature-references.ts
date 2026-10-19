@@ -258,6 +258,24 @@ const selectedSkill = z
   })
   .strict();
 
+/** Independent, default-off runtime switches that restore profile-free Chat features. */
+export const CHAT_RESTORATION_FEATURE_FLAGS = [
+  "chatProviderFallbackV1Enabled",
+  "chatSkillInstructionsV1Enabled",
+  "boundedToolExposureV1Enabled",
+  "scheduledChatTurnsV1Enabled",
+  "chatExplicitContextV1Enabled",
+  "chatAutomaticFanoutV1Enabled",
+  "chatDelegationControlsV1Enabled",
+  "proactiveHeartbeatTurnsV1Enabled",
+  "commitmentScheduledTurnsV1Enabled",
+  "chatMeshCapabilitiesV1Enabled",
+  "chatRemotePlacementV1Enabled",
+  "chatExplicitContextBranchesV1Enabled",
+  "chatRequesterMcpV1Enabled",
+  "chatStaticMcpV1Enabled",
+] as const;
+
 /** Immutable feature evidence. These records never grant callable authority. */
 export const chatTurnFeatureReferencesSchema = z
   .object({

@@ -18,5 +18,9 @@ export function projectChatFeatureAvailability(
       features.subagentFanoutV1Disabled !== true,
     providerFallback: durableExecution && features.chatProviderFallbackV1Enabled === true,
     staticMcp: durableExecution && features.chatStaticMcpV1Enabled === true,
+    explicitContextBranches:
+      durableExecution &&
+      features.chatExplicitContextV1Enabled === true &&
+      features.chatExplicitContextBranchesV1Enabled === true,
   };
 }

@@ -161,6 +161,7 @@ export interface RuntimeSettings {
     commitmentScheduledTurnsV1Enabled?: boolean;
     chatMeshCapabilitiesV1Enabled?: boolean;
     chatRemotePlacementV1Enabled?: boolean;
+    chatExplicitContextBranchesV1Enabled?: boolean;
     chatRequesterMcpV1Enabled?: boolean;
     chatStaticMcpV1Enabled?: boolean;
     /** Gateway-owned governed Change Plan authority. */

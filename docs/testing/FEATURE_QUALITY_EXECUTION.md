@@ -883,8 +883,10 @@ New feature admissions pin provider routing without freezing a callable catalog.
 Current skills, grants, requester generations, mesh publications and policy remain
 live authority checks. Changed admitted content fails closed instead of silently
 substituting bytes. Historical profile decoding remains available. Fresh explicit
-context restoration currently covers ordinary operator turns; edit/retry and
-child-context combinations are not promoted. Code Mode retains trusted-code
+context restoration covers ordinary operator turns and edit/retry turns that carry refs.
+WS9 adds default-off `chatExplicitContextBranchesV1Enabled`: edit/retry without refs re-admits the
+source turn's ids, and delegated children inherit the parent's ids, always as a fresh admission
+(child path not yet proven by an end-to-end delegated run). Code Mode retains trusted-code
 terminology, immutable artifacts and its existing approval/execution owners.
 
 ### Live evaluation preflight
