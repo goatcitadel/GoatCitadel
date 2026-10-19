@@ -132,9 +132,18 @@ it("names each grant's actions by its tool, decision and scope, never its ID", a
   });
   await render();
   const labels = view!.root.findAllByType("button").map((item) => String(item.props["aria-label"] ?? ""));
-  expect(labels).toContain("Inspect grant: session.status · allow · workspace");
-  expect(labels).toContain("Revoke grant: session.status · allow · workspace");
+  expect(labels).toContain("Inspect grant: session.status · Allow · Workspace");
+  expect(labels).toContain("Revoke grant: session.status · Allow · Workspace");
   expect(labels.some((label) => label.includes("grant-secret-id"))).toBe(false);
+  // The row reads in operator words; the workspace ID stays in Inspect grant.
+  const rowText = view!.root
+    .findAllByType("li")
+    .flatMap((item) => item.findAllByType("p"))
+    .map((item) => item.children.join(""));
+  expect(rowText).toContain("session.status · Allow · Workspace");
+  expect(rowText.some((row) => row.includes("workspace-a"))).toBe(false);
+  const links = view!.root.findAllByType("a");
+  expect(links.some((link) => link.props.href === "/settings/safety#permission-profile")).toBe(true);
 });
 
 it("keeps separate unsent drafts for the same workspace/tool across installations", async () => {

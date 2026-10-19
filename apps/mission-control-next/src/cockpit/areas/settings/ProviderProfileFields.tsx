@@ -1,10 +1,12 @@
-import { useId } from "react";
 import type { ProviderProfileFieldsProps } from "../../../features/native-routes/settings/sections/ProviderProfileFields";
 import {
   getProviderApiStyleWarning,
   type ProviderEditorDraft,
 } from "../../../features/native-routes/settings/helpers/provider-drafts";
+import { Field } from "../../ui/Field";
+import { cockpitInputClass } from "../../ui/input-class";
 import { ProviderTransportFields } from "./ProviderTransportFields";
+import { urlFieldError, useBlurValidation } from "./field-validation";
 import {
   AWS_SIGV4_ENV_REFERENCE_HELP,
   AWS_SIGV4_ENV_REFERENCE_LABEL,
@@ -14,120 +16,153 @@ import {
   LLM_API_STYLES,
 } from "./settings-vocabulary";
 
-export const providerFieldClass =
-  "mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 py-1 text-sm text-fg disabled:opacity-60";
+type TextKey = {
+  [K in keyof ProviderEditorDraft]: ProviderEditorDraft[K] extends string ? K : never;
+}[keyof ProviderEditorDraft];
+type BlurCheck = ReturnType<typeof useBlurValidation>;
+
 export function ProviderProfileFields(
   props: ProviderProfileFieldsProps & {
     disabled: boolean;
     existing: boolean;
     credentialStorage?: "keychain" | "env";
     onCredentialStorage?: (value: "keychain" | "env") => void;
+    /** Opens the request transport group, for the provider page's Transport entry point. */
+    transportOpen?: boolean;
   },
 ) {
-  const id = useId();
   const draft = props.providerDraft;
   const codex = draft.providerId.trim().toLowerCase() === "openai-codex" || draft.authMode === "codex-oauth";
   const google = draft.authMode === "google-adc" || draft.authMode === "google-service-account";
   const bedrock = draft.apiStyle === "bedrock-messages" || isBedrockCredentialMode(draft.authMode);
+  const providerIdCheck = useBlurValidation((value) => (value.trim() ? undefined : "Enter a provider ID."));
+  const baseUrlCheck = useBlurValidation((value) => urlFieldError(value, { required: true }));
   const patch = <K extends keyof ProviderEditorDraft>(key: K, value: ProviderEditorDraft[K]) =>
     props.setProviderDraft((current) => ({ ...current, [key]: value }));
-  const field = (key: keyof ProviderEditorDraft, label: string, disabled = false) => (
-    <label key={key} className="block text-sm text-fg-secondary">
-      <span id={`${id}-${key}`}>{label}</span>
-      <input
-        aria-labelledby={`${id}-${key}`}
-        className={providerFieldClass}
-        value={draft[key]}
-        disabled={props.disabled || disabled}
-        onChange={(event) => patch(key, event.target.value as ProviderEditorDraft[typeof key])}
-      />
-    </label>
+  const text = (
+    key: TextKey,
+    label: string,
+    options: { disabled?: boolean; required?: boolean; help?: string; type?: "url"; check?: BlurCheck } = {},
+  ) => (
+    <Field key={key} label={label} required={options.required} help={options.help} error={options.check?.error}>
+      {(fieldProps) => (
+        <input
+          {...fieldProps}
+          // A required label also shows a marker; the name stays the plain label text.
+          aria-label={options.required ? label : undefined}
+          type={options.type ?? "text"}
+          autoComplete="off"
+          spellCheck={false}
+          className={cockpitInputClass}
+          value={draft[key]}
+          disabled={props.disabled || options.disabled}
+          onBlur={(event) => options.check?.onBlur(event.target.value)}
+          onChange={(event) => {
+            patch(key, event.target.value);
+            options.check?.onChange(event.target.value);
+          }}
+        />
+      )}
+    </Field>
   );
+  const apiStyleWarning = getProviderApiStyleWarning(draft);
   return (
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2">
-        {field("providerId", "Provider ID", props.existing)}
-        {field("label", "Provider label")}
-        {field("baseUrl", "Provider base URL")}
-        {field("defaultModel", "Provider's suggested model")}
-        <label className="text-sm text-fg-secondary">
-          <span id={`${id}-api-style`}>Provider API style</span>
-          <select
-            aria-labelledby={`${id}-api-style`}
-            className={providerFieldClass}
-            value={draft.apiStyle}
-            disabled={props.disabled}
-            onChange={(event) => patch("apiStyle", event.target.value as ProviderEditorDraft["apiStyle"])}
-          >
-            {LLM_API_STYLES.map((value) => (
-              <option key={value} value={value}>
-                {LLM_API_STYLE_LABELS[value]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm text-fg-secondary">
-          <span id={`${id}-auth-mode`}>Credential mode</span>
-          <select
-            aria-labelledby={`${id}-auth-mode`}
-            className={providerFieldClass}
-            value={codex ? "codex-oauth" : draft.authMode}
-            disabled={props.disabled || codex}
-            onChange={(event) => patch("authMode", event.target.value as ProviderEditorDraft["authMode"])}
-          >
-            <option value="">Provider default</option>
-            <option value="api-key">API key</option>
-            <option value="google-adc">Google ADC</option>
-            <option value="google-service-account">Google service account</option>
-            <option value="claude-code-oauth">Claude Code OAuth token</option>
-            <option value="codex-oauth">ChatGPT/Codex OAuth</option>
-            {bedrock
-              ? BEDROCK_CREDENTIAL_MODE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))
-              : null}
-          </select>
-        </label>
+        {text("providerId", "Provider ID", {
+          disabled: props.existing,
+          required: !props.existing,
+          check: props.existing ? undefined : providerIdCheck,
+        })}
+        {text("label", "Provider label")}
+        {props.existing
+          ? null
+          : text("baseUrl", "Provider base URL", { required: true, type: "url", check: baseUrlCheck })}
+        {text("defaultModel", "Provider's suggested model")}
+        <Field label="Provider API style">
+          {(fieldProps) => (
+            <select
+              {...fieldProps}
+              className={cockpitInputClass}
+              value={draft.apiStyle}
+              disabled={props.disabled}
+              onChange={(event) => patch("apiStyle", event.target.value as ProviderEditorDraft["apiStyle"])}
+            >
+              {LLM_API_STYLES.map((value) => (
+                <option key={value} value={value}>
+                  {LLM_API_STYLE_LABELS[value]}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+        <Field label="Credential mode">
+          {(fieldProps) => (
+            <select
+              {...fieldProps}
+              className={cockpitInputClass}
+              value={codex ? "codex-oauth" : draft.authMode}
+              disabled={props.disabled || codex}
+              onChange={(event) => patch("authMode", event.target.value as ProviderEditorDraft["authMode"])}
+            >
+              <option value="">Provider default</option>
+              <option value="api-key">API key</option>
+              <option value="google-adc">Google ADC</option>
+              <option value="google-service-account">Google service account</option>
+              <option value="claude-code-oauth">Claude Code OAuth token</option>
+              <option value="codex-oauth">ChatGPT/Codex OAuth</option>
+              {bedrock
+                ? BEDROCK_CREDENTIAL_MODE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))
+                : null}
+            </select>
+          )}
+        </Field>
         {!codex && draft.authMode !== "google-adc"
-          ? field(
+          ? text(
               "apiKeyEnv",
               draft.authMode === "google-service-account"
                 ? "Service-account JSON environment variable"
                 : draft.authMode === "aws-sigv4"
                   ? AWS_SIGV4_ENV_REFERENCE_LABEL
                   : "API key environment variable",
+              { help: draft.authMode === "aws-sigv4" ? AWS_SIGV4_ENV_REFERENCE_HELP : undefined },
             )
           : null}
-        {draft.authMode === "aws-sigv4" ? (
-          <p className="text-xs text-fg-muted sm:col-span-2">{AWS_SIGV4_ENV_REFERENCE_HELP}</p>
-        ) : null}
         {google ? (
           <>
-            {field("googleProjectId", "Google Cloud project")}
-            {field("googleProjectIdEnv", "Google project environment variable")}
-            {field("googleLocation", "Google Cloud location")}
-            {field("googleLocationEnv", "Google location environment variable")}
-            {field("googleEndpointId", "Google endpoint ID")}
+            {text("googleProjectId", "Google Cloud project")}
+            {text("googleProjectIdEnv", "Google project environment variable")}
+            {text("googleLocation", "Google Cloud location")}
+            {text("googleLocationEnv", "Google location environment variable")}
+            {text("googleEndpointId", "Google endpoint ID")}
           </>
         ) : null}
       </div>
+      {props.existing ? (
+        <p className="text-xs text-fg-muted">
+          Change this provider's endpoint and saved credential under Provider connection on the provider page.
+        </p>
+      ) : null}
       {!props.existing && !codex && draft.authMode !== "google-adc" ? (
         <div className="space-y-2">
-          <label className="block text-sm text-fg-secondary">
-            <span id={`${id}-custody`}>New credential storage</span>
-            <select
-              aria-labelledby={`${id}-custody`}
-              className={providerFieldClass}
-              disabled={props.disabled}
-              value={props.credentialStorage ?? "keychain"}
-              onChange={(event) => props.onCredentialStorage?.(event.target.value as "keychain" | "env")}
-            >
-              <option value="keychain">OS keychain</option>
-              <option value="env">Installation environment file (plaintext)</option>
-            </select>
-          </label>
+          <Field label="New credential storage">
+            {(fieldProps) => (
+              <select
+                {...fieldProps}
+                className={cockpitInputClass}
+                disabled={props.disabled}
+                value={props.credentialStorage ?? "keychain"}
+                onChange={(event) => props.onCredentialStorage?.(event.target.value as "keychain" | "env")}
+              >
+                <option value="keychain">OS keychain</option>
+                <option value="env">Installation environment file (plaintext)</option>
+              </select>
+            )}
+          </Field>
           {props.credentialStorage === "env" ? (
             <p role="note" className="text-sm text-status-waiting">
               The credential will be stored as plaintext in this installation's environment file at{" "}
@@ -137,9 +172,9 @@ export function ProviderProfileFields(
           ) : null}
         </div>
       ) : null}
-      {getProviderApiStyleWarning(draft) ? (
+      {apiStyleWarning ? (
         <p role="status" className="text-sm text-status-waiting">
-          {getProviderApiStyleWarning(draft)}
+          {apiStyleWarning}
         </p>
       ) : null}
       <p className="text-xs text-fg-muted">
@@ -150,12 +185,9 @@ export function ProviderProfileFields(
         draft={props.providerTransportDraft}
         onChange={props.setProviderTransportDraft}
         disabled={props.disabled}
+        error={props.providerRequestValidation.error}
+        defaultOpen={props.transportOpen}
       />
-      {props.providerRequestValidation.error ? (
-        <p role="alert" className="text-sm text-status-failed">
-          {props.providerRequestValidation.error}
-        </p>
-      ) : null}
     </div>
   );
 }

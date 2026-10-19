@@ -13,7 +13,8 @@ import {
   useIntegrationConnectionMutation,
 } from "../../../features/native-routes/settings/integration-connection-mutation";
 import { Button } from "../../ui/Button";
-import { IntegrationManagementSettings } from "./IntegrationManagementSettings";
+import { Field } from "../../ui/Field";
+import { IntegrationManagementSettings, type IntegrationManagementSelection } from "./IntegrationManagementSettings";
 import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { McpDraftLeave } from "./McpDraftLeave";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
@@ -28,6 +29,11 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [search, setSearch] = useState("");
   const [managementOpen, setManagementOpen] = useState(false);
+  const [selection, setSelection] = useState<IntegrationManagementSelection | null>(null);
+  const manage = (connectionId: string) => {
+    setManagementOpen(true);
+    setSelection((current) => ({ connectionId, nonce: (current?.nonce ?? 0) + 1 }));
+  };
   const leave = useDraftLeave();
   const ready = !connections.isError && Array.isArray(connections.data?.items);
   const control = useIntegrationEnabled({
@@ -63,7 +69,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
       >
         {managementOpen ? "Hide connection management" : "Add and manage integrations"}
       </Button>
-      {managementOpen ? <IntegrationManagementSettings workspaceId={workspaceId} /> : null}
+      {managementOpen ? <IntegrationManagementSettings workspaceId={workspaceId} selection={selection} /> : null}
       <McpDraftLeave {...leave.dialogProps} />
       <Button
         size="sm"
@@ -99,18 +105,20 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
       ) : null}
       {ready ? (
         <>
-          <label className="block text-sm text-fg-secondary">
-            Search saved integrations
-            <input
-              type="search"
-              value={search}
-              onChange={(event) => {
-                setSearch(event.target.value);
-                setLimit(PAGE_SIZE);
-              }}
-              className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-sm text-fg"
-            />
-          </label>
+          <Field label="Search saved integrations">
+            {(fieldProps) => (
+              <input
+                {...fieldProps}
+                type="search"
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setLimit(PAGE_SIZE);
+                }}
+                className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-sm text-fg"
+              />
+            )}
+          </Field>
           <p className="text-xs text-fg-muted">
             Showing {Math.min(limit, filtered.length)} of {filtered.length} loaded integrations
             {connections.data!.items.length === 300 ? " · Showing the first 300 records" : ""}.
@@ -122,6 +130,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
                 connection={connection}
                 disabled={connections.isFetching || control.checking || Boolean(reviewed)}
                 onReview={() => void control.requestReview(connection)}
+                onManage={() => manage(connection.connectionId)}
                 onSettled={() => {
                   // Close only this row's now-stale review; another row's open review is untouched.
                   if (control.review?.connection.connectionId === connection.connectionId) control.cancel();
@@ -165,12 +174,15 @@ function IntegrationRow({
   connection,
   disabled,
   onReview,
+  onManage,
   onSettled,
   readback,
 }: {
   connection: IntegrationConnection;
   disabled: boolean;
   onReview: () => void;
+  /** Opens this connection in connection management (details, edit, diagnostics, delete). */
+  onManage: () => void;
   /** Closes a review that a settled lost toggle made stale. */
   onSettled: () => void;
   /** The canonical directory read that must succeed before a settled outcome unlocks this row. */
@@ -188,20 +200,25 @@ function IntegrationRow({
           </p>
           <p className="text-xs text-fg-muted">
             Configured status: {INTEGRATION_CONNECTION_STATUS_LABELS[connection.status] ?? "Unknown"}. A saved status
-            does not verify connectivity; run diagnostics in connection management.
+            does not verify connectivity; choose Manage to run diagnostics.
           </p>
           <p className="mt-1 break-words text-xs text-fg-muted">
             {connection.workspaceId ? "Workspace-bound connection" : "Unbound · Personal Citadel policy"}
           </p>
         </div>
-        <Button
-          size="sm"
-          disabled={disabled || attempt.locked || !canToggleIntegration(connection)}
-          aria-label={`Review ${connection.enabled ? "disable" : "enable"} ${connection.label}`}
-          onClick={onReview}
-        >
-          {connection.enabled ? "Review disable" : "Review enable"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" aria-label={`Manage ${connection.label}`} onClick={onManage}>
+            Manage
+          </Button>
+          <Button
+            size="sm"
+            disabled={disabled || attempt.locked || !canToggleIntegration(connection)}
+            aria-label={`Review ${connection.enabled ? "disable" : "enable"} ${connection.label}`}
+            onClick={onReview}
+          >
+            {connection.enabled ? "Review disable" : "Review enable"}
+          </Button>
+        </div>
       </div>
       <div className="mt-2 text-xs text-fg-muted">
         <TechnicalDetails label="Connection details">

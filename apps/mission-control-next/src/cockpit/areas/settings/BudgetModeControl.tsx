@@ -9,6 +9,8 @@ import {
   useSettingsChange,
 } from "../../../features/native-routes/settings/use-settings-change";
 import { Button } from "../../ui/Button";
+import { Field } from "../../ui/Field";
+import { cockpitInputClass } from "../../ui/input-class";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
@@ -19,6 +21,16 @@ import { presentChangeStatusLabel } from "./settings-vocabulary";
 type BudgetMode = RuntimeSettingsResponse["budgetMode"];
 const BUDGET_MODE_LABELS: Record<BudgetMode, string> = { saver: "Saver", balanced: "Balanced", power: "Power" };
 const MODES = Object.keys(BUDGET_MODE_LABELS) as BudgetMode[];
+/**
+ * What each mode means today. The Gateway only stores the mode: nothing reads it to pick models
+ * or to stop spending, so the copy must not promise either.
+ */
+const BUDGET_MODE_HELP: Record<BudgetMode, string> = {
+  saver: "Your preference is lower cost.",
+  balanced: "The everyday default: no lean toward cost or quality.",
+  power: "Your preference is answer quality over cost.",
+};
+const BUDGET_MODE_SCOPE = "Saved as a preference only: no mode switches models or caps spending today.";
 const budgetModeLabel = (mode: BudgetMode | undefined) => (mode ? (BUDGET_MODE_LABELS[mode] ?? "Unknown") : "Unknown");
 
 function isBudgetMode(value: unknown): value is BudgetMode {
@@ -130,7 +142,7 @@ export function BudgetModeControl() {
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 id="budget-mode-title" className="text-base font-semibold text-fg">
+          <h3 id="budget-mode-title" className="text-md font-semibold text-fg">
             Budget preference
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
@@ -169,24 +181,36 @@ export function BudgetModeControl() {
           <TechnicalDetails>
             <p className="break-all font-mono text-xs">Settings version {settings.data?.revision}</p>
           </TechnicalDetails>
-          <label className="mt-3 block max-w-sm text-sm font-medium text-fg">
-            Mode
-            <select
-              className="mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
-              value={draft.value}
-              onChange={(event) => {
-                setNotice(null);
-                draft.setValue(event.target.value as BudgetMode);
-              }}
-              disabled={busy || change.hasPending || outcomeUncertain}
-            >
-              {MODES.map((mode) => (
-                <option key={mode} value={mode}>
-                  {BUDGET_MODE_LABELS[mode]}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="mt-3 max-w-sm">
+            <Field label="Mode" help={BUDGET_MODE_SCOPE}>
+              {(fieldProps) => (
+                <select
+                  {...fieldProps}
+                  className={cockpitInputClass}
+                  value={draft.value}
+                  onChange={(event) => {
+                    setNotice(null);
+                    draft.setValue(event.target.value as BudgetMode);
+                  }}
+                  disabled={busy || change.hasPending || outcomeUncertain}
+                >
+                  {MODES.map((mode) => (
+                    <option key={mode} value={mode}>
+                      {BUDGET_MODE_LABELS[mode]}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
+          </div>
+          <dl className="mt-2 space-y-1 text-xs text-fg-muted">
+            {MODES.map((mode) => (
+              <div key={mode}>
+                <dt className="inline font-medium text-fg-secondary">{BUDGET_MODE_LABELS[mode]}: </dt>
+                <dd className="inline">{BUDGET_MODE_HELP[mode]}</dd>
+              </div>
+            ))}
+          </dl>
           {draft.isDirty ? (
             <p role="status" className="mt-2 text-xs text-status-waiting">
               Unsaved preference draft

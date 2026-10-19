@@ -34,11 +34,12 @@ let surface: "profiles" | "overrides";
 const text = (node: ReactTestInstance | string): string =>
   typeof node === "string" ? node : node.children.map(text).join("");
 const button = (label: string) => view!.root.findAllByType("button").find((node) => text(node) === label)!;
-function field(label: string, type: "input" | "textarea" = "input") {
-  return view!.root
-    .findAllByType("label")
-    .find((node) => text(node).startsWith(label))!
-    .findByType(type);
+/** A control wrapped by its label, or tied to it by `htmlFor` (ui/Field). */
+function field(label: string, type: "input" | "textarea" | "select" = "input") {
+  const node = view!.root.findAllByType("label").find((item) => text(item).startsWith(label))!;
+  return node.props.htmlFor
+    ? view!.root.findAll((item) => item.type === type && item.props.id === node.props.htmlFor)[0]!
+    : node.findByType(type);
 }
 async function click(label: string) {
   await act(async () => {
@@ -190,6 +191,28 @@ it("reviews temporary scope, expiry and no-CAS limits, with zero writes after ca
   await click("Cancel permission change");
   expect(api.createLocalOperatorOverride).not.toHaveBeenCalled();
   expect(field("Override reason", "textarea").props.value).toBe(override.reason);
+});
+
+it("offers the override duration as whole minutes inside the accepted range, with no empty or zero value", async () => {
+  surface = "overrides";
+  await render();
+  expect(text(view!.root)).toContain("Temporary local operator overrides");
+  expect(text(view!.root)).not.toContain("in seconds");
+  const duration = field("Override duration", "select");
+  expect(duration.props.value).toBe(600);
+  const options = duration.findAllByType("option");
+  expect(options.map((option) => option.props.value)).toEqual([60, 300, 600, 900, 1800, 3600]);
+  expect(options.map((option) => text(option))).toEqual([
+    "1 minute",
+    "5 minutes",
+    "10 minutes",
+    "15 minutes",
+    "30 minutes",
+    "60 minutes",
+  ]);
+  await act(async () => duration.props.onChange({ target: { value: "1800" } }));
+  expect(field("Override duration", "select").props.value).toBe(1800);
+  expect(field("Override reason", "textarea").props["aria-required"]).toBe(true);
 });
 
 it("uses the exact current override record when reviewing an end request", async () => {

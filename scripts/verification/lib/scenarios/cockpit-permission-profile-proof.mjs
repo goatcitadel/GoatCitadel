@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
+import { openPermissionProfileChoices } from "./cockpit-permission-context-proof.mjs";
 
 export function assertPermissionActivationOwnerAgreement({ workspaceId, reviewed, request, receipt, effective }) {
   assert.equal(reviewed.input.operation, "activate");
@@ -87,7 +88,9 @@ export async function runCockpitPermissionProfileProof({ context, browser, stack
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         const panel = page.getByRole("region", { name: "Chat permission profile", exact: true });
         // The page marks the profile in effect Current and keeps Review disabled until a different profile is picked.
+        // Search and radios render only after "Change profile" (idempotent if the choices are already open).
         const pick = async (profile) => {
+          await openPermissionProfileChoices(panel);
           await panel.getByRole("searchbox", { name: "Find permission profile", exact: true }).fill(profile.label);
           await panel.getByRole("radio", { name: new RegExp(`^${profile.label}(?:\\s|$)`) }).check();
         };

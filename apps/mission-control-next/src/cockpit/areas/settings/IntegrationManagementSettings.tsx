@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef } from "react";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useIntegrationSettings } from "../../../features/native-routes/settings/sections/use-integration-settings";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
@@ -6,22 +7,41 @@ import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { IntegrationConnectionEditor } from "./IntegrationConnectionEditor";
 import { IntegrationConnectionDetails } from "./IntegrationConnectionDetails";
 import { IntegrationCatalogEvidence } from "./IntegrationCatalogEvidence";
-import { NotificationRoutingSettings } from "./NotificationRoutingSettings";
 import { IntegrationMeetSettings } from "./IntegrationMeetSettings";
-import { integrationInputClass } from "./IntegrationFormFields";
 
-export function IntegrationManagementSettings({ workspaceId }: { workspaceId: string }) {
+/** A request from the single saved-integrations list to open one connection here; `nonce` re-opens the same one. */
+export interface IntegrationManagementSelection {
+  connectionId: string;
+  nonce: number;
+}
+
+/** ST-21: the management views, shown as one segmented control whose pressed state names the open view. */
+const MANAGEMENT_VIEWS = [
+  { panel: "connectors", label: "Imported connectors" },
+  { panel: "plugins", label: "Plugin trust" },
+  { panel: "history", label: "Delivery records" },
+  { panel: "meet", label: "Google Meet preparation" },
+] as const;
+
+export function IntegrationManagementSettings({
+  workspaceId,
+  selection = null,
+}: {
+  workspaceId: string;
+  /** Set by the saved-integrations list; this owner keeps no second list or search box of its own. */
+  selection?: IntegrationManagementSelection | null;
+}) {
   const s = useIntegrationSettings(workspaceId);
-  const [search, setSearch] = useState("");
-  const [limit, setLimit] = useState(20);
   const available = Boolean(
     s.data && !s.data.issues.some((issue) => ["Integration catalog", "Integration connections"].includes(issue.label)),
   );
-  const connections =
-    s.data?.connections.filter(
-      (item) =>
-        item.kind !== "external_connector" && `${item.label} ${item.key}`.toLowerCase().includes(search.toLowerCase()),
-    ) ?? [];
+  const handledSelection = useRef<number | null>(null);
+  const selectionGuard = s.connectionSelectionGuard;
+  useEffect(() => {
+    if (!selection || !available || handledSelection.current === selection.nonce) return;
+    handledSelection.current = selection.nonce;
+    selectionGuard.requestTransition(selection.connectionId);
+  }, [available, selection, selectionGuard]);
   return (
     <section aria-label="Integration management" className="space-y-4 rounded-md border border-line-subtle p-3">
       <header>
@@ -38,7 +58,7 @@ export function IntegrationManagementSettings({ workspaceId }: { workspaceId: st
       ) : null}
       {s.error ? (
         <p role="alert" className="text-sm text-status-failed">
-          {String(s.error)}
+          Connection management unavailable: {describeApiError(s.error).summary}
         </p>
       ) : null}
       {s.data?.issues.map((issue) => (
@@ -65,53 +85,22 @@ export function IntegrationManagementSettings({ workspaceId }: { workspaceId: st
         <Button disabled={s.loading || s.saving} onClick={() => void s.reload()}>
           Refresh connection management
         </Button>
-        <Button disabled={s.loading} onClick={() => s.openPanel("connectors")}>
-          Imported connectors
-        </Button>
-        <Button disabled={s.loading} onClick={() => s.openPanel("plugins")}>
-          Plugin trust
-        </Button>
-        <Button disabled={s.loading} onClick={() => s.openPanel("history")}>
-          Delivery records
-        </Button>
-        <Button disabled={s.loading} onClick={() => s.openPanel("routing")}>
-          Notification routing
-        </Button>
-        <Button disabled={s.loading} onClick={() => s.openPanel("meet")}>
-          Google Meet preparation
-        </Button>
+      </div>
+      <div role="group" aria-label="Management views" className="flex flex-wrap gap-2">
+        {MANAGEMENT_VIEWS.map((view) => (
+          <Button
+            key={view.panel}
+            size="sm"
+            aria-pressed={s.panel === view.panel}
+            disabled={s.loading}
+            onClick={() => s.openPanel(s.panel === view.panel ? null : view.panel)}
+          >
+            {view.label}
+          </Button>
+        ))}
       </div>
       {available ? (
         <>
-          <label className="block text-sm">
-            Find managed integration
-            <input
-              aria-label="Find managed integration"
-              type="search"
-              className={integrationInputClass}
-              value={search}
-              onChange={(event) => {
-                setSearch(event.target.value);
-                setLimit(20);
-              }}
-            />
-          </label>
-          <ul className="space-y-2">
-            {connections.slice(0, limit).map((connection) => (
-              <li key={connection.connectionId}>
-                <Button
-                  className="h-auto w-full justify-start whitespace-normal break-words text-left"
-                  onClick={() => s.connectionSelectionGuard.requestTransition(connection.connectionId)}
-                >
-                  {connection.label} · {connection.enabled ? "Enabled" : "Disabled"}
-                </Button>
-              </li>
-            ))}
-          </ul>
-          {!connections.length ? <p className="text-sm text-fg-muted">No saved integrations match this view.</p> : null}
-          {connections.length > limit ? (
-            <Button onClick={() => setLimit((value) => value + 20)}>Show more managed integrations</Button>
-          ) : null}
           {s.panel === "meet" ? <IntegrationMeetSettings owner={s} /> : null}
           {s.panel === "create" || s.panel === "edit" ? (
             <IntegrationConnectionEditor key={`${s.panel}:${s.selectedConnectionId}`} owner={s} />
@@ -119,12 +108,6 @@ export function IntegrationManagementSettings({ workspaceId }: { workspaceId: st
             <IntegrationConnectionDetails owner={s} />
           ) : ["connectors", "plugins", "history"].includes(s.panel ?? "") ? (
             <IntegrationCatalogEvidence owner={s} />
-          ) : s.panel === "routing" ? (
-            <NotificationRoutingSettings
-              key={workspaceId}
-              workspaceId={workspaceId}
-              channels={s.data?.channelConnections ?? []}
-            />
           ) : null}
         </>
       ) : null}

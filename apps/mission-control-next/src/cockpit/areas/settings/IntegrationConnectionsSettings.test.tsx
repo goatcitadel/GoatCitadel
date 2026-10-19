@@ -28,6 +28,14 @@ vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (impo
   ...(await importOriginal<object>()),
   fetchMutationAttempt: attempts.read,
 }));
+// Connection management is its own suite; here it only records which connection the single list asked it to open.
+const management = vi.hoisted(() => ({ selections: [] as unknown[] }));
+vi.mock("./IntegrationManagementSettings", () => ({
+  IntegrationManagementSettings: ({ selection }: { selection: unknown }) => {
+    management.selections.push(selection);
+    return null;
+  },
+}));
 const connection = (id: string, patch: Partial<IntegrationConnection> = {}): IntegrationConnection => ({
   connectionId: id,
   catalogId: "productivity.github",
@@ -87,6 +95,18 @@ afterEach(async () => {
 });
 
 describe("native integration connections", () => {
+  it("ST-21: lists each connection once with one search box and opens it in management from its row", async () => {
+    items = [connection("one"), connection("two")];
+    management.selections.length = 0;
+    await mount();
+    expect(view.root.findAllByType("input").filter((node) => node.props.type === "search")).toHaveLength(1);
+    expect(view.root.findAllByType("li")).toHaveLength(2);
+    await click(view.root.findByProps({ "aria-label": "Manage GitHub two" }));
+    expect(button("Hide connection management").props["aria-expanded"]).toBe(true);
+    expect(management.selections.at(-1)).toEqual({ connectionId: "two", nonce: 1 });
+    await click(view.root.findByProps({ "aria-label": "Manage GitHub two" }));
+    expect(management.selections.at(-1)).toEqual({ connectionId: "two", nonce: 2 });
+  });
   it("does not promote a configured connected record to verified connectivity", async () => {
     items = [{ ...connection("one"), enabled: true, status: "connected" }];
     await mount();

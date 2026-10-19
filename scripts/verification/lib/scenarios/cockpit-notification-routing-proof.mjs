@@ -131,11 +131,12 @@ export async function runCockpitNotificationRoutingProof({ context, browser, sta
         page = await browserContext.newPage();
         page.on("request", request => { const route = new URL(request.url()).pathname;
           if (["POST", "PATCH", "DELETE"].includes(request.method()) && route.startsWith("/api/v1/notifications/")) writes.push({ method: request.method(), route }); });
-        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#integration-connections"), { waitUntil: "domcontentloaded" });
+        // Notification routing sits beside General › Attention (AttentionNotificationRouting, id="notification-routing").
+        // `#appearance` is the General page's registered section anchor; SettingsArea rejects unregistered hashes.
+        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/general?shell=cockpit#appearance"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
-        await page.getByRole("button", { name: "Add and manage integrations", exact: true }).click();
-        await page.getByRole("region", { name: "Integration management", exact: true }).getByRole("button", { name: "Notification routing", exact: true }).click();
-        const panel = page.getByRole("region", { name: "Notification routing", exact: true });
+        const panel = page.getByRole("region", { name: "Appearance and attention", exact: true }).getByRole("region", { name: "Notification routing", exact: true });
+        await panel.scrollIntoViewIfNeeded();
         stage = "create reviewed destination without premature mutation";
         await panel.getByRole("button", { name: "New destination", exact: true }).click();
         await panel.getByLabel("Destination label", { exact: true }).fill(label);

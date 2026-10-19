@@ -39,7 +39,7 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
         <div>
           <h3 className="text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-overview"]}</h3>
           <p className="mt-1 text-sm text-fg-secondary">
-            Review this operating space's Charter, Chambers and Gatehouse posture.
+            Review this Citadel&apos;s purpose (Charter), areas (Chambers) and default access settings (Gatehouse).
           </p>
           <p className="mt-1 break-all text-xs text-fg-muted">Citadel: {citadelId}</p>
         </div>
@@ -167,7 +167,8 @@ export function CitadelOverviewSettings({ citadelId }: { citadelId: string }) {
               )
             ) : null}
             <p className="text-xs text-fg-muted">
-              Wards and Gates are evaluated with deny-wins policy. Sealed Chambers do not widen access.
+              Rules (Wards) and Gates are checked with deny-wins: one matching deny blocks the action. Sealed Chambers
+              do not widen access.
             </p>
             <details className="rounded-md border border-line-subtle bg-sunken p-3 text-sm text-fg-secondary">
               <summary className="cursor-pointer">Default templates for reference</summary>

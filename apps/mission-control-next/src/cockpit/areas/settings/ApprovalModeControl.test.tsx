@@ -280,6 +280,20 @@ describe("cockpit tool approval rule", () => {
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
 
+  it("ties the reason Skip normal prompts is unavailable to the approval rule select", async () => {
+    owner.deploymentProfile = "remote_hardened";
+    await render();
+    const select = container.querySelector("select")!;
+    const described = select
+      .getAttribute("aria-describedby")!
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent)
+      .join(" ");
+    expect(described).toContain(
+      "Skip normal prompts is unavailable here. Remote Hardened keeps normal prompt skipping unavailable.",
+    );
+  });
+
   it("fails closed when the owner profile is missing", async () => {
     delete owner.deploymentProfile;
     await render();

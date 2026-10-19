@@ -40,6 +40,24 @@ vi.mock("../../ui/Dialog", () => ({
 vi.mock("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog", () => ({
   ChatChangePlanActionDialog: () => null,
 }));
+const connection = vi.hoisted(() => ({ providerIds: [] as Array<string | undefined> }));
+// The connection panel has its own tests; here it only shows which provider the page handed it.
+vi.mock("./ProviderConnectionSettings", () => ({
+  ProviderConnectionSettings: ({
+    providerId,
+    credentialActions,
+  }: {
+    providerId?: string;
+    credentialActions?: ReactNode;
+  }) => {
+    connection.providerIds.push(providerId);
+    return (
+      <section aria-label="Provider connection" data-provider={providerId}>
+        {credentialActions}
+      </section>
+    );
+  },
+}));
 const reload = vi.fn(async (): Promise<void> => undefined),
   loadModelsForProvider = vi.fn(async () => []);
 vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
@@ -77,10 +95,25 @@ const click = (label: string) =>
   act(async () => {
     button(label).click();
   });
+/** The control a visible label names, whether the label wraps it or points at it. */
+function control(label: string) {
+  const node = [...container.querySelectorAll("label")].find(
+    (item) =>
+      [...item.childNodes]
+        .filter((child) => !(child instanceof Element && child.getAttribute("aria-hidden") === "true"))
+        .map((child) => child.textContent)
+        .join("")
+        .trim() === label || item.querySelector("span")?.textContent === label,
+  );
+  if (!node) return null;
+  return (node.htmlFor ? document.getElementById(node.htmlFor) : node.querySelector("input,textarea,select")) as
+    | HTMLInputElement
+    | HTMLTextAreaElement
+    | HTMLSelectElement
+    | null;
+}
 async function fill(label: string, value: string) {
-  const field = [...container.querySelectorAll("label")]
-    .find((node) => node.querySelector("span")?.textContent === label)
-    ?.querySelector("input,textarea") as HTMLInputElement | HTMLTextAreaElement;
+  const field = control(label) as HTMLInputElement | HTMLTextAreaElement;
   if (!field) throw new Error(`Missing field ${label}`);
   await act(async () => {
     const prototype = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -168,9 +201,7 @@ describe("native provider owner composition", () => {
     await fill("Provider label", "New fixture");
     await fill("Provider base URL", "http://127.0.0.1:9999/v1");
     await fill("API key environment variable", "NEW_FIXTURE_KEY");
-    const storage = [...container.querySelectorAll("label")]
-      .find((node) => node.querySelector("span")?.textContent === "New credential storage")!
-      .querySelector("select")!;
+    const storage = control("New credential storage") as HTMLSelectElement;
     await act(async () => {
       storage.value = "env";
       storage.dispatchEvent(new Event("change", { bubbles: true }));
@@ -202,12 +233,58 @@ describe("native provider owner composition", () => {
     expect(button("Review provider profile").disabled).toBe(true);
     expect(api.createChangePlan).toHaveBeenCalledOnce();
   });
-  it("names the provider selector independently of its option text", async () => {
+  it("offers one provider list whose selection drives the profile, connection and credential editor", async () => {
+    connection.providerIds.length = 0;
     await render();
-    const picker = container.querySelector<HTMLSelectElement>("select[aria-labelledby]")!;
-    const label = document.getElementById(picker.getAttribute("aria-labelledby")!);
-    expect(label?.textContent).toBe("Manage provider");
-    expect(picker.selectedOptions[0]?.textContent).toBe("Fixture");
+    expect(container.querySelector("legend")?.textContent).toBe("Provider");
+    const radio = container.querySelector<HTMLInputElement>("input[type=radio][value=fixture]")!;
+    expect(radio.checked).toBe(true);
+    expect(document.getElementById(radio.getAttribute("aria-labelledby")!)?.textContent).toBe("Fixture");
+    // One selection: no second provider picker anywhere on the page.
+    expect(container.querySelectorAll("select")).toHaveLength(0);
+    expect(container.querySelector("[aria-label='Provider connection']")?.getAttribute("data-provider")).toBe(
+      "fixture",
+    );
+    expect(connection.providerIds.every((id) => id === "fixture")).toBe(true);
+    expect(container.querySelector("[aria-label='Provider connection']")?.textContent).toContain(
+      "Remove saved API credential",
+    );
+  });
+  it("says why blocked provider actions are disabled and ties each reason to its control", async () => {
+    api.fetchProviderSecretStatus.mockResolvedValue({ providerId: "fixture", hasSecret: false, source: "none" });
+    await render();
+    const remove = button("Remove saved API credential");
+    expect(remove.disabled).toBe(true);
+    const reason = document.getElementById(remove.getAttribute("aria-describedby")!);
+    expect(reason?.textContent).toBe("There is no saved API credential to remove.");
+    expect(button("Add provider profile").disabled).toBe(false);
+    expect(button("Add provider profile").hasAttribute("aria-describedby")).toBe(false);
+  });
+  it("leaves the endpoint out of the existing-profile editor so Connection is its one editor", async () => {
+    await render();
+    await click("Edit provider profile");
+    expect(control("Provider base URL")).toBeNull();
+    expect(container.textContent).toContain("under Provider connection on the provider page");
+    await click("Close profile editor");
+    await click("Add provider profile");
+    expect(control("Provider base URL")).not.toBeNull();
+  });
+  it("validates the new profile URL on blur and ties the error to the field", async () => {
+    await render();
+    await click("Add provider profile");
+    await fill("Provider base URL", "not a url");
+    const input = control("Provider base URL") as HTMLInputElement;
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    await act(async () => {
+      input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(document.getElementById(input.getAttribute("aria-describedby")!.split(" ")[0]!)?.textContent).toContain(
+      "Enter a full URL",
+    );
+    expect(input.getAttribute("aria-required")).toBe("true");
+    await fill("Provider base URL", "https://example.test/v1");
+    expect(input.getAttribute("aria-invalid")).toBeNull();
   });
   it("reveals the pending owner step after a profile submission without claiming it saved", async () => {
     const requiredAction = {
@@ -256,9 +333,7 @@ describe("native provider owner composition", () => {
   it("binds bearer header and header scheme fields to the shared transport contract", async () => {
     await render();
     await click("Edit provider profile");
-    const select = [...container.querySelectorAll("label")]
-      .find((node) => node.querySelector("span")?.textContent === "Request auth mode")!
-      .querySelector("select")!;
+    const select = control("Request auth mode") as HTMLSelectElement;
     await act(async () => {
       select.value = "bearer";
       select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -268,9 +343,7 @@ describe("native provider owner composition", () => {
     await click("Review provider profile");
     expect(container.textContent).toContain("X-Fixture-Bearer");
     await click("Keep editing");
-    const next = [...container.querySelectorAll("label")]
-      .find((node) => node.querySelector("span")?.textContent === "Request auth mode")!
-      .querySelector("select")!;
+    const next = control("Request auth mode") as HTMLSelectElement;
     await act(async () => {
       next.value = "header";
       next.dispatchEvent(new Event("change", { bubbles: true }));
@@ -314,7 +387,7 @@ describe("native provider owner composition", () => {
     expect(container.textContent).toContain("This review is out of date");
     expect(button("Apply reviewed provider profile").disabled).toBe(true);
     await click("Keep editing");
-    expect(container.querySelector<HTMLInputElement>('input[aria-labelledby$="-label"]')?.value).toBe("Retained");
+    expect((control("Provider label") as HTMLInputElement | null)?.value).toBe("Retained");
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
   it("reviews transport separately and uses only its existing dedicated owner", async () => {

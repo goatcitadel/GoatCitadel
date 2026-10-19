@@ -13,8 +13,12 @@ import {
 } from "../../../features/native-routes/settings/helpers/permission-helpers";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { Field } from "../../ui/Field";
+import { cockpitInputClass } from "../../ui/input-class";
 import { ToolGrantDetails } from "./ToolGrantDetails";
 import { ToolGrantFields } from "./ToolGrantFields";
+import { RulesPrecedenceLink } from "./RulesPrecedence";
+import { describeToolGrant, TOOL_GRANT_SCOPE_LABELS } from "./tool-grant-labels";
 
 const PAGE_SIZE = 30;
 export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
@@ -90,6 +94,7 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
           <p className="mt-1 text-xs text-fg-muted">
             Hard denies, approval gates, profiles, auth, host and path boundaries remain authoritative.
           </p>
+          <RulesPrecedenceLink />
         </div>
         <Button size="sm" disabled={owner.isFetching || actions.pending} onClick={() => void owner.refetch()}>
           Refresh tool records
@@ -123,34 +128,38 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
         </p>
       ) : null}
       <div className="space-y-3">
-        <label className="block text-sm text-fg-secondary">
-          Find tool
-          <input
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-raised px-3 text-fg"
-          />
-        </label>
-        <label className="block text-sm text-fg-secondary">
-          Match a catalog tool
-          <select
-            value={selectedTool}
-            disabled={!toolsReady || actions.pending}
-            onChange={(event) => {
-              setSelectedTool(event.target.value);
-              setLimit(PAGE_SIZE);
-            }}
-            className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-raised px-3 text-fg"
-          >
-            <option value="">All recorded grants / custom pattern</option>
-            {tools.map((item) => (
-              <option key={item.toolName} value={item.toolName}>
-                {item.toolName}
-              </option>
-            ))}
-          </select>
-        </label>
+        <Field label="Find tool">
+          {(fieldProps) => (
+            <input
+              {...fieldProps}
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              className={cockpitInputClass}
+            />
+          )}
+        </Field>
+        <Field label="Match a catalog tool">
+          {(fieldProps) => (
+            <select
+              {...fieldProps}
+              value={selectedTool}
+              disabled={!toolsReady || actions.pending}
+              onChange={(event) => {
+                setSelectedTool(event.target.value);
+                setLimit(PAGE_SIZE);
+              }}
+              className={cockpitInputClass}
+            >
+              <option value="">All recorded grants / custom pattern</option>
+              {tools.map((item) => (
+                <option key={item.toolName} value={item.toolName}>
+                  {item.toolName}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
         {selectedTool && toolsReady ? (
           <p className="text-sm text-fg-secondary">
             {owner.data!.tools.find((item) => item.toolName === selectedTool)?.description ??
@@ -181,18 +190,20 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
       </div>
       <div className="space-y-3 border-t border-line-subtle pt-3">
         <h4 className="text-sm font-semibold text-fg">Recorded grants</h4>
-        <label className="block text-sm text-fg-secondary">
-          Find recorded grant
-          <input
-            type="search"
-            value={grantSearch}
-            onChange={(event) => {
-              setGrantSearch(event.target.value);
-              setLimit(PAGE_SIZE);
-            }}
-            className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-raised px-3 text-fg"
-          />
-        </label>
+        <Field label="Find recorded grant">
+          {(fieldProps) => (
+            <input
+              {...fieldProps}
+              type="search"
+              value={grantSearch}
+              onChange={(event) => {
+                setGrantSearch(event.target.value);
+                setLimit(PAGE_SIZE);
+              }}
+              className={cockpitInputClass}
+            />
+          )}
+        </Field>
         {grantsReady && !grants.length ? (
           <p className="text-sm text-fg-muted">No recorded grants match this view.</p>
         ) : null}
@@ -204,13 +215,12 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
         <ul className="space-y-2">
           {grants.slice(0, limit).map((grant) => {
             const attempt = actions.attemptFor(`revoke:${grant.grantId}`);
+            const name = describeToolGrant(grant);
             return (
               <li key={grant.grantId} className="min-w-0 space-y-2 rounded-md border border-line bg-raised p-3">
-                <p className="break-words text-sm font-semibold text-fg">
-                  {grant.toolPattern} · {grant.decision}
-                </p>
+                <p className="break-words text-sm font-semibold text-fg">{name}</p>
                 <p className="break-words text-xs text-fg-secondary">
-                  {grant.scope} · {grant.scopeRef} · {describeToolGrantAvailability(grant)}
+                  {TOOL_GRANT_SCOPE_LABELS[grant.scope] ?? "Unknown scope"} · {describeToolGrantAvailability(grant)}
                 </p>
                 {attempt?.phase === "uncertain" ? (
                   <p role="status" className="text-xs text-status-waiting">
@@ -218,17 +228,13 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
                   </p>
                 ) : null}
                 <div className="flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    aria-label={`Inspect grant: ${grant.toolPattern} · ${grant.decision} · ${grant.scope}`}
-                    onClick={() => setDetail(grant)}
-                  >
+                  <Button size="sm" aria-label={`Inspect grant: ${name}`} onClick={() => setDetail(grant)}>
                     Inspect grant
                   </Button>
                   <Button
                     size="sm"
                     variant="danger"
-                    aria-label={`Revoke grant: ${grant.toolPattern} · ${grant.decision} · ${grant.scope}`}
+                    aria-label={`Revoke grant: ${name}`}
                     disabled={Boolean(grant.revokedAt || attempt || owner.isFetching || review)}
                     onClick={() => actions.requestRevoke(grant)}
                   >

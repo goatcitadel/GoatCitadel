@@ -41,6 +41,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/access-scope", () => ({
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({
     theme: "dark",
+    themePreference: "dark",
     density: "comfortable",
     activeWorkspaceId: identity.workspace,
     activeCitadelId: identity.citadel,

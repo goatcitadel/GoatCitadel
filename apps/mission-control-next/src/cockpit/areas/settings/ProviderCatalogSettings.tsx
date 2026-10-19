@@ -6,6 +6,8 @@ import {
   type ProviderModelCatalogOption,
 } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { Button } from "../../ui/Button";
+import { Field } from "../../ui/Field";
+import { cockpitInputClass } from "../../ui/input-class";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { ProviderConnectionEvidence } from "./ProviderConnectionEvidence";
@@ -125,26 +127,30 @@ export function ProviderCatalogSettings() {
           ) : null}
           {provider && evidence ? (
             <>
-              <label className="mt-4 block text-sm font-medium text-fg">
-                Inspect provider
-                <select
-                  value={provider.providerId}
-                  disabled={catalog.loading || refreshingId !== null}
-                  onChange={(event) => {
-                    setSelectedId(event.target.value);
-                    setQuery("");
-                    setPage(0);
-                  }}
-                  className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-2 text-fg"
-                >
-                  {catalog.providers.map((item) => (
-                    <option key={item.providerId} value={item.providerId}>
-                      {item.label}
-                      {item.providerId === catalog.config?.activeProviderId ? " (Chat default)" : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="mt-4">
+                <Field label="Inspect provider">
+                  {(fieldProps) => (
+                    <select
+                      {...fieldProps}
+                      value={provider.providerId}
+                      disabled={catalog.loading || refreshingId !== null}
+                      onChange={(event) => {
+                        setSelectedId(event.target.value);
+                        setQuery("");
+                        setPage(0);
+                      }}
+                      className={cockpitInputClass}
+                    >
+                      {catalog.providers.map((item) => (
+                        <option key={item.providerId} value={item.providerId}>
+                          {item.label}
+                          {item.providerId === catalog.config?.activeProviderId ? " (Chat default)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </Field>
+              </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <StatusBadge status={presentProviderReadiness(provider)} />
                 <span className="break-all text-xs text-fg-muted">{provider.sanitizedEndpointIdentity}</span>
@@ -202,19 +208,23 @@ export function ProviderCatalogSettings() {
                     </p>
                   </div>
                 ) : null}
-                <label className="mt-3 block text-sm font-medium text-fg">
-                  Filter models
-                  <input
-                    type="search"
-                    value={query}
-                    onChange={(event) => {
-                      setQuery(event.target.value);
-                      setPage(0);
-                    }}
-                    className="mt-1 block min-h-11 w-full rounded-md border border-line-control bg-canvas px-3 text-fg"
-                    placeholder="Find a model"
-                  />
-                </label>
+                <div className="mt-3">
+                  <Field label="Filter models">
+                    {(fieldProps) => (
+                      <input
+                        {...fieldProps}
+                        type="search"
+                        value={query}
+                        onChange={(event) => {
+                          setQuery(event.target.value);
+                          setPage(0);
+                        }}
+                        className={cockpitInputClass}
+                        placeholder="Find a model"
+                      />
+                    )}
+                  </Field>
+                </div>
                 {visibleModels.length ? (
                   <ul aria-label="Discovered models" className="mt-3 divide-y divide-line-subtle">
                     {visibleModels.map((model) => (
