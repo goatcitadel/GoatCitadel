@@ -7,6 +7,7 @@ import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hoo
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
 import {
   clampGuidedThinkingLevel,
+  GUIDED_CATALOG_LOADING_READINESS,
   GUIDED_THINKING_LEVELS,
   guidedConnectionHint,
   localRuntimeSetupGuide,
@@ -106,9 +107,14 @@ export function useGuidedModelSetup({
     catalog.config?.defaultThinkingLevel ?? "standard",
     supportedThinkingLevels,
   );
-  const readiness = resolveGuidedProviderReadiness(
-    selectedProvider && recheckingEndpoint ? { ...selectedProvider, modelProbeState: "not_checked" } : selectedProvider,
-  );
+  const readiness =
+    !selectedProvider && catalog.loading
+      ? GUIDED_CATALOG_LOADING_READINESS
+      : resolveGuidedProviderReadiness(
+          selectedProvider && recheckingEndpoint
+            ? { ...selectedProvider, modelProbeState: "not_checked" }
+            : selectedProvider,
+        );
   const providerReady = readiness.state === "ready";
   // Local runtimes need no credential: the next step is re-checking the live endpoint, not a credential plan.
   const verifiesLocalEndpoint =
@@ -307,6 +313,7 @@ export function useGuidedModelSetup({
         : { kind: "connect" as const, run: createProviderPlan };
   const primaryDisabled =
     busy ||
+    catalog.loading ||
     !providerId ||
     (providerReady && !model) ||
     (!providerReady && verifiesLocalEndpoint && readiness.state === "checking");

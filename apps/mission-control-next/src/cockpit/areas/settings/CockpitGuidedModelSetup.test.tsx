@@ -232,6 +232,28 @@ describe("shared guided model setup", () => {
     await act(async () => button("Connect provider")!.click());
     expect(mocks.create).not.toHaveBeenCalled();
   });
+  it("switches from the Claude Code token route to the CLI provider in one click", async () => {
+    catalog("missing", {
+      providerId: "claude-code",
+      label: "Claude Code (Claude subscription)",
+      authMode: "claude-code-oauth",
+    });
+    onboarding.settings.llm.activeProviderId = "claude-code";
+    await mount();
+    await act(async () => button("Use Claude Code CLI instead")!.click());
+    const provider = container.querySelector<HTMLSelectElement>("select")!;
+    expect(provider.value).toBe("claude-code-cli");
+    expect(button("Add Claude Code CLI")).toBeDefined();
+  });
+  it("shows loading instead of an unavailable saved provider while the catalog loads", async () => {
+    catalog("ready");
+    mocks.catalog.mockReturnValue({ ...mocks.catalog(), providers: [], loading: true });
+    await mount();
+    const provider = container.querySelector<HTMLSelectElement>("select")!;
+    expect(provider.textContent).toContain("Loading providers…");
+    expect(provider.textContent).not.toContain("unavailable");
+    expect(container.textContent).not.toContain("Not chosen");
+  });
   it("confirms a changed model through an installation default plan and shows the result", async () => {
     catalog("ready");
     await mount();

@@ -32,6 +32,7 @@ import { NativeButton } from "../../primitives";
 import { useOnboardingCompletion } from "../use-onboarding-completion";
 import {
   clampGuidedThinkingLevel,
+  GUIDED_CATALOG_LOADING_READINESS,
   GUIDED_THINKING_LEVELS,
   guidedConnectionHint,
   localRuntimeSetupGuide,
@@ -157,9 +158,14 @@ export function GuidedModelSetup({
   const effortLimited = supportedThinkingLevels.length < GUIDED_THINKING_LEVELS.length;
   const localGuide = localRuntimeSetupGuide(selectedProvider, model);
   const [recheckingEndpoint, setRecheckingEndpoint] = useState(false);
-  const providerReadiness = resolveGuidedProviderReadiness(
-    selectedProvider && recheckingEndpoint ? { ...selectedProvider, modelProbeState: "not_checked" } : selectedProvider,
-  );
+  const providerReadiness =
+    !selectedProvider && catalog.loading
+      ? GUIDED_CATALOG_LOADING_READINESS
+      : resolveGuidedProviderReadiness(
+          selectedProvider && recheckingEndpoint
+            ? { ...selectedProvider, modelProbeState: "not_checked" }
+            : selectedProvider,
+        );
   const providerReady = providerReadiness.state === "ready";
   // Local runtimes need no credential: their readiness comes from the live
   // endpoint probe, so the next step is re-checking it, not a credential plan.
@@ -167,6 +173,10 @@ export function GuidedModelSetup({
     selectedProvider?.localCostPosture === "zero_cost_local_runtime" && providerReadiness.state !== "needs_setup";
   // Connection guidance only: once the provider is ready there is no Connect action to point at.
   const connectionHint = providerReady ? null : guidedConnectionHint(selectedProvider);
+  // Offer the better-supported provider as a one-click switch, only when the list has it.
+  const alternative = catalogProviders.some((provider) => provider.providerId === connectionHint?.alternative?.providerId)
+    ? connectionHint?.alternative
+    : undefined;
   // Shown beside the provider hint, never replaced by it.
   // The local CLI's login state is already described in plain words by its readiness step.
   const connectionDiagnostic =
@@ -459,7 +469,9 @@ export function GuidedModelSetup({
               </option>
             ) : null}
             {providerId && !catalogProviders.some((provider) => provider.providerId === providerId) ? (
-              <option value={providerId}>{providerId} · unavailable</option>
+              <option value={providerId}>
+                {catalog.loading ? "Loading providers…" : `${providerId} · unavailable`}
+              </option>
             ) : null}
             {catalogProviders.map((provider) => (
               <option key={provider.providerId} value={provider.providerId}>
@@ -553,6 +565,7 @@ export function GuidedModelSetup({
           variant="default"
           disabled={
             busy ||
+            catalog.loading ||
             (defaultPlanCompleted && !onEnterChat && (completion.locked || !completion.ready)) ||
             !providerId ||
             (providerReady && !model) ||
@@ -579,6 +592,11 @@ export function GuidedModelSetup({
                   : "Check connection"
                 : (connectionHint?.connectLabel ?? "Connect provider")}
         </NativeButton>
+        {alternative ? (
+          <NativeButton variant="secondary" disabled={busy} onClick={() => setProviderId(alternative.providerId)}>
+            {alternative.label}
+          </NativeButton>
+        ) : null}
       </SettingsButtonRow>
       {actionError && !dialogPlan ? <p role="alert">{actionError}</p> : null}
       {completion.notice || completion.attempt ? (
