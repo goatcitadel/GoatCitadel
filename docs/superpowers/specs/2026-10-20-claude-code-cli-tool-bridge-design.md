@@ -1,6 +1,6 @@
 # Claude Code CLI tool bridge: design
 
-Status: draft for operator review, 2026-10-20. Nothing is implemented. The decisions marked **Operator decision** are open and listed again at the end.
+Status: approved by the operator on 2026-10-20, with all four **Operator decisions** settled (listed at the end). Nothing is implemented yet.
 
 Builds on the `claude-code-cli` provider (`docs/superpowers/specs/2026-10-19-claude-code-cli-provider-design.md`, PRs #448–#451) and the open PR #455 (`fileOutputNotice` and inline answers for text-only providers). **Implementation stacks on #455:** it starts after #455 merges, because the runner and preflight read `toolCalling` only through #455's `describeProviderToolSupport`. On `main` today nothing in the runner reads it.
 
@@ -95,7 +95,7 @@ Here the MCP server really executes. The stub, or a loopback HTTP endpoint, re-e
 - Turn budgets would depend on the hidden `--max-turns` flag or on counting inside the MCP handler.
 - It needs a credential. The design would be a 256-bit random token per CLI run, stored hashed in memory, bound to session, turn, durable run, capability snapshot id, manifest hash and expiry, valid only until that process exits, and passed in a run-dir `mcp.json` (mode 0600), never in argv. It would extend the existing server-mode prior art (`routes/mcp-server-mode.ts`, `bin/goatcitadel.mjs` `runMcpServerModeStdio`).
 
-Option L could be a later optimization after step mode is proven, if latency turns out to matter. **Operator decision 1:** step mode for v1.
+Option L could be a later optimization after step mode is proven, if latency turns out to matter. **Operator decision 1 (decided):** step mode for v1.
 
 ## Step mode in detail
 
@@ -138,7 +138,7 @@ These are today's flags, with three changes:
 
 A step with no tools, or with `tool_choice: "none"`, or with the bridge disabled, uses exactly today's flags, including `--safe-mode`.
 
-**Operator decision 3:** whether to accept losing `--safe-mode` on tool-bearing steps. These layers replace it:
+**Operator decision 3 (decided: accepted):** `--safe-mode` is dropped on tool-bearing steps. These layers replace it:
 
 - `--tools ""` (no built-in tools)
 - `--strict-mcp-config` (only our server)
@@ -211,7 +211,7 @@ Malformed `input` (not an object) is passed through as the arguments string. The
 ### Capability truth and the #455 notice
 
 - `llm-service.ts` currently forces every capability to `false` for `apiStyle === "claude-code-cli"` (around :6655). With the bridge, `toolCalling` becomes `true` when the bridge is enabled. Everything else stays `false`. The template's static `toolCalling: false` is replaced by this one computed value.
-- **Bridge enabled** means a Gateway feature flag, `claudeCliToolBridgeEnabled` (config, env `GOATCITADEL_FEATURE_CLAUDE_CLI_TOOL_BRIDGE_ENABLED`, and the dashboard feature patch). It follows the pattern of `computerUseGuardrailsV1Enabled`. **Operator decision 2:** the default value.
+- **Bridge enabled** means a Gateway feature flag, `claudeCliToolBridgeEnabled` (config, env `GOATCITADEL_FEATURE_CLAUDE_CLI_TOOL_BRIDGE_ENABLED`, and the dashboard feature patch). It follows the pattern of `computerUseGuardrailsV1Enabled`. **Operator decision 2 (decided):** it defaults to `false` until the live proof passes.
 - #455's `describeProviderToolSupport` reads the same computed capability. When the bridge is on:
   - route preflight shows no `fileOutputNotice` for this provider;
   - the runner skips the text-only instruction and inline-answer note;
@@ -285,12 +285,12 @@ New reason codes: `claude_cli_bridge_unavailable` and `claude_cli_bridge_mismatc
 - The exact transcript labels and addendum wording.
 - How the stub path is resolved in dev, `dist`, and the packaged desktop bundle. The packaged layout must be tested.
 
-## Operator decisions (open)
+## Operator decisions (decided 2026-10-20)
 
-1. **Loop location:** step mode (recommended), or CLI loop mode.
-2. **Default for `claudeCliToolBridgeEnabled`:** on as soon as it ships, or off until the live proof passes and then flipped on in a follow-up.
-3. **`--safe-mode`:** accept dropping it on tool-bearing steps, with the replacement layers and the init tripwire.
-4. **Cost:** accept one CLI process start and one transcript re-send per tool step, counted against the subscription limits. That is up to 8 steps for a typical Chat turn and up to 120 for a sustained-coding turn. The alternative is to leave sustained-coding turns unbridged in v1.
+1. **Loop location:** step mode for v1. CLI loop mode is not built.
+2. **Default for `claudeCliToolBridgeEnabled`:** `false` until the live proof passes. Turning it on by default is a follow-up PR.
+3. **`--safe-mode`:** dropped on tool-bearing steps, with the replacement layers and the init tripwire. Unbridged steps keep it.
+4. **Cost:** accepted. Each tool step costs one CLI process start and one transcript re-send, counted against the subscription limits. That includes sustained-coding turns (up to 120 tool runs), which are bridged like every other Chat mode.
 
 ## My calls, for checking while reading
 

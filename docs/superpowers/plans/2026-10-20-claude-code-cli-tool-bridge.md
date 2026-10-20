@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** Blocked until the operator approves the spec and its four open decisions. This plan assumes decision 1 is **step mode**. If CLI loop mode is chosen instead, the plan has to be rewritten.
+**Status:** The spec was approved on 2026-10-20 (step mode, flag off by default, `--safe-mode` dropped on tool steps, per-step cost accepted including sustained coding). Implementation starts after #455 merges.
 
 **Goal:** Let the `claude-code-cli` provider call GoatCitadel tools. Each `claude -p` run is one model step. The CLI sees tools through an inert stdio MCP stub, and the Gateway runner executes every call.
 
@@ -26,7 +26,7 @@
 - **No recovery retry:** `claude_cli_bridge_unavailable`, `claude_cli_bridge_mismatch`, `claude_cli_tool_use_blocked` and `claude_cli_hook_blocked` are never retried by `shouldRetryToolProtocolError`.
 - **Stub:** imports only `node:fs` and `node:process`. It never answers `tools/call`. It answers unknown requests with JSON-RPC error `-32601`. Stdin lines are capped at 1 MiB, and it exits on stdin EOF.
 - **New reason codes:** `claude_cli_bridge_unavailable` and `claude_cli_bridge_mismatch`.
-- **Feature flag:** `claudeCliToolBridgeEnabled`, with env `GOATCITADEL_FEATURE_CLAUDE_CLI_TOOL_BRIDGE_ENABLED`. Its default is operator decision 2 and is written as `CLAUDE_CLI_TOOL_BRIDGE_DEFAULT`.
+- **Feature flag:** `claudeCliToolBridgeEnabled`, with env `GOATCITADEL_FEATURE_CLAUDE_CLI_TOOL_BRIDGE_ENABLED`. It defaults to `false` (operator decision 2). Turning it on by default is a separate follow-up PR after the live proof.
 - **Capability:** for `apiStyle === "claude-code-cli"`, `toolCalling` equals the flag. Every other capability stays `false`.
 - **Repo rules:**
   - vitest runs with `--maxWorkers=2`, at low priority, one heavy job at a time;
