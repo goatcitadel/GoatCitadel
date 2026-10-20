@@ -7,6 +7,7 @@ import {
   type RoutingDecisionSnapshot,
   type RoutingPreflightRequest,
   type RoutingPreflightResult,
+  type RoutingPreflightFileOutputNotice,
   type ChatSessionPrefsRecord,
   type ChatProviderFallbackPreference,
   type RoutingWardReasonCode,
@@ -17,6 +18,7 @@ import type { LlmService } from "./llm-service.js";
 import { isLocalChatProviderUrl } from "./chat-provider-fallback-authority.js";
 import { splitChatPrefsPatch } from "./chat-session-utils.js";
 import { enforceRouteLocalWard, type RouteLocalWardDependencies } from "./chat-route-local-ward.js";
+import { detectDocumentArtifactIntent, detectPresentationArtifactIntent } from "./chat-artifact-intent.js";
 
 type LlmRuntimeConfig = ReturnType<LlmService["getRuntimeConfig"]>;
 type RuntimeProvider = LlmRuntimeConfig["providers"][number];
@@ -67,6 +69,8 @@ export interface ResolvedChatRouteDescriptor {
   providerFallback?: ChatProviderFallbackPreference;
   wardReasonCode?: RoutingWardReasonCode;
   wardCitadelId?: string;
+  /** Set only when the route's provider cannot call tools: configured, credentialed providers that can. */
+  toolCapableProviders?: Array<{ providerId: string; label: string }>;
 }
 
 function normalizeRequestedModel(providerId: string, model: string): string {
@@ -339,6 +343,14 @@ async function resolveUnwardedChatRouteDescriptor(
     blockedReason: effectiveModelResolution.blockedReason,
     degradedReason: undefined,
     runtimeProvider: requestedProvider,
+    ...(requestedProvider.capabilities?.toolCalling === false
+      ? {
+          toolCapableProviders: runtime.providers
+            .filter((candidate) => candidate.capabilities?.toolCalling !== false && candidate.hasApiKey)
+            .slice(0, 3)
+            .map((candidate) => ({ providerId: candidate.providerId, label: candidate.label })),
+        }
+      : {}),
     fallbackTarget: providerFallback
       ? { providerId: providerFallback.providerId, model: providerFallback.model }
       : undefined,
@@ -358,21 +370,22 @@ export async function preflightChatRoute(
   const descriptor = await resolveChatRouteDescriptor(deps, sessionId, input);
   let runtimeReachability: RoutingPreflightResult["runtimeReachability"] = "not_checked";
   let blockedReason = descriptor.blockedReason;
+  const runtimeProvider = descriptor.runtimeProvider;
 
-  if (!blockedReason && descriptor.runtimeClass === "local" && descriptor.runtimeProvider?.providerId) {
+  if (!blockedReason && descriptor.runtimeClass === "local" && runtimeProvider?.providerId) {
     try {
-      const models = await deps.listLlmModels?.(descriptor.runtimeProvider.providerId);
+      const models = await deps.listLlmModels?.(runtimeProvider.providerId);
       if (models) {
         runtimeReachability = models.length > 0 ? "reachable" : "models_unavailable";
         if (models.length === 0) {
-          blockedReason = `No models are currently available for ${descriptor.runtimeProvider.label}.`;
+          blockedReason = `No models are currently available for ${runtimeProvider.label}.`;
         }
       }
     } catch {
       runtimeReachability = "unreachable";
-      blockedReason = `The ${descriptor.runtimeProvider.label} runtime could not be reached.`;
+      blockedReason = `The ${runtimeProvider.label} runtime could not be reached.`;
     }
-  } else if (!blockedReason && descriptor.runtimeClass === "cloud" && descriptor.runtimeProvider?.hasApiKey) {
+  } else if (!blockedReason && descriptor.runtimeClass === "cloud" && runtimeProvider?.hasApiKey) {
     runtimeReachability = "not_checked";
   }
 
@@ -393,10 +406,30 @@ export async function preflightChatRoute(
     wardReasonCode: descriptor.wardReasonCode,
     wardCitadelId: descriptor.wardCitadelId,
   } satisfies Omit<RoutingPreflightResult, "decision">;
+  const fileOutputNotice = blockedReason
+    ? undefined
+    : describeFileOutputNotice(runtimeProvider, descriptor.toolCapableProviders, input.content);
 
   return {
     ...resultWithoutDecision,
+    // Display-only, so it stays out of the decision snapshot and its fingerprint.
+    ...(fileOutputNotice ? { fileOutputNotice } : {}),
     decision: createRoutingDecisionSnapshot(input, resultWithoutDecision),
+  };
+}
+
+/** A draft that asks for a file, routed to a provider that cannot call tools (the local Claude Code CLI). */
+function describeFileOutputNotice(
+  provider: RuntimeProvider | undefined,
+  toolCapableProviders: ResolvedChatRouteDescriptor["toolCapableProviders"],
+  content: string | undefined,
+): RoutingPreflightFileOutputNotice | undefined {
+  if (!provider || provider.capabilities?.toolCalling !== false || !content) return undefined;
+  if (!detectDocumentArtifactIntent(content) && !detectPresentationArtifactIntent(content)) return undefined;
+  return {
+    providerLabel: provider.label,
+    message: `${provider.label} cannot use GoatCitadel tools, so it cannot create a PDF, document, or deck. It will answer in chat instead. Choose a model from a provider that supports tools to get a file.`,
+    alternatives: toolCapableProviders ?? [],
   };
 }
 
