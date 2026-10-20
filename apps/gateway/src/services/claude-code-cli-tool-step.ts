@@ -1,6 +1,11 @@
-import type { ClaudeCliReasonCode } from "./claude-code-cli-process.js";
+import {
+  buildClaudeCliChunk,
+  failClaudeCliStep as fail,
+  type ClaudeCliChunkIdentity,
+} from "./claude-code-cli-output.js";
 import type { ClaudeCliUsage } from "./claude-code-cli-stream.js";
 import type { ClaudeCliToolManifest } from "./claude-code-cli-tool-bridge.js";
+import { normalizeAnthropicUsage } from "./llm-provider-anthropic.js";
 
 /**
  * Bridged ("step mode") handling for the Claude Code CLI stream mapper: the
@@ -10,7 +15,8 @@ import type { ClaudeCliToolManifest } from "./claude-code-cli-tool-bridge.js";
  *
  * This module has no runtime imports from the stream or bridge modules (the
  * bridge imports the stream module), so the server name lives here and the
- * bridge re-exports it.
+ * bridge re-exports it. Chunk shape and typed failures come from the shared
+ * leaf module `claude-code-cli-output`.
  */
 
 export const CLAUDE_CLI_MCP_SERVER_NAME = "goatcitadel";
@@ -19,13 +25,6 @@ export const CLAUDE_CLI_MCP_TOOL_PREFIX = "mcp__goatcitadel__";
 export interface ClaudeCliToolStep {
   chunks: Record<string, unknown>[];
   usage?: ClaudeCliUsage;
-}
-
-export interface ClaudeCliToolStepDeps {
-  chunk: (delta: Record<string, unknown>, extra?: Record<string, unknown>) => Record<string, unknown>;
-  /** Throws the typed CLI error; `detail` is a fixed diagnostic phrase, never CLI-provided text. */
-  fail: (reasonCode: ClaudeCliReasonCode, detail?: string) => never;
-  normalizeUsage: (usage: Record<string, unknown>) => ClaudeCliUsage | undefined;
 }
 
 export interface ClaudeCliToolStepCollector {
@@ -46,9 +45,11 @@ interface StartedCall {
 
 export function createClaudeCliToolStepCollector(
   manifest: ClaudeCliToolManifest,
-  deps: ClaudeCliToolStepDeps,
+  /** The mapper's run identity, so this step's chunks match the rest of the run. */
+  identity: ClaudeCliChunkIdentity,
 ): ClaudeCliToolStepCollector {
-  const fail = (reasonCode: ClaudeCliReasonCode, detail?: string): never => deps.fail(reasonCode, detail);
+  const chunk = (delta: Record<string, unknown>, extra?: Record<string, unknown>) =>
+    buildClaudeCliChunk(identity, delta, extra);
   /** In `content_block_start` order, which is the order of the emitted tool_calls. */
   const calls: StartedCall[] = [];
   const argumentsById = new Map<string, string>();
@@ -72,8 +73,8 @@ export function createClaudeCliToolStepCollector(
 
   const onInit = (event: Record<string, unknown>): void => {
     if (sawInit) fail("claude_cli_bridge_mismatch", "the CLI reported a second init");
-    checkInitServers(event.mcp_servers, fail);
-    checkInitTools(event.tools, manifest, fail);
+    checkInitServers(event.mcp_servers);
+    checkInitTools(event.tools, manifest);
     sawInit = true;
   };
 
@@ -114,11 +115,11 @@ export function createClaudeCliToolStepCollector(
       return { index, id: call.id, type: "function", function: { name: call.modelName, arguments: args } };
     });
     const step = finalStep("tool_calls");
-    completed = { ...step, chunks: [deps.chunk({ tool_calls: toolCalls }), ...step.chunks] };
+    completed = { ...step, chunks: [chunk({ tool_calls: toolCalls }), ...step.chunks] };
   };
 
   const finalStep = (finishReason: string): ClaudeCliToolStep => ({
-    chunks: [{ ...deps.chunk({}, { finish_reason: finishReason }), ...(usage ? { usage } : {}) }],
+    chunks: [{ ...chunk({}, { finish_reason: finishReason }), ...(usage ? { usage } : {}) }],
     ...(usage ? { usage } : {}),
   });
 
@@ -137,7 +138,7 @@ export function createClaudeCliToolStepCollector(
       case "message_delta":
         requireInit();
         if (isRecord(inner.delta) && typeof inner.delta.stop_reason === "string") stopReason = inner.delta.stop_reason;
-        if (isRecord(inner.usage)) usage = deps.normalizeUsage(inner.usage);
+        if (isRecord(inner.usage)) usage = normalizeAnthropicUsage(inner.usage);
         return true;
       case "message_stop":
         onMessageStop();
@@ -173,7 +174,7 @@ export function createClaudeCliToolStepCollector(
   };
 }
 
-function checkInitServers(servers: unknown, fail: ClaudeCliToolStepDeps["fail"]): void {
+function checkInitServers(servers: unknown): void {
   const list = Array.isArray(servers) ? servers : [];
   const ours = list.filter((server) => isRecord(server) && server.name === CLAUDE_CLI_MCP_SERVER_NAME);
   if (list.length !== ours.length || ours.length > 1) {
@@ -183,7 +184,7 @@ function checkInitServers(servers: unknown, fail: ClaudeCliToolStepDeps["fail"])
   if (!isRecord(server) || server.status !== "connected") fail("claude_cli_bridge_unavailable");
 }
 
-function checkInitTools(tools: unknown, manifest: ClaudeCliToolManifest, fail: ClaudeCliToolStepDeps["fail"]): void {
+function checkInitTools(tools: unknown, manifest: ClaudeCliToolManifest): void {
   const expected = manifest.cliNameToModelName;
   const reported = Array.isArray(tools) ? tools : undefined;
   const exact =

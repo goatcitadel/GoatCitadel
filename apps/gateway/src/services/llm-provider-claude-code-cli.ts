@@ -68,11 +68,10 @@ export interface ClaudeCodeCliRuntimeOptions {
   toolBridge?: { stubPath?: () => string | undefined; nodePath?: string };
 }
 
-/** Step-mode tool bridge wiring. `enabled` is read per step, never cached. */
-export interface ClaudeCodeCliToolBridgeRuntime {
-  enabled(): boolean;
-  readonly nodePath: string;
-  stubPath(): string | undefined;
+/** Where one bridged step runs the MCP stub from; `stubPath` is undefined when the stub cannot be found. */
+export interface ClaudeCodeCliToolBridgeLaunch {
+  nodePath: string;
+  stubPath: string | undefined;
 }
 
 export interface ClaudeCodeCliRuntime {
@@ -81,7 +80,10 @@ export interface ClaudeCodeCliRuntime {
   readonly scratchRoot: string;
   readonly spawn?: ClaudeCliSpawn;
   readonly killTree?: (pid: number) => void;
-  readonly toolBridge?: ClaudeCodeCliToolBridgeRuntime;
+  /** Step-mode tool bridge flag; read per call, never cached. */
+  toolBridgeEnabled(): boolean;
+  /** This step's stub launch, or undefined when the flag is off. Resolved per step, never cached. */
+  resolveToolBridgeLaunch(): ClaudeCodeCliToolBridgeLaunch | undefined;
   resolveInvocation(): ClaudeCliInvocation;
 }
 
@@ -106,17 +108,18 @@ export function createClaudeCodeCliRuntime(
       cached = { at: Date.now(), invocation: resolved };
       return resolved;
     });
+  const toolBridgeEnabled = () => bridgeEnabled?.() === true;
+  const bridgeNodePath = options.toolBridge?.nodePath ?? process.execPath;
+  const resolveBridgeStubPath = options.toolBridge?.stubPath ?? (() => resolveClaudeCliStubPath(existsSync));
   const runtime: ClaudeCodeCliRuntime = {
     env: childEnv,
     scratchRoot: options.scratchRoot ?? path.join(os.tmpdir(), "goatcitadel-claude-cli"),
     spawn: options.spawn,
     killTree: options.killTree,
     resolveInvocation,
-    toolBridge: {
-      enabled: () => bridgeEnabled?.() === true,
-      nodePath: options.toolBridge?.nodePath ?? process.execPath,
-      stubPath: options.toolBridge?.stubPath ?? (() => resolveClaudeCliStubPath(existsSync)),
-    },
+    toolBridgeEnabled,
+    resolveToolBridgeLaunch: () =>
+      toolBridgeEnabled() ? { nodePath: bridgeNodePath, stubPath: resolveBridgeStubPath() } : undefined,
     readiness:
       options.readiness ??
       new ClaudeCodeCliReadiness({
@@ -143,6 +146,11 @@ export function createClaudeCodeCliRuntime(
       }),
   };
   return runtime;
+}
+
+/** Whether this runtime may bridge Gateway tools (the feature flag, read per call). */
+export function isClaudeCodeCliToolBridgeEnabled(runtime: ClaudeCodeCliRuntime | undefined): boolean {
+  return runtime?.toolBridgeEnabled() === true;
 }
 
 /** Last probed readiness without spawning anything. */
@@ -217,7 +225,7 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
     const invocation = runtime.resolveInvocation();
     buildClaudeCliArgs({ model }); // Validate the model id before any usage intent exists.
     // Resolved before the usage intent, so a missing stub leaves nothing to settle.
-    const bridge = prepareToolBridge(request, runtime.toolBridge);
+    const bridge = prepareToolBridge(request, () => runtime.resolveToolBridgeLaunch());
     const prompt = renderClaudeCliPrompt(request.messages, { bridged: bridge !== undefined });
 
     // Prepare local state before the usage intent exists, so a scratch-dir failure
@@ -348,16 +356,17 @@ interface PreparedToolBridge {
  */
 function prepareToolBridge(
   request: ChatCompletionRequest,
-  toolBridge: ClaudeCodeCliToolBridgeRuntime | undefined,
+  resolveLaunch: () => ClaudeCodeCliToolBridgeLaunch | undefined,
 ): PreparedToolBridge | undefined {
   if (!request.tools || request.tools.length === 0 || !isAutoToolChoice(request.tool_choice)) return undefined;
-  if (!toolBridge?.enabled()) return undefined;
+  const launch = resolveLaunch();
+  if (!launch) return undefined;
   const manifest = buildClaudeCliToolManifest(request.tools);
-  const stubPath = toolBridge.stubPath();
+  const { nodePath, stubPath } = launch;
   if (!stubPath) {
     throw new ClaudeCliError("claude_cli_bridge_unavailable", claudeCliUserMessage("claude_cli_bridge_unavailable"));
   }
-  return { manifest, files: { nodePath: toolBridge.nodePath, stubPath } };
+  return { manifest, files: { nodePath, stubPath } };
 }
 
 function isAutoToolChoice(choice: ChatCompletionRequest["tool_choice"]): boolean {
@@ -435,7 +444,7 @@ class ToolCallAccumulator {
 }
 
 async function assertCliReady(runtime: ClaudeCodeCliRuntime): Promise<void> {
-  const readiness = await runtime.readiness.check();
+  const readiness = await checkClaudeCodeCliReadiness(runtime);
   if (readiness.status === "ready") return;
   const reasonCode = isClaudeCliReasonCode(readiness.reasonCode) ? readiness.reasonCode : "claude_cli_failed";
   throw new ClaudeCliError(reasonCode, claudeCliUserMessage(reasonCode));

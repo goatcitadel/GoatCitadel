@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ChatCompletionMessage } from "@goatcitadel/contracts";
 import { ClaudeCliError, type ClaudeCliExit, type ClaudeCliReasonCode } from "./claude-code-cli-process.js";
+import { buildClaudeCliChunk, claudeCliUserMessage } from "./claude-code-cli-output.js";
 import type { ClaudeCliToolManifest } from "./claude-code-cli-tool-bridge.js";
 import {
   createClaudeCliToolStepCollector,
@@ -10,6 +11,7 @@ import {
 import { normalizeAnthropicUsage } from "./llm-provider-anthropic.js";
 
 export type { ClaudeCliToolStep } from "./claude-code-cli-tool-step.js";
+export { claudeCliUserMessage } from "./claude-code-cli-output.js";
 
 /**
  * Maps Claude Code CLI `--output-format stream-json` lines onto the
@@ -41,35 +43,6 @@ export interface ClaudeCliStreamMapperOptions {
   bridge?: ClaudeCliToolManifest;
 }
 
-const USER_FACING_MESSAGES: Record<ClaudeCliReasonCode, string> = {
-  claude_cli_missing: "Claude Code is not installed on this host. Install it, then retry",
-  claude_cli_logged_out: "The local Claude Code CLI is not logged in. Run `claude auth login`, then retry",
-  claude_cli_usage_limited: "Your Claude subscription usage limit was reached",
-  claude_cli_incompatible: "The installed Claude Code CLI does not support a required flag. Update Claude Code",
-  claude_cli_model_unavailable: "The selected model is not available through your Claude Code login",
-  claude_cli_tool_use_blocked: "The Claude Code CLI attempted a tool call, which GoatCitadel blocks on this provider",
-  claude_cli_timeout: "The Claude Code CLI timed out",
-  claude_cli_failed: "The Claude Code CLI run failed",
-  claude_cli_tools_unsupported:
-    "This request forces a specific tool call, which the Claude Code CLI provider cannot do. Ask without forcing a tool, or use another provider",
-  claude_cli_not_subscription_login:
-    "The local Claude Code CLI is signed in with an API key, not a Claude subscription login",
-  claude_cli_unsupported_shim:
-    "Only an unsupported Claude Code launcher was found. Install the native build or set GOATCITADEL_CLAUDE_CLI_PATH",
-  claude_cli_cancelled: "The Claude Code CLI run was cancelled",
-  claude_cli_hook_blocked:
-    "A Claude Code hook ran during this turn, which GoatCitadel blocks because hooks bypass its approvals",
-  claude_cli_managed_hooks_active:
-    "This Claude Code install has organization-managed hooks, which GoatCitadel cannot disable. Use another provider",
-  claude_cli_bridge_unavailable: "GoatCitadel could not connect its tools to the Claude Code CLI for this step",
-  claude_cli_bridge_mismatch:
-    "The Claude Code CLI reported tools or activity outside the GoatCitadel tool bridge, so GoatCitadel stopped the step",
-};
-
-export function claudeCliUserMessage(reasonCode: ClaudeCliReasonCode): string {
-  return USER_FACING_MESSAGES[reasonCode];
-}
-
 export function classifyClaudeCliFailure(text: string): ClaudeCliReasonCode {
   const normalized = text.toLowerCase();
   if (
@@ -93,32 +66,17 @@ export function createClaudeCliStreamMapper(
   model: string,
   options: ClaudeCliStreamMapperOptions = {},
 ): ClaudeCliStreamMapper {
-  const id = `chatcmpl-claude-cli-${randomUUID()}`;
-  const created = Math.floor(Date.now() / 1000);
+  const identity = { id: `chatcmpl-claude-cli-${randomUUID()}`, created: Math.floor(Date.now() / 1000), model };
   let sawDelta = false;
   let text = "";
   let result: Record<string, unknown> | undefined;
 
-  const chunk = (delta: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
-    id,
-    object: "chat.completion.chunk",
-    created,
-    model,
-    choices: [{ index: 0, delta, ...extra }],
-  });
+  const chunk = (delta: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+    buildClaudeCliChunk(identity, delta, extra);
   const blockToolUse = (): never => {
     throw new ClaudeCliError("claude_cli_tool_use_blocked", claudeCliUserMessage("claude_cli_tool_use_blocked"));
   };
-  const collector = options.bridge
-    ? createClaudeCliToolStepCollector(options.bridge, {
-        chunk,
-        fail: (reasonCode, detail) => {
-          const base = claudeCliUserMessage(reasonCode);
-          throw new ClaudeCliError(reasonCode, detail ? `${base}: ${detail}` : base);
-        },
-        normalizeUsage: normalizeAnthropicUsage,
-      })
-    : undefined;
+  const collector = options.bridge ? createClaudeCliToolStepCollector(options.bridge, identity) : undefined;
 
   return {
     push(line) {
