@@ -35,6 +35,11 @@ export function ProviderProfileFields(
   const codex = draft.providerId.trim().toLowerCase() === "openai-codex" || draft.authMode === "codex-oauth";
   const google = draft.authMode === "google-adc" || draft.authMode === "google-service-account";
   const bedrock = draft.apiStyle === "bedrock-messages" || isBedrockCredentialMode(draft.authMode);
+  // The local Claude Code CLI provider holds no secret; its only credential mode is the operator's own login.
+  const claudeCli =
+    draft.providerId.trim().toLowerCase() === "claude-code-cli" ||
+    draft.apiStyle === "claude-code-cli" ||
+    draft.authMode === "claude-code-cli-login";
   const providerIdCheck = useBlurValidation((value) => (value.trim() ? undefined : "Enter a provider ID."));
   const baseUrlCheck = useBlurValidation((value) => urlFieldError(value, { required: true }));
   const patch = <K extends keyof ProviderEditorDraft>(key: K, value: ProviderEditorDraft[K]) =>
@@ -101,8 +106,8 @@ export function ProviderProfileFields(
             <select
               {...fieldProps}
               className={cockpitInputClass}
-              value={codex ? "codex-oauth" : draft.authMode}
-              disabled={props.disabled || codex}
+              value={codex ? "codex-oauth" : claudeCli ? "claude-code-cli-login" : draft.authMode}
+              disabled={props.disabled || codex || claudeCli}
               onChange={(event) => patch("authMode", event.target.value as ProviderEditorDraft["authMode"])}
             >
               <option value="">Provider default</option>
@@ -111,6 +116,7 @@ export function ProviderProfileFields(
               <option value="google-service-account">Google service account</option>
               <option value="claude-code-oauth">Claude Code OAuth token</option>
               <option value="codex-oauth">ChatGPT/Codex OAuth</option>
+              {claudeCli ? <option value="claude-code-cli-login">Local Claude Code login</option> : null}
               {bedrock
                 ? BEDROCK_CREDENTIAL_MODE_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -121,7 +127,7 @@ export function ProviderProfileFields(
             </select>
           )}
         </Field>
-        {!codex && draft.authMode !== "google-adc"
+        {!codex && !claudeCli && draft.authMode !== "google-adc"
           ? text(
               "apiKeyEnv",
               draft.authMode === "google-service-account"
@@ -147,7 +153,7 @@ export function ProviderProfileFields(
           Change this provider's endpoint and saved credential under Provider connection on the provider page.
         </p>
       ) : null}
-      {!props.existing && !codex && draft.authMode !== "google-adc" ? (
+      {!props.existing && !codex && !claudeCli && draft.authMode !== "google-adc" ? (
         <div className="space-y-2">
           <Field label="New credential storage">
             {(fieldProps) => (

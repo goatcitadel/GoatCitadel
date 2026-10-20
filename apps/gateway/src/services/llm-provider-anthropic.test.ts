@@ -45,6 +45,7 @@ const host: LlmProviderAdapterHost = {
     };
   },
   retryOutputCapFailure: async () => undefined,
+  beginTrackedDispatch: async () => ({}),
 };
 
 describe("anthropicProviderAdapter", () => {

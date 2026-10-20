@@ -18,12 +18,31 @@ import { updateLlmConfigWithTransportReceipt } from "./provider-transport-receip
 import { readMcpServerTestEvidence } from "./mcp-server-test-evidence.js";
 
 export function composeMcpAdministration(
-  store: Pick<McpServerStore, "readServers" | "writeServers" | "patchServerState" | "completeConnection" | "readTools" |
-    "writeTools" | "requireServer" | "readAuthState" | "writeAuthState">,
-  callbacks: Pick<mcpServerAdminService.McpServerAdminHost, "storage" | "captureMcpServerSessionCloser" |
-    "prepareMcpStaticEnvironment" | "resolveMcpOAuthClientId" | "resolveConnectedMcpTools" | "exchangeMcpOAuthCode" | "publishRealtime">,
+  store: Pick<
+    McpServerStore,
+    | "readServers"
+    | "writeServers"
+    | "patchServerState"
+    | "completeConnection"
+    | "readTools"
+    | "writeTools"
+    | "requireServer"
+    | "readAuthState"
+    | "writeAuthState"
+  >,
+  callbacks: Pick<
+    mcpServerAdminService.McpServerAdminHost,
+    | "storage"
+    | "captureMcpServerSessionCloser"
+    | "prepareMcpStaticEnvironment"
+    | "resolveMcpOAuthClientId"
+    | "resolveConnectedMcpTools"
+    | "exchangeMcpOAuthCode"
+    | "publishRealtime"
+  >,
 ): mcpServerAdminService.McpServerAdminHost {
-  return { ...callbacks,
+  return {
+    ...callbacks,
     readMcpServers: () => store.readServers(),
     writeMcpServers: (...args) => store.writeServers(...args),
     patchMcpServerState: (...args) => store.patchServerState(...args),
@@ -64,7 +83,7 @@ export function composeToolsMcpRouteDependencies(
         providerConfigs: gateway.llmService.exportConfigFile().providers,
       }),
       getProviderAdvice: async (input) => {
-        const providers = gateway.llmService.listProviders();
+        const providers = await gateway.llmService.listProvidersWithProbedReadiness();
         const latestMeasurements = new Map(
           await Promise.all(
             providers.map(
@@ -85,7 +104,7 @@ export function composeToolsMcpRouteDependencies(
       listLlmEvalProofRuns: (limit) => llmRuntimeTruth.listEvalProofRuns(limit),
       listLlmLocalEngines: () => llmRuntimeTruth.listLocalEngines(),
       listLlmModels: (providerId) => gateway.llmService.listModelsWithSource(providerId),
-      listLlmProviders: () => gateway.llmService.listProviders(),
+      listLlmProviders: () => gateway.llmService.listProviders({ warmProbedReadiness: true }),
       listLlmRuntimeMeasurements: (query) => llmRuntimeTruth.listMeasurements(query),
       pollOpenAICodexOAuthDeviceFlow: (flowId) => gateway.llmService.pollOpenAICodexOAuthDeviceFlow(flowId),
       previewLlmModels: (input) => gateway.llmService.previewModels(input),
@@ -96,16 +115,43 @@ export function composeToolsMcpRouteDependencies(
     },
     mcp: {
       elicitations: gateway.mcpElicitationService,
-      completeMcpOAuth: async (serverId: string, code: string, state?: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) =>
-        await mcpServerAdminService.completeMcpOAuth.apply(undefined, review ? [mcpAdminDeps, serverId, code, state, { ...review, onCommitted }] : [mcpAdminDeps, serverId, code, state]),
-      connectMcpServer: async (serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) =>
-        await mcpServerAdminService.connectMcpServer(mcpAdminDeps, serverId, review ? { ...review, onCommitted } : undefined),
+      completeMcpOAuth: async (
+        serverId: string,
+        code: string,
+        state?: string,
+        review?: McpServerConnectionReview,
+        onCommitted?: () => void | Promise<void>,
+      ) =>
+        await mcpServerAdminService.completeMcpOAuth.apply(
+          undefined,
+          review
+            ? [mcpAdminDeps, serverId, code, state, { ...review, onCommitted }]
+            : [mcpAdminDeps, serverId, code, state],
+        ),
+      connectMcpServer: async (
+        serverId: string,
+        review?: McpServerConnectionReview,
+        onCommitted?: () => void | Promise<void>,
+      ) =>
+        await mcpServerAdminService.connectMcpServer(
+          mcpAdminDeps,
+          serverId,
+          review ? { ...review, onCommitted } : undefined,
+        ),
       createMcpServer: async (input: McpServerCreateInput, onCommitted?: () => void | Promise<void>) =>
         await mcpServerAdminService.createMcpServer(mcpAdminDeps, input, undefined, undefined, onCommitted),
       deleteMcpServer: async (serverId: string, expectedRevision: string, onCommitted?: () => void | Promise<void>) =>
         await mcpServerAdminService.deleteMcpServer(mcpAdminDeps, serverId, { expectedRevision, onCommitted }),
-      disconnectMcpServer: async (serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) =>
-        await mcpServerAdminService.disconnectMcpServer(mcpAdminDeps, serverId, review ? { ...review, onCommitted } : undefined),
+      disconnectMcpServer: async (
+        serverId: string,
+        review?: McpServerConnectionReview,
+        onCommitted?: () => void | Promise<void>,
+      ) =>
+        await mcpServerAdminService.disconnectMcpServer(
+          mcpAdminDeps,
+          serverId,
+          review ? { ...review, onCommitted } : undefined,
+        ),
       // Route through the guarded public method (enrich → capability-scope assert → coordinator)
       // so the REST /mcp/invoke surface is subject to the same workspace/citadel scope as the
       // autonomous-model path (spec §7a: "covers every caller (model and REST)").
@@ -114,20 +160,46 @@ export function composeToolsMcpRouteDependencies(
       listMcpTemplateDiscovery: async () => await mcpDiagnosticsService.listMcpTemplateDiscovery(mcpDiagnosticsDeps),
       listMcpTemplates: async () => await gateway.listMcpTemplates(),
       listMcpTools: async (serverId: string) => await gateway.listMcpTools(serverId),
-      readMcpServerTestEvidence: (serverId, scope) => readMcpServerTestEvidence({
-        storage: gateway.storage,
-        readServer: async (id) => (await gateway.listMcpServers()).find((server) => server.serverId === id),
-        readTools: (id) => gateway.listMcpTools(id),
-      }, serverId, scope),
+      readMcpServerTestEvidence: (serverId, scope) =>
+        readMcpServerTestEvidence(
+          {
+            storage: gateway.storage,
+            readServer: async (id) => (await gateway.listMcpServers()).find((server) => server.serverId === id),
+            readTools: (id) => gateway.listMcpTools(id),
+          },
+          serverId,
+          scope,
+        ),
       runMcpServerHealthCheck: async (serverId: string) =>
         await mcpDiagnosticsService.runMcpServerHealthCheck(mcpDiagnosticsDeps, serverId),
-      startMcpOAuth: async (serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) =>
-        await mcpServerAdminService.startMcpOAuth.apply(undefined, review ? [mcpAdminDeps, serverId, { ...review, onCommitted }] : [mcpAdminDeps, serverId]),
-      updateMcpServer: async (serverId: string, input: McpServerUpdateRequest, onCommitted?: () => void | Promise<void>) =>
-        await mcpServerAdminService.updateMcpServer(mcpAdminDeps, serverId, input, undefined, { expectedRevision: input.expectedRevision, onCommitted }),
-      updateMcpServerPolicy: async (serverId: string, input: McpServerPolicyUpdateRequest, onCommitted?: () => void | Promise<void>) => {
+      startMcpOAuth: async (
+        serverId: string,
+        review?: McpServerConnectionReview,
+        onCommitted?: () => void | Promise<void>,
+      ) =>
+        await mcpServerAdminService.startMcpOAuth.apply(
+          undefined,
+          review ? [mcpAdminDeps, serverId, { ...review, onCommitted }] : [mcpAdminDeps, serverId],
+        ),
+      updateMcpServer: async (
+        serverId: string,
+        input: McpServerUpdateRequest,
+        onCommitted?: () => void | Promise<void>,
+      ) =>
+        await mcpServerAdminService.updateMcpServer(mcpAdminDeps, serverId, input, undefined, {
+          expectedRevision: input.expectedRevision,
+          onCommitted,
+        }),
+      updateMcpServerPolicy: async (
+        serverId: string,
+        input: McpServerPolicyUpdateRequest,
+        onCommitted?: () => void | Promise<void>,
+      ) => {
         const { expectedRevision, ...policy } = input;
-        return await mcpServerAdminService.updateMcpServerPolicy(mcpAdminDeps, serverId, policy, { expectedRevision, onCommitted });
+        return await mcpServerAdminService.updateMcpServerPolicy(mcpAdminDeps, serverId, policy, {
+          expectedRevision,
+          onCommitted,
+        });
       },
     },
     secrets: {
@@ -147,7 +219,8 @@ export function composeToolsMcpRouteDependencies(
     tools: {
       activatePermissionProfile: (input) => gateway.activatePermissionProfile(input),
       reviewPermissionProfileSelection: (input) => gateway.reviewPermissionProfileSelection(input),
-      archivePermissionProfile: (profileId, archivedBy, expectedRevision) => gateway.archivePermissionProfile(profileId, archivedBy, expectedRevision),
+      archivePermissionProfile: (profileId, archivedBy, expectedRevision) =>
+        gateway.archivePermissionProfile(profileId, archivedBy, expectedRevision),
       createLocalOperatorOverride: (input) => gateway.createLocalOperatorOverride(input),
       createPermissionProfile: (input) => gateway.createPermissionProfile(input),
       createToolGrant: (input) => gateway.approvalRuntime.createToolGrant(input),

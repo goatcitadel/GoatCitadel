@@ -7,6 +7,7 @@ import {
   CronJobSchema,
   CronJobsConfigSchema,
   describeAwsAuthModeApiStyleMismatch,
+  describeClaudeCodeCliApiStyleMismatch,
   LlmConfigFileSchema,
   ToolPolicyConfigSchema,
 } from "./config-schemas.js";
@@ -275,6 +276,52 @@ describe("LlmConfigFileSchema", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.providers[0]?.apiStyle).toBe("bedrock-messages");
+    }
+  });
+
+  it("rejects apiStyle 'claude-code-cli' on any provider other than the built-in one", () => {
+    const result = LlmConfigFileSchema.safeParse({
+      activeProviderId: "my-proxy",
+      providers: [
+        {
+          providerId: "my-proxy",
+          label: "Proxy",
+          baseUrl: "https://proxy.example/v1",
+          apiStyle: "claude-code-cli",
+          defaultModel: "sonnet",
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+    expect(describeClaudeCodeCliApiStyleMismatch("claude-code-cli", "claude-code-cli")).toBeUndefined();
+    expect(describeClaudeCodeCliApiStyleMismatch("my-proxy", "claude-code-cli")).toMatch(/only valid/);
+    // The login mode carries subscription usage lineage, so no other provider may claim it either.
+    expect(describeClaudeCodeCliApiStyleMismatch("anthropic", "anthropic-messages", "claude-code-cli-login")).toMatch(
+      /authMode "claude-code-cli-login" is only valid/,
+    );
+    expect(
+      describeClaudeCodeCliApiStyleMismatch("claude-code-cli", "claude-code-cli", "claude-code-cli-login"),
+    ).toBeUndefined();
+  });
+
+  it("accepts apiStyle 'claude-code-cli' with authMode 'claude-code-cli-login'", () => {
+    const result = LlmConfigFileSchema.safeParse({
+      activeProviderId: "claude-code-cli",
+      providers: [
+        {
+          providerId: "claude-code-cli",
+          label: "Claude Code CLI (local login)",
+          baseUrl: "https://api.anthropic.com/v1",
+          apiStyle: "claude-code-cli",
+          authMode: "claude-code-cli-login",
+          defaultModel: "claude-sonnet-5-5",
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.providers[0]?.apiStyle).toBe("claude-code-cli");
+      expect(result.data.providers[0]?.authMode).toBe("claude-code-cli-login");
     }
   });
 

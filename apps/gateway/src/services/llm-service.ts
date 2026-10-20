@@ -54,6 +54,7 @@ import type {
   LlmModelPreviewResponse,
   ModelUsageAttributionContext,
   LlmProviderConfig,
+  LlmProviderAuthReadiness,
   LlmProviderCapabilities,
   ProviderModelCatalogSnapshot,
   LlmProviderSummary,
@@ -61,7 +62,9 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   canonicalJsonString,
+  CLAUDE_CODE_CLI_EGRESS_BASE_URL,
   describeAwsAuthModeApiStyleMismatch,
+  describeClaudeCodeCliApiStyleMismatch,
   ExternalServiceError,
   findProviderTemplate,
   inferProviderForModelId,
@@ -81,12 +84,23 @@ import { resolveLlmReasoningProfile } from "./llm-reasoning-profile.js";
 import { anthropicProviderAdapter } from "./llm-provider-anthropic.js";
 import { bedrockProviderAdapter } from "./llm-provider-bedrock.js";
 import {
+  checkClaudeCodeCliReadiness,
+  claudeCodeCliProviderAdapter,
+  createClaudeCodeCliRuntime,
+  peekClaudeCodeCliReadiness,
+  type ClaudeCodeCliRuntime,
+  type ClaudeCodeCliRuntimeOptions,
+} from "./llm-provider-claude-code-cli.js";
+import type { ClaudeCodeCliReadinessResult } from "./claude-code-cli-readiness.js";
+import {
   createLlmProviderAdapterRegistry,
   type LlmProviderAdapterHost,
   type LlmProviderAdapterRegistry,
   type LlmProviderJsonRequestInput,
   type LlmProviderResolution,
   type LlmTrackedJsonDispatch,
+  type LlmTrackedProcessDispatch,
+  type LlmTrackedProcessDispatchInput,
 } from "./llm-provider-adapter.js";
 import {
   applyEstimatedCostToChatResponse,
@@ -215,6 +229,8 @@ export interface LlmServiceOptions {
   localServiceLeaseAcquirer?: LlmLocalServiceLeaseAcquirer;
   /** Canonical per-network-attempt accounting owner. */
   modelUsageAccounting?: ModelUsageAccountingService;
+  /** Overrides for the local Claude Code CLI provider (`claude-code-cli`); tests inject a fake spawn. */
+  claudeCli?: ClaudeCodeCliRuntimeOptions;
   /** Injected only for deterministic auth integration tests. */
   googleCloudAuthService?: GoogleCloudAuthService;
 }
@@ -254,6 +270,8 @@ export interface LlmProviderSecretStatusOptions {
 
 export interface LlmListProvidersOptions extends LlmProviderSecretStatusOptions {
   includeKeychainForProviderId?: string;
+  /** Start a background probe for probe-backed readiness (the local Claude Code CLI) that has none yet. */
+  warmProbedReadiness?: boolean;
 }
 
 export interface LlmProviderSecretStatus {
@@ -315,6 +333,7 @@ export class LlmService {
   private readonly secretStore: SecretStoreService;
   private readonly openAICodexOAuth: OpenAICodexOAuthService;
   private readonly googleCloudAuth: GoogleCloudAuthService;
+  private readonly claudeCodeCli: ClaudeCodeCliRuntime;
   private readonly secretStatusCache = new Map<string, SecretStatusCacheEntry>();
   private readonly modelDiscoveryCache = new Map<string, ModelDiscoveryCacheEntry>();
   private readonly modelCatalogRefreshAttemptAt = new Map<string, number>();
@@ -331,8 +350,11 @@ export class LlmService {
   private readonly providerAdapters: LlmProviderAdapterRegistry = createLlmProviderAdapterRegistry([
     anthropicProviderAdapter,
     bedrockProviderAdapter,
+    claudeCodeCliProviderAdapter,
   ]);
   private readonly providerAdapterHost: LlmProviderAdapterHost = {
+    claudeCodeCliRuntime: () => this.claudeCodeCli,
+    beginTrackedDispatch: (input) => this.beginTrackedProcessDispatch(input),
     buildRequestTarget: (resolved, purpose, endpointUrl) => this.buildRequestTarget(resolved, purpose, endpointUrl),
     postJsonRequest: (input) => this.postTrackedJsonRequest(input),
     retryOutputCapFailure: (input) => this.retryTrackedOutputCapFailure(input),
@@ -361,6 +383,7 @@ export class LlmService {
     this.secretStore = options.secretStore ?? new SecretStoreService();
     this.openAICodexOAuth = new OpenAICodexOAuthService(this.secretStore, options.openAICodexOAuthFetch ?? fetch);
     this.googleCloudAuth = options.googleCloudAuthService ?? new GoogleCloudAuthService({ env: this.env });
+    this.claudeCodeCli = createClaudeCodeCliRuntime(this.env, options);
     this.networkAllowlist = [...(options.networkAllowlist ?? [])];
     this.enforceNetworkAllowlist = options.enforceNetworkAllowlist ?? true;
     this.tlsPathPolicy = options.tlsPathPolicy;
@@ -450,26 +473,41 @@ export class LlmService {
               endpointId: provider.googleCloud?.endpointId,
             })
           : undefined;
-      const status = googleAuthReadiness
+      const cliAuthReadiness =
+        authMode === "claude-code-cli-login"
+          ? projectClaudeCodeCliAuthReadiness(peekClaudeCodeCliReadiness(this.claudeCodeCli))
+          : undefined;
+      if (cliAuthReadiness?.reasonCode === "claude_cli_not_probed" && options.warmProbedReadiness) {
+        void checkClaudeCodeCliReadiness(this.claudeCodeCli).catch(() => undefined);
+      }
+      const status = cliAuthReadiness
         ? {
             providerId: provider.providerId,
-            hasApiKey: googleAuthReadiness.status === "configured" || googleAuthReadiness.status === "ready",
+            hasApiKey: cliAuthReadiness.status === "ready",
             apiKeySource: "none" as const,
             hasKeychainSecret: false,
             apiKeyRef: undefined,
           }
-        : oauthStatus
+        : googleAuthReadiness
           ? {
               providerId: provider.providerId,
-              hasApiKey: oauthStatus.connected,
-              apiKeySource: oauthStatus.connected ? ("keychain" as const) : ("none" as const),
-              hasKeychainSecret: oauthStatus.connected,
-              apiKeyRef: oauthStatus.connected ? "keychain:goatcitadel:provider:openai-codex:oauth" : undefined,
+              hasApiKey: googleAuthReadiness.status === "configured" || googleAuthReadiness.status === "ready",
+              apiKeySource: "none" as const,
+              hasKeychainSecret: false,
+              apiKeyRef: undefined,
             }
-          : this.getProviderSecretStatus(provider.providerId, {
-              includeKeychain,
-              useCache: options.useCache,
-            });
+          : oauthStatus
+            ? {
+                providerId: provider.providerId,
+                hasApiKey: oauthStatus.connected,
+                apiKeySource: oauthStatus.connected ? ("keychain" as const) : ("none" as const),
+                hasKeychainSecret: oauthStatus.connected,
+                apiKeyRef: oauthStatus.connected ? "keychain:goatcitadel:provider:openai-codex:oauth" : undefined,
+              }
+            : this.getProviderSecretStatus(provider.providerId, {
+                includeKeychain,
+                useCache: options.useCache,
+              });
       return {
         providerId: provider.providerId,
         label: provider.label,
@@ -480,7 +518,7 @@ export class LlmService {
         authMode,
         googleCloud: provider.googleCloud,
         oauthStatus,
-        authReadiness: googleAuthReadiness,
+        authReadiness: cliAuthReadiness ?? googleAuthReadiness,
         hasApiKey: status.hasApiKey,
         apiKeySource: status.apiKeySource,
         hasKeychainSecret: status.hasKeychainSecret,
@@ -488,6 +526,29 @@ export class LlmService {
         capabilities: inferProviderCapabilities(provider),
       };
     });
+  }
+
+  /** Populate probe-backed readiness (the local Claude Code CLI) before callers snapshot
+   * `listProviders()`, so a freshly started Gateway does not freeze "auth missing"
+   * evidence for a provider that is in fact signed in. Cached; other providers are no-ops. */
+  public async ensureProviderReadiness(providerId: string | undefined): Promise<void> {
+    const provider = providerId ? this.providers.get(providerId) : undefined;
+    if (provider?.apiStyle !== "claude-code-cli") return;
+    await checkClaudeCodeCliReadiness(this.claudeCodeCli);
+  }
+
+  /** `listProviders()` after any probe-backed readiness has been checked (cached), for flows such as
+   * provider advice that filter on `hasApiKey`. */
+  public async listProvidersWithProbedReadiness(options: LlmListProvidersOptions = {}): Promise<LlmProviderSummary[]> {
+    if (Array.from(this.providers.values()).some((provider) => provider.apiStyle === "claude-code-cli")) {
+      await checkClaudeCodeCliReadiness(this.claudeCodeCli);
+    }
+    return this.listProviders(options);
+  }
+
+  /** Re-probe `claude auth status` for the local Claude Code CLI provider; listings only read the cache. */
+  public async refreshClaudeCodeCliReadiness(): Promise<LlmProviderAuthReadiness> {
+    return projectClaudeCodeCliAuthReadiness(await checkClaudeCodeCliReadiness(this.claudeCodeCli, { refresh: true }));
   }
 
   /** Resolve the per-model token-estimate multiplier from model metadata (default 1). */
@@ -585,14 +646,16 @@ export class LlmService {
       const submittedApiKey =
         isCodexOAuthProvider || submittedApiKeyValue === SECRET_REDACTION_MARKER ? undefined : submittedApiKeyValue;
       // Validate the resulting apiStyle/authMode pairing before any credential is written.
-      const resolvedApiStyle = normalizeProviderApiStyle(
-        input.upsertProvider.providerId,
-        input.upsertProvider.apiStyle ?? existing?.apiStyle,
-      );
       const resolvedAuthMode =
         input.upsertProvider.authMode ??
         existing?.authMode ??
         defaultAuthModeForProvider(input.upsertProvider.providerId);
+      // Also refuses the claude-code-cli style or login mode on any other provider id.
+      const resolvedApiStyle = normalizeProviderApiStyle(
+        input.upsertProvider.providerId,
+        input.upsertProvider.apiStyle ?? existing?.apiStyle,
+        resolvedAuthMode,
+      );
       const authModeMismatch = describeAwsAuthModeApiStyleMismatch(resolvedApiStyle, resolvedAuthMode);
       if (authModeMismatch) {
         throw new Error(`Provider "${input.upsertProvider.providerId}": ${authModeMismatch}`);
@@ -1250,6 +1313,38 @@ export class LlmService {
     }
   }
 
+  /** Same ward → usage intent → dispatch guard → accept order as an HTTP
+   * attempt, for providers whose transport is a local process. The caller
+   * starts the process only after this resolves. */
+  private async beginTrackedProcessDispatch(input: LlmTrackedProcessDispatchInput): Promise<LlmTrackedProcessDispatch> {
+    const resolved = input.resolved as ResolvedProvider;
+    this.assertProviderHostAllowed(input.targetUrl);
+    await this.authorizeDispatchWard(input.attribution, resolved.provider.providerId, input.targetUrl);
+    // Shared owner: usage intent, then the dispatch guard; abandons the intent if the guard refuses.
+    const reservation = await this.prepareScopedModelUsageDispatch({
+      source: "llm_service",
+      attribution: input.attribution,
+      requestedProviderId: input.requestedProviderId,
+      requestedModelId: input.requestedModelId,
+      effectiveProviderId: resolved.provider.providerId,
+      effectiveModelId: input.model,
+      effectiveApiStyle: resolveProviderExecutionApiStyle(resolved.provider, input.model),
+      transportAttemptIndex: input.transportAttemptIndex,
+      credential: this.resolveModelUsageCredentialLineage(resolved),
+      pricing: resolveModelPricingLineage(resolved.provider.providerId, input.model),
+    });
+    try {
+      const usage = await reservation?.accept();
+      return usage ? { usage } : {};
+    } catch (cause) {
+      await reservation?.markDispatchUnknown();
+      throw new ModelUsageDispatchUncertainError(
+        "Provider dispatch outcome is uncertain; same-generation retry is blocked pending reconciliation",
+        { eventId: reservation?.eventId, cause },
+      );
+    }
+  }
+
   private async postTrackedJsonRequest(input: LlmProviderJsonRequestInput): Promise<LlmTrackedJsonDispatch> {
     const timeoutSignal = AbortSignal.timeout(input.timeoutMs);
     const dispatchAbort = new AbortController();
@@ -1520,6 +1615,8 @@ export class LlmService {
   } {
     const provider = resolved.provider;
     const authMode = resolveProviderAuthMode(provider);
+    const subscriptionAuth =
+      authMode === "codex-oauth" || authMode === "claude-code-oauth" || authMode === "claude-code-cli-login";
     const local = isLocalBillingProvider(provider.providerId);
     const requestAuth = provider.request?.auth;
     const requestAuthSource = resolveRequestAuthSource(requestAuth);
@@ -1530,7 +1627,7 @@ export class LlmService {
           ? resolved.credentialSource === "env"
             ? "env"
             : "keychain"
-          : authMode === "codex-oauth" || authMode === "claude-code-oauth"
+          : subscriptionAuth
             ? "oauth"
             : requestAuthSource !== "none"
               ? requestAuthSource
@@ -1538,13 +1635,8 @@ export class LlmService {
     return {
       credentialType:
         resolved.credentialType ??
-        (authMode === "codex-oauth" || authMode === "claude-code-oauth"
-          ? "oauth"
-          : resolved.apiKey || requestAuth
-            ? "api_key"
-            : "unknown"),
-      usagePool:
-        authMode === "codex-oauth" || authMode === "claude-code-oauth" ? "subscription" : local ? "local" : "standard",
+        (subscriptionAuth ? "oauth" : resolved.apiKey || requestAuth ? "api_key" : "unknown"),
+      usagePool: subscriptionAuth ? "subscription" : local ? "local" : "standard",
       credentialSource: local && source === "none" ? "none" : source,
       credentialConfigFingerprint: fingerprintProviderCredentialConfig(provider),
     };
@@ -3348,6 +3440,14 @@ export class LlmService {
     resolved: ResolvedProvider,
     options: { skipLocalLease?: boolean } = {},
   ): Promise<ModelDiscoveryResult> {
+    if (resolved.provider.apiStyle === "claude-code-cli") {
+      // The CLI has no model listing; `--model` accepts these ids and the sonnet/opus/haiku/fable aliases.
+      return {
+        items: buildFallbackModelCatalog(resolved.provider.providerId, resolved.provider.defaultModel),
+        source: "template_fallback",
+        warning: "The Claude Code CLI does not list models. Showing the configured and template models.",
+      };
+    }
     if (resolved.provider.apiStyle === "bedrock-messages") {
       // The Bedrock runtime host has no model listing endpoint; the catalog is configuration only.
       return {
@@ -3504,7 +3604,12 @@ function isLlmModelRecord(value: unknown): value is LlmModelRecord {
 }
 
 function normalizeProvider(provider: LlmProviderConfig): LlmProviderConfig {
-  const base = provider.baseUrl.trim().replace(/\/+$/, "");
+  const cliMismatch = describeClaudeCodeCliApiStyleMismatch(provider.providerId, provider.apiStyle, provider.authMode);
+  if (cliMismatch) throw new Error(cliMismatch);
+  // The CLI ignores baseUrl and always egresses to Anthropic, so its profile may not
+  // point the network allowlist or the ward at any other host.
+  const configuredBase = provider.providerId === "claude-code-cli" ? CLAUDE_CODE_CLI_EGRESS_BASE_URL : provider.baseUrl;
+  const base = configuredBase.trim().replace(/\/+$/, "");
   validateProviderBaseUrl(base);
   const canonicalBase = canonicalizeProviderUrl(provider.providerId, base);
   const withV1 = shouldAppendV1(provider.providerId, canonicalBase) ? `${canonicalBase}/v1` : canonicalBase;
@@ -3517,7 +3622,9 @@ function normalizeProvider(provider: LlmProviderConfig): LlmProviderConfig {
         ? "codex-oauth"
         : provider.providerId === "claude-code"
           ? "claude-code-oauth"
-          : (provider.authMode ?? defaultAuthModeForProvider(provider.providerId)),
+          : provider.providerId === "claude-code-cli"
+            ? "claude-code-cli-login"
+            : (provider.authMode ?? defaultAuthModeForProvider(provider.providerId)),
     googleCloud: normalizeGoogleCloudConfig(provider.googleCloud),
     request: normalizeProviderRequestConfig(provider.request, provider.headers),
     headers: undefined,
@@ -3841,9 +3948,22 @@ function scrubTlsConfig(tls: LlmProviderRequestTlsConfig): LlmProviderRequestTls
   return cleaned;
 }
 
-function normalizeProviderApiStyle(providerId: string, apiStyle: LlmApiStyle | undefined): LlmApiStyle {
+function normalizeProviderApiStyle(
+  providerId: string,
+  apiStyle: LlmApiStyle | undefined,
+  authMode?: LlmProviderConfig["authMode"],
+): LlmApiStyle {
   if (providerId === "openai-codex") {
     return "openai-codex-responses";
+  }
+  if (providerId === "claude-code-cli") {
+    return "claude-code-cli";
+  }
+  // The CLI transport and its login mode are tied to their own provider id; refuse instead of
+  // silently falling back to HTTP or recording subscription lineage for another provider.
+  const cliMismatch = describeClaudeCodeCliApiStyleMismatch(providerId, apiStyle, authMode);
+  if (cliMismatch) {
+    throw new Error(`Provider "${providerId}": ${cliMismatch}`);
   }
   if (
     apiStyle === "openai-chat-completions" ||
@@ -3915,6 +4035,12 @@ function resolveConfiguredModelForProvider(
   return normalizeRequestedModel(provider.providerId, normalizedModel);
 }
 
+const ANTHROPIC_MODEL_FAMILY_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  "anthropic",
+  "claude-code",
+  "claude-code-cli",
+]);
+
 function inferForeignProviderForModel(providerId: string, model: string): string | undefined {
   if (providerAllowsForeignModelIds(providerId)) {
     return undefined;
@@ -3926,7 +4052,9 @@ function inferForeignProviderForModel(providerId: string, model: string): string
   if (!ownerProviderId || ownerProviderId === providerId) {
     return undefined;
   }
-  if (providerId === "claude-code" && ownerProviderId === "anthropic") {
+  // Anthropic, the Claude Code token route and the local CLI share one model id space;
+  // a template listing an id first must not take it away from the others.
+  if (ANTHROPIC_MODEL_FAMILY_PROVIDER_IDS.has(providerId) && ANTHROPIC_MODEL_FAMILY_PROVIDER_IDS.has(ownerProviderId)) {
     return undefined;
   }
   return ownerProviderId;
@@ -3936,6 +4064,9 @@ function normalizeRequestedModel(providerId: string, model: string): string {
   const trimmed = model.trim();
   if (providerId === "claude-code") {
     return trimmed.replace(/^claude-code\//i, "");
+  }
+  if (providerId === "claude-code-cli") {
+    return trimmed.replace(/^claude-code-cli\//i, "");
   }
   if (providerId === "openai-codex") {
     return trimmed.replace(/^openai-codex\//i, "");
@@ -6522,6 +6653,21 @@ function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapa
     imageEdit: supportsImageGenerationProvider(provider.providerId),
     ...(provider.capabilities ?? {}),
   };
+  if (provider.apiStyle === "claude-code-cli") {
+    // The CLI runs as a pure text model with its own tools disabled; no
+    // configured override may advertise tool, media or JSON-mode support.
+    return {
+      vision: false,
+      audio: false,
+      video: false,
+      toolCalling: false,
+      jsonMode: false,
+      webSearch: false,
+      reasoning: false,
+      imageGenerate: false,
+      imageEdit: false,
+    };
+  }
   if (!providerOmitsReasoningEffort(provider, provider.defaultModel)) {
     return capabilities;
   }
@@ -6537,7 +6683,8 @@ function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapa
  * reasoning blocks, which the Bedrock adapter does not do.
  */
 function providerOmitsReasoningEffort(provider: LlmProviderConfig, model: string): boolean {
-  return resolveProviderExecutionApiStyle(provider, model) === "bedrock-messages";
+  const apiStyle = resolveProviderExecutionApiStyle(provider, model);
+  return apiStyle === "bedrock-messages" || apiStyle === "claude-code-cli";
 }
 
 function defaultModelForProvider(providerId: string): string {
@@ -6552,10 +6699,19 @@ function defaultAuthModeForProvider(providerId: string): LlmProviderConfig["auth
   if (normalized === "claude-code") {
     return "claude-code-oauth";
   }
+  if (normalized === "claude-code-cli") {
+    return "claude-code-cli-login";
+  }
   if (normalized === "vertex") {
     return "google-adc";
   }
   return undefined;
+}
+
+function projectClaudeCodeCliAuthReadiness(result: ClaudeCodeCliReadinessResult | undefined): LlmProviderAuthReadiness {
+  return result
+    ? { status: result.status, source: "metadata", liveVerified: result.liveVerified, reasonCode: result.reasonCode }
+    : { status: "unknown", source: "metadata", liveVerified: false, reasonCode: "claude_cli_not_probed" };
 }
 
 function resolveProviderAuthMode(provider: LlmProviderConfig): LlmProviderConfig["authMode"] {

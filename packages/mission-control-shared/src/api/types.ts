@@ -501,13 +501,15 @@ export interface RuntimeSettingsResponse {
         | "openai-responses"
         | "openai-codex-responses"
         | "anthropic-messages"
-        | "bedrock-messages";
+        | "bedrock-messages"
+        | "claude-code-cli";
       resolvedApiStyle?:
         | "openai-chat-completions"
         | "openai-responses"
         | "openai-codex-responses"
         | "anthropic-messages"
-        | "bedrock-messages";
+        | "bedrock-messages"
+        | "claude-code-cli";
       defaultModel: string;
       authMode?: LlmProviderConfig["authMode"];
       googleCloud?: LlmProviderConfig["googleCloud"];

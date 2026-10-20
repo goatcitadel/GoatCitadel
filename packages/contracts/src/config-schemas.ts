@@ -299,6 +299,7 @@ export const LlmProviderAuthModeSchema = z.enum([
   "api-key",
   "codex-oauth",
   "claude-code-oauth",
+  "claude-code-cli-login",
   "google-service-account",
   "google-adc",
   "aws-sigv4",
@@ -316,6 +317,26 @@ export function describeAwsAuthModeApiStyleMismatch(
   return undefined;
 }
 
+/** The only origin the local Claude Code CLI talks to; its profile baseUrl is pinned to it. */
+export const CLAUDE_CODE_CLI_EGRESS_BASE_URL = "https://api.anthropic.com/v1";
+
+/** The `claude-code-cli` API style and login auth mode run the operator's local CLI; they belong to that built-in provider only. */
+export function describeClaudeCodeCliApiStyleMismatch(
+  providerId: string,
+  apiStyle: string | undefined,
+  authMode?: string,
+): string | undefined {
+  if (providerId.trim().toLowerCase() === "claude-code-cli") return undefined;
+  if (apiStyle === "claude-code-cli") {
+    return `apiStyle "claude-code-cli" is only valid for the built-in "claude-code-cli" provider (got "${providerId}").`;
+  }
+  // The login mode carries subscription usage lineage; no other provider may claim it.
+  if (authMode === "claude-code-cli-login") {
+    return `authMode "claude-code-cli-login" is only valid for the built-in "claude-code-cli" provider (got "${providerId}").`;
+  }
+  return undefined;
+}
+
 export const LlmProviderConfigSchema = z
   .object({
     providerId: z.string(),
@@ -327,6 +348,7 @@ export const LlmProviderConfigSchema = z
       "openai-codex-responses",
       "anthropic-messages",
       "bedrock-messages",
+      "claude-code-cli",
     ]),
     defaultModel: z.string(),
     authMode: LlmProviderAuthModeSchema.optional(),
@@ -342,6 +364,10 @@ export const LlmProviderConfigSchema = z
     const message = describeAwsAuthModeApiStyleMismatch(provider.apiStyle, provider.authMode);
     if (message) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["authMode"], message });
+    }
+    const cliMessage = describeClaudeCodeCliApiStyleMismatch(provider.providerId, provider.apiStyle, provider.authMode);
+    if (cliMessage) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["apiStyle"], message: cliMessage });
     }
   });
 

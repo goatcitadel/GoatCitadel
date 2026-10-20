@@ -221,6 +221,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
                         "openai-codex-responses",
                         "anthropic-messages",
                         "bedrock-messages",
+                        "claude-code-cli",
                       ],
                     },
                     authMode: {
@@ -229,6 +230,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
                         "api-key",
                         "codex-oauth",
                         "claude-code-oauth",
+                        "claude-code-cli-login",
                         "google-service-account",
                         "google-adc",
                         "aws-sigv4",

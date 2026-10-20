@@ -232,17 +232,30 @@ function resolveHarnessStatus(reasons: AgenticHarnessReason[]): AgenticHarnessAv
 }
 
 function resolveExecutableFromPath(command: string): string | undefined {
+  return listExecutableCandidates(command)[0];
+}
+
+/** Every PATH match for `command`, in lookup order. On Windows `where` can list a
+ * native `.exe` alongside npm `.cmd`/`.ps1` shims; callers that spawn without a
+ * shell need the whole list to pick a launchable entry. */
+export function listExecutableCandidates(command: string): string[] {
   const lookupCommand = process.platform === "win32" ? "where" : "which";
-  const result = spawnSync(lookupCommand, [command], {
+  const args = process.platform === "win32" ? [command] : ["-a", command];
+  const result = spawnSync(lookupCommand, args, {
     encoding: "utf8",
     windowsHide: true,
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (result.status !== 0 || !result.stdout) {
-    return undefined;
+    return [];
   }
   return result.stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .find(Boolean);
+    .filter(Boolean);
+}
+
+/** The executable names the `claude_code` harness entry probes for. */
+export function claudeCodeHarnessExecutableNames(): string[] {
+  return [...(AGENTIC_HARNESS_REGISTRY.find((entry) => entry.harnessId === "claude_code")?.executableNames ?? [])];
 }
