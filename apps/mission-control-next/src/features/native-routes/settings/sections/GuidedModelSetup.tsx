@@ -34,9 +34,7 @@ import {
   clampGuidedThinkingLevel,
   GUIDED_CATALOG_LOADING_READINESS,
   GUIDED_THINKING_LEVELS,
-  groupGuidedProviders,
   guidedConnectionHint,
-  guidedProviderOptionLabel,
   localRuntimeSetupGuide,
   pendingPlanForSelection,
   pickDefaultGuidedProvider,
@@ -475,14 +473,10 @@ export function GuidedModelSetup({
                 {catalog.loading ? "Loading providers…" : `${providerId} · unavailable`}
               </option>
             ) : null}
-            {groupGuidedProviders(catalogProviders, providerId).map((group) => (
-              <optgroup key={group.id} label={group.label}>
-                {group.providers.map((provider) => (
-                  <option key={provider.providerId} value={provider.providerId}>
-                    {guidedProviderOptionLabel(provider)}
-                  </option>
-                ))}
-              </optgroup>
+            {catalogProviders.map((provider) => (
+              <option key={provider.providerId} value={provider.providerId}>
+                {provider.label}
+              </option>
             ))}
           </select>
           {connectionHint ? <p className="mc-next-settings-field-note">{connectionHint.note}</p> : null}

@@ -320,6 +320,7 @@ describe("grouped provider choices", () => {
     { ...base, providerId: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)", authMode: "codex-oauth", hasApiKey: true },
     { ...base, providerId: "anthropic", label: "Anthropic" },
     { ...base, providerId: "claude-code", label: "Claude Code (Claude subscription)", authMode: "claude-code-oauth" },
+    { ...base, providerId: "vertex", label: "Google Vertex AI", authMode: "google-adc" },
     { ...base, providerId: "ollama", label: "Ollama", localCostPosture: "zero_cost_local_runtime" },
     { ...base, providerId: "npu-local", label: "NPU Local Sidecar", localCostPosture: "zero_cost_local_runtime" },
   ] as never;
@@ -330,6 +331,7 @@ describe("grouped provider choices", () => {
       ["Ready to use", ["openai-codex"]],
       ["Use a subscription", ["claude-code"]],
       ["Pay-per-use API key", ["openai", "anthropic"]],
+      ["Pay-per-use cloud account", ["vertex"]],
       ["Run locally", ["ollama"]],
     ]);
   });
