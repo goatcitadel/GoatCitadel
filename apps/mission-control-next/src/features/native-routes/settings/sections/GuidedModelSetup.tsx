@@ -38,6 +38,7 @@ import {
   pendingPlanForSelection,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
+  submittedGuidedSelection,
   supportedGuidedThinkingLevels,
   withAddableBuiltinProviders,
 } from "./guided-model-setup-support";
@@ -128,6 +129,8 @@ export function GuidedModelSetup({
   const setThinkingLevel = (thinkingLevel: ChatThinkingLevel) =>
     modelDraft.setValue((current) => ({ ...current, thinkingLevel }));
   const busyRef = useRef(false);
+  // The raw draft behind the default-model plan this wizard submitted, before effort clamping.
+  const submittedDraftRef = useRef<typeof modelDraft.value | null>(null);
   const planLoadGeneration = useRef(0);
   const [models, setModels] = useState<string[]>([]);
   const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
@@ -168,7 +171,9 @@ export function GuidedModelSetup({
   // The local CLI's login state is already described in plain words by its readiness step.
   const connectionDiagnostic =
     catalog.error ??
-    (selectedProvider?.authMode === "claude-code-cli-login" ? undefined : selectedProvider?.authReadiness?.reasonCode) ??
+    (selectedProvider?.authMode === "claude-code-cli-login"
+      ? undefined
+      : selectedProvider?.authReadiness?.reasonCode) ??
     null;
   const defaultPlanCompleted =
     providerReady &&
@@ -258,7 +263,13 @@ export function GuidedModelSetup({
             model: updated.request.model,
             thinkingLevel: updated.request.thinkingLevel ?? ("standard" as ChatThinkingLevel),
           };
-          modelDraft.acceptSaved(saved, JSON.stringify(saved), saved);
+          const savedProvider = catalog.providers.find((provider) => provider.providerId === saved.providerId);
+          const submitted = submittedGuidedSelection(
+            submittedDraftRef.current,
+            saved,
+            supportedGuidedThinkingLevels(savedProvider?.capabilities),
+          );
+          modelDraft.acceptSaved(saved, JSON.stringify(saved), submitted);
         }
         setNotice({ tone: "success", message: updated.result?.summary ?? "Change applied and verified." });
         await Promise.all([catalog.reload(), reloadOnboarding()]);
@@ -343,6 +354,7 @@ export function GuidedModelSetup({
       setNotice({ tone: "warning", message: "Choose a verified provider and model first." });
       return;
     }
+    submittedDraftRef.current = modelDraft.value;
     await runAction(() =>
       createChangePlan({
         workspaceId,

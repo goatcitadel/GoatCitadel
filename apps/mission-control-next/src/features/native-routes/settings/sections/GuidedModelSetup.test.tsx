@@ -1,4 +1,4 @@
-import { __resetSessionDraftsForTests } from "../../library/session-drafts";
+import { __resetSessionDraftsForTests, hasSessionDraft } from "../../library/session-drafts";
 // @vitest-environment happy-dom
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -95,6 +95,7 @@ async function mount(
     ],
     config: { defaultThinkingLevel: "standard" },
     loadModelsForProvider: mocks.models,
+    reload: vi.fn(async () => {}),
     loading: false,
   });
   const host = document.createElement("div");
@@ -351,6 +352,35 @@ describe("guided first model setup", () => {
         },
       }),
     );
+  });
+  it("leaves no unsaved draft after saving the clamped effort of a provider without reasoning", async () => {
+    mocks.models.mockResolvedValue(["claude-local"]);
+    mocks.create.mockImplementation(async (input) => ({
+      planId: "plan-1",
+      status: "completed",
+      origin: { workspaceId: "default", surface: "settings" },
+      request: input.request,
+      result: { summary: "Change applied and verified." },
+    }));
+    const view = await mount("ready", undefined, {
+      providerId: "claude-code-cli",
+      label: "Claude Code CLI (local login)",
+      defaultModel: "claude-local",
+      capabilities: { reasoning: false },
+    });
+    const modelSelect = [...view.host.querySelectorAll("select")].find((select) =>
+      [...select.options].some((option) => option.value === "claude-local"),
+    )!;
+    await act(async () => {
+      modelSelect.value = "claude-local";
+      modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(hasSessionDraft("onboarding:default:model")).toBe(true);
+    await act(async () => view.button("Confirm model")!.click());
+    expect(mocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({ request: expect.objectContaining({ model: "claude-local", thinkingLevel: "off" }) }),
+    );
+    expect(hasSessionDraft("onboarding:default:model")).toBe(false);
   });
   it("refreshes onboarding before navigation and preserves a failed refresh as an error", async () => {
     const reload = vi.fn(async () => {

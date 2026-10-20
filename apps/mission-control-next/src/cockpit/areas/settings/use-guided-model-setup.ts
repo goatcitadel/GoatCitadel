@@ -13,6 +13,7 @@ import {
   pendingPlanForSelection,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
+  submittedGuidedSelection,
   supportedGuidedThinkingLevels,
   withAddableBuiltinProviders,
 } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
@@ -80,6 +81,8 @@ export function useGuidedModelSetup({
   const setThinkingLevel = (next: ChatThinkingLevel) =>
     modelDraft.setValue((current) => ({ ...current, thinkingLevel: next }));
   const busyRef = useRef(false);
+  // The raw draft behind the default-model plan this wizard submitted, before effort clamping.
+  const submittedDraftRef = useRef<typeof modelDraft.value | null>(null);
   const planLoadGeneration = useRef(0);
   const [models, setModels] = useState<string[]>([]);
   const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
@@ -193,7 +196,13 @@ export function useGuidedModelSetup({
             model: updated.request.model,
             thinkingLevel: updated.request.thinkingLevel ?? ("standard" as ChatThinkingLevel),
           };
-          modelDraft.acceptSaved(saved, JSON.stringify(saved), saved);
+          const savedProvider = providers.find((provider) => provider.providerId === saved.providerId);
+          const submitted = submittedGuidedSelection(
+            submittedDraftRef.current,
+            saved,
+            supportedGuidedThinkingLevels(savedProvider?.capabilities),
+          );
+          modelDraft.acceptSaved(saved, JSON.stringify(saved), submitted);
         }
         setNotice(updated.result?.summary ?? "Change applied and verified.");
         await Promise.all([catalog.reload(), reloadOnboarding()]);
@@ -203,7 +212,7 @@ export function useGuidedModelSetup({
       }
       return updated;
     },
-    [catalog, reloadOnboarding, setNotice, modelDraft],
+    [catalog, providers, reloadOnboarding, setNotice, modelDraft],
   );
 
   const runAction = useCallback(
@@ -253,6 +262,7 @@ export function useGuidedModelSetup({
       setNotice("Choose a verified provider and model first.");
       return;
     }
+    if (!pendingSetupPlan) submittedDraftRef.current = modelDraft.value;
     await createPlan({ kind: "installation_default_model", providerId, model, thinkingLevel });
   };
   const recheckLocalEndpoint = async () => {

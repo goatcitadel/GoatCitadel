@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingState } from "@goatcitadel/contracts";
 import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
-import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
+import { __resetSessionDraftsForTests, hasSessionDraft } from "../../../features/native-routes/library/session-drafts";
 import { CockpitGuidedModelSetup } from "./CockpitGuidedModelSetup";
 
 const mocks = vi.hoisted(() => ({
@@ -254,6 +254,20 @@ describe("shared guided model setup", () => {
     });
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Change applied and verified.");
     expect(mocks.reload).toHaveBeenCalled();
+  });
+  it("leaves no unsaved draft after saving the clamped effort of a provider without reasoning", async () => {
+    catalog("ready", { capabilities: { reasoning: false } });
+    await mount();
+    const model = container.querySelectorAll("select")[1]!;
+    await vi.waitFor(() => expect(model.querySelector('option[value="other-model"]')).not.toBeNull());
+    await act(async () => {
+      model.value = "other-model";
+      model.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(hasSessionDraft("onboarding:default:model")).toBe(true);
+    await act(async () => button("Confirm model")!.click());
+    expect(mocks.create.mock.calls[0]![0].request).toMatchObject({ model: "other-model", thinkingLevel: "off" });
+    expect(hasSessionDraft("onboarding:default:model")).toBe(false);
   });
   it("moves on with the host's own label once the default is confirmed", async () => {
     catalog("ready");
