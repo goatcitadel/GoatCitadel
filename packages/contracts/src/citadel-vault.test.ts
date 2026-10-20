@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { generateVaultKey, sealValue, openValue } from "./citadel-vault-node.js";
+import {
+  generateVaultKey,
+  openValue,
+  sealValue,
+  unwrapKey,
+  vaultDekWrapAad,
+  vaultSecretAad,
+  wrapKey,
+} from "./citadel-vault-node.js";
+import { toVaultSecretMetadata, type CitadelVaultSecretRecord } from "./citadel-vault.js";
 
 describe("citadel-vault", () => {
   describe("generateVaultKey", () => {
@@ -42,6 +51,120 @@ describe("citadel-vault", () => {
       const tampered = { ...sealed, ciphertext: raw.toString("base64") };
 
       expect(() => openValue(tampered, key)).toThrow();
+    });
+  });
+
+  describe("associated data binding", () => {
+    const binding = { citadelId: "c1", chamberId: "ch1", secretId: "s1", keyId: "k1" };
+
+    it("round-trips with associated data", () => {
+      const key = generateVaultKey();
+      const sealed = sealValue("bound value", key, vaultSecretAad(binding));
+      expect(openValue(sealed, key, vaultSecretAad(binding))).toBe("bound value");
+    });
+
+    it.each(["citadelId", "chamberId", "secretId", "keyId"] as const)("fails to open when %s differs", (field) => {
+      const key = generateVaultKey();
+      const sealed = sealValue("bound value", key, vaultSecretAad(binding));
+      const moved = { ...binding, [field]: `${binding[field]}-other` };
+      expect(() => openValue(sealed, key, vaultSecretAad(moved))).toThrow();
+    });
+
+    it("fails to open a bound envelope without associated data", () => {
+      const key = generateVaultKey();
+      const sealed = sealValue("bound value", key, vaultSecretAad(binding));
+      expect(() => openValue(sealed, key)).toThrow();
+    });
+
+    it("opens a legacy envelope sealed without associated data", () => {
+      const key = generateVaultKey();
+      const legacy = sealValue("legacy value", key);
+      expect(openValue(legacy, key)).toBe("legacy value");
+    });
+
+    it("emits the exact canonical secret AAD", () => {
+      expect(vaultSecretAad({ citadelId: "c1", chamberId: null, secretId: "s1", keyId: "k1" }).toString("utf8")).toBe(
+        '{"purpose":"goatcitadel.vault.secret","v":2,"citadelId":"c1","chamberId":null,"secretId":"s1","keyId":"k1"}',
+      );
+    });
+
+    it("emits a citadel scope for a null Chamber and a chamber scope otherwise", () => {
+      const base = { citadelId: "c1", keyId: "k1", dekVersion: 3, kekVersion: 2 };
+      expect(vaultDekWrapAad({ ...base, chamberId: null }).toString("utf8")).toBe(
+        '{"purpose":"goatcitadel.vault.dek-wrap","v":2,"citadelId":"c1","scope":"citadel","chamberId":null,"keyId":"k1","dekVersion":3,"kekVersion":2}',
+      );
+      expect(vaultDekWrapAad({ ...base, chamberId: "ch1" }).toString("utf8")).toBe(
+        '{"purpose":"goatcitadel.vault.dek-wrap","v":2,"citadelId":"c1","scope":"chamber","chamberId":"ch1","keyId":"k1","dekVersion":3,"kekVersion":2}',
+      );
+    });
+  });
+
+  describe("wrapKey / unwrapKey", () => {
+    const aadInput = { citadelId: "c1", chamberId: "ch1", keyId: "k1", dekVersion: 1, kekVersion: 1 };
+
+    it("round-trips a data key", () => {
+      const kek = generateVaultKey();
+      const dek = generateVaultKey();
+      const wrapped = wrapKey(dek, kek, vaultDekWrapAad(aadInput));
+      expect(unwrapKey(wrapped, kek, vaultDekWrapAad(aadInput)).equals(dek)).toBe(true);
+    });
+
+    it("fails to unwrap under another Chamber's associated data", () => {
+      const kek = generateVaultKey();
+      const wrapped = wrapKey(generateVaultKey(), kek, vaultDekWrapAad(aadInput));
+      expect(() => unwrapKey(wrapped, kek, vaultDekWrapAad({ ...aadInput, chamberId: "ch2" }))).toThrow();
+    });
+
+    it("rejects a payload that is not 32 bytes", () => {
+      const kek = generateVaultKey();
+      const aad = vaultDekWrapAad(aadInput);
+      const short = sealValue("x".repeat(16), kek, aad);
+      expect(() => unwrapKey(short, kek, aad)).toThrow(/32 bytes/);
+    });
+
+    it("refuses to wrap a key that is not 32 bytes", () => {
+      expect(() => wrapKey(Buffer.alloc(16, 1), generateVaultKey(), vaultDekWrapAad(aadInput))).toThrow(/32 bytes/);
+    });
+  });
+
+  describe("toVaultSecretMetadata", () => {
+    it("maps scope and key version and never copies the sealed value", () => {
+      const record: CitadelVaultSecretRecord = {
+        secretId: "s1",
+        citadelId: "c1",
+        secretName: "API",
+        chamberId: "ch1",
+        keyId: "k1",
+        envelopeVersion: 2,
+        sealedValue: { iv: "aXY=", ciphertext: "Y3Q=", tag: "dGFn" },
+        createdAt: "2026-10-19T00:00:00.000Z",
+        updatedAt: "2026-10-19T00:00:01.000Z",
+      };
+      const metadata = toVaultSecretMetadata(record, 3);
+      expect(metadata).toEqual({
+        secretId: "s1",
+        secretName: "API",
+        createdAt: "2026-10-19T00:00:00.000Z",
+        updatedAt: "2026-10-19T00:00:01.000Z",
+        chamberId: "ch1",
+        keyVersion: 3,
+      });
+      expect(JSON.stringify(metadata)).not.toContain("Y3Q=");
+    });
+
+    it("reports a legacy envelope with a null key version", () => {
+      const legacy: CitadelVaultSecretRecord = {
+        secretId: "s2",
+        citadelId: "c1",
+        secretName: "Old",
+        chamberId: null,
+        keyId: null,
+        envelopeVersion: 1,
+        sealedValue: { iv: "aXY=", ciphertext: "Y3Q=", tag: "dGFn" },
+        createdAt: "t",
+        updatedAt: "t",
+      };
+      expect(toVaultSecretMetadata(legacy)).toMatchObject({ chamberId: null, keyVersion: null });
     });
   });
 });

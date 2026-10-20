@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 268,
+      "expectedCount": 269,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 268,
+      "expectedLastVersion": 269,
       "migrations": [
         {
           "version": 1,
@@ -1884,15 +1884,22 @@
           "groupName": "canonical",
           "definitionSha256": "105f693d3129c342edda5ed0a495c2f9bd91bd1fb76e79defbd362a1dbd17ff0",
           "implementationSha256": "05cab7216f4e13e919ba0df693dc1af86dbe025fd25cb2bdbcc9c6e738084de4"
+        },
+        {
+          "version": 269,
+          "name": "citadel_vault_chamber_keys",
+          "groupName": "canonical",
+          "definitionSha256": "0296aa6f3df166dd5c28516fba2c6bfe35af974df0c89fe0563730140449aaba",
+          "implementationSha256": "1449afe7da12aef58037f8822533a8cff259773c5cf544340dc1fe09d5d299fd"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 216,
+      "expectedCount": 218,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 216,
+      "expectedLastVersion": 218,
       "migrations": [
         {
           "version": 1,
@@ -3195,6 +3202,18 @@
           "definitionSha256": "20c1a479ac95d016db33c6812bbde7075d9a23d0500e45b85423ecb95801876a",
           "sqlPayloadSha256": "467c542c0cf38a4da5a70081a0fc0625fedee1690b08ed7acb49a20394f8606c",
           "runtimeIntegritySha256": "1368d55a32906a665fd9209b3346e9667242b705d200a2fc19238a462f65649d"
+        },
+        {
+          "version": 217,
+          "name": "citadel_vault_chamber_keys",
+          "definitionSha256": "4d9ed2fa0ee3aa9fea4e7b8810cc5ee89fce678cf6c6bb03f25c6b8fb3fbeb94",
+          "runtimeIntegritySha256": "2f6d9ffdd937e4445c7fde3f3b0ec13a97e6fe83143e81f3d8fc28aeaa32ae1a"
+        },
+        {
+          "version": 218,
+          "name": "citadel_vault_chamber_keys_schema_convergence",
+          "definitionSha256": "5135a373638f1d0a14082545388ee05b3de519fc1fca89a575a4186ee3def324",
+          "runtimeIntegritySha256": "a80c3efa7adb6246a127793838e95491c974f429c67045a7edf8384cbed8a7aa"
         }
       ]
     }

@@ -19,12 +19,24 @@ vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
 let owner: CitadelVaultSnapshot,
   control!: ReturnType<typeof useCitadelVaultEditor>,
   renderer: ReactTestRenderer | undefined;
-const initial = (): CitadelVaultSnapshot => ({ citadelId: "citadel", revision: "a".repeat(64), items: [] });
+const initial = (): CitadelVaultSnapshot => ({
+  citadelId: "citadel",
+  revision: "a".repeat(64),
+  items: [],
+  keys: { kekVersion: 1, scopes: [], legacySecretCount: 0 },
+});
 const stored = (): CitadelVaultSnapshot => ({
   ...initial(),
   revision: "b".repeat(64),
   items: [
-    { secretId: "secret", secretName: "Example", createdAt: "2026-09-30T00:00:00Z", updatedAt: "2026-09-30T00:00:00Z" },
+    {
+      secretId: "secret",
+      secretName: "Example",
+      createdAt: "2026-09-30T00:00:00Z",
+      updatedAt: "2026-09-30T00:00:00Z",
+      chamberId: null,
+      keyVersion: 1,
+    },
   ],
 });
 function Harness({ scope = "citadel" }: { scope?: string }) {
@@ -275,6 +287,34 @@ it("withholds a reveal changed during transport and clears revealed values after
   expect(control.revealed.secret).toBe("synthetic-opened-value");
   await act(async () => control.refresh());
   expect(control.revealed).toEqual({});
+});
+it("still reveals when only key versions and counts changed during transport", async () => {
+  owner = stored();
+  await mount();
+  await act(async () => control.inspect("secret"));
+  api.reveal.mockImplementationOnce(async () => {
+    const upgraded = stored();
+    owner = {
+      ...upgraded,
+      items: upgraded.items.map((item) => ({ ...item, keyVersion: 2 })),
+      keys: {
+        ...upgraded.keys,
+        legacySecretCount: 0,
+        scopes: [{ chamberId: null, activeKeyVersion: 2, secretCount: 1 }],
+      },
+    };
+    return "synthetic-secret";
+  });
+  await act(async () => control.reveal("secret"));
+  expect(control.revealed.secret).toBe("synthetic-secret");
+});
+it("rejects a snapshot with unknown item fields", async () => {
+  owner = {
+    ...stored(),
+    items: stored().items.map((item) => ({ ...item, sealedValue: "synthetic-leak" })),
+  } as CitadelVaultSnapshot;
+  await mount();
+  expect(control.items).toEqual([]);
 });
 it("hides a revealed value after 30 seconds", async () => {
   vi.useFakeTimers();

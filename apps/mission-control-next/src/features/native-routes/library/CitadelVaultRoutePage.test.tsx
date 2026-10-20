@@ -39,7 +39,10 @@ function vaultSnapshot(revision = "a", citadelId = "default") {
   return {
     citadelId,
     revision: revision.repeat(64),
-    items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: revision }],
+    items: [
+      { secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: revision, chamberId: null, keyVersion: 1 },
+    ],
+    keys: { kekVersion: 1, scopes: [], legacySecretCount: 0 },
   };
 }
 function rejected(status: number, method = "POST") {
@@ -145,6 +148,8 @@ describe("CitadelVaultRoutePage", () => {
             secretName: name,
             createdAt: prior?.createdAt ?? "t",
             updatedAt: "b",
+            chamberId: null,
+            keyVersion: 1,
           },
         ].sort((a, b) => a.secretName.localeCompare(b.secretName)),
       };
@@ -295,7 +300,16 @@ describe("CitadelVaultRoutePage", () => {
     await act(async () => {
       finish({
         ...vaultSnapshot("b"),
-        items: [{ secretId: "late", secretName: "Late acknowledgement", createdAt: "t", updatedAt: "t" }],
+        items: [
+          {
+            secretId: "late",
+            secretName: "Late acknowledgement",
+            createdAt: "t",
+            updatedAt: "t",
+            chamberId: null,
+            keyVersion: 1,
+          },
+        ],
       });
     });
     expect(treeString(renderer)).not.toContain("Late acknowledgement");

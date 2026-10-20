@@ -10,7 +10,7 @@ export function assertVaultUnavailableAgreement({ before, request, status, respo
   assert.equal(request.value, "synthetic-vault-proof-input");
   assert.deepEqual(owner, before, "An unavailable keychain must not change Vault metadata.");
   assert.match(owner.revision, /^[a-f0-9]{64}$/u);
-  assert.ok(owner.items.every(item => Object.keys(item).every(key => ["secretId", "secretName", "createdAt", "updatedAt"].includes(key))));
+  assert.ok(owner.items.every(item => Object.keys(item).every(key => ["secretId", "secretName", "createdAt", "updatedAt", "chamberId", "keyVersion"].includes(key))));
 }
 
 /** Real metadata/read/cancel and unavailable-keychain owner response. Never enables a keychain backend. */

@@ -1013,11 +1013,12 @@ test("current registries and checked-in manifest cover every migration exactly",
 
   // These reviewed literals are intentionally independent from the generated
   // manifest so an accidental registry-plus-manifest edit cannot self-certify.
-  assert.equal(sqlite.migrations.length, 268);
-  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 268]);
-  assert.equal(postgres.migrations.length, 216);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 216]);
-  assert.equal(sqlite.migrations.at(-1)?.name, "external_side_effect_replay_record");
+  assert.equal(sqlite.migrations.length, 269);
+  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 269]);
+  assert.equal(postgres.migrations.length, 218);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 218]);
+  assert.equal(sqlite.migrations.at(-1)?.name, "citadel_vault_chamber_keys");
+  assert.equal(sqlite.migrations.find((record) => record.version === 268)?.name, "external_side_effect_replay_record");
   assert.equal(
     sqlite.migrations.find((record) => record.version === 267)?.name,
     "pause_dormant_no_agent_cron_jobs",
@@ -1040,7 +1041,9 @@ test("current registries and checked-in manifest cover every migration exactly",
     sqlite.migrations.find((record) => record.version === 253)?.name,
     "purge_credential_route_idempotency_payload_hashes",
   );
-  assert.equal(postgres.migrations.at(-1)?.name, "external_side_effect_replay_record");
+  assert.equal(postgres.migrations.at(-1)?.name, "citadel_vault_chamber_keys_schema_convergence");
+  assert.equal(postgres.migrations.find((record) => record.version === 217)?.name, "citadel_vault_chamber_keys");
+  assert.equal(postgres.migrations.find((record) => record.version === 216)?.name, "external_side_effect_replay_record");
   assert.equal(postgres.migrations.find((record) => record.version === 215)?.name, "pause_dormant_no_agent_cron_jobs");
   assert.equal(postgres.migrations.find((record) => record.version === 214)?.name, "mail_drafts_schema_convergence");
   assert.equal(postgres.migrations.find((record) => record.version === 213)?.name, "mail_drafts");
@@ -1128,7 +1131,7 @@ test("current registries and checked-in manifest cover every migration exactly",
       2, 119, 120, 121, 122, 134, 135, 136, 137, 138, 140, 141, 145, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156,
       157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179,
       180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 198, 200, 204, 205, 206, 207,
-      209, 210, 211, 213, 214, 215,
+      209, 210, 211, 213, 214, 215, 217, 218,
     ],
   );
   assert.equal(
@@ -1162,6 +1165,14 @@ test("current registries and checked-in manifest cover every migration exactly",
   assert.equal(
     postgres.migrations.find((record) => record.version === 216)?.runtimeIntegritySha256,
     "1368d55a32906a665fd9209b3346e9667242b705d200a2fc19238a462f65649d",
+  );
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 217)?.runtimeIntegritySha256,
+    "2f6d9ffdd937e4445c7fde3f3b0ec13a97e6fe83143e81f3d8fc28aeaa32ae1a",
+  );
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 218)?.runtimeIntegritySha256,
+    "a80c3efa7adb6246a127793838e95491c974f429c67045a7edf8384cbed8a7aa",
   );
   assert.equal(postgres.migrations.find((record) => record.version === 63)?.name, "citadel_tables_backfill");
   assert.equal(

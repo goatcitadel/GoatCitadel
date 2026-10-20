@@ -11,7 +11,6 @@ import type {
   CitadelCouncilAssignmentInput,
   CitadelIntegrationGrant,
   CitadelIntegrationGrantInput,
-  CitadelIntegrationMode,
   CitadelLifecycleStatus,
   CitadelMember,
   CitadelMemberInput,
@@ -20,7 +19,6 @@ import type {
   CitadelRecord,
   CitadelStructureMutation,
   CitadelStructureSnapshot,
-  CitadelRole,
   CitadelUpdateInput,
   CitadelVaultMutation,
   CitadelVaultSnapshot,
@@ -28,113 +26,36 @@ import type {
   CitadelVaultSecretRecord,
   CitadelWardInput,
   CitadelWardRecord,
-  ChamberSensitivity,
-  CitadelKind,
-  CitadelModelPolicy,
-  CitadelRiskPosture,
   MasonAnswers,
   MasonSession,
   MasonSessionStatus,
-  WardEffect,
 } from "@goatcitadel/contracts";
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
-import { safeJsonParse } from "./safe-json.js";
 import { CitadelVaultRepository } from "./citadel-vault-repo.js";
+import { CitadelVaultKeyRepository } from "./citadel-vault-key-repo.js";
 import { applyCitadelAccessChange } from "./citadel-access-change.js";
-
-interface CharterRow {
-  citadel_id: string;
-  purpose: string;
-  kind: string;
-  goals_json: string;
-  boundaries_json: string;
-  success_definition_json: string;
-  default_chamber_id: string | null;
-  risk_posture: string;
-  model_policy_default: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface CitadelRecordRow {
-  citadel_id: string;
-  name: string;
-  description: string | null;
-  slug: string;
-  kind: string;
-  lifecycle_status: "active" | "archived";
-  archived_at: string | null;
-  default_workspace_id: string | null;
-  created_at: string;
-  updated_at: string;
-  has_charter?: number | boolean | null;
-}
-
-interface ChamberRow {
-  chamber_id: string;
-  citadel_id: string;
-  name: string;
-  sensitivity: string;
-  sealed: number;
-  created_at: string;
-  updated_at: string;
-}
-
-interface CouncilAssignmentRow {
-  assignment_id: string;
-  citadel_id: string;
-  agent_id: string;
-  created_at: string;
-}
-
-interface WardRow {
-  ward_id: string;
-  citadel_id: string;
-  name: string;
-  action_pattern: string;
-  effect: string;
-  created_at: string;
-}
-
-interface PassageRow {
-  passage_id: string;
-  source_citadel_id: string;
-  source_chamber_id: string | null;
-  destination_citadel_id: string;
-  allowed_fields_json: string;
-  expires_at: string | null;
-  created_at: string;
-}
-
-interface MemberRow {
-  member_id: string;
-  citadel_id: string;
-  subject_id: string;
-  role: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface MasonSessionRow {
-  session_id: string;
-  answers_json: string;
-  status: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface IntegrationGrantRow {
-  grant_id: string;
-  citadel_id: string;
-  provider: string;
-  account: string | null;
-  capabilities_json: string;
-  mode: string;
-  expires_at: string | null;
-  created_at: string;
-}
+import {
+  mapCitadelRecord,
+  mapCharter,
+  mapChamber,
+  mapCouncilAssignment,
+  mapWard,
+  mapPassage,
+  mapMember,
+  mapMasonSession,
+  mapIntegrationGrant,
+  type CharterRow,
+  type CitadelRecordRow,
+  type ChamberRow,
+  type CouncilAssignmentRow,
+  type WardRow,
+  type PassageRow,
+  type MemberRow,
+  type MasonSessionRow,
+  type IntegrationGrantRow,
+} from "./citadel-repo-rows.js";
 
 /**
  * Persistence for Citadel identity: a Charter (1:1 with a workspace/citadel) and
@@ -163,6 +84,8 @@ export class CitadelRepository {
   private readonly listWardsStmt;
   private readonly deleteWardStmt;
   private readonly vault: CitadelVaultRepository;
+  /** Ciphertext-only Vault key hierarchy: wrapped data keys, key state and the rotation ledger. */
+  public readonly vaultKeys: CitadelVaultKeyRepository;
   private readonly createPassageStmt;
   private readonly getPassageStmt;
   private readonly listPassagesStmt;
@@ -287,8 +210,13 @@ export class CitadelRepository {
       "SELECT * FROM citadel_wards WHERE citadel_id = @citadelId ORDER BY created_at ASC, ward_id ASC",
     );
     this.deleteWardStmt = db.prepare("DELETE FROM citadel_wards WHERE ward_id = @wardId AND citadel_id = @citadelId");
+    this.vaultKeys = new CitadelVaultKeyRepository(db, {
+      withLock: (citadelId, action) => this.withStructureLock(citadelId, action),
+    });
     this.vault = new CitadelVaultRepository(db, {
       withLock: (citadelId, action) => this.withStructureLock(citadelId, action),
+      listChambers: (citadelId) => this.listChambers(citadelId),
+      keys: () => this.vaultKeys,
       readRecord: (citadelId) => {
         const row = this.getRecordForUpdateStmt.get(citadelId) as CitadelRecordRow | undefined;
         return row ? mapCitadelRecord(row) : undefined;
@@ -384,8 +312,14 @@ export class CitadelRepository {
     return this.withStructureLock(citadelId, () => {
       this.assertRecordSlugAvailable(slug);
       const inserted = this.insertRecordStmt.run({
-        citadelId, name, description: sanitizeOptional(input.description), slug, kind: input.kind ?? "custom",
-        defaultWorkspaceId: sanitizeOptional(input.defaultWorkspaceId), createdAt: now, updatedAt: now,
+        citadelId,
+        name,
+        description: sanitizeOptional(input.description),
+        slug,
+        kind: input.kind ?? "custom",
+        defaultWorkspaceId: sanitizeOptional(input.defaultWorkspaceId),
+        createdAt: now,
+        updatedAt: now,
       });
       if (inserted.changes !== 1) {
         throw new ConflictError({ code: "ALREADY_EXISTS", message: `Citadel id or slug "${slug}" is already in use` });
@@ -408,18 +342,25 @@ export class CitadelRepository {
         this.updateRecordStmt.run({
           citadelId,
           name: nextName,
-          description: input.description !== undefined ? sanitizeOptional(input.description) : (current.description ?? null),
+          description:
+            input.description !== undefined ? sanitizeOptional(input.description) : (current.description ?? null),
           slug: nextSlug,
           kind: input.kind ?? current.kind,
-          defaultWorkspaceId: input.defaultWorkspaceId !== undefined
-            ? sanitizeOptional(input.defaultWorkspaceId) : (current.defaultWorkspaceId ?? null),
+          defaultWorkspaceId:
+            input.defaultWorkspaceId !== undefined
+              ? sanitizeOptional(input.defaultWorkspaceId)
+              : (current.defaultWorkspaceId ?? null),
           updatedAt,
         });
         return this.getRecord(citadelId);
       });
     } catch (error) {
-      if (error && typeof error === "object" && "code" in error
-        && (error.code === "23505" || error.code === "SQLITE_CONSTRAINT_UNIQUE")) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error.code === "23505" || error.code === "SQLITE_CONSTRAINT_UNIQUE")
+      ) {
         throw new ConflictError({ code: "ALREADY_EXISTS", message: "That Citadel slug is already in use." });
       }
       throw error;
@@ -442,18 +383,27 @@ export class CitadelRepository {
     });
   }
 
-  private withReviewedRecord<T>(citadelId: string, expectedRevision: string, now: string,
-    write: (current: CitadelRecord, updatedAt: string) => T): T {
+  private withReviewedRecord<T>(
+    citadelId: string,
+    expectedRevision: string,
+    now: string,
+    write: (current: CitadelRecord, updatedAt: string) => T,
+  ): T {
     if (!/^[a-f0-9]{64}$/.test(expectedRevision ?? "")) {
-      throw new ValidationError({ message: "Review the Citadel before changing it. An expected revision is required." });
+      throw new ValidationError({
+        message: "Review the Citadel before changing it. An expected revision is required.",
+      });
     }
     return this.withStructureLock(citadelId, () => {
       const row = this.getRecordForUpdateStmt.get(citadelId) as CitadelRecordRow | undefined;
       if (!row) throw new NotFoundError({ entity: "Citadel", id: citadelId });
       const current = mapCitadelRecord(row);
       if (current.revision !== expectedRevision) {
-        throw new ConflictError({ code: "WRITE_CONFLICT", message: "The Citadel changed. Review its current profile before applying your change.",
-          details: { reason: "CITADEL_RECORD_REVISION_CONFLICT" } });
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "The Citadel changed. Review its current profile before applying your change.",
+          details: { reason: "CITADEL_RECORD_REVISION_CONFLICT" },
+        });
       }
       const previous = Date.parse(current.updatedAt);
       const updatedAt = new Date(Math.max(Date.parse(now), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
@@ -541,21 +491,32 @@ export class CitadelRepository {
 
   public mutateStructure(input: CitadelStructureMutation): CitadelStructureSnapshot {
     if (!/^[a-f0-9]{64}$/.test(input.expectedRevision ?? "")) {
-      throw new ValidationError({ message: "Review the current Charter and Chambers before changing them. An expected revision is required." });
+      throw new ValidationError({
+        message: "Review the current Charter and Chambers before changing them. An expected revision is required.",
+      });
     }
     return this.withStructureLock(input.citadelId, () => {
       const current = this.readStructureSnapshot(input.citadelId);
       if (current.revision !== input.expectedRevision) {
-        throw new ConflictError({ code: "WRITE_CONFLICT", message: "The Citadel changed. Review its current Charter and Chambers before applying your change.",
-          details: { reason: "CITADEL_STRUCTURE_REVISION_CONFLICT" } });
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "The Citadel changed. Review its current Charter and Chambers before applying your change.",
+          details: { reason: "CITADEL_STRUCTURE_REVISION_CONFLICT" },
+        });
       }
       if (current.record?.lifecycleStatus === "archived") {
-        throw new ConflictError({ code: "WRITE_CONFLICT", message: "Restore this Citadel before changing its Charter or Chambers.",
-          details: { reason: "CITADEL_ARCHIVED" } });
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "Restore this Citadel before changing its Charter or Chambers.",
+          details: { reason: "CITADEL_ARCHIVED" },
+        });
       }
       const change = input.change;
       if (change.type === "charter" || change.type === "setup") {
-        if (change.charter.defaultChamberId && this.getChamber(change.charter.defaultChamberId)?.citadelId !== input.citadelId) {
+        if (
+          change.charter.defaultChamberId &&
+          this.getChamber(change.charter.defaultChamberId)?.citadelId !== input.citadelId
+        ) {
           throw new ValidationError({ message: "The default Chamber must belong to this Citadel." });
         }
         this.writeCharter({ ...change.charter, citadelId: input.citadelId });
@@ -577,9 +538,17 @@ export class CitadelRepository {
     const record = row ? mapCitadelRecord(row) : undefined;
     const charter = this.getCharter(citadelId) ?? null;
     const chambers = this.listChambers(citadelId);
-    const revision = createHash("sha256").update(JSON.stringify({
-      schemaVersion: "citadel.structure.v1", citadelId, recordRevision: record?.revision ?? null, charter, chambers,
-    })).digest("hex");
+    const revision = createHash("sha256")
+      .update(
+        JSON.stringify({
+          schemaVersion: "citadel.structure.v1",
+          citadelId,
+          recordRevision: record?.revision ?? null,
+          charter,
+          chambers,
+        }),
+      )
+      .digest("hex");
     return { citadelId, revision, record, charter, chambers };
   }
 
@@ -587,7 +556,8 @@ export class CitadelRepository {
     return this.db.transaction("immediate", () => {
       if (this.db.dialect === "postgres") {
         // The advisory lock also protects empty/legacy Citadels with no profile row.
-        this.db.prepare("SELECT pg_advisory_xact_lock(hashtextextended(@lockKey, 541)) AS locked")
+        this.db
+          .prepare("SELECT pg_advisory_xact_lock(hashtextextended(@lockKey, 541)) AS locked")
           .get({ lockKey: `citadel-structure:${citadelId}` });
       }
       return action();
@@ -600,17 +570,25 @@ export class CitadelRepository {
 
   public mutateAccess(input: CitadelAccessMutation): CitadelAccessSnapshot {
     if (!/^[a-f0-9]{64}$/.test(input.expectedRevision ?? "")) {
-      throw new ValidationError({ message: "Review the Citadel access rules before changing them. An expected revision is required." });
+      throw new ValidationError({
+        message: "Review the Citadel access rules before changing them. An expected revision is required.",
+      });
     }
     return this.withStructureLock(input.citadelId, () => {
       const current = this.readAccessSnapshot(input.citadelId);
       if (current.revision !== input.expectedRevision) {
-        throw new ConflictError({ code: "WRITE_CONFLICT", message: "The Citadel access rules changed. Review the current rules before applying your change.",
-          details: { reason: "CITADEL_ACCESS_REVISION_CONFLICT" } });
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "The Citadel access rules changed. Review the current rules before applying your change.",
+          details: { reason: "CITADEL_ACCESS_REVISION_CONFLICT" },
+        });
       }
       if (current.structure.record?.lifecycleStatus === "archived") {
-        throw new ConflictError({ code: "WRITE_CONFLICT", message: "Restore this Citadel before changing its access rules.",
-          details: { reason: "CITADEL_ARCHIVED" } });
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "Restore this Citadel before changing its access rules.",
+          details: { reason: "CITADEL_ARCHIVED" },
+        });
       }
       const { citadelId, change } = input;
       applyCitadelAccessChange(this, citadelId, change);
@@ -619,12 +597,24 @@ export class CitadelRepository {
   }
 
   private readAccessSnapshot(citadelId: string): CitadelAccessSnapshot {
-    const generation = this.db.prepare("SELECT CAST(generation AS TEXT) AS generation FROM citadel_access_revisions WHERE citadel_id = @citadelId")
-      .get<{ generation: string }>({ citadelId })?.generation ?? "0";
-    const content = { citadelId, structure: this.readStructureSnapshot(citadelId), council: this.listCouncilAssignments(citadelId),
-      wards: this.listWards(citadelId), passages: this.listPassages(citadelId), members: this.listMembers(citadelId),
-      integrations: this.listIntegrationGrants(citadelId) };
-    const revision = createHash("sha256").update(JSON.stringify({ schemaVersion: "citadel.access.v1", generation, ...content })).digest("hex");
+    const generation =
+      this.db
+        .prepare(
+          "SELECT CAST(generation AS TEXT) AS generation FROM citadel_access_revisions WHERE citadel_id = @citadelId",
+        )
+        .get<{ generation: string }>({ citadelId })?.generation ?? "0";
+    const content = {
+      citadelId,
+      structure: this.readStructureSnapshot(citadelId),
+      council: this.listCouncilAssignments(citadelId),
+      wards: this.listWards(citadelId),
+      passages: this.listPassages(citadelId),
+      members: this.listMembers(citadelId),
+      integrations: this.listIntegrationGrants(citadelId),
+    };
+    const revision = createHash("sha256")
+      .update(JSON.stringify({ schemaVersion: "citadel.access.v1", generation, ...content }))
+      .digest("hex");
     return { ...content, revision };
   }
 
@@ -633,8 +623,12 @@ export class CitadelRepository {
     return this.withStructureLock(citadelId, () => {
       const result = write();
       if (result !== false) {
-        this.db.prepare(`INSERT INTO citadel_access_revisions (citadel_id, generation) VALUES (@citadelId, 1)
-          ON CONFLICT (citadel_id) DO UPDATE SET generation = citadel_access_revisions.generation + 1`).run({ citadelId });
+        this.db
+          .prepare(
+            `INSERT INTO citadel_access_revisions (citadel_id, generation) VALUES (@citadelId, 1)
+          ON CONFLICT (citadel_id) DO UPDATE SET generation = citadel_access_revisions.generation + 1`,
+          )
+          .run({ citadelId });
       }
       return result;
     });
@@ -896,121 +890,6 @@ export class CitadelRepository {
       throw new ConflictError({ code: "ALREADY_EXISTS", message: `Citadel slug "${slug}" is already in use` });
     }
   }
-}
-
-function mapCitadelRecord(row: CitadelRecordRow): CitadelRecord {
-  // Derived hasCharter is intentionally excluded, so list/detail reviews agree.
-  const revision = createHash("sha256").update(JSON.stringify(["citadel-record-review-v1", row.citadel_id,
-    row.name, row.description, row.slug, row.kind, row.lifecycle_status, row.archived_at,
-    row.default_workspace_id, row.created_at, row.updated_at])).digest("hex");
-  return {
-    citadelId: row.citadel_id,
-    revision,
-    name: row.name,
-    description: row.description ?? undefined,
-    slug: row.slug,
-    kind: row.kind as CitadelKind,
-    lifecycleStatus: row.lifecycle_status,
-    archivedAt: row.archived_at ?? undefined,
-    defaultWorkspaceId: row.default_workspace_id ?? undefined,
-    ...(row.has_charter !== undefined ? { hasCharter: Boolean(row.has_charter) } : {}),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function mapCharter(row: CharterRow): CitadelCharter {
-  return {
-    citadelId: row.citadel_id,
-    purpose: row.purpose,
-    kind: row.kind as CitadelKind,
-    goals: safeJsonParse<string[]>(row.goals_json, []),
-    boundaries: safeJsonParse<string[]>(row.boundaries_json, []),
-    successDefinition: safeJsonParse<string[]>(row.success_definition_json, []),
-    defaultChamberId: row.default_chamber_id ?? undefined,
-    riskPosture: row.risk_posture as CitadelRiskPosture,
-    modelPolicyDefault: row.model_policy_default as CitadelModelPolicy,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function mapChamber(row: ChamberRow): CitadelChamber {
-  return {
-    chamberId: row.chamber_id,
-    citadelId: row.citadel_id,
-    name: row.name,
-    sensitivity: row.sensitivity as ChamberSensitivity,
-    sealed: row.sealed === 1,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function mapCouncilAssignment(row: CouncilAssignmentRow): CitadelCouncilAssignment {
-  return {
-    assignmentId: row.assignment_id,
-    citadelId: row.citadel_id,
-    agentId: row.agent_id,
-    createdAt: row.created_at,
-  };
-}
-
-function mapWard(row: WardRow): CitadelWardRecord {
-  return {
-    wardId: row.ward_id,
-    citadelId: row.citadel_id,
-    name: row.name,
-    actionPattern: row.action_pattern,
-    effect: row.effect as WardEffect,
-    createdAt: row.created_at,
-  };
-}
-
-function mapPassage(row: PassageRow): CitadelPassage {
-  return {
-    passageId: row.passage_id,
-    sourceCitadelId: row.source_citadel_id,
-    sourceChamberId: row.source_chamber_id ?? undefined,
-    destinationCitadelId: row.destination_citadel_id,
-    allowedFields: safeJsonParse<string[]>(row.allowed_fields_json, []),
-    expiresAt: row.expires_at ?? undefined,
-    createdAt: row.created_at,
-  };
-}
-
-function mapMember(row: MemberRow): CitadelMember {
-  return {
-    memberId: row.member_id,
-    citadelId: row.citadel_id,
-    subjectId: row.subject_id,
-    role: row.role as CitadelRole,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function mapMasonSession(row: MasonSessionRow): MasonSession {
-  return {
-    sessionId: row.session_id,
-    answers: safeJsonParse<Partial<MasonAnswers>>(row.answers_json, {}),
-    status: row.status as MasonSessionStatus,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function mapIntegrationGrant(row: IntegrationGrantRow): CitadelIntegrationGrant {
-  return {
-    grantId: row.grant_id,
-    citadelId: row.citadel_id,
-    provider: row.provider,
-    account: row.account ?? undefined,
-    capabilities: safeJsonParse<string[]>(row.capabilities_json, []),
-    mode: row.mode as CitadelIntegrationMode,
-    expiresAt: row.expires_at ?? undefined,
-    createdAt: row.created_at,
-  };
 }
 
 function sanitizeRequired(value: string, field: string): string {
