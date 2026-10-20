@@ -412,6 +412,7 @@ describe("ProviderConnectionChangePlanAdapter", () => {
     expect(prepared.status).toBe("awaiting_input");
     expect(prepared.requiredAction?.kind).toBe("secure_input");
     expect(prepared.requiredAction).toMatchObject({
+      title: "Enter Claude Code (Claude subscription) token",
       fields: [
         {
           fieldId: "credential",

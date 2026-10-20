@@ -59,9 +59,7 @@ export function CockpitGuidedModelSetup({
           ? readiness.state === "checking"
             ? "Checking connection…"
             : "Check connection"
-          : setup.usesChatGptOAuth
-            ? "Connect ChatGPT"
-            : "Connect provider";
+          : (setup.connectionHint?.connectLabel ?? "Connect provider");
   const PrimaryIcon = setup.primary.kind === "enter" ? Play : PlugZap;
   return (
     <div className="mt-4 grid gap-4">
@@ -84,8 +82,9 @@ export function CockpitGuidedModelSetup({
         <Field
           label="Provider or local runtime"
           help={
-            setup.usesChatGptOAuth
-              ? "Use your ChatGPT account: select Connect ChatGPT, review the plan, then approve the sign-in in OpenAI."
+            setup.connectionHint
+              ? // Keep a catalog error visible beside the provider hint.
+                [setup.connectionHint.note, catalog.error].filter(Boolean).join(" ")
               : (catalog.error ?? "The Gateway checks this connection before Chat can use it.")
           }
         >
