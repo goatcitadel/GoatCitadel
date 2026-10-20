@@ -25,6 +25,8 @@ export const CLAUDE_CLI_REASON_CODES = [
   "claude_cli_cancelled",
   "claude_cli_hook_blocked",
   "claude_cli_managed_hooks_active",
+  "claude_cli_bridge_unavailable",
+  "claude_cli_bridge_mismatch",
 ] as const;
 
 export type ClaudeCliReasonCode = (typeof CLAUDE_CLI_REASON_CODES)[number];
@@ -105,13 +107,19 @@ export function resolveClaudeCliInvocation(input: {
   return { command: candidates[0] as string, prefixArgs: [] };
 }
 
-export function buildClaudeCliArgs(input: { model: string; systemPromptFile?: string }): string[] {
+export function buildClaudeCliArgs(input: {
+  model: string;
+  systemPromptFile?: string;
+  /** Tool-bridge step: the CLI gets the inert MCP stub; its `mcp__goatcitadel` tools are allowed, nothing else. */
+  bridge?: { mcpConfigPath: string };
+}): string[] {
   const model = input.model.trim();
   if (!CLAUDE_CLI_MODEL_PATTERN.test(model)) {
     throw new ClaudeCliError("claude_cli_model_unavailable", "The selected model id is not a valid Claude model id");
   }
   return [
     "-p",
+    ...(input.bridge ? ["--mcp-config", input.bridge.mcpConfigPath] : []),
     "--input-format",
     "stream-json",
     "--output-format",
@@ -127,7 +135,7 @@ export function buildClaudeCliArgs(input: { model: string; systemPromptFile?: st
     "--tools",
     "",
     "--strict-mcp-config",
-    "--safe-mode",
+    ...(input.bridge ? [] : ["--safe-mode"]),
     "--disable-slash-commands",
     "--no-session-persistence",
     "--permission-mode",
@@ -138,6 +146,7 @@ export function buildClaudeCliArgs(input: { model: string; systemPromptFile?: st
     "",
     "--settings",
     CLAUDE_CLI_ISOLATION_SETTINGS,
+    ...(input.bridge ? ["--allowedTools", "mcp__goatcitadel", "--permission-prompts", "none"] : []),
   ];
 }
 
