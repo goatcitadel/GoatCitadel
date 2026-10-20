@@ -22,6 +22,7 @@ import {
   shouldRetryTransientProviderError,
 } from "./llm-completion-helpers.js";
 import { ChatTurnCancelledError } from "./chat-turn-helpers.js";
+import { ClaudeCliError } from "./claude-code-cli-process.js";
 import { StreamIdleTimeoutError } from "./stream-idle-watchdog.js";
 import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 
@@ -143,6 +144,19 @@ describe("llm-completion-helpers", () => {
       leadingSystemMessageCount: 2,
       copyMode: "retrieved_non_authoritative",
     });
+  });
+
+  it("shouldRetryToolProtocolError is false for each bridge, tool-use and hook ClaudeCliError", () => {
+    const protocolLooking = "invalid tool call: tool_calls[0] is malformed";
+    expect(shouldRetryToolProtocolError(new Error(protocolLooking))).toBe(true);
+    for (const reasonCode of [
+      "claude_cli_bridge_unavailable",
+      "claude_cli_bridge_mismatch",
+      "claude_cli_tool_use_blocked",
+      "claude_cli_hook_blocked",
+    ] as const) {
+      expect(shouldRetryToolProtocolError(new ClaudeCliError(reasonCode, protocolLooking)), reasonCode).toBe(false);
+    }
   });
 
   it("classifies tool-protocol and transient provider failures without retrying auth denials blindly", () => {

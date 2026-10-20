@@ -22,6 +22,7 @@ import {
   buildClaudeCliEnv,
   resolveClaudeCliInvocation,
   runClaudeCli,
+  type ClaudeCliExit,
   type ClaudeCliInvocation,
   type ClaudeCliSpawn,
 } from "./claude-code-cli-process.js";
@@ -30,8 +31,16 @@ import {
   claudeCliUserMessage,
   createClaudeCliStreamMapper,
   renderClaudeCliPrompt,
+  type ClaudeCliStreamOutcome,
+  type ClaudeCliToolStep,
   type ClaudeCliUsage,
 } from "./claude-code-cli-stream.js";
+import {
+  buildClaudeCliToolManifest,
+  resolveClaudeCliStubPath,
+  writeClaudeCliBridgeFiles,
+  type ClaudeCliToolManifest,
+} from "./claude-code-cli-tool-bridge.js";
 import {
   ClaudeCodeCliReadiness,
   claudeManagedSettingsDirs,
@@ -55,6 +64,15 @@ export interface ClaudeCodeCliRuntimeOptions {
   readiness?: ClaudeCodeCliReadiness;
   /** Parent of the per-run scratch dirs (cwd + system prompt file). Defaults to the OS temp dir. */
   scratchRoot?: string;
+  /** Tool-bridge overrides; by default the stub is found next to this module and run by this Node binary. */
+  toolBridge?: { stubPath?: () => string | undefined; nodePath?: string };
+}
+
+/** Step-mode tool bridge wiring. `enabled` is read per step, never cached. */
+export interface ClaudeCodeCliToolBridgeRuntime {
+  enabled(): boolean;
+  readonly nodePath: string;
+  stubPath(): string | undefined;
 }
 
 export interface ClaudeCodeCliRuntime {
@@ -63,14 +81,16 @@ export interface ClaudeCodeCliRuntime {
   readonly scratchRoot: string;
   readonly spawn?: ClaudeCliSpawn;
   readonly killTree?: (pid: number) => void;
+  readonly toolBridge?: ClaudeCodeCliToolBridgeRuntime;
   resolveInvocation(): ClaudeCliInvocation;
 }
 
 export function createClaudeCodeCliRuntime(
   env: NodeJS.ProcessEnv,
-  serviceOptions: { claudeCli?: ClaudeCodeCliRuntimeOptions } = {},
+  serviceOptions: { claudeCli?: ClaudeCodeCliRuntimeOptions; claudeCliToolBridgeEnabled?: () => boolean } = {},
 ): ClaudeCodeCliRuntime {
   const options = serviceOptions.claudeCli ?? {};
+  const bridgeEnabled = serviceOptions.claudeCliToolBridgeEnabled;
   const childEnv = buildClaudeCliEnv(env);
   let cached: { at: number; invocation: ClaudeCliInvocation } | undefined;
   const resolveInvocation =
@@ -92,6 +112,11 @@ export function createClaudeCodeCliRuntime(
     spawn: options.spawn,
     killTree: options.killTree,
     resolveInvocation,
+    toolBridge: {
+      enabled: () => bridgeEnabled?.() === true,
+      nodePath: options.toolBridge?.nodePath ?? process.execPath,
+      stubPath: options.toolBridge?.stubPath ?? (() => resolveClaudeCliStubPath(existsSync)),
+    },
     readiness:
       options.readiness ??
       new ClaudeCodeCliReadiness({
@@ -142,6 +167,8 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
     let id: string | undefined;
     let usage: ClaudeCliUsage | undefined;
     let eventIds: string[] | undefined;
+    let finishReason = "stop";
+    const toolCalls = new ToolCallAccumulator();
     for await (const chunk of claudeCodeCliProviderAdapter.chatCompletionsStream(
       request,
       resolved,
@@ -152,15 +179,25 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
       id ??= typeof chunk.id === "string" ? chunk.id : undefined;
       const delta = readDelta(chunk);
       if (typeof delta?.content === "string") text += delta.content;
+      toolCalls.absorb(delta?.tool_calls);
+      const chunkFinish = readFinishReason(chunk);
+      if (chunkFinish) finishReason = chunkFinish;
       if (chunk.usage) usage = chunk.usage as ClaudeCliUsage;
       if (Array.isArray(chunk.model_usage_event_ids)) eventIds = chunk.model_usage_event_ids as string[];
     }
+    const calls = toolCalls.list();
     return {
       id,
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
       model,
-      choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: text, ...(calls.length > 0 ? { tool_calls: calls } : {}) },
+          finish_reason: finishReason,
+        },
+      ],
       ...(usage ? { usage: { ...usage } } : {}),
       ...(eventIds && eventIds.length > 0 ? { modelUsageEventIds: eventIds } : {}),
     };
@@ -179,7 +216,9 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
     await assertCliReady(runtime);
     const invocation = runtime.resolveInvocation();
     buildClaudeCliArgs({ model }); // Validate the model id before any usage intent exists.
-    const prompt = renderClaudeCliPrompt(request.messages);
+    // Resolved before the usage intent, so a missing stub leaves nothing to settle.
+    const bridge = prepareToolBridge(request, runtime.toolBridge);
+    const prompt = renderClaudeCliPrompt(request.messages, { bridged: bridge !== undefined });
 
     // Prepare local state before the usage intent exists, so a scratch-dir failure
     // cannot leave an accepted intent unsettled.
@@ -205,35 +244,34 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
       withUsageEvent(value, accounting, dispatch.priorModelUsageEventIds ?? []);
     let settled = false;
     try {
+      const bridgeArgs = bridge
+        ? { bridge: await writeClaudeCliBridgeFiles({ runDir, manifest: bridge.manifest, ...bridge.files }) }
+        : {};
       let inlineSystem = false;
       for (;;) {
         let yielded = false;
         try {
           const systemPromptFile = prompt.system && !inlineSystem ? path.join(runDir, "system-prompt.txt") : undefined;
           if (systemPromptFile) await writeFile(systemPromptFile, prompt.system, "utf8");
-          const userText =
-            prompt.system && inlineSystem
-              ? `[System instructions]\n${prompt.system}\n\n${prompt.userText}`
-              : prompt.userText;
-          const mapper = createClaudeCliStreamMapper(model);
+          const mapper = createClaudeCliStreamMapper(model, bridge ? { bridge: bridge.manifest } : {});
           const lines = runClaudeCli({
             invocation,
-            args: buildClaudeCliArgs({ model, systemPromptFile }),
+            args: buildClaudeCliArgs({ model, systemPromptFile, ...bridgeArgs }),
             env: runtime.env,
             cwd: runDir,
-            stdinPayload: buildStreamJsonUserMessage(userText),
+            stdinPayload: buildStdinPayload(prompt, inlineSystem, bridge !== undefined),
             signal: request.signal,
             overallTimeoutMs: positiveOr(request.timeoutMs, DEFAULT_OVERALL_TIMEOUT_MS),
             idleTimeoutMs: IDLE_TIMEOUT_MS,
             spawn: runtime.spawn,
             killTree: runtime.killTree,
           });
-          let exit;
+          let ended: { exit: ClaudeCliExit } | { toolStep: ClaudeCliToolStep } | undefined;
           try {
-            for (;;) {
+            while (!ended) {
               const next = await lines.next();
               if (next.done) {
-                exit = next.value;
+                ended = { exit: next.value };
                 break;
               }
               for (const chunk of mapper.push(next.value)) {
@@ -241,17 +279,21 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
                 await accounting?.renewLease();
                 yield tag(chunk);
               }
+              // Step mode: the CLI now waits on the inert stub, so the step ends here.
+              const toolStep = mapper.toolStep();
+              if (toolStep) ended = { toolStep };
             }
           } finally {
             // Closing the line source runs its cleanup, which kills a still-running CLI.
-            if (!exit) await lines.return({ exitCode: null, stderrTail: "" });
+            if (!ended || !("exit" in ended)) await lines.return({ exitCode: null, stderrTail: "" });
           }
-          const outcome = mapper.finish(exit);
+          const outcome =
+            "exit" in ended ? finishedOutcome(mapper.finish(ended.exit)) : toolStepOutcome(ended, request);
           if (outcome.usage) accounting?.observe(outcome.usage);
           accounting?.observeNormalized({ effectiveModelId: model });
           settled = true;
           await accounting?.succeed();
-          yield tag(outcome.finalChunk);
+          for (const chunk of outcome.chunks) yield tag(chunk);
           return;
         } catch (error) {
           if (!yielded && !inlineSystem && prompt.system && isSystemPromptFileRejection(error)) {
@@ -295,6 +337,103 @@ function assertNoRequiredToolCall(request: ChatCompletionRequest): void {
   }
 }
 
+interface PreparedToolBridge {
+  manifest: ClaudeCliToolManifest;
+  files: { nodePath: string; stubPath: string };
+}
+
+/**
+ * Step mode runs only when the flag is on for this step, tools are offered, and the
+ * model may choose freely (`tool_choice` absent or auto). `"none"` keeps today's text-only run.
+ */
+function prepareToolBridge(
+  request: ChatCompletionRequest,
+  toolBridge: ClaudeCodeCliToolBridgeRuntime | undefined,
+): PreparedToolBridge | undefined {
+  if (!request.tools || request.tools.length === 0 || !isAutoToolChoice(request.tool_choice)) return undefined;
+  if (!toolBridge?.enabled()) return undefined;
+  const manifest = buildClaudeCliToolManifest(request.tools);
+  const stubPath = toolBridge.stubPath();
+  if (!stubPath) {
+    throw new ClaudeCliError("claude_cli_bridge_unavailable", claudeCliUserMessage("claude_cli_bridge_unavailable"));
+  }
+  return { manifest, files: { nodePath: toolBridge.nodePath, stubPath } };
+}
+
+function isAutoToolChoice(choice: ChatCompletionRequest["tool_choice"]): boolean {
+  return (
+    choice === undefined ||
+    choice === "auto" ||
+    (typeof choice === "object" && choice !== null && choice.type === "auto")
+  );
+}
+
+/** Unbridged steps keep today's single text block; bridged steps send one block per rendered turn. */
+function buildStdinPayload(
+  prompt: { system: string; userText: string; userBlocks: string[] },
+  inlineSystem: boolean,
+  bridged: boolean,
+): string {
+  const systemBlock = prompt.system && inlineSystem ? `[System instructions]\n${prompt.system}` : undefined;
+  if (bridged) {
+    return buildStreamJsonUserMessage(systemBlock ? [systemBlock, ...prompt.userBlocks] : prompt.userBlocks);
+  }
+  return buildStreamJsonUserMessage(systemBlock ? `${systemBlock}\n\n${prompt.userText}` : prompt.userText);
+}
+
+interface StepOutcome {
+  chunks: readonly Record<string, unknown>[];
+  usage?: ClaudeCliUsage;
+}
+
+function finishedOutcome(outcome: ClaudeCliStreamOutcome): StepOutcome {
+  return { chunks: [outcome.finalChunk], ...(outcome.usage ? { usage: outcome.usage } : {}) };
+}
+
+function toolStepOutcome(ended: { toolStep: ClaudeCliToolStep }, request: ChatCompletionRequest): StepOutcome {
+  const { chunks, usage } = ended.toolStep;
+  return {
+    chunks: request.parallel_tool_calls === false ? keepFirstToolCall(chunks) : chunks,
+    ...(usage ? { usage } : {}),
+  };
+}
+
+/** `parallel_tool_calls: false`: only the step's first tool call reaches the runner. */
+function keepFirstToolCall(chunks: readonly Record<string, unknown>[]): Record<string, unknown>[] {
+  return chunks.map((chunk) => {
+    const delta = readDelta(chunk);
+    if (!delta || !Array.isArray(delta.tool_calls) || delta.tool_calls.length <= 1) return chunk;
+    const choice = (chunk.choices as Record<string, unknown>[])[0];
+    return { ...chunk, choices: [{ ...choice, delta: { ...delta, tool_calls: delta.tool_calls.slice(0, 1) } }] };
+  });
+}
+
+/** Folds streamed `tool_calls` deltas (by index) into non-streaming `message.tool_calls`. */
+class ToolCallAccumulator {
+  private readonly byIndex = new Map<number, { id: string; name: string; arguments: string }>();
+
+  public absorb(deltaCalls: unknown): void {
+    if (!Array.isArray(deltaCalls)) return;
+    for (const entry of deltaCalls) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const call = entry as { index?: unknown; id?: unknown; function?: { name?: unknown; arguments?: unknown } };
+      const index = typeof call.index === "number" ? call.index : this.byIndex.size;
+      const current = this.byIndex.get(index) ?? { id: "", name: "", arguments: "" };
+      this.byIndex.set(index, {
+        id: current.id || (typeof call.id === "string" ? call.id : ""),
+        name: current.name || (typeof call.function?.name === "string" ? call.function.name : ""),
+        arguments: current.arguments + (typeof call.function?.arguments === "string" ? call.function.arguments : ""),
+      });
+    }
+  }
+
+  public list(): Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> {
+    return [...this.byIndex.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([, call]) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } }));
+  }
+}
+
 async function assertCliReady(runtime: ClaudeCodeCliRuntime): Promise<void> {
   const readiness = await runtime.readiness.check();
   if (readiness.status === "ready") return;
@@ -324,6 +463,13 @@ function readDelta(chunk: Record<string, unknown>): Record<string, unknown> | un
   return typeof choice === "object" && choice !== null && typeof (choice as { delta?: unknown }).delta === "object"
     ? ((choice as { delta: Record<string, unknown> }).delta ?? undefined)
     : undefined;
+}
+
+function readFinishReason(chunk: Record<string, unknown>): string | undefined {
+  const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+  const reason =
+    typeof choice === "object" && choice !== null ? (choice as { finish_reason?: unknown }).finish_reason : undefined;
+  return typeof reason === "string" && reason ? reason : undefined;
 }
 
 const hostManagedSettingsFs: ManagedSettingsFs = {

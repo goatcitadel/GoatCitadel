@@ -51,7 +51,7 @@ const USER_FACING_MESSAGES: Record<ClaudeCliReasonCode, string> = {
   claude_cli_timeout: "The Claude Code CLI timed out",
   claude_cli_failed: "The Claude Code CLI run failed",
   claude_cli_tools_unsupported:
-    "This turn requires tool calls, which the Claude Code CLI provider does not support. Switch providers for agentic or Code Mode turns",
+    "This request forces a specific tool call, which the Claude Code CLI provider cannot do. Ask without forcing a tool, or use another provider",
   claude_cli_not_subscription_login:
     "The local Claude Code CLI is signed in with an API key, not a Claude subscription login",
   claude_cli_unsupported_shim:

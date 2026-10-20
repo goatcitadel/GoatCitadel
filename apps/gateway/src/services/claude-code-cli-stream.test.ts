@@ -4,6 +4,7 @@ import {
   CLAUDE_CLI_TOOL_BRIDGE_ADDENDUM,
   buildStreamJsonUserMessage,
   classifyClaudeCliFailure,
+  claudeCliUserMessage,
   createClaudeCliStreamMapper,
   renderClaudeCliPrompt,
 } from "./claude-code-cli-stream.js";
@@ -342,5 +343,13 @@ describe("buildStreamJsonUserMessage", () => {
     expect(payload.indexOf("\n")).toBe(payload.length - 1);
     const parsed = JSON.parse(payload) as { message: { content: Array<{ text: string }> } };
     expect(parsed.message.content.map((block) => block.text)).toEqual(userBlocks);
+  });
+});
+
+describe("claudeCliUserMessage", () => {
+  it("explains a forced tool call without sending agentic or Code Mode turns to another provider", () => {
+    const message = claudeCliUserMessage("claude_cli_tools_unsupported");
+    expect(message).toMatch(/forces a specific tool call/);
+    expect(message).not.toMatch(/agentic|Code Mode/i);
   });
 });
