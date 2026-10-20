@@ -2148,10 +2148,13 @@ export class ChatTurnAgentRunner {
           ? this.deps.getModelOutputTokenLimit?.(input.providerId, input.model)
           : undefined,
     });
-    const fileToollessProviderLabel = resolveFileToollessProviderLabel(
-      intents.documentArtifact || intents.presentationArtifact,
+    const describeProviderToolSupport = this.deps.describeProviderToolSupport;
+    const fileArtifactIntent = intents.documentArtifact || intents.presentationArtifact;
+    // Before the first completion only the routed provider is known; the instruction is sized for it.
+    const primaryFileToollessProviderLabel = resolveFileToollessProviderLabel(
+      fileArtifactIntent,
       input.capabilityProfile?.selection.effectiveProviderId ?? input.providerId,
-      this.deps.describeProviderToolSupport,
+      describeProviderToolSupport,
     );
     const executionBudgetTrace = {
       profile: executionBudget.profile ?? "default",
@@ -2539,6 +2542,15 @@ export class ChatTurnAgentRunner {
       ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
       ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
     };
+    // An opted-in fallback can answer on another provider; file behavior follows the provider that answered.
+    const answeringFileToollessProviderLabel = (): string | undefined =>
+      routingState.effectiveProviderId
+        ? resolveFileToollessProviderLabel(
+            fileArtifactIntent,
+            routingState.effectiveProviderId,
+            describeProviderToolSupport,
+          )
+        : primaryFileToollessProviderLabel;
     let lastCodingCheckpointAt = codingCheckpoint?.createdAt;
     const persistCodingProgress = async (nextAction: string): Promise<void> => {
       if (!codingState || !input.policyRunId) return;
@@ -4181,7 +4193,7 @@ export class ChatTurnAgentRunner {
         content: buildPdfDeckDeliveryInstruction(),
       } as ChatCompletionMessage);
     }
-    if (fileToollessProviderLabel) {
+    if (primaryFileToollessProviderLabel) {
       conversationMessages.push({
         role: "system",
         content: buildFileToollessProviderInstruction(),
@@ -4730,7 +4742,7 @@ export class ChatTurnAgentRunner {
                 : undefined;
             if (
               requestedArtifactTool &&
-              !fileToollessProviderLabel &&
+              !answeringFileToollessProviderLabel() &&
               !turnControl.artifactRetryIssued &&
               toolCalls.length === 0 &&
               input.toolAutonomy !== "manual" &&
@@ -6070,7 +6082,7 @@ export class ChatTurnAgentRunner {
       !verifiedPresentationWrite &&
       !verifiedPdfDeckDocumentWrite &&
       // A text-only provider never had the tool; the missing-file notice below keeps its answer.
-      !fileToollessProviderLabel
+      !answeringFileToollessProviderLabel()
     ) {
       const lastAttempt = presentationAttempts.at(-1);
       const failureClass: ChatTurnFailureClass = lastAttempt?.status === "blocked" ? "tool_blocked" : "tool_failed";
@@ -6306,7 +6318,7 @@ export class ChatTurnAgentRunner {
             Boolean(run.result?.path || run.result?.artifactId || run.result?.artifact)),
       )
     ) {
-      assistantContent = withMissingArtifactNotice(assistantContent, fileToollessProviderLabel);
+      assistantContent = withMissingArtifactNotice(assistantContent, answeringFileToollessProviderLabel());
     }
     if (
       delegatedResultContract &&

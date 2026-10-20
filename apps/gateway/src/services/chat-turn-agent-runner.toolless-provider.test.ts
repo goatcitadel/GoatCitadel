@@ -91,7 +91,70 @@ describe("ChatTurnAgentRunner file requests on a text-only provider", () => {
       "The requested file was not created. There is no successful artifact result for this turn.",
     );
   });
+
+  it("follows the provider that answered when a tool-capable primary falls back to a text-only one", async () => {
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValue(fallbackCompletion(REPORT_TEXT, { from: "glm", to: "claude-code-cli" }));
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["documents.create"]),
+      createChatCompletion,
+      invokeTool: vi.fn<() => Promise<ToolInvokeResult>>(),
+      describeProviderToolSupport: describeSupport,
+    });
+
+    const result = await orchestrator.run(turnInput({ content: PDF_REPORT_PROMPT, providerId: "glm", model: "glm-5" }));
+
+    // No wasted artifact retry on the CLI, and its inline answer survives under the notice.
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(result.assistantContent).toContain(`No file was created: ${CLI_LABEL}`);
+    expect(result.assistantContent).toContain("TypeScript leads for full stack web work.");
+  });
+
+  it("follows the provider that answered when a text-only primary falls back to a tool-capable one", async () => {
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValue(fallbackCompletion("I could not make the file.", { from: "claude-code-cli", to: "glm" }));
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["documents.create"]),
+      createChatCompletion,
+      invokeTool: vi.fn<() => Promise<ToolInvokeResult>>(),
+      describeProviderToolSupport: describeSupport,
+    });
+
+    const result = await orchestrator.run(turnInput({ content: PDF_REPORT_PROMPT }));
+
+    // The tool-capable fallback gets its artifact retry, and the tool-capable guard applies.
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+    expect(result.assistantContent).toBe(
+      "The requested file was not created. There is no successful artifact result for this turn.",
+    );
+  });
 });
+
+function describeSupport(providerId: string): { label: string; toolCalling: boolean } | undefined {
+  if (providerId === "claude-code-cli") return { label: CLI_LABEL, toolCalling: false };
+  return providerId === "glm" ? { label: "GLM", toolCalling: true } : undefined;
+}
+
+function fallbackCompletion(content: string, route: { from: string; to: string }): ChatCompletionResponse {
+  const model = route.to === "glm" ? "glm-5" : "claude-sonnet-5-5";
+  return {
+    ...completion(content),
+    model,
+    routing: {
+      primaryProviderId: route.from,
+      primaryModel: route.from === "glm" ? "glm-5" : "claude-sonnet-5-5",
+      effectiveProviderId: route.to,
+      effectiveModel: model,
+      fallbackProviderId: route.to,
+      fallbackModel: model,
+      fallbackUsed: true,
+    },
+  } as ChatCompletionResponse;
+}
 
 function turnInput(overrides: Partial<ChatTurnAgentRunnerInput> = {}): ChatTurnAgentRunnerInput {
   const content = overrides.content ?? "Answer directly.";
