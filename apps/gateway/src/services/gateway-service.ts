@@ -1656,6 +1656,7 @@ export class GatewayService {
       modelCatalogCachePath: path.resolve(config.rootDir, config.assistant.dataDir, "cache", "llm-model-catalog.json"),
       secretStore,
       modelUsageAccounting: this.modelUsageAccounting,
+      claudeCliToolBridgeEnabled: () => this.config.assistant.features.claudeCliToolBridgeEnabled === true,
       localServiceLeaseAcquirer: (request) => {
         this.configGenerationService.assertRuntimeReadsReady();
         return acquireBoundLlamaCppLease({

@@ -170,6 +170,8 @@ export interface RuntimeSettings {
     chatWorkPassportV1Enabled?: boolean;
     chatRequesterMcpV1Enabled?: boolean;
     chatStaticMcpV1Enabled?: boolean;
+    /** Lets the local `claude-code-cli` provider call Gateway tools through the per-run MCP bridge. Absent/false => text-only. */
+    claudeCliToolBridgeEnabled?: boolean;
     /** Gateway-owned governed Change Plan authority. */
     evolutionControlPlaneV1Enabled?: boolean;
     /** Default-on only after the Evolution Control Plane rollout. */

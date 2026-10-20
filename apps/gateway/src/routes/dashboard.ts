@@ -261,6 +261,7 @@ export const updateSettingsSchema = z.object({
       chatWorkPassportV1Enabled: z.boolean().optional(),
       chatRequesterMcpV1Enabled: z.boolean().optional(),
       chatStaticMcpV1Enabled: z.boolean().optional(),
+      claudeCliToolBridgeEnabled: z.boolean().optional(),
       evolutionControlPlaneV1Enabled: z.boolean().optional(),
       improvementLocalObservationV1Enabled: z.boolean().optional(),
       improvementModelEvaluationV1Enabled: z.boolean().optional(),
