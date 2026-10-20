@@ -12,6 +12,7 @@ import {
   localRuntimeSetupGuide,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
+  submittedGuidedSelection,
   supportedGuidedThinkingLevels,
 } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
 
@@ -178,7 +179,13 @@ export function useGuidedModelSetup({
             model: updated.request.model,
             thinkingLevel: updated.request.thinkingLevel ?? ("standard" as ChatThinkingLevel),
           };
-          modelDraft.acceptSaved(saved, JSON.stringify(saved), saved);
+          const savedProvider = providers.find((provider) => provider.providerId === saved.providerId);
+          const submitted = submittedGuidedSelection(
+            modelDraft.value,
+            saved,
+            supportedGuidedThinkingLevels(savedProvider?.capabilities),
+          );
+          modelDraft.acceptSaved(saved, JSON.stringify(saved), submitted);
         }
         setNotice(updated.result?.summary ?? "Change applied and verified.");
         await Promise.all([catalog.reload(), reloadOnboarding()]);
@@ -188,7 +195,7 @@ export function useGuidedModelSetup({
       }
       return updated;
     },
-    [catalog, reloadOnboarding, setNotice, modelDraft],
+    [catalog, providers, reloadOnboarding, setNotice, modelDraft],
   );
 
   const runAction = useCallback(

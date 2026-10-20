@@ -54,6 +54,24 @@ export function clampGuidedThinkingLevel(
   return fallback ?? supported[0] ?? "off";
 }
 
+type GuidedModelSelection = { providerId: string; model: string; thinkingLevel: ChatThinkingLevel };
+
+/**
+ * The draft input a saved default acknowledges. The wizard submits the clamped effort, so a draft whose requested
+ * effort clamps to the saved one was that submission, not newer input that would keep the draft unsaved.
+ */
+export function submittedGuidedSelection(
+  draft: GuidedModelSelection,
+  saved: GuidedModelSelection,
+  supported: readonly ChatThinkingLevel[],
+): GuidedModelSelection {
+  return draft.providerId === saved.providerId &&
+    draft.model === saved.model &&
+    clampGuidedThinkingLevel(draft.thinkingLevel, supported) === saved.thinkingLevel
+    ? draft
+    : saved;
+}
+
 type GuidedReadinessProvider = Pick<ProviderModelCatalogOption, "providerId" | "label" | "baseUrl"> &
   Partial<
     Pick<

@@ -37,6 +37,7 @@ import {
   localRuntimeSetupGuide,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
+  submittedGuidedSelection,
   supportedGuidedThinkingLevels,
 } from "./guided-model-setup-support";
 
@@ -160,7 +161,9 @@ export function GuidedModelSetup({
   // The local CLI's login state is already described in plain words by its readiness step.
   const connectionDiagnostic =
     catalog.error ??
-    (selectedProvider?.authMode === "claude-code-cli-login" ? undefined : selectedProvider?.authReadiness?.reasonCode) ??
+    (selectedProvider?.authMode === "claude-code-cli-login"
+      ? undefined
+      : selectedProvider?.authReadiness?.reasonCode) ??
     null;
   const defaultPlanCompleted =
     providerReady &&
@@ -243,7 +246,13 @@ export function GuidedModelSetup({
             model: updated.request.model,
             thinkingLevel: updated.request.thinkingLevel ?? ("standard" as ChatThinkingLevel),
           };
-          modelDraft.acceptSaved(saved, JSON.stringify(saved), saved);
+          const savedProvider = catalog.providers.find((provider) => provider.providerId === saved.providerId);
+          const submitted = submittedGuidedSelection(
+            modelDraft.value,
+            saved,
+            supportedGuidedThinkingLevels(savedProvider?.capabilities),
+          );
+          modelDraft.acceptSaved(saved, JSON.stringify(saved), submitted);
         }
         setNotice({ tone: "success", message: updated.result?.summary ?? "Change applied and verified." });
         await Promise.all([catalog.reload(), reloadOnboarding()]);
