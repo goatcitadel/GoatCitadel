@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   clampGuidedThinkingLevel,
   GUIDED_CATALOG_LOADING_READINESS,
+  groupGuidedProviders,
   guidedConnectionHint,
+  guidedProviderOptionLabel,
   pendingPlanForSelection,
   withAddableBuiltinProviders,
   localRuntimeSetupGuide,
@@ -293,5 +295,43 @@ describe("finding the Claude Code CLI provider", () => {
 
   it("reports loading, not a missing provider, while the catalog loads", () => {
     expect(GUIDED_CATALOG_LOADING_READINESS).toMatchObject({ state: "checking", label: "Loading…" });
+  });
+});
+
+describe("grouped provider choices", () => {
+  const base = { baseUrl: "https://example.test", defaultModel: "m", apiStyle: "openai-responses", models: [], sanitizedEndpointIdentity: "" };
+  const providers = [
+    { ...base, providerId: "openai", label: "OpenAI" },
+    { ...base, providerId: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)", authMode: "codex-oauth", hasApiKey: true },
+    { ...base, providerId: "anthropic", label: "Anthropic" },
+    { ...base, providerId: "claude-code", label: "Claude Code (Claude subscription)", authMode: "claude-code-oauth" },
+    { ...base, providerId: "ollama", label: "Ollama", localCostPosture: "zero_cost_local_runtime" },
+    { ...base, providerId: "npu-local", label: "NPU Local Sidecar", localCostPosture: "zero_cost_local_runtime" },
+  ] as never;
+
+  it("puts ready providers first, then subscriptions, API keys and local runtimes", () => {
+    const groups = groupGuidedProviders(providers, "openai-codex");
+    expect(groups.map((group) => [group.label, group.providers.map((provider) => provider.providerId)])).toEqual([
+      ["Ready to use", ["openai-codex"]],
+      ["Use a subscription", ["claude-code"]],
+      ["Pay-per-use API key", ["openai", "anthropic"]],
+      ["Run locally", ["ollama"]],
+    ]);
+  });
+
+  it("hides a retired provider unless it is the current selection", () => {
+    const ids = (selected: string) =>
+      groupGuidedProviders(providers, selected).flatMap((group) => group.providers.map((provider) => provider.providerId));
+    expect(ids("openai-codex")).not.toContain("npu-local");
+    expect(ids("npu-local")).toContain("npu-local");
+  });
+
+  it("names each option by how it is paid for", () => {
+    expect(guidedProviderOptionLabel({ providerId: "anthropic", label: "Anthropic" })).toBe("Anthropic API (Console key)");
+    expect(guidedProviderOptionLabel({ providerId: "openai", label: "OpenAI" })).toBe("OpenAI API (platform key)");
+    expect(guidedProviderOptionLabel({ providerId: "claude-code", label: "Claude Code (Claude subscription)" })).toBe(
+      "Claude Code token (may be rejected)",
+    );
+    expect(guidedProviderOptionLabel({ providerId: "ollama", label: "Ollama" })).toBe("Ollama");
   });
 });
