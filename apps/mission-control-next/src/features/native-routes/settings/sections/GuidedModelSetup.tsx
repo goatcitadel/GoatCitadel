@@ -157,7 +157,11 @@ export function GuidedModelSetup({
   // Connection guidance only: once the provider is ready there is no Connect action to point at.
   const connectionHint = providerReady ? null : guidedConnectionHint(selectedProvider);
   // Shown beside the provider hint, never replaced by it.
-  const connectionDiagnostic = catalog.error ?? selectedProvider?.authReadiness?.reasonCode ?? null;
+  // The local CLI's login state is already described in plain words by its readiness step.
+  const connectionDiagnostic =
+    catalog.error ??
+    (selectedProvider?.authMode === "claude-code-cli-login" ? undefined : selectedProvider?.authReadiness?.reasonCode) ??
+    null;
   const defaultPlanCompleted =
     providerReady &&
     ((Boolean(activeProviderId && activeModel) &&
@@ -243,6 +247,9 @@ export function GuidedModelSetup({
         }
         setNotice({ tone: "success", message: updated.result?.summary ?? "Change applied and verified." });
         await Promise.all([catalog.reload(), reloadOnboarding()]);
+      } else if (updated.status === "manual_required" && updated.request.kind === "provider_connection") {
+        // A failed login or connection check refreshed the Gateway's readiness; show it.
+        await catalog.reload();
       }
       return updated;
     },

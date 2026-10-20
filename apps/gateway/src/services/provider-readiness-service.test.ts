@@ -28,6 +28,20 @@ describe("provider connection evidence", () => {
       verifyProviderConnection(fixture({ authMode: "codex-oauth" }, "configured") as never, "provider"),
     ).rejects.toThrow("verifiable model catalog");
   });
+  it("accepts the live login probe for the local Claude Code CLI, which lists no models", async () => {
+    const deps = fixture(
+      { authMode: "claude-code-cli-login", authReadiness: { status: "ready", liveVerified: true } },
+      "template_fallback",
+    );
+    expect(await verifyProviderConnection(deps as never, "provider")).toEqual({
+      evidenceRefs: ["provider:provider:auth_ready", "provider:provider:local_login:live"],
+    });
+    expect(deps.listModelsWithSource).not.toHaveBeenCalled();
+  });
+  it("refuses a local Claude Code CLI login that was not checked live", async () => {
+    const deps = fixture({ authMode: "claude-code-cli-login", authReadiness: { status: "ready", liveVerified: false } });
+    await expect(verifyProviderConnection(deps as never, "provider")).rejects.toThrow("not checked live");
+  });
 });
 
 describe("temporary provider credential evidence", () => {

@@ -182,6 +182,9 @@ export function useGuidedModelSetup({
         }
         setNotice(updated.result?.summary ?? "Change applied and verified.");
         await Promise.all([catalog.reload(), reloadOnboarding()]);
+      } else if (updated.status === "manual_required" && updated.request.kind === "provider_connection") {
+        // A failed login or connection check refreshed the Gateway's readiness; show it.
+        await catalog.reload();
       }
       return updated;
     },

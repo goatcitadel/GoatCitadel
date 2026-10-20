@@ -1,9 +1,11 @@
 import {
   ConflictError,
   SemanticValidationError,
+  describeClaudeCodeCliLoginGuidance,
   isProviderProfileCheckpoint,
   type ChangePlanProviderConnectionRequest,
   type ChangePlanRecord,
+  type LlmProviderAuthReadiness,
   type LlmProviderConfig,
   type LlmProviderSummary,
 } from "@goatcitadel/contracts";
@@ -53,6 +55,8 @@ export interface ProviderConnectionChangePlanAdapterDependencies {
   readonly discardTemporarySecret: (planId: string, providerId: string) => void | Promise<void>;
   readonly discardTemporaryOAuthCredential?: (planId: string, providerId: string) => void | Promise<void>;
   readonly verifyProvider: (providerId: string) => Promise<{ evidenceRefs: readonly string[] }>;
+  /** Re-probes a provider that signs in through a local CLI login instead of a stored credential. */
+  readonly refreshLocalLoginReadiness?: (providerId: string) => Promise<LlmProviderAuthReadiness>;
 }
 
 /** Credential values stay in a dedicated temporary keychain owner; the plan retains only references. */
@@ -95,9 +99,18 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
     ) {
       throw new SemanticValidationError("OAuth removal requires an OAuth-backed provider.");
     }
+    const localLogin = isLocalLoginAuthMode(request.profile?.authMode ?? provider?.authMode);
+    if (localLogin && credentialAction) {
+      throw new SemanticValidationError(
+        `${label} stores no credential in GoatCitadel. Sign in or out with the claude CLI on this machine instead.`,
+      );
+    }
     const profileChange = Boolean(
       request.profile && !providerProfileMatches(provider, request, this.deps.getProviderConfig?.(request.providerId)),
     );
+    if (localLogin && provider && !profileChange) {
+      return prepareLocalLoginCheck(context, request.providerId, label, settings.revision, providerIsReady(provider));
+    }
     const ready = provider ? providerIsReady(provider) : false;
     const oauth = isOAuthAuthMode(request.profile?.authMode ?? provider?.authMode);
     const removing = credentialAction === "remove_api_key";
@@ -263,6 +276,9 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
         },
       };
     }
+    if (isLocalLoginAuthMode(requireProvider(settings, request.providerId).authMode)) {
+      return this.applyLocalLoginCheck(request.providerId, settings.revision);
+    }
     const hasTemporarySecret = await this.deps.hasTemporarySecret(plan.planId, request.providerId);
     const provider = requireProvider(settings, request.providerId);
     const oauth = isOAuthProvider(provider);
@@ -320,6 +336,35 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
       result: {
         summary: `${requireProvider(await this.deps.getSettings(), request.providerId).label} is securely connected and passed live verification.`,
         appliedRevision: promoted.revision,
+      },
+    };
+  }
+
+  // A local-login provider has nothing to promote: re-check the login, then verify the live catalog.
+  private async applyLocalLoginCheck(providerId: string, revision: number): Promise<EvolutionControlPlaneAdapterOutcome> {
+    const refreshReadiness = this.deps.refreshLocalLoginReadiness;
+    if (!refreshReadiness) {
+      throw new SemanticValidationError("The local login readiness owner is unavailable.");
+    }
+    const readiness = await refreshReadiness(providerId);
+    const provider = requireProvider(await this.deps.getSettings(), providerId);
+    if (!["configured", "ready"].includes(readiness.status)) {
+      return {
+        status: "manual_required",
+        evidenceRefs: [`provider:${providerId}:local_login:${readiness.reasonCode ?? readiness.status}`],
+        result: {
+          summary: `${provider.label} is not ready: ${describeClaudeCodeCliLoginGuidance(readiness.reasonCode)}`,
+          failureCode: "provider_local_login_not_ready",
+        },
+      };
+    }
+    const verification = await this.deps.verifyProvider(providerId);
+    return {
+      status: "verifying",
+      evidenceRefs: [`provider:${providerId}:local_login:${readiness.reasonCode ?? "ready"}`, ...verification.evidenceRefs],
+      result: {
+        summary: `${provider.label} is signed in and passed live verification.`,
+        appliedRevision: revision,
       },
     };
   }
@@ -557,6 +602,33 @@ function isOAuthAuthMode(authMode: LlmProviderSummary["authMode"] | undefined): 
   return authMode === "codex-oauth";
 }
 
+function isLocalLoginAuthMode(authMode: LlmProviderSummary["authMode"] | undefined): boolean {
+  return authMode === "claude-code-cli-login";
+}
+
+function prepareLocalLoginCheck(
+  context: EvolutionControlPlaneAdapterContext,
+  providerId: string,
+  label: string,
+  revision: number,
+  ready: boolean,
+) {
+  return {
+    target: { ownerId: "provider_connection", resourceId: providerId, expectedRevision: revision },
+    title: `Check ${label} login`,
+    summary: ready
+      ? `${label} is signed in. Re-check the login and its live model catalog before keeping this connection.`
+      : `${label} uses your own claude login on this machine. Sign in with the claude CLI, then confirm to check it.`,
+    impact: "GoatCitadel stores no credential for this provider. A live provider check runs before completion.",
+    risk: "safe" as const,
+    status: "awaiting_confirmation" as const,
+    requiredAction: context.actions.confirmation({
+      title: `Check ${label} login`,
+      confirmationText: `Run claude auth status on this machine, then a live, read-only verification of ${label}.`,
+    }),
+  };
+}
+
 function assertRevision(plan: ChangePlanRecord, currentRevision: number): void {
   if (plan.target.expectedRevision === currentRevision) return;
   throw new ConflictError({
@@ -583,7 +655,7 @@ function credentialField(
     label: claudeToken ? `${label} token` : `${label} credential`,
     required: true,
     description: claudeToken
-      ? `Paste the token printed by claude setup-token. Anthropic limits subscription tokens to Claude Code and may reject it here. ${credentialStorageDescription(request)}`
+      ? `Paste the token printed by claude setup-token. Anthropic limits subscription tokens to Claude Code and may reject it here; Claude Code CLI (local login) is the supported way to use your subscription. ${credentialStorageDescription(request)}`
       : credentialStorageDescription(request),
   };
 }

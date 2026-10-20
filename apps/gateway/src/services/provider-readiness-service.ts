@@ -41,6 +41,14 @@ export async function verifyProviderConnection(
     ? ["configured", "ready"].includes(provider.authReadiness.status)
     : provider.hasApiKey || provider.oauthStatus?.connected === true || provider.authMode === "google-adc";
   if (!ready) throw new ValidationError({ message: `${provider.label} is not connected.` });
+  if (provider.authMode === "claude-code-cli-login") {
+    // The local Claude Code CLI lists no models, so its catalog is never live; the
+    // live `claude auth status` probe behind its readiness is the verification evidence.
+    if (provider.authReadiness?.liveVerified !== true) {
+      throw new ValidationError({ message: `${provider.label} login was not checked live.` });
+    }
+    return { evidenceRefs: [`provider:${providerId}:auth_ready`, `provider:${providerId}:local_login:live`] };
+  }
   const catalog = await dependencies.listModelsWithSource(providerId);
   if (catalog.items.length === 0 || catalog.source !== "live") {
     throw new ValidationError({ message: `${provider.label} did not return a verifiable model catalog.` });

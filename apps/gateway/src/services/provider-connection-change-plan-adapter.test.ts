@@ -604,4 +604,104 @@ describe("ProviderConnectionChangePlanAdapter", () => {
       status: "manual_required",
     });
   });
+
+  describe("local Claude Code CLI login", () => {
+    const cliSettings = (status: string, reasonCode?: string) =>
+      ({
+        revision: 5,
+        llm: {
+          providers: [
+            {
+              providerId: "claude-code-cli",
+              label: "Claude Code CLI (local login)",
+              authMode: "claude-code-cli-login",
+              authReadiness: { status, ...(reasonCode ? { reasonCode } : {}) },
+            },
+          ],
+        },
+      }) as any;
+    const cliAdapter = (
+      status: string,
+      refreshed: { status: string; reasonCode?: string } | undefined,
+      overrides: Record<string, unknown> = {},
+    ) =>
+      new ProviderConnectionChangePlanAdapter({
+        getSettings: vi.fn(async () => cliSettings(refreshed?.status ?? status, refreshed?.reasonCode)),
+        updateSettings: vi.fn(),
+        hasTemporarySecret: vi.fn(async () => false),
+        promoteTemporarySecret: vi.fn(),
+        removeProviderApiKey: vi.fn(),
+        getProviderApiKeyStatus: vi.fn(() => ({ hasSecret: false, source: "none" })),
+        discardTemporarySecret: vi.fn(),
+        verifyProvider: vi.fn(async () => ({ evidenceRefs: ["provider-catalog:claude-code-cli:live"] })),
+        ...(refreshed
+          ? { refreshLocalLoginReadiness: vi.fn(async () => ({ source: "metadata", liveVerified: true, ...refreshed })) }
+          : {}),
+        ...overrides,
+      } as any);
+    const plan = {
+      planId: "plan-cli",
+      request: { kind: "provider_connection" as const, providerId: "claude-code-cli" },
+      target: { ownerId: "provider_connection", resourceId: "claude-code-cli", expectedRevision: 5 },
+    } as ChangePlanRecord;
+
+    it("asks to check the login instead of collecting a credential", async () => {
+      const prepared = await cliAdapter("missing", undefined).prepare(context, {
+        kind: "provider_connection",
+        providerId: "claude-code-cli",
+      });
+      expect(prepared.status).toBe("awaiting_confirmation");
+      expect(prepared.title).toBe("Check Claude Code CLI (local login) login");
+      expect(prepared.requiredAction).toMatchObject({
+        kind: "confirmation",
+        confirmationText: expect.stringContaining("claude auth status"),
+      });
+      expect(JSON.stringify(prepared)).not.toMatch(/secure_input|credential"/u);
+    });
+
+    it("refuses credential actions because the login lives in the claude CLI", async () => {
+      await expect(
+        cliAdapter("ready", undefined).prepare(context, {
+          kind: "provider_connection",
+          providerId: "claude-code-cli",
+          credentialAction: "replace_api_key",
+        }),
+      ).rejects.toThrow(/stores no credential/u);
+    });
+
+    it("stops with plain guidance when the re-checked login is signed out", async () => {
+      const verifyProvider = vi.fn();
+      const outcome = await cliAdapter("missing", { status: "missing", reasonCode: "claude_cli_logged_out" }, {
+        verifyProvider,
+      }).apply(context, plan);
+      expect(outcome.status).toBe("manual_required");
+      expect(outcome.result?.summary).toContain("sign in with /login");
+      expect(outcome.result?.failureCode).toBe("provider_local_login_not_ready");
+      expect(verifyProvider).not.toHaveBeenCalled();
+    });
+
+    it("runs provider verification once the re-checked login is ready", async () => {
+      const verifyProvider = vi.fn(async () => ({ evidenceRefs: ["provider-catalog:claude-code-cli:live"] }));
+      const refreshLocalLoginReadiness = vi.fn(async () => ({
+        status: "ready" as const,
+        source: "metadata" as const,
+        liveVerified: true,
+        reasonCode: "claude_cli_logged_in",
+      }));
+      const outcome = await cliAdapter("missing", { status: "ready", reasonCode: "claude_cli_logged_in" }, {
+        verifyProvider,
+        refreshLocalLoginReadiness,
+      }).apply(context, plan);
+      expect(refreshLocalLoginReadiness).toHaveBeenCalledWith("claude-code-cli");
+      expect(verifyProvider).toHaveBeenCalledWith("claude-code-cli");
+      expect(outcome).toMatchObject({
+        status: "verifying",
+        evidenceRefs: ["provider:claude-code-cli:local_login:claude_cli_logged_in", "provider-catalog:claude-code-cli:live"],
+      });
+    });
+
+    it("fails closed when no local login readiness owner is wired", async () => {
+      await expect(cliAdapter("ready", undefined).apply(context, plan)).rejects.toThrow(/readiness owner is unavailable/u);
+    });
+  });
 });

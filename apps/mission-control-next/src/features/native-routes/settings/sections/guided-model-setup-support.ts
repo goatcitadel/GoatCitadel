@@ -1,4 +1,8 @@
-import type { ChatCompletionReasoningEffort, ChatThinkingLevel } from "@goatcitadel/contracts";
+import {
+  describeClaudeCodeCliLoginGuidance,
+  type ChatCompletionReasoningEffort,
+  type ChatThinkingLevel,
+} from "@goatcitadel/contracts";
 import type { ProviderModelCatalogOption } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 
 export const GUIDED_THINKING_LEVELS: ReadonlyArray<{ value: ChatThinkingLevel; label: string }> = [
@@ -54,6 +58,7 @@ type GuidedReadinessProvider = Pick<ProviderModelCatalogOption, "providerId" | "
   Partial<
     Pick<
       ProviderModelCatalogOption,
+      | "authMode"
       | "authReadiness"
       | "hasApiKey"
       | "localCostPosture"
@@ -70,7 +75,7 @@ export interface GuidedProviderReadiness {
   label: string;
   description: string;
   /** Which existing Gateway evidence proved readiness; null until something did. */
-  evidence: "credential" | "local_endpoint" | null;
+  evidence: "credential" | "local_endpoint" | "local_login" | null;
 }
 
 const READINESS_LABELS: Readonly<Record<GuidedProviderReadiness["state"], string>> = {
@@ -102,6 +107,9 @@ export function resolveGuidedProviderReadiness(provider: GuidedReadinessProvider
     };
   }
   const authStatus = provider.authReadiness?.status;
+  if (provider.authMode === "claude-code-cli-login") {
+    return resolveLocalLoginReadiness(provider);
+  }
   if (authStatus === "missing" || authStatus === "invalid") {
     return readiness("needs_setup", `${provider.label} needs a credential. Connect it with the secure setup flow.`);
   }
@@ -121,6 +129,20 @@ export function resolveGuidedProviderReadiness(provider: GuidedReadinessProvider
     return readiness("needs_setup", `${provider.label} needs a credential. Connect it with the secure setup flow.`);
   }
   return readiness("not_verified", `${provider.label}'s credential status is not available yet.`);
+}
+
+// The local Claude Code CLI has no credential to collect: readiness is its own login probe.
+function resolveLocalLoginReadiness(provider: GuidedReadinessProvider): GuidedProviderReadiness {
+  const readinessState = provider.authReadiness;
+  if (readinessState?.status === "ready" || readinessState?.status === "configured") {
+    // A ready login never borrows failure text from an unrecognized reason code.
+    return readiness("ready", describeClaudeCodeCliLoginGuidance("claude_cli_logged_in"), "local_login");
+  }
+  const guidance = describeClaudeCodeCliLoginGuidance(readinessState?.reasonCode);
+  if (readinessState?.status === "missing" || readinessState?.status === "invalid") {
+    return readiness("needs_setup", guidance);
+  }
+  return readiness("not_verified", guidance);
 }
 
 function resolveLocalEndpointReadiness(provider: GuidedReadinessProvider): GuidedProviderReadiness {
@@ -187,7 +209,13 @@ export function guidedConnectionHint(
   if (provider?.authMode === "claude-code-oauth") {
     return {
       connectLabel: "Connect Claude Code",
-      note: "Run claude setup-token in a terminal, select Connect Claude Code, then paste the token it prints. Anthropic limits subscription tokens to Claude Code and may reject them here; the Anthropic provider with a Console API key is the supported route.",
+      note: "Run claude setup-token in a terminal, select Connect Claude Code, then paste the token it prints. Anthropic limits subscription tokens to Claude Code and may reject them here; choose Claude Code CLI (local login) to use your subscription, or an Anthropic API key.",
+    };
+  }
+  if (provider?.authMode === "claude-code-cli-login") {
+    return {
+      connectLabel: "Check Claude Code login",
+      note: "Runs Claude Code on this machine under your own claude login, so GoatCitadel stores no token. Install Claude Code, run claude and sign in with /login, then select Check Claude Code login.",
     };
   }
   return null;
