@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChangePlanRecord } from "@goatcitadel/contracts";
+import { findProviderTemplate, type ChangePlanRecord } from "@goatcitadel/contracts";
 import { ProviderConnectionChangePlanAdapter } from "./provider-connection-change-plan-adapter.js";
 
 const context = {
@@ -606,6 +606,7 @@ describe("ProviderConnectionChangePlanAdapter", () => {
   });
 
   describe("local Claude Code CLI login", () => {
+    const cliTemplate = findProviderTemplate("claude-code-cli")!;
     const cliSettings = (status: string, reasonCode?: string) =>
       ({
         revision: 5,
@@ -613,7 +614,10 @@ describe("ProviderConnectionChangePlanAdapter", () => {
           providers: [
             {
               providerId: "claude-code-cli",
-              label: "Claude Code CLI (local login)",
+              label: cliTemplate.label,
+              baseUrl: cliTemplate.baseUrl,
+              defaultModel: cliTemplate.defaultModel,
+              apiStyle: "claude-code-cli",
               authMode: "claude-code-cli-login",
               authReadiness: { status, ...(reasonCode ? { reasonCode } : {}) },
             },
@@ -707,7 +711,6 @@ describe("ProviderConnectionChangePlanAdapter", () => {
     it("adds a missing CLI provider from its profile, then checks the login", async () => {
       const added = cliSettings("missing", "claude_cli_logged_out");
       added.revision = 6;
-      added.llm.providers[0].apiStyle = "claude-code-cli";
       const getSettings = vi
         .fn()
         .mockResolvedValueOnce({ revision: 5, llm: { providers: [] } })
@@ -733,10 +736,13 @@ describe("ProviderConnectionChangePlanAdapter", () => {
       const request = {
         kind: "provider_connection" as const,
         providerId: "claude-code-cli",
+        // The same secret-free profile the guided setup sends from the template.
         profile: {
-          label: "Claude Code CLI (local login)",
+          label: cliTemplate.label,
+          baseUrl: cliTemplate.baseUrl,
           apiStyle: "claude-code-cli" as const,
           authMode: "claude-code-cli-login" as const,
+          defaultModel: cliTemplate.defaultModel,
         },
       };
       const outcome = await adapter.apply(context, {
