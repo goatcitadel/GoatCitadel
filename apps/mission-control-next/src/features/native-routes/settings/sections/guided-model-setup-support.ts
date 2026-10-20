@@ -134,10 +134,11 @@ export function resolveGuidedProviderReadiness(provider: GuidedReadinessProvider
 // The local Claude Code CLI has no credential to collect: readiness is its own login probe.
 function resolveLocalLoginReadiness(provider: GuidedReadinessProvider): GuidedProviderReadiness {
   const readinessState = provider.authReadiness;
-  const guidance = describeClaudeCodeCliLoginGuidance(readinessState?.reasonCode);
   if (readinessState?.status === "ready" || readinessState?.status === "configured") {
-    return readiness("ready", guidance, "local_login");
+    // A ready login never borrows failure text from an unrecognized reason code.
+    return readiness("ready", describeClaudeCodeCliLoginGuidance("claude_cli_logged_in"), "local_login");
   }
+  const guidance = describeClaudeCodeCliLoginGuidance(readinessState?.reasonCode);
   if (readinessState?.status === "missing" || readinessState?.status === "invalid") {
     return readiness("needs_setup", guidance);
   }

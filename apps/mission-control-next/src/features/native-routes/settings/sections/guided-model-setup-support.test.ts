@@ -199,6 +199,10 @@ describe("local Claude Code CLI login readiness", () => {
     expect(loggedOut.description).toContain("sign in with /login");
     expect(loggedOut.description).not.toContain("credential");
     expect(resolveGuidedProviderReadiness(cli("unknown", "claude_cli_not_probed") as never).state).toBe("not_verified");
+    const readyWithOddReason = resolveGuidedProviderReadiness(cli("configured", "metadata_only") as never);
+    expect(readyWithOddReason.state).toBe("ready");
+    expect(readyWithOddReason.description).toContain("signed in");
+    expect(readyWithOddReason.description).not.toContain("not found");
   });
 
   it("offers a login check and points the token route at the CLI provider", () => {
