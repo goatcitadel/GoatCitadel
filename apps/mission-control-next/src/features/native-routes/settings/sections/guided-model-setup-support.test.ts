@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampGuidedThinkingLevel,
+  GUIDED_CATALOG_LOADING_READINESS,
   guidedConnectionHint,
   pendingPlanForSelection,
   withAddableBuiltinProviders,
@@ -259,5 +260,38 @@ describe("addable built-in providers need a loaded catalog", () => {
   it("offers nothing while the catalog is loading or failed", () => {
     expect(withAddableBuiltinProviders([], false)).toEqual([]);
     expect(withAddableBuiltinProviders([], true).map((option) => option.providerId)).toEqual(["claude-code-cli"]);
+  });
+});
+
+describe("finding the Claude Code CLI provider", () => {
+  const option = (providerId: string) => ({ providerId, label: providerId, baseUrl: "https://example.test", defaultModel: "m", apiStyle: "openai-responses", models: [], sanitizedEndpointIdentity: "" });
+
+  it("lists the missing CLI provider right after the Claude Code token route, not at the end", () => {
+    const ids = withAddableBuiltinProviders(
+      [option("openai"), option("anthropic"), option("claude-code"), option("google"), option("ollama")] as never,
+      true,
+    ).map((entry) => entry.providerId);
+    expect(ids).toEqual(["openai", "anthropic", "claude-code", "claude-code-cli", "google", "ollama"]);
+  });
+
+  it("falls back to right after Anthropic, then to the top", () => {
+    expect(
+      withAddableBuiltinProviders([option("openai"), option("anthropic"), option("google")] as never, true).map(
+        (entry) => entry.providerId,
+      ),
+    ).toEqual(["openai", "anthropic", "claude-code-cli", "google"]);
+    expect(withAddableBuiltinProviders([option("openai")] as never, true)[0]?.providerId).toBe("claude-code-cli");
+  });
+
+  it("offers a one-click switch from the token route to the CLI provider", () => {
+    expect(guidedConnectionHint({ authMode: "claude-code-oauth" })?.alternative).toEqual({
+      providerId: "claude-code-cli",
+      label: "Use Claude Code CLI instead",
+    });
+    expect(guidedConnectionHint({ authMode: "codex-oauth" })?.alternative).toBeUndefined();
+  });
+
+  it("reports loading, not a missing provider, while the catalog loads", () => {
+    expect(GUIDED_CATALOG_LOADING_READINESS).toMatchObject({ state: "checking", label: "Loading…" });
   });
 });
