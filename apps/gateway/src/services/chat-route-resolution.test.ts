@@ -22,6 +22,7 @@ function createHost(input?: {
       defaultModel?: string;
       hasApiKey?: boolean;
       baseUrl?: string;
+      capabilities?: { toolCalling: boolean };
     }>;
   };
   fallbacks?: Array<{ providerId: string; model: string }>;
@@ -945,5 +946,75 @@ describe("chat-route-resolution citadel ward route_local", () => {
     expect(descriptor.wardReasonCode).toBeUndefined();
     expect(descriptor.wardCitadelId).toBeUndefined();
     expect(withSessionReader.resolveSessionWorkspaceId).not.toHaveBeenCalled();
+  });
+
+  describe("file output notice", () => {
+    const providers = [
+      {
+        providerId: "claude-code-cli",
+        label: "Claude Code CLI (local login)",
+        defaultModel: "claude-sonnet-5-5",
+        hasApiKey: true,
+        baseUrl: "https://api.anthropic.com/v1",
+        capabilities: { toolCalling: false },
+      },
+      {
+        providerId: "openai",
+        label: "OpenAI",
+        defaultModel: "gpt-5.4-mini",
+        hasApiKey: true,
+        baseUrl: "https://api.openai.com/v1",
+        capabilities: { toolCalling: true },
+      },
+      {
+        providerId: "anthropic",
+        label: "Anthropic",
+        defaultModel: "claude-sonnet-5-5",
+        hasApiKey: false,
+        baseUrl: "https://api.anthropic.com/v1",
+        capabilities: { toolCalling: true },
+      },
+    ];
+    const pdfDraft =
+      "Please do some research into the best coding languages for full stack web development and then put it into a report/pdf.";
+
+    it("warns before send when a text-only provider is asked for a file and names providers that can create one", async () => {
+      const host = createHost({
+        runtime: { activeProviderId: "claude-code-cli", activeModel: "claude-sonnet-5-5", providers },
+      });
+      const result = await preflightChatRoute(host as never, "session-1", { action: "send", content: pdfDraft });
+      expect(result.blockedReason).toBeUndefined();
+      expect(result.fileOutputNotice).toEqual({
+        providerLabel: "Claude Code CLI (local login)",
+        message: expect.stringContaining("cannot create a PDF, document, or deck"),
+        alternatives: [{ providerId: "openai", label: "OpenAI" }],
+      });
+    });
+
+    it("keeps the notice out of the routing decision fingerprint", async () => {
+      const host = createHost({
+        runtime: { activeProviderId: "claude-code-cli", activeModel: "claude-sonnet-5-5", providers },
+      });
+      const withFile = await preflightChatRoute(host as never, "session-1", { action: "send", content: pdfDraft });
+      expect(JSON.stringify(withFile.decision)).not.toContain("fileOutputNotice");
+      expect(withFile.decision.fingerprint).toBe(
+        createRoutingDecisionFingerprint({ ...withFile.decision, fingerprint: undefined } as never),
+      );
+    });
+
+    it("stays quiet for tool-capable providers and for drafts that do not ask for a file", async () => {
+      const cli = createHost({
+        runtime: { activeProviderId: "claude-code-cli", activeModel: "claude-sonnet-5-5", providers },
+      });
+      const chatOnly = await preflightChatRoute(cli as never, "session-1", {
+        action: "send",
+        content: "What are the best languages for full stack web development?",
+      });
+      expect(chatOnly.fileOutputNotice).toBeUndefined();
+
+      const openai = createHost({ runtime: { activeProviderId: "openai", activeModel: "gpt-5.4-mini", providers } });
+      const toolCapable = await preflightChatRoute(openai as never, "session-1", { action: "send", content: pdfDraft });
+      expect(toolCapable.fileOutputNotice).toBeUndefined();
+    });
   });
 });

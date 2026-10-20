@@ -578,6 +578,14 @@ export class LlmService {
     return typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0 ? limit : undefined;
   }
 
+  /** Whether a configured provider can call Gateway tools (and so create files). */
+  public describeProviderToolSupport(providerId: string): { label: string; toolCalling: boolean } | undefined {
+    const provider = this.providers.get(providerId);
+    return provider
+      ? { label: provider.label, toolCalling: inferProviderCapabilities(provider).toolCalling }
+      : undefined;
+  }
+
   /** Exact server-owned reasoning metadata used by Change Plan validation. */
   public getModelReasoningMetadata(providerId: string, model: string): LlmModelReasoningMetadata | undefined {
     const reasoning = lookupExactModelMetadata(this.modelMetadata, providerId, model)?.reasoning;

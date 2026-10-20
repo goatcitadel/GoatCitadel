@@ -1841,6 +1841,7 @@ export class GatewayService {
       storage: this.storage,
       listToolCatalog: () => this.listToolCatalog(),
       getModelOutputTokenLimit: (providerId, model) => this.llmService.getModelOutputTokenLimit(providerId, model),
+      describeProviderToolSupport: (providerId) => this.llmService.describeProviderToolSupport(providerId),
       listCapabilityCatalog: (scope, workspaceId) =>
         this.capabilitySystemService.listCatalog(scope, "ALL", workspaceId),
       revalidateRequesterTool: (profile, canonicalName) => this.revalidateNativeMcpChatTool(profile, canonicalName),

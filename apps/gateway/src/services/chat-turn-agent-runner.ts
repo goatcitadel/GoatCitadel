@@ -901,6 +901,8 @@ export interface ChatTurnAgentRunnerDeps {
   storage: Storage;
   listToolCatalog: () => ToolCatalogEntry[];
   getModelOutputTokenLimit?: (providerId: string, model: string) => number | undefined;
+  /** Text-only providers (the local Claude Code CLI) drop Gateway tools, so they cannot create files. */
+  describeProviderToolSupport?: (providerId: string) => { label: string; toolCalling: boolean } | undefined;
   /** Live callable catalog used only to enforce stricter removals or drift. */
   listCapabilityCatalog?: (scope: "callable", workspaceId?: string) => Promise<CapabilityCatalogEntry[]>;
   revalidateRequesterTool?: (profile: ChatTurnCapabilityProfileRecord, canonicalName: string) => Promise<void>;
@@ -2146,6 +2148,11 @@ export class ChatTurnAgentRunner {
           ? this.deps.getModelOutputTokenLimit?.(input.providerId, input.model)
           : undefined,
     });
+    const fileToollessProviderLabel = resolveFileToollessProviderLabel(
+      intents.documentArtifact || intents.presentationArtifact,
+      input.capabilityProfile?.selection.effectiveProviderId ?? input.providerId,
+      this.deps.describeProviderToolSupport,
+    );
     const executionBudgetTrace = {
       profile: executionBudget.profile ?? "default",
       ...(executionBudget.promotionReason ? { promotionReason: executionBudget.promotionReason } : {}),
@@ -4174,6 +4181,12 @@ export class ChatTurnAgentRunner {
         content: buildPdfDeckDeliveryInstruction(),
       } as ChatCompletionMessage);
     }
+    if (fileToollessProviderLabel) {
+      conversationMessages.push({
+        role: "system",
+        content: buildFileToollessProviderInstruction(),
+      } as ChatCompletionMessage);
+    }
 
     if (!assistantContent && !approvalPayload && !pendingUserInput) {
       try {
@@ -4717,6 +4730,7 @@ export class ChatTurnAgentRunner {
                 : undefined;
             if (
               requestedArtifactTool &&
+              !fileToollessProviderLabel &&
               !turnControl.artifactRetryIssued &&
               toolCalls.length === 0 &&
               input.toolAutonomy !== "manual" &&
@@ -6039,6 +6053,7 @@ export class ChatTurnAgentRunner {
         markCompletionRepair("cowork_contract_normalization", "orchestrator", preRepairContent, assistantContent);
       }
     }
+    const workspaceFileRootDir = this.deps.workspaceFileRootDir;
     const presentationAttempts = toolRuns.filter((run) => run.toolName === "presentations.create");
     const verifiedPresentationWrite = presentationAttempts.some(hasVerifiedPresentationArtifactWrite);
     // "A deck, saved as a PDF" is satisfied by a verified PDF file; the deck
@@ -6053,7 +6068,9 @@ export class ChatTurnAgentRunner {
       !durableFanoutWaiting &&
       intents.presentationArtifact &&
       !verifiedPresentationWrite &&
-      !verifiedPdfDeckDocumentWrite
+      !verifiedPdfDeckDocumentWrite &&
+      // A text-only provider never had the tool; the missing-file notice below keeps its answer.
+      !fileToollessProviderLabel
     ) {
       const lastAttempt = presentationAttempts.at(-1);
       const failureClass: ChatTurnFailureClass = lastAttempt?.status === "blocked" ? "tool_blocked" : "tool_failed";
@@ -6094,7 +6111,7 @@ export class ChatTurnAgentRunner {
       assistantContent = mergePresentationArtifactDeliveryContent(assistantContent, verifiedAttempt, {
         downloadHref:
           bytesWritten !== undefined && bytesWritten <= MAX_INLINE_FILE_DOWNLOAD_BYTES
-            ? buildWorkspaceFileDownloadHref(artifactPath, this.deps.workspaceFileRootDir)
+            ? buildWorkspaceFileDownloadHref(artifactPath, workspaceFileRootDir)
             : undefined,
       });
     }
@@ -6114,7 +6131,7 @@ export class ChatTurnAgentRunner {
         assistantContent = mergeWorkspaceFileDownloadContent(
           assistantContent,
           toolRun,
-          buildWorkspaceFileDownloadHref(receipt.artifactPath, this.deps.workspaceFileRootDir),
+          buildWorkspaceFileDownloadHref(receipt.artifactPath, workspaceFileRootDir),
         );
       }
     }
@@ -6289,7 +6306,7 @@ export class ChatTurnAgentRunner {
             Boolean(run.result?.path || run.result?.artifactId || run.result?.artifact)),
       )
     ) {
-      assistantContent = "The requested file was not created. There is no successful artifact result for this turn.";
+      assistantContent = withMissingArtifactNotice(assistantContent, fileToollessProviderLabel);
     }
     if (
       delegatedResultContract &&
@@ -10400,6 +10417,38 @@ function buildEvidenceGroundingInstruction(): string {
     "- Cite only the few URLs that directly support the key claims you make. Do not append long source inventories.",
     "- If the results are insufficient to answer the question well, tell the user what was found and what is missing.",
   ].join("\n");
+}
+
+function resolveFileToollessProviderLabel(
+  artifactIntent: boolean,
+  providerId: string | undefined,
+  describe: ChatTurnAgentRunnerDeps["describeProviderToolSupport"],
+): string | undefined {
+  if (!artifactIntent || !providerId) return undefined;
+  const support = describe?.(providerId);
+  return support && !support.toolCalling ? support.label : undefined;
+}
+
+function buildFileToollessProviderInstruction(): string {
+  return [
+    "File delivery for this turn:",
+    "- The user asked for a file, but the selected model cannot call tools, so no file can be created in this turn.",
+    "- Write the complete requested content directly in your reply.",
+    "- Do not claim that a file, download, or attachment was created.",
+  ].join("\n");
+}
+
+/**
+ * A tool-capable model that made no file may still claim one ("Your PDF is ready"), so its text is
+ * dropped. A text-only provider was told to answer inline instead, so its answer stays under the notice.
+ */
+function withMissingArtifactNotice(assistantContent: string, toollessProviderLabel: string | undefined): string {
+  if (!toollessProviderLabel) {
+    return "The requested file was not created. There is no successful artifact result for this turn.";
+  }
+  const notice = `No file was created: ${toollessProviderLabel} cannot use GoatCitadel tools, so it cannot save a PDF, document, or deck. The answer is below; to get a file, choose a model from a provider that supports tools and resend.`;
+  const answer = assistantContent.trim();
+  return answer ? `${notice}\n\n${answer}` : notice;
 }
 
 function buildPdfDeckDeliveryInstruction(): string {

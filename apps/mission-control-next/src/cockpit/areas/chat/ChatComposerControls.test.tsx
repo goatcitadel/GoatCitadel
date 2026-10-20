@@ -212,3 +212,31 @@ describe("Route fallback notice (CH-13)", () => {
     expect(input.onAcknowledgeRouteBoundary).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("File output notice", () => {
+  it("warns before send that a text-only provider cannot create the requested file and offers another model", async () => {
+    const input = props({
+      routePreflight: {
+        effectiveProviderId: "claude-code-cli",
+        effectiveModel: "claude-sonnet-5-5",
+        runtimeClass: "cloud",
+        fileOutputNotice: {
+          providerLabel: "Claude Code CLI (local login)",
+          message:
+            "Claude Code CLI (local login) cannot use GoatCitadel tools, so it cannot create a PDF, document, or deck.",
+          alternatives: [
+            { providerId: "openai", label: "OpenAI" },
+            { providerId: "anthropic", label: "Anthropic" },
+          ],
+        },
+      } as never,
+    });
+    await act(async () => root.render(<ChatComposerControls props={input} />));
+    const notice = container.querySelector('[role="status"]');
+    expect(notice?.textContent).toContain("cannot create a PDF, document, or deck");
+    expect(notice?.textContent).toContain("Can create files: OpenAI, Anthropic");
+    const choose = [...container.querySelectorAll("button")].find((b) => b.textContent === "Choose another model")!;
+    await act(async () => choose.click());
+    await vi.waitFor(() => expect(document.querySelector('select[aria-label="Provider"]')).not.toBeNull());
+  });
+});
