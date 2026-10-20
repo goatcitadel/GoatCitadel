@@ -66,6 +66,9 @@ export const CLAUDE_CLI_MAX_LINE_BYTES = 1024 * 1024;
 export const CLAUDE_CLI_STDERR_TAIL_BYTES = 16 * 1024;
 const CLAUDE_CLI_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
 const SHIM_EXTENSIONS = new Set([".cmd", ".bat", ".ps1"]);
+const CLAUDE_CLI_ISOLATION_SETTINGS = JSON.stringify({ disableAllHooks: true });
+const QUEUE_HIGH_WATER = 256;
+const QUEUE_LOW_WATER = 32;
 
 export function resolveClaudeCliInvocation(input: {
   env: NodeJS.ProcessEnv | Record<string, string | undefined>;
@@ -122,6 +125,12 @@ export function buildClaudeCliArgs(input: { model: string; systemPromptFile?: st
     "--no-session-persistence",
     "--permission-mode",
     "dontAsk",
+    // Defense in depth beside --safe-mode: load no user/project/local settings files
+    // (their env, apiKeyHelper or hooks) and disable hooks outright.
+    "--setting-sources",
+    "",
+    "--settings",
+    CLAUDE_CLI_ISOLATION_SETTINGS,
   ];
 }
 
@@ -188,17 +197,23 @@ export function killClaudeCliProcessTree(
     killer.on("error", () => undefined);
     return;
   }
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch {
-    return;
-  }
-  const escalate = setTimeout(() => {
+  // The child is spawned detached on POSIX, so -pid signals its whole process group.
+  const signal = (name: NodeJS.Signals): boolean => {
     try {
-      process.kill(pid, "SIGKILL");
+      process.kill(-pid, name);
+      return true;
     } catch {
-      // Already gone.
+      try {
+        process.kill(pid, name);
+        return true;
+      } catch {
+        return false;
+      }
     }
+  };
+  if (!signal("SIGTERM")) return;
+  const escalate = setTimeout(() => {
+    signal("SIGKILL");
   }, 3000);
   escalate.unref();
 }
@@ -233,6 +248,8 @@ export async function* runClaudeCli(input: RunClaudeCliInput): AsyncGenerator<st
     env: input.env,
     shell: false,
     windowsHide: true,
+    // Own process group on POSIX so cancellation reaches the CLI's children too.
+    detached: process.platform !== "win32",
     stdio: ["pipe", "pipe", "pipe"],
   });
 
@@ -241,12 +258,14 @@ export async function* runClaudeCli(input: RunClaudeCliInput): AsyncGenerator<st
   let settled = false;
   let killed = false;
   let closed = false;
+  let finished = false;
   let stdoutBuffer = "";
   let stderrTail = "";
   const push = (item: QueueItem) => {
     if (settled) return;
     if (item.kind !== "line") settled = true;
     queue.push(item);
+    if (queue.length >= QUEUE_HIGH_WATER) child.stdout?.pause();
     wake?.();
   };
   const terminate = (error: Error) => {
@@ -261,6 +280,7 @@ export async function* runClaudeCli(input: RunClaudeCliInput): AsyncGenerator<st
   let idleTimer: NodeJS.Timeout | undefined;
   const armIdle = () => {
     if (idleTimer) clearTimeout(idleTimer);
+    if (finished || settled) return;
     idleTimer = setTimeout(
       () => terminate(new ClaudeCliError("claude_cli_timeout", "The Claude Code CLI stopped producing output")),
       input.idleTimeoutMs,
@@ -310,11 +330,16 @@ export async function* runClaudeCli(input: RunClaudeCliInput): AsyncGenerator<st
   });
 
   child.stdin?.on("error", () => undefined);
+  child.stdout?.on("error", (error) =>
+    terminate(new ClaudeCliError("claude_cli_failed", "The Claude Code CLI output stream failed", { cause: error })),
+  );
+  child.stderr?.on("error", () => undefined);
   child.stdin?.end(Buffer.from(input.stdinPayload, "utf8"));
 
   try {
     for (;;) {
       const item = queue.shift();
+      if (queue.length <= QUEUE_LOW_WATER && child.stdout?.isPaused()) child.stdout.resume();
       if (!item) {
         await new Promise<void>((resolve) => {
           wake = resolve;
@@ -330,6 +355,7 @@ export async function* runClaudeCli(input: RunClaudeCliInput): AsyncGenerator<st
       return item.exit;
     }
   } finally {
+    finished = true;
     clearTimeout(overallTimer);
     if (idleTimer) clearTimeout(idleTimer);
     input.signal?.removeEventListener("abort", onAbort);

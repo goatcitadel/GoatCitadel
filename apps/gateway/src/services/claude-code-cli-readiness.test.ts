@@ -83,6 +83,21 @@ describe("ClaudeCodeCliReadiness", () => {
     expect(run).toHaveBeenCalledTimes(3);
   });
 
+  it("does not cache a transient unavailable result but still reports it to listings", async () => {
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("slow"), { reasonCode: "claude_cli_timeout" }))
+      .mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty" }),
+      });
+    const readiness = new ClaudeCodeCliReadiness({ run });
+    await expect(readiness.check()).resolves.toMatchObject({ status: "unavailable", reasonCode: "claude_cli_timeout" });
+    expect(readiness.peek()).toMatchObject({ status: "unavailable" });
+    await expect(readiness.check()).resolves.toMatchObject({ status: "ready" });
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
   it("shares one in-flight probe between concurrent checks", async () => {
     const run = status({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty" });
     const readiness = new ClaudeCodeCliReadiness({ run });

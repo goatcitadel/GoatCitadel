@@ -36,11 +36,18 @@ describe("createClaudeCliStreamMapper", () => {
       choices: [{ index: 0, delta: { content: "hello " } }],
     });
     expect(chunks[1]).toMatchObject({ choices: [{ delta: { content: "world" } }] });
-    expect(final.usage).toEqual({ prompt_tokens: 7, completion_tokens: 2, total_tokens: 9 });
+    // Same shape as the Anthropic Messages adapter: uncached input, cache fields passed through.
+    expect(final.usage).toEqual({
+      prompt_tokens: 4,
+      completion_tokens: 2,
+      total_tokens: 6,
+      cache_read_input_tokens: 2,
+      cache_creation_input_tokens: 1,
+    });
     expect(final.text).toBe("hello world");
     expect(final.finalChunk).toMatchObject({
       choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-      usage: { prompt_tokens: 7, completion_tokens: 2, total_tokens: 9 },
+      usage: { prompt_tokens: 4, completion_tokens: 2, cache_read_input_tokens: 2 },
     });
     // The CLI's notional API price is not a subscription charge.
     expect(JSON.stringify(final.finalChunk)).not.toContain("0.42");
@@ -94,6 +101,39 @@ describe("createClaudeCliStreamMapper", () => {
     ).toThrow(expect.objectContaining({ reasonCode: "claude_cli_tool_use_blocked" }));
   });
 
+  it("leaves usage unknown when the CLI reports none", () => {
+    const mapper = createClaudeCliStreamMapper("sonnet");
+    mapper.push(line({ type: "result", subtype: "success", is_error: false, result: "ok" }));
+    const final = mapper.finish({ exitCode: 0, stderrTail: "" });
+    expect(final.usage).toBeUndefined();
+    expect(final.finalChunk).not.toHaveProperty("usage");
+  });
+
+  it("never streams the CLI's synthetic auth-failure message as reply text (captured from Claude Code 2.1.212)", () => {
+    const mapper = createClaudeCliStreamMapper("claude-sonnet-5-5");
+    const synthetic = line({
+      type: "assistant",
+      message: {
+        model: "<synthetic>",
+        role: "assistant",
+        content: [{ type: "text", text: "Failed to authenticate: OAuth session expired and could not be refreshed" }],
+      },
+    });
+    const result = line({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: "Failed to authenticate: OAuth session expired and could not be refreshed",
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 },
+    });
+    expect(mapper.push(synthetic)).toEqual([]);
+    expect(mapper.push(result)).toEqual([]);
+    expect(() => mapper.finish({ exitCode: 1, stderrTail: "" })).toThrow(
+      expect.objectContaining({ reasonCode: "claude_cli_logged_out" }),
+    );
+  });
+
   it("maps error results to typed reason codes", () => {
     const mapper = createClaudeCliStreamMapper("sonnet");
     mapper.push(
@@ -132,6 +172,7 @@ describe("classifyClaudeCliFailure", () => {
     ["Invalid API key · Please run /login", "claude_cli_logged_out"],
     ['{"type":"error","error":{"type":"authentication_error"}}', "claude_cli_logged_out"],
     ["Not logged in", "claude_cli_logged_out"],
+    ["Failed to authenticate: OAuth session expired and could not be refreshed", "claude_cli_logged_out"],
     ["Claude AI usage limit reached|1760000000", "claude_cli_usage_limited"],
     ["rate_limit_error: too many requests", "claude_cli_usage_limited"],
     ["error: unknown option '--tools'", "claude_cli_incompatible"],

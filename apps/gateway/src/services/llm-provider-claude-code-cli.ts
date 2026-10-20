@@ -7,7 +7,12 @@ import type {
   ChatCompletionResponse,
   ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
-import type { LlmProviderAdapter, LlmProviderAdapterHost, LlmProviderResolution } from "./llm-provider-adapter.js";
+import type {
+  LlmProviderAdapter,
+  LlmProviderAdapterHost,
+  LlmProviderResolution,
+  LlmTrackedProcessDispatch,
+} from "./llm-provider-adapter.js";
 import { claudeCodeHarnessExecutableNames, listExecutableCandidates } from "./agentic-harness-availability.js";
 import {
   ClaudeCliError,
@@ -152,20 +157,28 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
     buildClaudeCliArgs({ model }); // Validate the model id before any usage intent exists.
     const prompt = renderClaudeCliPrompt(request.messages);
 
-    const dispatch = await host.beginTrackedDispatch({
-      resolved,
-      model,
-      requestedProviderId: attribution.requestedProviderId ?? request.providerId,
-      requestedModelId: attribution.requestedModelId ?? request.model,
-      attribution,
-      transportAttemptIndex: 0,
-      targetUrl: `${resolved.provider.baseUrl}/messages`,
-    });
+    // Prepare local state before the usage intent exists, so a scratch-dir failure
+    // cannot leave an accepted intent unsettled.
+    const runDir = await mkdtempSafe(runtime.scratchRoot);
+    let dispatch: LlmTrackedProcessDispatch;
+    try {
+      dispatch = await host.beginTrackedDispatch({
+        resolved,
+        model,
+        requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+        requestedModelId: attribution.requestedModelId ?? request.model,
+        attribution,
+        transportAttemptIndex: 0,
+        targetUrl: `${resolved.provider.baseUrl}/messages`,
+      });
+    } catch (error) {
+      await rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
     const accounting = dispatch.usage;
     const tag = <T extends object>(value: T) =>
       withUsageEvent(value, accounting, dispatch.priorModelUsageEventIds ?? []);
     let settled = false;
-    const runDir = await mkdtempSafe(runtime.scratchRoot);
     try {
       let inlineSystem = false;
       for (;;) {
@@ -209,7 +222,7 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
             if (!exit) await lines.return({ exitCode: null, stderrTail: "" });
           }
           const outcome = mapper.finish(exit);
-          accounting?.observe(outcome.usage);
+          if (outcome.usage) accounting?.observe(outcome.usage);
           accounting?.observeNormalized({ effectiveModelId: model });
           settled = true;
           await accounting?.succeed();

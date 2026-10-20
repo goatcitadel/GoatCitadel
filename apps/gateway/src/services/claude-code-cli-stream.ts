@@ -1,21 +1,20 @@
 import { randomUUID } from "node:crypto";
 import type { ChatCompletionMessage } from "@goatcitadel/contracts";
 import { ClaudeCliError, type ClaudeCliExit, type ClaudeCliReasonCode } from "./claude-code-cli-process.js";
+import { normalizeAnthropicUsage } from "./llm-provider-anthropic.js";
 
 /**
  * Maps Claude Code CLI `--output-format stream-json` lines onto the
  * OpenAI-shaped chunks every GoatCitadel provider adapter yields.
  */
 
-export interface ClaudeCliUsage {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-}
+/** Anthropic-shaped usage (prompt_tokens = uncached input; cache fields passed through), like the Messages adapter. */
+export type ClaudeCliUsage = Record<string, unknown>;
 
 export interface ClaudeCliStreamOutcome {
   finalChunk: Record<string, unknown>;
-  usage: ClaudeCliUsage;
+  /** Undefined when the CLI reported no usage, so it is recorded as unknown rather than zero. */
+  usage?: ClaudeCliUsage;
   text: string;
 }
 
@@ -49,7 +48,7 @@ export function claudeCliUserMessage(reasonCode: ClaudeCliReasonCode): string {
 export function classifyClaudeCliFailure(text: string): ClaudeCliReasonCode {
   const normalized = text.toLowerCase();
   if (
-    /not logged in|please run \/login|invalid api key|authentication_error|oauth token (?:has )?expired|login required/.test(
+    /not logged in|please run \/login|invalid api key|authentication_error|failed to authenticate|(?:oauth|session|token)\b[^.\n]{0,40}\bexpired|login required/.test(
       normalized,
     )
   ) {
@@ -113,6 +112,9 @@ export function createClaudeCliStreamMapper(model: string): ClaudeCliStreamMappe
       if (event.type === "assistant" && isRecord(event.message) && Array.isArray(event.message.content)) {
         if (event.message.content.some((block) => isRecord(block) && isToolUseBlock(block))) blockToolUse();
         if (sawDelta) return [];
+        // The CLI reports its own failures (e.g. "Failed to authenticate") as a synthetic assistant
+        // message before the error result; that text is not a model reply.
+        if (event.message.model === "<synthetic>") return [];
         const full = event.message.content
           .filter((block): block is Record<string, unknown> => isRecord(block) && block.type === "text")
           .map((block) => (typeof block.text === "string" ? block.text : ""))
@@ -147,10 +149,10 @@ export function createClaudeCliStreamMapper(model: string): ClaudeCliStreamMappe
           stderrTail: exit.stderrTail,
         });
       }
-      const usage = readUsage(result.usage);
+      const usage = isRecord(result.usage) ? normalizeAnthropicUsage(result.usage) : undefined;
       return {
-        finalChunk: { ...chunk({}, { finish_reason: "stop" }), usage },
-        usage,
+        finalChunk: { ...chunk({}, { finish_reason: "stop" }), ...(usage ? { usage } : {}) },
+        ...(usage ? { usage } : {}),
         text: text || (typeof result.result === "string" ? result.result : ""),
       };
     },
@@ -202,17 +204,6 @@ function renderContent(content: ChatCompletionMessage["content"]): string {
     })
     .filter(Boolean)
     .join("\n");
-}
-
-function readUsage(value: unknown): ClaudeCliUsage {
-  const usage = isRecord(value) ? value : {};
-  const count = (key: string) => {
-    const raw = usage[key];
-    return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
-  };
-  const prompt = count("input_tokens") + count("cache_read_input_tokens") + count("cache_creation_input_tokens");
-  const completion = count("output_tokens");
-  return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion };
 }
 
 function stringifyErrors(value: unknown): string {

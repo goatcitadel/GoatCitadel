@@ -24,6 +24,7 @@ export class ClaudeCodeCliReadiness {
   private readonly ttlMs: number;
   private cached: { at: number; result: ClaudeCodeCliReadinessResult } | undefined;
   private inFlight: Promise<ClaudeCodeCliReadinessResult> | undefined;
+  private last: ClaudeCodeCliReadinessResult | undefined;
 
   public constructor(options: { run: ClaudeCodeCliStatusRun; now?: () => number; ttlMs?: number }) {
     this.run = options.run;
@@ -35,7 +36,9 @@ export class ClaudeCodeCliReadiness {
     if (this.cached && this.now() - this.cached.at < this.ttlMs) return this.cached.result;
     if (this.inFlight) return await this.inFlight;
     this.inFlight = this.probe().then((result) => {
-      this.cached = { at: this.now(), result };
+      // A transient probe failure (slow cold start, spawn hiccup) must not block every turn for the TTL.
+      this.cached = result.status === "unavailable" ? undefined : { at: this.now(), result };
+      this.last = result;
       return result;
     });
     try {
@@ -47,7 +50,7 @@ export class ClaudeCodeCliReadiness {
 
   /** Last probed result without spawning anything; undefined until the first probe. */
   public peek(): ClaudeCodeCliReadinessResult | undefined {
-    return this.cached?.result;
+    return this.last;
   }
 
   public invalidate(): void {

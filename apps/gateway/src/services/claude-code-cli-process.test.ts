@@ -134,6 +134,8 @@ describe("buildClaudeCliArgs", () => {
     );
     expect(args[args.indexOf("--tools") + 1]).toBe("");
     expect(args[args.indexOf("--permission-mode") + 1]).toBe("dontAsk");
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
+    expect(JSON.parse(args[args.indexOf("--settings") + 1] ?? "null")).toEqual({ disableAllHooks: true });
     expect(args[args.indexOf("--model") + 1]).toBe("claude-sonnet-5-5");
     expect(args[args.indexOf("--system-prompt-file") + 1]).toBe("C:\\tmp\\sys.txt");
   });

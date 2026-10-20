@@ -1021,7 +1021,9 @@ function isAnthropicForcedToolChoice(toolChoice: Record<string, unknown>): boole
   return toolChoice.type === "any" || toolChoice.type === "tool";
 }
 
-function normalizeAnthropicUsage(usage: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+export function normalizeAnthropicUsage(
+  usage: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
   if (!usage) {
     return undefined;
   }

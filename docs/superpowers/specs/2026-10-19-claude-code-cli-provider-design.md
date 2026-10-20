@@ -64,7 +64,7 @@ Command:
          --include-partial-messages --model <model>
          --system-prompt-file <tmp> --tools "" --strict-mcp-config
          --safe-mode --disable-slash-commands --no-session-persistence
-         --permission-mode dontAsk
+         --permission-mode dontAsk --setting-sources "" --settings '{"disableAllHooks":true}'
 ```
 
 - **Arguments:** an argv array with `shell: false` and `windowsHide: true`. No user text goes on the command line. The only argument values are the model id (validated against `^[A-Za-z0-9._:\[\]-]+$`) and a temp-file path.
@@ -93,7 +93,8 @@ The CLI's stream-json lines are mapped to the OpenAI-shaped chunks every other a
 | `stream_event` with a `content_block_delta` / `text_delta` | `choices[0].delta.content` |
 | `stream_event` with a `thinking_delta` | the existing private reasoning-delta field. `llm-service` already strips it or forwards it per `streamReasoningDeltas`. |
 | `assistant` with full text blocks | used only if no partial deltas arrived (older CLIs) |
-| `result` with `subtype: "success"` | a final chunk with `finish_reason: "stop"`, plus `usage` (`prompt_tokens` = input + cache read/creation, `completion_tokens` = output) tagged with the usage event id |
+| `result` with `subtype: "success"` | a final chunk with `finish_reason: "stop"`, plus `usage` in the same shape as the Anthropic Messages adapter (`prompt_tokens` = uncached input, cache read/creation fields passed through; omitted when the CLI reports none), tagged with the usage event id |
+| `assistant` with `model: "<synthetic>"` | dropped: the CLI reports its own failures (e.g. "Failed to authenticate") this way before the error result |
 | `result` with `is_error` or a non-success subtype | a mapped error (see section 7) |
 | `system`, `rate_limit_event`, other lines | ignored; lines that are not JSON are dropped after a bounded length check |
 
