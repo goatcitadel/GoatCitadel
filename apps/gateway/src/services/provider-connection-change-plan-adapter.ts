@@ -149,14 +149,7 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
                 targetId: request.providerId,
                 title: `Enter ${label} credential`,
                 expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
-                fields: [
-                  {
-                    fieldId: "credential",
-                    label: `${label} credential`,
-                    required: true,
-                    description: credentialStorageDescription(request),
-                  },
-                ],
+                fields: [credentialField(label, request, request.profile?.authMode ?? provider?.authMode)],
               }),
     };
   }
@@ -294,14 +287,7 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
               targetId: provider.providerId,
               title: `Enter ${provider.label} credential`,
               expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
-              fields: [
-                {
-                  fieldId: "credential",
-                  label: `${provider.label} credential`,
-                  required: true,
-                  description: credentialStorageDescription(request),
-                },
-              ],
+              fields: [credentialField(provider.label, request, provider.authMode)],
             }),
         result: {
           summary: `${provider.label} profile saved. Its credential is still required through the secure owner flow.`,
@@ -578,6 +564,24 @@ function assertRevision(plan: ChangePlanRecord, currentRevision: number): void {
     message: "Provider settings changed after this Change Plan was prepared.",
     details: { expectedRevision: plan.target.expectedRevision, currentRevision },
   });
+}
+
+// A Claude subscription token is pasted from `claude setup-token`; say so instead of
+// asking for a generic credential the operator has to guess at.
+function credentialField(
+  label: string,
+  request: ChangePlanProviderConnectionRequest,
+  authMode: LlmProviderSummary["authMode"] | undefined,
+) {
+  const claudeToken = authMode === "claude-code-oauth";
+  return {
+    fieldId: "credential",
+    label: claudeToken ? `${label} token` : `${label} credential`,
+    required: true,
+    description: claudeToken
+      ? `Paste the token printed by claude setup-token. Anthropic limits subscription tokens to Claude Code and may reject it here. ${credentialStorageDescription(request)}`
+      : credentialStorageDescription(request),
+  };
 }
 
 function credentialStorageDescription(request: ChangePlanProviderConnectionRequest): string {

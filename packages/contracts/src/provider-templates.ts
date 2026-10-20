@@ -6,6 +6,21 @@ import type {
   ProviderProfile,
 } from "./llm.js";
 
+// Shared by the Anthropic API-key and Claude Code subscription templates, newest first.
+// Older ids stay listed while Anthropic still serves them; the live model probe stays authoritative.
+const CLAUDE_DEFAULT_MODEL = "claude-sonnet-5-5";
+const CLAUDE_KNOWN_MODELS = [
+  "claude-fable-5-1",
+  "claude-opus-5-5",
+  "claude-sonnet-5-5",
+  "claude-haiku-5-5",
+  "claude-opus-4-8",
+  "claude-fable-5",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4",
+  "claude-opus-4",
+] as const;
+
 export interface ProviderTemplateDefinition {
   providerId: string;
   label: string;
@@ -53,17 +68,17 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     providerId: "anthropic",
     label: "Anthropic",
     baseUrl: "https://api.anthropic.com/v1",
-    defaultModel: "claude-sonnet-4-6",
+    defaultModel: CLAUDE_DEFAULT_MODEL,
     apiStyle: "anthropic-messages",
-    knownModels: ["claude-opus-4-8", "claude-fable-5", "claude-sonnet-4-6", "claude-sonnet-4", "claude-opus-4"],
+    knownModels: [...CLAUDE_KNOWN_MODELS],
   },
   {
     providerId: "claude-code",
     label: "Claude Code (Claude subscription)",
     baseUrl: "https://api.anthropic.com/v1",
-    defaultModel: "claude-sonnet-4-6",
+    defaultModel: CLAUDE_DEFAULT_MODEL,
     apiStyle: "anthropic-messages",
-    knownModels: ["claude-opus-4-8", "claude-fable-5", "claude-sonnet-4-6", "claude-sonnet-4", "claude-opus-4"],
+    knownModels: [...CLAUDE_KNOWN_MODELS],
   },
   {
     providerId: "bedrock",

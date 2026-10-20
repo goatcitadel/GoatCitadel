@@ -1587,7 +1587,7 @@ function defaultLlmConfig(): string {
         label: "Anthropic",
         baseUrl: "https://api.anthropic.com/v1",
         apiStyle: "anthropic-messages",
-        defaultModel: "claude-sonnet-4-6",
+        defaultModel: "claude-sonnet-5-5",
         apiKeyEnv: "ANTHROPIC_API_KEY",
       },
       {
@@ -1595,7 +1595,7 @@ function defaultLlmConfig(): string {
         label: "Claude Code (Claude subscription)",
         baseUrl: "https://api.anthropic.com/v1",
         apiStyle: "anthropic-messages",
-        defaultModel: "claude-sonnet-4-6",
+        defaultModel: "claude-sonnet-5-5",
         authMode: "claude-code-oauth",
         apiKeyEnv: "CLAUDE_CODE_OAUTH_TOKEN",
       },

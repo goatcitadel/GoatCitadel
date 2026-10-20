@@ -33,6 +33,7 @@ import { useOnboardingCompletion } from "../use-onboarding-completion";
 import {
   clampGuidedThinkingLevel,
   GUIDED_THINKING_LEVELS,
+  guidedConnectionHint,
   localRuntimeSetupGuide,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
@@ -153,7 +154,7 @@ export function GuidedModelSetup({
   // endpoint probe, so the next step is re-checking it, not a credential plan.
   const verifiesLocalEndpoint =
     selectedProvider?.localCostPosture === "zero_cost_local_runtime" && providerReadiness.state !== "needs_setup";
-  const usesChatGptOAuth = selectedProvider?.authMode === "codex-oauth";
+  const connectionHint = guidedConnectionHint(selectedProvider);
   const defaultPlanCompleted =
     providerReady &&
     ((Boolean(activeProviderId && activeModel) &&
@@ -423,8 +424,8 @@ export function GuidedModelSetup({
             ))}
           </select>
           <p className="mc-next-settings-field-note">
-            {usesChatGptOAuth
-              ? "Use your ChatGPT account: select Connect ChatGPT, review the plan, then approve the sign-in in OpenAI."
+            {connectionHint
+              ? connectionHint.note
               : (catalog.error ??
                 selectedProvider?.authReadiness?.reasonCode ??
                 "The Gateway will verify this connection before it can be used.")}
@@ -533,9 +534,7 @@ export function GuidedModelSetup({
                 ? providerReadiness.state === "checking"
                   ? "Checking connection…"
                   : "Check connection"
-                : usesChatGptOAuth
-                  ? "Connect ChatGPT"
-                  : "Connect provider"}
+                : (connectionHint?.connectLabel ?? "Connect provider")}
         </NativeButton>
       </SettingsButtonRow>
       {actionError && !dialogPlan ? <p role="alert">{actionError}</p> : null}
