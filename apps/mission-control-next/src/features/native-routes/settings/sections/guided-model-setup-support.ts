@@ -294,7 +294,7 @@ export function withAddableBuiltinProviders(
   );
 }
 
-export type GuidedProviderGroupId = "ready" | "subscription" | "api_key" | "local";
+export type GuidedProviderGroupId = "ready" | "subscription" | "api_key" | "cloud_account" | "local";
 
 export interface GuidedProviderGroup {
   readonly id: GuidedProviderGroupId;
@@ -306,11 +306,15 @@ const GUIDED_PROVIDER_GROUP_LABELS: Readonly<Record<GuidedProviderGroupId, strin
   ready: "Ready to use",
   subscription: "Use a subscription",
   api_key: "Pay-per-use API key",
+  cloud_account: "Pay-per-use cloud account",
   local: "Run locally",
 };
 
 // Sign-in or account based providers; everything not local and not here takes an API key.
 const SUBSCRIPTION_AUTH_MODES = new Set(["codex-oauth", "claude-code-oauth", "claude-code-cli-login"]);
+
+// Cloud credentials that are not an API key: Google ADC or service accounts, and AWS SigV4.
+const CLOUD_ACCOUNT_AUTH_MODES = new Set(["google-adc", "google-service-account", "aws-sigv4"]);
 
 // Providers whose path is retired from the product but can linger in an older saved config.
 const RETIRED_PROVIDER_IDS = new Set(["npu-local"]);
@@ -333,6 +337,7 @@ function guidedProviderGroupId(provider: GuidedProviderOption): GuidedProviderGr
   if (resolveGuidedProviderReadiness(provider).state === "ready") return "ready";
   if (provider.authMode && SUBSCRIPTION_AUTH_MODES.has(provider.authMode)) return "subscription";
   if (provider.localCostPosture === "zero_cost_local_runtime") return "local";
+  if (provider.authMode && CLOUD_ACCOUNT_AUTH_MODES.has(provider.authMode)) return "cloud_account";
   return "api_key";
 }
 
