@@ -680,7 +680,7 @@ describe("ProviderConnectionChangePlanAdapter", () => {
       expect(verifyProvider).not.toHaveBeenCalled();
     });
 
-    it("verifies the live catalog once the re-checked login is ready", async () => {
+    it("runs provider verification once the re-checked login is ready", async () => {
       const verifyProvider = vi.fn(async () => ({ evidenceRefs: ["provider-catalog:claude-code-cli:live"] }));
       const refreshLocalLoginReadiness = vi.fn(async () => ({
         status: "ready" as const,
