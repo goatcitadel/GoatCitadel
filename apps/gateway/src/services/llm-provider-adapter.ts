@@ -9,6 +9,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type { ModelUsageAttemptHandle } from "@goatcitadel/gateway-core";
 import type { Dispatcher } from "undici";
+import type { ClaudeCodeCliRuntime } from "./llm-provider-claude-code-cli.js";
 
 export interface LlmProviderResolution {
   provider: LlmProviderConfig;
@@ -68,7 +69,28 @@ export interface LlmTrackedJsonDispatch {
   minimumEffectiveOutputTokenCap?: number;
 }
 
+/** A non-HTTP provider attempt (e.g. a local CLI process) that still needs the
+ * ward, canonical usage intent and dispatch guard before it starts. */
+export interface LlmTrackedProcessDispatchInput {
+  resolved: LlmProviderResolution;
+  model: string;
+  requestedProviderId?: string;
+  requestedModelId?: string;
+  attribution: ModelUsageAttributionContext;
+  transportAttemptIndex: number;
+  /** Where the process egresses; the ward and allowlist judge locality by it. */
+  targetUrl: string;
+}
+
+export interface LlmTrackedProcessDispatch {
+  usage?: ModelUsageAttemptHandle;
+  priorModelUsageEventIds?: string[];
+}
+
 export interface LlmProviderAdapterHost {
+  /** Present only on hosts that can run the operator's local Claude Code CLI. */
+  claudeCodeCliRuntime?(): ClaudeCodeCliRuntime | undefined;
+  beginTrackedDispatch(input: LlmTrackedProcessDispatchInput): Promise<LlmTrackedProcessDispatch>;
   buildRequestTarget(
     resolved: LlmProviderResolution,
     purpose: "chat" | "responses" | "messages" | "models",

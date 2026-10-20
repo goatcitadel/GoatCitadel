@@ -1600,6 +1600,14 @@ function defaultLlmConfig(): string {
         apiKeyEnv: "CLAUDE_CODE_OAUTH_TOKEN",
       },
       {
+        providerId: "claude-code-cli",
+        label: "Claude Code CLI (local login)",
+        baseUrl: "https://api.anthropic.com/v1",
+        apiStyle: "claude-code-cli",
+        defaultModel: "claude-sonnet-5-5",
+        authMode: "claude-code-cli-login",
+      },
+      {
         providerId: "google",
         label: "Google (compatible endpoint)",
         baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",

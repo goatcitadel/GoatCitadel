@@ -9,19 +9,26 @@ import process from "node:process";
  * CLI can only use the operator's own `claude` login.
  */
 
-export type ClaudeCliReasonCode =
-  | "claude_cli_missing"
-  | "claude_cli_logged_out"
-  | "claude_cli_usage_limited"
-  | "claude_cli_incompatible"
-  | "claude_cli_model_unavailable"
-  | "claude_cli_tool_use_blocked"
-  | "claude_cli_timeout"
-  | "claude_cli_failed"
-  | "claude_cli_tools_unsupported"
-  | "claude_cli_not_subscription_login"
-  | "claude_cli_unsupported_shim"
-  | "claude_cli_cancelled";
+export const CLAUDE_CLI_REASON_CODES = [
+  "claude_cli_missing",
+  "claude_cli_logged_out",
+  "claude_cli_usage_limited",
+  "claude_cli_incompatible",
+  "claude_cli_model_unavailable",
+  "claude_cli_tool_use_blocked",
+  "claude_cli_timeout",
+  "claude_cli_failed",
+  "claude_cli_tools_unsupported",
+  "claude_cli_not_subscription_login",
+  "claude_cli_unsupported_shim",
+  "claude_cli_cancelled",
+] as const;
+
+export type ClaudeCliReasonCode = (typeof CLAUDE_CLI_REASON_CODES)[number];
+
+export function isClaudeCliReasonCode(value: string): value is ClaudeCliReasonCode {
+  return (CLAUDE_CLI_REASON_CODES as readonly string[]).includes(value);
+}
 
 export class ClaudeCliError extends Error {
   public readonly reasonCode: ClaudeCliReasonCode;

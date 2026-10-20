@@ -17,6 +17,7 @@ const llmApiStyleSchema = z.enum([
   "openai-codex-responses",
   "anthropic-messages",
   "bedrock-messages",
+  "claude-code-cli",
 ]);
 
 const llmProviderRequestAuthSchema = z.discriminatedUnion("type", [

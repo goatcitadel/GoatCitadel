@@ -27,6 +27,7 @@ const providerProfileSchema = z
         "openai-codex-responses",
         "anthropic-messages",
         "bedrock-messages",
+        "claude-code-cli",
       ])
       .optional(),
     authMode: LlmProviderAuthModeSchema.optional(),

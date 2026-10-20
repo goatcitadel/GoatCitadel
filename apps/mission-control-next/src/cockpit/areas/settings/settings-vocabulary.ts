@@ -43,6 +43,7 @@ export const LLM_API_STYLE_LABELS: Record<LlmApiStyle, string> = {
   "anthropic-messages": "Anthropic Messages",
   "openai-chat-completions": "OpenAI-compatible chat completions",
   "bedrock-messages": "Amazon Bedrock messages",
+  "claude-code-cli": "Claude Code CLI (local process)",
 };
 export const LLM_API_STYLES = Object.keys(LLM_API_STYLE_LABELS) as LlmApiStyle[];
 export function presentApiStyle(value: string | null | undefined): string {
@@ -141,6 +142,7 @@ export const PROVIDER_AUTH_MODE_LABELS: Record<LlmProviderAuthMode, string> = {
   "api-key": "an API key",
   "codex-oauth": "ChatGPT/Codex sign-in",
   "claude-code-oauth": "a Claude Code OAuth token",
+  "claude-code-cli-login": "your local Claude Code login",
   "google-service-account": "a Google service account",
   "google-adc": "Google application default credentials",
   "aws-sigv4": "AWS access keys (SigV4)",

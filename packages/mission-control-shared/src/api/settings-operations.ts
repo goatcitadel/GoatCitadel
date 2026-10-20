@@ -83,7 +83,8 @@ export async function patchSettings(input: {
         | "openai-responses"
         | "openai-codex-responses"
         | "anthropic-messages"
-        | "bedrock-messages";
+        | "bedrock-messages"
+        | "claude-code-cli";
       authMode?: LlmProviderConfig["authMode"];
       defaultModel?: string;
       apiKey?: string;

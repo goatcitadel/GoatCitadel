@@ -64,6 +64,7 @@ function createHost(
       };
     },
     retryOutputCapFailure: async () => undefined,
+    beginTrackedDispatch: async () => ({}),
   };
 }
 

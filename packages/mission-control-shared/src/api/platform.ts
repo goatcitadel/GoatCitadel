@@ -139,7 +139,8 @@ export async function previewLlmModels(
       | "openai-responses"
       | "openai-codex-responses"
       | "anthropic-messages"
-      | "bedrock-messages";
+      | "bedrock-messages"
+      | "claude-code-cli";
     apiKey?: string;
     apiKeyEnv?: string;
     request?: LlmProviderRequestConfig;

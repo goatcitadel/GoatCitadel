@@ -9,7 +9,8 @@ export type ProviderEditorDraft = {
     | "openai-responses"
     | "openai-codex-responses"
     | "anthropic-messages"
-    | "bedrock-messages";
+    | "bedrock-messages"
+    | "claude-code-cli";
   defaultModel: string;
   authMode: NonNullable<LlmProviderConfig["authMode"]> | "";
   apiKeyEnv: string;
@@ -47,7 +48,8 @@ export function buildProviderEditorDraft(
       | "openai-responses"
       | "openai-codex-responses"
       | "anthropic-messages"
-      | "bedrock-messages";
+      | "bedrock-messages"
+      | "claude-code-cli";
     defaultModel: string;
     authMode?: LlmProviderConfig["authMode"];
     googleCloud?: LlmProviderConfig["googleCloud"];

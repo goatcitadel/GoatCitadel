@@ -87,6 +87,7 @@ const llmApiStyleSchema = z.enum([
   "openai-codex-responses",
   "anthropic-messages",
   "bedrock-messages",
+  "claude-code-cli",
 ]);
 
 const personalityCategorySchema = z.enum(["core", "critical", "execution", "social", "thinking", "flavor", "chaos"]);

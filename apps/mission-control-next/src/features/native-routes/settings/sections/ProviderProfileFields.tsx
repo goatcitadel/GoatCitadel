@@ -20,6 +20,7 @@ const PROVIDER_API_STYLE_OPTIONS: ProviderEditorDraft["apiStyle"][] = [
   "anthropic-messages",
   "openai-chat-completions",
   "bedrock-messages",
+  "claude-code-cli",
 ];
 
 export interface ProviderProfileFieldsProps {
@@ -261,6 +262,9 @@ function formatProviderApiStyleLabel(value: ProviderEditorDraft["apiStyle"]): st
   if (value === "bedrock-messages") {
     return LLM_API_STYLE_LABELS["bedrock-messages"];
   }
+  if (value === "claude-code-cli") {
+    return LLM_API_STYLE_LABELS["claude-code-cli"];
+  }
   return "OpenAI Chat Completions";
 }
 
@@ -276,6 +280,9 @@ function describeProviderApiStyle(value: ProviderEditorDraft["apiStyle"]): strin
   }
   if (value === "bedrock-messages") {
     return "Use for Amazon Bedrock runtime endpoints through the Converse API.";
+  }
+  if (value === "claude-code-cli") {
+    return "Use only for the built-in provider that runs your local Claude Code CLI under your own login.";
   }
   return "Use for older OpenAI-compatible chat-completions endpoints such as many proxy or local servers.";
 }
