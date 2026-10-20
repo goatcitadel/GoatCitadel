@@ -130,6 +130,22 @@ describe("resolveClaudeCliStubPath", () => {
     expect(resolveClaudeCliStubPath(() => false, dir)).toBeUndefined();
   });
 
+  it("resolves against a real dist-shaped layout on disk", () => {
+    const js = "claude-code-cli-mcp-stub.js";
+    const ts = "claude-code-cli-mcp-stub.ts";
+    const distOnly = tempDir("dist-only", "services");
+    fs.writeFileSync(path.join(distOnly, js), "");
+    expect(resolveClaudeCliStubPath(fs.existsSync, distOnly)).toBe(path.join(distOnly, js));
+
+    const both = tempDir("both", "services");
+    fs.writeFileSync(path.join(both, js), "");
+    fs.writeFileSync(path.join(both, ts), "");
+    expect(resolveClaudeCliStubPath(fs.existsSync, both)).toBe(path.join(both, js));
+
+    const neither = tempDir("neither", "services");
+    expect(resolveClaudeCliStubPath(fs.existsSync, neither)).toBeUndefined();
+  });
+
   it("finds the stub source next to this module by default", () => {
     expect(resolveClaudeCliStubPath(fs.existsSync)).toMatch(/claude-code-cli-mcp-stub\.(ts|js)$/);
   });

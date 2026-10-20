@@ -1,6 +1,6 @@
 # Claude Code CLI tool bridge: design
 
-Status: approved by the operator on 2026-10-20, with all four **Operator decisions** settled (listed at the end). Nothing is implemented yet.
+Status: approved by the operator on 2026-10-20, with all four **Operator decisions** settled (listed at the end). Implemented behind the `claudeCliToolBridgeEnabled` flag (default off); the live proof is still pending.
 
 Builds on the `claude-code-cli` provider (`docs/superpowers/specs/2026-10-19-claude-code-cli-provider-design.md`, PRs #448–#451) and the open PR #455 (`fileOutputNotice` and inline answers for text-only providers). **Implementation stacks on #455:** it starts after #455 merges, because the runner and preflight read `toolCalling` only through #455's `describeProviderToolSupport`. On `main` today nothing in the runner reads it.
 
