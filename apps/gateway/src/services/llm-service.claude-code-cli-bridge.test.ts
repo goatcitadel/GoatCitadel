@@ -1,14 +1,18 @@
-import { EventEmitter } from "node:events";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
-import type { ChildProcess, SpawnOptions } from "node:child_process";
 import type { ChatCompletionRequest, LlmConfigFile } from "@goatcitadel/contracts";
-import type { ModelUsageAccountingService } from "@goatcitadel/gateway-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  FAKE_CLAUDE_CLI_NODE_PATH as NODE_PATH,
+  FAKE_CLAUDE_CLI_STUB_PATH as STUB_PATH,
+  createFakeClaudeCliHarness as createHarness,
+  createFakeModelUsageAccounting as createAccounting,
+  helloScript,
+  toolStepScript,
+  type FakeClaudeCliCall as FakeCall,
+} from "../test/claude-code-cli-fake-spawn.js";
 import { createNoopSecretStore } from "../test/llm-fixtures.js";
-import { ClaudeCodeCliReadiness } from "./claude-code-cli-readiness.js";
 import { CLAUDE_CLI_TOOL_BRIDGE_ADDENDUM } from "./claude-code-cli-stream.js";
 import { LlmService } from "./llm-service.js";
 
@@ -17,158 +21,6 @@ import { LlmService } from "./llm-service.js";
  * tools, stops for tool_use and then keeps waiting on the (inert) stub like the
  * real CLI does, so the adapter must end the step and kill the tree itself.
  */
-
-interface SpawnRecord {
-  args: string[];
-  stdin: () => string;
-  mcpConfigAtSpawn?: Record<string, unknown>;
-  toolsFileAtSpawn?: Record<string, unknown>;
-  systemPromptAtSpawn?: string;
-}
-
-type Script = (child: { stdout: PassThrough; stderr: PassThrough; exit: (code: number | null) => void }) => void;
-
-const STUB_PATH = path.join(os.tmpdir(), "gc-test-stub", "claude-code-cli-mcp-stub.js");
-const NODE_PATH = path.join(os.tmpdir(), "gc-test-node", "node.exe");
-const line = (value: unknown) => `${JSON.stringify(value)}\n`;
-const streamEvent = (event: Record<string, unknown>) => line({ type: "stream_event", event });
-
-const helloScript: Script = ({ stdout, exit }) => {
-  stdout.write(line({ type: "system", subtype: "init" }));
-  stdout.write(streamEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hello" } }));
-  stdout.write(
-    line({ type: "result", subtype: "success", is_error: false, usage: { input_tokens: 3, output_tokens: 1 } }),
-  );
-  exit(0);
-};
-
-interface FakeCall {
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}
-
-function bridgedInit(toolNames: readonly string[]): string {
-  return line({
-    type: "system",
-    subtype: "init",
-    tools: toolNames.map((name) => `mcp__goatcitadel__${name}`),
-    mcp_servers: [{ name: "goatcitadel", status: "connected" }],
-  });
-}
-
-/** Modeled on the live probe: init, one message with tool_use blocks, tool_use stop, then no exit. */
-function toolStepScript(toolNames: readonly string[], calls: readonly FakeCall[], options: { stop?: boolean } = {}) {
-  const script: Script = ({ stdout }) => {
-    stdout.write(bridgedInit(toolNames));
-    stdout.write(streamEvent({ type: "message_start", message: { usage: { input_tokens: 2 } } }));
-    calls.forEach((call, index) => {
-      const name = `mcp__goatcitadel__${call.name}`;
-      stdout.write(
-        streamEvent({
-          type: "content_block_start",
-          index,
-          content_block: { type: "tool_use", id: call.id, name, input: {} },
-        }),
-      );
-      stdout.write(
-        streamEvent({
-          type: "content_block_delta",
-          index,
-          delta: { type: "input_json_delta", partial_json: JSON.stringify(call.input) },
-        }),
-      );
-      stdout.write(
-        line({
-          type: "assistant",
-          message: { content: [{ type: "tool_use", id: call.id, name, input: call.input }] },
-        }),
-      );
-      stdout.write(streamEvent({ type: "content_block_stop", index }));
-    });
-    if (options.stop === false) return;
-    stdout.write(
-      streamEvent({
-        type: "message_delta",
-        delta: { stop_reason: "tool_use" },
-        usage: { input_tokens: 5, output_tokens: 9 },
-      }),
-    );
-    stdout.write(streamEvent({ type: "message_stop" }));
-    // A heartbeat after the stop is ignored; the CLI never exits on its own here.
-    stdout.write(line({ type: "tool_progress", heartbeat: true }));
-  };
-  return script;
-}
-
-function readJson(filePath: string | undefined): Record<string, unknown> | undefined {
-  return filePath ? (JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>) : undefined;
-}
-
-function createHarness(scripts: Script[]) {
-  const spawns: SpawnRecord[] = [];
-  const killTree = vi.fn();
-  const spawn = vi.fn((_command: string, args: string[], _options: SpawnOptions) => {
-    const emitter = new EventEmitter() as ChildProcess;
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const stdin = new PassThrough();
-    const chunks: Buffer[] = [];
-    stdin.on("data", (chunk: Buffer) => chunks.push(chunk));
-    Object.assign(emitter, { stdout, stderr, stdin, pid: 7000 + spawns.length, exitCode: null });
-    const configIndex = args.indexOf("--mcp-config");
-    const mcpConfigAtSpawn = readJson(configIndex >= 0 ? args[configIndex + 1] : undefined);
-    const server = (mcpConfigAtSpawn?.mcpServers as Record<string, { args?: string[] }> | undefined)?.goatcitadel;
-    const systemIndex = args.indexOf("--system-prompt-file");
-    spawns.push({
-      args,
-      stdin: () => Buffer.concat(chunks).toString("utf8"),
-      mcpConfigAtSpawn,
-      toolsFileAtSpawn: readJson(server?.args?.[1]),
-      systemPromptAtSpawn: systemIndex >= 0 ? readFileSync(args[systemIndex + 1] as string, "utf8") : undefined,
-    });
-    const script = scripts[spawns.length - 1] ?? helloScript;
-    setImmediate(() =>
-      script({
-        stdout,
-        stderr,
-        exit: (code) => {
-          Object.assign(emitter, { exitCode: code });
-          stdout.end();
-          stderr.end();
-          setImmediate(() => emitter.emit("close", code, null));
-        },
-      }),
-    );
-    return emitter;
-  });
-  const readiness = new ClaudeCodeCliReadiness({
-    run: async () => ({
-      exitCode: 0,
-      stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty" }),
-    }),
-  });
-  return { spawns, spawn, killTree, readiness };
-}
-
-function createAccounting() {
-  const handle = {
-    eventId: "usage-event-bridge",
-    renewLease: vi.fn(async () => undefined),
-    observe: vi.fn(),
-    observeNormalized: vi.fn(),
-    succeed: vi.fn(async () => undefined),
-    fail: vi.fn(async () => undefined),
-    cancel: vi.fn(async () => undefined),
-  };
-  const prepareDispatch = vi.fn(async () => ({
-    eventId: handle.eventId,
-    accept: vi.fn(async () => handle),
-    abandon: vi.fn(async () => undefined),
-    markDispatchUnknown: vi.fn(async () => undefined),
-  }));
-  return { handle, prepareDispatch, service: { prepareDispatch } as unknown as ModelUsageAccountingService };
-}
 
 const config: LlmConfigFile = {
   activeProviderId: "claude-code-cli",
