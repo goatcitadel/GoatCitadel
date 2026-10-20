@@ -165,6 +165,34 @@ export function pickDefaultGuidedProvider<T extends GuidedReadinessProvider>(
   );
 }
 
+export interface GuidedConnectionHint {
+  /** Primary button text before the provider is ready. */
+  connectLabel: string;
+  note: string;
+}
+
+/**
+ * Credential-flow guidance for providers whose connection is not a plain API
+ * key. Returns null so the caller keeps its generic copy for everything else.
+ */
+export function guidedConnectionHint(
+  provider: Pick<ProviderModelCatalogOption, "authMode"> | null,
+): GuidedConnectionHint | null {
+  if (provider?.authMode === "codex-oauth") {
+    return {
+      connectLabel: "Connect ChatGPT",
+      note: "Use your ChatGPT account: select Connect ChatGPT, review the plan, then approve the sign-in in OpenAI.",
+    };
+  }
+  if (provider?.authMode === "claude-code-oauth") {
+    return {
+      connectLabel: "Connect Claude Code",
+      note: "Run claude setup-token in a terminal, select Connect Claude Code, then paste the token it prints. Anthropic limits subscription tokens to Claude Code and may reject them here; the Anthropic provider with a Console API key is the supported route.",
+    };
+  }
+  return null;
+}
+
 export interface LocalRuntimeSetupGuide {
   title: string;
   steps: readonly string[];

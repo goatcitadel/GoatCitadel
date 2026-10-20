@@ -88,13 +88,20 @@ describe("provider templates", () => {
     expect(anthropicModels).toContain("claude-opus-4-8");
     expect(anthropicModels).toContain("claude-fable-5");
     expect(anthropicModels).toContain("claude-sonnet-4-6");
+    expect(anthropicModels.slice(0, 4)).toEqual([
+      "claude-fable-5-1",
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+      "claude-haiku-5-5",
+    ]);
+    expect(findProviderTemplate("anthropic")?.defaultModel).toBe("claude-sonnet-5-5");
     expect(findProviderTemplate("claude-code")).toMatchObject({
       label: "Claude Code (Claude subscription)",
       baseUrl: "https://api.anthropic.com/v1",
-      defaultModel: "claude-sonnet-4-6",
+      defaultModel: "claude-sonnet-5-5",
       apiStyle: "anthropic-messages",
     });
-    expect(findProviderTemplate("claude-code")?.knownModels).toContain("claude-sonnet-4-6");
+    expect(findProviderTemplate("claude-code")?.knownModels).toEqual(anthropicModels);
   });
 
   it("includes a fallback Google Gemini shortlist for offline model pickers", () => {

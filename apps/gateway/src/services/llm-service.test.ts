@@ -355,6 +355,34 @@ describe("LlmService", () => {
     ).toThrowError(/belongs to anthropic/i);
   });
 
+  it("infers vision and reasoning for current and fourth-generation Claude defaults", () => {
+    const claude = (providerId: string, defaultModel: string): LlmProviderConfig => ({
+      providerId,
+      label: providerId,
+      baseUrl: "https://api.anthropic.com/v1",
+      apiStyle: "anthropic-messages",
+      defaultModel,
+    });
+    const service = new LlmService(
+      {
+        activeProviderId: "claude-code",
+        activeModel: "claude-sonnet-5-5",
+        providers: [
+          claude("claude-code", "claude-sonnet-5-5"),
+          claude("anthropic", "claude-opus-4-8"),
+          { ...claude("legacy", "claude-2.1"), baseUrl: "https://legacy.example.test/v1" },
+        ],
+      },
+      process.env,
+      { secretStore: createNoopSecretStore() },
+    );
+    const capabilities = (providerId: string) =>
+      service.listProviders().find((entry) => entry.providerId === providerId)?.capabilities;
+    expect(capabilities("claude-code")).toMatchObject({ vision: true, reasoning: true });
+    expect(capabilities("anthropic")).toMatchObject({ vision: true, reasoning: true });
+    expect(capabilities("legacy")).toMatchObject({ vision: false, reasoning: false });
+  });
+
   it("accepts supported shared GPT models and rejects API-only models for the OpenAI Codex OAuth provider", () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai-codex",

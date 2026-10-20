@@ -6472,6 +6472,12 @@ function modelRequiresReasoningContentForToolCalls(model: string): boolean {
   return normalized.includes("kimi") || normalized.includes("moonshot");
 }
 
+// Matches claude-sonnet-4, claude-opus-4-8, claude-sonnet-5-5, claude-fable-5-1 and later families.
+function isClaudeFourthGenerationOrLater(model: string): boolean {
+  const match = /claude-(?:sonnet|opus|haiku|fable)-(\d+)/.exec(model);
+  return Boolean(match && Number(match[1]) >= 4);
+}
+
 function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapabilities {
   const model = provider.defaultModel.toLowerCase();
   const base = provider.baseUrl.toLowerCase();
@@ -6482,8 +6488,7 @@ function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapa
     model.includes("gpt-4.1") ||
     model.includes("gemini") ||
     model.includes("claude-3") ||
-    model.includes("claude-sonnet-4") ||
-    model.includes("claude-opus-4") ||
+    isClaudeFourthGenerationOrLater(model) ||
     model.includes("kimi") ||
     model.includes("glm");
   const hasAudio = model.includes("audio") || model.includes("whisper");
@@ -6503,8 +6508,7 @@ function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapa
     model.includes("thinking") ||
     model.includes("o1") ||
     model.includes("o3") ||
-    model.includes("claude-sonnet-4") ||
-    model.includes("claude-opus-4");
+    isClaudeFourthGenerationOrLater(model);
   const capabilities: LlmProviderCapabilities = {
     vision: hasVision,
     audio: hasAudio,

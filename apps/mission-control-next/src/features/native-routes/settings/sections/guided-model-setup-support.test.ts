@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampGuidedThinkingLevel,
+  guidedConnectionHint,
   localRuntimeSetupGuide,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
@@ -158,5 +159,23 @@ describe("guided model setup support", () => {
 
   it("does not offer a copyable command when the model alias could execute shell text", () => {
     expect(localRuntimeSetupGuide({ providerId: "llamacpp", baseUrl: "http://127.0.0.1:8080/v1" }, "model;echo unsafe")?.command).toBeUndefined();
+  });
+});
+
+describe("guided connection hint", () => {
+  it("keeps the ChatGPT sign-in copy for Codex OAuth", () => {
+    expect(guidedConnectionHint({ authMode: "codex-oauth" })?.connectLabel).toBe("Connect ChatGPT");
+  });
+
+  it("tells Claude Code users to paste a setup-token and that Anthropic may reject it", () => {
+    const hint = guidedConnectionHint({ authMode: "claude-code-oauth" });
+    expect(hint?.connectLabel).toBe("Connect Claude Code");
+    expect(hint?.note).toContain("claude setup-token");
+    expect(hint?.note).toContain("may reject");
+  });
+
+  it("leaves API-key providers on the generic copy", () => {
+    expect(guidedConnectionHint({ authMode: undefined })).toBeNull();
+    expect(guidedConnectionHint(null)).toBeNull();
   });
 });

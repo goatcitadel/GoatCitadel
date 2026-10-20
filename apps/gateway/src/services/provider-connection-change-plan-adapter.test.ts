@@ -411,6 +411,15 @@ describe("ProviderConnectionChangePlanAdapter", () => {
     const prepared = await adapter.prepare(context, { kind: "provider_connection", providerId: "claude-code" });
     expect(prepared.status).toBe("awaiting_input");
     expect(prepared.requiredAction?.kind).toBe("secure_input");
+    expect(prepared.requiredAction).toMatchObject({
+      fields: [
+        {
+          fieldId: "credential",
+          label: "Claude Code (Claude subscription) token",
+          description: expect.stringMatching(/claude setup-token[\s\S]*may reject it here[\s\S]*OS keychain/u),
+        },
+      ],
+    });
   });
 
   it("promotes the claude-code token through the secret owner and verifies the live catalog", async () => {
