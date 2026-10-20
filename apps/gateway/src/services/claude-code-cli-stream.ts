@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { ChatCompletionMessage } from "@goatcitadel/contracts";
 import { ClaudeCliError, type ClaudeCliExit, type ClaudeCliReasonCode } from "./claude-code-cli-process.js";
+import type { ClaudeCliToolManifest } from "./claude-code-cli-tool-bridge.js";
+import {
+  createClaudeCliToolStepCollector,
+  isClaudeCliToolUseBlock,
+  type ClaudeCliToolStep,
+} from "./claude-code-cli-tool-step.js";
 import { normalizeAnthropicUsage } from "./llm-provider-anthropic.js";
+
+export type { ClaudeCliToolStep } from "./claude-code-cli-tool-step.js";
 
 /**
  * Maps Claude Code CLI `--output-format stream-json` lines onto the
@@ -21,6 +29,16 @@ export interface ClaudeCliStreamOutcome {
 export interface ClaudeCliStreamMapper {
   push(line: string): Record<string, unknown>[];
   finish(exit: ClaudeCliExit): ClaudeCliStreamOutcome;
+  /**
+   * Bridged steps only: defined once the model stopped for tool calls (or hit max_tokens). The adapter
+   * then yields these chunks and kills the CLI instead of calling `finish`, which has no `result` to read.
+   */
+  toolStep(): ClaudeCliToolStep | undefined;
+}
+
+export interface ClaudeCliStreamMapperOptions {
+  /** Step mode: the step's tool manifest. Without it, any CLI tool use is a governance fault. */
+  bridge?: ClaudeCliToolManifest;
 }
 
 const USER_FACING_MESSAGES: Record<ClaudeCliReasonCode, string> = {
@@ -71,7 +89,10 @@ export function classifyClaudeCliFailure(text: string): ClaudeCliReasonCode {
   return "claude_cli_failed";
 }
 
-export function createClaudeCliStreamMapper(model: string): ClaudeCliStreamMapper {
+export function createClaudeCliStreamMapper(
+  model: string,
+  options: ClaudeCliStreamMapperOptions = {},
+): ClaudeCliStreamMapper {
   const id = `chatcmpl-claude-cli-${randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   let sawDelta = false;
@@ -88,6 +109,16 @@ export function createClaudeCliStreamMapper(model: string): ClaudeCliStreamMappe
   const blockToolUse = (): never => {
     throw new ClaudeCliError("claude_cli_tool_use_blocked", claudeCliUserMessage("claude_cli_tool_use_blocked"));
   };
+  const collector = options.bridge
+    ? createClaudeCliToolStepCollector(options.bridge, {
+        chunk,
+        fail: (reasonCode, detail) => {
+          const base = claudeCliUserMessage(reasonCode);
+          throw new ClaudeCliError(reasonCode, detail ? `${base}: ${detail}` : base);
+        },
+        normalizeUsage: normalizeAnthropicUsage,
+      })
+    : undefined;
 
   return {
     push(line) {
@@ -96,10 +127,14 @@ export function createClaudeCliStreamMapper(model: string): ClaudeCliStreamMappe
       if (isHookEvent(event)) {
         throw new ClaudeCliError("claude_cli_hook_blocked", claudeCliUserMessage("claude_cli_hook_blocked"));
       }
+      if (collector) {
+        // Once the step is complete the adapter kills the tree; trailing lines (heartbeats) are ignored.
+        if (collector.step() || collector.observe(event)) return [];
+      }
       if (event.type === "stream_event" && isRecord(event.event)) {
         const inner = event.event;
         if (inner.type === "content_block_start" && isRecord(inner.content_block)) {
-          if (isToolUseBlock(inner.content_block)) blockToolUse();
+          if (isClaudeCliToolUseBlock(inner.content_block)) blockToolUse();
           return [];
         }
         if (inner.type === "content_block_delta" && isRecord(inner.delta)) {
@@ -120,7 +155,10 @@ export function createClaudeCliStreamMapper(model: string): ClaudeCliStreamMappe
         return [];
       }
       if (event.type === "assistant" && isRecord(event.message) && Array.isArray(event.message.content)) {
-        if (event.message.content.some((block) => isRecord(block) && isToolUseBlock(block))) blockToolUse();
+        // A bridged collector has already admitted (or failed) every tool block on this line.
+        if (!collector && event.message.content.some((block) => isRecord(block) && isClaudeCliToolUseBlock(block))) {
+          blockToolUse();
+        }
         if (sawDelta) return [];
         // The CLI reports its own failures (e.g. "Failed to authenticate") as a synthetic assistant
         // message before the error result; that text is not a model reply.
@@ -165,6 +203,10 @@ export function createClaudeCliStreamMapper(model: string): ClaudeCliStreamMappe
         ...(usage ? { usage } : {}),
         text: text || (typeof result.result === "string" ? result.result : ""),
       };
+    },
+
+    toolStep() {
+      return collector?.step();
     },
   };
 }
@@ -225,10 +267,6 @@ function isHookEvent(event: Record<string, unknown>): boolean {
   const type = typeof event.type === "string" ? event.type : "";
   const subtype = typeof event.subtype === "string" ? event.subtype : "";
   return /hook/i.test(type) || /hook/i.test(subtype) || "hook_event_name" in event || "hook_name" in event;
-}
-
-function isToolUseBlock(block: Record<string, unknown>): boolean {
-  return block.type === "tool_use" || block.type === "server_tool_use" || block.type === "mcp_tool_use";
 }
 
 function parseRecord(line: string): Record<string, unknown> | undefined {

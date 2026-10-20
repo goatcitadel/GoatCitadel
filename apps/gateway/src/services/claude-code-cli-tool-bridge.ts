@@ -4,6 +4,7 @@ import path from "node:path";
 import { ClaudeCliError } from "./claude-code-cli-process.js";
 import { claudeCliUserMessage } from "./claude-code-cli-stream.js";
 import type { ClaudeCliStubTool } from "./claude-code-cli-mcp-stub.js";
+import { CLAUDE_CLI_MCP_SERVER_NAME, CLAUDE_CLI_MCP_TOOL_PREFIX } from "./claude-code-cli-tool-step.js";
 
 /**
  * Per-step tool manifest and run-dir files for the Claude Code CLI tool bridge.
@@ -11,8 +12,8 @@ import type { ClaudeCliStubTool } from "./claude-code-cli-mcp-stub.js";
  * serves the manifest; calls are intercepted and run by the governed runner.
  */
 
-export const CLAUDE_CLI_MCP_SERVER_NAME = "goatcitadel";
-export const CLAUDE_CLI_MCP_TOOL_PREFIX = "mcp__goatcitadel__";
+// Defined beside the stream tripwires, which cannot import this module at runtime without a cycle.
+export { CLAUDE_CLI_MCP_SERVER_NAME, CLAUDE_CLI_MCP_TOOL_PREFIX };
 
 /** Longest tool name (prefix included) the CLI accepts. */
 const MAX_CLI_TOOL_NAME_LENGTH = 64;
