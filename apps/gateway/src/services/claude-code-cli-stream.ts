@@ -39,6 +39,10 @@ const USER_FACING_MESSAGES: Record<ClaudeCliReasonCode, string> = {
   claude_cli_unsupported_shim:
     "Only an unsupported Claude Code launcher was found. Install the native build or set GOATCITADEL_CLAUDE_CLI_PATH",
   claude_cli_cancelled: "The Claude Code CLI run was cancelled",
+  claude_cli_hook_blocked:
+    "A Claude Code hook ran during this turn, which GoatCitadel blocks because hooks bypass its approvals",
+  claude_cli_managed_hooks_active:
+    "This Claude Code install has organization-managed hooks, which GoatCitadel cannot disable. Use another provider",
 };
 
 export function claudeCliUserMessage(reasonCode: ClaudeCliReasonCode): string {
@@ -86,6 +90,9 @@ export function createClaudeCliStreamMapper(model: string): ClaudeCliStreamMappe
     push(line) {
       const event = parseRecord(line);
       if (!event) return [];
+      if (isHookEvent(event)) {
+        throw new ClaudeCliError("claude_cli_hook_blocked", claudeCliUserMessage("claude_cli_hook_blocked"));
+      }
       if (event.type === "stream_event" && isRecord(event.event)) {
         const inner = event.event;
         if (inner.type === "content_block_start" && isRecord(inner.content_block)) {
@@ -208,6 +215,13 @@ function renderContent(content: ChatCompletionMessage["content"]): string {
 
 function stringifyErrors(value: unknown): string {
   return Array.isArray(value) ? value.filter((entry) => typeof entry === "string").join("\n") : "";
+}
+
+/** Hook lifecycle lines from `--include-hook-events` (e.g. system/hook_started, hook_response). */
+function isHookEvent(event: Record<string, unknown>): boolean {
+  const type = typeof event.type === "string" ? event.type : "";
+  const subtype = typeof event.subtype === "string" ? event.subtype : "";
+  return /hook/i.test(type) || /hook/i.test(subtype) || "hook_event_name" in event || "hook_name" in event;
 }
 
 function isToolUseBlock(block: Record<string, unknown>): boolean {

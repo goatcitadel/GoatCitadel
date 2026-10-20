@@ -317,6 +317,20 @@ export function describeAwsAuthModeApiStyleMismatch(
   return undefined;
 }
 
+/** The only origin the local Claude Code CLI talks to; its profile baseUrl is pinned to it. */
+export const CLAUDE_CODE_CLI_EGRESS_BASE_URL = "https://api.anthropic.com/v1";
+
+/** The `claude-code-cli` API style spawns the operator's local CLI and belongs to that built-in provider only. */
+export function describeClaudeCodeCliApiStyleMismatch(
+  providerId: string,
+  apiStyle: string | undefined,
+): string | undefined {
+  if (apiStyle === "claude-code-cli" && providerId.trim().toLowerCase() !== "claude-code-cli") {
+    return `apiStyle "claude-code-cli" is only valid for the built-in "claude-code-cli" provider (got "${providerId}").`;
+  }
+  return undefined;
+}
+
 export const LlmProviderConfigSchema = z
   .object({
     providerId: z.string(),
@@ -344,6 +358,10 @@ export const LlmProviderConfigSchema = z
     const message = describeAwsAuthModeApiStyleMismatch(provider.apiStyle, provider.authMode);
     if (message) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["authMode"], message });
+    }
+    const cliMessage = describeClaudeCodeCliApiStyleMismatch(provider.providerId, provider.apiStyle);
+    if (cliMessage) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["apiStyle"], message: cliMessage });
     }
   });
 

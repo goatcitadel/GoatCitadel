@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { ClaudeCodeCliReadiness } from "./claude-code-cli-readiness.js";
+import {
+  ClaudeCodeCliReadiness,
+  claudeManagedSettingsDirs,
+  detectClaudeManagedHooks,
+} from "./claude-code-cli-readiness.js";
 
 const status = (value: unknown) => vi.fn(async () => ({ exitCode: 0, stdout: JSON.stringify(value) }));
 
@@ -103,5 +107,68 @@ describe("ClaudeCodeCliReadiness", () => {
     const readiness = new ClaudeCodeCliReadiness({ run });
     await Promise.all([readiness.check(), readiness.check()]);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("managed hooks", () => {
+  it("refuses the provider when organization-managed hooks are active", async () => {
+    const run = status({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty" });
+    const readiness = new ClaudeCodeCliReadiness({ run, managedHooks: () => "active" });
+    await expect(readiness.check()).resolves.toEqual({
+      status: "invalid",
+      reasonCode: "claude_cli_managed_hooks_active",
+      liveVerified: true,
+    });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on an unreadable managed settings file", async () => {
+    const readiness = new ClaudeCodeCliReadiness({ run: status({ loggedIn: true }), managedHooks: () => "unreadable" });
+    await expect(readiness.check()).resolves.toMatchObject({ reasonCode: "claude_cli_managed_hooks_active" });
+  });
+
+  const fsWith = (files: Record<string, string>, dirs: Record<string, string[]> = {}) => ({
+    readFile: (filePath: string) => files[filePath],
+    listDir: (dirPath: string) => dirs[dirPath] ?? [],
+  });
+
+  it("detects hooks in managed-settings.json and in drop-in files", () => {
+    expect(detectClaudeManagedHooks(["/etc/claude-code"], fsWith({}))).toBe("none");
+    expect(
+      detectClaudeManagedHooks(
+        ["/etc/claude-code"],
+        fsWith({ "/etc/claude-code/managed-settings.json": '{"hooks":{}}' }),
+      ),
+    ).toBe("none");
+    expect(
+      detectClaudeManagedHooks(
+        ["/etc/claude-code"],
+        fsWith({ "/etc/claude-code/managed-settings.json": '{"hooks":{"Stop":[{"hooks":[]}]}}' }),
+      ),
+    ).toBe("active");
+    expect(
+      detectClaudeManagedHooks(
+        ["/etc/claude-code"],
+        fsWith(
+          { "/etc/claude-code/managed-settings.d/10-org.json": '{"hooks":{"SessionStart":[]}}' },
+          { "/etc/claude-code/managed-settings.d": ["10-org.json", "README.md"] },
+        ),
+      ),
+    ).toBe("active");
+    expect(
+      detectClaudeManagedHooks(["/etc/claude-code"], fsWith({ "/etc/claude-code/managed-settings.json": "{nope" })),
+    ).toBe("unreadable");
+  });
+
+  it("knows the managed settings locations per platform", () => {
+    expect(
+      claudeManagedSettingsDirs("win32", { ProgramFiles: "D:\\Program Files", ProgramData: "D:\\ProgramData" }),
+    ).toEqual(["D:\\Program Files\\ClaudeCode", "D:\\ProgramData\\ClaudeCode"]);
+    expect(claudeManagedSettingsDirs("win32", {})).toEqual([
+      "C:\\Program Files\\ClaudeCode",
+      "C:\\ProgramData\\ClaudeCode",
+    ]);
+    expect(claudeManagedSettingsDirs("darwin", {})).toEqual(["/Library/Application Support/ClaudeCode"]);
+    expect(claudeManagedSettingsDirs("linux", {})).toEqual(["/etc/claude-code"]);
   });
 });

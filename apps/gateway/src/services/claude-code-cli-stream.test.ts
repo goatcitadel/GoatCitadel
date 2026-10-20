@@ -134,6 +134,14 @@ describe("createClaudeCliStreamMapper", () => {
     );
   });
 
+  it("fails the turn closed when any hook event appears", () => {
+    const mapper = createClaudeCliStreamMapper("sonnet");
+    expect(() =>
+      mapper.push(line({ type: "system", subtype: "hook_started", hook_name: "SessionStart:startup" })),
+    ).toThrow(expect.objectContaining({ reasonCode: "claude_cli_hook_blocked" }));
+    expect(mapper.push(line({ type: "system", subtype: "init", tools: [] }))).toEqual([]);
+  });
+
   it("maps error results to typed reason codes", () => {
     const mapper = createClaudeCliStreamMapper("sonnet");
     mapper.push(

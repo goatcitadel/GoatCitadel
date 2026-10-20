@@ -185,3 +185,14 @@ This feeds `LlmProviderAuthReadiness` (`source: "metadata"`, `liveVerified: true
 ## Terms note
 
 This route uses the operator's own Claude Code install, under their own login, on their own machine, through Claude Code's documented headless mode. GoatCitadel does not extract, store, or re-send the credential. Whether automated use through `claude -p` fits a given plan's usage limits and terms is the operator's call. The UI copy in PR 3 should say so plainly and not imply that Anthropic endorses it.
+
+## Review follow-ups (PR #448)
+
+- **Pinned egress origin.** The profile `baseUrl` is forced to `https://api.anthropic.com/v1`. The allowlist and ward authorize that origin, because it is the one the CLI actually reaches, so an edited profile cannot slip past a blocked Anthropic host.
+- **Managed hooks.** Organization-managed hooks run even with `--safe-mode` and `disableAllHooks`. Two layers handle this:
+  1. Readiness refuses the provider (`claude_cli_managed_hooks_active`) when a managed settings file or drop-in defines hooks, and fails closed if that file is unreadable. The files checked are `%ProgramFiles%\ClaudeCode` and `%ProgramData%\ClaudeCode` on Windows, `/Library/Application Support/ClaudeCode` on macOS, and `/etc/claude-code` on Linux.
+  2. `--include-hook-events` acts as a tripwire. Any hook event fails the turn with `claude_cli_hook_blocked`.
+
+  Residual risk: server-delivered managed settings and Windows registry policies are not read locally, so only the tripwire covers them. A hook that runs at session start may already have run when the turn fails.
+- **API-style mismatch.** The `claude-code-cli` apiStyle is rejected on any other provider id, both in the zod schema and in normalization. It is not silently swapped for an HTTP style.
+- **Readiness before profile freeze.** `LlmService.ensureProviderReadiness()` runs before the Chat capability profile is frozen, so a newly started Gateway does not record "auth missing" for a logged-in CLI.

@@ -126,6 +126,7 @@ describe("buildClaudeCliArgs", () => {
         "stream-json",
         "--verbose",
         "--include-partial-messages",
+        "--include-hook-events",
         "--strict-mcp-config",
         "--safe-mode",
         "--disable-slash-commands",

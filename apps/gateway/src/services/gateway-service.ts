@@ -7503,6 +7503,7 @@ export class GatewayService {
       normalizationProfile: input.normalized.normalizationProfile,
       serverOnlyTurn: Boolean(input.request.parentDelegationStepId),
     });
+    await this.llmService.ensureProviderReadiness(routeResolution.effectiveProviderId);
     const runtime = this.llmService.getRuntimeConfig({
       includeKeychainForActiveProvider: true,
       useCache: true,

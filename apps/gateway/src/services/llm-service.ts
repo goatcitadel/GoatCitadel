@@ -62,7 +62,9 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   canonicalJsonString,
+  CLAUDE_CODE_CLI_EGRESS_BASE_URL,
   describeAwsAuthModeApiStyleMismatch,
+  describeClaudeCodeCliApiStyleMismatch,
   ExternalServiceError,
   findProviderTemplate,
   inferProviderForModelId,
@@ -82,8 +84,10 @@ import { resolveLlmReasoningProfile } from "./llm-reasoning-profile.js";
 import { anthropicProviderAdapter } from "./llm-provider-anthropic.js";
 import { bedrockProviderAdapter } from "./llm-provider-bedrock.js";
 import {
+  checkClaudeCodeCliReadiness,
   claudeCodeCliProviderAdapter,
   createClaudeCodeCliRuntime,
+  peekClaudeCodeCliReadiness,
   type ClaudeCodeCliRuntime,
   type ClaudeCodeCliRuntimeOptions,
 } from "./llm-provider-claude-code-cli.js";
@@ -377,7 +381,7 @@ export class LlmService {
     this.secretStore = options.secretStore ?? new SecretStoreService();
     this.openAICodexOAuth = new OpenAICodexOAuthService(this.secretStore, options.openAICodexOAuthFetch ?? fetch);
     this.googleCloudAuth = options.googleCloudAuthService ?? new GoogleCloudAuthService({ env: this.env });
-    this.claudeCodeCli = createClaudeCodeCliRuntime(this.env, options.claudeCli);
+    this.claudeCodeCli = createClaudeCodeCliRuntime(this.env, options);
     this.networkAllowlist = [...(options.networkAllowlist ?? [])];
     this.enforceNetworkAllowlist = options.enforceNetworkAllowlist ?? true;
     this.tlsPathPolicy = options.tlsPathPolicy;
@@ -469,7 +473,7 @@ export class LlmService {
           : undefined;
       const cliAuthReadiness =
         authMode === "claude-code-cli-login"
-          ? projectClaudeCodeCliAuthReadiness(this.claudeCodeCli.readiness.peek())
+          ? projectClaudeCodeCliAuthReadiness(peekClaudeCodeCliReadiness(this.claudeCodeCli))
           : undefined;
       const status = cliAuthReadiness
         ? {
@@ -519,10 +523,18 @@ export class LlmService {
     });
   }
 
+  /** Populate probe-backed readiness (the local Claude Code CLI) before callers snapshot
+   * `listProviders()`, so a freshly started Gateway does not freeze "auth missing"
+   * evidence for a provider that is in fact signed in. Cached; other providers are no-ops. */
+  public async ensureProviderReadiness(providerId: string | undefined): Promise<void> {
+    const provider = providerId ? this.providers.get(providerId) : undefined;
+    if (provider?.apiStyle !== "claude-code-cli") return;
+    await checkClaudeCodeCliReadiness(this.claudeCodeCli);
+  }
+
   /** Re-probe `claude auth status` for the local Claude Code CLI provider; listings only read the cache. */
   public async refreshClaudeCodeCliReadiness(): Promise<LlmProviderAuthReadiness> {
-    this.claudeCodeCli.readiness.invalidate();
-    return projectClaudeCodeCliAuthReadiness(await this.claudeCodeCli.readiness.check());
+    return projectClaudeCodeCliAuthReadiness(await checkClaudeCodeCliReadiness(this.claudeCodeCli, { refresh: true }));
   }
 
   /** Resolve the per-model token-estimate multiplier from model metadata (default 1). */
@@ -1290,8 +1302,10 @@ export class LlmService {
    * starts the process only after this resolves. */
   private async beginTrackedProcessDispatch(input: LlmTrackedProcessDispatchInput): Promise<LlmTrackedProcessDispatch> {
     const resolved = input.resolved as ResolvedProvider;
+    this.assertProviderHostAllowed(input.targetUrl);
     await this.authorizeDispatchWard(input.attribution, resolved.provider.providerId, input.targetUrl);
-    const reservation = await this.modelUsageAccounting?.prepareDispatch({
+    // Shared owner: usage intent, then the dispatch guard; abandons the intent if the guard refuses.
+    const reservation = await this.prepareScopedModelUsageDispatch({
       source: "llm_service",
       attribution: input.attribution,
       requestedProviderId: input.requestedProviderId,
@@ -1303,20 +1317,6 @@ export class LlmService {
       credential: this.resolveModelUsageCredentialLineage(resolved),
       pricing: resolveModelPricingLineage(resolved.provider.providerId, input.model),
     });
-    const guard = this.dispatchGuardScope.get();
-    try {
-      if (guard) {
-        await this.authorizeModelUsageIntent(
-          reservation?.eventId,
-          input.attribution,
-          this.dispatchRoute(resolved, input.model),
-          input.transportAttemptIndex,
-        );
-      }
-    } catch (error) {
-      await reservation?.abandon({ retainNoDispatchEvidence: guard !== undefined });
-      throw error;
-    }
     try {
       const usage = await reservation?.accept();
       return usage ? { usage } : {};
@@ -3588,7 +3588,10 @@ function isLlmModelRecord(value: unknown): value is LlmModelRecord {
 }
 
 function normalizeProvider(provider: LlmProviderConfig): LlmProviderConfig {
-  const base = provider.baseUrl.trim().replace(/\/+$/, "");
+  // The CLI ignores baseUrl and always egresses to Anthropic, so its profile may not
+  // point the network allowlist or the ward at any other host.
+  const configuredBase = provider.providerId === "claude-code-cli" ? CLAUDE_CODE_CLI_EGRESS_BASE_URL : provider.baseUrl;
+  const base = configuredBase.trim().replace(/\/+$/, "");
   validateProviderBaseUrl(base);
   const canonicalBase = canonicalizeProviderUrl(provider.providerId, base);
   const withV1 = shouldAppendV1(provider.providerId, canonicalBase) ? `${canonicalBase}/v1` : canonicalBase;
@@ -3931,9 +3934,12 @@ function normalizeProviderApiStyle(providerId: string, apiStyle: LlmApiStyle | u
   if (providerId === "openai-codex") {
     return "openai-codex-responses";
   }
-  if (providerId === "claude-code-cli" || apiStyle === "claude-code-cli") {
-    // The CLI transport is tied to its own provider id; no other provider may borrow it.
-    return providerId === "claude-code-cli" ? "claude-code-cli" : normalizeProviderApiStyle(providerId, undefined);
+  if (providerId === "claude-code-cli") {
+    return "claude-code-cli";
+  }
+  if (apiStyle === "claude-code-cli") {
+    // The CLI transport is tied to its own provider id; refuse instead of silently falling back to HTTP.
+    throw new Error(describeClaudeCodeCliApiStyleMismatch(providerId, apiStyle) ?? "Invalid apiStyle.");
   }
   if (
     apiStyle === "openai-chat-completions" ||

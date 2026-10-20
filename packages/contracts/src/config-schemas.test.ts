@@ -7,6 +7,7 @@ import {
   CronJobSchema,
   CronJobsConfigSchema,
   describeAwsAuthModeApiStyleMismatch,
+  describeClaudeCodeCliApiStyleMismatch,
   LlmConfigFileSchema,
   ToolPolicyConfigSchema,
 } from "./config-schemas.js";
@@ -276,6 +277,24 @@ describe("LlmConfigFileSchema", () => {
     if (result.success) {
       expect(result.data.providers[0]?.apiStyle).toBe("bedrock-messages");
     }
+  });
+
+  it("rejects apiStyle 'claude-code-cli' on any provider other than the built-in one", () => {
+    const result = LlmConfigFileSchema.safeParse({
+      activeProviderId: "my-proxy",
+      providers: [
+        {
+          providerId: "my-proxy",
+          label: "Proxy",
+          baseUrl: "https://proxy.example/v1",
+          apiStyle: "claude-code-cli",
+          defaultModel: "sonnet",
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+    expect(describeClaudeCodeCliApiStyleMismatch("claude-code-cli", "claude-code-cli")).toBeUndefined();
+    expect(describeClaudeCodeCliApiStyleMismatch("my-proxy", "claude-code-cli")).toMatch(/only valid/);
   });
 
   it("accepts apiStyle 'claude-code-cli' with authMode 'claude-code-cli-login'", () => {

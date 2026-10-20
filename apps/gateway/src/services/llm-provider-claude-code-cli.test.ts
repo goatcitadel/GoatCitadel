@@ -275,6 +275,63 @@ describe("claude-code-cli provider through LlmService", () => {
     expect(harness.spawns[1]?.stdin()).toContain("[System instructions]\\nBe terse.");
   });
 
+  it("pins the profile baseUrl to the CLI's real egress origin", () => {
+    const harness = createHarness([]);
+    const service = new LlmService(
+      {
+        ...config,
+        providers: config.providers.map((provider) =>
+          provider.providerId === "claude-code-cli"
+            ? { ...provider, baseUrl: "https://allowlisted.example/v1" }
+            : provider,
+        ),
+      },
+      {},
+      { secretStore: createNoopSecretStore(), claudeCli: { readiness: harness.readiness, scratchRoot } },
+    );
+    expect(service.listProviders().find((provider) => provider.providerId === "claude-code-cli")?.baseUrl).toBe(
+      "https://api.anthropic.com/v1",
+    );
+  });
+
+  it("refuses the claude-code-cli API style on any other provider id", () => {
+    expect(
+      () =>
+        new LlmService(
+          {
+            activeProviderId: "my-proxy",
+            providers: [
+              {
+                providerId: "my-proxy",
+                label: "Proxy",
+                baseUrl: "https://proxy.example/v1",
+                apiStyle: "claude-code-cli",
+                defaultModel: "sonnet",
+              },
+            ],
+          },
+          {},
+          { secretStore: createNoopSecretStore() },
+        ),
+    ).toThrow(/only valid for the built-in "claude-code-cli" provider/);
+  });
+
+  it("probes readiness on demand so a fresh Gateway does not freeze auth-missing evidence", async () => {
+    const harness = createHarness([]);
+    const service = createService(harness);
+    await service.ensureProviderReadiness("claude-code");
+    expect(service.listProviders().find((provider) => provider.providerId === "claude-code-cli")?.hasApiKey).toBe(
+      false,
+    );
+    await service.ensureProviderReadiness("claude-code-cli");
+    expect(
+      service.getRuntimeConfig().providers.find((provider) => provider.providerId === "claude-code-cli"),
+    ).toMatchObject({
+      hasApiKey: true,
+      authReadiness: { status: "ready" },
+    });
+  });
+
   it("lists the provider with CLI readiness and text-only capabilities, and keeps claude-code on the token route", async () => {
     const harness = createHarness([]);
     const service = createService(harness);

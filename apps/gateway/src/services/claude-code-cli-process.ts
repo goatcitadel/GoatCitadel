@@ -22,6 +22,8 @@ export const CLAUDE_CLI_REASON_CODES = [
   "claude_cli_not_subscription_login",
   "claude_cli_unsupported_shim",
   "claude_cli_cancelled",
+  "claude_cli_hook_blocked",
+  "claude_cli_managed_hooks_active",
 ] as const;
 
 export type ClaudeCliReasonCode = (typeof CLAUDE_CLI_REASON_CODES)[number];
@@ -114,6 +116,9 @@ export function buildClaudeCliArgs(input: { model: string; systemPromptFile?: st
     "stream-json",
     "--verbose",
     "--include-partial-messages",
+    // Surfaces any hook that still runs (e.g. organization-managed hooks, which no user
+    // flag can disable) so the stream mapper can fail the turn closed.
+    "--include-hook-events",
     "--model",
     model,
     ...(input.systemPromptFile ? ["--system-prompt-file", input.systemPromptFile] : []),

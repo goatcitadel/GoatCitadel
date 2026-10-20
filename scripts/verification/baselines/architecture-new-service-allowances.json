@@ -2600,6 +2600,14 @@
       "maxDependencyMemberAccesses": 0,
       "reason": "Reviewed new owner for opening a folder from a Chat outside-root write approval (operator write-roots program PR7, plan approved 2026-10-18): validates the operator folder choice against the engine-described approval before resolution and mints the bounded folder grant after it. It takes the policy-engine slice and realtime publisher as arguments and reads no host, keeping approval-lifecycle-service under its limits.",
       "evidence": "2026-10-19: approval-lifecycle-service.test.ts covers minting for the chat scope, approve-once, refusals before resolution (no folder, folder with once, unoffered folder, bad duration, non-outside-root approval) and mint failure as grantError; repository counters measure 0 dependency accesses and 0 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/llm-provider-claude-code-cli.ts",
+      "maxHostCallbacks": 2,
+      "maxDependencyMemberAccesses": 6,
+      "reason": "Reviewed new owner for the claude-code-cli LLM provider adapter (Claude-subscription switch PR 2, design approved by the operator 2026-10-19): runs the operator's local Claude Code CLI as a text-only model. It reads two adapter-host members (the CLI runtime accessor and beginTrackedDispatch, so the ward, usage intent and dispatch guard admit the process before it starts) and its own runtime's readiness, keeping process and readiness logic out of LlmService.",
+      "evidence": "2026-10-19: llm-provider-claude-code-cli.test.ts drives LlmService with a faked CLI (streaming, argv/env isolation, required-tool refusal, logged-out before spawn, tool_use and abort cleanup, pinned egress origin, readiness before profile freeze); repository counters measure 2 host callbacks and 6 dependency accesses."
     }
   ]
 }

@@ -1,11 +1,12 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type {
-  ChatCompletionRequest,
-  ChatCompletionResponse,
-  ModelUsageAttributionContext,
+import {
+  CLAUDE_CODE_CLI_EGRESS_BASE_URL,
+  type ChatCompletionRequest,
+  type ChatCompletionResponse,
+  type ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
 import type {
   LlmProviderAdapter,
@@ -31,7 +32,14 @@ import {
   renderClaudeCliPrompt,
   type ClaudeCliUsage,
 } from "./claude-code-cli-stream.js";
-import { ClaudeCodeCliReadiness } from "./claude-code-cli-readiness.js";
+import {
+  ClaudeCodeCliReadiness,
+  claudeManagedSettingsDirs,
+  detectClaudeManagedHooks,
+  type ClaudeCodeCliReadinessResult,
+  type ClaudeManagedHooksState,
+  type ManagedSettingsFs,
+} from "./claude-code-cli-readiness.js";
 import { withUsageEvent } from "./llm-pricing.js";
 
 const DEFAULT_OVERALL_TIMEOUT_MS = 300_000;
@@ -60,8 +68,9 @@ export interface ClaudeCodeCliRuntime {
 
 export function createClaudeCodeCliRuntime(
   env: NodeJS.ProcessEnv,
-  options: ClaudeCodeCliRuntimeOptions = {},
+  serviceOptions: { claudeCli?: ClaudeCodeCliRuntimeOptions } = {},
 ): ClaudeCodeCliRuntime {
+  const options = serviceOptions.claudeCli ?? {};
   const childEnv = buildClaudeCliEnv(env);
   let cached: { at: number; invocation: ClaudeCliInvocation } | undefined;
   const resolveInvocation =
@@ -86,6 +95,7 @@ export function createClaudeCodeCliRuntime(
     readiness:
       options.readiness ??
       new ClaudeCodeCliReadiness({
+        managedHooks: () => detectManagedHooksOnHost(env),
         run: async (args) => {
           const lines: string[] = [];
           const generator = runClaudeCli({
@@ -108,6 +118,20 @@ export function createClaudeCodeCliRuntime(
       }),
   };
   return runtime;
+}
+
+/** Last probed readiness without spawning anything. */
+export function peekClaudeCodeCliReadiness(runtime: ClaudeCodeCliRuntime): ClaudeCodeCliReadinessResult | undefined {
+  return runtime.readiness.peek();
+}
+
+/** Probe-backed readiness (cached unless `refresh`). */
+export async function checkClaudeCodeCliReadiness(
+  runtime: ClaudeCodeCliRuntime,
+  options: { refresh?: boolean } = {},
+): Promise<ClaudeCodeCliReadinessResult> {
+  if (options.refresh) runtime.readiness.invalidate();
+  return await runtime.readiness.check();
 }
 
 export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
@@ -169,7 +193,8 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
         requestedModelId: attribution.requestedModelId ?? request.model,
         attribution,
         transportAttemptIndex: 0,
-        targetUrl: `${resolved.provider.baseUrl}/messages`,
+        // The CLI ignores the profile baseUrl; authorize the origin it actually reaches.
+        targetUrl: `${CLAUDE_CODE_CLI_EGRESS_BASE_URL}/messages`,
       });
     } catch (error) {
       await rm(runDir, { recursive: true, force: true }).catch(() => undefined);
@@ -299,4 +324,34 @@ function readDelta(chunk: Record<string, unknown>): Record<string, unknown> | un
   return typeof choice === "object" && choice !== null && typeof (choice as { delta?: unknown }).delta === "object"
     ? ((choice as { delta: Record<string, unknown> }).delta ?? undefined)
     : undefined;
+}
+
+const hostManagedSettingsFs: ManagedSettingsFs = {
+  readFile(filePath) {
+    try {
+      return readFileSync(filePath, "utf8");
+    } catch (error) {
+      // Absent is fine; any other read failure must fail closed in the caller.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  },
+  listDir(dirPath) {
+    try {
+      return readdirSync(dirPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") {
+        return [];
+      }
+      throw error;
+    }
+  },
+};
+
+function detectManagedHooksOnHost(env: NodeJS.ProcessEnv): ClaudeManagedHooksState {
+  try {
+    return detectClaudeManagedHooks(claudeManagedSettingsDirs(process.platform, env), hostManagedSettingsFs, path.sep);
+  } catch {
+    return "unreadable";
+  }
 }
