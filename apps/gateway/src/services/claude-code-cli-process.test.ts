@@ -375,3 +375,13 @@ describe("runClaudeCli", () => {
     await expect(pending).rejects.toMatchObject({ reasonCode: "claude_cli_missing" });
   });
 });
+
+describe("ClaudeCliError", () => {
+  it("never carries raw CLI stderr that may echo a credential", () => {
+    const secret = "sk-ant-api03-" + "Q".repeat(40);
+    const error = new ClaudeCliError("claude_cli_failed", "failed", { exitCode: 1, stderrTail: `auth used ${secret}` });
+    expect(error.stderrTail).toBeDefined();
+    expect(error.stderrTail).not.toContain(secret);
+    expect(JSON.stringify({ ...error })).not.toContain(secret);
+  });
+});

@@ -352,6 +352,11 @@ export function inferProviderForModelId(modelId: string): string | undefined {
     if (providerAllowsForeignModelIds(template.providerId)) {
       continue;
     }
+    // The local CLI transport is opt-in: a bare Claude model id must never route to it
+    // or take ownership away from the Anthropic / Claude Code providers.
+    if (template.providerId === "claude-code-cli") {
+      continue;
+    }
     if (template.defaultModel === normalizedModelId || template.knownModels?.includes(normalizedModelId)) {
       return template.providerId;
     }

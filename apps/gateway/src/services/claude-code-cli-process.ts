@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
+import { redactSecretText } from "@goatcitadel/contracts";
 
 /**
  * Process plumbing for the `claude-code-cli` provider. The Gateway runs the
@@ -46,7 +47,8 @@ export class ClaudeCliError extends Error {
     this.name = "ClaudeCliError";
     this.reasonCode = reasonCode;
     this.exitCode = details.exitCode;
-    this.stderrTail = details.stderrTail;
+    // Errors are logged with their own properties; never carry raw CLI stderr (it can echo secrets).
+    this.stderrTail = details.stderrTail === undefined ? undefined : redactSecretText(details.stderrTail).value;
   }
 }
 

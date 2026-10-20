@@ -316,6 +316,52 @@ describe("claude-code-cli provider through LlmService", () => {
     ).toThrow(/only valid for the built-in "claude-code-cli" provider/);
   });
 
+  it("refuses the CLI login auth mode on any other provider id", () => {
+    expect(
+      () =>
+        new LlmService(
+          {
+            activeProviderId: "anthropic",
+            providers: [
+              {
+                providerId: "anthropic",
+                label: "Anthropic",
+                baseUrl: "https://api.anthropic.com/v1",
+                apiStyle: "anthropic-messages",
+                authMode: "claude-code-cli-login",
+                defaultModel: "claude-sonnet-5-5",
+              },
+            ],
+          },
+          {},
+          { secretStore: createNoopSecretStore() },
+        ),
+    ).toThrow(/authMode "claude-code-cli-login" is only valid/);
+  });
+
+  it("keeps Claude model ids selectable on the anthropic and claude-code providers", () => {
+    const harness = createHarness([]);
+    const service = createService(harness);
+    expect(
+      service.updateRuntimeConfig({ activeProviderId: "claude-code", activeModel: "claude-sonnet-5-5" }),
+    ).toMatchObject({ activeProviderId: "claude-code", activeModel: "claude-sonnet-5-5" });
+    expect(
+      service.updateRuntimeConfig({ activeProviderId: "claude-code-cli", activeModel: "claude-opus-5-5" }),
+    ).toMatchObject({ activeProviderId: "claude-code-cli", activeModel: "claude-opus-5-5" });
+  });
+
+  it("warms readiness for listings and probes it for provider advice", async () => {
+    const harness = createHarness([]);
+    const probe = vi.spyOn(harness.readiness, "check");
+    const service = createService(harness);
+    service.listProviders();
+    expect(probe).not.toHaveBeenCalled();
+    service.listProviders({ warmProbedReadiness: true });
+    expect(probe).toHaveBeenCalledTimes(1);
+    const listed = await service.listProvidersWithProbedReadiness();
+    expect(listed.find((provider) => provider.providerId === "claude-code-cli")?.hasApiKey).toBe(true);
+  });
+
   it("probes readiness on demand so a fresh Gateway does not freeze auth-missing evidence", async () => {
     const harness = createHarness([]);
     const service = createService(harness);

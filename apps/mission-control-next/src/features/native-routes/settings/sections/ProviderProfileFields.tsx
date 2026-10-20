@@ -45,6 +45,11 @@ export function ProviderProfileFields({
     providerDraft.authMode === "google-adc" || providerDraft.authMode === "google-service-account";
   const draftUsesBedrock =
     providerDraft.apiStyle === "bedrock-messages" || isBedrockCredentialMode(providerDraft.authMode);
+  // The local Claude Code CLI provider holds no secret; its only credential mode is the operator's own login.
+  const draftUsesClaudeCli =
+    providerDraft.providerId.trim().toLowerCase() === "claude-code-cli" ||
+    providerDraft.apiStyle === "claude-code-cli" ||
+    providerDraft.authMode === "claude-code-cli-login";
   const providerApiStyleWarning = getProviderApiStyleWarning(providerDraft);
   return (
     <>
@@ -111,8 +116,10 @@ export function ProviderProfileFields({
         <SettingsField label="Credential mode">
           <select
             className="mc-next-settings-input"
-            value={draftIsCodexOAuth ? "codex-oauth" : providerDraft.authMode}
-            disabled={draftIsCodexOAuth}
+            value={
+              draftIsCodexOAuth ? "codex-oauth" : draftUsesClaudeCli ? "claude-code-cli-login" : providerDraft.authMode
+            }
+            disabled={draftIsCodexOAuth || draftUsesClaudeCli}
             onChange={(event) =>
               setProviderDraft((current) => ({
                 ...current,
@@ -126,6 +133,7 @@ export function ProviderProfileFields({
             <option value="google-service-account">Google service account</option>
             <option value="claude-code-oauth">Claude Code OAuth token</option>
             <option value="codex-oauth">ChatGPT/Codex OAuth</option>
+            {draftUsesClaudeCli ? <option value="claude-code-cli-login">Local Claude Code login</option> : null}
             {draftUsesBedrock
               ? BEDROCK_CREDENTIAL_MODE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -135,9 +143,11 @@ export function ProviderProfileFields({
               : null}
           </select>
           <p className="mc-next-settings-field-note">
-            {draftUsesBedrock
-              ? "AWS credential contents remain Gateway-local; this field stores only the auth posture."
-              : "Google credential contents remain Gateway-local; this field stores only the auth posture."}
+            {draftUsesClaudeCli
+              ? "Uses the Claude Code CLI on the Gateway host under its own `claude` login; GoatCitadel stores no credential."
+              : draftUsesBedrock
+                ? "AWS credential contents remain Gateway-local; this field stores only the auth posture."
+                : "Google credential contents remain Gateway-local; this field stores only the auth posture."}
           </p>
         </SettingsField>
         <SettingsField label="Default model">
@@ -153,7 +163,7 @@ export function ProviderProfileFields({
             }
           />
         </SettingsField>
-        {draftIsCodexOAuth || providerDraft.authMode === "google-adc" ? null : (
+        {draftIsCodexOAuth || draftUsesClaudeCli || providerDraft.authMode === "google-adc" ? null : (
           <SettingsField
             label={
               providerDraft.authMode === "google-service-account"

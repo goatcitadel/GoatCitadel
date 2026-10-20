@@ -82,6 +82,12 @@ describe("provider templates", () => {
     expect(inferProviderForModelId("us.amazon.nova-pro-v1:0")).toBe("bedrock");
   });
 
+  it("never infers the opt-in local Claude Code CLI transport from a bare model id", () => {
+    expect(findProviderTemplate("claude-code-cli")?.knownModels).toContain("claude-sonnet-5-5");
+    expect(inferProviderForModelId("claude-sonnet-5-5")).not.toBe("claude-code-cli");
+    expect(inferProviderForModelId("claude-code-cli/claude-sonnet-5-5")).toBe("claude-code-cli");
+  });
+
   it("marks Anthropic as a native messages provider", () => {
     expect(findProviderTemplate("anthropic")?.apiStyle).toBe("anthropic-messages");
     const anthropicModels = findProviderTemplate("anthropic")?.knownModels ?? [];

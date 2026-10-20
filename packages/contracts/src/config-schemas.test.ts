@@ -295,6 +295,13 @@ describe("LlmConfigFileSchema", () => {
     expect(result.success).toBe(false);
     expect(describeClaudeCodeCliApiStyleMismatch("claude-code-cli", "claude-code-cli")).toBeUndefined();
     expect(describeClaudeCodeCliApiStyleMismatch("my-proxy", "claude-code-cli")).toMatch(/only valid/);
+    // The login mode carries subscription usage lineage, so no other provider may claim it either.
+    expect(describeClaudeCodeCliApiStyleMismatch("anthropic", "anthropic-messages", "claude-code-cli-login")).toMatch(
+      /authMode "claude-code-cli-login" is only valid/,
+    );
+    expect(
+      describeClaudeCodeCliApiStyleMismatch("claude-code-cli", "claude-code-cli", "claude-code-cli-login"),
+    ).toBeUndefined();
   });
 
   it("accepts apiStyle 'claude-code-cli' with authMode 'claude-code-cli-login'", () => {

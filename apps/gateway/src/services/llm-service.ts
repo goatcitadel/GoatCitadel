@@ -270,6 +270,8 @@ export interface LlmProviderSecretStatusOptions {
 
 export interface LlmListProvidersOptions extends LlmProviderSecretStatusOptions {
   includeKeychainForProviderId?: string;
+  /** Start a background probe for probe-backed readiness (the local Claude Code CLI) that has none yet. */
+  warmProbedReadiness?: boolean;
 }
 
 export interface LlmProviderSecretStatus {
@@ -475,6 +477,9 @@ export class LlmService {
         authMode === "claude-code-cli-login"
           ? projectClaudeCodeCliAuthReadiness(peekClaudeCodeCliReadiness(this.claudeCodeCli))
           : undefined;
+      if (cliAuthReadiness?.reasonCode === "claude_cli_not_probed" && options.warmProbedReadiness) {
+        void checkClaudeCodeCliReadiness(this.claudeCodeCli).catch(() => undefined);
+      }
       const status = cliAuthReadiness
         ? {
             providerId: provider.providerId,
@@ -530,6 +535,15 @@ export class LlmService {
     const provider = providerId ? this.providers.get(providerId) : undefined;
     if (provider?.apiStyle !== "claude-code-cli") return;
     await checkClaudeCodeCliReadiness(this.claudeCodeCli);
+  }
+
+  /** `listProviders()` after any probe-backed readiness has been checked (cached), for flows such as
+   * provider advice that filter on `hasApiKey`. */
+  public async listProvidersWithProbedReadiness(options: LlmListProvidersOptions = {}): Promise<LlmProviderSummary[]> {
+    if (Array.from(this.providers.values()).some((provider) => provider.apiStyle === "claude-code-cli")) {
+      await checkClaudeCodeCliReadiness(this.claudeCodeCli);
+    }
+    return this.listProviders(options);
   }
 
   /** Re-probe `claude auth status` for the local Claude Code CLI provider; listings only read the cache. */
@@ -632,14 +646,16 @@ export class LlmService {
       const submittedApiKey =
         isCodexOAuthProvider || submittedApiKeyValue === SECRET_REDACTION_MARKER ? undefined : submittedApiKeyValue;
       // Validate the resulting apiStyle/authMode pairing before any credential is written.
-      const resolvedApiStyle = normalizeProviderApiStyle(
-        input.upsertProvider.providerId,
-        input.upsertProvider.apiStyle ?? existing?.apiStyle,
-      );
       const resolvedAuthMode =
         input.upsertProvider.authMode ??
         existing?.authMode ??
         defaultAuthModeForProvider(input.upsertProvider.providerId);
+      // Also refuses the claude-code-cli style or login mode on any other provider id.
+      const resolvedApiStyle = normalizeProviderApiStyle(
+        input.upsertProvider.providerId,
+        input.upsertProvider.apiStyle ?? existing?.apiStyle,
+        resolvedAuthMode,
+      );
       const authModeMismatch = describeAwsAuthModeApiStyleMismatch(resolvedApiStyle, resolvedAuthMode);
       if (authModeMismatch) {
         throw new Error(`Provider "${input.upsertProvider.providerId}": ${authModeMismatch}`);
@@ -3588,6 +3604,8 @@ function isLlmModelRecord(value: unknown): value is LlmModelRecord {
 }
 
 function normalizeProvider(provider: LlmProviderConfig): LlmProviderConfig {
+  const cliMismatch = describeClaudeCodeCliApiStyleMismatch(provider.providerId, provider.apiStyle, provider.authMode);
+  if (cliMismatch) throw new Error(cliMismatch);
   // The CLI ignores baseUrl and always egresses to Anthropic, so its profile may not
   // point the network allowlist or the ward at any other host.
   const configuredBase = provider.providerId === "claude-code-cli" ? CLAUDE_CODE_CLI_EGRESS_BASE_URL : provider.baseUrl;
@@ -3930,16 +3948,22 @@ function scrubTlsConfig(tls: LlmProviderRequestTlsConfig): LlmProviderRequestTls
   return cleaned;
 }
 
-function normalizeProviderApiStyle(providerId: string, apiStyle: LlmApiStyle | undefined): LlmApiStyle {
+function normalizeProviderApiStyle(
+  providerId: string,
+  apiStyle: LlmApiStyle | undefined,
+  authMode?: LlmProviderConfig["authMode"],
+): LlmApiStyle {
   if (providerId === "openai-codex") {
     return "openai-codex-responses";
   }
   if (providerId === "claude-code-cli") {
     return "claude-code-cli";
   }
-  if (apiStyle === "claude-code-cli") {
-    // The CLI transport is tied to its own provider id; refuse instead of silently falling back to HTTP.
-    throw new Error(describeClaudeCodeCliApiStyleMismatch(providerId, apiStyle) ?? "Invalid apiStyle.");
+  // The CLI transport and its login mode are tied to their own provider id; refuse instead of
+  // silently falling back to HTTP or recording subscription lineage for another provider.
+  const cliMismatch = describeClaudeCodeCliApiStyleMismatch(providerId, apiStyle, authMode);
+  if (cliMismatch) {
+    throw new Error(`Provider "${providerId}": ${cliMismatch}`);
   }
   if (
     apiStyle === "openai-chat-completions" ||
@@ -4011,6 +4035,12 @@ function resolveConfiguredModelForProvider(
   return normalizeRequestedModel(provider.providerId, normalizedModel);
 }
 
+const ANTHROPIC_MODEL_FAMILY_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  "anthropic",
+  "claude-code",
+  "claude-code-cli",
+]);
+
 function inferForeignProviderForModel(providerId: string, model: string): string | undefined {
   if (providerAllowsForeignModelIds(providerId)) {
     return undefined;
@@ -4022,7 +4052,9 @@ function inferForeignProviderForModel(providerId: string, model: string): string
   if (!ownerProviderId || ownerProviderId === providerId) {
     return undefined;
   }
-  if ((providerId === "claude-code" || providerId === "claude-code-cli") && ownerProviderId === "anthropic") {
+  // Anthropic, the Claude Code token route and the local CLI share one model id space;
+  // a template listing an id first must not take it away from the others.
+  if (ANTHROPIC_MODEL_FAMILY_PROVIDER_IDS.has(providerId) && ANTHROPIC_MODEL_FAMILY_PROVIDER_IDS.has(ownerProviderId)) {
     return undefined;
   }
   return ownerProviderId;
