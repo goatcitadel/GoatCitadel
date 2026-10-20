@@ -232,7 +232,10 @@ describe("File output notice", () => {
       } as never,
     });
     await act(async () => root.render(<ChatComposerControls props={input} />));
-    const notice = container.querySelector('[role="status"]');
+    const notice = [...container.querySelectorAll("div")].find((node) =>
+      node.firstElementChild?.textContent?.includes("cannot create a PDF, document, or deck"),
+    );
+    expect(notice?.getAttribute("role")).toBeNull();
     expect(notice?.textContent).toContain("cannot create a PDF, document, or deck");
     expect(notice?.textContent).toContain("Can create files: OpenAI, Anthropic");
     const choose = [...container.querySelectorAll("button")].find((b) => b.textContent === "Choose another model")!;

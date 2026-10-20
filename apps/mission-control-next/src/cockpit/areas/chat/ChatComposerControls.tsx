@@ -329,11 +329,9 @@ export function ChatComposerNotices({ props, onChooseModel }: { props: Controls;
           ) : null}
         </div>
       ) : null}
+      {/* Not a live region: preflight re-runs while the draft changes, so it would re-announce on every keystroke. */}
       {route?.fileOutputNotice ? (
-        <div
-          role="status"
-          className="mb-2 space-y-2 rounded-md border border-status-waiting bg-sunken p-2 text-xs text-fg-secondary"
-        >
+        <div className="mb-2 space-y-2 rounded-md border border-status-waiting bg-sunken p-2 text-xs text-fg-secondary">
           <p>{route.fileOutputNotice.message}</p>
           {route.fileOutputNotice.alternatives.length > 0 ? (
             <p>
