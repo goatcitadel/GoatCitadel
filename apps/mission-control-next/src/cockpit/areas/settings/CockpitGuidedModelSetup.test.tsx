@@ -42,7 +42,7 @@ vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ naviga
 let root: Root, container: HTMLDivElement, onboarding: OnboardingState;
 const button = (label: string) =>
   [...container.querySelectorAll("button")].find((item) => item.textContent?.trim() === label);
-const catalog = (status: string) =>
+const catalog = (status: string, provider: Record<string, unknown> = {}) =>
   mocks.catalog.mockReturnValue({
     providers: [
       {
@@ -51,6 +51,7 @@ const catalog = (status: string) =>
         hasApiKey: status === "ready",
         authReadiness: { status },
         defaultModel: "test-model",
+        ...provider,
       },
     ],
     config: { defaultThinkingLevel: "standard" },
@@ -124,6 +125,15 @@ describe("shared guided model setup", () => {
       surface: "settings",
       request: { kind: "provider_connection", providerId: "test" },
     });
+  });
+  it("tells Claude Code users to paste a setup-token and names the Claude Code connect action", async () => {
+    catalog("missing", { label: "Claude Code (Claude subscription)", authMode: "claude-code-oauth" });
+    await mount();
+    const provider = container.querySelector<HTMLSelectElement>("select")!;
+    const help = document.getElementById(provider.getAttribute("aria-describedby")!)?.textContent;
+    expect(help).toContain("claude setup-token");
+    expect(help).toContain("may reject");
+    expect(button("Connect Claude Code")).toBeDefined();
   });
   it("confirms a changed model through an installation default plan and shows the result", async () => {
     catalog("ready");

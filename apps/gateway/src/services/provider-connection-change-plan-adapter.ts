@@ -147,7 +147,7 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
             ? context.actions.oauth({ targetId: request.providerId, title: `Authorize ${label}` })
             : context.actions.secureInput({
                 targetId: request.providerId,
-                title: `Enter ${label} credential`,
+                title: credentialPromptTitle(label, request.profile?.authMode ?? provider?.authMode),
                 expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
                 fields: [credentialField(label, request, request.profile?.authMode ?? provider?.authMode)],
               }),
@@ -285,7 +285,7 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
           ? context.actions.oauth({ targetId: provider.providerId, title: `Authorize ${provider.label}` })
           : context.actions.secureInput({
               targetId: provider.providerId,
-              title: `Enter ${provider.label} credential`,
+              title: credentialPromptTitle(provider.label, provider.authMode),
               expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
               fields: [credentialField(provider.label, request, provider.authMode)],
             }),
@@ -564,6 +564,10 @@ function assertRevision(plan: ChangePlanRecord, currentRevision: number): void {
     message: "Provider settings changed after this Change Plan was prepared.",
     details: { expectedRevision: plan.target.expectedRevision, currentRevision },
   });
+}
+
+function credentialPromptTitle(label: string, authMode: LlmProviderSummary["authMode"] | undefined): string {
+  return authMode === "claude-code-oauth" ? `Enter ${label} token` : `Enter ${label} credential`;
 }
 
 // A Claude subscription token is pasted from `claude setup-token`; say so instead of

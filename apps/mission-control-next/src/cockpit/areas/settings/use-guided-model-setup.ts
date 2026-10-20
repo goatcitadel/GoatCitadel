@@ -8,6 +8,7 @@ import { useSessionDraft } from "../../../features/native-routes/library/session
 import {
   clampGuidedThinkingLevel,
   GUIDED_THINKING_LEVELS,
+  guidedConnectionHint,
   localRuntimeSetupGuide,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
@@ -101,7 +102,7 @@ export function useGuidedModelSetup({
   // Local runtimes need no credential: the next step is re-checking the live endpoint, not a credential plan.
   const verifiesLocalEndpoint =
     selectedProvider?.localCostPosture === "zero_cost_local_runtime" && readiness.state !== "needs_setup";
-  const usesChatGptOAuth = selectedProvider?.authMode === "codex-oauth";
+  const connectionHint = guidedConnectionHint(selectedProvider);
   const defaultPlanCompleted =
     providerReady &&
     ((Boolean(activeProviderId && activeModel) &&
@@ -294,7 +295,7 @@ export function useGuidedModelSetup({
     localGuide: localRuntimeSetupGuide(selectedProvider, model),
     readiness,
     providerReady,
-    usesChatGptOAuth,
+    connectionHint,
     defaultPlanCompleted,
     progress,
     busy,
