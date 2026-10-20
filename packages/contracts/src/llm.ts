@@ -5,7 +5,8 @@ export type LlmApiStyle =
   | "openai-responses"
   | "openai-codex-responses"
   | "anthropic-messages"
-  | "bedrock-messages";
+  | "bedrock-messages"
+  | "claude-code-cli";
 
 export const LLM_API_STYLES: readonly LlmApiStyle[] = [
   "openai-chat-completions",
@@ -13,12 +14,14 @@ export const LLM_API_STYLES: readonly LlmApiStyle[] = [
   "openai-codex-responses",
   "anthropic-messages",
   "bedrock-messages",
+  "claude-code-cli",
 ];
 
 export type LlmProviderAuthMode =
   | "api-key"
   | "codex-oauth"
   | "claude-code-oauth"
+  | "claude-code-cli-login"
   | "google-service-account"
   | "google-adc"
   | "aws-sigv4"
@@ -28,6 +31,7 @@ export const LLM_PROVIDER_AUTH_MODES: readonly LlmProviderAuthMode[] = [
   "api-key",
   "codex-oauth",
   "claude-code-oauth",
+  "claude-code-cli-login",
   "google-service-account",
   "google-adc",
   "aws-sigv4",

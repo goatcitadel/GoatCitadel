@@ -278,6 +278,27 @@ describe("LlmConfigFileSchema", () => {
     }
   });
 
+  it("accepts apiStyle 'claude-code-cli' with authMode 'claude-code-cli-login'", () => {
+    const result = LlmConfigFileSchema.safeParse({
+      activeProviderId: "claude-code-cli",
+      providers: [
+        {
+          providerId: "claude-code-cli",
+          label: "Claude Code CLI (local login)",
+          baseUrl: "https://api.anthropic.com/v1",
+          apiStyle: "claude-code-cli",
+          authMode: "claude-code-cli-login",
+          defaultModel: "claude-sonnet-5-5",
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.providers[0]?.apiStyle).toBe("claude-code-cli");
+      expect(result.data.providers[0]?.authMode).toBe("claude-code-cli-login");
+    }
+  });
+
   it.each(["aws-sigv4", "aws-bedrock-api-key"])("accepts authMode %s on the zod runtime enum", (authMode) => {
     const result = LlmConfigFileSchema.safeParse({
       activeProviderId: "bedrock",

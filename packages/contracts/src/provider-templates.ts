@@ -66,6 +66,26 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     knownModels: ["claude-opus-4-8", "claude-fable-5", "claude-sonnet-4-6", "claude-sonnet-4", "claude-opus-4"],
   },
   {
+    // Runs the operator's locally installed Claude Code CLI (`claude -p`) under
+    // their own `claude` login. GoatCitadel holds no credential for it; baseUrl
+    // is never fetched and only tells the network allowlist where the CLI egresses.
+    providerId: "claude-code-cli",
+    label: "Claude Code CLI (local login)",
+    baseUrl: "https://api.anthropic.com/v1",
+    defaultModel: "claude-sonnet-5-5",
+    apiStyle: "claude-code-cli",
+    authMode: "claude-code-cli-login",
+    capabilities: {
+      vision: false,
+      audio: false,
+      video: false,
+      toolCalling: false,
+      jsonMode: false,
+      reasoning: true,
+    },
+    knownModels: ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "claude-fable-5-1"],
+  },
+  {
     providerId: "bedrock",
     label: "Amazon Bedrock",
     baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -279,6 +299,7 @@ export function isAggregatorProvider(providerId: string): boolean {
 const MODEL_PREFIX_PROVIDER_IDS: Record<string, string> = {
   anthropic: "anthropic",
   "claude-code": "claude-code",
+  "claude-code-cli": "claude-code-cli",
   google: "google",
   openai: "openai",
   "openai-codex": "openai-codex",
