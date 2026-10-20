@@ -138,12 +138,14 @@ describe("guided model setup support", () => {
     expect(clampGuidedThinkingLevel("extended", ["off", "minimal", "standard", "extended"])).toBe("extended");
   });
 
-  it("treats a draft whose effort clamps to the saved one as the saved submission", () => {
+  it("treats the draft captured at submission as the saved submission when its effort clamps to the saved one", () => {
     const saved = { providerId: "claude-code-cli", model: "sonnet", thinkingLevel: "off" as const };
     const draft = { ...saved, thinkingLevel: "standard" as const };
     expect(submittedGuidedSelection(draft, saved, ["off"])).toBe(draft);
     expect(submittedGuidedSelection(draft, saved, ["off", "minimal", "standard"])).toBe(saved);
     expect(submittedGuidedSelection({ ...draft, providerId: "openai" }, saved, ["off"])).toBe(saved);
+    // A plan this wizard did not submit, such as one resumed from the Gateway, acknowledges only the saved value.
+    expect(submittedGuidedSelection(null, saved, ["off"])).toBe(saved);
   });
 
   it("returns setup guides only for llama.cpp and LocalAI, using the configured endpoint", () => {

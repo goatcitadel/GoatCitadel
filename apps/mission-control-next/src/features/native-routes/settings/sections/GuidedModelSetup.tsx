@@ -122,6 +122,8 @@ export function GuidedModelSetup({
   const setThinkingLevel = (thinkingLevel: ChatThinkingLevel) =>
     modelDraft.setValue((current) => ({ ...current, thinkingLevel }));
   const busyRef = useRef(false);
+  // The raw draft behind the default-model plan this wizard submitted, before effort clamping.
+  const submittedDraftRef = useRef<typeof modelDraft.value | null>(null);
   const planLoadGeneration = useRef(0);
   const [models, setModels] = useState<string[]>([]);
   const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
@@ -248,7 +250,7 @@ export function GuidedModelSetup({
           };
           const savedProvider = catalog.providers.find((provider) => provider.providerId === saved.providerId);
           const submitted = submittedGuidedSelection(
-            modelDraft.value,
+            submittedDraftRef.current,
             saved,
             supportedGuidedThinkingLevels(savedProvider?.capabilities),
           );
@@ -330,6 +332,7 @@ export function GuidedModelSetup({
       setNotice({ tone: "warning", message: "Choose a verified provider and model first." });
       return;
     }
+    submittedDraftRef.current = modelDraft.value;
     await runAction(() =>
       createChangePlan({
         workspaceId,

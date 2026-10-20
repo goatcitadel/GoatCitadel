@@ -57,18 +57,20 @@ export function clampGuidedThinkingLevel(
 type GuidedModelSelection = { providerId: string; model: string; thinkingLevel: ChatThinkingLevel };
 
 /**
- * The draft input a saved default acknowledges. The wizard submits the clamped effort, so a draft whose requested
- * effort clamps to the saved one was that submission, not newer input that would keep the draft unsaved.
+ * The draft input a saved default acknowledges. The wizard submits the clamped effort, so the raw draft captured when
+ * the plan was submitted is that submission when its effort clamps to the saved one. Input edited after submission is
+ * compared against this snapshot, so it stays unsaved.
  */
 export function submittedGuidedSelection(
-  draft: GuidedModelSelection,
+  submittedDraft: GuidedModelSelection | null,
   saved: GuidedModelSelection,
   supported: readonly ChatThinkingLevel[],
 ): GuidedModelSelection {
-  return draft.providerId === saved.providerId &&
-    draft.model === saved.model &&
-    clampGuidedThinkingLevel(draft.thinkingLevel, supported) === saved.thinkingLevel
-    ? draft
+  return submittedDraft &&
+    submittedDraft.providerId === saved.providerId &&
+    submittedDraft.model === saved.model &&
+    clampGuidedThinkingLevel(submittedDraft.thinkingLevel, supported) === saved.thinkingLevel
+    ? submittedDraft
     : saved;
 }
 

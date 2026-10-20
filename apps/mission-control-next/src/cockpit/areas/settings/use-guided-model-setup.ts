@@ -74,6 +74,8 @@ export function useGuidedModelSetup({
   const setThinkingLevel = (next: ChatThinkingLevel) =>
     modelDraft.setValue((current) => ({ ...current, thinkingLevel: next }));
   const busyRef = useRef(false);
+  // The raw draft behind the default-model plan this wizard submitted, before effort clamping.
+  const submittedDraftRef = useRef<typeof modelDraft.value | null>(null);
   const planLoadGeneration = useRef(0);
   const [models, setModels] = useState<string[]>([]);
   const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
@@ -181,7 +183,7 @@ export function useGuidedModelSetup({
           };
           const savedProvider = providers.find((provider) => provider.providerId === saved.providerId);
           const submitted = submittedGuidedSelection(
-            modelDraft.value,
+            submittedDraftRef.current,
             saved,
             supportedGuidedThinkingLevels(savedProvider?.capabilities),
           );
@@ -241,6 +243,7 @@ export function useGuidedModelSetup({
       setNotice("Choose a verified provider and model first.");
       return;
     }
+    if (!pendingSetupPlan) submittedDraftRef.current = modelDraft.value;
     await createPlan({ kind: "installation_default_model", providerId, model, thinkingLevel });
   };
   const recheckLocalEndpoint = async () => {
