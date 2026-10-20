@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   clampGuidedThinkingLevel,
   guidedConnectionHint,
+  pendingPlanForSelection,
+  withAddableBuiltinProviders,
   localRuntimeSetupGuide,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
@@ -209,5 +211,53 @@ describe("local Claude Code CLI login readiness", () => {
     expect(guidedConnectionHint({ authMode: "claude-code-cli-login" })?.connectLabel).toBe("Check Claude Code login");
     expect(guidedConnectionHint({ authMode: "claude-code-cli-login" })?.note).toContain("stores no token");
     expect(guidedConnectionHint({ authMode: "claude-code-oauth" })?.note).toContain("Claude Code CLI (local login)");
+  });
+});
+
+describe("built-in providers an older config lacks", () => {
+  const saved = { providerId: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt", apiStyle: "openai-responses", models: [], sanitizedEndpointIdentity: "" };
+
+  it("offers the Claude Code CLI provider with its template profile when the saved config lacks it", () => {
+    const options = withAddableBuiltinProviders([saved] as never, true);
+    const cli = options.find((option) => option.providerId === "claude-code-cli");
+    expect(cli?.label).toBe("Claude Code CLI (local login) · not added yet");
+    expect(cli?.addProfile).toMatchObject({
+      label: "Claude Code CLI (local login)",
+      apiStyle: "claude-code-cli",
+      authMode: "claude-code-cli-login",
+      baseUrl: "https://api.anthropic.com/v1",
+    });
+    expect(resolveGuidedProviderReadiness(cli!)).toMatchObject({ state: "needs_setup" });
+    expect(resolveGuidedProviderReadiness(cli!).description).toContain("not added to this installation yet");
+    expect(guidedConnectionHint(cli!)?.connectLabel).toBe("Add Claude Code CLI");
+  });
+
+  it("adds nothing once the saved config has the provider", () => {
+    const present = { ...saved, providerId: "claude-code-cli", label: "Claude Code CLI (local login)" };
+    const options = withAddableBuiltinProviders([saved, present] as never, true);
+    expect(options).toHaveLength(2);
+    expect(options.some((option) => option.addProfile)).toBe(false);
+  });
+});
+
+describe("pending setup plan reuse", () => {
+  const anthropic = { planId: "a", request: { kind: "provider_connection", providerId: "anthropic" } } as never;
+  const claude = { planId: "c", request: { kind: "provider_connection", providerId: "claude-code" } } as never;
+
+  it("resumes the active plan for the selected provider from the whole list", () => {
+    expect(pendingPlanForSelection([anthropic, claude], "claude-code")).toBe(claude);
+    expect(pendingPlanForSelection([anthropic], "claude-code")).toBeNull();
+  });
+
+  it("resumes the first active plan when no provider is chosen yet", () => {
+    expect(pendingPlanForSelection([anthropic, claude], "")).toBe(anthropic);
+    expect(pendingPlanForSelection([], "anthropic")).toBeNull();
+  });
+});
+
+describe("addable built-in providers need a loaded catalog", () => {
+  it("offers nothing while the catalog is loading or failed", () => {
+    expect(withAddableBuiltinProviders([], false)).toEqual([]);
+    expect(withAddableBuiltinProviders([], true).map((option) => option.providerId)).toEqual(["claude-code-cli"]);
   });
 });

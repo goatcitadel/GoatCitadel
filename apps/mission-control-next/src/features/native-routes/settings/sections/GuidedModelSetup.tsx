@@ -35,9 +35,11 @@ import {
   GUIDED_THINKING_LEVELS,
   guidedConnectionHint,
   localRuntimeSetupGuide,
+  pendingPlanForSelection,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
   supportedGuidedThinkingLevels,
+  withAddableBuiltinProviders,
 } from "./guided-model-setup-support";
 
 const TERMINAL_CHANGE_PLAN_STATUSES = new Set<ChangePlanRecord["status"]>([
@@ -81,10 +83,15 @@ export function GuidedModelSetup({
 }) {
   const catalog = useProviderModelCatalog("system");
   const completion = useOnboardingCompletion({ state: onboarding, scope: workspaceId, requireModel: true });
+  const catalogLoaded = !catalog.loading && !catalog.error;
   const catalogProviders = useMemo(
     () =>
-      excludeLlamaCpp ? catalog.providers.filter((provider) => provider.providerId !== "llamacpp") : catalog.providers,
-    [catalog.providers, excludeLlamaCpp],
+      // Includes built-in providers an older saved config lacks, so setup can add them.
+      withAddableBuiltinProviders(
+        excludeLlamaCpp ? catalog.providers.filter((provider) => provider.providerId !== "llamacpp") : catalog.providers,
+        catalogLoaded,
+      ),
+    [catalog.providers, catalogLoaded, excludeLlamaCpp],
   );
   const loadModelsForProvider = catalog.loadModelsForProvider;
   // Keep first-run setup usable against an older or partially available
@@ -124,6 +131,7 @@ export function GuidedModelSetup({
   const planLoadGeneration = useRef(0);
   const [models, setModels] = useState<string[]>([]);
   const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
+  const [activePlans, setActivePlans] = useState<ChangePlanRecord[]>([]);
   const [dialogPlan, setDialogPlan] = useState<ChangePlanRecord | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -184,6 +192,8 @@ export function GuidedModelSetup({
     let cancelled = false;
     const provider = catalogProviders.find((candidate) => candidate.providerId === providerId);
     setModels(provider?.models ?? (provider?.defaultModel ? [provider.defaultModel] : []));
+    // A provider that is not added yet has no Gateway catalog to load.
+    if (provider?.addProfile) return;
     void loadModelsForProvider(providerId)
       .then((items) => {
         if (cancelled) return;
@@ -207,17 +217,21 @@ export function GuidedModelSetup({
     setBusy(false);
     setActionError(null);
     setLatestPlan(null);
+    setActivePlans([]);
     setDialogPlan(null);
     void fetchChangePlans({ workspaceId }, { limit: 25 })
       .then(({ items }) => {
         if (cancelled) return;
-        const pending = items.find(
+        const pending = items.filter(
           (plan) =>
             plan.origin.surface === "settings" &&
             ["provider_connection", "installation_default_model"].includes(plan.kind) &&
             !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
         );
-        if (pending && generation === planLoadGeneration.current) setLatestPlan(pending);
+        if (generation !== planLoadGeneration.current) return;
+        // Keep every active plan so Connect can resume the one for the selected provider.
+        setActivePlans(pending);
+        if (pending[0]) setLatestPlan(pending[0]);
       })
       .catch((error) => {
         if (!cancelled && generation === planLoadGeneration.current) setActionError(getErrorMessage(error));
@@ -231,6 +245,7 @@ export function GuidedModelSetup({
   const recordPlan = useCallback(
     async (updated: ChangePlanRecord) => {
       setLatestPlan(updated);
+      setActivePlans((current) => current.map((plan) => (plan.planId === updated.planId ? updated : plan)));
       if (updated.requiredAction && !TERMINAL_CHANGE_PLAN_STATUSES.has(updated.status)) {
         setDialogPlan(updated);
       } else {
@@ -279,7 +294,10 @@ export function GuidedModelSetup({
     [recordPlan],
   );
 
-  const pendingSetupPlan = latestPlan && !TERMINAL_CHANGE_PLAN_STATUSES.has(latestPlan.status) ? latestPlan : null;
+  const pendingSetupPlan = pendingPlanForSelection(
+    [...(latestPlan ? [latestPlan] : []), ...activePlans].filter((plan) => !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status)),
+    providerId,
+  );
   const createProviderPlan = async () => {
     if (pendingSetupPlan) {
       setDialogPlan(pendingSetupPlan);
@@ -293,7 +311,11 @@ export function GuidedModelSetup({
       createChangePlan({
         workspaceId,
         surface: "settings",
-        request: { kind: "provider_connection", providerId },
+        request: {
+          kind: "provider_connection",
+          providerId,
+          ...(selectedProvider?.addProfile ? { profile: selectedProvider.addProfile } : {}),
+        },
       }),
     );
   };

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChangePlanRecord } from "@goatcitadel/contracts";
+import { findProviderTemplate, type ChangePlanRecord } from "@goatcitadel/contracts";
 import { ProviderConnectionChangePlanAdapter } from "./provider-connection-change-plan-adapter.js";
 
 const context = {
@@ -606,6 +606,7 @@ describe("ProviderConnectionChangePlanAdapter", () => {
   });
 
   describe("local Claude Code CLI login", () => {
+    const cliTemplate = findProviderTemplate("claude-code-cli")!;
     const cliSettings = (status: string, reasonCode?: string) =>
       ({
         revision: 5,
@@ -613,7 +614,10 @@ describe("ProviderConnectionChangePlanAdapter", () => {
           providers: [
             {
               providerId: "claude-code-cli",
-              label: "Claude Code CLI (local login)",
+              label: cliTemplate.label,
+              baseUrl: cliTemplate.baseUrl,
+              defaultModel: cliTemplate.defaultModel,
+              apiStyle: "claude-code-cli",
               authMode: "claude-code-cli-login",
               authReadiness: { status, ...(reasonCode ? { reasonCode } : {}) },
             },
@@ -702,6 +706,57 @@ describe("ProviderConnectionChangePlanAdapter", () => {
 
     it("fails closed when no local login readiness owner is wired", async () => {
       await expect(cliAdapter("ready", undefined).apply(context, plan)).rejects.toThrow(/readiness owner is unavailable/u);
+    });
+
+    it("adds a missing CLI provider from its profile, then checks the login", async () => {
+      const added = cliSettings("missing", "claude_cli_logged_out");
+      added.revision = 6;
+      const getSettings = vi
+        .fn()
+        .mockResolvedValueOnce({ revision: 5, llm: { providers: [] } })
+        .mockResolvedValue(added);
+      const updateSettings = vi.fn(async () => added);
+      const verifyProvider = vi.fn();
+      const adapter = new ProviderConnectionChangePlanAdapter({
+        getSettings,
+        updateSettings,
+        hasTemporarySecret: vi.fn(async () => false),
+        promoteTemporarySecret: vi.fn(),
+        removeProviderApiKey: vi.fn(),
+        getProviderApiKeyStatus: vi.fn(() => ({ hasSecret: false, source: "none" })),
+        discardTemporarySecret: vi.fn(),
+        verifyProvider,
+        refreshLocalLoginReadiness: vi.fn(async () => ({
+          status: "missing" as const,
+          source: "metadata" as const,
+          liveVerified: true,
+          reasonCode: "claude_cli_logged_out",
+        })),
+      } as any);
+      const request = {
+        kind: "provider_connection" as const,
+        providerId: "claude-code-cli",
+        // The same secret-free profile the guided setup sends from the template.
+        profile: {
+          label: cliTemplate.label,
+          baseUrl: cliTemplate.baseUrl,
+          apiStyle: "claude-code-cli" as const,
+          authMode: "claude-code-cli-login" as const,
+          defaultModel: cliTemplate.defaultModel,
+        },
+      };
+      const outcome = await adapter.apply(context, {
+        planId: "plan-add-cli",
+        request,
+        target: { ownerId: "provider_connection", resourceId: "claude-code-cli", expectedRevision: 5 },
+      } as ChangePlanRecord);
+      expect(updateSettings).toHaveBeenCalledWith({
+        expectedRevision: 5,
+        llm: { upsertProvider: expect.objectContaining({ providerId: "claude-code-cli", apiStyle: "claude-code-cli" }) },
+      });
+      expect(outcome.status).toBe("manual_required");
+      expect(outcome.result?.summary).toContain("sign in with /login");
+      expect(verifyProvider).not.toHaveBeenCalled();
     });
   });
 });

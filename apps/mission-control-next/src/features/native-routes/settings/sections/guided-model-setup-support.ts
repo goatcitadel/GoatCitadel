@@ -1,5 +1,8 @@
 import {
   describeClaudeCodeCliLoginGuidance,
+  findProviderTemplate,
+  type ChangePlanProviderConnectionRequest,
+  type ChangePlanRecord,
   type ChatCompletionReasoningEffort,
   type ChatThinkingLevel,
 } from "@goatcitadel/contracts";
@@ -55,6 +58,7 @@ export function clampGuidedThinkingLevel(
 }
 
 type GuidedReadinessProvider = Pick<ProviderModelCatalogOption, "providerId" | "label" | "baseUrl"> &
+  Pick<GuidedProviderOption, "addProfile"> &
   Partial<
     Pick<
       ProviderModelCatalogOption,
@@ -105,6 +109,12 @@ export function resolveGuidedProviderReadiness(provider: GuidedReadinessProvider
       ...readiness("needs_setup", "Choose a cloud provider, or a local runtime that is already running."),
       label: "Not chosen",
     };
+  }
+  if (provider.addProfile) {
+    return readiness(
+      "needs_setup",
+      `${provider.addProfile.label ?? provider.providerId} is not added to this installation yet. Add it, then check its login.`,
+    );
   }
   const authStatus = provider.authReadiness?.status;
   if (provider.authMode === "claude-code-cli-login") {
@@ -198,8 +208,14 @@ export interface GuidedConnectionHint {
  * key. Returns null so the caller keeps its generic copy for everything else.
  */
 export function guidedConnectionHint(
-  provider: Pick<ProviderModelCatalogOption, "authMode"> | null,
+  provider: (Pick<ProviderModelCatalogOption, "authMode"> & Pick<GuidedProviderOption, "addProfile">) | null,
 ): GuidedConnectionHint | null {
+  if (provider?.addProfile) {
+    return {
+      connectLabel: "Add Claude Code CLI",
+      note: "This installation was set up before the Claude Code CLI provider existed. Select Add Claude Code CLI to add it; GoatCitadel stores no token for it. Then run claude in a terminal, sign in with /login, and check the login here.",
+    };
+  }
   if (provider?.authMode === "codex-oauth") {
     return {
       connectLabel: "Connect ChatGPT",
@@ -219,6 +235,70 @@ export function guidedConnectionHint(
     };
   }
   return null;
+}
+
+/** A provider option, plus the profile that adds it when an older saved config predates this built-in provider. */
+export type GuidedProviderOption = ProviderModelCatalogOption & {
+  readonly addProfile?: NonNullable<ChangePlanProviderConnectionRequest["profile"]>;
+};
+
+// Built-in providers that new installs get by default but an existing saved config can lack.
+const ADDABLE_BUILTIN_PROVIDER_IDS = ["claude-code-cli"] as const;
+
+/**
+ * Appends each addable built-in provider the saved config is missing, so the
+ * guided setup can add it through a provider connection plan with its template profile.
+ * Only a successful, current catalog load proves a provider is missing: while the
+ * catalog is loading or failed, nothing is offered.
+ */
+export function withAddableBuiltinProviders(
+  providers: readonly ProviderModelCatalogOption[],
+  catalogLoaded: boolean,
+): GuidedProviderOption[] {
+  if (!catalogLoaded) return [...providers];
+  const present = new Set(providers.map((provider) => provider.providerId));
+  const additions = ADDABLE_BUILTIN_PROVIDER_IDS.filter((providerId) => !present.has(providerId)).flatMap(
+    (providerId): GuidedProviderOption[] => {
+      const template = findProviderTemplate(providerId);
+      if (!template?.apiStyle) return [];
+      return [
+        {
+          providerId: template.providerId,
+          label: `${template.label} · not added yet`,
+          baseUrl: template.baseUrl,
+          defaultModel: template.defaultModel,
+          apiStyle: template.apiStyle,
+          authMode: template.authMode,
+          models: [template.defaultModel],
+          sanitizedEndpointIdentity: "",
+          addProfile: {
+            label: template.label,
+            baseUrl: template.baseUrl,
+            apiStyle: template.apiStyle,
+            authMode: template.authMode,
+            defaultModel: template.defaultModel,
+            // Capabilities stay Gateway-owned: it pins this provider's, and a stated
+            // value it overrides would fail the plan's exact saved-profile check.
+          },
+        },
+      ];
+    },
+  );
+  return [...providers, ...additions];
+}
+
+/**
+ * Picks the active setup plan to resume: the one targeting the selected provider,
+ * or the first one when no provider is chosen yet. Callers pass every active plan.
+ */
+export function pendingPlanForSelection(
+  activePlans: readonly ChangePlanRecord[],
+  providerId: string,
+): ChangePlanRecord | null {
+  if (!providerId) return activePlans[0] ?? null;
+  return (
+    activePlans.find((plan) => "providerId" in plan.request && plan.request.providerId === providerId) ?? null
+  );
 }
 
 export interface LocalRuntimeSetupGuide {
