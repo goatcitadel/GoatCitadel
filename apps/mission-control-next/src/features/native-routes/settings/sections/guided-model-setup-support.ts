@@ -314,6 +314,68 @@ export function withAddableBuiltinProviders(
   );
 }
 
+export type GuidedProviderGroupId = "ready" | "subscription" | "api_key" | "local";
+
+export interface GuidedProviderGroup {
+  readonly id: GuidedProviderGroupId;
+  readonly label: string;
+  readonly providers: readonly GuidedProviderOption[];
+}
+
+const GUIDED_PROVIDER_GROUP_LABELS: Readonly<Record<GuidedProviderGroupId, string>> = {
+  ready: "Ready to use",
+  subscription: "Use a subscription",
+  api_key: "Pay-per-use API key",
+  local: "Run locally",
+};
+
+// Sign-in or account based providers; everything not local and not here takes an API key.
+const SUBSCRIPTION_AUTH_MODES = new Set(["codex-oauth", "claude-code-oauth", "claude-code-cli-login"]);
+
+// Providers whose path is retired from the product but can linger in an older saved config.
+const RETIRED_PROVIDER_IDS = new Set(["npu-local"]);
+
+// Dropdown names that say how each provider is paid for, where the saved label leaves it ambiguous.
+const GUIDED_PROVIDER_OPTION_LABELS: Readonly<Record<string, string>> = {
+  openai: "OpenAI API (platform key)",
+  anthropic: "Anthropic API (Console key)",
+  "claude-code": "Claude Code token (may be rejected)",
+};
+
+/** The dropdown name for a provider; the saved label is unchanged everywhere else. */
+export function guidedProviderOptionLabel(
+  provider: Pick<GuidedProviderOption, "providerId" | "label" | "addProfile">,
+): string {
+  return provider.addProfile ? provider.label : (GUIDED_PROVIDER_OPTION_LABELS[provider.providerId] ?? provider.label);
+}
+
+function guidedProviderGroupId(provider: GuidedProviderOption): GuidedProviderGroupId {
+  if (resolveGuidedProviderReadiness(provider).state === "ready") return "ready";
+  if (provider.authMode && SUBSCRIPTION_AUTH_MODES.has(provider.authMode)) return "subscription";
+  if (provider.localCostPosture === "zero_cost_local_runtime") return "local";
+  return "api_key";
+}
+
+/**
+ * Groups the provider choices by how they are paid for, ready ones first, keeping
+ * catalog order inside each group. Retired providers are hidden unless selected.
+ */
+export function groupGuidedProviders(
+  providers: readonly GuidedProviderOption[],
+  selectedProviderId: string,
+): GuidedProviderGroup[] {
+  const visible = providers.filter(
+    (provider) => !RETIRED_PROVIDER_IDS.has(provider.providerId) || provider.providerId === selectedProviderId,
+  );
+  return (Object.keys(GUIDED_PROVIDER_GROUP_LABELS) as GuidedProviderGroupId[])
+    .map((id) => ({
+      id,
+      label: GUIDED_PROVIDER_GROUP_LABELS[id],
+      providers: visible.filter((provider) => guidedProviderGroupId(provider) === id),
+    }))
+    .filter((group) => group.providers.length > 0);
+}
+
 /** Readiness while the saved providers are still loading: never "not chosen" or "unavailable". */
 export const GUIDED_CATALOG_LOADING_READINESS: GuidedProviderReadiness = {
   state: "checking",
