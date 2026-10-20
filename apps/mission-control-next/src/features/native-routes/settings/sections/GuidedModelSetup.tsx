@@ -155,6 +155,8 @@ export function GuidedModelSetup({
   const verifiesLocalEndpoint =
     selectedProvider?.localCostPosture === "zero_cost_local_runtime" && providerReadiness.state !== "needs_setup";
   const connectionHint = guidedConnectionHint(selectedProvider);
+  // Shown beside the provider hint, never replaced by it.
+  const connectionDiagnostic = catalog.error ?? selectedProvider?.authReadiness?.reasonCode ?? null;
   const defaultPlanCompleted =
     providerReady &&
     ((Boolean(activeProviderId && activeModel) &&
@@ -423,13 +425,12 @@ export function GuidedModelSetup({
               </option>
             ))}
           </select>
-          <p className="mc-next-settings-field-note">
-            {connectionHint
-              ? connectionHint.note
-              : (catalog.error ??
-                selectedProvider?.authReadiness?.reasonCode ??
-                "The Gateway will verify this connection before it can be used.")}
-          </p>
+          {connectionHint ? <p className="mc-next-settings-field-note">{connectionHint.note}</p> : null}
+          {connectionDiagnostic || !connectionHint ? (
+            <p className="mc-next-settings-field-note">
+              {connectionDiagnostic ?? "The Gateway will verify this connection before it can be used."}
+            </p>
+          ) : null}
         </SettingsField>
         <SettingsField label="Model">
           <select

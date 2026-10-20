@@ -76,6 +76,8 @@ async function mount(
     baseUrl?: string;
     defaultModel?: string;
     capabilities?: object;
+    authMode?: string;
+    authReadiness?: object;
   } = {},
   onEnterChat?: () => void,
   enterChatLabel?: string,
@@ -439,5 +441,19 @@ describe("guided first model setup", () => {
     const view = await mount();
     expect(view.host.querySelector('[role="alert"]')?.textContent).toBe("Catalog unavailable");
     expect(view.host.textContent).toContain("Not yet");
+  });
+});
+
+describe("GuidedModelSetup Claude Code guidance", () => {
+  it("keeps the connection diagnostic visible beside the Claude Code token hint", async () => {
+    const view = await mount("missing", undefined, {
+      providerId: "claude-code",
+      label: "Claude Code (Claude subscription)",
+      authMode: "claude-code-oauth",
+      authReadiness: { status: "missing", reasonCode: "credential_missing" },
+    });
+    expect(view.host.textContent).toContain("claude setup-token");
+    expect(view.host.textContent).toContain("credential_missing");
+    expect(view.button("Connect Claude Code")).toBeDefined();
   });
 });
