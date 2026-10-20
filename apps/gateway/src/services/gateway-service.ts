@@ -3391,6 +3391,7 @@ export class GatewayService {
         discardTemporarySecret: (planId, providerId) => this.discardTemporaryProviderSecret(planId, providerId),
         discardTemporaryOAuthCredential: (planId, providerId) =>
           this.discardTemporaryProviderOAuthCredential(planId, providerId),
+        refreshLocalLoginReadiness: () => this.llmService.refreshClaudeCodeCliReadiness(),
         verifyProvider: (providerId) =>
           verifyProviderConnection(
             {

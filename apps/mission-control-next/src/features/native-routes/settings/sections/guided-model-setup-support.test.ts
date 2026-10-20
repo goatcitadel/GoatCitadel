@@ -179,3 +179,31 @@ describe("guided connection hint", () => {
     expect(guidedConnectionHint(null)).toBeNull();
   });
 });
+
+describe("local Claude Code CLI login readiness", () => {
+  const cli = (status: string, reasonCode?: string) => ({
+    providerId: "claude-code-cli",
+    label: "Claude Code CLI (local login)",
+    baseUrl: "https://api.anthropic.com/v1",
+    authMode: "claude-code-cli-login" as const,
+    authReadiness: { status, source: "metadata", liveVerified: true, ...(reasonCode ? { reasonCode } : {}) },
+  });
+
+  it("is ready only from the login probe and never asks for a credential", () => {
+    expect(resolveGuidedProviderReadiness(cli("ready", "claude_cli_logged_in") as never)).toMatchObject({
+      state: "ready",
+      evidence: "local_login",
+    });
+    const loggedOut = resolveGuidedProviderReadiness(cli("missing", "claude_cli_logged_out") as never);
+    expect(loggedOut.state).toBe("needs_setup");
+    expect(loggedOut.description).toContain("sign in with /login");
+    expect(loggedOut.description).not.toContain("credential");
+    expect(resolveGuidedProviderReadiness(cli("unknown", "claude_cli_not_probed") as never).state).toBe("not_verified");
+  });
+
+  it("offers a login check and points the token route at the CLI provider", () => {
+    expect(guidedConnectionHint({ authMode: "claude-code-cli-login" })?.connectLabel).toBe("Check Claude Code login");
+    expect(guidedConnectionHint({ authMode: "claude-code-cli-login" })?.note).toContain("stores no token");
+    expect(guidedConnectionHint({ authMode: "claude-code-oauth" })?.note).toContain("Claude Code CLI (local login)");
+  });
+});

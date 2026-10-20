@@ -143,6 +143,26 @@ describe("shared guided model setup", () => {
     expect(help).not.toContain("claude setup-token");
     expect(button("Connect Claude Code")).toBeUndefined();
   });
+  it("checks the local Claude Code login through a provider connection plan instead of asking for a token", async () => {
+    catalog("missing", {
+      providerId: "claude-code-cli",
+      label: "Claude Code CLI (local login)",
+      authMode: "claude-code-cli-login",
+      authReadiness: { status: "missing", reasonCode: "claude_cli_logged_out" },
+    });
+    onboarding.settings.llm.activeProviderId = "claude-code-cli";
+    await mount();
+    const provider = container.querySelector<HTMLSelectElement>("select")!;
+    const help = document.getElementById(provider.getAttribute("aria-describedby")!)?.textContent;
+    expect(help).toContain("stores no token");
+    expect(container.textContent).toContain("sign in with /login");
+    await act(async () => button("Check Claude Code login")!.click());
+    expect(mocks.create).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "default",
+      surface: "settings",
+      request: { kind: "provider_connection", providerId: "claude-code-cli" },
+    });
+  });
   it("confirms a changed model through an installation default plan and shows the result", async () => {
     catalog("ready");
     await mount();
