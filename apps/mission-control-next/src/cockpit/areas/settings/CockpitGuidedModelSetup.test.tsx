@@ -135,6 +135,14 @@ describe("shared guided model setup", () => {
     expect(help).toContain("may reject");
     expect(button("Connect Claude Code")).toBeDefined();
   });
+  it("drops the Claude Code connection hint once the provider is ready", async () => {
+    catalog("ready", { label: "Claude Code (Claude subscription)", authMode: "claude-code-oauth" });
+    await mount();
+    const provider = container.querySelector<HTMLSelectElement>("select")!;
+    const help = document.getElementById(provider.getAttribute("aria-describedby")!)?.textContent;
+    expect(help).not.toContain("claude setup-token");
+    expect(button("Connect Claude Code")).toBeUndefined();
+  });
   it("confirms a changed model through an installation default plan and shows the result", async () => {
     catalog("ready");
     await mount();

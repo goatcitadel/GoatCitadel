@@ -154,7 +154,8 @@ export function GuidedModelSetup({
   // endpoint probe, so the next step is re-checking it, not a credential plan.
   const verifiesLocalEndpoint =
     selectedProvider?.localCostPosture === "zero_cost_local_runtime" && providerReadiness.state !== "needs_setup";
-  const connectionHint = guidedConnectionHint(selectedProvider);
+  // Connection guidance only: once the provider is ready there is no Connect action to point at.
+  const connectionHint = providerReady ? null : guidedConnectionHint(selectedProvider);
   // Shown beside the provider hint, never replaced by it.
   const connectionDiagnostic = catalog.error ?? selectedProvider?.authReadiness?.reasonCode ?? null;
   const defaultPlanCompleted =
