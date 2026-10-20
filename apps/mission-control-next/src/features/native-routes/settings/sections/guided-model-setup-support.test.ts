@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   clampGuidedThinkingLevel,
   guidedConnectionHint,
+  pendingPlanForSelection,
+  withAddableBuiltinProviders,
   localRuntimeSetupGuide,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
@@ -209,5 +211,45 @@ describe("local Claude Code CLI login readiness", () => {
     expect(guidedConnectionHint({ authMode: "claude-code-cli-login" })?.connectLabel).toBe("Check Claude Code login");
     expect(guidedConnectionHint({ authMode: "claude-code-cli-login" })?.note).toContain("stores no token");
     expect(guidedConnectionHint({ authMode: "claude-code-oauth" })?.note).toContain("Claude Code CLI (local login)");
+  });
+});
+
+describe("built-in providers an older config lacks", () => {
+  const saved = { providerId: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt", apiStyle: "openai-responses", models: [], sanitizedEndpointIdentity: "" };
+
+  it("offers the Claude Code CLI provider with its template profile when the saved config lacks it", () => {
+    const options = withAddableBuiltinProviders([saved] as never);
+    const cli = options.find((option) => option.providerId === "claude-code-cli");
+    expect(cli?.label).toBe("Claude Code CLI (local login) · not added yet");
+    expect(cli?.addProfile).toMatchObject({
+      label: "Claude Code CLI (local login)",
+      apiStyle: "claude-code-cli",
+      authMode: "claude-code-cli-login",
+      baseUrl: "https://api.anthropic.com/v1",
+    });
+    expect(resolveGuidedProviderReadiness(cli!)).toMatchObject({ state: "needs_setup" });
+    expect(resolveGuidedProviderReadiness(cli!).description).toContain("not added to this installation yet");
+    expect(guidedConnectionHint(cli!)?.connectLabel).toBe("Add Claude Code CLI");
+  });
+
+  it("adds nothing once the saved config has the provider", () => {
+    const present = { ...saved, providerId: "claude-code-cli", label: "Claude Code CLI (local login)" };
+    const options = withAddableBuiltinProviders([saved, present] as never);
+    expect(options).toHaveLength(2);
+    expect(options.some((option) => option.addProfile)).toBe(false);
+  });
+});
+
+describe("pending setup plan reuse", () => {
+  const plan = { request: { kind: "provider_connection", providerId: "anthropic" } } as never;
+
+  it("resumes a pending plan only for the provider it targets", () => {
+    expect(pendingPlanForSelection(plan, "anthropic")).toBe(plan);
+    expect(pendingPlanForSelection(plan, "claude-code")).toBeNull();
+  });
+
+  it("resumes a pending plan when no provider is chosen yet", () => {
+    expect(pendingPlanForSelection(plan, "")).toBe(plan);
+    expect(pendingPlanForSelection(null, "anthropic")).toBeNull();
   });
 });

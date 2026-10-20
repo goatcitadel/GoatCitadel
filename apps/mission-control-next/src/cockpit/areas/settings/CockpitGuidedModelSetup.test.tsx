@@ -163,6 +163,51 @@ describe("shared guided model setup", () => {
       request: { kind: "provider_connection", providerId: "claude-code-cli" },
     });
   });
+  it("adds the Claude Code CLI provider for a saved config that predates it", async () => {
+    catalog("ready");
+    await mount();
+    const provider = container.querySelector<HTMLSelectElement>("select")!;
+    expect([...provider.options].map((option) => option.textContent)).toContain(
+      "Claude Code CLI (local login) · not added yet",
+    );
+    await act(async () => {
+      provider.value = "claude-code-cli";
+      provider.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(mocks.models).not.toHaveBeenCalledWith("claude-code-cli");
+    await act(async () => button("Add Claude Code CLI")!.click());
+    expect(mocks.create).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "default",
+      surface: "settings",
+      request: {
+        kind: "provider_connection",
+        providerId: "claude-code-cli",
+        profile: expect.objectContaining({ apiStyle: "claude-code-cli", authMode: "claude-code-cli-login" }),
+      },
+    });
+  });
+  it("starts a new plan instead of reopening a pending plan for a different provider", async () => {
+    catalog("missing");
+    mocks.plans.mockResolvedValue({
+      items: [
+        {
+          planId: "plan-old",
+          kind: "provider_connection",
+          status: "awaiting_input",
+          revision: 1,
+          origin: { workspaceId: "default", surface: "settings" },
+          request: { kind: "provider_connection", providerId: "anthropic" },
+        },
+      ],
+    });
+    await mount();
+    await act(async () => button("Connect provider")!.click());
+    expect(mocks.create).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "default",
+      surface: "settings",
+      request: { kind: "provider_connection", providerId: "test" },
+    });
+  });
   it("confirms a changed model through an installation default plan and shows the result", async () => {
     catalog("ready");
     await mount();

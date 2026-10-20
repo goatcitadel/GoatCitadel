@@ -703,5 +703,54 @@ describe("ProviderConnectionChangePlanAdapter", () => {
     it("fails closed when no local login readiness owner is wired", async () => {
       await expect(cliAdapter("ready", undefined).apply(context, plan)).rejects.toThrow(/readiness owner is unavailable/u);
     });
+
+    it("adds a missing CLI provider from its profile, then checks the login", async () => {
+      const added = cliSettings("missing", "claude_cli_logged_out");
+      added.revision = 6;
+      added.llm.providers[0].apiStyle = "claude-code-cli";
+      const getSettings = vi
+        .fn()
+        .mockResolvedValueOnce({ revision: 5, llm: { providers: [] } })
+        .mockResolvedValue(added);
+      const updateSettings = vi.fn(async () => added);
+      const verifyProvider = vi.fn();
+      const adapter = new ProviderConnectionChangePlanAdapter({
+        getSettings,
+        updateSettings,
+        hasTemporarySecret: vi.fn(async () => false),
+        promoteTemporarySecret: vi.fn(),
+        removeProviderApiKey: vi.fn(),
+        getProviderApiKeyStatus: vi.fn(() => ({ hasSecret: false, source: "none" })),
+        discardTemporarySecret: vi.fn(),
+        verifyProvider,
+        refreshLocalLoginReadiness: vi.fn(async () => ({
+          status: "missing" as const,
+          source: "metadata" as const,
+          liveVerified: true,
+          reasonCode: "claude_cli_logged_out",
+        })),
+      } as any);
+      const request = {
+        kind: "provider_connection" as const,
+        providerId: "claude-code-cli",
+        profile: {
+          label: "Claude Code CLI (local login)",
+          apiStyle: "claude-code-cli" as const,
+          authMode: "claude-code-cli-login" as const,
+        },
+      };
+      const outcome = await adapter.apply(context, {
+        planId: "plan-add-cli",
+        request,
+        target: { ownerId: "provider_connection", resourceId: "claude-code-cli", expectedRevision: 5 },
+      } as ChangePlanRecord);
+      expect(updateSettings).toHaveBeenCalledWith({
+        expectedRevision: 5,
+        llm: { upsertProvider: expect.objectContaining({ providerId: "claude-code-cli", apiStyle: "claude-code-cli" }) },
+      });
+      expect(outcome.status).toBe("manual_required");
+      expect(outcome.result?.summary).toContain("sign in with /login");
+      expect(verifyProvider).not.toHaveBeenCalled();
+    });
   });
 });

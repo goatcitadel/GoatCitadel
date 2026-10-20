@@ -35,9 +35,11 @@ import {
   GUIDED_THINKING_LEVELS,
   guidedConnectionHint,
   localRuntimeSetupGuide,
+  pendingPlanForSelection,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
   supportedGuidedThinkingLevels,
+  withAddableBuiltinProviders,
 } from "./guided-model-setup-support";
 
 const TERMINAL_CHANGE_PLAN_STATUSES = new Set<ChangePlanRecord["status"]>([
@@ -83,7 +85,10 @@ export function GuidedModelSetup({
   const completion = useOnboardingCompletion({ state: onboarding, scope: workspaceId, requireModel: true });
   const catalogProviders = useMemo(
     () =>
-      excludeLlamaCpp ? catalog.providers.filter((provider) => provider.providerId !== "llamacpp") : catalog.providers,
+      // Includes built-in providers an older saved config lacks, so setup can add them.
+      withAddableBuiltinProviders(
+        excludeLlamaCpp ? catalog.providers.filter((provider) => provider.providerId !== "llamacpp") : catalog.providers,
+      ),
     [catalog.providers, excludeLlamaCpp],
   );
   const loadModelsForProvider = catalog.loadModelsForProvider;
@@ -184,6 +189,8 @@ export function GuidedModelSetup({
     let cancelled = false;
     const provider = catalogProviders.find((candidate) => candidate.providerId === providerId);
     setModels(provider?.models ?? (provider?.defaultModel ? [provider.defaultModel] : []));
+    // A provider that is not added yet has no Gateway catalog to load.
+    if (provider?.addProfile) return;
     void loadModelsForProvider(providerId)
       .then((items) => {
         if (cancelled) return;
@@ -279,7 +286,10 @@ export function GuidedModelSetup({
     [recordPlan],
   );
 
-  const pendingSetupPlan = latestPlan && !TERMINAL_CHANGE_PLAN_STATUSES.has(latestPlan.status) ? latestPlan : null;
+  const pendingSetupPlan = pendingPlanForSelection(
+    latestPlan && !TERMINAL_CHANGE_PLAN_STATUSES.has(latestPlan.status) ? latestPlan : null,
+    providerId,
+  );
   const createProviderPlan = async () => {
     if (pendingSetupPlan) {
       setDialogPlan(pendingSetupPlan);
@@ -293,7 +303,11 @@ export function GuidedModelSetup({
       createChangePlan({
         workspaceId,
         surface: "settings",
-        request: { kind: "provider_connection", providerId },
+        request: {
+          kind: "provider_connection",
+          providerId,
+          ...(selectedProvider?.addProfile ? { profile: selectedProvider.addProfile } : {}),
+        },
       }),
     );
   };
