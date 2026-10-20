@@ -218,7 +218,7 @@ describe("built-in providers an older config lacks", () => {
   const saved = { providerId: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt", apiStyle: "openai-responses", models: [], sanitizedEndpointIdentity: "" };
 
   it("offers the Claude Code CLI provider with its template profile when the saved config lacks it", () => {
-    const options = withAddableBuiltinProviders([saved] as never);
+    const options = withAddableBuiltinProviders([saved] as never, true);
     const cli = options.find((option) => option.providerId === "claude-code-cli");
     expect(cli?.label).toBe("Claude Code CLI (local login) · not added yet");
     expect(cli?.addProfile).toMatchObject({
@@ -234,22 +234,30 @@ describe("built-in providers an older config lacks", () => {
 
   it("adds nothing once the saved config has the provider", () => {
     const present = { ...saved, providerId: "claude-code-cli", label: "Claude Code CLI (local login)" };
-    const options = withAddableBuiltinProviders([saved, present] as never);
+    const options = withAddableBuiltinProviders([saved, present] as never, true);
     expect(options).toHaveLength(2);
     expect(options.some((option) => option.addProfile)).toBe(false);
   });
 });
 
 describe("pending setup plan reuse", () => {
-  const plan = { request: { kind: "provider_connection", providerId: "anthropic" } } as never;
+  const anthropic = { planId: "a", request: { kind: "provider_connection", providerId: "anthropic" } } as never;
+  const claude = { planId: "c", request: { kind: "provider_connection", providerId: "claude-code" } } as never;
 
-  it("resumes a pending plan only for the provider it targets", () => {
-    expect(pendingPlanForSelection(plan, "anthropic")).toBe(plan);
-    expect(pendingPlanForSelection(plan, "claude-code")).toBeNull();
+  it("resumes the active plan for the selected provider from the whole list", () => {
+    expect(pendingPlanForSelection([anthropic, claude], "claude-code")).toBe(claude);
+    expect(pendingPlanForSelection([anthropic], "claude-code")).toBeNull();
   });
 
-  it("resumes a pending plan when no provider is chosen yet", () => {
-    expect(pendingPlanForSelection(plan, "")).toBe(plan);
-    expect(pendingPlanForSelection(null, "anthropic")).toBeNull();
+  it("resumes the first active plan when no provider is chosen yet", () => {
+    expect(pendingPlanForSelection([anthropic, claude], "")).toBe(anthropic);
+    expect(pendingPlanForSelection([], "anthropic")).toBeNull();
+  });
+});
+
+describe("addable built-in providers need a loaded catalog", () => {
+  it("offers nothing while the catalog is loading or failed", () => {
+    expect(withAddableBuiltinProviders([], false)).toEqual([]);
+    expect(withAddableBuiltinProviders([], true).map((option) => option.providerId)).toEqual(["claude-code-cli"]);
   });
 });

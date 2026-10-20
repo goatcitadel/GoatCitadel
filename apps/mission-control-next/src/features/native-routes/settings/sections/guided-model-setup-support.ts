@@ -248,10 +248,14 @@ const ADDABLE_BUILTIN_PROVIDER_IDS = ["claude-code-cli"] as const;
 /**
  * Appends each addable built-in provider the saved config is missing, so the
  * guided setup can add it through a provider connection plan with its template profile.
+ * Only a successful, current catalog load proves a provider is missing: while the
+ * catalog is loading or failed, nothing is offered.
  */
 export function withAddableBuiltinProviders(
   providers: readonly ProviderModelCatalogOption[],
+  catalogLoaded: boolean,
 ): GuidedProviderOption[] {
+  if (!catalogLoaded) return [...providers];
   const present = new Set(providers.map((provider) => provider.providerId));
   const additions = ADDABLE_BUILTIN_PROVIDER_IDS.filter((providerId) => !present.has(providerId)).flatMap(
     (providerId): GuidedProviderOption[] => {
@@ -283,11 +287,18 @@ export function withAddableBuiltinProviders(
   return [...providers, ...additions];
 }
 
-/** A pending setup plan is resumed only for the provider it targets, or when no provider is chosen yet. */
-export function pendingPlanForSelection(plan: ChangePlanRecord | null, providerId: string): ChangePlanRecord | null {
-  if (!plan || !providerId) return plan;
-  const request = plan.request;
-  return "providerId" in request && request.providerId === providerId ? plan : null;
+/**
+ * Picks the active setup plan to resume: the one targeting the selected provider,
+ * or the first one when no provider is chosen yet. Callers pass every active plan.
+ */
+export function pendingPlanForSelection(
+  activePlans: readonly ChangePlanRecord[],
+  providerId: string,
+): ChangePlanRecord | null {
+  if (!providerId) return activePlans[0] ?? null;
+  return (
+    activePlans.find((plan) => "providerId" in plan.request && plan.request.providerId === providerId) ?? null
+  );
 }
 
 export interface LocalRuntimeSetupGuide {

@@ -208,6 +208,30 @@ describe("shared guided model setup", () => {
       request: { kind: "provider_connection", providerId: "test" },
     });
   });
+  it("does not offer to add the Claude Code CLI provider when the catalog failed to load", async () => {
+    catalog("ready");
+    mocks.catalog.mockReturnValue({ ...mocks.catalog(), error: "Gateway unavailable" });
+    await mount();
+    const provider = container.querySelector<HTMLSelectElement>("select")!;
+    expect([...provider.options].map((option) => option.textContent)).not.toContain(
+      "Claude Code CLI (local login) · not added yet",
+    );
+  });
+  it("resumes an older active plan for the selected provider instead of creating a duplicate", async () => {
+    catalog("missing");
+    const plan = (planId: string, providerId: string) => ({
+      planId,
+      kind: "provider_connection",
+      status: "awaiting_input",
+      revision: 1,
+      origin: { workspaceId: "default", surface: "settings" },
+      request: { kind: "provider_connection", providerId },
+    });
+    mocks.plans.mockResolvedValue({ items: [plan("plan-new", "anthropic"), plan("plan-old", "test")] });
+    await mount();
+    await act(async () => button("Connect provider")!.click());
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
   it("confirms a changed model through an installation default plan and shows the result", async () => {
     catalog("ready");
     await mount();
