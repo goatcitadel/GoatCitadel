@@ -601,7 +601,7 @@ describe("InboxArea", () => {
       await apiMocks.fetchApproval.mock.results[0]?.value;
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(document.activeElement?.textContent).toBe("Review approval");
+    expect(document.activeElement?.textContent).toBe("Review danger approval");
     expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
 
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true })));
@@ -828,6 +828,61 @@ it("puts the installation-wide rejection in its own zone at the bottom when appr
   expect(zone.parentElement?.lastElementChild).toBe(zone);
 });
 
+it("shows only the empty state when this workspace has nothing pending, even if another workspace does", async () => {
+  apiMocks.fetchApprovals.mockResolvedValue({ items: [approval] });
+  inboxMock.result = {
+    data: { ...projection, items: [] },
+    isLoading: false,
+    isError: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  };
+  await renderUpdates(new QueryClient());
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(container.textContent).not.toContain("Reject everything pending");
+  expect(container.querySelector(".border-status-failed")).toBeNull();
+});
+
+it("renders the installation-wide rejection as a flat section after the groups and history", async () => {
+  apiMocks.fetchApprovals.mockResolvedValue({ items: [approval] });
+  await renderUpdates(new QueryClient());
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  const zone = [...container.querySelectorAll("section")].find(
+    (section) => section.querySelector("h2")?.textContent === "Reject everything pending",
+  )!;
+  expect(zone.className).not.toMatch(/\brounded-lg\b|\bborder-status-failed\b/);
+  const order = container.textContent ?? "";
+  expect(order.indexOf("Approval history")).toBeLessThan(order.indexOf("Reject everything pending"));
+  expect(order.indexOf("Needs decision")).toBeLessThan(order.indexOf("Approval history"));
+});
+
+it("keeps the installation-wide rejection, and its receipt, after this page's decisions clear", async () => {
+  apiMocks.fetchApprovals.mockResolvedValue({ items: [approval] });
+  const client = new QueryClient();
+  await renderUpdates(client);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(container.textContent).toContain("Reject everything pending");
+  // A successful bulk rejection re-reads the Inbox, and this workspace's decisions empty out.
+  inboxMock.result = {
+    data: { ...projection, items: [] },
+    isLoading: false,
+    isError: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  };
+  await renderUpdates(client);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(container.textContent).toContain("Reject everything pending");
+});
+
 it("lets operators disable single-letter shortcuts", async () => {
   await renderUpdates(new QueryClient());
   // Shortcut help and the switch sit behind the header's keyboard disclosure (IN-10, IN-18).
@@ -1023,8 +1078,6 @@ describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN
     await settle();
     expect(document.activeElement?.textContent).toBe("Deny");
     await act(async () => (document.activeElement as HTMLButtonElement).click());
-    const confirm = [...document.body.querySelectorAll("button")].find((b) => b.textContent === "Confirm deny")!;
-    await act(async () => confirm.click());
     await vi.waitFor(() => expect(announcer()).toContain("Decision recorded: Denied"));
     await vi.waitFor(() =>
       expect(document.activeElement?.closest("[data-inbox-row]")?.getAttribute("data-inbox-row")).toBe(

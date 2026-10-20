@@ -493,7 +493,7 @@ it("uses the real Library decision portal then replaces its pending decision rec
     vi.mocked(fetchApprovalReplay).mockResolvedValue(running);
     return { ...running, replay: running };
   });
-  await click("Review approval");
+  await click("Review danger approval");
   await click("Approve once");
   expect(resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
   await vi.waitFor(() =>

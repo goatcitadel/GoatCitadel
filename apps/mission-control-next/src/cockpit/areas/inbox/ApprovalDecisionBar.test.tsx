@@ -43,7 +43,16 @@ const button = (label: string) =>
     (entry) => !entry.closest('[aria-hidden="true"]') && entry.textContent === label,
   )!;
 
-it("denies with a neutral secondary button and confirms the deny as primary, because denying is safe", async () => {
+const renderBar = async (record: ApprovalRequest) =>
+  act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ApprovalDecisionBar approval={record} workspaceId="default" onResolved={vi.fn()} onInvalidated={vi.fn()} />
+      </QueryClientProvider>,
+    ),
+  );
+
+it("denies in one neutral click, because denying is the safe choice", async () => {
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -54,8 +63,28 @@ it("denies with a neutral secondary button and confirms the deny as primary, bec
   const deny = button("Deny");
   expect(deny.className).toContain("bg-raised");
   expect(deny.className).not.toContain("text-status-failed");
-  expect(button("Review approval").className).toContain("text-status-failed");
+  expect(button("Review danger approval").className).toContain("text-status-failed");
+  api.resolveApproval.mockResolvedValue({ approval: { ...approval, status: "rejected" }, effects: [] });
   await act(async () => deny.click());
-  expect(button("Confirm deny").className).toContain("bg-accent");
-  expect(api.resolveApproval).not.toHaveBeenCalled();
+  expect(document.body.querySelector("[role=dialog]")).toBeNull();
+  expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "reject");
+});
+
+it("shows Expired before the missing-preview message", async () => {
+  await renderBar({ ...approval, preview: {}, expiresAt: "2020-01-01T00:00:00Z" });
+  expect(document.body.textContent).toContain("has expired and can no longer be decided");
+  expect(document.body.textContent).not.toContain("can't be decided yet");
+});
+
+it("treats a malformed expiresAt as not expired, as the list does", async () => {
+  await renderBar({ ...approval, expiresAt: "not-a-date" });
+  expect(button("Deny")).toBeDefined();
+  expect(document.body.textContent).not.toContain("has expired");
+});
+
+it("leaves the expiry to the surrounding view and states the disclaimer once", async () => {
+  await renderBar({ ...approval, expiresAt: "2099-01-01T00:00:00Z" });
+  const text = document.body.textContent ?? "";
+  expect(text).not.toContain("Expiry:");
+  expect(text.split(/does not prove the action ran/).length - 1).toBe(1);
 });

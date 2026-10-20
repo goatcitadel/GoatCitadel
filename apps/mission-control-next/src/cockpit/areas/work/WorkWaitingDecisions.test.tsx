@@ -51,3 +51,35 @@ it("shows decision source failures without treating them as no decisions", async
   act(() => renderer.unmount());
   state.isError = false;
 });
+it("leaves expired approvals out of Waiting on your decision, as Inbox does", async () => {
+  state.data = {
+    workspaceId: "default",
+    counts: { needs_decision: { complete: true } },
+    items: [
+      {
+        id: "old",
+        group: "needs_decision",
+        title: "Expired write",
+        source: { runId: "run-old" },
+        href: "/inbox?approvalId=old",
+        expiresAt: "2020-01-01T00:00:00Z",
+      },
+      {
+        id: "live",
+        group: "needs_decision",
+        title: "Live write",
+        source: { runId: "run-live" },
+        href: "/inbox?approvalId=live",
+        expiresAt: "2099-01-01T00:00:00Z",
+      },
+    ],
+  };
+  let renderer!: ReturnType<typeof create>;
+  await act(async () => {
+    renderer = create(<WorkWaitingDecisions workspaceId="default" />);
+  });
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain("Live write");
+  expect(text).not.toContain("Expired write");
+  act(() => renderer.unmount());
+});

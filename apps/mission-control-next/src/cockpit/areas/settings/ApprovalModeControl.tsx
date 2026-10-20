@@ -1,4 +1,5 @@
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { ShieldAlert } from "lucide-react";
 import {
   describeToolApprovalMode,
   describeToolApprovalModeHelp,
@@ -144,7 +145,7 @@ export function ApprovalModeEditor({
           ) : null}
           <Button
             className="mt-3"
-            variant={draft.value === "bypass" ? "danger" : "primary"}
+            variant="primary"
             disabled={!control.canSave || Boolean(review)}
             onClick={() => void control.requestSave()}
           >
@@ -219,11 +220,12 @@ export function ApprovalModeEditor({
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
-            variant="danger"
+            variant="primary"
             loading={control.busy}
             disabled={!control.reviewCurrent}
             onClick={() => void control.confirm()}
           >
+            <ShieldAlert aria-hidden="true" className="size-4 shrink-0" />
             Skip normal prompts
           </Button>
           <Button disabled={control.busy} onClick={() => control.setReview(null)}>

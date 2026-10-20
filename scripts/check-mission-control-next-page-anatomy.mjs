@@ -42,7 +42,7 @@ export const ANATOMY_RULES = [
   },
   {
     id: "card-surface",
-    budget: 19,
+    budget: 18,
     help: "make the page the only card; use ui/Section for sub-sections",
     // Card containers: a large radius with a border. Controls (inputs, buttons, chips) use rounded-md and stay out.
     count: (_relative, contents) =>

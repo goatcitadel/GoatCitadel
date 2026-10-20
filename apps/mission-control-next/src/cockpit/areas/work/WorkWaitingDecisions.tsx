@@ -1,5 +1,6 @@
 import { useOperatorInbox } from "../../data/use-operator-inbox";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { inboxViewGroup } from "../inbox/inbox-triage";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 /** Shows only decisions the Inbox links to a run; never infer approvals from a run's waiting status. */
@@ -7,7 +8,8 @@ export function WorkWaitingDecisions({ workspaceId }: { workspaceId: string }) {
   const inbox = useOperatorInbox(workspaceId);
   const decisions =
     !inbox.isError && inbox.data?.workspaceId === workspaceId
-      ? inbox.data.items.filter((item) => item.group === "needs_decision" && item.source.runId)
+      ? // Expired approvals can no longer be decided; Inbox lists them under Expired (WK-N06).
+        inbox.data.items.filter((item) => inboxViewGroup(item, Date.now()) === "needs_decision" && item.source.runId)
       : [];
   const empty = !inbox.isError && Boolean(inbox.data) && !decisions.length;
   // Nothing waiting collapses to one line; the Inbox caveat only matters while decisions are listed or checked.

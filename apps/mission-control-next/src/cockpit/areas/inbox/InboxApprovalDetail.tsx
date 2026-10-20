@@ -278,9 +278,6 @@ export function InboxApprovalDetail({
               }
             />
           ) : null}
-          <p className="text-xs text-fg-muted">
-            This is the current approval record. A decision alone does not prove its action ran.
-          </p>
         </>
       ) : null}
     </section>

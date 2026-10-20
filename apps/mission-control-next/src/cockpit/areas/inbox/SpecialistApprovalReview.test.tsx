@@ -360,7 +360,7 @@ it("keeps nuclear confirmation input through an observation-only background refr
   api.replay.mockResolvedValue(observed(reviewed, "fresh").replay);
   api.decide.mockResolvedValue({ approval: { ...nuclear, status: "approved" }, effects: [] });
   await render(reviewed, nuclear);
-  await click("Review approval");
+  await click("Review nuclear approval");
   const input = document.querySelector<HTMLInputElement>('[role="dialog"] input')!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "approve");
