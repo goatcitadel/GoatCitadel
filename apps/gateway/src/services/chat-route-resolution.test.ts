@@ -1,3 +1,4 @@
+import { describeClaudeCodeCliLoginGuidance } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   createRoutingDecisionFingerprint,
@@ -945,5 +946,68 @@ describe("chat-route-resolution citadel ward route_local", () => {
     expect(descriptor.wardReasonCode).toBeUndefined();
     expect(descriptor.wardCitadelId).toBeUndefined();
     expect(withSessionReader.resolveSessionWorkspaceId).not.toHaveBeenCalled();
+  });
+});
+
+describe("chat-route-resolution Claude Code CLI login readiness", () => {
+  /** A Gateway that just restarted: the `claude auth status` probe has not run, so the
+   * provider projects `claude_cli_not_probed` until `ensureProviderReadiness` runs it. */
+  function coldCliHost(probe: { status: "ready" | "missing"; reasonCode: string }) {
+    const base = createHost();
+    let probed: typeof probe | undefined;
+    const ensureProviderReadiness = vi.fn(async (providerId: string | undefined) => {
+      if (providerId === "claude-code-cli") probed = probe;
+    });
+    const getRuntimeConfig = vi.fn(() => ({
+      activeProviderId: "claude-code-cli",
+      activeModel: "claude-sonnet-4-6",
+      providers: [
+        {
+          providerId: "claude-code-cli",
+          label: "Claude Code CLI (local login)",
+          defaultModel: "claude-sonnet-4-6",
+          baseUrl: "https://api.anthropic.com/v1",
+          authMode: "claude-code-cli-login",
+          authReadiness: { reasonCode: probed?.reasonCode ?? "claude_cli_not_probed" },
+          hasApiKey: probed?.status === "ready",
+        },
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          defaultModel: "gpt-5.4-mini",
+          hasApiKey: true,
+          baseUrl: "https://api.openai.com/v1",
+        },
+      ],
+    }));
+    return { ...base, llmService: { ...base.llmService, getRuntimeConfig, ensureProviderReadiness } };
+  }
+
+  it("probes a cold-start signed-in CLI before judging the route, so it is not blocked", async () => {
+    const host = coldCliHost({ status: "ready", reasonCode: "claude_cli_logged_in" });
+    const result = await preflightChatRoute(host as never, "session-1", { action: "send" });
+    expect(host.llmService.ensureProviderReadiness).toHaveBeenCalledWith("claude-code-cli");
+    expect(host.llmService.ensureProviderReadiness.mock.contexts).toEqual([host.llmService]);
+    expect(result).toMatchObject({
+      effectiveProviderId: "claude-code-cli",
+      effectiveModel: "claude-sonnet-4-6",
+      runtimeClass: "cloud",
+      blockedReason: undefined,
+    });
+  });
+
+  it("tells a not-signed-in CLI to sign in with claude instead of adding an API key", async () => {
+    const host = coldCliHost({ status: "missing", reasonCode: "claude_cli_logged_out" });
+    const result = await preflightChatRoute(host as never, "session-1", { action: "send" });
+    expect(result.blockedReason).toBe(describeClaudeCodeCliLoginGuidance("claude_cli_logged_out"));
+    expect(result.blockedReason).toContain("sign in with /login");
+    expect(result.blockedReason).not.toContain("API key");
+  });
+
+  it("does not probe the CLI for a route on another provider", async () => {
+    const host = coldCliHost({ status: "ready", reasonCode: "claude_cli_logged_in" });
+    const result = await preflightChatRoute(host as never, "session-1", { action: "send", providerId: "openai" });
+    expect(host.llmService.ensureProviderReadiness).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ effectiveProviderId: "openai", blockedReason: undefined });
   });
 });
