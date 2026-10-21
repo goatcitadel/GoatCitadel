@@ -31,6 +31,10 @@ const DEDICATED_BROWSER_PROOFS = Object.freeze({
     "surface-regression.settings-hooks",
     "The route-specific Chromium scenario verifies that the governed Hooks surface renders from canonical Gateway state.",
   ),
+  "route.settings-web-search.web-search-settings-governed-save": dedicated(
+    "surface-regression.settings-web-search",
+    "The route-specific Chromium scenario verifies that Web & Search renders Firecrawl, search engine, and key status from canonical Gateway state.",
+  ),
 });
 
 const SUPPLEMENTAL_ACTION_PROOFS = Object.freeze({
@@ -1001,9 +1005,11 @@ const STEPS = [
     "settings-governance-runtime-integrations",
     "route.settings-integrations.sandbox-destination",
     "settings-integrations",
-    [clickPattern("Verification sandbox bridge"),
+    [
+      clickPattern("Verification sandbox bridge"),
       click("Actions"),
-      text("Read Sample"), click("Run"),
+      text("Read Sample"),
+      click("Run"),
       confirm("Run reviewed action"),
       text("fixture bridge ok"),
     ],
