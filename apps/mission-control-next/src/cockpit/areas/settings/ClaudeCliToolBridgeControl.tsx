@@ -1,4 +1,6 @@
+import { useQuery } from "@tanstack/react-query";
 import type { ChangePlanRecord } from "@goatcitadel/contracts";
+import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { Button } from "../../ui/Button";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
@@ -35,8 +37,13 @@ const matchesPlan = (plan: ChangePlanRecord, submitted: boolean) =>
   plan.target.ownerId === "runtime_settings";
 
 export function ClaudeCliToolBridgeControl() {
-  const governed = useGovernedRuntimeSetting<boolean>({
+  const query = useQuery({
     queryKey: ["system", "settings-claude-cli-tool-bridge"],
+    queryFn: fetchSettings,
+    refetchInterval: 60_000,
+  });
+  const governed = useGovernedRuntimeSetting<boolean>({
+    settings: query,
     draftKey: "features:system:claude-cli-tool-bridge",
     draftLabel: "Claude Code CLI tools",
     recovery: { path: "/settings/models", anchor: CLAUDE_CLI_TOOL_BRIDGE_ANCHOR },

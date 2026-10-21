@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import type { UseQueryResult } from "@tanstack/react-query";
 import type { ChangePlanRecord } from "@goatcitadel/contracts";
 import { fetchSettings, isApiRequestError, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -20,9 +20,12 @@ export type GovernedSettingNotice = { tone: "done" | "waiting" | "failed"; messa
  * The save lifecycle shared by single-value runtime Settings controls: a session draft over the saved
  * revision, a re-read before the write, the Gateway change plan (receipt, approval, continuation), and a
  * lock after a write whose outcome is unknown. Each control supplies only its value, patch and copy.
+ *
+ * The control owns the settings query, so its literal key stays visible to the settings
+ * reader inventory (`SETTINGS_READER_KEYS`), which refreshes it after a settings change.
  */
 export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(options: {
-  queryKey: readonly unknown[];
+  settings: UseQueryResult<RuntimeSettingsResponse>;
   draftKey: string;
   draftLabel: string;
   recovery: { path: string; anchor: string };
@@ -39,7 +42,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
   parameters.delete("shell");
   parameters.delete("shellScope");
   const recoveryHref = `${options.recovery.path}${parameters.size ? `?${parameters}` : ""}#${options.recovery.anchor}`;
-  const settings = useQuery({ queryKey: options.queryKey, queryFn: fetchSettings, refetchInterval: 60_000 });
+  const { settings } = options;
   const saved = settings.data ? options.read(settings.data) : undefined;
   const current = saved ?? options.fallback;
   const ready = Boolean(

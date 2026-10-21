@@ -1,3 +1,5 @@
+import { useQuery } from "@tanstack/react-query";
+import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { Button } from "../../ui/Button";
 import { Field } from "../../ui/Field";
@@ -30,8 +32,13 @@ function isBudgetMode(value: unknown): value is BudgetMode {
 }
 
 export function BudgetModeControl() {
-  const governed = useGovernedRuntimeSetting<BudgetMode>({
+  const query = useQuery({
     queryKey: ["system", "settings-budget-mode"],
+    queryFn: fetchSettings,
+    refetchInterval: 60_000,
+  });
+  const governed = useGovernedRuntimeSetting<BudgetMode>({
+    settings: query,
     draftKey: "budget:system:mode",
     draftLabel: "Budget preference",
     recovery: { path: "/settings/safety", anchor: "budget-mode" },
