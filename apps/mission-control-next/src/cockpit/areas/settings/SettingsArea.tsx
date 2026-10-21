@@ -1,10 +1,15 @@
 import { Suspense, useMemo, useState } from "react";
-import { ArrowRight, Search } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowRight, RefreshCw, Search } from "lucide-react";
+import { fetchOnboardingState } from "@goatcitadel/mission-control-shared/api/client";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { AreaHeader, AreaTabsProvider } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
+import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
+import { cockpitInputClass } from "../../ui/input-class";
+import { projectFirstRunState } from "./first-run-state";
 import { isModifiedClick } from "../../lib/modified-click";
 import { buildSettingsIndex, searchSettingsPages, type SettingsIndexEntry } from "./settings-index";
 import { SettingsSectionTabs, selectedSettingsSection, useSettingsSectionHash } from "./SettingsSectionTabs";
@@ -72,6 +77,10 @@ export function SettingsArea() {
   const selectedSection = selectedSettingsSection(page, rest[0], hash);
   const searched = useMemo(() => searchSettingsPages(DISCOVERABLE_PAGES, query), [query]);
   const searching = Boolean(query.trim());
+  const queryClient = useQueryClient();
+  // Get started stays in the header only until the first answer is verified (ST-N05); unknown progress keeps it.
+  const onboarding = useQuery({ queryKey: ["system", "onboarding"], queryFn: fetchOnboardingState });
+  const setupUnfinished = !onboarding.data || !projectFirstRunState(onboarding.data).firstResponseVerified;
 
   const goTo = (href: string) => {
     setQuery("");
@@ -221,20 +230,38 @@ export function SettingsArea() {
           onFocus={(event) => preloadPageTab(event.target)}
         >
           <AreaHeader
-            title="Settings"
-            description="Find a setting, or review the controls available in this cockpit."
+            title={searching ? "Settings" : page.label}
+            description="Find a setting, or change the ones on this page."
             actions={
-              <a
-                href="/settings/first-run"
-                onClick={(event) => {
-                  if (isModifiedClick(event)) return;
-                  event.preventDefault();
-                  navigate("/settings/first-run");
-                }}
-                className="text-sm font-medium text-accent hover:underline"
-              >
-                Open three-step first-run setup
-              </a>
+              <>
+                <label className="relative flex w-full min-w-0 items-center sm:w-64">
+                  <Search aria-hidden="true" className="pointer-events-none absolute left-3 size-4 text-fg-muted" />
+                  <span className="sr-only">Search settings</span>
+                  <input
+                    type="search"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Search settings"
+                    className={`${cockpitInputClass} w-full pl-9`}
+                  />
+                </label>
+                {setupUnfinished ? (
+                  <a
+                    href="/settings/first-run"
+                    onClick={(event) => {
+                      if (isModifiedClick(event)) return;
+                      event.preventDefault();
+                      navigate("/settings/first-run");
+                    }}
+                    className="inline-flex min-h-9 items-center rounded-md bg-accent px-3.5 text-base font-medium text-accent-ink hover:bg-accent-hover"
+                  >
+                    Get started
+                  </a>
+                ) : null}
+                <Button onClick={() => void queryClient.invalidateQueries()}>
+                  <RefreshCw aria-hidden="true" className="size-4" /> Refresh
+                </Button>
+              </>
             }
           />
         </div>
@@ -246,17 +273,6 @@ export function SettingsArea() {
           />
         ) : (
           <>
-            <label className="flex min-h-10 max-w-xl items-center gap-2 rounded-md border border-line bg-raised px-3 focus-within:border-accent">
-              <Search aria-hidden="true" className="size-4 text-fg-muted" />
-              <span className="sr-only">Search settings</span>
-              <input
-                type="search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search settings"
-                className="min-w-0 flex-1 self-stretch bg-transparent text-sm text-fg outline-none placeholder:text-fg-muted"
-              />
-            </label>
             {searching && searched.length === 0 ? (
               <EmptyState title="No matching settings" description="Try a different name or topic." />
             ) : null}

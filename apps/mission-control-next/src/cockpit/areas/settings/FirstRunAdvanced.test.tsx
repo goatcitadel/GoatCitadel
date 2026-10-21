@@ -54,7 +54,7 @@ async function render() {
   );
 }
 async function open() {
-  await click("Optional bootstrap defaults");
+  await click("Change installation defaults");
   await vi.waitFor(() => expect(button("Review defaults").disabled).toBe(false));
 }
 beforeEach(() => {
@@ -95,7 +95,7 @@ afterEach(() => {
 describe("native advanced first-run disclosure", () => {
   it("keeps advanced owners and reads out of the primary initial flow", async () => {
     await render();
-    expect(button("Optional bootstrap defaults").getAttribute("aria-expanded")).toBe("false");
+    expect(button("Change installation defaults").getAttribute("aria-expanded")).toBe("false");
     // The demo moved to step 1's "Try the demo" choice.
     expect(button("Explore sample records")).toBeUndefined();
     expect(api.fetchSettings).not.toHaveBeenCalled();
@@ -190,4 +190,22 @@ describe("first-run verification values", () => {
       expect(container.textContent).not.toContain(raw);
     }
   });
+});
+
+it("offers only the safe approval rules in installation defaults (ST-R04)", async () => {
+  await render();
+  await open();
+  const values = [...document.querySelectorAll<HTMLOptionElement>("option")].map((option) => option.value);
+  expect(values).not.toContain("bypass");
+});
+
+it("shows a saved prompt bypass as the current rule instead of a safe one it is not (ST-R04)", async () => {
+  state = { ...state, settings: { ...state.settings, toolApprovalMode: "bypass" } };
+  await render();
+  await open();
+  const select = document.querySelector<HTMLSelectElement>("select")!;
+  const selected = select.options[select.selectedIndex]!;
+  expect(selected.value).toBe("bypass");
+  expect(selected.disabled).toBe(true);
+  expect(selected.textContent).toContain("current");
 });

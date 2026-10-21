@@ -9,6 +9,15 @@ import { buildSettingsIndex } from "./settings-index";
 import { selectedSettingsSection } from "./SettingsSectionTabs";
 
 const owner = vi.hoisted(() => ({ mounted: vi.fn(), unmounted: vi.fn() }));
+const onboarding = vi.hoisted(() => ({ verified: false }));
+vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client")>()),
+  fetchOnboardingState: vi.fn(async () => ({
+    settings: { llm: { activeProviderId: "p", activeModel: "m" }, toolApprovalMode: "approve_risky" },
+    setupReadiness: { items: [{ id: "provider", status: "ready" }] },
+    firstTask: { status: onboarding.verified ? "verified" : "pending" },
+  })),
+}));
 const catalog = vi.hoisted(() => ({ read: vi.fn(async () => ({ items: [], issues: [], callableKnown: false })) }));
 vi.mock("../library/capability-catalog", () => ({ loadCapabilityCatalog: catalog.read }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
@@ -112,6 +121,50 @@ afterEach(() => {
   queryClient.clear();
   container.remove();
   window.history.replaceState(null, "", "/");
+});
+
+describe("Settings page anatomy (ST-N01, ST-N02, ST-N05, ST-N18)", () => {
+  it.each([
+    ["/settings/general", "General"],
+    ["/settings/models", "Models"],
+  ])("titles %s with its own page name", async (path, title) => {
+    await render(path);
+    await vi.waitFor(() => expect(container.querySelector("h1")?.textContent).toBe(title));
+  });
+  it("renders no section tablist on a page with one section", async () => {
+    await render("/settings/access");
+    await vi.waitFor(() => expect(container.textContent).toContain("Access owner"));
+    expect(container.querySelector('[role="tablist"][aria-label$=" sections"]')).toBeNull();
+  });
+  it("keeps the settings search in the header actions", async () => {
+    await render("/settings/general");
+    const search = container.querySelector<HTMLInputElement>('input[type="search"]');
+    expect(search?.closest("header")).not.toBeNull();
+  });
+  it("offers Get started in the header only while setup is unfinished", async () => {
+    onboarding.verified = false;
+    await render("/settings/general");
+    await vi.waitFor(() =>
+      expect([...container.querySelectorAll("header a")].map((link) => link.textContent)).toContain("Get started"),
+    );
+    act(() => root.unmount());
+    root = createRoot(container);
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    onboarding.verified = true;
+    await render("/settings/general");
+    await vi.waitFor(() => expect(container.textContent).toContain("Appearance owner"));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect([...container.querySelectorAll("header a")].map((link) => link.textContent)).not.toContain("Get started");
+    expect(container.textContent).not.toContain("Open three-step first-run setup");
+  });
+  it("does not make a section panel a tab stop", async () => {
+    await render("/settings/general");
+    await vi.waitFor(() => expect(container.querySelector('[role="tabpanel"]')).not.toBeNull());
+    for (const panel of container.querySelectorAll('[role="tabpanel"]'))
+      expect(panel.getAttribute("tabindex")).toBe("-1");
+  });
 });
 
 describe("Settings section tabs", () => {
@@ -273,13 +326,15 @@ describe("Settings section tabs", () => {
       window.history.replaceState(null, "", `/settings/${page.id}?shell=cockpit`);
       await act(async () => window.dispatchEvent(new PopStateEvent("popstate")));
       await act(async () => root.render(settingsView()));
+      const discoverable = page.entries.filter((entry) => entry.discoverable);
+      // A page with one section shows no section tabs at all (ST-N02).
       expect([...container.querySelectorAll('[role="tab"]')].map((item) => item.textContent)).toEqual(
-        page.entries
-          .filter((entry) => entry.discoverable)
-          .map(
-            (entry) =>
-              `${entry.tabLabel ?? entry.label}${entry.releaseStatus === "experimental" ? " · Experimental" : ""}`,
-          ),
+        discoverable.length <= 1
+          ? []
+          : discoverable.map(
+              (entry) =>
+                `${entry.tabLabel ?? entry.label}${entry.releaseStatus === "experimental" ? " · Experimental" : ""}`,
+            ),
       );
     }
     expect(selectedSettingsSection(pages.find((page) => page.id === "safety")!, "safety", "approval-mode")).toBe(

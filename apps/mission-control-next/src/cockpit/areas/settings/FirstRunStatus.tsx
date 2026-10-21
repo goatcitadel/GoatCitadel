@@ -76,7 +76,15 @@ export function FirstRunStatus() {
           </li>
         ))}
       </ol>
-      <div>{link}</div>
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Once setup is recorded the last step happens in Chat, so link there first. */}
+        {state.completed && current !== -1 ? (
+          <NativeOwnerLink href="/chat" scope="first-run" className="text-sm font-medium text-accent hover:underline">
+            Open Chat
+          </NativeOwnerLink>
+        ) : null}
+        {link}
+      </div>
     </div>
   );
 }

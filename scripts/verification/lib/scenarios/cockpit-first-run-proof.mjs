@@ -93,7 +93,7 @@ export async function runCockpitFirstRunGuardProof({ context, stack, requestJson
             });
             await page.goto(`${stack.uiUrl}/settings/first-run?shell=cockpit`, { waitUntil: "domcontentloaded" });
             const area = page.getByRole("region", { name: "First-run setup", exact: true });
-            await area.getByRole("heading", { name: "Your first answer", exact: true }).waitFor({ timeout: 30_000 });
+            await area.getByRole("heading", { name: "Get started", exact: true }).waitFor({ timeout: 30_000 });
             const navigationBaseline = navigations;
             assert.equal(
               await area.getByRole("button", { name: "Finish setup and open Chat", exact: true }).isDisabled(),
@@ -138,7 +138,7 @@ export async function runCockpitFirstRunGuardProof({ context, stack, requestJson
             assert.equal(intercepted, 1);
             await capture("unknown");
             await area.getByRole("button", { name: "Exit setup", exact: true }).click();
-            await page.getByRole("link", { name: "Open three-step first-run setup", exact: true }).click();
+            await page.getByRole("link", { name: "Get started", exact: true }).click();
             await area.getByRole("alert").filter({ hasText: "Setup completion is uncertain" }).waitFor();
             assert.equal(await finish.isDisabled(), true);
             assert.equal(navigations, navigationBaseline, "First-run remount reloaded the document and lost the lock.");

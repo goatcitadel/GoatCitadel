@@ -26,12 +26,12 @@ export function NotificationRoutingSettings({
   const s = useNotificationRouting(workspaceId, channels);
   const [limit, setLimit] = useState(20);
   return (
-    <section aria-label="Notification routing" className="min-w-0 space-y-4 rounded-md border border-line p-4">
+    <section aria-label="Notification routing" className="min-w-0 space-y-4">
       <header>
         <h3 className="text-md font-semibold">Notification routing</h3>
         <p className="mt-1 text-sm text-fg-secondary">
-          Workspace-owned destinations and rules. Test sends contact the selected destination only after explicit
-          review. Normal rules may send matching future events.
+          Notification destinations and rules for this workspace. Changes and test sends are saved after you review
+          them; active rules send matching future events.
         </p>
       </header>
       {s.loading ? (

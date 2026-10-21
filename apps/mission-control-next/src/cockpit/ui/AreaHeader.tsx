@@ -50,7 +50,10 @@ export function AreaHeader({
           {description ? <p className="mt-1 max-w-3xl text-sm text-fg-secondary">{description}</p> : null}
           {children}
         </div>
-        {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+        {/* min-w-0 max-w-full: a wide action row (search, links, buttons) wraps instead of overflowing a phone. */}
+        {actions ? (
+          <div className="flex min-w-0 max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div>
+        ) : null}
       </div>
       {area ? (
         <OverflowTabs label={area.label} tabs={area.tabs} current={area.current} navigate={area.navigate} />

@@ -65,8 +65,14 @@ export function FirstRunDefaults({ workspaceId }: { workspaceId: string }) {
               control.edit({ ...value, toolApprovalMode: normalizeToolApprovalMode(event.target.value) })
             }
           >
-            {TOOL_APPROVAL_MODE_OPTIONS.map((mode) => (
-              <option key={mode} value={mode} disabled={mode === "bypass" && control.restricted}>
+            {/* A saved bypass stays visible as the current rule, but this page only offers rules that keep prompts. */}
+            {value.toolApprovalMode === "bypass" ? (
+              <option value="bypass" disabled>
+                {describeToolApprovalMode("bypass")} (current, choose a safe rule to change it)
+              </option>
+            ) : null}
+            {TOOL_APPROVAL_MODE_OPTIONS.filter((mode) => mode !== "bypass").map((mode) => (
+              <option key={mode} value={mode}>
                 {describeToolApprovalMode(mode)}
               </option>
             ))}

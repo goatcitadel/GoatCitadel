@@ -59,3 +59,10 @@ it("renders no tab row outside an area and keeps sections and metrics flat", asy
   expect(section.getAttribute("aria-labelledby")).toBe(section.querySelector("h2")!.id);
   expect(container.querySelector('dl[aria-label="Spend summary"] dt')?.textContent).toBe("Cost");
 });
+
+it("lets the actions row shrink and wrap inside a phone-width header", async () => {
+  await act(async () => root.render(<AreaHeader title="Settings" actions={<button type="button">Refresh</button>} />));
+  const actions = container.querySelector("button")!.parentElement!;
+  expect(actions.className).toContain("min-w-0");
+  expect(actions.className).toContain("max-w-full");
+});

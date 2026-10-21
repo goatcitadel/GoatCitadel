@@ -67,6 +67,15 @@ export function SettingsSectionTabs({
       ?.querySelector('[role="tablist"] [data-state="active"]')
       ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [value]);
+  const discoverable = page.entries.filter((entry) => entry.discoverable);
+  if (discoverable.length <= 1) {
+    const entry = page.entries.find((item) => item.section === value) ?? discoverable[0] ?? page.entries[0];
+    return entry ? (
+      <section aria-label={entry.tabLabel ?? entry.label} className="mt-3 min-w-0">
+        <SectionBody entry={entry}>{children}</SectionBody>
+      </section>
+    ) : null;
+  }
   return (
     <Tabs
       ref={root}
@@ -105,28 +114,40 @@ export function SettingsSectionTabs({
           key={entry.section}
           value={entry.section}
           forceMount
+          tabIndex={-1}
           hidden={value !== entry.section}
           aria-label={!entry.discoverable ? entry.label : undefined}
           className="min-w-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
         >
-          {visited.current.has(entry.section) ? (
-            <Suspense
-              fallback={
-                <p role="status" className="py-3 text-sm text-fg-muted">
-                  Loading {entry.tabLabel ?? entry.label}…
-                </p>
-              }
-            >
-              {entry.releaseStatus !== "ship" ? (
-                <p className="py-2 text-sm text-fg-secondary">
-                  {describeReleaseSurfaceStatus(entry.releaseStatus)}. {entry.releaseNote}
-                </p>
-              ) : null}
-              {children(entry)}
-            </Suspense>
-          ) : null}
+          {visited.current.has(entry.section) ? <SectionBody entry={entry}>{children}</SectionBody> : null}
         </TabsContent>
       ))}
     </Tabs>
+  );
+}
+
+/** One section's lazy body: its loading line, any release-status note, then the section's controls. */
+function SectionBody({
+  entry,
+  children,
+}: {
+  entry: SettingsIndexEntry;
+  children: (entry: SettingsIndexEntry) => ReactNode;
+}) {
+  return (
+    <Suspense
+      fallback={
+        <p role="status" className="py-3 text-sm text-fg-muted">
+          Loading {entry.tabLabel ?? entry.label}…
+        </p>
+      }
+    >
+      {entry.releaseStatus !== "ship" ? (
+        <p className="py-2 text-sm text-fg-secondary">
+          {describeReleaseSurfaceStatus(entry.releaseStatus)}. {entry.releaseNote}
+        </p>
+      ) : null}
+      {children(entry)}
+    </Suspense>
   );
 }
