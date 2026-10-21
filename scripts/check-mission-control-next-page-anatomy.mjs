@@ -71,7 +71,8 @@ export const ANATOMY_RULES = [
       relative.startsWith("areas/settings/") && relative.endsWith(".tsx")
         ? [...contents.matchAll(/<(?:input|select|textarea)\b([^>]*)>/gs)].filter(
             (match) =>
-              !/\{\.\.\.(?:field|\w*[pP]rops)\b/.test(match[1]) && !/type=["'](?:checkbox|radio|hidden|file)["']/.test(match[1]),
+              !/\{\.\.\.(?:field|\w*[pP]rops)\b/.test(match[1]) &&
+              !/type=["'](?:checkbox|radio|hidden|file)["']/.test(match[1]),
           ).length
         : 0,
   },
