@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ClaudeCliError } from "./claude-code-cli-process.js";
-import { claudeCliUserMessage } from "./claude-code-cli-stream.js";
+import { claudeCliUserMessage, failClaudeCliStep } from "./claude-code-cli-output.js";
 import type { ClaudeCliStubTool } from "./claude-code-cli-mcp-stub.js";
 import { CLAUDE_CLI_MCP_SERVER_NAME, CLAUDE_CLI_MCP_TOOL_PREFIX } from "./claude-code-cli-tool-step.js";
 
@@ -32,11 +32,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function bridgeUnavailable(detail?: string): ClaudeCliError {
-  const base = claudeCliUserMessage("claude_cli_bridge_unavailable");
-  return new ClaudeCliError("claude_cli_bridge_unavailable", detail ? `${base}: ${detail}` : base);
-}
-
 function sha256Hex(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
@@ -48,7 +43,7 @@ export function buildClaudeCliToolManifest(tools: ReadonlyArray<Record<string, u
     const definition = isRecord(tool.function) ? tool.function : undefined;
     const name = definition?.name;
     if (!definition || typeof name !== "string" || name.length === 0) {
-      throw bridgeUnavailable("a tool definition has no name");
+      failClaudeCliStep("claude_cli_bridge_unavailable", "a tool definition has no name");
     }
     const exposedName =
       CLAUDE_CLI_MCP_TOOL_PREFIX.length + name.length > MAX_CLI_TOOL_NAME_LENGTH
@@ -56,7 +51,7 @@ export function buildClaudeCliToolManifest(tools: ReadonlyArray<Record<string, u
         : name;
     const cliName = `${CLAUDE_CLI_MCP_TOOL_PREFIX}${exposedName}`;
     if (cliNameToModelName.has(cliName) || [...cliNameToModelName.values()].includes(name)) {
-      throw bridgeUnavailable("tool names are not unique");
+      failClaudeCliStep("claude_cli_bridge_unavailable", "tool names are not unique");
     }
     cliNameToModelName.set(cliName, name);
     stubTools.push({
