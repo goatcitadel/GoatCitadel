@@ -86,6 +86,7 @@ interface OAuthTokenPayload {
 
 export class OpenAICodexOAuthService {
   private readonly pendingFlows = new Map<string, PendingDeviceFlow>();
+  private readonly inflightRefreshes = new Map<string, Promise<string>>();
   private readonly callbackConfig: OpenAICodexCallbackConfig;
   private callbackServer: Server | null = null;
   private callbackServerStart: Promise<void> | null = null;
@@ -281,6 +282,43 @@ export class OpenAICodexOAuthService {
     if (!credential.expiresAt || credential.expiresAt > Date.now() + OPENAI_CODEX_REFRESH_SKEW_MS) {
       return credential.accessToken;
     }
+    return this.refreshAndPersist(credential, credentialAccount);
+  }
+
+  /**
+   * Refresh after the provider rejected `rejectedAccessToken` as expired, even
+   * when the stored expiry still looks valid (the session can be revoked
+   * upstream). When another caller already rotated the token, the stored
+   * token is returned without a second refresh-token exchange.
+   */
+  public async forceRefreshAccessToken(
+    rejectedAccessToken: string,
+    credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT,
+  ): Promise<string> {
+    const credential = this.readCredential(credentialAccount);
+    if (!credential?.accessToken || !credential.refreshToken || credential.requiresReauth) {
+      throw new Error("OpenAI Codex OAuth is not connected. Connect ChatGPT OAuth in Settings first.");
+    }
+    if (credential.accessToken !== rejectedAccessToken) {
+      return credential.accessToken;
+    }
+    return this.refreshAndPersist(credential, credentialAccount);
+  }
+
+  /** Single-flight per account: concurrent callers share one refresh-token exchange. */
+  private refreshAndPersist(credential: OpenAICodexOAuthCredential, credentialAccount: string): Promise<string> {
+    const inflight = this.inflightRefreshes.get(credentialAccount);
+    if (inflight) {
+      return inflight;
+    }
+    const pending = this.runRefresh(credential, credentialAccount).finally(() => {
+      this.inflightRefreshes.delete(credentialAccount);
+    });
+    this.inflightRefreshes.set(credentialAccount, pending);
+    return pending;
+  }
+
+  private async runRefresh(credential: OpenAICodexOAuthCredential, credentialAccount: string): Promise<string> {
     try {
       const refreshed = await this.refreshCredential(credential);
       this.saveCredential(refreshed, credentialAccount);

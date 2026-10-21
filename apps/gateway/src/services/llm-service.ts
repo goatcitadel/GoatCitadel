@@ -1361,7 +1361,10 @@ export class LlmService {
     }
   }
 
-  private async postTrackedJsonRequest(input: LlmProviderJsonRequestInput): Promise<LlmTrackedJsonDispatch> {
+  private async postTrackedJsonRequest(
+    input: LlmProviderJsonRequestInput,
+    options: { credentialRefreshed?: boolean } = {},
+  ): Promise<LlmTrackedJsonDispatch> {
     const timeoutSignal = AbortSignal.timeout(input.timeoutMs);
     const dispatchAbort = new AbortController();
     const signal = input.signal
@@ -1476,6 +1479,12 @@ export class LlmService {
         ...(requestedOutputTokenCap === undefined ? {} : { logicalRequestedOutputTokenCap: requestedOutputTokenCap }),
         ...(minimumEffectiveOutputTokenCap === undefined ? {} : { minimumEffectiveOutputTokenCap }),
       };
+      if (response.status === 401 && !options.credentialRefreshed && isOpenAICodexProvider(resolved.provider)) {
+        const refreshed = await this.retryAfterOpenAICodexTokenExpiry(input, baseResult);
+        if (refreshed) {
+          return refreshed;
+        }
+      }
       if (
         response.ok ||
         !isOutputCapRecoveryHttpStatus(response.status) ||
@@ -1510,6 +1519,51 @@ export class LlmService {
       rethrowIfProviderNetworkBlocked(error);
       throw error;
     }
+  }
+
+  /**
+   * ChatGPT can revoke a Codex access token before its recorded expiry. On a
+   * `token_expired` 401, force one refresh and resend with the new token. A
+   * failed refresh marks the credential as needing reconnect (inside the OAuth
+   * owner) and leaves the original 401 authoritative.
+   */
+  private async retryAfterOpenAICodexTokenExpiry(
+    input: LlmProviderJsonRequestInput,
+    dispatched: LlmTrackedJsonDispatch,
+  ): Promise<LlmTrackedJsonDispatch | undefined> {
+    let errorText: string;
+    try {
+      errorText = await readProviderErrorBody("OpenAI Codex auth probe", dispatched.response.clone());
+    } catch {
+      return undefined;
+    }
+    const rejectedAccessToken = input.resolved.apiKey;
+    if (!rejectedAccessToken || !isOpenAICodexTokenExpiredError(errorText)) {
+      return undefined;
+    }
+    let accessToken: string;
+    try {
+      accessToken = await this.openAICodexOAuth.forceRefreshAccessToken(rejectedAccessToken);
+    } catch {
+      return undefined;
+    }
+    const expiredError = new Error(`OpenAI Codex access token expired: ${errorText.slice(0, 400)}`);
+    expiredError.name = "ProviderCredentialExpiredError";
+    await dispatched.usage?.fail(expiredError);
+    const usage = dispatched.usage;
+    const retried = await this.postTrackedJsonRequest(
+      {
+        ...input,
+        resolved: { ...input.resolved, apiKey: accessToken },
+        target: { ...input.target, headers: { ...input.target.headers, Authorization: `Bearer ${accessToken}` } },
+        transportAttemptIndex: (dispatched.lastTransportAttemptIndex ?? input.transportAttemptIndex) + 1,
+      },
+      { credentialRefreshed: true },
+    );
+    return {
+      ...retried,
+      priorModelUsageEventIds: [...(usage ? [usage.eventId] : []), ...(retried.priorModelUsageEventIds ?? [])],
+    };
   }
 
   private async retryTrackedOutputCapFailure(
@@ -6742,6 +6796,21 @@ function resolveProviderAuthMode(provider: LlmProviderConfig): LlmProviderConfig
 
 function isOpenAICodexProvider(provider: Pick<LlmProviderConfig, "providerId">): boolean {
   return provider.providerId.trim().toLowerCase() === "openai-codex";
+}
+
+/** ChatGPT reports a stale Codex token as `code: "token_expired"` under `error` or `detail`. */
+function isOpenAICodexTokenExpiredError(errorText: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(errorText);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return false;
+  }
+  const body = parsed as { error?: { code?: unknown }; detail?: { code?: unknown } };
+  return body.error?.code === "token_expired" || body.detail?.code === "token_expired";
 }
 
 function isClaudeCodeOAuthProvider(provider: Pick<LlmProviderConfig, "providerId" | "authMode">): boolean {
