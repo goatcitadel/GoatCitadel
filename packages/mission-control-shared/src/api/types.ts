@@ -627,6 +627,7 @@ export interface RuntimeSettingsResponse {
     chatWorkPassportV1Enabled?: boolean;
     chatRequesterMcpV1Enabled?: boolean;
     chatStaticMcpV1Enabled?: boolean;
+    claudeCliToolBridgeEnabled?: boolean;
     evolutionControlPlaneV1Enabled?: boolean;
     improvementLocalObservationV1Enabled?: boolean;
     improvementModelEvaluationV1Enabled?: boolean;
