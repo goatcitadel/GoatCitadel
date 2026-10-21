@@ -65,6 +65,8 @@ export interface KnowledgeExecutorDeps {
   ): Promise<{ response: Response; finalUrl: string }>;
   resolveExecutionGrantAllowedHosts(request: ToolInvokeRequest, storage?: AsyncStorage): Promise<string[] | undefined>;
   resolveNetworkAllowlist(request: ToolInvokeRequest, config: ToolPolicyConfig): string[];
+  /** Keychain-held Firecrawl key for docs.ingest; the environment variable stays the fallback. */
+  resolveFirecrawlCredential?: () => Promise<string | undefined>;
 }
 
 export function isKnowledgeToolName(toolName: string): boolean {
@@ -572,6 +574,7 @@ async function docsIngest(
     embeddingRuntime,
     networkAllowlist: deps.resolveNetworkAllowlist(request, config),
     sourceAllowlist: await deps.resolveExecutionGrantAllowedHosts(request, storage),
+    resolveFirecrawlCredential: deps.resolveFirecrawlCredential,
     fetchUrl: async (url) => {
       const res = await deps.fetchAllowlisted(
         url,

@@ -37,7 +37,9 @@ function service(overrides: Partial<WebSearchCredentialServiceOptions> = {}) {
     getNetworkAllowlist: () => ["api.firecrawl.dev", "api.search.brave.com"],
     getFirecrawlConfig: () => firecrawlConfig(),
     probeOfficial: vi.fn(async () => ({ ok: true, status: "succeeded" })),
-    assertOfficialTargetAvailable: vi.fn(),
+    withOfficialTargetChange: vi.fn((_targetId, work) =>
+      work(),
+    ) as WebSearchCredentialServiceOptions["withOfficialTargetChange"],
     appendAudit: vi.fn(async () => undefined),
     env: {},
     fetchImpl: vi.fn(async () => new Response(JSON.stringify({ data: { remainingCredits: 480 } }), { status: 200 })),
@@ -129,15 +131,53 @@ describe("WebSearchCredentialService", () => {
     await expect(credentials.checkFirecrawl()).resolves.toMatchObject({ status: "ok", remainingCredits: 480 });
   });
 
-  it("uses the shared Chat availability gate and live probe for Brave", async () => {
-    const assertOfficialTargetAvailable = vi.fn();
+  it("runs Brave changes under the shared Chat owner fence and live probe", async () => {
+    const withOfficialTargetChange = vi.fn((_targetId: string, work: () => Promise<unknown>) => work());
     const probeOfficial = vi.fn(async () => ({ ok: false, status: "unavailable", httpStatus: 401 }));
-    const { credentials, secretStore } = service({ assertOfficialTargetAvailable, probeOfficial });
+    const { credentials, secretStore } = service({
+      withOfficialTargetChange:
+        withOfficialTargetChange as WebSearchCredentialServiceOptions["withOfficialTargetChange"],
+      probeOfficial,
+    });
 
     await expect(credentials.store("search.brave", "brave-bad")).rejects.toThrow("Brave Search rejected the key");
-    expect(assertOfficialTargetAvailable).toHaveBeenCalledWith("search.brave");
+    expect(withOfficialTargetChange).toHaveBeenCalledWith("search.brave", expect.any(Function));
     expect(probeOfficial).toHaveBeenCalledWith("brave", "brave-bad", ["api.firecrawl.dev", "api.search.brave.com"]);
     expect(secretStore.setSecret).not.toHaveBeenCalled();
+  });
+
+  it("does not touch the keychain when the Chat owner fence refuses the change", async () => {
+    const { credentials, secretStore } = service({
+      withOfficialTargetChange: (async () => {
+        throw new Error("Brave Search is being configured from Chat.");
+      }) as WebSearchCredentialServiceOptions["withOfficialTargetChange"],
+    });
+
+    await expect(credentials.store("search.brave", "brave-key")).rejects.toThrow("being configured from Chat");
+    await expect(credentials.clear("search.brave")).rejects.toThrow("being configured from Chat");
+    expect(secretStore.setSecret).not.toHaveBeenCalled();
+    expect(secretStore.deleteSecret).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed audit write without hiding a committed keychain change", async () => {
+    const reportAuditFailure = vi.fn();
+    const { credentials, secretStore } = service({
+      appendAudit: vi.fn(async () => {
+        throw new Error("audit store offline");
+      }),
+      reportAuditFailure,
+    });
+
+    await expect(credentials.store("search.firecrawl", "fc-key")).resolves.toMatchObject({ keychainConfigured: true });
+    expect(secretStore.values.get(FIRECRAWL_ACCOUNT)).toBe("fc-key");
+    expect(reportAuditFailure).toHaveBeenCalledWith(
+      "web_search_credential.stored",
+      "search.firecrawl",
+      expect.any(Error),
+    );
+
+    await expect(credentials.clear("search.firecrawl")).resolves.toMatchObject({ keychainConfigured: false });
+    expect(reportAuditFailure).toHaveBeenCalledTimes(2);
   });
 
   it("clears a keychain key and falls back to the environment", async () => {

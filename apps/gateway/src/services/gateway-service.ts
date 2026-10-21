@@ -1421,9 +1421,17 @@ export class GatewayService {
       getNetworkAllowlist: () => this.config.toolPolicy.sandbox.networkAllowlist,
       getFirecrawlConfig: () => this.config.assistant.web.firecrawl,
       probeOfficial: probeOfficialSearchCredential,
-      assertOfficialTargetAvailable: (targetId) =>
-        this.runtimeConfigurationService.assertConfigurationAvailable(targetId),
+      withOfficialTargetChange: (targetId, work) =>
+        this.runtimeConfigurationService.withSettingsCredentialChange(targetId, work),
       appendAudit: async (payload) => void (await this.storage.audit.append("tool_invocations", payload)),
+      reportAuditFailure: (event, targetId, error) =>
+        this.recordDevDiagnostic({
+          level: "warn",
+          category: "runtime_configuration",
+          event: "web_search_credential.audit_failed_after_keychain_change",
+          message: "A web-search key changed in the OS keychain, but its audit record could not be written.",
+          context: { auditEvent: event, targetId, errorName: error instanceof Error ? error.name : "unknown" },
+        }),
     });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       // Tool-policy approval creation must enter the canonical lifecycle. A

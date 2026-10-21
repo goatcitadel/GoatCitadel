@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { DeploymentProfile, ResearchSearchOfficialProvider } from "@goatcitadel/contracts";
-import { ExternalServiceError, PolicyViolationError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, ExternalServiceError, PolicyViolationError, ValidationError } from "@goatcitadel/contracts";
 import {
   executeOfficialResearchSearch,
   getOfficialSearchCredentialEnvAliases,
@@ -259,6 +259,27 @@ export class RuntimeConfigurationService {
           operatorAction: "Add the exact provider host in Settings, then retry the original Chat request.",
         },
       });
+    }
+  }
+
+  /**
+   * Settings-surface keychain changes for the same target share this owner's lock and fences, so
+   * they cannot interleave with a Chat configuration that is preparing, settling, or reserved.
+   */
+  public async withSettingsCredentialChange<T>(
+    targetId: RuntimeConfigurationTargetId,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const target = requireTarget(targetId);
+    // Checked before queueing too: a pending settlement keeps the lock until Chat settles.
+    await this.assertNoChatConfigurationInFlight(target);
+    const releaseTarget = await this.acquireTargetLock(target.targetId);
+    try {
+      this.assertConfigurationAvailable(target.targetId);
+      await this.assertNoChatConfigurationInFlight(target);
+      return await work();
+    } finally {
+      releaseTarget();
     }
   }
 
@@ -675,6 +696,18 @@ export class RuntimeConfigurationService {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  private async assertNoChatConfigurationInFlight(target: RuntimeConfigurationTarget): Promise<void> {
+    if (
+      this.preparingTargets.has(target.targetId) ||
+      [...this.pendingSettlement.values()].some((pending) => pending.target.targetId === target.targetId) ||
+      (await this.hasBlockingDurableReservation(target.targetId))
+    ) {
+      throw new ConflictError({
+        message: `${target.targetLabel} is being configured from Chat. Finish or cancel that request, then try again.`,
+      });
     }
   }
 

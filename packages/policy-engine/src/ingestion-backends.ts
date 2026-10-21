@@ -60,6 +60,8 @@ export async function ingestDocumentViaBackend(input: {
   embeddingRuntime?: Omit<EmbeddingRuntimeOptions, "purpose">;
   networkAllowlist?: string[];
   sourceAllowlist?: string[];
+  /** Keychain-held Firecrawl key; the configured environment variable stays the fallback. */
+  resolveFirecrawlCredential?: () => Promise<string | undefined>;
 }): Promise<{
   backend: IngestionBackend;
   fetchResult: FetchResult;
@@ -122,6 +124,7 @@ export async function ingestDocumentViaBackend(input: {
     fetchUrl: input.fetchUrl,
     networkAllowlist: input.networkAllowlist ?? [],
     sourceAllowlist: input.sourceAllowlist ?? [],
+    resolveFirecrawlCredential: input.resolveFirecrawlCredential,
   });
   const title =
     optionalString(args.title) ??
@@ -280,6 +283,7 @@ async function fetchDocument(input: {
   fetchUrl: (url: string) => Promise<FetchUrlResult>;
   networkAllowlist: string[];
   sourceAllowlist: string[];
+  resolveFirecrawlCredential?: () => Promise<string | undefined>;
 }): Promise<FetchResult> {
   const args = input.request.args;
   const sourceType = parseIngestionSourceType(args.sourceType);
@@ -332,7 +336,8 @@ async function fetchDocument(input: {
       normalizeFirecrawlApiKeyEnvName(optionalString(args.firecrawlApiKeyEnv)) ??
       normalizeFirecrawlApiKeyEnvName(process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV) ??
       "FIRECRAWL_API_KEY";
-    const firecrawlApiKey = process.env[firecrawlApiKeyEnv]?.trim();
+    const firecrawlApiKey =
+      (await resolveKeychainFirecrawlKey(input.resolveFirecrawlCredential)) ?? process.env[firecrawlApiKeyEnv]?.trim();
     // Allow loopback for the base URL only when it matches the canonical
     // local default (so the bundled Firecrawl docker compose still works).
     let parsedBase: URL;
@@ -549,6 +554,17 @@ async function readCachedDocument(input: {
     };
   }
   return undefined;
+}
+
+async function resolveKeychainFirecrawlKey(
+  resolve: (() => Promise<string | undefined>) | undefined,
+): Promise<string | undefined> {
+  try {
+    return (await resolve?.())?.trim() || undefined;
+  } catch {
+    // A keychain outage keeps the environment fallback and never surfaces a credential value.
+    return undefined;
+  }
 }
 
 function normalizeFetchParser(value: unknown): FetchResult["parser"] | undefined {

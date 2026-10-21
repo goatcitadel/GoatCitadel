@@ -37,9 +37,14 @@ export interface WebSearchCredentialServiceOptions {
     secret: string,
     networkAllowlist: readonly string[],
   ) => Promise<{ ok: boolean; status?: string; httpStatus?: number }>;
-  /** Shared Chat-owner availability gate (keychain, allowlist, deployment profile, pending settlement). */
-  readonly assertOfficialTargetAvailable: (targetId: OfficialTargetId) => void;
+  /**
+   * Runs a Brave or Parallel keychain change under the Chat owner's target lock and fences
+   * (keychain, allowlist, deployment profile, preparing, pending settlement, durable reservation).
+   */
+  readonly withOfficialTargetChange: <T>(targetId: OfficialTargetId, work: () => Promise<T>) => Promise<T>;
   readonly appendAudit?: (payload: Record<string, unknown>) => Promise<void>;
+  /** Called when the keychain changed but its audit record could not be written. */
+  readonly reportAuditFailure?: (event: string, targetId: WebSearchCredentialTargetId, error: unknown) => void;
   readonly env?: NodeJS.ProcessEnv;
   readonly fetchImpl?: typeof fetchAllowlisted;
   readonly now?: () => Date;
@@ -143,7 +148,7 @@ export class WebSearchCredentialService {
 
   public async store(targetId: WebSearchCredentialTargetId, rawSecret: string): Promise<WebSearchCredentialStatus> {
     const secret = normalizeSecret(rawSecret);
-    return await this.withTargetLock(targetId, async () => {
+    return await this.withOwnerLocks(targetId, async () => {
       this.assertKeychainAvailable(targetId);
       await this.assertSecretAccepted(targetId, secret);
       try {
@@ -160,7 +165,7 @@ export class WebSearchCredentialService {
   }
 
   public async clear(targetId: WebSearchCredentialTargetId): Promise<WebSearchCredentialStatus> {
-    return await this.withTargetLock(targetId, async () => {
+    return await this.withOwnerLocks(targetId, async () => {
       if (!this.keychainAvailable()) {
         throw new ExternalServiceError("The OS keychain is unavailable.", {
           targetId,
@@ -205,7 +210,6 @@ export class WebSearchCredentialService {
         { targetId, diagnosticCode: "credential_probe_failed", checkStatus: check.status },
       );
     }
-    this.options.assertOfficialTargetAvailable(targetId);
     const target = describeOfficialSearchTarget(targetId);
     const probe = await this.options.probeOfficial(target.provider, secret, this.options.getNetworkAllowlist());
     if (!probe.ok) {
@@ -286,15 +290,29 @@ export class WebSearchCredentialService {
     return runtimeConfigurationAccount(this.options.installationScopeId, suffix);
   }
 
+  /**
+   * Runs after the keychain changed, so a failed audit write must not report the change as
+   * uncommitted: the owner reports the gap and the committed status stands.
+   */
   private async audit(event: string, targetId: WebSearchCredentialTargetId): Promise<void> {
-    await this.options.appendAudit?.({
-      event,
-      targetId,
-      storage: "os_keychain",
-      scope: "installation",
-      surface: "settings",
-      at: this.now().toISOString(),
-    });
+    try {
+      await this.options.appendAudit?.({
+        event,
+        targetId,
+        storage: "os_keychain",
+        scope: "installation",
+        surface: "settings",
+        at: this.now().toISOString(),
+      });
+    } catch (error) {
+      this.options.reportAuditFailure?.(event, targetId, error);
+    }
+  }
+
+  private async withOwnerLocks<T>(targetId: WebSearchCredentialTargetId, work: () => Promise<T>): Promise<T> {
+    return await this.withTargetLock(targetId, () =>
+      targetId === "search.firecrawl" ? work() : this.options.withOfficialTargetChange(targetId, work),
+    );
   }
 
   private async withTargetLock<T>(targetId: WebSearchCredentialTargetId, work: () => Promise<T>): Promise<T> {

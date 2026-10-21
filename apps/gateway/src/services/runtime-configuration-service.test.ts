@@ -33,6 +33,52 @@ function applyInput(secret = "candidate-secret") {
   };
 }
 
+describe("RuntimeConfigurationService Settings credential fence", () => {
+  function fencedService(overrides: Record<string, unknown> = {}) {
+    return new RuntimeConfigurationService({
+      secretStore: createSecretStore(),
+      installationScopeId: INSTALLATION_SCOPE_ID,
+      networkAllowlist: ["api.search.brave.com"],
+      probe: vi.fn(async () => ({ ok: true, status: "succeeded" })),
+      ...overrides,
+    });
+  }
+
+  it("refuses a Settings change while a Chat configuration awaits settlement, then allows it", async () => {
+    const service = fencedService();
+    await service.configureAndValidate(applyInput());
+    const work = vi.fn(async () => "changed");
+
+    await expect(service.withSettingsCredentialChange("search.brave", work)).rejects.toThrow(
+      "Brave Search is being configured from Chat",
+    );
+    expect(work).not.toHaveBeenCalled();
+
+    await service.finalizeConfiguration("prompt-1");
+    await expect(service.withSettingsCredentialChange("search.brave", work)).resolves.toBe("changed");
+  });
+
+  it("refuses a Settings change while a durable Chat reservation holds the target", async () => {
+    const service = fencedService({ hasBlockingDurableReservation: vi.fn(async () => true) });
+    const work = vi.fn(async () => "changed");
+
+    await expect(service.withSettingsCredentialChange("search.brave", work)).rejects.toThrow(
+      "being configured from Chat",
+    );
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  it("applies the shared availability gate before running the change", async () => {
+    const service = fencedService({ networkAllowlist: [] });
+    const work = vi.fn(async () => "changed");
+
+    await expect(service.withSettingsCredentialChange("search.brave", work)).rejects.toThrow(
+      "explicitly enabled in the network allowlist",
+    );
+    expect(work).not.toHaveBeenCalled();
+  });
+});
+
 describe("RuntimeConfigurationService", () => {
   it("probes before storing and emits only non-secret audit metadata", async () => {
     const secretStore = createSecretStore();

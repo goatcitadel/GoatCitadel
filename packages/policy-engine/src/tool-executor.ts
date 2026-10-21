@@ -284,6 +284,9 @@ const executeKnowledgeFamily = (
     ...(runtimeHooks.prepareEmbeddingUsageDispatch
       ? { prepareEmbeddingUsageDispatch: runtimeHooks.prepareEmbeddingUsageDispatch }
       : {}),
+    ...(runtimeHooks.resolveFirecrawlCredential
+      ? { resolveFirecrawlCredential: runtimeHooks.resolveFirecrawlCredential }
+      : {}),
     assertReadPathAllowedForRequest,
     fetchAllowlisted,
     resolveExecutionGrantAllowedHosts,
