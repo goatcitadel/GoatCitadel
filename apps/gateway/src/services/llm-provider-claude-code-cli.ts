@@ -8,6 +8,7 @@ import {
   type ChatCompletionResponse,
   type ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
+import { logger } from "@goatcitadel/gateway-core";
 import type {
   LlmProviderAdapter,
   LlmProviderAdapterHost,
@@ -55,6 +56,11 @@ const DEFAULT_OVERALL_TIMEOUT_MS = 300_000;
 const IDLE_TIMEOUT_MS = 120_000;
 const AUTH_STATUS_TIMEOUT_MS = 10_000;
 const INVOCATION_CACHE_MS = 60_000;
+// A just-killed CLI tree can briefly hold its cwd open on Windows (EBUSY); retry for ~2 s.
+const RUN_DIR_RM_MAX_RETRIES = 20;
+const RUN_DIR_RM_RETRY_DELAY_MS = 100;
+
+const log = logger.child("llm-provider-claude-code-cli");
 
 /** Injection points for tests and for hosts that pin the CLI location. */
 export interface ClaudeCodeCliRuntimeOptions {
@@ -244,7 +250,7 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
         targetUrl: `${CLAUDE_CODE_CLI_EGRESS_BASE_URL}/messages`,
       });
     } catch (error) {
-      await rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+      await removeRunDir(runDir);
       throw error;
     }
     const accounting = dispatch.usage;
@@ -327,7 +333,7 @@ export const claudeCodeCliProviderAdapter: LlmProviderAdapter = {
     } finally {
       // A consumer that stops early cancels the attempt; the CLI itself is killed by runClaudeCli.
       if (!settled) await accounting?.cancel(new Error("Claude Code CLI stream closed by consumer"));
-      await rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+      await removeRunDir(runDir);
     }
   },
 };
@@ -456,6 +462,24 @@ function isSystemPromptFileRejection(error: unknown): boolean {
     error.reasonCode === "claude_cli_incompatible" &&
     (error.stderrTail ?? "").includes("system-prompt-file")
   );
+}
+
+/** Removes a run's scratch dir; a failure is logged (dir name and error code only) and never thrown. */
+async function removeRunDir(runDir: string): Promise<void> {
+  try {
+    await rm(runDir, {
+      recursive: true,
+      force: true,
+      maxRetries: RUN_DIR_RM_MAX_RETRIES,
+      retryDelay: RUN_DIR_RM_RETRY_DELAY_MS,
+    });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    log.warn("Claude Code CLI run dir cleanup failed", {
+      runDir: path.basename(runDir),
+      code: typeof code === "string" ? code.slice(0, 32) : "unknown",
+    });
+  }
 }
 
 async function mkdtempSafe(root: string): Promise<string> {

@@ -75,6 +75,8 @@ const SHIM_EXTENSIONS = new Set([".cmd", ".bat", ".ps1"]);
 const CLAUDE_CLI_ISOLATION_SETTINGS = JSON.stringify({ disableAllHooks: true });
 const QUEUE_HIGH_WATER = 256;
 const QUEUE_LOW_WATER = 32;
+/** How long cleanup waits for a killed CLI tree to close, so callers can remove its cwd afterwards. */
+export const CLAUDE_CLI_KILL_CLOSE_WAIT_MS = 5000;
 
 export function resolveClaudeCliInvocation(input: {
   env: NodeJS.ProcessEnv | Record<string, string | undefined>;
@@ -277,6 +279,10 @@ export async function* runClaudeCli(input: RunClaudeCliInput): AsyncGenerator<st
   let finished = false;
   let stdoutBuffer = "";
   let stderrTail = "";
+  let markClosed: () => void = () => undefined;
+  const childClosed = new Promise<void>((resolve) => {
+    markClosed = resolve;
+  });
   const push = (item: QueueItem) => {
     if (settled) return;
     if (item.kind !== "line") settled = true;
@@ -339,6 +345,7 @@ export async function* runClaudeCli(input: RunClaudeCliInput): AsyncGenerator<st
   });
   child.on("close", (code: number | null) => {
     closed = true;
+    markClosed();
     const tail = stdoutBuffer.replace(/\r$/, "");
     stdoutBuffer = "";
     if (tail.trim()) push({ kind: "line", line: tail });
@@ -381,5 +388,22 @@ export async function* runClaudeCli(input: RunClaudeCliInput): AsyncGenerator<st
       killed = true;
       killTree(child.pid);
     }
+    // Windows taskkill is fire-and-forget: wait (bounded) for the tree to close so the
+    // caller's cwd cleanup does not race the dying CLI and its stub children.
+    if (killed && !closed) await waitBounded(childClosed, CLAUDE_CLI_KILL_CLOSE_WAIT_MS);
+  }
+}
+
+/** Resolves when promise settles or after ms, whichever comes first; never rejects. */
+async function waitBounded(promise: Promise<void>, ms: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const bound = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+    timer.unref();
+  });
+  try {
+    await Promise.race([promise.catch(() => undefined), bound]);
+  } finally {
+    clearTimeout(timer);
   }
 }

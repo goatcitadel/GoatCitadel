@@ -143,7 +143,9 @@ export interface FakeClaudeCliHarness {
 /** Plays `scripts[n]` for the n-th spawn; spawns past the end answer "hello". */
 export function createFakeClaudeCliHarness(scripts: FakeClaudeCliScript[]): FakeClaudeCliHarness {
   const spawns: FakeClaudeCliSpawnRecord[] = [];
-  const killTree = vi.fn<(pid: number) => void>();
+  const exitsByPid = new Map<number, (code: number | null) => void>();
+  // Like a real tree kill, the killed fake child closes (stdout ends, then "close").
+  const killTree = vi.fn<(pid: number) => void>((pid) => exitsByPid.get(pid)?.(null));
   const spawn = vi.fn<ClaudeCliSpawn>((_command, args) => {
     const emitter = new EventEmitter() as ChildProcess;
     const stdout = new PassThrough();
@@ -165,21 +167,17 @@ export function createFakeClaudeCliHarness(scripts: FakeClaudeCliScript[]): Fake
     };
     spawns.push(spawned);
     const script = scripts[spawns.length - 1] ?? helloScript;
-    setImmediate(() =>
-      script(
-        {
-          stdout,
-          stderr,
-          exit: (code) => {
-            Object.assign(emitter, { exitCode: code });
-            stdout.end();
-            stderr.end();
-            setImmediate(() => emitter.emit("close", code, null));
-          },
-        },
-        spawned,
-      ),
-    );
+    let exited = false;
+    const exit = (code: number | null) => {
+      if (exited) return;
+      exited = true;
+      Object.assign(emitter, { exitCode: code });
+      stdout.end();
+      stderr.end();
+      setImmediate(() => emitter.emit("close", code, null));
+    };
+    exitsByPid.set(emitter.pid as number, exit);
+    setImmediate(() => script({ stdout, stderr, exit }, spawned));
     return emitter;
   });
   const readiness = new ClaudeCodeCliReadiness({
