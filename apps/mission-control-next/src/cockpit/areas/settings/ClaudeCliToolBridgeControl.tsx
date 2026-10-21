@@ -73,8 +73,8 @@ export function ClaudeCliToolBridgeControl() {
             Claude Code CLI: let it use GoatCitadel tools
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
-            Experimental and off by default. When on, Chat turns on the Claude Code CLI provider can ask for GoatCitadel
-            tools.
+            Experimental and on by default. When on, Chat turns on the Claude Code CLI provider can ask for GoatCitadel
+            tools. Turn it off to keep those turns text-only.
           </p>
         </div>
         <Button size="sm" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>

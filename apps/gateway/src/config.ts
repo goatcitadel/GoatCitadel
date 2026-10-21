@@ -1495,7 +1495,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       chatWorkPassportV1Enabled: featuresInput.chatWorkPassportV1Enabled ?? true,
       chatRequesterMcpV1Enabled: featuresInput.chatRequesterMcpV1Enabled ?? false,
       chatStaticMcpV1Enabled: featuresInput.chatStaticMcpV1Enabled ?? false,
-      claudeCliToolBridgeEnabled: featuresInput.claudeCliToolBridgeEnabled ?? false,
+      claudeCliToolBridgeEnabled: featuresInput.claudeCliToolBridgeEnabled ?? true,
       evolutionControlPlaneV1Enabled: featuresInput.evolutionControlPlaneV1Enabled ?? true,
       improvementLocalObservationV1Enabled: featuresInput.improvementLocalObservationV1Enabled ?? true,
       improvementModelEvaluationV1Enabled: featuresInput.improvementModelEvaluationV1Enabled ?? false,
