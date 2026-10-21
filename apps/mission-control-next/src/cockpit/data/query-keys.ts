@@ -53,6 +53,7 @@ export const queryKeys = {
 export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
   ["system", "managed-runtime-settings"],
   ["system", "settings-budget-mode"],
+  ["system", "settings-claude-cli-tool-bridge"],
   ["system", "settings-approval-mode"],
   ["system", "settings-filesystem-write-access"],
   ["system", "first-run-defaults"],
