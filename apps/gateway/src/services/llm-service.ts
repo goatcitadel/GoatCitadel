@@ -87,6 +87,7 @@ import {
   checkClaudeCodeCliReadiness,
   claudeCodeCliProviderAdapter,
   createClaudeCodeCliRuntime,
+  isClaudeCodeCliToolBridgeEnabled,
   peekClaudeCodeCliReadiness,
   type ClaudeCodeCliRuntime,
   type ClaudeCodeCliRuntimeOptions,
@@ -231,6 +232,8 @@ export interface LlmServiceOptions {
   modelUsageAccounting?: ModelUsageAccountingService;
   /** Overrides for the local Claude Code CLI provider (`claude-code-cli`); tests inject a fake spawn. */
   claudeCli?: ClaudeCodeCliRuntimeOptions;
+  /** Read per call: whether the Claude Code CLI provider may call Gateway tools through the MCP bridge. Absent means off. */
+  claudeCliToolBridgeEnabled?: () => boolean;
   /** Injected only for deterministic auth integration tests. */
   googleCloudAuthService?: GoogleCloudAuthService;
 }
@@ -523,7 +526,7 @@ export class LlmService {
         apiKeySource: status.apiKeySource,
         hasKeychainSecret: status.hasKeychainSecret,
         apiKeyRef: status.apiKeyRef,
-        capabilities: inferProviderCapabilities(provider),
+        capabilities: inferProviderCapabilities(provider, this.claudeCodeCli),
       };
     });
   }
@@ -578,11 +581,16 @@ export class LlmService {
     return typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0 ? limit : undefined;
   }
 
+  /** Whether the Claude Code CLI provider may call Gateway tools through the MCP bridge (read per call). */
+  public isClaudeCliToolBridgeEnabled(): boolean {
+    return isClaudeCodeCliToolBridgeEnabled(this.claudeCodeCli);
+  }
+
   /** Whether a configured provider can call Gateway tools (and so create files). */
   public describeProviderToolSupport(providerId: string): { label: string; toolCalling: boolean } | undefined {
     const provider = this.providers.get(providerId);
     return provider
-      ? { label: provider.label, toolCalling: inferProviderCapabilities(provider).toolCalling }
+      ? { label: provider.label, toolCalling: inferProviderCapabilities(provider, this.claudeCodeCli).toolCalling }
       : undefined;
   }
 
@@ -604,7 +612,7 @@ export class LlmService {
     if (!provider || !contextWindowTokens) {
       return undefined;
     }
-    return fingerprintProviderRouteConfig(provider, model, contextWindowTokens);
+    return fingerprintProviderRouteConfig(provider, model, contextWindowTokens, this.claudeCodeCli);
   }
 
   public getRuntimeConfig(
@@ -1268,7 +1276,7 @@ export class LlmService {
     return resolveLlmReasoningProfile({
       request,
       providerId: provider.providerId,
-      providerCapabilities: inferProviderCapabilities(provider),
+      providerCapabilities: inferProviderCapabilities(provider, this.claudeCodeCli),
       modelMetadata: omitsReasoning
         ? undefined
         : lookupExactModelMetadata(this.modelMetadata, provider.providerId, model),
@@ -4701,6 +4709,7 @@ function fingerprintProviderRouteConfig(
   provider: LlmProviderConfig,
   model: string,
   contextWindowTokens: number,
+  claudeCodeCli: ClaudeCodeCliRuntime | undefined,
 ): string {
   const proxy = provider.request?.proxy;
   const secretFree = {
@@ -4710,7 +4719,7 @@ function fingerprintProviderRouteConfig(
     contextWindowTokens,
     resolvedApiStyle: resolveProviderExecutionApiStyle(provider, model),
     credentialConfigFingerprint: fingerprintProviderCredentialConfig(provider),
-    capabilities: inferProviderCapabilities(provider),
+    capabilities: inferProviderCapabilities(provider, claudeCodeCli),
     requestTransport: {
       tls: projectProviderTlsShape(provider.request?.tls),
       proxy: proxy
@@ -6617,7 +6626,11 @@ function isClaudeFourthGenerationOrLater(model: string): boolean {
   return Boolean(match && Number(match[1]) >= 4);
 }
 
-function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapabilities {
+/** `claudeCodeCli` owns the tool-bridge flag, which only a `claude-code-cli` provider reads. */
+function inferProviderCapabilities(
+  provider: LlmProviderConfig,
+  claudeCodeCli: ClaudeCodeCliRuntime | undefined,
+): LlmProviderCapabilities {
   const model = provider.defaultModel.toLowerCase();
   const base = provider.baseUrl.toLowerCase();
   const hasVision =
@@ -6662,13 +6675,14 @@ function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapa
     ...(provider.capabilities ?? {}),
   };
   if (provider.apiStyle === "claude-code-cli") {
-    // The CLI runs as a pure text model with its own tools disabled; no
-    // configured override may advertise tool, media or JSON-mode support.
+    // The CLI is a text model; only the Gateway tool bridge (behind its feature
+    // flag) can give it tool calling. No configured override may advertise tool,
+    // media or JSON-mode support beyond that.
     return {
       vision: false,
       audio: false,
       video: false,
-      toolCalling: false,
+      toolCalling: isClaudeCodeCliToolBridgeEnabled(claudeCodeCli),
       jsonMode: false,
       webSearch: false,
       reasoning: false,

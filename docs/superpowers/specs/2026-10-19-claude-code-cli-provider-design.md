@@ -82,7 +82,7 @@ Disabling the CLI's tools works in layers: `--tools ""` (no built-in tools), `--
 The provider advertises `toolCalling: false`, `vision: false`, `audio: false`, `jsonMode: false` and `reasoning: true`. The CLI cannot do OpenAI-style function calling back to its caller, so `tools` are never passed to it. The operator decided how tool turns are handled:
 
 - If a request requires a tool call (`tool_choice` is `"required"` or names a function), the turn fails before spawn with `claude_cli_tools_unsupported` and a hint to switch providers for agentic or Code Mode turns.
-- If tools are only offered (`tool_choice` is absent, `"auto"` or `"none"`), they are dropped and the turn runs as plain text. My call: GoatCitadel tools through this provider would need a Gateway-hosted MCP bridge that goes through policy and approvals. That is listed as a follow-up and is not in this PR.
+- If tools are only offered (`tool_choice` is absent, `"auto"` or `"none"`), they are dropped and the turn runs as plain text. My call: GoatCitadel tools through this provider would need a Gateway-hosted MCP bridge that goes through policy and approvals. That bridge was a follow-up to this PR; it is now designed in `2026-10-20-claude-code-cli-tool-bridge-design.md` and implemented behind the `claudeCliToolBridgeEnabled` flag. With the flag off (the default), this text-only behavior is unchanged.
 
 ### 5. Streaming into the normalized chat stream
 
@@ -179,7 +179,7 @@ This feeds `LlmProviderAuthReadiness` (`source: "metadata"`, `liveVerified: true
 ## Follow-ups (not in this PR)
 
 - PR 3: wizard support, with a "Use my local Claude Code login" path, a readiness panel, and the logged-out remediation copy.
-- A Gateway-hosted MCP bridge, so GoatCitadel tools can be offered to the CLI under policy and approvals.
+- A Gateway-hosted MCP bridge, so GoatCitadel tools can be offered to the CLI under policy and approvals. Designed in `2026-10-20-claude-code-cli-tool-bridge-design.md` and implemented behind the `claudeCliToolBridgeEnabled` feature flag, which defaults to off until the live proof passes. Tools run in GoatCitadel, not in Claude Code, and each tool step is a separate CLI run.
 - Image input via stream-json content blocks.
 
 ## Terms note

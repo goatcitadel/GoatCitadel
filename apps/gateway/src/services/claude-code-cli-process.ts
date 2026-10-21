@@ -25,6 +25,8 @@ export const CLAUDE_CLI_REASON_CODES = [
   "claude_cli_cancelled",
   "claude_cli_hook_blocked",
   "claude_cli_managed_hooks_active",
+  "claude_cli_bridge_unavailable",
+  "claude_cli_bridge_mismatch",
 ] as const;
 
 export type ClaudeCliReasonCode = (typeof CLAUDE_CLI_REASON_CODES)[number];
@@ -73,6 +75,8 @@ const SHIM_EXTENSIONS = new Set([".cmd", ".bat", ".ps1"]);
 const CLAUDE_CLI_ISOLATION_SETTINGS = JSON.stringify({ disableAllHooks: true });
 const QUEUE_HIGH_WATER = 256;
 const QUEUE_LOW_WATER = 32;
+/** How long cleanup waits for a killed CLI tree to close, so callers can remove its cwd afterwards. */
+export const CLAUDE_CLI_KILL_CLOSE_WAIT_MS = 5000;
 
 export function resolveClaudeCliInvocation(input: {
   env: NodeJS.ProcessEnv | Record<string, string | undefined>;
@@ -105,13 +109,19 @@ export function resolveClaudeCliInvocation(input: {
   return { command: candidates[0] as string, prefixArgs: [] };
 }
 
-export function buildClaudeCliArgs(input: { model: string; systemPromptFile?: string }): string[] {
+export function buildClaudeCliArgs(input: {
+  model: string;
+  systemPromptFile?: string;
+  /** Tool-bridge step: the CLI gets the inert MCP stub; its `mcp__goatcitadel` tools are allowed, nothing else. */
+  bridge?: { mcpConfigPath: string };
+}): string[] {
   const model = input.model.trim();
   if (!CLAUDE_CLI_MODEL_PATTERN.test(model)) {
     throw new ClaudeCliError("claude_cli_model_unavailable", "The selected model id is not a valid Claude model id");
   }
   return [
     "-p",
+    ...(input.bridge ? ["--mcp-config", input.bridge.mcpConfigPath] : []),
     "--input-format",
     "stream-json",
     "--output-format",
@@ -127,7 +137,7 @@ export function buildClaudeCliArgs(input: { model: string; systemPromptFile?: st
     "--tools",
     "",
     "--strict-mcp-config",
-    "--safe-mode",
+    ...(input.bridge ? [] : ["--safe-mode"]),
     "--disable-slash-commands",
     "--no-session-persistence",
     "--permission-mode",
@@ -138,6 +148,7 @@ export function buildClaudeCliArgs(input: { model: string; systemPromptFile?: st
     "",
     "--settings",
     CLAUDE_CLI_ISOLATION_SETTINGS,
+    ...(input.bridge ? ["--allowedTools", "mcp__goatcitadel", "--permission-prompts", "none"] : []),
   ];
 }
 
@@ -268,6 +279,10 @@ export async function* runClaudeCli(input: RunClaudeCliInput): AsyncGenerator<st
   let finished = false;
   let stdoutBuffer = "";
   let stderrTail = "";
+  let markClosed: () => void = () => undefined;
+  const childClosed = new Promise<void>((resolve) => {
+    markClosed = resolve;
+  });
   const push = (item: QueueItem) => {
     if (settled) return;
     if (item.kind !== "line") settled = true;
@@ -330,6 +345,7 @@ export async function* runClaudeCli(input: RunClaudeCliInput): AsyncGenerator<st
   });
   child.on("close", (code: number | null) => {
     closed = true;
+    markClosed();
     const tail = stdoutBuffer.replace(/\r$/, "");
     stdoutBuffer = "";
     if (tail.trim()) push({ kind: "line", line: tail });
@@ -372,5 +388,22 @@ export async function* runClaudeCli(input: RunClaudeCliInput): AsyncGenerator<st
       killed = true;
       killTree(child.pid);
     }
+    // Windows taskkill is fire-and-forget: wait (bounded) for the tree to close so the
+    // caller's cwd cleanup does not race the dying CLI and its stub children.
+    if (killed && !closed) await waitBounded(childClosed, CLAUDE_CLI_KILL_CLOSE_WAIT_MS);
+  }
+}
+
+/** Resolves when promise settles or after ms, whichever comes first; never rejects. */
+async function waitBounded(promise: Promise<void>, ms: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const bound = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+    timer.unref();
+  });
+  try {
+    await Promise.race([promise.catch(() => undefined), bound]);
+  } finally {
+    clearTimeout(timer);
   }
 }

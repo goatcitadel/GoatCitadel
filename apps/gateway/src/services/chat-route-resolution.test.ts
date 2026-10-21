@@ -1,10 +1,12 @@
 import { describeClaudeCodeCliLoginGuidance } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
+import { createNoopSecretStore } from "../test/llm-fixtures.js";
 import {
   createRoutingDecisionFingerprint,
   preflightChatRoute,
   resolveChatRouteDescriptor,
 } from "./chat-route-resolution.js";
+import { LlmService } from "./llm-service.js";
 
 function createHost(input?: {
   sessionPrefs?: {
@@ -1016,6 +1018,68 @@ describe("chat-route-resolution citadel ward route_local", () => {
       const openai = createHost({ runtime: { activeProviderId: "openai", activeModel: "gpt-5.4-mini", providers } });
       const toolCapable = await preflightChatRoute(openai as never, "session-1", { action: "send", content: pdfDraft });
       expect(toolCapable.fileOutputNotice).toBeUndefined();
+    });
+
+    /** The CLI provider with the capability LlmService projects for the tool-bridge flag. */
+    function providersWithBridgeFlag(enabled: boolean) {
+      const service = new LlmService(
+        {
+          activeProviderId: "claude-code-cli",
+          activeModel: "claude-sonnet-5-5",
+          providers: [
+            {
+              providerId: "claude-code-cli",
+              label: "Claude Code CLI (local login)",
+              baseUrl: "https://api.anthropic.com/v1",
+              apiStyle: "claude-code-cli",
+              defaultModel: "claude-sonnet-5-5",
+            },
+          ],
+        },
+        {},
+        {
+          secretStore: createNoopSecretStore(),
+          enforceNetworkAllowlist: false,
+          claudeCliToolBridgeEnabled: () => enabled,
+        },
+      );
+      const cli = service.listProviders().find((item) => item.providerId === "claude-code-cli");
+      const toolCalling = cli?.capabilities?.toolCalling === true;
+      expect(toolCalling).toBe(enabled);
+      return providers.map((provider) =>
+        provider.providerId === "claude-code-cli" ? { ...provider, capabilities: { toolCalling } } : provider,
+      );
+    }
+
+    it("flag on: no fileOutputNotice for claude-code-cli", async () => {
+      const host = createHost({
+        runtime: {
+          activeProviderId: "claude-code-cli",
+          activeModel: "claude-sonnet-5-5",
+          providers: providersWithBridgeFlag(true),
+        },
+      });
+      const result = await preflightChatRoute(host as never, "session-1", { action: "send", content: pdfDraft });
+      expect(result.blockedReason).toBeUndefined();
+      expect(result.effectiveProviderId).toBe("claude-code-cli");
+      expect(result.fileOutputNotice).toBeUndefined();
+    });
+
+    it("flag off: #455 notice unchanged", async () => {
+      const host = createHost({
+        runtime: {
+          activeProviderId: "claude-code-cli",
+          activeModel: "claude-sonnet-5-5",
+          providers: providersWithBridgeFlag(false),
+        },
+      });
+      const result = await preflightChatRoute(host as never, "session-1", { action: "send", content: pdfDraft });
+      expect(result.fileOutputNotice).toEqual({
+        providerLabel: "Claude Code CLI (local login)",
+        message:
+          "Claude Code CLI (local login) cannot use GoatCitadel tools, so it cannot create a PDF, document, or deck. It will answer in chat instead. Choose a model from a provider that supports tools to get a file.",
+        alternatives: [{ providerId: "openai", label: "OpenAI" }],
+      });
     });
   });
 });

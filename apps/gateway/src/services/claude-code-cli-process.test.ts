@@ -3,6 +3,7 @@ import { PassThrough } from "node:stream";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import {
+  CLAUDE_CLI_KILL_CLOSE_WAIT_MS,
   ClaudeCliError,
   buildClaudeCliArgs,
   buildClaudeCliEnv,
@@ -372,11 +373,82 @@ describe("runClaudeCli", () => {
     );
     await new Promise((resolve) => setImmediate(resolve));
     fake.child.emit("error", Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" }));
+    // Node emits close after a spawn error once the stdio pipes are closed.
+    fake.exit(null);
     await expect(pending).rejects.toMatchObject({ reasonCode: "claude_cli_missing" });
+  });
+
+  it("waits for a killed CLI to close before an early return() resolves", async () => {
+    const fake = createFakeChild();
+    const { spawn } = spawnReturning(fake);
+    const order: string[] = [];
+    fake.child.on("close", () => order.push("close"));
+    const killTree = vi.fn(() => {
+      setTimeout(() => fake.exit(null), 40);
+    });
+    const generator = runClaudeCli({
+      invocation,
+      args: [],
+      env: {},
+      cwd: ".",
+      stdinPayload: "",
+      overallTimeoutMs: 5000,
+      idleTimeoutMs: 5000,
+      spawn,
+      killTree,
+    });
+    const first = generator.next();
+    fake.stdout.write("one\n");
+    expect(await first).toEqual({ done: false, value: "one" });
+    await generator.return({ exitCode: null, stderrTail: "" });
+    order.push("returned");
+    expect(killTree).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["close", "returned"]);
+  });
+
+  it("stops waiting for close after the bound when the killed tree never closes", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const fake = createFakeChild();
+      const { spawn } = spawnReturning(fake);
+      const killTree = vi.fn();
+      const generator = runClaudeCli({
+        invocation,
+        args: [],
+        env: {},
+        cwd: ".",
+        stdinPayload: "",
+        overallTimeoutMs: 60_000,
+        idleTimeoutMs: 60_000,
+        spawn,
+        killTree,
+      });
+      const first = generator.next();
+      fake.stdout.write("one\n");
+      expect(await first).toEqual({ done: false, value: "one" });
+      let returned = false;
+      const returning = generator.return({ exitCode: null, stderrTail: "" }).then(() => {
+        returned = true;
+      });
+      await vi.advanceTimersByTimeAsync(CLAUDE_CLI_KILL_CLOSE_WAIT_MS - 1);
+      expect(returned).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await returning;
+      expect(returned).toBe(true);
+      expect(killTree).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
 describe("ClaudeCliError", () => {
+  it('is named "ClaudeCliError", which the tool-protocol retry exclusion matches on', () => {
+    const error = new ClaudeCliError("claude_cli_bridge_mismatch", "mismatch");
+    expect(error.name).toBe("ClaudeCliError");
+    expect(error).toBeInstanceOf(Error);
+  });
+
   it("never carries raw CLI stderr that may echo a credential", () => {
     const secret = "sk-ant-api03-" + "Q".repeat(40);
     const error = new ClaudeCliError("claude_cli_failed", "failed", { exitCode: 1, stderrTail: `auth used ${secret}` });

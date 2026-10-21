@@ -155,8 +155,30 @@ function countLeadingSystemMessages(messages: ChatCompletionRequest["messages"])
   return count;
 }
 
+/**
+ * Claude Code CLI tool-bridge governance faults. Retrying with a repaired tool
+ * protocol cannot help: the bridge or the CLI itself refused the step. Matched by
+ * name so this module does not import the CLI provider.
+ */
+const CLAUDE_CLI_NON_RETRYABLE_TOOL_REASON_CODES: ReadonlySet<string> = new Set([
+  "claude_cli_bridge_unavailable",
+  "claude_cli_bridge_mismatch",
+  "claude_cli_tool_use_blocked",
+  "claude_cli_hook_blocked",
+]);
+
+function isClaudeCliToolGovernanceError(error: Error): boolean {
+  const reasonCode = (error as Error & { reasonCode?: unknown }).reasonCode;
+  return (
+    error.name === "ClaudeCliError" &&
+    typeof reasonCode === "string" &&
+    CLAUDE_CLI_NON_RETRYABLE_TOOL_REASON_CODES.has(reasonCode)
+  );
+}
+
 export function shouldRetryToolProtocolError(error: Error): boolean {
   if (isAuthoritativeChatDispatchError(error)) return false;
+  if (isClaudeCliToolGovernanceError(error)) return false;
   const providerFailure = (
     error as Error & {
       providerFailure?: { code?: unknown; message?: unknown; type?: unknown };
