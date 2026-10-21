@@ -115,6 +115,9 @@ export async function patchSettings(input: {
       defaultReadBackend?: "native" | "firecrawl";
       fallbackToNative?: boolean;
     };
+    search?: {
+      engineOrder: import("@goatcitadel/contracts").WebSearchNativeEngine[];
+    };
   };
   mesh?: {
     enabled?: boolean;

@@ -47,6 +47,24 @@ const TARGETS: Record<RuntimeConfigurationTargetId, RuntimeConfigurationTarget> 
   },
 };
 
+/** Keychain account for an installation-scoped runtime credential; shared with the Settings owner. */
+export function runtimeConfigurationAccount(installationScopeId: string, accountSuffix: string): string {
+  return `runtime-configuration:installation:${installationScopeId}:${accountSuffix}`;
+}
+
+/** Secret-free description of an official-search credential target. */
+export function describeOfficialSearchTarget(targetId: RuntimeConfigurationTargetId) {
+  const target = requireTarget(targetId);
+  return {
+    targetId: target.targetId,
+    provider: target.provider,
+    targetLabel: target.targetLabel,
+    endpointHost: target.endpointHost,
+    acquisitionUrl: target.acquisitionUrl,
+    accountSuffix: target.accountSuffix,
+  };
+}
+
 export interface RuntimeConfigurationPromptDescriptor {
   targetId: RuntimeConfigurationTargetId;
   targetLabel: string;
@@ -697,7 +715,7 @@ export class RuntimeConfigurationService {
   }
 
   private accountFor(target: RuntimeConfigurationTarget): string {
-    return `runtime-configuration:installation:${this.installationScopeId}:${target.accountSuffix}`;
+    return runtimeConfigurationAccount(this.installationScopeId, target.accountSuffix);
   }
 
   private async hasBlockingDurableReservation(targetId: RuntimeConfigurationTargetId): Promise<boolean> {
@@ -834,7 +852,7 @@ export function getRuntimeConfigurationAvailabilityProjection(
   };
 }
 
-async function probeOfficialSearchCredential(
+export async function probeOfficialSearchCredential(
   provider: ResearchSearchOfficialProvider,
   secret: string,
   networkAllowlist: readonly string[],

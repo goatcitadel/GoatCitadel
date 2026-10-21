@@ -405,6 +405,29 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
                     {
                       type: "object",
                       properties: {
+                        operation: { const: "web_search_configuration" },
+                        config: {
+                          type: "object",
+                          properties: {
+                            engineOrder: {
+                              type: "array",
+                              minItems: 1,
+                              maxItems: 3,
+                              uniqueItems: true,
+                              items: { type: "string", enum: ["duckduckgo", "bing", "google"] },
+                              description: "Native search engines in order; the first is the default.",
+                            },
+                          },
+                          required: ["engineOrder"],
+                          additionalProperties: false,
+                        },
+                      },
+                      required: ["operation", "config"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
                         operation: { const: "mesh_configuration" },
                         config: {
                           type: "object",

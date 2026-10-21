@@ -283,12 +283,12 @@ describe("ChatTurnAgentRunner loop 28 coverage", () => {
         auditEventId: "audit-primary-empty",
         result: { query: "GoatCitadel release blockers", results: [] },
       })
+      .mockRejectedValueOnce(new Error("duckduckgo timeout"))
       .mockResolvedValueOnce({
         outcome: "blocked",
         policyReason: "bing blocked",
         auditEventId: "audit-bing-blocked",
       })
-      .mockRejectedValueOnce(new Error("duckduckgo timeout"))
       .mockResolvedValueOnce({
         outcome: "approval_required",
         policyReason: "google approval required",
@@ -308,18 +308,19 @@ describe("ChatTurnAgentRunner loop 28 coverage", () => {
     });
 
     expect(invokeTool).toHaveBeenCalledTimes(4);
+    // Alternate engines follow the operator order (default duckduckgo → bing → google) and stay native.
     expect(invokeTool).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         toolName: "browser.search",
-        args: expect.objectContaining({ engine: "bing" }),
+        args: expect.objectContaining({ engine: "duckduckgo", backend: "native" }),
       }),
     );
     expect(invokeTool).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
         toolName: "browser.search",
-        args: expect.objectContaining({ engine: "duckduckgo" }),
+        args: expect.objectContaining({ engine: "bing", backend: "native" }),
       }),
     );
     expect(invokeTool).toHaveBeenNthCalledWith(

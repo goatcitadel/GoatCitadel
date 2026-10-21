@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { OUTSIDE_ROOT_WRITE_MODES } from "./outside-root-write.js";
+import { WEB_SEARCH_NATIVE_ENGINES } from "./web-search.js";
 
 // ---------------------------------------------------------------------------
 // Tool Policy
@@ -532,6 +533,12 @@ export const AssistantConfigInputSchema = z
             timeoutMs: z.number().optional(),
             defaultReadBackend: z.enum(["native", "firecrawl"]).optional(),
             fallbackToNative: z.boolean().optional(),
+          })
+          .passthrough()
+          .optional(),
+        search: z
+          .object({
+            engineOrder: z.array(z.enum(WEB_SEARCH_NATIVE_ENGINES)).optional(),
           })
           .passthrough()
           .optional(),

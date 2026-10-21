@@ -13,6 +13,7 @@
  * Pattern reference: comms-service.ts, memory-facade-service.ts.
  */
 
+import { isFirecrawlBaseUrlAllowlisted } from "./runtime-browser-backend-defaults.js";
 import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
 import { projectChatFeatureAvailability } from "./chat-feature-availability.js";
@@ -56,6 +57,8 @@ import {
   type OperatorWriteRootChange,
   type RealtimeEvent,
   type ToolApprovalMode,
+  isWebSearchEngineOrder,
+  normalizeWebSearchEngineOrder,
 } from "@goatcitadel/contracts";
 import type { MeshService } from "@goatcitadel/mesh-core";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
@@ -238,6 +241,13 @@ export async function getSettings(deps: SettingsRuntimeDependencies): Promise<Ru
         timeoutMs: deps.config.assistant.web.firecrawl.timeoutMs,
         defaultReadBackend: deps.config.assistant.web.firecrawl.defaultReadBackend,
         fallbackToNative: deps.config.assistant.web.firecrawl.fallbackToNative,
+        baseUrlAllowlisted: isFirecrawlBaseUrlAllowlisted(
+          deps.config.assistant.web.firecrawl.baseUrl,
+          toolPolicy.sandbox.networkAllowlist,
+        ),
+      },
+      search: {
+        engineOrder: normalizeWebSearchEngineOrder(deps.config.assistant.web.search?.engineOrder),
       },
     },
     auth: getAuthRuntimeSettings(deps),
@@ -346,6 +356,9 @@ export interface UpdateSettingsInput {
       timeoutMs?: number;
       defaultReadBackend?: "native" | "firecrawl";
       fallbackToNative?: boolean;
+    };
+    search?: {
+      engineOrder?: string[];
     };
   };
   mesh?: {
@@ -606,6 +619,13 @@ export async function updateSettings(
     if (firecrawl.fallbackToNative !== undefined) {
       deps.config.assistant.web.firecrawl.fallbackToNative = firecrawl.fallbackToNative;
     }
+  }
+
+  if (input.web?.search?.engineOrder !== undefined) {
+    if (!isWebSearchEngineOrder(input.web.search.engineOrder)) {
+      throw new Error("web.search.engineOrder must list one to three distinct engines: duckduckgo, bing, google");
+    }
+    deps.config.assistant.web.search = { engineOrder: [...input.web.search.engineOrder] };
   }
 
   if (input.mesh) {

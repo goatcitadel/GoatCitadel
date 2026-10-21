@@ -54,6 +54,7 @@ export type SettingsSection =
   | "integrations"
   | "channels"
   | "mcp"
+  | "web-search"
   | "tools"
   | "hooks"
   | "trust-policy"
@@ -618,6 +619,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "mcp",
     },
     {
+      id: "settings-web-search",
+      label: "Web & Search",
+      description: "Firecrawl, search engines, and web-search API keys.",
+      area: "settings",
+      section: "web-search",
+    },
+    {
       id: "settings-tools",
       label: "Tools",
       description: "Low-level tool catalog and scoped allow/deny grants.",
@@ -720,7 +728,11 @@ export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
   settings: [
     { id: "settings-general", label: "General", sections: ["general", "personalities"] },
     { id: "settings-models", label: "Models", sections: ["onboarding", "providers", "local-ai"] },
-    { id: "settings-connections", label: "Connections", sections: ["channels", "integrations", "mcp", "addons"] },
+    {
+      id: "settings-connections",
+      label: "Connections",
+      sections: ["channels", "integrations", "mcp", "web-search", "addons"],
+    },
     { id: "settings-safety", label: "Safety", sections: ["permissions", "tools", "trust-policy", "hooks", "budget"] },
     {
       id: "settings-citadel",
