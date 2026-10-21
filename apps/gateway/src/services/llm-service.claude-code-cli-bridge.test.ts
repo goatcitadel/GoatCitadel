@@ -9,6 +9,7 @@ import {
   createFakeClaudeCliHarness as createHarness,
   createFakeModelUsageAccounting as createAccounting,
   helloScript,
+  line,
   toolStepScript,
   type FakeClaudeCliCall as FakeCall,
 } from "../test/claude-code-cli-fake-spawn.js";
@@ -270,6 +271,48 @@ describe("claude-code-cli tool bridge through LlmService", () => {
     expect(harness.killTree).toHaveBeenCalledTimes(1);
     expect(accounting.handle.cancel).toHaveBeenCalledTimes(1);
     expect(accounting.handle.succeed).not.toHaveBeenCalled();
+    expect(readdirSync(scratchRoot)).toEqual([]);
+  });
+
+  it("an init that lists a tool outside the manifest fails claude_cli_bridge_mismatch and kills the tree", async () => {
+    const harness = createHarness([
+      ({ stdout }) => {
+        stdout.write(
+          line({
+            type: "system",
+            subtype: "init",
+            tools: [...toolNames.map((name) => `mcp__goatcitadel__${name}`), "Bash"],
+            mcp_servers: [{ name: "goatcitadel", status: "connected" }],
+          }),
+        );
+      },
+    ]);
+    const { service, accounting } = createService(harness);
+    await expect(collect(service, { messages: [{ role: "user", content: "hi" }], tools })).rejects.toMatchObject({
+      reasonCode: "claude_cli_bridge_mismatch",
+    });
+    expect(harness.killTree).toHaveBeenCalledTimes(1);
+    expect(accounting.handle.fail).toHaveBeenCalledTimes(1);
+    expect(accounting.handle.succeed).not.toHaveBeenCalled();
+    expect(accounting.handle.cancel).not.toHaveBeenCalled();
+    expect(readdirSync(scratchRoot)).toEqual([]);
+  });
+
+  it("a consumer that stops right after the tool_calls chunk keeps the settled success", async () => {
+    const harness = createHarness([toolStepScript(toolNames, [readCall])]);
+    const { service, accounting } = createService(harness);
+    let sawToolCalls = false;
+    for await (const chunk of service.chatCompletionsStream({ messages: [{ role: "user", content: "hi" }], tools })) {
+      if (Array.isArray(readDelta(chunk)?.tool_calls)) {
+        sawToolCalls = true;
+        break;
+      }
+    }
+    expect(sawToolCalls).toBe(true);
+    expect(accounting.handle.succeed).toHaveBeenCalledTimes(1);
+    expect(accounting.handle.cancel).not.toHaveBeenCalled();
+    expect(accounting.handle.fail).not.toHaveBeenCalled();
+    expect(harness.killTree).toHaveBeenCalledTimes(1);
     expect(readdirSync(scratchRoot)).toEqual([]);
   });
 
