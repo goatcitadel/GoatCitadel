@@ -11,6 +11,7 @@ import { Field } from "../../ui/Field";
 import { cockpitInputClass } from "../../ui/input-class";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { presentChangeStatusLabel } from "./settings-vocabulary";
 import { useGovernedRuntimeSetting } from "./use-governed-runtime-setting";
 import {
   GovernedSettingChangeStatus,
@@ -120,7 +121,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
               text:
                 status === "awaiting_approval"
                   ? `Adding ${draftHost} needs approval. Approve the allowlist change in Inbox, then save Firecrawl.`
-                  : `The allowlist change is ${status.replaceAll("_", " ")}. Finish it, then save Firecrawl.`,
+                  : `The allowlist change is ${presentChangeStatusLabel(status).toLowerCase()}. Finish it, then save Firecrawl.`,
             },
       );
       await settings.refetch();
@@ -288,7 +289,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
             <p className="text-xs text-fg-muted">Save first: the test uses the saved settings.</p>
           ) : null}
           {check ? (
-            <div role="status" className="space-y-1 rounded-md border border-line-subtle bg-sunken p-3 text-sm">
+            <Callout tone={check.status === "ok" || check.status === "reachable" ? "info" : "warning"}>
               <StatusBadge status={CHECK_PRESENTATION[check.status]} />
               <p className="text-fg-secondary">{check.message}</p>
               {check.status === "unreachable" && saved?.enabled && saved.defaultReadBackend === "firecrawl" ? (
@@ -308,7 +309,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
                   ? ` · ${check.remainingCredits.toLocaleString()} credits left`
                   : ""}
               </p>
-            </div>
+            </Callout>
           ) : null}
           {checkError ? <Callout tone="error">Could not run the test. {checkError}</Callout> : null}
           <TechnicalDetails>

@@ -42,11 +42,7 @@ export function WebSearchKeys({ settings }: { settings: UseQueryResult<RuntimeSe
         Keys are checked live, then stored in the OS keychain. A saved key takes priority over its environment variable.
         GoatCitadel never shows a saved key again.
       </p>
-      {credentials.isPending ? (
-        <p role="status" className="mt-3 text-sm text-fg-muted">
-          Loading keys…
-        </p>
-      ) : null}
+      {credentials.isPending ? <p className="mt-3 text-sm text-fg-muted">Loading keys…</p> : null}
       {credentials.isError ? (
         <Callout tone="error">Could not load key status. {describeApiError(credentials.error).summary}</Callout>
       ) : null}
