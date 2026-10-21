@@ -21,6 +21,7 @@ const OPENAI_CODEX_CALLBACK_PORT = 1455;
 const OPENAI_CODEX_CALLBACK_PATH = "/auth/callback";
 const OPENAI_CODEX_OAUTH_ACCOUNT = "provider:openai-codex:oauth";
 const OPENAI_CODEX_REFRESH_SKEW_MS = 60_000;
+const OPENAI_CODEX_TOKEN_REQUEST_TIMEOUT_MS = 15_000;
 const OPENAI_CODEX_SCOPE = "openid profile email offline_access";
 const OPENAI_CODEX_AUTH_CLAIM = "https://api.openai.com/auth";
 const OPENAI_CODEX_PROFILE_CLAIM = "https://api.openai.com/profile";
@@ -318,24 +319,49 @@ export class OpenAICodexOAuthService {
     return pending;
   }
 
+  /**
+   * A disconnect or fresh login can replace the credential while the exchange
+   * is in flight. Each write re-checks the stored credential synchronously (no
+   * await between read and write), so a stale result never overwrites newer
+   * state: the newer credential wins and the stale outcome is discarded.
+   */
   private async runRefresh(credential: OpenAICodexOAuthCredential, credentialAccount: string): Promise<string> {
+    let refreshed: OpenAICodexOAuthCredential;
     try {
-      const refreshed = await this.refreshCredential(credential);
-      this.saveCredential(refreshed, credentialAccount);
-      return refreshed.accessToken;
+      refreshed = await this.refreshCredential(credential);
     } catch (error) {
-      this.saveCredential(
-        {
-          ...credential,
-          requiresReauth: true,
-          updatedAt: Date.now(),
-        },
-        credentialAccount,
-      );
+      if (this.isStillStoredCredential(credential, credentialAccount)) {
+        this.saveCredential(
+          {
+            ...credential,
+            requiresReauth: true,
+            updatedAt: Date.now(),
+          },
+          credentialAccount,
+        );
+      }
       throw new Error("OpenAI Codex OAuth token refresh failed. Reconnect ChatGPT OAuth in Settings.", {
         cause: error,
       });
     }
+    if (!this.isStillStoredCredential(credential, credentialAccount)) {
+      const current = this.readCredential(credentialAccount);
+      if (!current?.accessToken || !current.refreshToken || current.requiresReauth) {
+        throw new Error("OpenAI Codex OAuth is not connected. Connect ChatGPT OAuth in Settings first.");
+      }
+      return current.accessToken;
+    }
+    this.saveCredential(refreshed, credentialAccount);
+    return refreshed.accessToken;
+  }
+
+  private isStillStoredCredential(credential: OpenAICodexOAuthCredential, credentialAccount: string): boolean {
+    const current = this.readCredential(credentialAccount);
+    return (
+      current?.accessToken === credential.accessToken &&
+      current.refreshToken === credential.refreshToken &&
+      !current.requiresReauth
+    );
   }
 
   private assertKeychainAvailable(): void {
@@ -540,6 +566,8 @@ export class OpenAICodexOAuthService {
       },
       body: params,
       redirect: "manual",
+      // Bounds the whole exchange, including a stall before response headers.
+      signal: AbortSignal.timeout(OPENAI_CODEX_TOKEN_REQUEST_TIMEOUT_MS),
     });
     const bodyText = await readBoundedResponseText(response, {
       maxBytes: 64 * 1024,

@@ -1543,7 +1543,15 @@ export class LlmService {
     }
     let accessToken: string;
     try {
-      accessToken = await this.openAICodexOAuth.forceRefreshAccessToken(rejectedAccessToken);
+      // The refresh is shared across callers; this caller stops waiting at its
+      // own cancel or timeout without aborting the exchange for the others.
+      const waitSignal = input.signal
+        ? AbortSignal.any([input.signal, AbortSignal.timeout(input.timeoutMs)])
+        : AbortSignal.timeout(input.timeoutMs);
+      accessToken = await raceAbortSignal(
+        this.openAICodexOAuth.forceRefreshAccessToken(rejectedAccessToken),
+        waitSignal,
+      );
     } catch {
       return undefined;
     }
@@ -6796,6 +6804,28 @@ function resolveProviderAuthMode(provider: LlmProviderConfig): LlmProviderConfig
 
 function isOpenAICodexProvider(provider: Pick<LlmProviderConfig, "providerId">): boolean {
   return provider.providerId.trim().toLowerCase() === "openai-codex";
+}
+
+/** Settle with `promise`, or reject with the signal's reason once it aborts. */
+function raceAbortSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    void promise.catch(() => undefined);
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 /** ChatGPT reports a stale Codex token as `code: "token_expired"` under `error` or `detail`. */

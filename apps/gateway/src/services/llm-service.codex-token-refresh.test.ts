@@ -107,6 +107,24 @@ describe("LlmService OpenAI Codex token_expired recovery", () => {
     expect(usageRecords(storage).map((record) => record.transportAttemptIndex)).toEqual([0, 1]);
   });
 
+  it("stops waiting on a stalled shared refresh when the caller cancels", async () => {
+    const secrets = createMemorySecretStore();
+    const oauthFetch = vi.fn(() => new Promise<Response>(() => undefined));
+    const { service } = createHarness(secrets, oauthFetch);
+    const providerFetch = stubProviderFetch([unauthorized(TOKEN_EXPIRED_BODY)]);
+    const controller = new AbortController();
+
+    const pending = service.chatCompletions(
+      { ...chatRequest(), signal: controller.signal },
+      attribution("codex-refresh-cancelled"),
+    );
+    await vi.waitFor(() => expect(oauthFetch).toHaveBeenCalledTimes(1));
+    controller.abort(new Error("caller cancelled"));
+
+    await expect(pending).rejects.toThrow();
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("does not refresh on a 401 that is not token_expired", async () => {
     const secrets = createMemorySecretStore();
     const oauthFetch = vi.fn(async () => tokenResponse("fresh-access-token"));
