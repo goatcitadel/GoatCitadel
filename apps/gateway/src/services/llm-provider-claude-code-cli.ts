@@ -56,8 +56,9 @@ const DEFAULT_OVERALL_TIMEOUT_MS = 300_000;
 const IDLE_TIMEOUT_MS = 120_000;
 const AUTH_STATUS_TIMEOUT_MS = 10_000;
 const INVOCATION_CACHE_MS = 60_000;
-// A just-killed CLI tree can briefly hold its cwd open on Windows (EBUSY); retry for ~2 s.
-const RUN_DIR_RM_MAX_RETRIES = 20;
+// A just-killed CLI tree can briefly hold its cwd open on Windows (EBUSY). fs.rm's backoff is
+// linear (retry n waits n × the delay), so 6 retries of 100 ms wait at most ~2.1 s in total.
+const RUN_DIR_RM_MAX_RETRIES = 6;
 const RUN_DIR_RM_RETRY_DELAY_MS = 100;
 
 const log = logger.child("llm-provider-claude-code-cli");
