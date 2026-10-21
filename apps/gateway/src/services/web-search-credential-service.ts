@@ -16,6 +16,7 @@ import {
 import type { FirecrawlRuntimeConfig } from "../config.js";
 import { isFirecrawlBaseUrlAllowlisted } from "./runtime-browser-backend-defaults.js";
 import { describeOfficialSearchTarget, runtimeConfigurationAccount } from "./runtime-configuration-service.js";
+import { readBoundedResponseJson } from "./bounded-response-reader.js";
 import type { SecretStoreService } from "./secret-store-service.js";
 
 const MAX_SECRET_LENGTH = 8_192;
@@ -384,10 +385,15 @@ function isCanonicalLocalFirecrawlBaseUrl(baseUrl: string): boolean {
 
 async function readRemainingCredits(response: Response): Promise<number | undefined> {
   try {
-    const body = (await response.json()) as { data?: { remainingCredits?: unknown } };
+    const body = await readBoundedResponseJson<{ data?: { remainingCredits?: unknown } }>(response, {
+      maxBytes: 64 * 1_024,
+      timeoutMs: FIRECRAWL_PROBE_TIMEOUT_MS,
+      label: "Firecrawl credit usage response",
+    });
     const credits = body?.data?.remainingCredits;
     return typeof credits === "number" && Number.isFinite(credits) ? credits : undefined;
   } catch {
+    // Credits are optional detail: an oversized or malformed body leaves the "ok" status unchanged.
     return undefined;
   }
 }
