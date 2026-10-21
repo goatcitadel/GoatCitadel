@@ -137,6 +137,12 @@ describe("dashboard settings routes", () => {
           expectedTargetRevision: 9,
         }),
       );
+      expect(confirm).toHaveBeenCalledWith(
+        expect.objectContaining({ surface: "settings" }),
+        "plan-cli-bridge-flag",
+        1,
+        "nonce-cli-bridge-flag-1234",
+      );
       expect(updateSettings).not.toHaveBeenCalled();
     },
   );

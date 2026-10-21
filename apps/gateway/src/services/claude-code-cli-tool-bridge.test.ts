@@ -54,6 +54,17 @@ describe("buildClaudeCliToolManifest", () => {
     });
   });
 
+  it("forces an object-typed inputSchema for loose parameter schemas", () => {
+    const manifest = buildClaudeCliToolManifest([
+      { type: "function", function: { name: "list_dir", parameters: {} } },
+      { type: "function", function: { name: "read", parameters: { properties: { p: { type: "string" } } } } },
+    ]);
+    expect(manifest.tools.map((tool) => tool.inputSchema)).toEqual([
+      { type: "object" },
+      { type: "object", properties: { p: { type: "string" } } },
+    ]);
+  });
+
   it("aliases names over 64 characters with the prefix and maps them back", () => {
     const longName = "x".repeat(50);
     const manifest = buildClaudeCliToolManifest([fn("short"), fn(longName)]);

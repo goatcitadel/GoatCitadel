@@ -57,7 +57,10 @@ export function buildClaudeCliToolManifest(tools: ReadonlyArray<Record<string, u
     stubTools.push({
       name: exposedName,
       description: typeof definition.description === "string" ? definition.description : "",
-      inputSchema: isRecord(definition.parameters) ? definition.parameters : { type: "object", properties: {} },
+      // MCP requires an object-typed inputSchema; one loose schema would fail the whole tools/list.
+      inputSchema: isRecord(definition.parameters)
+        ? { ...definition.parameters, type: "object" }
+        : { type: "object", properties: {} },
     });
   });
   return {
