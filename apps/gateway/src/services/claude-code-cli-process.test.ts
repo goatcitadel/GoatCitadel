@@ -443,6 +443,12 @@ describe("runClaudeCli", () => {
 });
 
 describe("ClaudeCliError", () => {
+  it('is named "ClaudeCliError", which the tool-protocol retry exclusion matches on', () => {
+    const error = new ClaudeCliError("claude_cli_bridge_mismatch", "mismatch");
+    expect(error.name).toBe("ClaudeCliError");
+    expect(error).toBeInstanceOf(Error);
+  });
+
   it("never carries raw CLI stderr that may echo a credential", () => {
     const secret = "sk-ant-api03-" + "Q".repeat(40);
     const error = new ClaudeCliError("claude_cli_failed", "failed", { exitCode: 1, stderrTail: `auth used ${secret}` });
