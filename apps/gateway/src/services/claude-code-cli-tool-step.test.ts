@@ -459,6 +459,19 @@ describe("bridged governance faults", () => {
     expectReason(() => mapper.push(messageStop), "claude_cli_bridge_mismatch");
   });
 
+  it("a result before message_stop after a started tool call throws claude_cli_bridge_mismatch", () => {
+    const mapper = bridged();
+    pushAll(mapper, [init(), messageStart, ...toolCallLines(0, "toolu_01Echo", ECHO, { text: "hi" })]);
+    const result = line({ type: "result", subtype: "success", is_error: false, usage: STEP_USAGE });
+    expect(() => mapper.push(result)).toThrow(
+      expect.objectContaining({
+        reasonCode: "claude_cli_bridge_mismatch",
+        message: expect.stringContaining("a result arrived before the tool step ended"),
+      }),
+    );
+    expect(mapper.toolStep()).toBeUndefined();
+  });
+
   it("an unbridged mapper still blocks any tool_use", () => {
     const mapper = createClaudeCliStreamMapper(MODEL);
     mapper.push(init({ mcp_servers: [], tools: [] }));

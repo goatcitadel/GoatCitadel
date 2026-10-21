@@ -13,9 +13,8 @@ import { normalizeAnthropicUsage } from "./llm-provider-anthropic.js";
  * `tool_use` blocks into OpenAI-shaped `tool_calls`. Anything the bridge does
  * not expect fails the step closed.
  *
- * This module has no runtime imports from the stream or bridge modules (the
- * bridge imports the stream module), so the server name lives here and the
- * bridge re-exports it. Chunk shape and typed failures come from the shared
+ * This module has no runtime imports from the stream or bridge modules (both
+ * import this one), so the server name lives here and the bridge re-exports it. Chunk shape and typed failures come from the shared
  * leaf module `claude-code-cli-output`.
  */
 
@@ -165,7 +164,13 @@ export function createClaudeCliToolStepCollector(
         onAssistant(event.message.content);
         return false;
       }
-      if (event.type === "result") requireInit();
+      if (event.type === "result") {
+        requireInit();
+        // A started tool call must end at message_stop; a result first would finish the step as text.
+        if (calls.length > 0 && !completed) {
+          fail("claude_cli_bridge_mismatch", "a result arrived before the tool step ended");
+        }
+      }
       return false;
     },
     step() {
