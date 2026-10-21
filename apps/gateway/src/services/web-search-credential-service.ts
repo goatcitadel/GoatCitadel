@@ -43,7 +43,11 @@ export interface WebSearchCredentialServiceOptions {
    * Runs a Brave or Parallel keychain change under the Chat owner's target lock and fences
    * (keychain, allowlist, deployment profile, preparing, pending settlement, durable reservation).
    */
-  readonly withOfficialTargetChange: <T>(targetId: OfficialTargetId, work: () => Promise<T>) => Promise<T>;
+  readonly withOfficialTargetChange: <T>(
+    targetId: OfficialTargetId,
+    work: () => Promise<T>,
+    options: { action: "store" | "remove" },
+  ) => Promise<T>;
   readonly appendAudit?: (payload: Record<string, unknown>) => Promise<void>;
   /** Called when the keychain changed but its audit record could not be written. */
   readonly reportAuditFailure?: (event: string, targetId: WebSearchCredentialTargetId, error: unknown) => void;
@@ -157,7 +161,7 @@ export class WebSearchCredentialService {
 
   public async store(targetId: WebSearchCredentialTargetId, rawSecret: string): Promise<WebSearchCredentialStatus> {
     const secret = normalizeSecret(rawSecret);
-    return await this.withOwnerLocks(targetId, async () => {
+    return await this.withOwnerLocks(targetId, "store", async () => {
       this.assertKeychainAvailable(targetId);
       await this.assertSecretAccepted(targetId, secret);
       try {
@@ -174,7 +178,8 @@ export class WebSearchCredentialService {
   }
 
   public async clear(targetId: WebSearchCredentialTargetId): Promise<WebSearchCredentialStatus> {
-    return await this.withOwnerLocks(targetId, async () => {
+    // Removal never contacts the provider, so it works even after the host leaves the allowlist.
+    return await this.withOwnerLocks(targetId, "remove", async () => {
       if (!this.keychainAvailable()) {
         throw new ExternalServiceError("The OS keychain is unavailable.", {
           targetId,
@@ -318,9 +323,13 @@ export class WebSearchCredentialService {
     }
   }
 
-  private async withOwnerLocks<T>(targetId: WebSearchCredentialTargetId, work: () => Promise<T>): Promise<T> {
+  private async withOwnerLocks<T>(
+    targetId: WebSearchCredentialTargetId,
+    action: "store" | "remove",
+    work: () => Promise<T>,
+  ): Promise<T> {
     return await this.withTargetLock(targetId, () =>
-      targetId === "search.firecrawl" ? work() : this.options.withOfficialTargetChange(targetId, work),
+      targetId === "search.firecrawl" ? work() : this.options.withOfficialTargetChange(targetId, work, { action }),
     );
   }
 

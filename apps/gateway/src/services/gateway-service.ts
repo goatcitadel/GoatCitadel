@@ -1421,8 +1421,8 @@ export class GatewayService {
       getNetworkAllowlist: () => this.config.toolPolicy.sandbox.networkAllowlist,
       getFirecrawlConfig: () => this.config.assistant.web.firecrawl,
       probeOfficial: probeOfficialSearchCredential,
-      withOfficialTargetChange: (targetId, work) =>
-        this.runtimeConfigurationService.withSettingsCredentialChange(targetId, work),
+      withOfficialTargetChange: (targetId, work, options) =>
+        this.runtimeConfigurationService.withSettingsCredentialChange(targetId, work, options),
       appendAudit: async (payload) => void (await this.storage.audit.append("tool_invocations", payload)),
       reportAuditFailure: (event, targetId, error) =>
         this.recordDevDiagnostic({

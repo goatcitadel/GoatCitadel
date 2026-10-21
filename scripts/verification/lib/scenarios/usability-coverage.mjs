@@ -137,7 +137,7 @@ export const ROUTE_ACTIONS_BY_SLUG = Object.freeze({
   "settings-integrations": ["integration-validation-and-diagnostics", "sandbox-destination"],
   "settings-channels": ["channel-validation-and-diagnostics", "sandbox-destination"],
   "settings-mcp": ["mcp-server-tool-grant-lifecycle", "unsupported-transport-truth"],
-  "settings-web-search": ["web-search-settings-governed-save"],
+  "settings-web-search": ["web-search-settings-render-from-gateway-state"],
   "settings-tools": ["tool-catalog-and-grants", "approval-and-policy-boundary"],
   "settings-hooks": ["signed-webhook-safe-test-and-delivery-history"],
 });

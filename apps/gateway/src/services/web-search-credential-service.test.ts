@@ -141,7 +141,7 @@ describe("WebSearchCredentialService", () => {
     });
 
     await expect(credentials.store("search.brave", "brave-bad")).rejects.toThrow("Brave Search rejected the key");
-    expect(withOfficialTargetChange).toHaveBeenCalledWith("search.brave", expect.any(Function));
+    expect(withOfficialTargetChange).toHaveBeenCalledWith("search.brave", expect.any(Function), { action: "store" });
     expect(probeOfficial).toHaveBeenCalledWith("brave", "brave-bad", ["api.firecrawl.dev", "api.search.brave.com"]);
     expect(secretStore.setSecret).not.toHaveBeenCalled();
   });

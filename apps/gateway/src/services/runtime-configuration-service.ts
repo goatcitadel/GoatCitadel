@@ -222,10 +222,11 @@ export class RuntimeConfigurationService {
    * `chatOnlyGates: false` is for the authenticated Settings owner: it keeps the keychain, allowlist
    * and unresolved-settlement checks but skips the remote_hardened installation-scope block and the
    * non-interactive write-custody check, which govern Chat-hosted credential capture only.
+   * `networkAllowlist: false` is for key removal, which never contacts the provider.
    */
   public assertConfigurationAvailable(
     targetId: RuntimeConfigurationTargetId,
-    options: { chatOnlyGates?: boolean } = {},
+    options: { chatOnlyGates?: boolean; networkAllowlist?: boolean } = {},
   ): void {
     const target = requireTarget(targetId);
     const chatOnlyGates = options.chatOnlyGates !== false;
@@ -257,6 +258,7 @@ export class RuntimeConfigurationService {
         },
       );
     }
+    if (options.networkAllowlist === false) return;
     const networkAllowlist = [...(this.options.getNetworkAllowlist?.() ?? this.options.networkAllowlist)];
     if (!isHostAllowed(`https://${target.endpointHost}`, networkAllowlist)) {
       throw new PolicyViolationError({
@@ -278,13 +280,17 @@ export class RuntimeConfigurationService {
   public async withSettingsCredentialChange<T>(
     targetId: RuntimeConfigurationTargetId,
     work: () => Promise<T>,
+    options: { action?: "store" | "remove" } = {},
   ): Promise<T> {
     const target = requireTarget(targetId);
     // Checked before queueing too: a pending settlement keeps the lock until Chat settles.
     await this.assertNoChatConfigurationInFlight(target);
     const releaseTarget = await this.acquireTargetLock(target.targetId);
     try {
-      this.assertConfigurationAvailable(target.targetId, { chatOnlyGates: false });
+      this.assertConfigurationAvailable(target.targetId, {
+        chatOnlyGates: false,
+        networkAllowlist: options.action !== "remove",
+      });
       await this.assertNoChatConfigurationInFlight(target);
       return await work();
     } finally {

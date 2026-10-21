@@ -31,9 +31,11 @@ const DEDICATED_BROWSER_PROOFS = Object.freeze({
     "surface-regression.settings-hooks",
     "The route-specific Chromium scenario verifies that the governed Hooks surface renders from canonical Gateway state.",
   ),
-  "route.settings-web-search.web-search-settings-governed-save": dedicated(
+  // Render-only browser proof. The governed saves (Change Plans, keychain, allowlist step) are proven
+  // by the Gateway and WebSearchSettings unit tests, not by this scenario.
+  "route.settings-web-search.web-search-settings-render-from-gateway-state": dedicated(
     "surface-regression.settings-web-search",
-    "The route-specific Chromium scenario verifies that Web & Search renders Firecrawl, search engine, and key status from canonical Gateway state.",
+    "The route-specific Chromium scenario verifies that the Web & Search route renders from canonical Gateway state; it does not submit a save.",
   ),
 });
 

@@ -78,6 +78,18 @@ describe("RuntimeConfigurationService Settings credential fence", () => {
     expect(() => service.assertConfigurationAvailable("search.brave")).toThrow();
   });
 
+  it("lets key removal skip the allowlist gate while storing still requires it", async () => {
+    const service = fencedService({ networkAllowlist: [] });
+    const work = vi.fn(async () => "removed");
+
+    await expect(service.withSettingsCredentialChange("search.brave", work, { action: "remove" })).resolves.toBe(
+      "removed",
+    );
+    await expect(service.withSettingsCredentialChange("search.brave", work, { action: "store" })).rejects.toThrow(
+      "explicitly enabled in the network allowlist",
+    );
+  });
+
   it("applies the shared availability gate before running the change", async () => {
     const service = fencedService({ networkAllowlist: [] });
     const work = vi.fn(async () => "changed");
