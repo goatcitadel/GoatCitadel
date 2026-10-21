@@ -100,6 +100,14 @@ describe("cockpit settings index", () => {
     ).toEqual(["Tools"]);
   });
 
+  it.each(["Claude Code CLI", "let it use GoatCitadel tools", "tool bridge"])(
+    "finds the Claude Code CLI tools switch by %s on Models",
+    (term) => {
+      const entries = searchSettingsPages(buildSettingsIndex(), term).flatMap((page) => page.entries);
+      expect(entries.find((entry) => entry.section === "providers")?.href).toBe("/settings/models#providers");
+    },
+  );
+
   it.each([
     ["desktop system permission", "General"],
     ["archive restore", "Workspaces"],
