@@ -202,3 +202,20 @@ describe("lookupModelMetadata", () => {
     expect(entry).toEqual({ contextWindow: 128000, outputTokenLimit: 32000 });
   });
 });
+
+describe("shipped Claude 5 metadata", () => {
+  it("covers the current Claude models for every Claude provider route", () => {
+    const { manifest, errors } = loadLlmModelMetadataManifest(
+      join(import.meta.dirname, "..", "..", "..", "..", "config", "llm-model-metadata.json"),
+    );
+    expect(errors).toEqual([]);
+    for (const providerId of ["anthropic", "claude-code", "claude-code-cli"]) {
+      for (const modelId of ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]) {
+        expect(lookupExactModelMetadata(manifest, providerId, modelId), `${providerId}/${modelId}`).toMatchObject({
+          contextWindow: 1000000,
+          outputTokenLimit: 128000,
+        });
+      }
+    }
+  });
+});
