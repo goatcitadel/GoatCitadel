@@ -178,12 +178,18 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
           <fieldset className="space-y-2" disabled={governed.locked}>
             <legend className="text-sm font-medium text-fg-secondary">Server</legend>
             <label className="flex items-center gap-2 text-sm text-fg">
-              <input type="radio" checked={hosted} onChange={() => edit({ baseUrl: HOSTED_FIRECRAWL_BASE_URL })} />
+              <input
+                type="radio"
+                name="firecrawl-server"
+                checked={hosted}
+                onChange={() => edit({ baseUrl: HOSTED_FIRECRAWL_BASE_URL })}
+              />
               Hosted Firecrawl (api.firecrawl.dev, needs an API key)
             </label>
             <label className="flex items-center gap-2 text-sm text-fg">
               <input
                 type="radio"
+                name="firecrawl-server"
                 checked={!hosted}
                 onChange={() => edit({ baseUrl: hosted ? LOCAL_FIRECRAWL_BASE_URL : value.baseUrl })}
               />

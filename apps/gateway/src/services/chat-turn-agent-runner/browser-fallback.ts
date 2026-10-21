@@ -230,13 +230,13 @@ async function tryAlternateBuiltinSearchEngines(
     return undefined;
   }
 
-  const failedEngine = typeof input.args.engine === "string" ? input.args.engine : undefined;
-  // Only operator-enabled engines, in the operator's order. Each retry names a native engine, so it
-  // must not send the same query back through Firecrawl.
-  const alternateEngines = normalizeWebSearchEngineOrder(deps.getSearchEngineOrder?.()).filter(
-    (engine) => engine !== failedEngine,
-  );
-  const alternateBackend = input.args.backend === "official" ? {} : { backend: "native" };
+  // Only operator-enabled engines, in the operator's order. Without an explicit engine the search
+  // already tried the configured default first, so retries start after it.
+  const configuredEngines = normalizeWebSearchEngineOrder(deps.getSearchEngineOrder?.());
+  const failedEngine = typeof input.args.engine === "string" ? input.args.engine : configuredEngines[0];
+  const alternateEngines = configuredEngines.filter((engine) => engine !== failedEngine);
+  // Each retry is a native engine search: it must not repeat the same Firecrawl or official request.
+  const alternateBackend = { backend: "native" };
 
   for (const engine of alternateEngines) {
     if (input.turnInput.signal?.aborted) {

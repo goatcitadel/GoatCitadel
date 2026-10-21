@@ -180,6 +180,29 @@ describe("WebSearchCredentialService", () => {
     expect(reportAuditFailure).toHaveBeenCalledTimes(2);
   });
 
+  it("gives the keychain key only to the configured Firecrawl endpoint", async () => {
+    const secretStore = memoryStore({ [FIRECRAWL_ACCOUNT]: "fc-key" });
+    const { credentials } = service({ secretStore });
+
+    await expect(credentials.resolveFirecrawlCredential("https://api.firecrawl.dev/")).resolves.toBe("fc-key");
+    await expect(credentials.resolveFirecrawlCredential("https://API.firecrawl.dev")).resolves.toBe("fc-key");
+    await expect(credentials.resolveFirecrawlCredential("https://attacker.example")).resolves.toBeUndefined();
+    await expect(credentials.resolveFirecrawlCredential("not a url")).resolves.toBeUndefined();
+  });
+
+  it("reports a private Firecrawl host as not allowlisted, like Settings and the tools", async () => {
+    const fetchImpl = vi.fn();
+    const { credentials } = service({
+      fetchImpl,
+      getNetworkAllowlist: () => ["192.168.1.20:3002"],
+      getFirecrawlConfig: () => firecrawlConfig({ baseUrl: "http://192.168.1.20:3002" }),
+    });
+
+    expect(credentials.status("search.firecrawl").endpointAllowlisted).toBe(false);
+    await expect(credentials.checkFirecrawl()).resolves.toMatchObject({ status: "blocked" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("clears a keychain key and falls back to the environment", async () => {
     const secretStore = memoryStore({ [FIRECRAWL_ACCOUNT]: "fc-key" });
     const { credentials } = service({ secretStore, env: { FIRECRAWL_API_KEY: "env-key" } });

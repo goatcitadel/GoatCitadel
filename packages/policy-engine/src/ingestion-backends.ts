@@ -61,7 +61,7 @@ export async function ingestDocumentViaBackend(input: {
   networkAllowlist?: string[];
   sourceAllowlist?: string[];
   /** Keychain-held Firecrawl key; the configured environment variable stays the fallback. */
-  resolveFirecrawlCredential?: () => Promise<string | undefined>;
+  resolveFirecrawlCredential?: (baseUrl: string) => Promise<string | undefined>;
 }): Promise<{
   backend: IngestionBackend;
   fetchResult: FetchResult;
@@ -283,7 +283,7 @@ async function fetchDocument(input: {
   fetchUrl: (url: string) => Promise<FetchUrlResult>;
   networkAllowlist: string[];
   sourceAllowlist: string[];
-  resolveFirecrawlCredential?: () => Promise<string | undefined>;
+  resolveFirecrawlCredential?: (baseUrl: string) => Promise<string | undefined>;
 }): Promise<FetchResult> {
   const args = input.request.args;
   const sourceType = parseIngestionSourceType(args.sourceType);
@@ -337,7 +337,8 @@ async function fetchDocument(input: {
       normalizeFirecrawlApiKeyEnvName(process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV) ??
       "FIRECRAWL_API_KEY";
     const firecrawlApiKey =
-      (await resolveKeychainFirecrawlKey(input.resolveFirecrawlCredential)) ?? process.env[firecrawlApiKeyEnv]?.trim();
+      (await resolveKeychainFirecrawlKey(input.resolveFirecrawlCredential, firecrawlBaseUrl)) ??
+      process.env[firecrawlApiKeyEnv]?.trim();
     // Allow loopback for the base URL only when it matches the canonical
     // local default (so the bundled Firecrawl docker compose still works).
     let parsedBase: URL;
@@ -557,10 +558,11 @@ async function readCachedDocument(input: {
 }
 
 async function resolveKeychainFirecrawlKey(
-  resolve: (() => Promise<string | undefined>) | undefined,
+  resolve: ((baseUrl: string) => Promise<string | undefined>) | undefined,
+  baseUrl: string,
 ): Promise<string | undefined> {
   try {
-    return (await resolve?.())?.trim() || undefined;
+    return (await resolve?.(baseUrl))?.trim() || undefined;
   } catch {
     // A keychain outage keeps the environment fallback and never surfaces a credential value.
     return undefined;

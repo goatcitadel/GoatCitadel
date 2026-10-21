@@ -218,9 +218,18 @@ export class RuntimeConfigurationService {
     return this.installationScopeId;
   }
 
-  public assertConfigurationAvailable(targetId: RuntimeConfigurationTargetId): void {
+  /**
+   * `chatOnlyGates: false` is for the authenticated Settings owner: it keeps the keychain, allowlist
+   * and unresolved-settlement checks but skips the remote_hardened installation-scope block and the
+   * non-interactive write-custody check, which govern Chat-hosted credential capture only.
+   */
+  public assertConfigurationAvailable(
+    targetId: RuntimeConfigurationTargetId,
+    options: { chatOnlyGates?: boolean } = {},
+  ): void {
     const target = requireTarget(targetId);
-    this.assertInstallationScopeAllowed(targetId);
+    const chatOnlyGates = options.chatOnlyGates !== false;
+    if (chatOnlyGates) this.assertInstallationScopeAllowed(targetId);
     const unresolved = this.unresolvedSettlements.get(targetId);
     if (unresolved) {
       throw new ExternalServiceError(
@@ -239,7 +248,7 @@ export class RuntimeConfigurationService {
         diagnosticCode: "keychain_unavailable",
       });
     }
-    if (!this.options.secretStore.isWriteCustodySafe()) {
+    if (chatOnlyGates && !this.options.secretStore.isWriteCustodySafe()) {
       throw new ExternalServiceError(
         "This host keychain adapter cannot safely accept a non-interactive Chat credential.",
         {
@@ -275,7 +284,7 @@ export class RuntimeConfigurationService {
     await this.assertNoChatConfigurationInFlight(target);
     const releaseTarget = await this.acquireTargetLock(target.targetId);
     try {
-      this.assertConfigurationAvailable(target.targetId);
+      this.assertConfigurationAvailable(target.targetId, { chatOnlyGates: false });
       await this.assertNoChatConfigurationInFlight(target);
       return await work();
     } finally {

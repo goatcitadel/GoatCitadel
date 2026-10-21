@@ -78,6 +78,31 @@ describe("applyRuntimeBrowserBackendDefaults", () => {
     expect(navigated.args.searchEngineOrder).toBeUndefined();
   });
 
+  it("replaces a caller-supplied engine order so disabled engines stay off", () => {
+    const result = applyRuntimeBrowserBackendDefaults(
+      search({ query: "q", searchEngineOrder: ["google", "duckduckgo"] }),
+      web({ enabled: false }, { engineOrder: ["bing"] }),
+      [],
+    ) as { args: Record<string, unknown> };
+    expect(result.args.searchEngineOrder).toEqual(["bing"]);
+  });
+
+  it("reroutes an explicit docs.ingest Firecrawl read when the URL is not allowlisted", () => {
+    const ingest = (fallbackToNative: boolean) =>
+      applyRuntimeBrowserBackendDefaults(
+        {
+          toolName: "docs.ingest",
+          args: { sourceType: "url", source: "https://example.com", backend: "firecrawl" },
+        } as never,
+        web({ fallbackToNative }),
+        [],
+      ) as { args: Record<string, unknown> };
+
+    expect(ingest(true).args).toMatchObject({ backend: "native" });
+    expect(ingest(true).args.firecrawlBaseUrl).toBeUndefined();
+    expect(ingest(false).args).toMatchObject({ backend: "firecrawl", firecrawlBaseUrl: "https://api.firecrawl.dev" });
+  });
+
   it("falls back to the default engine order when none is configured", () => {
     const result = applyRuntimeBrowserBackendDefaults(search(), web({ enabled: false }), []) as {
       args: Record<string, unknown>;

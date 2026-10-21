@@ -14,6 +14,7 @@ import {
   normalizeFirecrawlApiKeyEnvName,
 } from "@goatcitadel/policy-engine";
 import type { FirecrawlRuntimeConfig } from "../config.js";
+import { isFirecrawlBaseUrlAllowlisted } from "./runtime-browser-backend-defaults.js";
 import { describeOfficialSearchTarget, runtimeConfigurationAccount } from "./runtime-configuration-service.js";
 import type { SecretStoreService } from "./secret-store-service.js";
 
@@ -95,7 +96,14 @@ export class WebSearchCredentialService {
   }
 
   /** Execution-time lookup for browser tools. The environment fallback stays in the policy engine. */
-  public async resolveFirecrawlCredential(): Promise<string | undefined> {
+  public async resolveFirecrawlCredential(requestedBaseUrl?: string): Promise<string | undefined> {
+    // The saved key belongs to the configured endpoint only; a caller-supplied base URL never receives it.
+    if (
+      requestedBaseUrl !== undefined &&
+      !sameFirecrawlEndpoint(requestedBaseUrl, this.options.getFirecrawlConfig().baseUrl)
+    ) {
+      return undefined;
+    }
     return this.keychainAvailable() ? this.readKeychain("search.firecrawl") : undefined;
   }
 
@@ -277,7 +285,7 @@ export class WebSearchCredentialService {
     } catch {
       return { host, allowlisted: false };
     }
-    return { host, allowlisted: isCanonicalLocalFirecrawlBaseUrl(baseUrl) || isHostAllowed(baseUrl, allowlist) };
+    return { host, allowlisted: isFirecrawlBaseUrlAllowlisted(baseUrl, allowlist) };
   }
 
   private labelFor(targetId: WebSearchCredentialTargetId): string {
@@ -350,6 +358,19 @@ function normalizeSecret(value: string): string {
   if (secret.length > MAX_SECRET_LENGTH)
     throw new ValidationError({ field: "apiKey", message: "API key is too long." });
   return secret;
+}
+
+function sameFirecrawlEndpoint(left: string, right: string): boolean {
+  const normalize = (value: string) => {
+    try {
+      const parsed = new URL(value.trim());
+      return `${parsed.origin}${parsed.pathname.replace(/\/+$/u, "")}`.toLowerCase();
+    } catch {
+      return undefined;
+    }
+  };
+  const normalized = normalize(left);
+  return normalized !== undefined && normalized === normalize(right);
 }
 
 function isCanonicalLocalFirecrawlBaseUrl(baseUrl: string): boolean {

@@ -283,12 +283,7 @@ describe("ChatTurnAgentRunner loop 28 coverage", () => {
         auditEventId: "audit-primary-empty",
         result: { query: "GoatCitadel release blockers", results: [] },
       })
-      .mockRejectedValueOnce(new Error("duckduckgo timeout"))
-      .mockResolvedValueOnce({
-        outcome: "blocked",
-        policyReason: "bing blocked",
-        auditEventId: "audit-bing-blocked",
-      })
+      .mockRejectedValueOnce(new Error("bing timeout"))
       .mockResolvedValueOnce({
         outcome: "approval_required",
         policyReason: "google approval required",
@@ -307,27 +302,20 @@ describe("ChatTurnAgentRunner loop 28 coverage", () => {
       rawArgs: { query: "GoatCitadel release blockers" },
     });
 
-    expect(invokeTool).toHaveBeenCalledTimes(4);
-    // Alternate engines follow the operator order (default duckduckgo → bing → google) and stay native.
+    // The search already tried the default (duckduckgo); retries follow the rest of the order, natively.
+    expect(invokeTool).toHaveBeenCalledTimes(3);
     expect(invokeTool).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({
-        toolName: "browser.search",
-        args: expect.objectContaining({ engine: "duckduckgo", backend: "native" }),
-      }),
-    );
-    expect(invokeTool).toHaveBeenNthCalledWith(
-      3,
       expect.objectContaining({
         toolName: "browser.search",
         args: expect.objectContaining({ engine: "bing", backend: "native" }),
       }),
     );
     expect(invokeTool).toHaveBeenNthCalledWith(
-      4,
+      3,
       expect.objectContaining({
         toolName: "browser.search",
-        args: expect.objectContaining({ engine: "google" }),
+        args: expect.objectContaining({ engine: "google", backend: "native" }),
       }),
     );
     expect(result.record).toMatchObject({
@@ -341,11 +329,44 @@ describe("ChatTurnAgentRunner loop 28 coverage", () => {
     expect(result.record.result?.fallbackChain).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ engineLabel: "Built-in browser", browserFailureClass: "no_results" }),
-        expect.objectContaining({ engineLabel: "Built-in browser (bing)", status: "failed" }),
-        expect.objectContaining({ engineLabel: "Built-in browser (duckduckgo)", error: "duckduckgo timeout" }),
+        expect.objectContaining({ engineLabel: "Built-in browser (bing)", error: "bing timeout" }),
         expect.objectContaining({ engineLabel: "Built-in browser (google)", status: "failed" }),
       ]),
     );
+  });
+
+  it("retries only operator-enabled engines in the operator order", async () => {
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-primary-empty",
+        result: { query: "GoatCitadel release blockers", results: [] },
+      })
+      .mockResolvedValueOnce({ outcome: "blocked", policyReason: "bing blocked", auditEventId: "audit-bing" });
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(invokeTool),
+      toolNames: ["browser.search", "file.read_range", "time.now"],
+      getSearchEngineOrder: () => ["google", "bing"],
+    });
+
+    await executeToolCall({
+      input: turnInput({ content: "Search the web for GoatCitadel release blockers.", webMode: "auto" }),
+      turnId: "turn-loop28-operator-order",
+      toolName: "browser.search",
+      rawArgs: { query: "GoatCitadel release blockers" },
+    });
+
+    // Google is the default the search already tried; Bing is the only backup; DuckDuckGo is off.
+    expect(invokeTool).toHaveBeenCalledTimes(2);
+    expect(invokeTool).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ args: expect.objectContaining({ engine: "bing", backend: "native" }) }),
+    );
+    const engines = invokeTool.mock.calls.map(([request]) => (request.args as Record<string, unknown>).engine);
+    expect(engines).not.toContain("duckduckgo");
   });
 
   it("blocks delegated non-code Prompt Lab local file calls before runtime invocation", async () => {

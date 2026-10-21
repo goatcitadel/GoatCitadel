@@ -152,7 +152,7 @@ export interface ToolExecutorRuntimeHooks {
   /** Resolve protected official-search credentials at execution time, before environment fallback. */
   resolveCredential?: ResolveOfficialSearchCredential;
   /** Resolve the keychain-held Firecrawl key at execution time, before environment fallback. */
-  resolveFirecrawlCredential?: () => Promise<string | undefined>;
+  resolveFirecrawlCredential?: (baseUrl: string) => Promise<string | undefined>;
   /** Resolve a protected approval action bearer only inside the native comms provider adapter. */
   resolveApprovalActionTokenSecret?: (secretRef: string) => string;
   /** Remove a protected approval action bearer after a terminal provider outcome. */

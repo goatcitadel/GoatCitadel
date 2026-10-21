@@ -52,7 +52,7 @@ export interface BrowserExecutionContext {
   /** Process-local protected credential lookup; never serialized into browser tool arguments. */
   resolveCredential?: ResolveOfficialSearchCredential;
   /** Keychain-held Firecrawl key; the configured environment variable stays the fallback. */
-  resolveFirecrawlCredential?: () => Promise<string | undefined>;
+  resolveFirecrawlCredential?: (baseUrl: string) => Promise<string | undefined>;
 }
 
 interface BrowserStepInput {
@@ -2401,13 +2401,13 @@ function resolveFirecrawlRuntimeConfig(args: Record<string, unknown>): {
 }
 
 /** The keychain key wins; the environment variable named by `firecrawlApiKeyEnv` is the fallback. */
-async function withFirecrawlKeychainCredential<T extends { apiKey?: string }>(
+async function withFirecrawlKeychainCredential<T extends { apiKey?: string; baseUrl: string }>(
   firecrawl: T,
   executionContext?: BrowserExecutionContext,
 ): Promise<T> {
   let keychainKey: string | undefined;
   try {
-    keychainKey = (await executionContext?.resolveFirecrawlCredential?.())?.trim();
+    keychainKey = (await executionContext?.resolveFirecrawlCredential?.(firecrawl.baseUrl))?.trim();
   } catch {
     // A keychain outage keeps the environment fallback and never surfaces a credential value.
   }

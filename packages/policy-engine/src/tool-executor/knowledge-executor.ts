@@ -66,7 +66,7 @@ export interface KnowledgeExecutorDeps {
   resolveExecutionGrantAllowedHosts(request: ToolInvokeRequest, storage?: AsyncStorage): Promise<string[] | undefined>;
   resolveNetworkAllowlist(request: ToolInvokeRequest, config: ToolPolicyConfig): string[];
   /** Keychain-held Firecrawl key for docs.ingest; the environment variable stays the fallback. */
-  resolveFirecrawlCredential?: () => Promise<string | undefined>;
+  resolveFirecrawlCredential?: (baseUrl: string) => Promise<string | undefined>;
 }
 
 export function isKnowledgeToolName(toolName: string): boolean {

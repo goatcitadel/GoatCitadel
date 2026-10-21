@@ -13,6 +13,7 @@ import { Callout } from "../../ui/Callout";
 import { Field } from "../../ui/Field";
 import { cockpitInputClass } from "../../ui/input-class";
 import { StatusBadge } from "../../ui/StatusBadge";
+import { presentChangeStatusLabel } from "./settings-vocabulary";
 
 export const WEB_SEARCH_CREDENTIALS_QUERY_KEY = ["settings", "web-search-credentials"] as const;
 
@@ -80,13 +81,21 @@ function WebSearchKeyRow({
           ? await saveWebSearchCredential(status.targetId, apiKey, revision)
           : await clearWebSearchCredential(status.targetId, revision);
       setApiKey("");
-      setMessage({
-        tone: "info",
-        text:
-          action === "save"
-            ? `${status.label} key checked and saved.`
-            : `${status.label} key removed from the keychain.`,
-      });
+      const planStatus = response.changePlanReceipt?.status;
+      setMessage(
+        !planStatus || planStatus === "completed"
+          ? {
+              tone: "info",
+              text:
+                action === "save"
+                  ? `${status.label} key checked and saved.`
+                  : `${status.label} key removed from the keychain.`,
+            }
+          : {
+              tone: "info",
+              text: `The ${status.label} key change is ${presentChangeStatusLabel(planStatus).toLowerCase()}. Review it in Inbox before relying on it.`,
+            },
+      );
       queryClient.setQueryData(
         WEB_SEARCH_CREDENTIALS_QUERY_KEY,
         (previous: { items: WebSearchCredentialStatus[] } | undefined) =>

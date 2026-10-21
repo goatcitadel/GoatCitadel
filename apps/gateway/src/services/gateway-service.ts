@@ -1441,7 +1441,7 @@ export class GatewayService {
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
       resolveOutsideRootWriteEligibility: (request) => isOutsideRootWriteEligible(request, { storage: this.storage }),
       resolveCredential: (provider) => this.runtimeConfigurationService.resolveOfficialSearchCredential(provider),
-      resolveFirecrawlCredential: () => this.webSearchCredentials.resolveFirecrawlCredential(),
+      resolveFirecrawlCredential: (baseUrl) => this.webSearchCredentials.resolveFirecrawlCredential(baseUrl),
       configureRuntime: (_request, targetId) => this.runtimeConfigurationService.assertConfigurationAvailable(targetId),
       resolveApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.resolve(secretRef),
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),

@@ -33,7 +33,8 @@ export function applyRuntimeBrowserBackendDefaults<TRequest extends ToolInvokeRe
   const firecrawlUsable = firecrawl.enabled && !rerouteToNative;
 
   if (BROWSER_READ_TOOLS.has(request.toolName)) {
-    if (request.toolName === "browser.search" && args.searchEngineOrder === undefined) {
+    // The operator order always replaces a caller-supplied one: engines turned off stay off.
+    if (request.toolName === "browser.search") {
       args.searchEngineOrder = normalizeWebSearchEngineOrder(web.search?.engineOrder);
     }
     if (!explicitBackend && firecrawlUsable) {
@@ -58,6 +59,9 @@ export function applyRuntimeBrowserBackendDefaults<TRequest extends ToolInvokeRe
     const hasExplicitDocsBackend = args.backend !== undefined && args.backend !== null;
     if (!hasExplicitDocsBackend && firecrawlUsable && firecrawl.defaultReadBackend === "firecrawl") {
       args.backend = "firecrawl";
+    }
+    if (args.backend === "firecrawl" && rerouteToNative) {
+      args.backend = "native";
     }
     if (args.backend === "firecrawl") {
       args.firecrawlBaseUrl = args.firecrawlBaseUrl ?? firecrawl.baseUrl;

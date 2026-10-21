@@ -68,6 +68,16 @@ describe("RuntimeConfigurationService Settings credential fence", () => {
     expect(work).not.toHaveBeenCalled();
   });
 
+  it("does not apply the Chat-only deployment and write-custody gates to Settings changes", async () => {
+    const secretStore = createSecretStore();
+    secretStore.isWriteCustodySafe.mockReturnValue(false);
+    const service = fencedService({ secretStore, deploymentProfile: "remote_hardened" });
+    const work = vi.fn(async () => "changed");
+
+    await expect(service.withSettingsCredentialChange("search.brave", work)).resolves.toBe("changed");
+    expect(() => service.assertConfigurationAvailable("search.brave")).toThrow();
+  });
+
   it("applies the shared availability gate before running the change", async () => {
     const service = fencedService({ networkAllowlist: [] });
     const work = vi.fn(async () => "changed");
