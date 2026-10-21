@@ -26,7 +26,7 @@
 - **No recovery retry:** `claude_cli_bridge_unavailable`, `claude_cli_bridge_mismatch`, `claude_cli_tool_use_blocked` and `claude_cli_hook_blocked` are never retried by `shouldRetryToolProtocolError`.
 - **Stub:** imports only `node:fs` and `node:process`. It never answers `tools/call`. It answers unknown requests with JSON-RPC error `-32601`. Stdin lines are capped at 1 MiB, and it exits on stdin EOF.
 - **New reason codes:** `claude_cli_bridge_unavailable` and `claude_cli_bridge_mismatch`.
-- **Feature flag:** `claudeCliToolBridgeEnabled`, with env `GOATCITADEL_FEATURE_CLAUDE_CLI_TOOL_BRIDGE_ENABLED`. It defaults to `false` (operator decision 2). Turning it on by default is a separate follow-up PR after the live proof.
+- **Feature flag:** `claudeCliToolBridgeEnabled`, with env `GOATCITADEL_FEATURE_CLAUDE_CLI_TOOL_BRIDGE_ENABLED`. It defaulted to `false` (operator decision 2) until the live proof passed on 2026-10-21; a separate follow-up PR then turned it on by default.
 - **Capability:** for `apiStyle === "claude-code-cli"`, `toolCalling` equals the flag. Every other capability stays `false`.
 - **Repo rules:**
   - vitest runs with `--maxWorkers=2`, at low priority, one heavy job at a time;

@@ -84,6 +84,8 @@ describe("cockpit Claude Code CLI tool setting", () => {
     const { container, unmount } = await mount();
     try {
       await vi.waitFor(() => expect(container.textContent).toContain("Current: Off"));
+      expect(container.textContent).toContain("Experimental and on by default.");
+      expect(container.textContent).toContain("Turn it off to keep those turns text-only.");
       // The help says where tools run, what it costs, and claims no sandbox or endorsement.
       const facts = document.getElementById(checkbox(container).getAttribute("aria-describedby")!)!;
       expect(facts.textContent).toContain("Tools run in GoatCitadel, not inside Claude Code.");

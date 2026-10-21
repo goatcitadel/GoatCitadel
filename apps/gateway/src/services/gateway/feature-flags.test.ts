@@ -4,8 +4,19 @@ import { buildUpdatedFeatureFlags, resolveGatewayFeatureFlags, type GatewayFeatu
 describe("claudeCliToolBridgeEnabled feature flag", () => {
   const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
 
-  it("defaults to off", () => {
-    expect(defaults.claudeCliToolBridgeEnabled).toBe(false);
+  it("defaults on once its live proof passed, and still supports revocation", () => {
+    expect(defaults.claudeCliToolBridgeEnabled).toBe(true);
+    expect(buildUpdatedFeatureFlags(defaults, { claudeCliToolBridgeEnabled: false }).claudeCliToolBridgeEnabled).toBe(
+      false,
+    );
+  });
+
+  it("keeps an explicit off from configuration or a stored setting", () => {
+    const configuredOff = { ...defaults, claudeCliToolBridgeEnabled: false };
+    expect(resolveGatewayFeatureFlags(undefined, configuredOff).claudeCliToolBridgeEnabled).toBe(false);
+    expect(resolveGatewayFeatureFlags({ claudeCliToolBridgeEnabled: false }, defaults).claudeCliToolBridgeEnabled).toBe(
+      false,
+    );
   });
 
   it("buildUpdatedFeatureFlags carries claudeCliToolBridgeEnabled", () => {
