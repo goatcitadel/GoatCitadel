@@ -26,6 +26,16 @@ function fixture(owner: SettingsApprovalOwner): ChangePlanRecord {
       target: { ...base.target, resourceId: change.operation },
     };
   }
+  if (owner === "claude-cli-tool-bridge")
+    return {
+      ...base,
+      origin: { surface: "settings", workspaceId: "default" },
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "feature_flag", flag: "claudeCliToolBridgeEnabled", enabled: true },
+      },
+      target: { ...base.target, resourceId: "feature:claudeCliToolBridgeEnabled" },
+    };
   if (owner === "filesystem-write-access")
     return {
       ...base,
@@ -66,6 +76,7 @@ const owners: SettingsApprovalOwner[] = [
   "tool-approval",
   "budget-mode",
   "filesystem-write-access",
+  "claude-cli-tool-bridge",
 ];
 
 describe("native Settings exact approval owner binding", () => {
@@ -97,7 +108,18 @@ describe("native Settings exact approval owner binding", () => {
     expect(settingsApprovalOwnerBinding(plan, owner, "workspace-a", { ...plan, planId: "other-plan" })).toBeNull();
     expect(settingsApprovalOwnerBinding(plan, owner, "workspace-a", { ...plan, requiredAction: undefined })).toBeNull();
   });
-  it.each(["tool-approval", "budget-mode", "filesystem-write-access"] as const)(
+  it("rejects a plan for another feature flag", () => {
+    const plan = fixture("claude-cli-tool-bridge");
+    const foreign: ChangePlanRecord = {
+      ...plan,
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "feature_flag", flag: "productSourceEvolutionV1Enabled", enabled: true },
+      },
+    };
+    expect(settingsApprovalOwnerBinding(foreign, "claude-cli-tool-bridge", "workspace-a")).toBeNull();
+  });
+  it.each(["tool-approval", "budget-mode", "filesystem-write-access", "claude-cli-tool-bridge"] as const)(
     "rejects another runtime operation for %s even with the expected target",
     (owner) => {
       const plan = fixture(owner);
