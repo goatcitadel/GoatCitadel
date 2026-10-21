@@ -79,6 +79,14 @@ describe("Evolution Control Plane Change Plan contract", () => {
         change: { operation: "feature_flag", flag: "codeModeV1Enabled", enabled: true },
       }),
     ).toBe(true);
+    for (const enabled of [true, false]) {
+      expect(
+        isChangePlanRequest({
+          kind: "runtime_configuration",
+          change: { operation: "feature_flag", flag: "claudeCliToolBridgeEnabled", enabled },
+        }),
+      ).toBe(true);
+    }
     expect(isChangePlanRequest({ kind: "managed_source_registration" })).toBe(true);
     expect(
       isChangePlanRequest({

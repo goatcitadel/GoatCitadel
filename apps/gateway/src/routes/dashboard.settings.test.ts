@@ -94,6 +94,53 @@ describe("dashboard settings routes", () => {
     });
   });
 
+  it.each([true, false])(
+    "routes the Claude Code CLI tool bridge flag (%s) through a confirmed Change Plan",
+    async (enabled) => {
+      const updateSettings = vi.fn();
+      const getSettings = vi.fn(() => ({ revision: 9 }));
+      const create = vi.fn(async (input: Record<string, unknown>) => ({
+        planId: "plan-cli-bridge-flag",
+        revision: 1,
+        requiredAction: { kind: "confirmation", actionNonce: "nonce-cli-bridge-flag-1234" },
+        ...input,
+      }));
+      const confirm = vi.fn(async () => ({
+        planId: "plan-cli-bridge-flag",
+        revision: 3,
+        status: "completed",
+        risk: "safe",
+        summary: "Change a runtime feature flag.",
+        result: { summary: "Runtime feature flag updated." },
+      }));
+
+      app = Fastify();
+      app.decorate("services", {
+        settings: { getSettings, updateSettings },
+        evolution: { isEnabled: vi.fn(async () => true), create, confirm },
+      } as never);
+      await app.register(dashboardRoutes);
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings",
+        payload: { expectedRevision: 9, features: { claudeCliToolBridgeEnabled: enabled } },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: {
+            kind: "runtime_configuration",
+            change: { operation: "feature_flag", flag: "claudeCliToolBridgeEnabled", enabled },
+          },
+          expectedTargetRevision: 9,
+        }),
+      );
+      expect(updateSettings).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes a secret-free provider profile through the provider connection adapter", async () => {
     const updateSettings = vi.fn();
     const getSettings = vi.fn(() => ({ revision: 12, llm: { providers: [] } }));
