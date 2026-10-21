@@ -321,6 +321,8 @@ export function useGuidedModelSetup({
   return {
     catalog,
     providers,
+    /** The provider saved for future Chats, distinct from the draft selection. */
+    savedProviderId: activeProviderId,
     draft: modelDraft,
     providerId,
     model,

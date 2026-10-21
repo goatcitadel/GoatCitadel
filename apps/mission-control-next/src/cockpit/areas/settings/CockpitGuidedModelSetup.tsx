@@ -116,7 +116,7 @@ export function CockpitGuidedModelSetup({
                   {catalog.loading ? "Loading providers…" : "Saved provider · unavailable"}
                 </option>
               ) : null}
-              {groupGuidedProviders(setup.providers, setup.providerId).map((group) => (
+              {groupGuidedProviders(setup.providers, [setup.providerId, setup.savedProviderId]).map((group) => (
                 <optgroup key={group.id} label={group.label}>
                   {group.providers.map((provider) => (
                     <option key={provider.providerId} value={provider.providerId}>

@@ -363,14 +363,17 @@ function guidedProviderGroupId(provider: GuidedProviderOption): GuidedProviderGr
 
 /**
  * Groups the provider choices by how they are paid for, ready ones first, keeping
- * catalog order inside each group. Retired providers are hidden unless selected.
+ * catalog order inside each group. Retired providers are hidden unless kept visible:
+ * pass both the draft selection and the saved provider, so an operator can switch
+ * back to a still-saved retired provider until a replacement is confirmed.
  */
 export function groupGuidedProviders(
   providers: readonly GuidedProviderOption[],
-  selectedProviderId: string,
+  keepVisibleIds: readonly string[],
 ): GuidedProviderGroup[] {
+  const keep = new Set(keepVisibleIds.filter(Boolean));
   const visible = providers.filter(
-    (provider) => !RETIRED_PROVIDER_IDS.has(provider.providerId) || provider.providerId === selectedProviderId,
+    (provider) => !RETIRED_PROVIDER_IDS.has(provider.providerId) || keep.has(provider.providerId),
   );
   return (Object.keys(GUIDED_PROVIDER_GROUP_LABELS) as GuidedProviderGroupId[])
     .map((id) => ({

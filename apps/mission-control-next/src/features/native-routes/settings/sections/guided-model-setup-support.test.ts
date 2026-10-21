@@ -326,7 +326,7 @@ describe("grouped provider choices", () => {
   ] as never;
 
   it("puts ready providers first, then subscriptions, API keys and local runtimes", () => {
-    const groups = groupGuidedProviders(providers, "openai-codex");
+    const groups = groupGuidedProviders(providers, ["openai-codex"]);
     expect(groups.map((group) => [group.label, group.providers.map((provider) => provider.providerId)])).toEqual([
       ["Ready to use", ["openai-codex"]],
       ["Use a subscription", ["claude-code"]],
@@ -338,9 +338,16 @@ describe("grouped provider choices", () => {
 
   it("hides a retired provider unless it is the current selection", () => {
     const ids = (selected: string) =>
-      groupGuidedProviders(providers, selected).flatMap((group) => group.providers.map((provider) => provider.providerId));
+      groupGuidedProviders(providers, [selected]).flatMap((group) => group.providers.map((provider) => provider.providerId));
     expect(ids("openai-codex")).not.toContain("npu-local");
     expect(ids("npu-local")).toContain("npu-local");
+  });
+
+  it("keeps a saved retired provider visible after the draft selection moves away", () => {
+    const visible = groupGuidedProviders(providers, ["openai-codex", "npu-local"]).flatMap((group) =>
+      group.providers.map((provider) => provider.providerId),
+    );
+    expect(visible).toContain("npu-local");
   });
 
   it("names each option by how it is paid for", () => {
