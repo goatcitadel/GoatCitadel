@@ -125,7 +125,7 @@ Option L could be a later optimization after step mode is proven, if latency tur
 - `tools.json` is written from `request.tools` and nothing else. In Chat those are the provider definitions the runner already built from the sealed capability profile, so they are the turn's frozen callable catalog. The runner's exposure cap applies first when a capability profile is set (8 for chat, 10 for code). Sustained-coding turns and turns without a profile are not capped, so a manifest can be larger. The stub has no size limit beyond the 1 MiB line cap.
 - **Names:** the MCP tool name is the runner's model-facing name (`toProviderToolFunctionName`, already `[a-zA-Z0-9_-]`). The CLI shows it as `mcp__goatcitadel__<name>`, the adapter strips that prefix, and the runner's own `modelToCanonical` maps it back. That is the same mapping every provider uses, so no new name authority is created.
 - **Long names (my call):** if `mcp__goatcitadel__` plus a name would exceed 64 characters, the adapter gives that tool a short per-step alias (`t<index>_<hash8>`) and maps it back before emitting `tool_calls`.
-- Descriptions and `parameters` go across as MCP `description` and `inputSchema` unchanged.
+- Descriptions and `parameters` go across as MCP `description` and `inputSchema` unchanged. A tool without a description is sent with `""`, and one without `parameters` gets an empty object schema `{ type: "object", properties: {} }`.
 - The manifest records a nonce and its own sha256. The adapter keeps the expected set of `mcp__goatcitadel__*` names in memory for the tripwires below.
 
 ### CLI arguments for a bridged step
