@@ -199,6 +199,7 @@ import {
 } from "./chat-turn-agent-runner/failure-records.js";
 import { buildToolResultDesignAdvisories, hasDesignSkillReceipt } from "./chat-turn-agent-runner/design-advisories.js";
 import { hasSubstantiveSeedQuery, resolveTurnWebLookupIntent } from "./chat-turn-agent-runner/web-research-mode.js";
+import { selectAnswerCitations } from "./chat-turn-agent-runner/answer-citations.js";
 import { buildDeepResearchThinEvidenceFooter } from "./chat-turn-agent-runner/deep-research-evidence.js";
 import {
   analyzePresentationContentQuality,
@@ -6450,6 +6451,10 @@ export class ChatTurnAgentRunner {
     };
     const deferSystemHeartbeatTerminalCommit =
       finalStatus === "completed" && isExactSystemHeartbeatRunnerPosture(input);
+    // Persist only the citations the answer relied on; scored prompt-lab output keeps its raw evidence.
+    if (!promptLabEvalIntegrityTurn) {
+      citations.splice(0, citations.length, ...selectAnswerCitations({ citations, assistantContent, toolRuns }));
+    }
     const updatedTrace = await this.patchTurnTrace(input, input.turnId, {
       ...(deferSystemHeartbeatTerminalCommit ? {} : { status: finalStatus }),
       model: assistantModel,
