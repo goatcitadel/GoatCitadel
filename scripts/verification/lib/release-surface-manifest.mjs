@@ -114,6 +114,7 @@ export const NEXT_RELEASE_SURFACE_STATUS_BY_SLUG = {
   "settings-integrations": "ship",
   "settings-channels": "ship",
   "settings-mcp": "ship",
+  "settings-web-search": "ship",
   "settings-tools": "ship",
   "settings-hooks": "ship",
 };
@@ -498,6 +499,14 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
     interaction: "open-inspector",
   },
   {
+    slug: "settings-web-search",
+    href: "/settings/web-search",
+    readyText: "Web & Search",
+    expectedArea: "settings",
+    expectedSection: "web-search",
+    interaction: "open-inspector",
+  },
+  {
     slug: "settings-tools",
     href: "/settings/tools",
     readyText: "Tool catalog",
@@ -554,7 +563,10 @@ export const NEXT_VISUAL_SCENARIO_MANIFEST = [
 ];
 
 export const NEXT_VISUAL_REGRESSION_MANIFEST = [
-  ...[...NEXT_RELEASE_SURFACE_MANIFEST, ...NEXT_VISUAL_SCENARIO_MANIFEST].map(route => ({ ...route, shell: "classic" })),
+  ...[...NEXT_RELEASE_SURFACE_MANIFEST, ...NEXT_VISUAL_SCENARIO_MANIFEST].map((route) => ({
+    ...route,
+    shell: "classic",
+  })),
   ...COCKPIT_VISUAL_MANIFEST,
 ];
 
@@ -734,7 +746,8 @@ export function resolveReleaseSurfaceHref(route, variant = {}, fixture = {}) {
 
 export const COCKPIT_SHELL_CONTRACT = {
   shellSelector: '[data-cockpit-ready="true"] #main-content',
-  chromeSelector: 'nav[aria-label="Areas"], nav[aria-label="Areas on small screens"], section[aria-label="First-run setup"]',
+  chromeSelector:
+    'nav[aria-label="Areas"], nav[aria-label="Areas on small screens"], section[aria-label="First-run setup"]',
   forbiddenSelector: ".gateway-access-shell",
   loadingSelector: '#main-content [aria-busy="true"]',
 };
@@ -749,7 +762,7 @@ export function resolveSurfaceRegressionManifest() {
     // Exercise the shipped default without a query override or saved shell preference.
     { ...COCKPIT_VISUAL_MANIFEST[0], slug: "cockpit-default-chat", shell: undefined },
     ...COCKPIT_VISUAL_MANIFEST,
-    ...NEXT_RELEASE_SURFACE_MANIFEST.map(route => ({ ...route, shell: "classic" })),
+    ...NEXT_RELEASE_SURFACE_MANIFEST.map((route) => ({ ...route, shell: "classic" })),
   ];
 }
 

@@ -35,6 +35,8 @@ const CONTROL_TERMS: Record<string, string> = {
   integrations:
     "add create edit delete enable disable integration connection diagnostics operator actions external connector meet",
   mcp: "register create edit delete server enable disable connect disconnect oauth tools health elicitation templates model context protocol stdio http sse transport",
+  "web-search":
+    "web search firecrawl api key hosted self-hosted engine default fallback order duckduckgo bing google brave parallel official allowlist test connection credits",
   addons: "install update uninstall enable disable launch stop addon extension capability pack import export",
   permissions:
     "permission profile select activate chat effective policy create edit archive default override autonomy grant revoke",

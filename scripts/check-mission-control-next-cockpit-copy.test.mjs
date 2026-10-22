@@ -79,6 +79,16 @@ describe("glossary and plurals (GL-R02)", () => {
     assert.deepEqual(countCopyRatchets("areas/x/X.tsx", source), { "glossary-terms": 6, "internal-terms": 4 });
   });
 
+  it("reads one-word copy props but not one-word code values", () => {
+    const source = [
+      '<Field label="Gateway">',
+      "<Button title='Evidence' />",
+      'if (kind === "evidence") return source === "gateway";',
+      'const owner = { id: "owner" };',
+    ].join("\n");
+    assert.deepEqual(countCopyRatchets("areas/x/X.tsx", source), { "glossary-terms": 2 });
+  });
+
   it("does not flag glossary words inside TechnicalDetails, code identifiers or className", () => {
     const source = [
       "const ownerId = gatewayEvidence.revision;",

@@ -267,7 +267,19 @@ export interface EvolutionRuntimeConfigurationRouteService {
     actionNonce: string;
     credential: string;
   }): Promise<ChangePlanRecord>;
+  submitWebSearchCredential?(input: {
+    actor: EvolutionControlPlaneActor;
+    planId: string;
+    expectedRevision: number;
+    actionId: string;
+    actionNonce: string;
+    apiKey: string;
+  }): Promise<ChangePlanRecord>;
 }
+export type WebSearchCredentialsRouteService = Pick<
+  import("./web-search-credential-service.js").WebSearchCredentialService,
+  "listStatuses" | "status" | "store" | "clear" | "checkFirecrawl"
+>;
 export interface EvolutionManagedSourceRouteService {
   submitSelection(input: {
     actor: EvolutionControlPlaneActor;
@@ -318,6 +330,7 @@ export interface GatewayRouteServices {
   evolutionManagedSource?: EvolutionManagedSourceRouteService;
   evolutionProviderConnection?: EvolutionProviderConnectionRouteService;
   evolutionRuntimeConfiguration?: EvolutionRuntimeConfigurationRouteService;
+  webSearchCredentials?: WebSearchCredentialsRouteService;
   externalSources?: ExternalSourceRouteService;
   files: FilesRouteService;
   gatewayEvents: GatewayEventsRouteService;

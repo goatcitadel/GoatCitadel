@@ -21,7 +21,6 @@ import {
 } from "../../data/record-view";
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
-import { Dialog } from "../../ui/Dialog";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { classifyOperationFailure } from "./approval-operation-attempts";
 import { callableImpactLabels, curatorRiskAsApprovalRisk, improvementEvaluationLabels } from "./inbox-vocabulary";
@@ -92,7 +91,6 @@ export function InboxImprovementProposalDetail({
   scopeRef.current = activeWorkspaceId ?? "default";
   const locked = useRef(false);
   const queryClient = useQueryClient();
-  const [reviewing, setReviewing] = useState<{ review: CuratorReviewItem; decision: Decision } | null>(null);
   const [pending, setPending] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [uncertain, setUncertain] = useState(false);
@@ -115,9 +113,8 @@ export function InboxImprovementProposalDetail({
   // A decided or changed proposal is superseded: drop it while it is read again (T15-M1).
   const rereadSuperseded = () => void queryClient.resetQueries({ queryKey, exact: true });
 
-  async function decide() {
+  async function decide(reviewing: { review: CuratorReviewItem; decision: Decision }) {
     if (
-      !reviewing ||
       !item.source.proposalId ||
       locked.current ||
       pending ||
@@ -138,7 +135,6 @@ export function InboxImprovementProposalDetail({
         !canDecideImprovementProposal(item, latest, workspaceId, reviewing.decision) ||
         JSON.stringify(latest) !== JSON.stringify(reviewing.review)
       ) {
-        setReviewing(null);
         setError("The proposal or its action readiness changed. Refresh its current review before deciding.");
         rereadSuperseded();
         return;
@@ -159,7 +155,6 @@ export function InboxImprovementProposalDetail({
         result.review.candidate.status !== result.status
       )
         throw new Error("The saved result did not match the reviewed proposal.");
-      setReviewing(null);
       setCompleted(true);
       setNotice(
         reviewing.decision === "approve"
@@ -169,7 +164,6 @@ export function InboxImprovementProposalDetail({
       rereadSuperseded();
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
     } catch (cause) {
-      setReviewing(null);
       if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
         // Gateway answered and recorded nothing: the decisions stay available.
         setError(`The decision was not accepted. ${describeApiError(cause).summary}`);
@@ -193,7 +187,6 @@ export function InboxImprovementProposalDetail({
           size="sm"
           disabled={query.isFetching || pending || !item.source.proposalId}
           onClick={() => {
-            setReviewing(null);
             setError("");
             void query.refetch();
           }}
@@ -264,7 +257,7 @@ export function InboxImprovementProposalDetail({
                     size="sm"
                     variant={decision === "reject" ? "secondary" : "primary"}
                     disabled={pending || checking}
-                    onClick={() => setReviewing({ review: current, decision })}
+                    onClick={() => void decide({ review: current, decision })}
                   >
                     {decision === "approve" ? "Keep proposal" : "Discard proposal"}
                   </Button>
@@ -301,29 +294,6 @@ export function InboxImprovementProposalDetail({
       >
         Open Curator
       </NativeOwnerLink>
-      <Dialog
-        open={Boolean(reviewing)}
-        onOpenChange={(open) => {
-          if (!open && !pending) setReviewing(null);
-        }}
-        title={reviewing?.decision === "approve" ? "Keep improvement proposal" : "Discard improvement proposal"}
-        description="The workspace, status and reviewed version are checked again before saving. Keeping a proposal does not turn it on."
-      >
-        {reviewing ? <p className="mb-3 text-sm text-fg-secondary">{reviewing.review.candidate.summary}</p> : null}
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="primary"
-            disabled={pending || scopeChanged || checking}
-            onClick={() => void decide()}
-          >
-            Confirm {reviewing?.decision === "approve" ? "keep" : "discard"}
-          </Button>
-          <Button size="sm" disabled={pending} onClick={() => setReviewing(null)}>
-            Cancel
-          </Button>
-        </div>
-      </Dialog>
     </section>
   );
 }

@@ -179,7 +179,8 @@ export function buildCoworkExecutionSnapshot(input: {
   deliverables: TaskDeliverableRecord[];
   deliverablesLoading: boolean;
   operators: CoworkOperatorRecord[];
-  pendingApprovals: number;
+  /** Undefined when the host has no approval count. */
+  pendingApprovals?: number;
   continuation: CoworkTaskContinuationSummary;
 }): CoworkExecutionSnapshot {
   const activeTaskCount = input.tasks.filter((item) => item.status !== "done").length;
@@ -237,23 +238,31 @@ export function buildCoworkExecutionSnapshot(input: {
           latestTask.updatedAt ?? latestTask.createdAt,
         )}`
       : "Create a task or resume Chat to start the visible execution record.";
-  const pendingApprovalTotal = Math.max(input.pendingApprovals, approvalLinkedTasks.length);
+  // An approval-linked task is evidence of at least that many; with neither a count nor such a task, it is unknown.
+  const pendingApprovalTotal =
+    input.pendingApprovals === undefined && approvalLinkedTasks.length === 0
+      ? undefined
+      : Math.max(input.pendingApprovals ?? 0, approvalLinkedTasks.length);
   const attentionLabel =
     blockedTasks.length > 0
       ? "Blocked"
-      : pendingApprovalTotal > 0
+      : pendingApprovalTotal && pendingApprovalTotal > 0
         ? "Waiting approval"
         : waitingWakeCount > 0
           ? "Waiting"
-          : "Clear";
+          : pendingApprovalTotal === undefined
+            ? "Unknown"
+            : "Clear";
   const attentionDetail =
     blockedTasks.length > 0
       ? `${blockedTasks.length} blocked task${blockedTasks.length === 1 ? "" : "s"} need operator review.`
-      : pendingApprovalTotal > 0
+      : pendingApprovalTotal && pendingApprovalTotal > 0
         ? `${pendingApprovalTotal} approval signal${pendingApprovalTotal === 1 ? "" : "s"} visible.`
         : waitingWakeCount > 0
           ? `${waitingWakeCount} task${waitingWakeCount === 1 ? "" : "s"} have a scheduled wake checkpoint.`
-          : "No blocker or approval queue pressure is visible in this route.";
+          : pendingApprovalTotal === undefined
+            ? "No blocker is visible, but the approval queue is unavailable, so pending approvals are unknown."
+            : "No blocker or approval queue pressure is visible in this route.";
   const runtimeLabel =
     durableRunIds.size > 0
       ? `${durableRunIds.size} durable run${durableRunIds.size === 1 ? "" : "s"}`

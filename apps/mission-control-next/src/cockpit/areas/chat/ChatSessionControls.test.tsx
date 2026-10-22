@@ -65,7 +65,7 @@ describe("Chat session controls", () => {
     await vi.waitFor(() => expect(item("Export conversation")).toBeDefined());
   };
 
-  it("exports immediately but requires confirmation before archiving", async () => {
+  it("exports and archives immediately: archiving is reversible from Archived (CH-R08)", async () => {
     const context = dock();
     await act(async () => root.render(<ChatSessionOverflow dock={context} onFork={vi.fn()} />));
     await openWithPointer();
@@ -74,11 +74,8 @@ describe("Chat session controls", () => {
     expect(item("Export conversation")).toBeUndefined();
     await openWithPointer();
     await act(async () => item("Archive conversation")?.click());
-    expect(context.onToggleArchiveSession).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Archive conversation?");
-    const confirm = [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Archive");
-    await act(async () => confirm?.click());
     expect(context.onToggleArchiveSession).toHaveBeenCalledOnce();
+    expect(document.body.querySelector("[role=dialog]")).toBeNull();
   });
 
   it("opens from the keyboard, closes on Escape and returns focus to the trigger", async () => {

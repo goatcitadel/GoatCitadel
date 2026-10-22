@@ -1,4 +1,5 @@
-import type { LlmProviderSummary } from "@goatcitadel/contracts";
+import type { LlmProviderSummary, LlmRuntimeConfig } from "@goatcitadel/contracts";
+import { isRouteLocalProvider } from "./chat-route-local-ward.js";
 
 export interface UtilityModelOverride {
   providerId: string;
@@ -36,4 +37,47 @@ export function resolveUtilityModelOverride(input: {
     return undefined;
   }
   return { providerId, model };
+}
+
+export interface JudgeModelDefaults {
+  providerId?: string;
+  model?: string;
+}
+
+// Keyed fallbacks tried in order when the active provider is not ready. Each
+// uses its own configured default model; the literal is only a last resort.
+const JUDGE_FALLBACK_PROVIDERS: ReadonlyArray<{ providerId: string; fallbackModel?: string }> = [
+  { providerId: "openai-codex" },
+  { providerId: "openai", fallbackModel: "gpt-5.4" },
+  { providerId: "glm", fallbackModel: "glm-5" },
+  { providerId: "moonshot" },
+];
+
+/**
+ * Picks the model for background judge-style calls (post-turn commitment
+ * classification, background review, proactive planning) when no utility
+ * override applies. The operator's active provider wins whenever it is ready,
+ * so background work follows the provider they chose for Chat. A keyless
+ * provider on a loopback endpoint (Ollama, LM Studio, llama.cpp) counts as
+ * ready, so a local choice never leaks post-turn transcripts to a remote
+ * fallback.
+ */
+export function resolveJudgeModelDefaults(
+  runtime: Pick<LlmRuntimeConfig, "activeProviderId" | "activeModel"> & {
+    providers: ReadonlyArray<Pick<LlmProviderSummary, "providerId" | "baseUrl" | "hasApiKey" | "defaultModel">>;
+  },
+): JudgeModelDefaults {
+  const active = runtime.providers.find((provider) => provider.providerId === runtime.activeProviderId);
+  const activeModel = runtime.activeModel || active?.defaultModel;
+  if (active && (active.hasApiKey || isRouteLocalProvider(active)) && activeModel) {
+    return { providerId: active.providerId, model: activeModel };
+  }
+  for (const candidate of JUDGE_FALLBACK_PROVIDERS) {
+    const provider = runtime.providers.find((item) => item.providerId === candidate.providerId && item.hasApiKey);
+    const model = provider?.defaultModel || candidate.fallbackModel;
+    if (provider && model) {
+      return { providerId: provider.providerId, model };
+    }
+  }
+  return { providerId: active?.providerId ?? runtime.activeProviderId, model: activeModel };
 }

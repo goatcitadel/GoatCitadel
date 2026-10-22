@@ -147,7 +147,7 @@ export function ManagedRuntimeSettings() {
                 <Button variant="primary" disabled={!control.canReview} onClick={() => void control.requestReview()}>
                   Review runtime changes
                 </Button>
-                <Button disabled={!draft.isDirty || control.locked} onClick={draft.discard}>
+                <Button variant="danger" disabled={!draft.isDirty || control.locked} onClick={draft.discard}>
                   Discard runtime draft
                 </Button>
               </div>

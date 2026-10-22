@@ -33,6 +33,9 @@ export const FilesystemWriteRootsControl = preloadable(async () => ({
   default: (await import("./FilesystemWriteRootsControl")).FilesystemWriteRootsControl,
 }));
 export const ModelsSettings = preloadable(async () => ({ default: (await import("./ModelsSettings")).ModelsSettings }));
+export const WebSearchSettings = preloadable(async () => ({
+  default: (await import("./WebSearchSettings")).WebSearchSettings,
+}));
 export const ClaudeCliToolBridgeControl = preloadable(async () => ({
   default: (await import("./ClaudeCliToolBridgeControl")).ClaudeCliToolBridgeControl,
 }));
@@ -107,6 +110,7 @@ const SECTION_CONTROLS: Record<string, readonly { preload: () => Promise<void> }
   integrations: [IntegrationConnectionsSettings],
   channels: [ChannelsSettings],
   mcp: [McpServersSettings],
+  "web-search": [WebSearchSettings],
   addons: [AddonsSettings, PortablePacksSettings],
   runtime: [ManagedRuntimeSettings, DaemonDiagnostics, VoiceRuntimeSettings],
   providers: [ModelsSettings, ClaudeCliToolBridgeControl],

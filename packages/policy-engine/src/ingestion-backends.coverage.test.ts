@@ -339,6 +339,56 @@ describe("ingestion backend coverage", () => {
     }
   });
 
+  it("prefers the keychain Firecrawl key over the environment and falls back when the keychain fails", async () => {
+    const priorApiKey = process.env.FIRECRAWL_API_KEY;
+    const priorFetch = globalThis.fetch;
+    process.env.FIRECRAWL_API_KEY = "env-firecrawl-key";
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ data: { markdown: "# Doc", metadata: { sourceURL: "https://example.com/doc" } } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const ingest = (resolveFirecrawlCredential: () => Promise<string | undefined>) =>
+      ingestDocumentViaBackend({
+        request: createRequest({
+          sourceType: "url",
+          source: "https://example.com/doc",
+          namespace: "web",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "https://firecrawl.example",
+        }),
+        storage: createKnowledgeStorage(),
+        networkAllowlist: ["firecrawl.example", "example.com"],
+        fetchUrl: vi.fn(),
+        resolveFirecrawlCredential,
+      });
+    const authorization = (call: number) =>
+      (fetchMock.mock.calls[call] as unknown as [string, { headers: Record<string, string> }])[1].headers.Authorization;
+
+    try {
+      await ingest(async () => "keychain-firecrawl-key");
+      expect(authorization(0)).toBe("Bearer keychain-firecrawl-key");
+
+      await ingest(async () => {
+        throw new Error("keychain locked");
+      });
+      expect(authorization(1)).toBe("Bearer env-firecrawl-key");
+    } finally {
+      if (priorApiKey === undefined) {
+        delete process.env.FIRECRAWL_API_KEY;
+      } else {
+        process.env.FIRECRAWL_API_KEY = priorApiKey;
+      }
+      globalThis.fetch = priorFetch;
+    }
+  });
+
   it("accepts lowercase Firecrawl sourceUrl metadata as the final source proof", async () => {
     const priorBaseUrl = process.env.FIRECRAWL_BASE_URL;
     const priorFetch = globalThis.fetch;

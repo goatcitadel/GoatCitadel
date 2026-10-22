@@ -217,12 +217,14 @@ it("keeps an open critical approval review, typed confirmation and focus through
     await import("./ChatApprovalRendererBody");
   });
   await vi.waitFor(() => {
-    const review = [...host.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
+    const review = [...host.querySelectorAll("button")].find(
+      (button) => button.textContent === "Review nuclear approval",
+    );
     expect(review).toBeInstanceOf(HTMLButtonElement);
     expect(review?.disabled).toBe(false);
   });
   await act(async () =>
-    [...host.querySelectorAll("button")].find((button) => button.textContent === "Review approval")!.click(),
+    [...host.querySelectorAll("button")].find((button) => button.textContent === "Review nuclear approval")!.click(),
   );
   const dialog = document.querySelector<HTMLElement>('[role="dialog"][data-state="open"]')!;
   expect(dialog).not.toBeNull();

@@ -51,3 +51,69 @@ it("shows decision source failures without treating them as no decisions", async
   act(() => renderer.unmount());
   state.isError = false;
 });
+it("leaves expired approvals out of Waiting on your decision, as Inbox does", async () => {
+  state.data = {
+    workspaceId: "default",
+    counts: { needs_decision: { complete: true } },
+    items: [
+      {
+        id: "old",
+        group: "needs_decision",
+        title: "Expired write",
+        source: { runId: "run-old" },
+        href: "/inbox?approvalId=old",
+        expiresAt: "2020-01-01T00:00:00Z",
+      },
+      {
+        id: "live",
+        group: "needs_decision",
+        title: "Live write",
+        source: { runId: "run-live" },
+        href: "/inbox?approvalId=live",
+        expiresAt: "2099-01-01T00:00:00Z",
+      },
+    ],
+  };
+  let renderer!: ReturnType<typeof create>;
+  await act(async () => {
+    renderer = create(<WorkWaitingDecisions workspaceId="default" />);
+  });
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain("Live write");
+  expect(text).not.toContain("Expired write");
+  act(() => renderer.unmount());
+});
+it("drops a decision from the list when it expires, without waiting for the next Inbox read", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(new Date("2026-10-22T12:00:00.000Z"));
+    state.data = {
+      workspaceId: "default",
+      counts: { needs_decision: { complete: true } },
+      items: [
+        {
+          id: "soon",
+          kind: "approval",
+          group: "needs_decision",
+          title: "Approve soon",
+          summary: "Expires in a moment",
+          expiresAt: "2026-10-22T12:00:10.000Z",
+          source: { runId: "run-soon" },
+          href: "/inbox?approvalId=soon",
+        },
+      ],
+    };
+    let renderer!: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<WorkWaitingDecisions workspaceId="default" />);
+    });
+    expect(JSON.stringify(renderer.toJSON())).toContain("Approve soon");
+    await act(async () => {
+      vi.advanceTimersByTime(11_000);
+    });
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("Approve soon");
+    act(() => renderer.unmount());
+  } finally {
+    vi.useRealTimers();
+  }
+});

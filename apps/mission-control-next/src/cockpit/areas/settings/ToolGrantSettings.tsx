@@ -271,6 +271,15 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
             <dd>{TOOL_GRANT_DECISION_LABELS[review.input.decision] ?? "Unknown decision"}</dd>
             <dt>Scope</dt>
             <dd>{review.input.scope === "global" ? "Global · all contexts" : scopeLabel(review.input)}</dd>
+            {review.input.scope !== "global" && review.input.scopeRef ? (
+              <>
+                {/* The confirmation saves exactly what was typed, so it shows it to catch a mistyped target. */}
+                <dt>Applies to</dt>
+                <dd>
+                  <code className="font-mono">{review.input.scopeRef}</code>
+                </dd>
+              </>
+            ) : null}
             <dt>Lifetime</dt>
             <dd>
               {review.input.grantType === "ttl" && review.input.expiresAt ? (

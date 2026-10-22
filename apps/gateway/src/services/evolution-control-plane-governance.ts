@@ -60,7 +60,11 @@ export const EVOLUTION_GOVERNED_MUTATION_INVENTORY: readonly GovernedMutationInv
     kind: "runtime_configuration",
     owner: "runtime_settings",
     canonicalEntryPoints: ["POST /api/v1/change-plans", "change.request"],
-    compatibilityEntryPoints: ["PATCH /api/v1/settings"],
+    compatibilityEntryPoints: [
+      "PATCH /api/v1/settings",
+      "PUT /api/v1/settings/web/credentials/:targetId",
+      "DELETE /api/v1/settings/web/credentials/:targetId",
+    ],
     mutationBoundary: "RuntimeConfigurationChangePlanAdapter.apply",
   },
   {

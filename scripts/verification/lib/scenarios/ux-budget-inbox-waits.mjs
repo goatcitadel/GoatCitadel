@@ -75,8 +75,7 @@ export async function runUxBudgetInboxWaits(environment) {
             );
           }
           await review.getByRole("radio", { name: /Continue with the current plan/ }).check();
-          await review.getByRole("button", { name: "Review answer" }).click();
-          await page.getByRole("dialog", { name: "Submit this answer" }).waitFor();
+          await review.getByRole("button", { name: "Send answer" }).waitFor();
           await page.screenshot({ path: confirmShot, fullPage: false });
           const before = await requestJson(
             stack.gatewayUrl,
@@ -85,9 +84,9 @@ export async function runUxBudgetInboxWaits(environment) {
           assertOk(before, `read ${variant} unanswered Chat question`);
           const waiting = before.body?.turns?.find((turn) => turn.turnId === seeded.turnId)?.trace;
           if (waiting?.status !== "waiting_for_user_input" || waiting.pendingUserInput?.promptId !== seeded.promptId) {
-            throw new Error("Reviewing the Inbox answer changed the canonical Chat wait.");
+            throw new Error("Choosing the Inbox answer changed the canonical Chat wait.");
           }
-          await page.getByRole("button", { name: "Confirm answer" }).click();
+          await review.getByRole("button", { name: "Send answer" }).click();
           await review.getByText("Answer sent", { exact: false }).waitFor();
           const after = await requestJson(stack.gatewayUrl, inboxUrl);
           assertOk(after, `read ${variant} answered Inbox question`);

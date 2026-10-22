@@ -75,9 +75,12 @@ export function RiskApprovalAction({
             setConfirmOpen(true);
           }}
         >
-          {/* The shield and red styling mark the risk; the label stays "Review approval" for proofs and tests. */}
           <ShieldAlert aria-hidden="true" className="size-4 shrink-0" />
-          Review approval
+          {critical
+            ? "Review nuclear approval"
+            : approval.riskLevel === "danger"
+              ? "Review danger approval"
+              : "Review approval"}
         </Button>
         <Dialog
           open={confirmOpen}

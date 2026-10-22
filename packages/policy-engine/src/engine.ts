@@ -33,6 +33,7 @@ import {
   OUTSIDE_ROOT_WRITE_GRANT_MINT_WINDOW_MS,
   isOutsideRootWriteGrantDuration,
   isOutsideRootWriteTool,
+  resolveWebSearchEngineCandidates,
   splitUtf8HeadTail,
   type OutsideRootWriteApprovalDetails,
   type OutsideRootWriteGrantDuration,
@@ -247,20 +248,6 @@ const OFFICIAL_SEARCH_PROVIDER_URLS = {
 
 type BrowserSearchEngine = keyof typeof BROWSER_SEARCH_ENGINE_URLS;
 
-function resolveBrowserSearchEngineCandidates(engineValue: unknown): BrowserSearchEngine[] {
-  const engine = typeof engineValue === "string" ? engineValue.toLowerCase() : "auto";
-  if (engine === "google") {
-    return ["google", "bing", "duckduckgo"];
-  }
-  if (engine === "bing") {
-    return ["bing", "duckduckgo", "google"];
-  }
-  if (engine === "duckduckgo") {
-    return ["duckduckgo", "bing", "google"];
-  }
-  return ["duckduckgo", "bing", "google"];
-}
-
 function validateBrowserSearchHosts(request: ToolAccessEvaluateRequest, config: ToolPolicyConfig): void {
   const backend = typeof request.args?.backend === "string" ? request.args.backend.toLowerCase() : undefined;
   if (isOfficialResearchSearchInvocation(request.args ?? {})) {
@@ -283,7 +270,10 @@ function validateBrowserSearchHosts(request: ToolAccessEvaluateRequest, config: 
   if (backend === "firecrawl" && request.args?.firecrawlFallbackToNative === false) {
     return;
   }
-  const candidates = resolveBrowserSearchEngineCandidates(request.args?.engine);
+  const candidates: BrowserSearchEngine[] = resolveWebSearchEngineCandidates(
+    request.args?.engine,
+    request.args?.searchEngineOrder,
+  );
   const errors: string[] = [];
   for (const candidate of candidates) {
     try {

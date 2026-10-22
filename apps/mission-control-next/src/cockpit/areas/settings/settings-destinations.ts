@@ -50,6 +50,7 @@ const NATIVE_SECTIONS = new Set([
   "access",
   "runtime",
   "mcp",
+  "web-search",
   "onboarding",
 ]);
 
@@ -115,11 +116,13 @@ export function buildSettingsDestinations({
                                                       ? "/settings/connections#channels"
                                                       : section === "mcp"
                                                         ? "/settings/connections#mcp-servers"
-                                                        : section === "addons"
-                                                          ? "/settings/connections#addons"
-                                                          : section === "runtime"
-                                                            ? "/settings/advanced#managed-runtime"
-                                                            : buildAppHref({ area: item.area, section });
+                                                        : section === "web-search"
+                                                          ? "/settings/connections#web-search"
+                                                          : section === "addons"
+                                                            ? "/settings/connections#addons"
+                                                            : section === "runtime"
+                                                              ? "/settings/advanced#managed-runtime"
+                                                              : buildAppHref({ area: item.area, section });
         return [
           {
             section,

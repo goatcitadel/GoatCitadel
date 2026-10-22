@@ -4,8 +4,10 @@ import { ApprovalBulkReject } from "./ApprovalBulkReject";
 import { useInstallationPendingApprovals } from "./installation-pending-approvals";
 
 /**
- * The installation-wide rejection, kept apart from everyday decisions at the bottom of the Inbox. It shows only while
- * at least one approval is pending somewhere in the installation, and stays after a rejection so its receipt is read.
+ * The installation-wide rejection, kept apart from everyday decisions at the bottom of the Inbox. The page mounts it
+ * once this workspace has open decisions and keeps it for the visit (IN-R01), so a rejection receipt survives the
+ * re-read that empties the page; it also needs at least one approval pending somewhere in the installation, or a
+ * rejection just made. A flat section: the red is on its one button.
  */
 export function InboxBulkRejectZone() {
   const queryClient = useQueryClient();
@@ -19,10 +21,7 @@ export function InboxBulkRejectZone() {
     void queryClient.invalidateQueries({ queryKey: ["approvals"] });
   }
   return (
-    <section
-      aria-labelledby="inbox-bulk-reject-heading"
-      className="grid gap-2 rounded-lg border border-status-failed p-4"
-    >
+    <section aria-labelledby="inbox-bulk-reject-heading" className="grid gap-2 border-t border-line-subtle pt-4">
       <h2 id="inbox-bulk-reject-heading" className="font-medium text-fg">
         Reject everything pending
       </h2>

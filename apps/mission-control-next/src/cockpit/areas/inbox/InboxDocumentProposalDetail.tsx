@@ -25,9 +25,8 @@ import {
 } from "../../data/record-view";
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
-import { Dialog } from "../../ui/Dialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { documentAuthorLabels, presentDocumentProposalState } from "./inbox-vocabulary";
+import { presentDocumentProposalState } from "./inbox-vocabulary";
 import { classifyOperationFailure } from "./approval-operation-attempts";
 import {
   canReviewInboxDocumentProposal,
@@ -61,7 +60,6 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
   const scopeRef = useRef(activeWorkspaceId ?? "default");
   scopeRef.current = activeWorkspaceId ?? "default";
   const locked = useRef(false);
-  const [review, setReview] = useState<{ proposal: DocumentPatchProposalRecord; decision: Decision } | null>(null);
   const [pending, setPending] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [outcomeUncertain, setOutcomeUncertain] = useState(false);
@@ -86,9 +84,8 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
   const reviewable = canReviewInboxDocumentProposal(proposal ?? undefined);
   const canDecide = reviewable && !scopeChanged && !completed && !outcomeUncertain;
 
-  async function decide() {
+  async function decide(review: { proposal: DocumentPatchProposalRecord; decision: Decision }) {
     if (
-      !review ||
       !item.source.proposalId ||
       locked.current ||
       pending ||
@@ -108,7 +105,6 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
         !canReviewInboxDocumentProposal(latest ?? undefined) ||
         JSON.stringify(latest) !== JSON.stringify(review.proposal)
       ) {
-        setReview(null);
         setError("The document proposal changed or left the pending queue. Refresh its current diff before deciding.");
         rereadSuperseded();
         return;
@@ -134,13 +130,11 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
       ) {
         throw new Error("The saved result did not match the reviewed proposal.");
       }
-      setReview(null);
       setResult(updated);
       setCompleted(true);
       rereadSuperseded();
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
     } catch (cause) {
-      setReview(null);
       if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
         // Gateway answered and recorded nothing: the decision stays available.
         setError(`The document decision was not accepted. ${describeApiError(cause).summary}`);
@@ -166,7 +160,6 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
           size="sm"
           disabled={query.isFetching || pending || !item.source.proposalId}
           onClick={() => {
-            setReview(null);
             setError("");
             void query.refetch();
           }}
@@ -233,16 +226,16 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
                 size="sm"
                 variant="primary"
                 disabled={pending || checking}
-                onClick={() => setReview({ proposal, decision: "apply" })}
+                onClick={() => void decide({ proposal, decision: "apply" })}
               >
-                Review apply
+                Apply change
               </Button>
               <Button
                 size="sm"
                 disabled={pending || checking}
-                onClick={() => setReview({ proposal, decision: "reject" })}
+                onClick={() => void decide({ proposal, decision: "reject" })}
               >
-                Review rejection
+                Reject change
               </Button>
             </div>
           ) : null}
@@ -267,39 +260,6 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
           {error}
         </p>
       ) : null}
-      <Dialog
-        open={Boolean(review)}
-        onOpenChange={(open) => {
-          if (!open && !pending) setReview(null);
-        }}
-        title={review?.decision === "apply" ? "Apply document patch" : "Reject document patch"}
-        description={
-          review?.decision === "apply"
-            ? "This replaces the reviewed note body or creates a new artifact version. It applies only if the document has not changed since the proposal was made."
-            : "This rejects the reviewed proposal without changing the target document."
-        }
-      >
-        {review ? (
-          <div className="mb-3 space-y-2 text-sm text-fg-secondary">
-            <DocumentProposalTarget proposal={review.proposal} />
-            <DocumentProposalDiff diff={review.proposal.derivedDiff} />
-            <p>Author: {documentAuthorLabels[review.proposal.authorKind] ?? "Unknown"}</p>
-          </div>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="primary"
-            disabled={pending || scopeChanged || checking}
-            onClick={() => void decide()}
-          >
-            Confirm {review?.decision === "apply" ? "apply" : "rejection"}
-          </Button>
-          <Button size="sm" disabled={pending} onClick={() => setReview(null)}>
-            Cancel
-          </Button>
-        </div>
-      </Dialog>
     </section>
   );
 }

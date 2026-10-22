@@ -41,7 +41,8 @@ export function buildActiveChatOptionSettings({
     settings.push({
       id: "web",
       label: "Deep research",
-      description: "Reaches the open web and researches across multiple sources.",
+      description:
+        "Uses web search for your messages, asks for several independent sources, and allows a longer research pass (up to 8 minutes).",
     });
   } else if (webMode === "quick") {
     settings.push({

@@ -7,12 +7,19 @@ import type {
   BrowserSessionStateSummary,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { clampInt } from "@goatcitadel/contracts";
+import { clampInt, resolveWebSearchEngineCandidates } from "@goatcitadel/contracts";
 import { startBrowserEgressProxy, type BrowserEgressProxy } from "./browser-egress-proxy.js";
 import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
 import { assertHostAllowed, assertNotPrivateOrReservedHost, fetchAllowlisted } from "./sandbox/network-guard.js";
 import { assertToolWritePath } from "./sandbox/tool-write-gate.js";
+import {
+  FirecrawlUnavailableError,
+  isFirecrawlConnectFailure,
+  isFirecrawlCoolingDown,
+  recordFirecrawlConnectFailure,
+  recordFirecrawlSuccess,
+} from "./firecrawl-reachability.js";
 import {
   BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE,
   BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE,
@@ -22,6 +29,7 @@ import {
 import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
 import {
   executeOfficialResearchSearch,
+  isInternalInfrastructureSearchQuery,
   isOfficialResearchSearchInvocation,
   resolveOfficialSearchProviders,
   type ResolveOfficialSearchCredential,
@@ -51,6 +59,8 @@ export interface BrowserExecutionContext {
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
   /** Process-local protected credential lookup; never serialized into browser tool arguments. */
   resolveCredential?: ResolveOfficialSearchCredential;
+  /** Keychain-held Firecrawl key; the configured environment variable stays the fallback. */
+  resolveFirecrawlCredential?: (baseUrl: string) => Promise<string | undefined>;
 }
 
 interface BrowserStepInput {
@@ -148,6 +158,8 @@ export { BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE, BROWSER_CHROMIUM_MANU
 
 const browserSessionStates = new Map<string, { state: BrowserSessionState; lastAccess: number }>();
 const MAX_BROWSER_SESSION_STATES = 128;
+const BROWSER_SEARCH_SENSITIVE_QUERY_REFUSAL =
+  "browser.search refused: the query names internal infrastructure or a secret; remove it and search again.";
 
 export function describeBrowserSessionState(sessionId: string): BrowserSessionStateSummary {
   const entry = browserSessionStates.get(sessionId);
@@ -273,6 +285,11 @@ async function executeBrowserSearch(
       fallbackUsed: response.routing?.fallbackUsed ?? false,
     };
   }
+  // The official path applies its own stricter check; native and Firecrawl search
+  // refuse here, before any page or request leaves the machine.
+  if (isInternalInfrastructureSearchQuery(query)) {
+    throw new Error(BROWSER_SEARCH_SENSITIVE_QUERY_REFUSAL);
+  }
   const requestedEngine = normalizeSearchEngine(rawEngine) ?? "auto";
   const requestedReadBackend = requestedBackend === "firecrawl" ? "firecrawl" : "native";
   const limit = clampInt(args.limit ?? args.maxResults, 5, 1, 25);
@@ -303,8 +320,9 @@ async function executeBrowserSearch(
       );
       return {
         ...nativeResult,
-        backend: "firecrawl",
-        backendUsed: false,
+        backend: "native",
+        requestedBackend: "firecrawl",
+        backendUsed: true,
         fallbackUsed: true,
         fallbackReason: (firecrawlError as Error).message,
       };
@@ -339,7 +357,7 @@ async function executeBrowserSearchNative(
   const attemptedEngines: string[] = [];
   const failures: string[] = [];
 
-  for (const engine of resolveSearchEngineCandidates(requestedEngine)) {
+  for (const engine of resolveWebSearchEngineCandidates(requestedEngine, args.searchEngineOrder)) {
     attemptedEngines.push(engine);
     const searchUrl = buildSearchUrl(engine, query);
     const searchBackendContext = browserSearchBackendExecutionContext(executionContext);
@@ -555,8 +573,9 @@ async function executeBrowserNavigate(
       const fallback = await executeBrowserNavigateNative(url, maxChars, args, config, executionContext);
       return {
         ...fallback,
-        backend: "firecrawl",
-        backendUsed: false,
+        backend: "native",
+        requestedBackend: "firecrawl",
+        backendUsed: true,
         fallbackUsed: true,
         fallbackReason: (firecrawlError as Error).message,
       };
@@ -652,8 +671,9 @@ async function executeBrowserExtract(
       const fallback = await executeBrowserExtractNative(url, selector, maxChars, args, config, executionContext);
       return {
         ...fallback,
-        backend: "firecrawl",
-        backendUsed: false,
+        backend: "native",
+        requestedBackend: "firecrawl",
+        backendUsed: true,
         fallbackUsed: true,
         fallbackReason: (firecrawlError as Error).message,
       };
@@ -2166,21 +2186,6 @@ function normalizeBrowserReadBackend(backend: string | undefined): "native" | "f
   return backend?.toLowerCase() === "firecrawl" ? "firecrawl" : "native";
 }
 
-function resolveSearchEngineCandidates(
-  engine: "auto" | "duckduckgo" | "bing" | "google",
-): Array<"duckduckgo" | "bing" | "google"> {
-  if (engine === "google") {
-    return ["google", "bing", "duckduckgo"];
-  }
-  if (engine === "bing") {
-    return ["bing", "duckduckgo", "google"];
-  }
-  if (engine === "duckduckgo") {
-    return ["duckduckgo", "bing", "google"];
-  }
-  return ["duckduckgo", "bing", "google"];
-}
-
 function parseWaitUntil(input: unknown): "load" | "domcontentloaded" | "networkidle" {
   const value = asString(input)?.toLowerCase();
   if (value === "load" || value === "networkidle" || value === "domcontentloaded") {
@@ -2413,6 +2418,20 @@ function resolveFirecrawlRuntimeConfig(args: Record<string, unknown>): {
   };
 }
 
+/** The keychain key wins; the environment variable named by `firecrawlApiKeyEnv` is the fallback. */
+async function withFirecrawlKeychainCredential<T extends { apiKey?: string; baseUrl: string }>(
+  firecrawl: T,
+  executionContext?: BrowserExecutionContext,
+): Promise<T> {
+  let keychainKey: string | undefined;
+  try {
+    keychainKey = (await executionContext?.resolveFirecrawlCredential?.(firecrawl.baseUrl))?.trim();
+  } catch {
+    // A keychain outage keeps the environment fallback and never surfaces a credential value.
+  }
+  return keychainKey ? { ...firecrawl, apiKey: keychainKey } : firecrawl;
+}
+
 function isCanonicalLocalFirecrawlBaseUrl(baseUrl: string): boolean {
   try {
     const parsed = new URL(baseUrl);
@@ -2431,25 +2450,33 @@ function assertFirecrawlBaseUrlAllowed(baseUrl: string, config: ToolPolicyConfig
   assertNotPrivateOrReservedHost(baseUrl);
 }
 
+const FIRECRAWL_SEARCH_PATH = "/v2/search";
+
 async function fetchFirecrawlEndpoint(
   firecrawl: { baseUrl: string; timeoutMs: number },
   path: string,
   config: ToolPolicyConfig,
   init: RequestInit,
+  callerSignal?: AbortSignal,
 ): Promise<Response> {
-  const targetUrl = `${firecrawl.baseUrl}${path}`;
-  if (isCanonicalLocalFirecrawlBaseUrl(firecrawl.baseUrl)) {
-    return fetchAllowlisted(targetUrl, {
-      allowlist: ["127.0.0.1:3002", "localhost:3002"],
-      timeoutMs: firecrawl.timeoutMs,
-      init,
-    });
+  if (isFirecrawlCoolingDown(firecrawl.baseUrl)) {
+    throw new FirecrawlUnavailableError(firecrawl.baseUrl);
   }
-  return fetchAllowlisted(targetUrl, {
-    allowlist: config.sandbox.networkAllowlist,
-    timeoutMs: firecrawl.timeoutMs,
-    init,
-  });
+  const targetUrl = `${firecrawl.baseUrl}${path}`;
+  const options = isCanonicalLocalFirecrawlBaseUrl(firecrawl.baseUrl)
+    ? { allowlist: ["127.0.0.1:3002", "localhost:3002"], timeoutMs: firecrawl.timeoutMs, init }
+    : { allowlist: config.sandbox.networkAllowlist, timeoutMs: firecrawl.timeoutMs, init };
+  let response: Response;
+  try {
+    response = await fetchAllowlisted(targetUrl, options);
+  } catch (error) {
+    if (isFirecrawlConnectFailure(error, callerSignal, { countTimeouts: path === FIRECRAWL_SEARCH_PATH })) {
+      recordFirecrawlConnectFailure(firecrawl.baseUrl);
+    }
+    throw error;
+  }
+  recordFirecrawlSuccess(firecrawl.baseUrl);
+  return response;
 }
 
 function trimTrailingSlashes(value: string): string {
@@ -2467,20 +2494,26 @@ async function executeBrowserSearchViaFirecrawl(
   config: ToolPolicyConfig,
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
-  const firecrawl = resolveFirecrawlRuntimeConfig(args);
+  const firecrawl = await withFirecrawlKeychainCredential(resolveFirecrawlRuntimeConfig(args), executionContext);
   assertFirecrawlBaseUrlAllowed(firecrawl.baseUrl, config);
-  const response = await fetchFirecrawlEndpoint(firecrawl, "/v2/search", config, {
-    method: "POST",
-    signal: executionContext?.signal ?? AbortSignal.timeout(firecrawl.timeoutMs),
-    headers: {
-      "Content-Type": "application/json",
-      ...(firecrawl.apiKey ? { Authorization: `Bearer ${firecrawl.apiKey}` } : {}),
+  const response = await fetchFirecrawlEndpoint(
+    firecrawl,
+    FIRECRAWL_SEARCH_PATH,
+    config,
+    {
+      method: "POST",
+      signal: executionContext?.signal ?? AbortSignal.timeout(firecrawl.timeoutMs),
+      headers: {
+        "Content-Type": "application/json",
+        ...(firecrawl.apiKey ? { Authorization: `Bearer ${firecrawl.apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        query,
+        limit,
+      }),
     },
-    body: JSON.stringify({
-      query,
-      limit,
-    }),
-  });
+    executionContext?.signal,
+  );
   if (!response.ok) {
     throw new Error(`Firecrawl search failed (${response.status} ${response.statusText}).`);
   }
@@ -2608,23 +2641,29 @@ async function executeFirecrawlScrape(
   markdown: string;
   html: string;
 }> {
-  const firecrawl = resolveFirecrawlRuntimeConfig(args);
+  const firecrawl = await withFirecrawlKeychainCredential(resolveFirecrawlRuntimeConfig(args), executionContext);
   assertFirecrawlBaseUrlAllowed(firecrawl.baseUrl, config);
   assertAllowedHttpUrl(url);
   assertHostAllowedForConfig(url, config, executionContext);
   assertNotPrivateOrReservedHost(url);
-  const response = await fetchFirecrawlEndpoint(firecrawl, "/v2/scrape", config, {
-    method: "POST",
-    signal: signal ?? AbortSignal.timeout(firecrawl.timeoutMs),
-    headers: {
-      "Content-Type": "application/json",
-      ...(firecrawl.apiKey ? { Authorization: `Bearer ${firecrawl.apiKey}` } : {}),
+  const response = await fetchFirecrawlEndpoint(
+    firecrawl,
+    "/v2/scrape",
+    config,
+    {
+      method: "POST",
+      signal: signal ?? AbortSignal.timeout(firecrawl.timeoutMs),
+      headers: {
+        "Content-Type": "application/json",
+        ...(firecrawl.apiKey ? { Authorization: `Bearer ${firecrawl.apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        url,
+        formats,
+      }),
     },
-    body: JSON.stringify({
-      url,
-      formats,
-    }),
-  });
+    signal,
+  );
   if (!response.ok) {
     throw new Error(`Firecrawl scrape failed (${response.status} ${response.statusText}).`);
   }

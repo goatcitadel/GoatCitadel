@@ -3,7 +3,11 @@ import { Play, PlugZap } from "lucide-react";
 import type { ChatThinkingLevel, OnboardingState } from "@goatcitadel/contracts";
 import { ChatChangePlanCard } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { GUIDED_THINKING_LEVELS } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
+import {
+  GUIDED_THINKING_LEVELS,
+  groupGuidedProviders,
+  guidedProviderOptionLabel,
+} from "../../../features/native-routes/settings/sections/guided-model-setup-support";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Field } from "../../ui/Field";
@@ -112,10 +116,14 @@ export function CockpitGuidedModelSetup({
                   {catalog.loading ? "Loading providers…" : "Saved provider · unavailable"}
                 </option>
               ) : null}
-              {setup.providers.map((provider) => (
-                <option key={provider.providerId} value={provider.providerId}>
-                  {provider.label}
-                </option>
+              {groupGuidedProviders(setup.providers, [setup.providerId, setup.savedProviderId]).map((group) => (
+                <optgroup key={group.id} label={group.label}>
+                  {group.providers.map((provider) => (
+                    <option key={provider.providerId} value={provider.providerId}>
+                      {guidedProviderOptionLabel(provider)}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           )}

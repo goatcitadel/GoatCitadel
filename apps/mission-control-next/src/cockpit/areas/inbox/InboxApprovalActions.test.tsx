@@ -97,7 +97,7 @@ function deferred<T>() {
 }
 
 async function approve() {
-  await act(async () => button("Review approval").click());
+  await act(async () => button("Review danger approval").click());
   await act(async () => button("Approve once").click());
 }
 
@@ -164,7 +164,7 @@ describe("Inbox approval decisions", () => {
       api.fetchApproval.mockResolvedValue(record);
       api.resolveApproval.mockResolvedValue({ approval: { ...record, status: "approved" }, effects: [] });
       renderActions(record);
-      await act(async () => button("Review approval").click());
+      await act(async () => button("Review danger approval").click());
       const dialog = document.querySelector('[role="dialog"]')!;
       expect(dialog.textContent).toContain(
         legacy
@@ -223,7 +223,7 @@ describe("Inbox approval decisions", () => {
     expect(container.textContent).toContain("does not authorize a replacement");
     expect(container.textContent).toContain("Project-wide always-allow is unavailable here");
     expect([...container.querySelectorAll("button")].map((entry) => entry.textContent)).toEqual([
-      "Review approval",
+      "Review danger approval",
       "Deny",
     ]);
     expect(api.resolveApproval).not.toHaveBeenCalled();
@@ -233,7 +233,7 @@ describe("Inbox approval decisions", () => {
 
   it("requires danger confirmation, then rereads the same pending owner record before approval", async () => {
     const { onResolved } = renderActions(approval);
-    await act(async () => button("Review approval").click());
+    await act(async () => button("Review danger approval").click());
     expect(api.resolveApproval).not.toHaveBeenCalled();
     await act(async () => button("Approve once").click());
     expect(api.fetchApproval).toHaveBeenCalledWith("approval-a", { workspaceId: "default" });
@@ -244,7 +244,7 @@ describe("Inbox approval decisions", () => {
   it("refuses a changed action even after confirmation", async () => {
     api.fetchApproval.mockResolvedValue({ ...approval, preview: { targets: ["other.txt"] } });
     const { onInvalidated } = renderActions(approval);
-    await act(async () => button("Review approval").click());
+    await act(async () => button("Review danger approval").click());
     await act(async () => button("Approve once").click());
     expect(api.resolveApproval).not.toHaveBeenCalled();
     expect(onInvalidated).toHaveBeenCalledOnce();
@@ -253,10 +253,10 @@ describe("Inbox approval decisions", () => {
   it("locks both decisions after a mutation response with an uncertain outcome", async () => {
     api.resolveApproval.mockRejectedValue(new Error("Connection lost"));
     renderActions(approval);
-    await act(async () => button("Review approval").click());
+    await act(async () => button("Review danger approval").click());
     await act(async () => button("Approve once").click());
     expect(api.resolveApproval).toHaveBeenCalledOnce();
-    expect(button("Review approval").disabled).toBe(true);
+    expect(button("Review danger approval").disabled).toBe(true);
     expect(button("Deny").disabled).toBe(true);
     expect(container.textContent).toContain("Decision outcome is uncertain");
     expect(button("Check again").disabled).toBe(false);
@@ -279,7 +279,7 @@ describe("Inbox approval decisions", () => {
       expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval-a", { workspaceId: "default" });
       expect(container.textContent).not.toContain("Decision outcome is uncertain");
       expect(container.textContent).toContain("still pending and unchanged");
-      expect(button("Review approval").disabled).toBe(false);
+      expect(button("Review danger approval").disabled).toBe(false);
       expect(button("Deny").disabled).toBe(false);
       expect(onResolved).not.toHaveBeenCalled();
       expect(onInvalidated).not.toHaveBeenCalled();
@@ -296,7 +296,7 @@ describe("Inbox approval decisions", () => {
       await act(async () => button("Check again").click());
       expect(container.textContent).toContain("Decision recorded: Approved");
       expect(container.textContent).not.toContain("Decision outcome is uncertain");
-      expect(button("Review approval").disabled).toBe(true);
+      expect(button("Review danger approval").disabled).toBe(true);
       expect(button("Deny").disabled).toBe(true);
       expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Check again")).toBe(
         false,
@@ -312,7 +312,7 @@ describe("Inbox approval decisions", () => {
       await act(async () => button("Check again").click());
       expect(onInvalidated).toHaveBeenCalledOnce();
       expect(container.textContent).not.toContain("Decision outcome is uncertain");
-      expect(button("Review approval").disabled).toBe(false);
+      expect(button("Review danger approval").disabled).toBe(false);
     });
 
     it("keeps the lock when the owner read fails or the record is gone", async () => {
@@ -321,12 +321,12 @@ describe("Inbox approval decisions", () => {
       await act(async () => button("Check again").click());
       expect(container.textContent).toContain("Could not check the current approval");
       expect(container.textContent).toContain("Decision outcome is uncertain");
-      expect(button("Review approval").disabled).toBe(true);
+      expect(button("Review danger approval").disabled).toBe(true);
       expect(button("Check again").disabled).toBe(false);
       api.fetchApproval.mockResolvedValue(undefined);
       await act(async () => button("Check again").click());
       expect(onInvalidated).toHaveBeenCalledOnce();
-      expect(button("Review approval").disabled).toBe(true);
+      expect(button("Review danger approval").disabled).toBe(true);
       expect(api.resolveApproval).toHaveBeenCalledOnce();
     });
   });
@@ -334,17 +334,17 @@ describe("Inbox approval decisions", () => {
   it("allows another check when the owner read fails before a mutation", async () => {
     api.fetchApproval.mockRejectedValue(new Error("Connection lost"));
     renderActions(approval);
-    await act(async () => button("Review approval").click());
+    await act(async () => button("Review danger approval").click());
     await act(async () => button("Approve once").click());
     expect(api.resolveApproval).not.toHaveBeenCalled();
-    expect(button("Review approval").disabled).toBe(false);
+    expect(button("Review danger approval").disabled).toBe(false);
     expect(container.textContent).toContain("Could not check the current approval");
   });
 
   it("withholds specialist approval without matching evidence", () => {
     renderActions({ ...approval, kind: "code_mode.run" });
     expect(
-      Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Review approval")
+      Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Review danger approval")
         ?.disabled,
     ).toBe(true);
     expect(api.resolveApproval).not.toHaveBeenCalled();
@@ -377,13 +377,13 @@ describe("Inbox approval decisions", () => {
       expect(callbacks.onInvalidated).not.toHaveBeenCalled();
       preferences.activeWorkspaceId = "default";
       renderActions(approval);
-      expect(button("Review approval").disabled).toBe(false);
+      expect(button("Review danger approval").disabled).toBe(false);
     },
   );
 
   it("does not carry an open danger or deny confirmation to another selected record", async () => {
     renderActions(approval);
-    await act(async () => button("Review approval").click());
+    await act(async () => button("Review danger approval").click());
     renderActions({ ...approval, preview: { targets: ["new-target.txt"] } });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => button("Deny").click());
@@ -400,7 +400,7 @@ describe("Inbox approval decisions", () => {
     expect(api.resolveApproval).toHaveBeenCalledOnce();
     act(() => root.render(null));
     const next = renderActions(approval);
-    expect(button("Review approval").disabled).toBe(true);
+    expect(button("Review danger approval").disabled).toBe(true);
     expect(button("Deny").disabled).toBe(true);
     await act(async () => result.reject(new Error("Response lost")));
     expect(original.onResolved).not.toHaveBeenCalled();
@@ -408,7 +408,7 @@ describe("Inbox approval decisions", () => {
     act(() => root.render(null));
     renderActions(approval);
     expect(container.textContent).toContain("Decision outcome is uncertain");
-    expect(button("Review approval").disabled).toBe(true);
+    expect(button("Review danger approval").disabled).toBe(true);
     expect(button("Deny").disabled).toBe(true);
     expect(api.resolveApproval).toHaveBeenCalledOnce();
   });
@@ -426,9 +426,9 @@ describe("Inbox approval decisions", () => {
     await act(async () => result.resolve({ approval: { ...approval, status: "approved" }, effects: [] }));
     expect(original.onResolved).not.toHaveBeenCalled();
     expect(next.onResolved).not.toHaveBeenCalled();
-    expect(button("Review approval").disabled).toBe(false);
+    expect(button("Review danger approval").disabled).toBe(false);
     renderActions(approval);
-    expect(button("Review approval").disabled).toBe(true);
+    expect(button("Review danger approval").disabled).toBe(true);
     expect(container.textContent).toContain("Decision recorded");
   });
 
@@ -459,18 +459,16 @@ describe("Inbox approval decisions", () => {
       { ...item, source: { ...item.source, workspaceId: "workspace-b" } },
       "workspace-b",
     );
-    expect(button("Review approval").disabled).toBe(false);
+    expect(button("Review danger approval").disabled).toBe(false);
     preferences.activeWorkspaceId = "default";
     renderActions(approval);
-    expect(button("Review approval").disabled).toBe(true);
+    expect(button("Review danger approval").disabled).toBe(true);
   });
 
   it("rechecks and validates a denied receipt separately from approval", async () => {
     api.resolveApproval.mockResolvedValue({ approval: { ...approval, status: "rejected" }, effects: [] });
     const { onResolved } = renderActions(approval);
     await act(async () => button("Deny").click());
-    expect(api.resolveApproval).not.toHaveBeenCalled();
-    await act(async () => button("Confirm deny").click());
     expect(api.resolveApproval).toHaveBeenCalledWith("approval-a", "reject");
     expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("Decision recorded"));
   });
@@ -480,7 +478,7 @@ describe("Inbox approval decisions", () => {
     api.fetchApproval.mockResolvedValue(nuclear);
     api.resolveApproval.mockResolvedValue({ approval: { ...nuclear, status: "approved" }, effects: [] });
     const { onResolved } = renderActions(nuclear);
-    await act(async () => button("Review approval").click());
+    await act(async () => button("Review nuclear approval").click());
     expect(button("Approve once").disabled).toBe(true);
     await typeConfirmation("approve");
     expect(button("Approve once").disabled).toBe(false);
@@ -494,12 +492,12 @@ describe("Inbox approval decisions", () => {
 
   it("closes an open nuclear confirmation when its reviewed evidence changes", async () => {
     renderActions({ ...approval, riskLevel: "nuclear" });
-    await act(async () => button("Review approval").click());
+    await act(async () => button("Review nuclear approval").click());
     await typeConfirmation("approve");
     expect(button("Approve once").disabled).toBe(false);
     renderActions({ ...approval, riskLevel: "nuclear", preview: { targets: ["new-target.txt"] } });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-    await act(async () => button("Review approval").click());
+    await act(async () => button("Review nuclear approval").click());
     expect(button("Approve once").disabled).toBe(true);
     expect(api.fetchApproval).not.toHaveBeenCalled();
     expect(api.resolveApproval).not.toHaveBeenCalled();
@@ -560,7 +558,7 @@ it.each(["One sentence", "  First line\nSecond line\n", "password=[REDACTED]"])(
         withheldSummary: "Metadata withheld",
       },
     });
-    await act(async () => button("Review approval").click());
+    await act(async () => button("Review danger approval").click());
     const dialog = document.querySelector('[role="dialog"]')!;
     const details = [...dialog.querySelectorAll("details")].find(
       (node) => node.querySelector("summary")?.textContent === "Requested memory content",
@@ -584,11 +582,11 @@ it.each(["approved", "rejected", "edited"] as const)(
   },
 );
 
-it("removes decision dialogs when a still-pending record expires in the mounted review", async () => {
+it("removes the review dialog when a still-pending record expires in the mounted review", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-06T00:00:00Z"));
   renderActions({ ...approval, expiresAt: "2026-10-06T00:00:01Z" });
-  await act(async () => button("Deny").click());
+  await act(async () => button("Review danger approval").click());
   expect(document.querySelector('[role="dialog"]')).not.toBeNull();
   await act(async () => vi.advanceTimersByTime(2000));
   expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -598,9 +596,10 @@ it("removes decision dialogs when a still-pending record expires in the mounted 
 });
 
 it.each(["approved", "rejected"] as const)(
-  "closes both kinds of dialog when external %s settlement arrives",
+  "closes the review dialog when external %s settlement arrives",
   async (status) => {
-    for (const opener of ["Review approval", "Deny"]) {
+    // Deny opens no dialog (one click); only the risk review does.
+    for (const opener of ["Review danger approval"]) {
       renderActions(approval);
       await act(async () => button(opener).click());
       expect(document.querySelector('[role="dialog"]')).not.toBeNull();
@@ -632,7 +631,7 @@ it("keeps the shared Library and Chat owner decidable while its record is re-rea
     );
   renderShared(approval, true);
   // A background re-read is not a reason to swallow the click: the decision re-reads the owner record itself.
-  expect(button("Review approval").disabled).toBe(false);
+  expect(button("Review danger approval").disabled).toBe(false);
   expect(button("Deny").disabled).toBe(false);
   await approve();
   expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval-a", { workspaceId: "default" });

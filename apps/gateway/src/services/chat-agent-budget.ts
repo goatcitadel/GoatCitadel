@@ -7,10 +7,17 @@ import {
   type ChatTurnFailureRecord,
   type ChatWebMode,
 } from "@goatcitadel/contracts";
-import { SUBAGENT_FANOUT_MAX_SUBTASKS, SUBAGENT_FANOUT_TOOL_NAME } from "@goatcitadel/policy-engine";
+import {
+  isOfficialResearchSearchInvocation,
+  resolveOfficialSearchProviders,
+  SUBAGENT_FANOUT_MAX_SUBTASKS,
+  SUBAGENT_FANOUT_TOOL_NAME,
+} from "@goatcitadel/policy-engine";
 
 const MAX_TOOL_LOOPS = 6;
 const MAX_TOOL_RUNS_PER_TURN = 12;
+const DEEP_MAX_TOOL_LOOPS = 8;
+const DEEP_MAX_TOOL_RUNS_PER_TURN = 16;
 const COWORK_RESEARCH_LIST_MAX_TOOL_LOOPS = 6;
 const COWORK_RESEARCH_LIST_MAX_TOOL_RUNS_PER_TURN = 16;
 const COWORK_RESEARCH_LIST_EXTENDED_MAX_TOOL_RUNS_PER_TURN = 48;
@@ -243,9 +250,9 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
         profile: "deep",
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.deep,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deep,
-        maxToolLoops: MAX_TOOL_LOOPS,
+        maxToolLoops: DEEP_MAX_TOOL_LOOPS,
         loopLimitBehavior,
-        maxToolRunsPerTurn: MAX_TOOL_RUNS_PER_TURN,
+        maxToolRunsPerTurn: DEEP_MAX_TOOL_RUNS_PER_TURN,
         searchMaxResults: 8,
         maxTokens: Math.max(defaultMaxTokens ?? 900, 1200),
         minSynthesisReserveMs: 15000,
@@ -314,10 +321,15 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   if (!shouldUseConstrainedLocalAgentProfile(input.providerId, input.model)) {
     return budget;
   }
+  // Deep is the mode the user picked for thoroughness, so a constrained local
+  // model keeps a slightly wider window than the other modes.
+  const isDeep = input.webMode === "deep";
+  const loopCap = isDeep ? 4 : input.promptLabExplicitTools ? 4 : 3;
+  const runCap = isDeep ? 8 : input.promptLabExplicitTools ? 6 : 5;
   return {
     ...budget,
-    maxToolLoops: Math.min(budget.maxToolLoops, input.promptLabExplicitTools ? 4 : 3),
-    maxToolRunsPerTurn: Math.min(budget.maxToolRunsPerTurn, input.promptLabExplicitTools ? 6 : 5),
+    maxToolLoops: Math.min(budget.maxToolLoops, loopCap),
+    maxToolRunsPerTurn: Math.min(budget.maxToolRunsPerTurn, runCap),
     maxTokens: Math.max(budget.maxTokens ?? 900, 1400),
     minSynthesisReserveMs: Math.max(budget.minSynthesisReserveMs, 12000),
   };
@@ -353,6 +365,7 @@ function resolveLoopLimitBehavior(input: ResolveChatExecutionBudgetInput): ChatL
   // to the retired surface label.
   return input.executionProfile === "sustained_local_coding" ||
     input.mode === "cowork" ||
+    input.webMode === "deep" ||
     Boolean(input.researchListIntent) ||
     Boolean(input.artifactIntent) ||
     Boolean(input.promptLabHarness)
@@ -361,7 +374,7 @@ function resolveLoopLimitBehavior(input: ResolveChatExecutionBudgetInput): ChatL
 }
 
 function shouldUseResearchListBudget(input: ResolveChatExecutionBudgetInput): boolean {
-  return input.webMode === "auto" && Boolean(input.researchListIntent);
+  return (input.webMode === "auto" || input.webMode === "deep") && Boolean(input.researchListIntent);
 }
 
 export function applyPromptLabHarnessBudget(
@@ -434,6 +447,12 @@ export function minimumRemainingBudgetForToolStart(toolName: string, executionBu
 }
 
 export function toolRunBudgetCostForToolCall(toolName: string, args: Record<string, unknown>): number {
+  if (toolName === "browser.search" && isOfficialResearchSearchInvocation(args)) {
+    // Research mode calls every requested provider in parallel, each a separate paid API call, so
+    // it is charged per provider. Quick mode (the default) stops at the first provider that
+    // succeeds, so it is charged once.
+    return args.mode === "research" ? Math.max(1, resolveOfficialSearchProviders(args).length) : 1;
+  }
   if (toolName !== SUBAGENT_FANOUT_TOOL_NAME) {
     return 1;
   }

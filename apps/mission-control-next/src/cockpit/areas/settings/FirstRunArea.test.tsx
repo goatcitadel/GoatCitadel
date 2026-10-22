@@ -276,7 +276,7 @@ describe("native first-run setup", () => {
     await render();
     const steps = [...container.querySelectorAll('nav[aria-label="Setup steps"] button')];
     expect(steps.map((step) => step.getAttribute("aria-current"))).toEqual([null, null, "step"]);
-    expect(steps[0]?.textContent).toContain("DoneChoose a modelProvider A");
+    expect(steps[0]?.textContent).toContain("DoneChoose a modelmodel-a · Provider A");
     expect(steps[1]?.textContent).toContain("Tool approval:");
     expect(steps[2]?.textContent).toContain("Current");
     expect(steps.map((step) => step.textContent)).not.toContainEqual(expect.stringContaining("Open"));

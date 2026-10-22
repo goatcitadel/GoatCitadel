@@ -46,6 +46,7 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
           : undefined;
       setError(
         typeof responseError === "string" &&
+          // copy-guard: not copy (matches the server error text; the operator reads the sentence below)
           responseError.startsWith("OS keychain is unavailable, so the Evidence Receipt signing key")
           ? "This host cannot build a signed receipt because its OS keychain is unavailable. Existing receipts can still be verified offline."
           : describeApiError(cause).summary,

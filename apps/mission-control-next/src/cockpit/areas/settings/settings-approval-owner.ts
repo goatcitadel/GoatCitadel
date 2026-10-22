@@ -10,7 +10,9 @@ export type SettingsApprovalOwner =
   | "tool-approval"
   | "budget-mode"
   | "filesystem-write-access"
-  | "claude-cli-tool-bridge";
+  | "claude-cli-tool-bridge"
+  | "firecrawl"
+  | "search-engine-order";
 export type SettingsApprovalReceipt = Pick<ChangePlanRecord, "planId" | "revision" | "status" | "requiredAction">;
 
 function identifier(value: unknown): value is string {
@@ -74,7 +76,17 @@ export function settingsApprovalOwnerBinding(
 
   let expectedWorkspace = workspaceId;
   let matches: boolean;
-  if (["gateway-auth", "managed-runtime", "llama-setup", "tool-approval", "budget-mode"].includes(owner)) {
+  if (
+    [
+      "gateway-auth",
+      "managed-runtime",
+      "llama-setup",
+      "tool-approval",
+      "budget-mode",
+      "firecrawl",
+      "search-engine-order",
+    ].includes(owner)
+  ) {
     const operation =
       owner === "gateway-auth"
         ? "gateway_auth_configuration"
@@ -84,7 +96,11 @@ export function settingsApprovalOwnerBinding(
             ? "tool_approval_mode"
             : owner === "budget-mode"
               ? "budget_mode"
-              : "llama_cpp_setup";
+              : owner === "firecrawl"
+                ? "web_firecrawl_configuration"
+                : owner === "search-engine-order"
+                  ? "web_search_configuration"
+                  : "llama_cpp_setup";
     expectedWorkspace = owner === "llama-setup" ? workspaceId : "default";
     matches =
       plan.kind === "runtime_configuration" &&
