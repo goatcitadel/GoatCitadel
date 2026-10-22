@@ -41,7 +41,7 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
         </p>
         <p className="mt-2 text-xs text-fg-muted">
           Policy defaults are advisory labels. Portable content hashes are declared metadata, not independently verified
-          bytes. Gateway policy and its usual checks still apply.
+          bytes. GoatCitadel policy and its usual checks still apply.
         </p>
       </header>
       <div className="flex flex-wrap gap-2">
@@ -128,8 +128,8 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
           {owner.view?.kind === "portable" ? (
             <>
               <p className="text-sm text-fg-secondary">
-                Choose a local_file manifest for Gateway validation. Previewing is read-only. Do not include credentials
-                or private endpoint values in portable metadata.
+                Choose a local_file manifest for GoatCitadel to validate. Previewing is read-only. Do not include
+                credentials or private endpoint values in portable metadata.
               </p>
               <label className="block text-sm text-fg-secondary">
                 Manifest file
@@ -172,7 +172,7 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
           ) : null}
           {owner.previewBusy ? (
             <p role="status" className="text-sm text-fg-muted">
-              Reading the Gateway preview…
+              Reading the preview…
             </p>
           ) : null}
           {owner.notice ? (
@@ -226,7 +226,7 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
       </Sheet>
       <Dialog
         open={Boolean(owner.review)}
-        title={owner.review?.kind === "record" ? "Record pack review evidence" : "Stage reviewed pack"}
+        title={owner.review?.kind === "record" ? "Record pack review" : "Stage reviewed pack"}
         description="This adds an installation record only. Capability availability, tools and runtime policy are unchanged."
         onOpenChange={(open) => {
           if (!open && !pending) owner.cancelReview();
@@ -249,7 +249,7 @@ function PortablePacksContent({ workspaceId }: { workspaceId: string }) {
             </code>
             <div className="flex flex-wrap gap-2">
               <Button disabled={owner.locked} onClick={() => void owner.confirm()}>
-                {owner.review.kind === "stage" ? "Stage reviewed pack" : "Record reviewed evidence"}
+                {owner.review.kind === "stage" ? "Stage reviewed pack" : "Record pack review"}
               </Button>
               <Button disabled={pending} onClick={owner.cancelReview}>
                 Cancel pack review

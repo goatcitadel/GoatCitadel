@@ -50,7 +50,7 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
       <header className="space-y-1">
         <h3 className="text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-vault"]}</h3>
         <p className="text-sm text-fg-secondary">
-          Secrets for {vault.snapshot?.record?.name ?? "the selected Citadel"}. The Gateway seals values with a Citadel
+          Secrets for {vault.snapshot?.record?.name ?? "the selected Citadel"}. GoatCitadel seals values with a Citadel
           key held in the OS keychain. Names and update times are listed here.
         </p>
         <p className="text-xs text-fg-muted">

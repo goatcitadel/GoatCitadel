@@ -32,7 +32,7 @@ export function ProjectFanout({
       <h2 className="text-lg font-semibold">Automatic fan-out</h2>
       <p className="text-sm text-fg-secondary">
         Allow automatic child work for this project until a finite expiry. Every launch reserves child slots and cost
-        before dispatch. Deny-wins, approvals, tools, hosts, and paths remain governed by the Gateway.
+        before dispatch. Deny-wins, approvals, tools, hosts, and paths remain governed by GoatCitadel.
       </p>
       {owner.error ? <Callout tone="error">{owner.error}</Callout> : null}
       {owner.message ? <Callout>{owner.message}</Callout> : null}
@@ -80,7 +80,7 @@ export function ProjectFanout({
                 <option value="24">1 day</option>
                 <option value="168">7 days</option>
                 <option disabled value="indefinite">
-                  Until revoked — unavailable: Gateway requires expiry
+                  Until revoked — unavailable: an expiry is required
                 </option>
               </select>
             )}
@@ -108,7 +108,7 @@ export function ProjectFanout({
           ))}
           <p className="text-sm text-fg-muted">
             New grants default to one hour, three child activations and a $0.75 ceiling. Until revoked is unavailable
-            because the Gateway requires finite expiry.
+            because GoatCitadel requires an expiry.
           </p>
           <Button disabled={owner.busy || owner.loading} onClick={owner.createGrant}>
             Review automatic fan-out
@@ -135,8 +135,8 @@ export function ProjectFanout({
           <p className="break-all">Expires {owner.review?.input.expiresAt}</p>
           <p className="break-words">{owner.review?.input.reason}</p>
           <p className="text-sm">
-            Chat only, automatic child work only. This permits child dispatch within the limits above. Gateway policy
-            and approvals still apply; the Gateway records the authenticated caller.
+            Chat only, automatic child work only. This permits child dispatch within the limits above. GoatCitadel
+            policy and approvals still apply, and GoatCitadel records who granted it.
           </p>
           <RiskBadge risk="caution" />
           <p className="break-all text-sm">Workspace path: {project.workspacePath}</p>

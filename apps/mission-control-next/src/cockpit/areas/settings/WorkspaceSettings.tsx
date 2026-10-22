@@ -226,7 +226,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
       ) : null}
       {action.pending ? (
         <p role="status" className="text-sm text-fg-muted">
-          Waiting for the Gateway to confirm…
+          Waiting for GoatCitadel to confirm…
         </p>
       ) : null}
       {lifecycle.notice ? (

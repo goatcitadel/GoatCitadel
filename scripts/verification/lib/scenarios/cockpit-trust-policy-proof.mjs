@@ -72,7 +72,7 @@ export async function runCockpitTrustPolicyProof({ context, browser, stack, cita
           const label = capability.title ?? capability.capabilityId;
           const panel = page.getByRole("region", { name: "Trust and policy", exact: true });
           await panel.getByRole("searchbox", { name: "Search trust records", exact: true }).waitFor();
-          assert.ok((await panel.innerText()).includes("Read-only snapshot of recorded trust."));
+          assert.ok((await panel.innerText()).includes("Read-only view of recorded trust."));
           await panel.getByRole("combobox", { name: "Type", exact: true }).selectOption("capability");
           await panel.getByRole("searchbox", { name: "Search trust records", exact: true }).fill(label);
           // The row button is named by its visible text: the label, then "Capability · <state> · <owner>".
@@ -117,9 +117,9 @@ export async function runCockpitTrustPolicyProof({ context, browser, stack, cita
           await panel.getByText("No trust records match these filters.", { exact: true }).waitFor();
           await search.fill("");
           const refresh = page.waitForResponse(isSnapshot);
-          await panel.getByRole("button", { name: "Refresh trust snapshot", exact: true }).click();
+          await panel.getByRole("button", { name: "Refresh trust records", exact: true }).click();
           assert.equal((await refresh).status(), 200);
-          await panel.getByRole("button", { name: "Refresh trust snapshot", exact: true }).waitFor();
+          await panel.getByRole("button", { name: "Refresh trust records", exact: true }).waitFor();
           await panel.scrollIntoViewIfNeeded();
           await audit("filtered");
           assert.deepEqual(writes, [], "Inspecting Trust evidence mutated a runtime owner.");

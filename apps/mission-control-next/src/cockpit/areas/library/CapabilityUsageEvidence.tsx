@@ -20,7 +20,7 @@ export function CapabilityLastUsed({ usage }: { usage: CapabilityUsage }) {
 }
 
 export function CapabilityUsageEvidence({ usage }: { usage: CapabilityUsage }) {
-  if (usage.status === "unsupported") return <p>Usage evidence is not provided for this capability type.</p>;
+  if (usage.status === "unsupported") return <p>Usage counts are not provided for this capability type.</p>;
   if (usage.status === "unavailable") return <p>Skill usage could not be verified from the current skills list.</p>;
   if (usage.status === "not_recorded")
     return <p>The current skills list has no usage count or last-used time for this skill.</p>;
@@ -30,7 +30,7 @@ export function CapabilityUsageEvidence({ usage }: { usage: CapabilityUsage }) {
       <p>Recorded uses: {usage.usageCount === undefined ? "Not recorded" : usage.usageCount}</p>
       <p>Last used: {date ? <TimeText value={date} absolute /> : "Not recorded"}</p>
       <p className="text-xs text-fg-muted">
-        These are skill lifecycle counters from Gateway. They are not a complete history of every tool or capability
+        These are skill lifecycle counters from GoatCitadel. They are not a complete history of every tool or capability
         invocation.
       </p>
     </div>

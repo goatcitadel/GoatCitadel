@@ -13,6 +13,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "cockpit");
 
+/** Every tree that renders operator copy in the cockpit: its own areas, the native routes and shared components. */
+export const COPY_ROOTS = [
+  { id: "cockpit", dir: cockpitRoot },
+  { id: "native-routes", dir: path.join(repoRoot, "apps", "mission-control-next", "src", "features", "native-routes") },
+  { id: "shared-components", dir: path.join(repoRoot, "packages", "mission-control-shared", "src", "components") },
+];
+
 const BANNED = [
   /\bcurrent (?:Ops(?: Kanban)?|controls|Settings|Approvals|Kanban|Runtime|Library)\b/,
   /\b(?:open|in|to|resolve it in|return to|review it in)\s+(?:the\s+)?current Chat\b(?!\s+turns?\b)/i,
@@ -65,17 +72,76 @@ export const COPY_RATCHETS = [
     budget: 0,
     help: "accessible names start with the visible text and never read IDs",
   },
+  {
+    id: "glossary-terms",
+    pattern: /\b(?:Gateway|evidence|owners?|replay(?:s|ed|ing)?|revisions?|snapshots?)\b/gi,
+    budget: 0,
+    help: 'write "GoatCitadel" or name the page; keep these words in TechnicalDetails',
+  },
+  {
+    id: "plural-template",
+    // A count, up to two words ("known workspace"), then a plural noun.
+    pattern:
+      /\$\{(?![^}]*\bplural\()(?![^}]*\?)[^}]*\b(?:count|length|total|size|known)\b[^}]*\}\s+(?:[a-z]+\s+){0,2}[a-z]+s\b|\w\(s\)/gi,
+    budget: 0,
+    help: "use plural() from mission-control-shared/content/format for every number-noun pair",
+  },
 ];
+
+/*
+ * Budgets per root, overriding the rule budget. The cockpit's own areas are held at the rule budgets; the native
+ * routes and shared components ratchet down as the copy sweep reaches them (cockpit follow-up plan, Task 4.3).
+ */
+export const ROOT_BUDGETS = {
+  // The one cockpit hit is not copy: RunSignedReceipt matches the server's keychain error text with startsWith.
+  cockpit: { "glossary-terms": 1 },
+  "native-routes": {
+    "internal-terms": 274,
+    "dead-end-pointer": 1,
+    "aria-label-id": 10,
+    "glossary-terms": 970,
+    "plural-template": 37,
+  },
+  "shared-components": { "internal-terms": 21, "aria-label-id": 11, "glossary-terms": 45, "plural-template": 2 },
+};
 const ARIA_ID = /aria-label=\{`[^`]*\$\{[^}]*\b\w*(?:Id|ID)\b[^}]*\}[^`]*`\}/g;
 const CODE_LINE =
   /^(?:import|export|const|let|var|return|if|else|for|while|function|type|interface|case|await|throw|switch|default|try|catch)\b/;
 
+/*
+ * TechnicalDetails children and class names never reach operator copy; blank them, keeping line breaks. The
+ * TechnicalDetails tag itself stays, because its label is the visible disclosure summary.
+ */
+function stripHiddenText(contents) {
+  return contents
+    .replace(/(<TechnicalDetails\b[^>]*>)([\s\S]*?)(<\/TechnicalDetails>)/g, (_, open, body, close) => {
+      return `${open}${body.replace(/[^\n]/g, "")}${close}`;
+    })
+    .replace(/className=(?:"[^"]*"|\{`[^`]*`\})/g, "");
+}
+
+/** A line after `// copy-guard: not copy (…)` holds text an operator never reads, such as search keywords. */
+const NOT_COPY_MARKER = /\/\/\s*copy-guard: not copy\b/;
+
 /** The parts of a source file an operator can read. */
 export function visibleText(contents) {
   const parts = [];
-  for (const line of contents.split(/\r?\n/)) {
+  let skipNext = false;
+  for (const line of stripHiddenText(contents).split(/\r?\n/)) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (NOT_COPY_MARKER.test(line)) {
+      skipNext = true;
+      continue;
+    }
     if (isComment(line)) continue;
-    for (const match of line.matchAll(/(["'`])((?:(?!\1).)*\s(?:(?!\1).)*)\1/g)) parts.push(match[2]);
+    // A "literal" that starts or ends with an operator, or holds JSX attribute syntax, is the code between two
+    // literals, not copy.
+    for (const match of line.matchAll(/(["'`])((?:(?!\1).)*\s(?:(?!\1).)*)\1/g))
+      if (!/^\s*(?:&&|\|\||[=!]==?|\?\?|[?:+,)])|(?:&&|\|\||[=!]==?|\()\s*$|=\{|=>/.test(match[2]))
+        parts.push(match[2]);
     for (const match of line.matchAll(/>([^<>{}=]*[A-Za-z][^<>{}=]*)</g)) parts.push(match[1]);
     const trimmed = line.trim();
     // A text-only line is JSX text; parameter lists ("projection: Inbox,"), continued conditions and property
@@ -92,7 +158,9 @@ export function countCopyRatchets(relativePath, contents) {
   const text = visibleText(contents);
   for (const rule of COPY_RATCHETS) {
     if (!rule.pattern) continue;
-    const hits = text.reduce((sum, part) => sum + (part.match(rule.pattern)?.length ?? 0), 0);
+    // A template's ${…} is code; only the plural rule reads it, to catch `${count} items`.
+    const read = (part) => (rule.id === "plural-template" ? part : part.replace(/\$\{[^}]*\}/g, ""));
+    const hits = text.reduce((sum, part) => sum + (read(part).match(rule.pattern)?.length ?? 0), 0);
     if (hits) counts[rule.id] = hits;
   }
   const ariaIds = relativePath.endsWith(".tsx") ? (contents.match(ARIA_ID)?.length ?? 0) : 0;
@@ -112,8 +180,9 @@ export function evaluateCopyRatchets(totals, rules = COPY_RATCHETS) {
   return failures;
 }
 
-async function walk(dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+/** A root that cannot be read fails the guard instead of passing with nothing checked. */
+export async function walk(dir) {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
   const groups = await Promise.all(
     entries.map((entry) => {
       const full = path.join(dir, entry.name);
@@ -124,40 +193,49 @@ async function walk(dir) {
   return groups.flat();
 }
 
-async function main() {
-  const files = await walk(cockpitRoot);
+async function scanRoot(root) {
+  const files = await walk(root.dir);
   const findings = [];
   const totals = {};
   const byFile = {};
   for (const file of files) {
     const contents = await fs.readFile(file, "utf8");
-    findings.push(...findClassicHandoffCopy(file, contents));
-    const relative = path.relative(cockpitRoot, file).split(path.sep).join("/");
+    if (root.id === "cockpit") findings.push(...findClassicHandoffCopy(file, contents));
+    const relative = path.relative(root.dir, file).split(path.sep).join("/");
     for (const [id, count] of Object.entries(countCopyRatchets(relative, contents))) {
       totals[id] = (totals[id] ?? 0) + count;
       (byFile[id] ??= []).push(`${relative} (${count})`);
     }
   }
-  const ratchetFailures = evaluateCopyRatchets(totals);
-  if (ratchetFailures.length) {
-    console.error("[cockpit-copy] operator language (see DESIGN.md › Copy and Glossary):");
-    for (const failure of ratchetFailures) {
-      console.error(`- ${failure}`);
-      const id = failure.split(":")[0];
-      if (process.env.COPY_VERBOSE && byFile[id]) console.error(`  ${byFile[id].join(", ")}`);
+  const budgets = ROOT_BUDGETS[root.id] ?? {};
+  const rules = COPY_RATCHETS.map((rule) => ({ ...rule, budget: budgets[rule.id] ?? rule.budget }));
+  return { files, findings, totals, byFile, failures: evaluateCopyRatchets(totals, rules) };
+}
+
+async function main() {
+  let fileCount = 0;
+  const summary = {};
+  for (const root of COPY_ROOTS) {
+    const { files, findings, totals, byFile, failures } = await scanRoot(root);
+    fileCount += files.length;
+    summary[root.id] = totals;
+    if (failures.length) {
+      console.error(`[cockpit-copy] ${root.id}: operator language (see DESIGN.md › Copy and Glossary):`);
+      for (const failure of failures) {
+        console.error(`- ${failure}`);
+        const id = failure.split(":")[0];
+        if (process.env.COPY_VERBOSE && byFile[id]) console.error(`  ${byFile[id].join(", ")}`);
+      }
+      process.exitCode = 1;
     }
-    process.exitCode = 1;
+    if (findings.length) {
+      console.error('[cockpit-copy] say "classic view" for handoffs, not "current …":');
+      for (const item of findings) console.error(`- ${path.relative(repoRoot, item.file)}:${item.line} -> ${item.text}`);
+      process.exitCode = 1;
+    }
   }
-  if (findings.length) {
-    console.error('[cockpit-copy] say "classic view" for handoffs, not "current …":');
-    for (const item of findings) console.error(`- ${path.relative(repoRoot, item.file)}:${item.line} -> ${item.text}`);
-    process.exitCode = 1;
-    return;
-  }
-  if (!ratchetFailures.length)
-    console.log(
-      `[cockpit-copy] ${files.length} cockpit files name the classic view plainly (${JSON.stringify(totals)})`,
-    );
+  if (!process.exitCode)
+    console.log(`[cockpit-copy] ${fileCount} files follow the operator glossary (${JSON.stringify(summary)})`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

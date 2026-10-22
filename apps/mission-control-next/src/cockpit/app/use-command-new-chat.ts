@@ -60,7 +60,7 @@ export function useCommandNewChat(scope: PaletteScope, open: boolean, onCreated:
         return;
       }
       pending.state = "pending";
-      pending.message = "Creating one conversation. Waiting for the Gateway…";
+      pending.message = "Creating one conversation…";
       publishChatSessionCreation(key, pending);
       dispatched = true;
       const created = await createChatSession(
@@ -78,7 +78,9 @@ export function useCommandNewChat(scope: PaletteScope, open: boolean, onCreated:
         throw new Error("The independent conversation read does not match the creation receipt.");
       await assertPaletteWorkspace(scope);
       if (getGatewayApiBaseUrl() !== installation)
-        throw new Error("The Gateway installation changed during verification.");
+        throw new Error(
+          "You switched to a different GoatCitadel installation, so the new conversation could not be confirmed.",
+        );
       pending.state = "confirmed";
       pending.message = "Conversation created and independently verified.";
       publishChatSessionCreation(key, pending);

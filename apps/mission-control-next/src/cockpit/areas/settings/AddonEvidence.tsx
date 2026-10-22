@@ -6,10 +6,12 @@ export function AddonCommands({ addon }: { addon: AddonCatalogEntry }) {
       <h4 className="font-semibold">Repository and installation commands</h4>
       <p className="break-all">Repository: {addon.repoUrl}</p>
       <p>
-        Owner: {addon.owner} · Trust tier: {addon.trustTier}
+        Publisher: {addon.owner} · Trust tier: {addon.trustTier}
       </p>
       <p>
-        {addon.sameOwnerAsGoatCitadel ? "Catalog records the same owner as GoatCitadel." : "Separate repository owner."}{" "}
+        {addon.sameOwnerAsGoatCitadel
+          ? "The catalog lists the same publisher as GoatCitadel."
+          : "Published by a separate repository."}{" "}
         The trust label does not isolate downloaded code from this host.
       </p>
       <ol className="list-decimal space-y-3 pl-5">
@@ -33,7 +35,7 @@ export function AddonEvidence({ status }: { status: AddonStatusRecord }) {
   return (
     <div className="space-y-3">
       <dl className="cockpit-definition-grid grid gap-x-3 gap-y-2 text-sm">
-        <dt>Gateway status</dt>
+        <dt>Status</dt>
         <dd>{status.status.replaceAll("_", " ")}</dd>
         <dt>Runtime</dt>
         <dd>{status.addon.runtimeType.replaceAll("_", " ")}</dd>

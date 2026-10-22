@@ -125,7 +125,7 @@ export function FirstRunDefaults({ workspaceId }: { workspaceId: string }) {
             <p>Tool approvals: {describeToolApprovalMode(control.review.submitted.toolApprovalMode)}</p>
             <p>Budget: {labelForBudgetMode(control.review.submitted.budgetMode)}</p>
             <p>Outbound hosts: {control.review.submitted.networkAllowlist || "None"}</p>
-            <p>Loopback auth bypass: off. Revision: {control.review.revision}.</p>
+            <p>Loopback auth bypass: off. Version: {control.review.revision}.</p>
           </div>
         ) : null}
         <div className="flex flex-wrap gap-2">

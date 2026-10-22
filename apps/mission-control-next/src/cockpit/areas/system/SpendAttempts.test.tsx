@@ -17,7 +17,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/platform", () => ({
 }));
 it("distinguishes provider accounting, estimate and missing price with explicit units and bounded scope", async () => {
   expect(attemptCostLabel({ costSource: "provider_reported", costUsd: 0 })).toBe("$0.00 · Provider reported");
-  expect(attemptCostLabel({ costSource: "gateway_estimate", costUsd: 1 })).toBe("$1.00 · Gateway estimate");
+  expect(attemptCostLabel({ costSource: "gateway_estimate", costUsd: 1 })).toBe("$1.00 · Estimated");
   expect(attemptCostLabel({ costSource: "not_available", costUsd: 100 })).toBe("Price unavailable");
   const start = "2026-10-06T01:02:03.000Z";
   api.read.mockResolvedValue({

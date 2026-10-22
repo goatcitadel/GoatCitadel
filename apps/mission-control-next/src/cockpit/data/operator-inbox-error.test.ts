@@ -16,7 +16,7 @@ describe("cockpit Inbox error copy", () => {
         message: `Route GET:${path} not found`,
       }),
     );
-    expect(result.summary).toContain("matching versions");
+    expect(result.summary).toContain("the same version");
     expect(result.summary).not.toContain("item no longer exists");
     expect(result.technical).toContain("GET /api/v1/inbox?workspaceId=default (404)");
   });
@@ -28,7 +28,7 @@ describe("cockpit Inbox error copy", () => {
       }),
     );
     expect(result.summary).toContain("Choose another workspace");
-    expect(result.summary).not.toContain("matching versions");
+    expect(result.summary).not.toContain("the same version");
   });
 
   it("keeps ordinary missing-item and other failure descriptions", () => {

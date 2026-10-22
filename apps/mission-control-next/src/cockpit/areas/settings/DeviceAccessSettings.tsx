@@ -41,7 +41,7 @@ export function DeviceAccessSettings() {
               Approved devices
             </h3>
             <p className="mt-1 text-sm text-fg-secondary">
-              Device grants for this Gateway installation, across all workspaces.
+              Device grants for this GoatCitadel installation, across all workspaces.
             </p>
           </div>
           <Button size="sm" disabled={devices.isFetching} onClick={() => void devices.refetch()}>
@@ -144,7 +144,7 @@ export function DeviceAccessSettings() {
           title="Revoke device access?"
           confirmLabel="Revoke device access"
           cancelLabel="Keep access"
-          message={`Revoke access for ${review?.deviceLabel || "this device"}${reviewingThisDevice ? " (this device)" : ""} on this Gateway? Its companion sessions and session controls will also be revoked. This can disconnect the current device. A new approval is needed to regain access.`}
+          message={`Revoke access for ${review?.deviceLabel || "this device"}${reviewingThisDevice ? " (this device)" : ""} on this installation? Its companion sessions and session controls will also be revoked. This can disconnect the current device. A new approval is needed to regain access.`}
           pending={control.pending}
           confirmDisabled={!review || !deviceGrantCanBeRevoked(review)}
           onCancel={control.cancel}

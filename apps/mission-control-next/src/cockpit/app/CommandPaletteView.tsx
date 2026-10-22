@@ -99,7 +99,7 @@ export function CommandPaletteView({
                 <Command.Item value="choose-model" onSelect={onChooseModel} className={PALETTE_ITEM_CLASS}>
                   Choose default model…
                   <span className="block break-words text-xs text-fg-secondary">
-                    {modelSummary} {"Opens reviewed Settings. Conversation overrides stay in Chat."}
+                    {modelSummary} {"Opens Settings to change it. Conversation overrides stay in Chat."}
                   </span>
                 </Command.Item>
               ) : null}

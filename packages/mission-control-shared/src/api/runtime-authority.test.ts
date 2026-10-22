@@ -65,4 +65,37 @@ describe("runtime authority api", () => {
       /invalid runtime authority envelope/i,
     );
   });
+
+  it("keeps a bounded coded state and drops a malformed one without rejecting the item", async () => {
+    const item = (id: string, stateMessage: unknown) => ({
+      id,
+      domain: "approvals",
+      label: "Approvals",
+      authorityClass: "derived_projection",
+      owner: "Mission Control",
+      source: "approval queue",
+      freshness: "current",
+      posture: "neutral",
+      state: "3 approval record(s) are available.",
+      basis: "Formatted for operators.",
+      scope: { kind: "workspace", workspaceId: "workspace-one" },
+      stateMessage,
+    });
+    apiMocks.request.mockResolvedValueOnce({
+      schemaVersion: 1,
+      generatedAt: "2026-07-13T20:00:00.000Z",
+      workspaceId: "workspace-one",
+      items: [
+        item("ok", { code: "mesh_workers", count: 3, counts: { staleNodes: 1, activeLeases: 0 } }),
+        item("bad-code", { code: "Not A Code!", count: 1 }),
+        item("bad-counts", { code: "approval_records_available", count: -1, counts: { "bad key": 2, ok: 1.5 } }),
+      ],
+    });
+    const result = await fetchRuntimeAuthorityProjection("workspace-one");
+    expect(result.items.map((entry) => entry.stateMessage)).toEqual([
+      { code: "mesh_workers", count: 3, counts: { staleNodes: 1, activeLeases: 0 } },
+      undefined,
+      { code: "approval_records_available", counts: {} },
+    ]);
+  });
 });

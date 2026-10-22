@@ -34,7 +34,7 @@ export function LibraryEngineeringRevision({
       prevention: item.prevention,
     },
     item.provenanceHash,
-    { label: "Engineering learning revision" },
+    { label: "Engineering learning draft" },
   );
   const [action, setAction] = useState<EngineeringRevision["action"]>("update"),
     [targets, setTargets] = useState<string[]>([]);
@@ -49,10 +49,10 @@ export function LibraryEngineeringRevision({
       <summary>Revise or consolidate learning</summary>
       <div className="grid gap-3">
         <p>
-          Updates preserve the source evidence. Replacement and consolidation request activation of this learning and
+          Updates preserve the source record. Replacement and consolidation request activation of this learning and
           supersession of the selected targets after approval.
         </p>
-        <Field label="Learning revision action">
+        <Field label="Learning change">
           {(props) => (
             <select
               {...props}
@@ -117,10 +117,10 @@ export function LibraryEngineeringRevision({
             onReview({ action, updates: { ...draft.value }, targets: action === "update" ? [] : selected })
           }
         >
-          Review learning revision
+          Review learning changes
         </Button>
         <Button variant="secondary" disabled={disabled} onClick={draft.discard}>
-          Discard learning revision
+          Discard learning changes
         </Button>
       </div>
     </details>

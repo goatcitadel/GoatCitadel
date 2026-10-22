@@ -105,9 +105,9 @@ export async function runCockpitIntegrationMeetProof({ context, browser, stack, 
           assert.ok(Array.isArray(prerequisites.prerequisites) && prerequisites.checkedAt);
           const panel = page.getByRole("region", { name: "Google Meet preparation", exact: true });
           await panel.getByRole("button", { name: "Review meeting preparation", exact: true }).waitFor();
-          await panel.locator("summary", { hasText: "Gateway prerequisites without local microphone probe" }).click();
+          await panel.locator("summary", { hasText: "Prerequisites without local microphone probe" }).click();
           for (const item of prerequisites.prerequisites) {
-            const text = `${item.id}: ${item.ready ? "Ready according to Gateway" : "Blocked"} · ${item.message}`;
+            const text = `${item.id}: ${item.ready ? "Ready according to GoatCitadel" : "Blocked"} · ${item.message}`;
             await panel.getByText(text, { exact: true }).waitFor();
           }
           if (!before.length) await panel.getByText("No meeting records returned.", { exact: true }).waitFor();

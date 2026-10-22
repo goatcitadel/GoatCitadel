@@ -275,7 +275,7 @@ describe("cockpit mesh capability publications", () => {
     await click("Review activation request");
     await confirm();
     expect(container.textContent).toContain(
-      "The Gateway refused this request, so nothing was changed. Review the current publication.",
+      "GoatCitadel refused this request, so nothing was changed. Review the current publication.",
     );
     expect(button("Retry the same request")).toBeUndefined();
   });
@@ -356,7 +356,7 @@ describe("cockpit mesh capability publications", () => {
     );
     expect(outcomes.textContent).toContain("Manual reconciliation required");
     expect(outcomes.textContent).toContain("Search");
-    expect(outcomes.textContent).toContain("Settled by the Gateway");
+    expect(outcomes.textContent).toContain("Settled by GoatCitadel");
     expect(outcomes.textContent).not.toContain("node-1");
     expect(outcomes.querySelectorAll("button")).toHaveLength(0);
   });

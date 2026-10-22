@@ -12,6 +12,8 @@ const projection = vi.hoisted(() => ({
 vi.mock("@goatcitadel/mission-control-shared/hooks/useRuntimeAuthorityProjection", () => ({
   useRuntimeAuthorityProjection: vi.fn(() => projection.value),
 }));
+const preferences = vi.hoisted(() => ({ showTechnicalDetails: true }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => preferences }));
 
 const item = (overrides: Partial<RuntimeAuthorityItem> = {}): RuntimeAuthorityItem =>
   ({
@@ -43,6 +45,7 @@ const render = () =>
   );
 
 beforeEach(() => {
+  preferences.showTechnicalDetails = true;
   projection.value = { data: null, loading: false, error: null, reload: vi.fn(async () => undefined) };
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -120,9 +123,30 @@ describe("cockpit runtime authority map", () => {
   it("states an empty projection without inventing records", async () => {
     projection.value.data = { items: [] };
     await render();
-    expect(container.textContent).toContain(
-      "The Gateway returned no authority records. Nothing is inferred in their place.",
-    );
+    expect(container.textContent).toContain("No authority records came back. Nothing is shown in their place.");
+  });
+
+  it("words a coded state and keeps the server prose in technical details (SY-N06)", async () => {
+    projection.value.data = {
+      items: [
+        item({
+          owner: "Approvals",
+          state: "3 canonical approval record(s) are available for client materialization.",
+          stateMessage: { code: "approval_records_available", count: 3 },
+          caveat: "Client caches remain non-canonical.",
+        }),
+      ],
+    };
+    await render();
+    const record = container.querySelector('[aria-label="Runtime authority records"] > li')!;
+    expect(record.textContent).toContain("3 approval records are in this workspace's recent window.");
+    preferences.showTechnicalDetails = false;
+    await render();
+    expect(container.textContent).toContain("3 approval records are in this workspace's recent window.");
+    expect(container.textContent).not.toContain("record(s)");
+    expect(container.textContent).not.toContain("non-canonical");
+    expect(container.textContent).not.toContain("Classification basis");
+    expect(container.textContent).not.toContain("Gateway");
   });
 
   it("shows an unavailable projection and reloads on request", async () => {

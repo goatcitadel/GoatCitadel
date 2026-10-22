@@ -133,7 +133,7 @@ it("withholds registration after the reviewed path snapshot changes", async () =
   mocks.inspect.mockResolvedValue({ ...bridge, snapshotSha256: "changed" });
   await click("Confirm source registration");
   expect(mocks.register).not.toHaveBeenCalled();
-  expect(document.body.textContent).toContain("evidence changed");
+  expect(document.body.textContent).toContain("The workspace or path changed.");
 });
 it("withholds registration across an awaited caller switch and isolates the draft", async () => {
   await prepare();

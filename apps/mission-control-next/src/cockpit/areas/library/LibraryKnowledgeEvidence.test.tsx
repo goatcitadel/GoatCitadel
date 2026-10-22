@@ -85,7 +85,7 @@ it("renders transcript citations as role and message text and keeps the raw JSON
   );
   await vi.waitFor(() => expect(container.textContent).toContain("Draft the release notes for 1.0"));
   const cards = [
-    ...container.querySelectorAll<HTMLElement>("section[aria-label='Knowledge evidence'] > ul > li > ul > li"),
+    ...container.querySelectorAll<HTMLElement>("section[aria-label='Knowledge retrieval history'] > ul > li > ul > li"),
   ];
   expect(cards).toHaveLength(4);
   const [transcriptCard, memoryCard, emptyCard, truncatedCard] = cards as [

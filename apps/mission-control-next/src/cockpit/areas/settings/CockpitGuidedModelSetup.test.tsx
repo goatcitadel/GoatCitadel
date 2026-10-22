@@ -113,7 +113,9 @@ describe("shared guided model setup", () => {
     await mount();
     const provider = container.querySelector<HTMLSelectElement>("select")!;
     expect(container.querySelector(`label[for="${provider.id}"]`)?.textContent).toBe("Provider or local runtime");
-    expect(document.getElementById(provider.getAttribute("aria-describedby")!)?.textContent).toContain("Gateway");
+    expect(document.getElementById(provider.getAttribute("aria-describedby")!)?.textContent).toContain(
+      "GoatCitadel checks this connection",
+    );
     expect(container.querySelector('[class*="mc-next"]')).toBeNull();
   });
   it("connects a provider that is not ready through a provider connection plan", async () => {

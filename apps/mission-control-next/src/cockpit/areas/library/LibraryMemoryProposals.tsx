@@ -85,8 +85,8 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
         error: false,
         text:
           review.action === "promote"
-            ? "Gateway confirmed promotion into a trusted workspace learning."
-            : "Gateway confirmed rejection.",
+            ? "GoatCitadel confirmed promotion into a trusted workspace learning."
+            : "GoatCitadel confirmed rejection.",
       });
       await client.invalidateQueries({ queryKey: ["library", "memory-proposals", workspaceId, operation.identity] });
     } catch (cause) {

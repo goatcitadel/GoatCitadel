@@ -86,7 +86,7 @@ export function HookRunEvidence({ run, workspaceLabel }: { run: HookRunRecord; w
         {run.errorText ? (
           <>
             <dt>Error</dt>
-            <dd>Delivery failure detail is hidden here; the Gateway audit log keeps it.</dd>
+            <dd>Delivery failure detail is hidden here; the GoatCitadel audit log keeps it.</dd>
           </>
         ) : null}
       </dl>

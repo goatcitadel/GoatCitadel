@@ -201,7 +201,7 @@ describe("cockpit provider catalog", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     expect(container.querySelectorAll('ul[aria-label="Discovered models"] li')).toHaveLength(1);
-    expect(container.textContent).toContain("1–1 of 1 model names");
+    expect(container.textContent).toContain("1–1 of 1 model name");
     expect(container.textContent).toContain("model-84");
   });
 

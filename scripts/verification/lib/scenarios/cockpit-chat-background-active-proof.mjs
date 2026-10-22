@@ -186,7 +186,7 @@ export async function runCockpitChatBackgroundActiveProof({ context, browser, st
       const readReviewed = async () => {
         // The response may belong to a concurrently finishing poll. Bind the
         // actual frozen dialog versions, not that transport, to the live owner.
-        const shown = /Task version (\d+) · Watcher revision (\d+)/.exec(await dialog.innerText());
+        const shown = /Task version (\d+) · Watcher version (\d+)/.exec(await dialog.innerText());
         assert.ok(shown, "The review must show its exact child and watcher versions.");
         current = await readBound();
         const reviewed = { ...current, watcherRevision: Number(shown[2]), childVersion: Number(shown[1]) };

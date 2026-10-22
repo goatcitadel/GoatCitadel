@@ -82,7 +82,7 @@ export function MemoryPolicy({
                 ? "It uses a chosen provider and model."
                 : "It uses the default provider and model."}
             </p>
-            <Button onClick={draft.rebaseToCurrent}>Use current policy revision and keep draft</Button>
+            <Button onClick={draft.rebaseToCurrent}>Use current policy version and keep draft</Button>
           </Callout>
         ) : null}
         <Button
@@ -112,7 +112,7 @@ export function MemoryPolicy({
                   !updated.revision ||
                   updated.revision === policy.revision
                 )
-                  throw new Error("Policy receipt does not confirm the reviewed revision.");
+                  throw new Error("Policy receipt does not confirm the reviewed version.");
                 same(buildMemoryMaintenancePolicyPatch(toMemoryMaintenancePolicyDraft(updated)), patch);
                 draft.acceptSaved(toMemoryMaintenancePolicyDraft(updated), updated.revision, draft.value);
                 return "Memory maintenance policy saved as a new version.";

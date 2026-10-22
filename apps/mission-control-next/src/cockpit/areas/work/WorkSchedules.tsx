@@ -255,7 +255,7 @@ export function WorkSchedules() {
     <section className={AREA_PAGE}>
       <AreaHeader
         title="Schedules"
-        description="Gateway-wide recurring jobs and their next run. Schedules apply across workspaces."
+        description="Recurring jobs for this installation"
         actions={
           <>
             <Button
@@ -347,7 +347,7 @@ export function WorkSchedules() {
               {!selectedId ? (
                 <EmptyState
                   title="Select a schedule"
-                  description="Review its current Gateway record before taking action."
+                  description="Review its current saved record before taking action."
                 />
               ) : null}
               {selectedId && detail.isLoading ? (
@@ -386,10 +386,7 @@ export function WorkSchedules() {
             </div>
           </div>
         ) : (
-          <EmptyState
-            title="No schedules returned"
-            description="The Gateway has no recurring jobs in its current schedule list."
-          />
+          <EmptyState title="No schedules returned" description="This installation has no recurring jobs yet." />
         )
       ) : null}
       <SchedulerReviewQueue scheduleName={(jobId) => schedules.data?.items.find((job) => job.jobId === jobId)?.name} />

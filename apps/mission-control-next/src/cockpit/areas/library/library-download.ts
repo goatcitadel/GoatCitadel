@@ -14,7 +14,7 @@ export async function readFileDownload(expected: FileResource): Promise<Blob> {
     throw new Error("The shared file changed after listing. Refresh the directory before downloading it.");
   }
   if (file.encoding !== "utf8" && file.encoding !== "base64")
-    throw new Error("The Gateway returned an unsupported file encoding.");
+    throw new Error("GoatCitadel returned an unsupported file encoding.");
   const bytes =
     file.encoding === "base64"
       ? Uint8Array.from(atob(file.content), (character) => character.charCodeAt(0))
@@ -61,7 +61,7 @@ export async function readArtifactDownload(
       (key) => item[key as keyof typeof item] !== expected[key as keyof typeof expected],
     )
   )
-    throw new Error("Artifact evidence changed. Refresh before downloading.");
+    throw new Error("The artifact changed. Refresh before downloading.");
   if (item.publicProjection?.contentRedacted || item.publicProjection?.artifactRedacted)
     throw new Error("This artifact was redacted. Its content is not available for download.");
   const bytes = new TextEncoder().encode(item.content);

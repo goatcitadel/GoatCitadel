@@ -44,7 +44,7 @@ export function ManagedRuntimeSettings() {
             Managed local runtime
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
-            Review llama.cpp configuration for this Gateway installation.
+            Review llama.cpp configuration for this GoatCitadel installation.
           </p>
         </div>
         <Button size="sm" disabled={settings.isFetching || control.busy} onClick={() => void settings.refetch()}>
@@ -63,7 +63,7 @@ export function ManagedRuntimeSettings() {
       ) : null}
       {settings.data && !settings.isError && !settings.isFetching && !control.ready ? (
         <p role="alert" className="text-sm text-status-failed">
-          The Gateway returned incomplete runtime settings. Refresh before editing.
+          GoatCitadel returned incomplete runtime settings. Refresh before editing.
         </p>
       ) : null}
       {control.ready ? (
@@ -114,7 +114,7 @@ export function ManagedRuntimeSettings() {
                     disabled={control.locked}
                     onChange={(event) => draft.setValue((current) => ({ ...current, autoStart: event.target.checked }))}
                   />
-                  Auto-start with the Gateway
+                  Auto-start with GoatCitadel
                 </label>
               </div>
               <p className="text-xs text-fg-secondary">
@@ -154,14 +154,14 @@ export function ManagedRuntimeSettings() {
             </>
           ) : (
             <p className="text-sm text-fg-secondary">
-              GoatCitadel observes this external server. Process and launch configuration stay with its owner; use
+              GoatCitadel observes this external server. Process and launch configuration stay with whoever runs it; use
               guided setup to change the connection.
             </p>
           )}
           <details className="text-sm text-fg-secondary">
             <summary className="cursor-pointer text-fg">Saved launch paths</summary>
             <p className="mt-2">
-              Read-only evidence. Change command and model paths through the validated llama.cpp setup flow.
+              Read-only record. Change command and model paths through the validated llama.cpp setup flow.
             </p>
             <dl className="mt-2 grid gap-2">
               <div>

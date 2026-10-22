@@ -93,7 +93,7 @@ export function WorkScheduleEditor({
       <h3 className="font-medium text-fg">Edit schedule</h3>
       <UnattributedDraftRecovery editor={editor} />
       <p className="text-sm text-fg-secondary">
-        Gateway-wide configuration. Changing timing affects future runs; it does not prove any run executed.
+        Installation-wide setting. Changing timing affects future runs; it does not mean any run happened.
       </p>
       <Field label="Schedule name">
         {(props) => (
@@ -188,13 +188,13 @@ export function WorkScheduleEditor({
           }
         }}
         title="Save schedule changes?"
-        description="The Gateway will check the current revision before saving this configuration."
+        description="GoatCitadel will check the current version before saving this configuration."
       >
         {review ? (
           <div className="grid gap-3 text-sm">
             {feedback ? <p role={feedbackFailed ? "alert" : "status"}>{feedback}</p> : null}
             <p>
-              Gateway-wide · {review.value.name} · {scheduleCadence(review.value.schedule)} ·{" "}
+              Installation-wide · {review.value.name} · {scheduleCadence(review.value.schedule)} ·{" "}
               <span className="font-mono">{review.value.schedule}</span>
             </p>
             <p>

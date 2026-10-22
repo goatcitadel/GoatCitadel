@@ -93,7 +93,7 @@ function Registration({
         snapshot.targetFlavor !== input.targetFlavor ||
         snapshot.gitIdentityRequired !== input.git
       )
-        throw new Error("Path evidence does not match the reviewed workspace and path options.");
+        throw new Error("The path check does not match the reviewed workspace and path options.");
       setBridge({ draft: binding, snapshot });
       setNotice(
         snapshot.status === "verified"
@@ -114,7 +114,7 @@ function Registration({
       const workspace = (await fetchWorkspaces()).items.find((item) => item.workspaceId === workspaceId);
       if (!operation.current()) return;
       if (!workspace || workspace.lifecycleStatus !== "active")
-        throw new Error("The active workspace revision is unavailable. Refresh workspace access before registering.");
+        throw new Error("The active workspace is unavailable. Refresh workspace access before registering.");
       const input = draft.value,
         snapshot = bridge.snapshot;
       setReviewedDraft({ ...input });
@@ -167,7 +167,7 @@ function Registration({
             snapshot.snapshotSha256 !== review.pathBridgeSnapshotSha256 ||
             snapshot.canonicalHostPath !== review.canonicalRootPath
           )
-            throw new Error("Workspace or path evidence changed. Verify and review the source again.");
+            throw new Error("The workspace or path changed. Verify and review the source again.");
         },
         () => registerExternalSource(review),
         (result) => {
@@ -211,7 +211,7 @@ function Registration({
       <summary>Register external source</summary>
       <div className="mt-3 grid min-w-0 grid-cols-1 gap-3">
         <p>
-          Register one exact read root. The Gateway verifies allowed roots and path identity before registration;
+          Register one exact read root. GoatCitadel verifies allowed roots and path identity before registration;
           registration does not grant context access.
         </p>
         <Field label="External source kind">

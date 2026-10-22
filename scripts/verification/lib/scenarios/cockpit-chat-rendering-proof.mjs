@@ -249,7 +249,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
           await report.getByText("Recorded edit attempt", { exact: true }).waitFor();
           await report.getByText("Failed", { exact: true }).waitFor();
           await capture("recorded-opencode");
-          await report.getByRole("button", { name: "Open run evidence", exact: true }).click();
+          await report.getByRole("button", { name: "Open run details", exact: true }).click();
           await page.getByRole("tab", { name: "Run", exact: true }).waitFor();
           await closeInspector();
           stage = "safe recorded source linkage";

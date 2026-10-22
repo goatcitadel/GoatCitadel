@@ -124,7 +124,7 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
             receipt.payload.action !== review.action ||
             receipt.linkage?.workspaceId !== workspaceId
           )
-            throw new Error("The Gateway did not return a bound approval receipt.");
+            throw new Error("GoatCitadel did not return a bound approval receipt.");
         },
       );
       if (!approval) return;
@@ -285,7 +285,7 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
                 </Button>
               ))}
           </div>
-          <Suspense fallback={<p role="status">Loading learning revision…</p>}>
+          <Suspense fallback={<p role="status">Loading the learning editor…</p>}>
             <Revision
               item={item}
               candidates={list.data?.items ?? []}
@@ -329,8 +329,8 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
             </p>
           ) : null}
           <Callout tone="warning">
-            Activation makes this learning eligible for context under Gateway policy. Rejection or archive removes its
-            eligibility as governed by the owner.
+            Activation makes this learning eligible for context under GoatCitadel policy. Rejection or archive removes
+            its eligibility.
           </Callout>
           {outcome ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
           {outcome?.approvalId && review ? (

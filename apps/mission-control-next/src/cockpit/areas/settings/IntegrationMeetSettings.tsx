@@ -66,12 +66,12 @@ export function IntegrationMeetSettings({ owner: s }: { owner: IntegrationSettin
         </Button>
       </div>
       <details>
-        <summary className="cursor-pointer text-sm">Gateway prerequisites without local microphone probe</summary>
+        <summary className="cursor-pointer text-sm">Prerequisites without local microphone probe</summary>
         {s.data?.meetStatus ? (
           <ul className="mt-2 space-y-2 text-sm">
             {s.data.meetStatus.prerequisites.map((item) => (
               <li key={item.id}>
-                {item.id}: {item.ready ? "Ready according to Gateway" : "Blocked"} · {item.message}
+                {item.id}: {item.ready ? "Ready according to GoatCitadel" : "Blocked"} · {item.message}
               </li>
             ))}
           </ul>
@@ -121,7 +121,7 @@ export function IntegrationMeetSettings({ owner: s }: { owner: IntegrationSettin
                 )}
                 {session.cleanup ? (
                   <p>
-                    Gateway cleanup report: transport{" "}
+                    Cleanup report: transport{" "}
                     {session.cleanup.stoppedTransport ? "marked stopped" : "not marked stopped"}, audio{" "}
                     {session.cleanup.releasedAudio ? "marked released" : "not marked released"}. External transport is
                     unverified.

@@ -57,7 +57,7 @@ export function TaskStatusControl({
       <h2 className="text-base font-semibold text-fg">Task status</h2>
       {executionOwned ? (
         <p className="mt-2 text-sm text-fg-secondary">
-          This task has a runtime execution owner. Review its run before changing execution state.
+          A run is handling this task. Review its run before changing execution state.
         </p>
       ) : (
         <p className="mt-2 text-sm text-fg-secondary">
@@ -101,7 +101,7 @@ export function TaskStatusControl({
       ) : null}
       {!executionOwned && !canMarkDone && task.status !== "done" ? (
         <p className="mt-2 text-xs text-fg-muted">
-          Done requires at least one recorded deliverable. The option appears when the owner confirms one.
+          Done requires at least one recorded deliverable. The option appears once one is recorded.
         </p>
       ) : null}
       {owner.busy ? (

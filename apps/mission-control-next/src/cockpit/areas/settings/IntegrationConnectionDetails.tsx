@@ -133,7 +133,7 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
                       }
                     />
                     <span className="text-xs text-fg-muted">
-                      Optional explicit key. The Gateway's action-specific replay policy remains authoritative.
+                      Optional explicit key. GoatCitadel's action-specific duplicate policy still decides.
                     </span>
                   </label>
                 ) : null}
@@ -201,7 +201,7 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
       <Dialog
         open={s.operatorReview !== null}
         title="Run reviewed integration action?"
-        description="This may contact the external service. The Gateway's policy and approvals remain authoritative."
+        description="This may contact the external service. GoatCitadel policy and approvals still decide."
         onOpenChange={(open) => {
           if (!open && !s.operatorBusyId) s.cancelOperatorAction();
         }}

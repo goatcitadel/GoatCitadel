@@ -94,7 +94,7 @@ export function RiskApprovalAction({
           ) : null}
           <div
             role="region"
-            aria-label="Approval action evidence"
+            aria-label="Approval action details"
             tabIndex={0}
             onKeyDown={handleEvidenceScrollKeyDown}
             className="mb-3 min-w-0 max-w-full max-h-72 space-y-2 overflow-y-auto wrap-anywhere text-sm text-fg-secondary"

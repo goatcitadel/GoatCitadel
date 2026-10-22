@@ -184,7 +184,7 @@ export function ProviderProfileFields(
         </p>
       ) : null}
       <p className="text-xs text-fg-muted">
-        A profile default is separate from installation routing. Credentials are entered only in the Gateway's secure
+        A profile default is separate from installation routing. Credentials are entered only in GoatCitadel's secure
         credential action.
       </p>
       <ProviderTransportFields

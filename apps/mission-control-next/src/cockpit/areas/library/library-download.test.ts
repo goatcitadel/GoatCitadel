@@ -62,7 +62,7 @@ describe("Immutable artifact downloads", () => {
     "rejects changed provenance %s",
     async (change) => {
       vi.mocked(fetchChatGeneratedArtifact).mockResolvedValue({ item: { ...artifact, ...change } });
-      await expect(readArtifactDownload(artifact, "one", "personal")).rejects.toThrow("evidence changed");
+      await expect(readArtifactDownload(artifact, "one", "personal")).rejects.toThrow("The artifact changed");
     },
   );
   it("never downloads redacted or hash-mismatched content as the canonical artifact", async () => {

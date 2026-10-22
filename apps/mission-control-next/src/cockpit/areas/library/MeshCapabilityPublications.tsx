@@ -32,7 +32,7 @@ const time = (value?: string) =>
   value && Number.isFinite(Date.parse(value)) ? <TimeText value={value} absolute /> : "Not reported";
 const UNKNOWN =
   "The outcome is unknown. Publications were read again. Retry re-reads the publication first and sends the same request only if this entry is unchanged.";
-const REFUSED = "The Gateway refused this request, so nothing was changed. Review the current publication.";
+const REFUSED = "GoatCitadel refused this request, so nothing was changed. Review the current publication.";
 /**
  * Governed mesh capability publications for one workspace: manifests and exact entries, a reviewed activation request
  * (it creates an approval; nothing becomes callable until it is decided) and a reasoned, reviewed revocation. Each

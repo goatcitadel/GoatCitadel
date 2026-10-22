@@ -62,8 +62,8 @@ export function ChatPendingQuestion({
             />
           </label>
           <p className="mt-1 text-xs text-fg-muted">
-            Sent directly to the Gateway for live verification and OS keychain storage. It is excluded from Chat, model
-            context, and memory.
+            Your answer is sent to GoatCitadel, checked and stored in the OS keychain. It is kept out of Chat, model
+            context and memory.
           </p>
         </>
       ) : prompt.kind === "single_select" ? (

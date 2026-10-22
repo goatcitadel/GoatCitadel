@@ -58,7 +58,7 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
       <EvidenceSection title="Plan and steps">
         {trace.lifecycle.state !== "available" ? (
           <p className="text-sm text-fg-muted">
-            Plan evidence is {EVIDENCE_STATE_WORDS[trace.lifecycle.state] ?? "unknown"}.
+            Plan details are {EVIDENCE_STATE_WORDS[trace.lifecycle.state] ?? "unknown"}.
           </p>
         ) : plans.length ? (
           <ol className="grid gap-3">
@@ -97,7 +97,7 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
       <EvidenceSection title="Delegation">
         {trace.lifecycle.state !== "available" ? (
           <p className="text-sm text-fg-muted">
-            Delegation evidence is {EVIDENCE_STATE_WORDS[trace.lifecycle.state] ?? "unknown"}.
+            Delegation details are {EVIDENCE_STATE_WORDS[trace.lifecycle.state] ?? "unknown"}.
           </p>
         ) : delegations.length ? (
           <ol className="grid gap-3">
@@ -146,7 +146,7 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
       <EvidenceSection title="Tool activity">
         {trace.toolCalls.state !== "available" ? (
           <p className="text-sm text-fg-muted">
-            Tool evidence is {EVIDENCE_STATE_WORDS[trace.toolCalls.state] ?? "unknown"}.
+            Tool details are {EVIDENCE_STATE_WORDS[trace.toolCalls.state] ?? "unknown"}.
           </p>
         ) : trace.toolCalls.items.length ? (
           <ol className="grid gap-2">

@@ -17,13 +17,13 @@ export function DaemonDiagnostics() {
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h3 id="gateway-daemon-title" className="text-base font-semibold text-fg">
-          Gateway process
+          GoatCitadel process
         </h3>
         <Button size="sm" disabled={daemon.isFetching} onClick={() => void daemon.refetch()}>
-          Refresh Gateway process
+          Refresh process status
         </Button>
       </div>
-      {daemon.isLoading ? <p role="status">Loading Gateway process status…</p> : null}
+      {daemon.isLoading ? <p role="status">Loading process status…</p> : null}
       {daemon.isError ? <p role="alert">{describeApiError(daemon.error).summary}</p> : null}
       {status ? (
         <>
@@ -37,13 +37,13 @@ export function DaemonDiagnostics() {
             <p className="break-all font-mono text-xs">
               {status.host} · process {status.pid}
             </p>
+            <p>{status.controlMessage}</p>
           </TechnicalDetails>
-          <p>{status.controlMessage}</p>
           <p>
-            Start, stop and restart the Gateway outside this app, with the process manager that runs it. This page never
-            runs the commands below.
+            Start, stop and restart the GoatCitadel server outside this app, with the process manager that runs it. This
+            page never runs the commands below.
           </p>
-          <ul className="space-y-2" aria-label="Gateway process diagnostics">
+          <ul className="space-y-2" aria-label="Process diagnostics">
             {(status.diagnostics ?? []).slice(0, 30).map((item) => (
               <li key={item.id}>
                 <strong>{item.title}</strong> · {DAEMON_SEVERITY_LABELS[item.severity] ?? "Unknown"}

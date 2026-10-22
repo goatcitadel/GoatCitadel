@@ -174,7 +174,7 @@ it("keeps a lost archive response locked and offers only the exact replay", asyn
   await click("Review archive");
   await click("Archive skill");
   expect(button("Archive skill")).toBeUndefined();
-  await click("Replay exact archive request");
+  await click("Retry the exact archive request");
   expect(vi.mocked(archiveCuratorSkill).mock.calls).toHaveLength(2);
   await vi.waitFor(() => expect(container.textContent).toContain("alpha was already archived; nothing changed."));
 });

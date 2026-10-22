@@ -249,17 +249,17 @@ export function InboxApprovalDetail({
           {specialist ? (
             <>
               <Button disabled={specialistQuery.isFetching} onClick={() => void specialistQuery.refetch()}>
-                Refresh specialist evidence
+                Check again
               </Button>
               {specialistEvidence ? (
                 <SpecialistApprovalReview approval={approval} evidence={specialistEvidence} />
               ) : (
                 <p role={specialistChecking ? "status" : "alert"} className={specialistChecking ? "text-fg-muted" : ""}>
                   {specialistChecking
-                    ? "Checking specialist evidence…"
+                    ? "Checking the specialist review…"
                     : specialistQuery.error
                       ? describeApiError(specialistQuery.error).summary
-                      : "Specialist evidence is unavailable or changed. Refresh before approving."}
+                      : "The specialist review is unavailable or changed. Check again before approving."}
                 </p>
               )}
             </>

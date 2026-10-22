@@ -27,7 +27,11 @@ import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/re
 
 const COLUMNS: readonly { id: WorkBoardGroup; title: string; description: string }[] = [
   { id: "running", title: "Active", description: "Tasks being prepared or worked; runs queued or executing" },
-  { id: "waiting", title: "Needs attention", description: "Tasks in inbox, blocked or review; runs waiting or paused" },
+  {
+    id: "waiting",
+    title: "Needs attention",
+    description: "Tasks not started, blocked or in review; runs waiting or paused",
+  },
   { id: "failed", title: "Failed runs", description: "Run failures and recovery" },
   { id: "done", title: "Done", description: "Completed or cancelled" },
 ];
@@ -199,7 +203,7 @@ export function WorkBoard() {
           className={`${CONTROL} px-2`}
         >
           <option value="all">Tasks and runs</option>
-          <option value="task">Operator tasks</option>
+          <option value="task">Tasks</option>
           <option value="run">Runs</option>
         </select>
       </div>
@@ -293,7 +297,7 @@ export function WorkBoard() {
             ))}
           </div>
           <p className="text-xs text-fg-muted">
-            {`Counts cover only loaded records; records without matching workspace evidence are omitted. Done shows up to ${DONE_LIMIT} matching tasks and ${DONE_LIMIT} matching runs. `}
+            {`Counts cover only loaded records; records without a matching workspace are omitted. Done shows up to ${DONE_LIMIT} matching tasks and ${DONE_LIMIT} matching runs. `}
             <NativeOwnerLink href="/work/history" scope={workspaceId}>
               Open run history
             </NativeOwnerLink>

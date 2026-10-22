@@ -171,8 +171,7 @@ export function useCapabilitySkillState({
         setReview(null);
         setError({
           identity,
-          message:
-            "This skill changed in Gateway. Refresh and review its current state before requesting another change.",
+          message: "This skill changed. Refresh and review its current state before requesting another change.",
         });
         lifecycle.current.onRefresh();
         return;
@@ -191,7 +190,7 @@ export function useCapabilitySkillState({
             ? `Approval requested. The reviewed skill remains ${skillStateLabel(target.currentState).toLowerCase()} until the decision and follow-on effect complete.`
             : approval
               ? "An existing approval request was returned. Inspect its decision and current skill state before another request."
-              : `Gateway reports the skill is already ${skillStateLabel(target.state).toLowerCase()}; no change was requested.`,
+              : `GoatCitadel reports the skill is already ${skillStateLabel(target.state).toLowerCase()}; no change was requested.`,
       });
       if (current()) {
         setReview(null);
@@ -211,7 +210,7 @@ export function useCapabilitySkillState({
         // Gateway answered and recorded nothing: no replay lock, the same revision may be reviewed again.
         refused = true;
         if (current())
-          setError({ identity, message: `Gateway did not accept the request. ${describeApiError(cause).summary}` });
+          setError({ identity, message: `GoatCitadel did not accept the request. ${describeApiError(cause).summary}` });
       } else if (dispatched) {
         publish(attemptKey, {
           ...base,

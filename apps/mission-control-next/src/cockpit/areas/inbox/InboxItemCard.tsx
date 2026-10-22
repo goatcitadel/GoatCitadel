@@ -51,7 +51,7 @@ export function InboxItemCard({
       </div>
       {item.expiresAt || item.group === "needs_decision" ? (
         <p className="mt-2 text-xs text-fg-muted">
-          {approvalExpiryLabel(item.expiresAt, now) ?? "Expiry not provided; review the current decision."}
+          {approvalExpiryLabel(item.expiresAt, now) ?? "No expiry time was given."}
         </p>
       ) : null}
       <div className="mt-3 flex flex-wrap items-center gap-3">

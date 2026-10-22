@@ -182,7 +182,9 @@ describe("System managed local runtime start", () => {
     "withholds inconsistent owner evidence %j",
     async (change) => {
       api.fetchLlamaCppSetup.mockResolvedValue({ ...setup, ...change });
-      await expect(readLocalRuntimeReview("workspace-a")).rejects.toThrow("inconsistent settings evidence");
+      await expect(readLocalRuntimeReview("workspace-a")).rejects.toThrow(
+        "The saved settings and the runtime don't match",
+      );
       expect(api.startLlamaCppRuntime).not.toHaveBeenCalled();
     },
   );
@@ -216,7 +218,9 @@ describe("System managed local runtime start", () => {
   it("rejects a matching but invalid zero settings revision", async () => {
     api.fetchSettings.mockResolvedValue({ ...settings, revision: 0 });
     api.fetchLlamaCppSetup.mockResolvedValue({ ...setup, settingsRevision: 0 });
-    await expect(readLocalRuntimeReview("workspace-a")).rejects.toThrow("inconsistent settings evidence");
+    await expect(readLocalRuntimeReview("workspace-a")).rejects.toThrow(
+      "The saved settings and the runtime don't match",
+    );
     expect(api.startLlamaCppRuntime).not.toHaveBeenCalled();
   });
   it("preserves the complete saved configuration comparison without showing extra launch arguments", async () => {
@@ -309,7 +313,7 @@ describe("System managed local runtime start", () => {
     await render();
     await click("Review local runtime start");
     await click("Confirm host-wide start");
-    expect(container.textContent).toContain("owned runtime starting");
+    expect(container.textContent).toContain("reports its managed runtime starting");
     expect(container.textContent).not.toContain("health probe passed");
     expect(readLocalRuntimeAttempt()?.phase).toBe("verified");
   });

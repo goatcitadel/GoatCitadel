@@ -77,7 +77,7 @@ it("retains a successful owner receipt inside the actual portal after query inva
   await vi.waitFor(() => expect(client.isFetching()).toBe(0));
   const dialog = document.querySelector('[role="dialog"]')!;
   expect(dialog.closest('[aria-hidden="true"]')).toBeNull();
-  expect(dialog.textContent).toContain("Gateway accepted proof.txt (5 B)");
+  expect(dialog.textContent).toContain("GoatCitadel accepted proof.txt (5 B)");
   expect(dialog.textContent).not.toContain("private");
   expect(uploadFile).toHaveBeenCalledExactlyOnceWith("proof.txt", "proof", { expectAbsent: true });
   await click("Upload file");

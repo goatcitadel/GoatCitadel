@@ -132,7 +132,7 @@ export function CapabilitySettings({
           className="space-y-2 rounded-md border border-line bg-sunken p-3"
         >
           <p>
-            Request a change to {skillStateLabel(target.state)} for {title}? Gateway will create an approval. This
+            Request a change to {skillStateLabel(target.state)} for {title}? GoatCitadel will create an approval. This
             installation-wide skill state changes only after that approval and its effect complete.
           </p>
           <div className="flex flex-wrap gap-2">

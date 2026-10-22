@@ -108,10 +108,27 @@ export function LocalAiSettings() {
           <p className="text-xs text-fg-muted">Observed {readiness.hardware.checkedAt}</p>
           {!control.hasRegisteredEndpoint ? (
             <p className="text-sm text-fg-secondary">
-              No Local AI job endpoint is registered here.{" "}
-              {control.hasDetectedRuntime
-                ? "A detected runtime is not a successful Chat test."
-                : "Use Get started to configure llama.cpp for Chat."}
+              Local AI is not set up yet.{" "}
+              {control.hasDetectedRuntime ? (
+                "A runtime was found, but Chat has not been tested with it."
+              ) : (
+                <>
+                  Set up llama.cpp for Chat in{" "}
+                  <a
+                    className="text-accent hover:underline"
+                    href="/settings/models?shell=cockpit#onboarding"
+                    onClick={(event) => {
+                      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+                        return;
+                      event.preventDefault();
+                      navigate("/settings/models?shell=cockpit#onboarding");
+                    }}
+                  >
+                    Get started
+                  </a>
+                  .
+                </>
+              )}
             </p>
           ) : null}
           <label className="block text-sm text-fg-secondary">
@@ -208,8 +225,8 @@ export function LocalAiSettings() {
           <details>
             <summary>Advisory approval requests (no execution)</summary>
             <p className="text-sm text-fg-secondary">
-              The current Gateway records approval intent only. These requests do not download models, start servers, or
-              configure a provider. Approval does not supply the missing execution step.
+              This GoatCitadel version records approval intent only. These requests do not download models, start
+              servers, or configure a provider. Approval does not supply the missing execution step.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button disabled={!selected || control.queueing} onClick={() => control.requestReview("download")}>

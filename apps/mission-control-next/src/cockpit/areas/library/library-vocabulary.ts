@@ -146,7 +146,7 @@ export const JOURNEY_CATEGORY: Record<JourneyTimelineCategory, string> = {
 };
 
 export const JOURNEY_TRUST: Record<JourneyTimelineEvidenceState["trustContribution"], string> = {
-  evidence_only: "Evidence only",
+  evidence_only: "Record only",
   blocked: "Blocked",
   none: "None",
 };
@@ -159,7 +159,7 @@ export const JOURNEY_ACTOR: Record<GovernanceJourneyActorType, string> = {
 
 const JOURNEY_BLOCKERS: Record<string, string> = {
   recurrence_scan_incomplete: "The recurrence scan was incomplete",
-  recurrence_contains_blocked_evidence: "Earlier observations include blocked evidence",
+  recurrence_contains_blocked_evidence: "Earlier observations include blocked items",
   staging_tampered: "Staged content was changed after review",
   staging_missing: "Staged content is missing",
 };

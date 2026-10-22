@@ -135,7 +135,7 @@ it("keeps a lost grant response locked and replays only the same request ID", as
   await click("Review grant");
   await click("Create grant");
   expect(button("Create grant")).toBeUndefined();
-  await click("Replay exact request");
+  await click("Send the same request again");
   const calls = vi.mocked(createBrowserSessionGrant).mock.calls;
   expect(calls).toHaveLength(2);
   expect(calls[1]![1].requestId).toBe(calls[0]![1].requestId);
@@ -153,7 +153,7 @@ it("keeps text typed after a lost response when the exact replay succeeds", asyn
   await click("Close");
   await type("Actor", "typed later");
   await click("Review pending grant change");
-  await click("Replay exact request");
+  await click("Send the same request again");
   expect(vi.mocked(createBrowserSessionGrant).mock.calls[1]![1].actorId).toBe("agent");
   expect(container.textContent).toContain("Grant recorded for agent");
   const actor = [...container.querySelectorAll("label")].find((item) => item.textContent === "Actor")!;
@@ -182,7 +182,7 @@ it("explains that rotation keeps the actor's access and locks a receipt with a d
   await click("Rotate grant");
   expect(rotateBrowserSessionGrant).toHaveBeenCalledExactlyOnceWith("s-1", "g-1");
   expect(dialog()!.textContent).toContain("does not match the reviewed grant");
-  expect(button("Replay exact request")).toBeDefined();
+  expect(button("Send the same request again")).toBeDefined();
 });
 
 it("states whether the actor keeps other access before revoking, and revokes once", async () => {

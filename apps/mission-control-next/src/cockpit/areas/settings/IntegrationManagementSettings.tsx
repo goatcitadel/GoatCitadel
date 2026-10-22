@@ -114,7 +114,7 @@ export function IntegrationManagementSettings({
       <Dialog
         open={Boolean(s.pendingDeleteConnection)}
         title="Delete integration connection?"
-        description={`Delete ${s.pendingDeleteConnection?.label ?? "this connection"}? The Gateway removes its saved configuration and requests runtime synchronization.`}
+        description={`Delete ${s.pendingDeleteConnection?.label ?? "this connection"}? GoatCitadel removes its saved configuration and requests runtime synchronization.`}
         onOpenChange={(open) => {
           if (!open && !s.deletePending) s.setPendingDeleteConnection(null);
         }}

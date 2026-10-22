@@ -168,7 +168,7 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
           text:
             typeof response.policyReason === "string"
               ? response.policyReason
-              : "Knowledge request blocked by Gateway policy.",
+              : "Knowledge request blocked by GoatCitadel policy.",
         });
       } else {
         const result = response.outcome === "executed" ? record(response.result) : response;
@@ -190,12 +190,12 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
           error: false,
           text:
             review.action === "retrieve" && rows
-              ? `Gateway returned ${plural(rows.length, "match", "matches")} under the source conversation's read policy.`
+              ? `GoatCitadel returned ${plural(rows.length, "match", "matches")} under the source conversation's read policy.`
               : documentId
                 ? "Document saved. Indexing and use in conversations are checked separately."
                 : response.outcome === "executed"
                   ? "The tool ran. It is not yet confirmed as available to conversations."
-                  : "Gateway returned a result. Completion and context availability are not independently confirmed.",
+                  : "GoatCitadel returned a result. Completion and context availability are not independently confirmed.",
           rows,
           documentId,
         });
@@ -294,7 +294,7 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
           if (!open && !busy) setReview(undefined);
         }}
         title="Review knowledge request"
-        description="Tool execution may require approval; source access is evaluated by Gateway."
+        description="Tool execution may require approval; source access is evaluated by GoatCitadel."
       >
         <div className="grid min-w-0 grid-cols-1 gap-3 wrap-anywhere">
           <p>{review ? KNOWLEDGE_ACTION[review.action] : ""} · This workspace</p>

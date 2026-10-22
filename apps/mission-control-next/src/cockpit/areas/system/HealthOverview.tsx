@@ -152,7 +152,7 @@ export function HealthOverview() {
       >
         {Number.isFinite(generatedAt) ? (
           <p className="mt-1 text-xs text-fg-muted">
-            <TimeText value={generatedAt} prefix="Gateway snapshot" />
+            <TimeText value={generatedAt} prefix="Updated" />
           </p>
         ) : null}
         {sources ? <p className="mt-2 text-sm font-medium text-fg">{heading}</p> : null}
@@ -192,7 +192,7 @@ export function HealthOverview() {
                       </span>
                     ) : null}
                     {source.state === "unavailable" && source.retryable === false
-                      ? " This source will be checked again after Gateway access or workspace scope changes; other sources continue refreshing."
+                      ? " This source will be checked again after your access or workspace changes; other sources continue refreshing."
                       : ""}
                   </li>
                 ))}

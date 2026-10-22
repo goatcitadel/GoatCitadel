@@ -181,13 +181,13 @@ it("keeps a lost send response locked and offers only the exact replay of the sa
   expect(dialog()!.textContent).toContain("The original attempt remains locked.");
   // A lost response never re-offers a fresh request; only the exact original can be replayed.
   expect(button("Request send approval")).toBeUndefined();
-  expect(button("Replay exact send request")).toBeDefined();
+  expect(button("Retry the exact send request")).toBeDefined();
   await act(async () => {
     dialog()!.querySelector<HTMLButtonElement>("button[aria-label='Close dialog']")?.click();
   });
   expect(button("Review send request")?.disabled).toBe(true);
   await click("Review pending send request");
-  await click("Replay exact send request");
+  await click("Retry the exact send request");
   expect(createMailDraft).toHaveBeenCalledOnce();
   expect(vi.mocked(sendMailDraft).mock.calls).toEqual([
     ["draft-1", "one"],
@@ -279,7 +279,7 @@ it("does not claim an empty account list while accounts are still unknown", asyn
 it("says the Gateway holds the reviewed draft, not only this browser", async () => {
   await render();
   expect(container.textContent).toContain(
-    "What you type stays in this browser session. Review saves the draft, including Bcc, on the Gateway. Only Request send approval asks for an approval; approving sends this exact message once.",
+    "What you type stays in this browser session. Review saves the draft, including Bcc, in GoatCitadel. Only Request send approval asks for an approval; approving sends this exact message once.",
   );
   expect(container.textContent).not.toContain("does not send mail from here");
 });
@@ -409,14 +409,14 @@ it("explains an interrupted send request exactly, without a lock, suffix or repl
   await click("Review send request");
   await click("Request send approval");
   const message =
-    "This send request was interrupted before its approval was recorded. Nothing was sent. After a short safety wait, the Gateway can check for a recorded approval and release this draft so you can request one again.";
+    "This send request was interrupted before its approval was recorded. Nothing was sent. After a short safety wait, GoatCitadel can check for a recorded approval and release this draft so you can request one again.";
   const alert = [...container.querySelectorAll("[role=alert], [role=status]")].find((n) => n.textContent === message);
   expect(alert, "exact message").toBeDefined();
   expect(button("Check and release draft")?.disabled).toBe(false);
   expect(container.textContent).not.toContain("not confirmed");
   expect(container.textContent).not.toContain("remains locked");
   expect(container.textContent).not.toContain("does not match the reviewed draft");
-  expect(button("Replay exact send request")).toBeUndefined();
+  expect(button("Retry the exact send request")).toBeUndefined();
   expect(button("Review pending send request")).toBeUndefined();
   expect(button("Review send request")?.disabled).toBe(false);
 });
@@ -538,7 +538,7 @@ async function loseFirstSend() {
   await compose();
   await click("Review send request");
   await click("Request send approval");
-  expect(button("Replay exact send request")).toBeDefined();
+  expect(button("Retry the exact send request")).toBeDefined();
 }
 
 it("never says no approval was requested when a replay finds the draft gone", async () => {
@@ -553,7 +553,7 @@ it("never says no approval was requested when a replay finds the draft gone", as
     bodyText: "",
     status: "failed",
   });
-  await click("Replay exact send request");
+  await click("Retry the exact send request");
   expect(container.textContent).toContain("The earlier send request's outcome is unknown");
   expect(container.textContent).toContain("Check Inbox");
   expect(container.textContent).not.toContain("no approval was requested");
@@ -564,8 +564,8 @@ it("never says no approval was requested when a replay finds the draft gone", as
 it("keeps the exact replay available when the replay is also lost", async () => {
   await loseFirstSend();
   vi.mocked(sendMailDraft).mockRejectedValueOnce(new Error("socket closed again"));
-  await click("Replay exact send request");
-  expect(button("Replay exact send request")).toBeDefined();
+  await click("Retry the exact send request");
+  expect(button("Retry the exact send request")).toBeDefined();
   expect(button("Request send approval")).toBeUndefined();
   expect(vi.mocked(sendMailDraft).mock.calls).toEqual([
     ["draft-1", "one"],
@@ -581,7 +581,7 @@ it("locks a mismatched send receipt as uncertain instead of accepting it", async
   await click("Review send request");
   await click("Request send approval");
   expect(dialog()!.textContent).toContain("does not match the reviewed draft");
-  expect(button("Replay exact send request")).toBeDefined();
+  expect(button("Retry the exact send request")).toBeDefined();
   expect(container.textContent).not.toContain("Approval owner");
 });
 

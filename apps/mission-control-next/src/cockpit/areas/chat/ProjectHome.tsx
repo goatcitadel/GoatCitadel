@@ -121,8 +121,8 @@ export function ProjectHome({
       ) : null}
       {artifacts.error ? (
         <Callout tone="warning">
-          {describeApiError(artifacts.error).summary} Artifact records are unavailable; conversation references are
-          partial evidence.
+          {describeApiError(artifacts.error).summary} Artifact records are unavailable; conversation references may be
+          incomplete.
         </Callout>
       ) : null}
       {error ? <Callout tone="error">{error}</Callout> : null}

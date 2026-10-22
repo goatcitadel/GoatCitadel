@@ -47,7 +47,7 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
     <section className={AREA_PAGE} aria-label="Library Agents">
       <AreaHeader
         title={LIBRARY_SECTION_LABELS.agents}
-        description="Installation profiles and workspace imported definitions. Tool access remains governed by Gateway policy and grants."
+        description="Installation profiles and workspace imported definitions. Tool access remains governed by GoatCitadel policy and grants."
         actions={
           <>
             <Button

@@ -53,7 +53,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
       ) : null}
       {s.data?.issues.map((issue) => (
         <p key={issue.label} role="status" className="text-sm text-status-waiting">
-          {issue.label} unavailable. Refresh to inspect current owner evidence.
+          {issue.label} unavailable. Refresh to check it again.
         </p>
       ))}
       {s.notice ? (
@@ -80,7 +80,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
           <h4 className="text-md font-semibold">Register hook</h4>
           <p className="text-sm text-fg-secondary">
             New registrations are enabled, send metadata only, use priority 100 and a 5-second timeout, and record an
-            open failure policy. The Gateway decides which modes are permitted.
+            open failure policy. GoatCitadel decides which modes are permitted.
           </p>
           <fieldset disabled={s.mutation.locked} className="grid gap-3 sm:grid-cols-2">
             <legend className="sr-only">Hook registration inputs</legend>
@@ -201,7 +201,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
       {!s.data?.issues.some((issue) => issue.label === "Hooks") && s.data ? (
         <>
           <p className="text-xs text-fg-muted">
-            {plural(hooks.length, "matching hook")} in this owner response
+            {plural(hooks.length, "matching hook")} in this response
             {s.hooks.length === HOOK_OWNER_LIMIT ? "; response is capped at 500" : ""}.
           </p>
           {!hooks.length ? (
@@ -245,7 +245,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
             </Button>
           </div>
           <p className="text-xs text-fg-muted">
-            Only completed post-event observers can be redriven. Inline control hooks are never replayed.
+            Only completed post-event observers can be redriven. Inline control hooks never run again.
           </p>
         </section>
       ) : null}
@@ -258,7 +258,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
             <>
               <p className="text-xs text-fg-muted">
                 Showing at most {limit} of {plural(s.selectedRuns.length, "returned delivery", "returned deliveries")}.
-                Payloads and remote response bodies stay in the Gateway's records.
+                Payloads and remote response bodies stay in GoatCitadel's records.
               </p>
               <ul className="space-y-2">
                 {s.selectedRuns.slice(0, limit).map((run) => (

@@ -40,7 +40,7 @@ const EVIDENCE_KIND: Record<EvidenceEnvelopeEventKind, string> = {
   external_writeback: "External write",
   cron_job_executed: "Scheduled job run",
 };
-export const evidenceKindLabel = (value: string) => lookup(EVIDENCE_KIND, value, "Other evidence");
+export const evidenceKindLabel = (value: string) => lookup(EVIDENCE_KIND, value, "Other record");
 
 const SIGNATURE: Record<EvidenceEnvelopeSignatureStatus, string> = {
   signed_hmac: "Signed",

@@ -131,7 +131,7 @@ describe("Work run artifact preview", () => {
     foreign.run.payload.workspaceId = "workspace-b";
     await render(foreign);
     expect(container.textContent).not.toContain(artifact.title);
-    expect(container.textContent).toContain("no matching run workspace");
+    expect(container.textContent).toContain("this run's workspace doesn't match");
     expect(fetchChatGeneratedArtifact).not.toHaveBeenCalled();
   });
 
@@ -151,7 +151,7 @@ describe("Work run artifact preview", () => {
     await click("Preview artifact");
     expect(container.textContent).not.toContain("DO NOT DISPLAY");
     expect(container.textContent).toContain("no longer matches");
-    expect(container.textContent).toContain("Refresh run evidence");
+    expect(container.textContent).toContain("Check again");
   });
 
   it("withholds content after a failed owner read", async () => {
@@ -168,9 +168,9 @@ describe("Work run artifact preview", () => {
     expect(container.textContent).toContain(artifact.content);
     await render(trace([{ ...artifact, version: 3 }]));
     expect(container.textContent).not.toContain(artifact.content);
-    expect(container.textContent).toContain("Run evidence changed");
+    expect(container.textContent).toContain("The run changed");
     const invalidate = vi.spyOn(client, "invalidateQueries");
-    await click("Refresh run evidence");
+    await click("Check again");
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.runTrace("run-a") });
     expect(container.querySelector('[role="dialog"]')).toBeNull();
   });
@@ -230,7 +230,7 @@ describe("Work run artifact preview", () => {
     await render(unavailable);
     expect(container.textContent).not.toContain(artifact.title);
     expect(container.textContent).not.toContain(artifact.content);
-    expect(container.textContent).toContain("Artifact evidence is unknown");
-    expect(container.textContent).toContain("Run evidence changed");
+    expect(container.textContent).toContain("Artifact records are unknown");
+    expect(container.textContent).toContain("The run changed");
   });
 });

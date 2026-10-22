@@ -177,7 +177,7 @@ function RuntimeWidget() {
   return (
     <WidgetFrame
       title="Runtime truth"
-      source="Gateway host-wide health snapshot"
+      source="Host-wide health"
       ownerHref="/system/runtime/diagnostics"
       ownerLabel="Open runtime diagnostics"
       loading={query.isLoading}
@@ -188,7 +188,7 @@ function RuntimeWidget() {
       <Metrics
         summary="Host-wide status applies beyond the selected workspace."
         items={[
-          ["Gateway host", health?.systemVitals.hostname || "Unknown"],
+          ["Host", health?.systemVitals.hostname || "Unknown"],
           ["Runtime service", service],
           ["Memory", memory],
         ]}
@@ -245,7 +245,7 @@ function UsageWidget() {
   return (
     <WidgetFrame
       title="Usage and cost"
-      source="Gateway-wide day-scope usage"
+      source="Installation-wide daily usage"
       ownerHref="/system/spend/details"
       ownerLabel="Open spend details"
       loading={query.isLoading}

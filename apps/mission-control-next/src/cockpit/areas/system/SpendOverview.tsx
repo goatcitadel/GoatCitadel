@@ -55,7 +55,7 @@ export function SpendOverview() {
     <section className={AREA_PAGE}>
       <AreaHeader
         title="Spend"
-        description="Gateway usage and known cost for the latest seven days."
+        description="Usage and known cost for the latest seven days."
         actions={
           <Button size="sm" onClick={() => void costs.refetch()} disabled={costs.isFetching}>
             <RefreshCw aria-hidden="true" className="size-4" /> Refresh
@@ -94,13 +94,13 @@ export function SpendOverview() {
               </p>
             ) : null}
             <p className="text-xs text-fg-muted">
-              Accounted cost may combine provider-reported amounts and Gateway pricing estimates. Complete coverage
+              Accounted cost may combine provider-reported amounts and GoatCitadel pricing estimates. Complete coverage
               means all costs were accounted; it does not make an estimate a measured bill.
             </p>
           </div>
 
           <Section
-            title="Known cost by Gateway day (UTC)"
+            title="Cost by day (UTC)"
             description="Bars show cost in USD recorded in UTC day buckets. The period above uses local time; these aggregates cannot be rebucketed into local days. A plus sign marks a lower bound."
           >
             <SpendDailyChart summary={summary} />
@@ -115,7 +115,7 @@ export function SpendOverview() {
 
           <Section
             title="Provider attribution"
-            description="Gateway day segments identify providers and observed models. The API does not supply per-model cost totals."
+            description="Daily records identify providers and observed models. The API does not supply per-model cost totals."
           >
             {providers.length ? (
               <ul className="divide-y divide-line-subtle">
@@ -143,7 +143,7 @@ export function SpendOverview() {
 
           <Section title="Budget setting">
             <p className="text-sm text-fg-secondary">
-              {"Gateway budget preference: "}
+              {"Budget preference: "}
               <strong className="text-fg">
                 {settings.data && !settings.isError
                   ? (BUDGET_MODE[settings.data.budgetMode] ?? "Unrecognized mode")

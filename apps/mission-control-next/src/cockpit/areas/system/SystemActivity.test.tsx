@@ -117,8 +117,8 @@ describe("System activity reads as sentences (SY-01)", () => {
     // Identifiers live only in technical details, and the retention caveat is stated once for the list.
     expect(rows()[0]).not.toContain("session-a");
     expect(rows()[0]).not.toContain("Workspace");
-    expect(rows()[0]).not.toContain("does not establish");
-    expect(container.textContent?.split("does not establish its current health")).toHaveLength(2);
+    expect(rows()[0]).not.toContain("does not show its current health");
+    expect(container.textContent?.split("does not show its current health")).toHaveLength(2);
     for (const text of rows()) expect(text).not.toContain("_");
 
     const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;

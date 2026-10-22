@@ -217,7 +217,7 @@ export function ChatTranscriptEmpty({ context }: { context?: TranscriptFooterCon
         {props?.loading
           ? "Loading messages…"
           : context?.gatewayUnavailable
-            ? "Messages can’t load while the Gateway is unreachable."
+            ? "Messages can’t load while GoatCitadel is unreachable."
             : "No messages in this view."}
       </p>
     );

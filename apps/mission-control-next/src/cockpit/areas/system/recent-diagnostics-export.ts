@@ -25,7 +25,7 @@ export function buildRecentDiagnosticsExport(input: {
     schemaVersion: "goatcitadel.recent-diagnostics.v1",
     generatedAt: input.generatedAt,
     description:
-      "Recent client and Gateway diagnostic events and daemon logs. Each source is limited to 100 received entries; this is not complete history.",
+      "Recent client and server diagnostic events and daemon logs. Each source is limited to 100 received entries; this is not complete history.",
     sourceStatus: {
       diagnosticEvents: sourceStatus(input.events),
       daemonLogs: sourceStatus(input.logs),

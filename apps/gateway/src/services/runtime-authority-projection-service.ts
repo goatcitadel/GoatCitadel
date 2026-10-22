@@ -2,6 +2,7 @@
 import type {
   RuntimeAuthorityFreshness,
   RuntimeAuthorityItem,
+  RuntimeAuthorityMessage,
   RuntimeAuthorityPosture,
   RuntimeAuthorityProjectionResponse,
   RuntimeAuthorityReference,
@@ -576,6 +577,10 @@ function buildWorkerItems(
       freshness: critical > 0 || attention > 0 ? "stale" : "current",
       posture: critical > 0 ? "critical" : attention > 0 ? "attention" : "ok",
       state: `${runs.length} running workspace run(s) were evaluated; ${critical} expired or missing lease(s) and ${attention} stale heartbeat(s) were found.`,
+      stateMessage: {
+        code: "worker_leases_checked",
+        counts: { runs: runs.length, expired: critical, stale: attention },
+      },
       basis: "The summary is computed over the bounded canonical running-run owner result.",
       caveat: "Only the three highest-risk individual leases are expanded as cards.",
       scope,
@@ -690,6 +695,7 @@ function buildMeshWorkerItem(
     freshness: hasStale ? "stale" : "current",
     posture: hasStale ? "attention" : "ok",
     state: `${currentNodes} current node record(s), ${staleNodes} stale node record(s), ${activeLeases} active lease(s), ${expiredLeases} expired lease(s).`,
+    stateMessage: { code: "mesh_workers", counts: { currentNodes, staleNodes, activeLeases, expiredLeases } },
     basis: "Remote owner health is calculated from stored last-seen and lease-expiry timestamps.",
     caveat: "Network reachability and UI presence are not canonical ownership evidence.",
     scope,
@@ -736,6 +742,17 @@ function buildLocalRuntimeItem(
     : unhealthyActiveLease
       ? `${status.activeLeaseCount} active lease(s) exist while the local runtime is not healthy and running.`
       : `Local runtime is ${status.processState}, health is ${status.healthy ? "ready" : "not ready"}, and ${status.activeLeaseCount} lease(s) are active.`;
+  const stateCode = !status.enabled
+    ? "local_runtime_disabled"
+    : unhealthyActiveLease
+      ? "local_runtime_unhealthy_leases"
+      : unhealthyRuntime
+        ? "local_runtime_failed"
+        : status.healthy
+          ? "local_runtime_ready"
+          : status.processState === "starting"
+            ? "local_runtime_starting"
+            : "local_runtime_not_ready";
   return {
     id: "local-runtime-lease-health",
     domain: "workers",
@@ -747,6 +764,7 @@ function buildLocalRuntimeItem(
     freshness: stale ? "stale" : "current",
     posture,
     state,
+    stateMessage: { code: stateCode, count: status.activeLeaseCount },
     basis:
       "Gateway projects process health and lease counts from the local runtime owner without exposing command, path, PID, or endpoint data.",
     caveat: "Health and lease posture are read-time projections; they do not create or settle runtime leases.",
@@ -1136,6 +1154,9 @@ function approvalUiProjectionItem(
     state: sourceAvailable
       ? `${count} canonical approval record(s) are available for client materialization.`
       : "The client cannot safely materialize approval settlement without canonical rows.",
+    stateMessage: sourceAvailable
+      ? { code: "approval_records_available", count }
+      : { code: "approval_records_unavailable" },
     basis: "Mission Control formats Gateway records for operators; it does not own decisions or effect settlement.",
     caveat: "Client caches, realtime notices, and optimistic state remain non-canonical.",
     scope,
@@ -1577,7 +1598,26 @@ function boundAuthorityItem(item: RuntimeAuthorityItem): RuntimeAuthorityItem {
     state: publicText(item.state, MAX_PUBLIC_TEXT_LENGTH, "State unavailable."),
     basis: publicText(item.basis, MAX_PUBLIC_TEXT_LENGTH, "Authority basis unavailable."),
     caveat: publicOptionalText(item.caveat, MAX_PUBLIC_TEXT_LENGTH),
+    stateMessage: boundAuthorityMessage(item.stateMessage),
     observedAt: validIso(item.observedAt),
+  };
+}
+
+/** A coded state keeps a short code and only whole, non-negative counts; anything else is dropped. */
+function boundAuthorityMessage(message: RuntimeAuthorityMessage | undefined): RuntimeAuthorityMessage | undefined {
+  if (!message || !/^[a-z][a-z0-9_]{0,63}$/u.test(message.code)) return undefined;
+  const whole = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+  const counts = message.counts
+    ? Object.fromEntries(
+        Object.entries(message.counts)
+          .filter(([key, value]) => /^\w{1,32}$/u.test(key) && whole(value))
+          .slice(0, 8),
+      )
+    : undefined;
+  return {
+    code: message.code,
+    ...(whole(message.count) ? { count: message.count } : {}),
+    ...(counts ? { counts } : {}),
   };
 }
 

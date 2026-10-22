@@ -145,7 +145,7 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
       />
       <p className="text-xs text-fg-muted">
         Preview and template export do not create a schedule, activate capabilities, import into an external service, or
-        prove execution. Gateway governance still applies.
+        prove execution. GoatCitadel policy and approvals still apply.
       </p>
       {(Object.keys(labels) as (keyof typeof labels)[]).map((key) => (
         <Field key={key} label={labels[key]}>
@@ -165,7 +165,7 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
         </Field>
       ))}
       <Button className="self-start" disabled={busy} variant="primary" onClick={() => void perform()}>
-        {busy ? "Waiting for Gateway…" : "Preview automation recipe"}
+        {busy ? "Waiting for GoatCitadel…" : "Preview automation recipe"}
       </Button>
       {message ? (
         <p role="status" className="text-sm text-fg-secondary">

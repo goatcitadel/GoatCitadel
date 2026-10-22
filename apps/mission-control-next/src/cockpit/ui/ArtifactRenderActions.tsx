@@ -125,7 +125,7 @@ export function ArtifactRenderActions({
       setState({
         activity: "idle",
         renders: response.renders,
-        message: `Rendered ${plural(response.renders.length, "snapshot")} (${viewports}).`,
+        message: `Rendered ${plural(response.renders.length, "image")} (${viewports}).`,
       });
     } catch (error) {
       setState((current) => ({ ...current, activity: "idle", error: describeFailure(error) }));
@@ -159,10 +159,10 @@ export function ArtifactRenderActions({
         </Button>
         <span role="status" className="text-xs text-fg-muted">
           {state.activity === "rendering"
-            ? "Rendering offline snapshots…"
+            ? "Rendering offline images…"
             : state.activity === "critiquing"
               ? "Sending the critique…"
-              : (state.message ?? "Offline PNG snapshots at desktop and phone widths; no scripts, no network.")}
+              : (state.message ?? "Offline PNG images at desktop and phone widths; no scripts, no network.")}
         </span>
       </div>
       {state.error ? (

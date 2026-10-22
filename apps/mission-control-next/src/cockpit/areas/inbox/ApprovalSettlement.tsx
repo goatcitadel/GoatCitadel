@@ -75,7 +75,7 @@ export function ApprovalSettlement({
       {resolution ? <p className="text-fg-secondary">{resolution}</p> : null}
       {state ? (
         <details>
-          <summary>Decision history and replay</summary>
+          <summary>Decision history</summary>
           <ol className="space-y-2 pt-2">
             {state.replay.events.map((event) => (
               <li key={event.eventId}>

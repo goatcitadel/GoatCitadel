@@ -231,7 +231,7 @@ describe("CommandPalette", () => {
     expect(dialog.textContent).toContain("Library unavailable.");
     expect(dialog.querySelector("[role='alert']")?.textContent).toBe("Search didn't respond. Try again.");
     expect(dialog.querySelector("[role='status']")?.textContent?.trim()).toBe("Searching…");
-    expect(dialog.textContent).toContain("No matches in this source’s returned window.");
+    expect(dialog.textContent).toContain("No matches in the loaded results.");
     expect(dialog.textContent).toContain("Up to ten current workspace matches.");
     const item = [...listbox.querySelectorAll<HTMLElement>('[role="option"]')].find((node) =>
       node.textContent?.startsWith("Exact conversation"),

@@ -147,7 +147,7 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
                       ]}
                       className="font-medium text-accent hover:underline"
                     >
-                      Open run evidence
+                      Open run details
                     </NativeOwnerLink>
                     {task.controls.detach.enabled ? (
                       <button
@@ -217,10 +217,10 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
           if (!open) dismissCancel();
         }}
         title="Cancel this background task?"
-        description="Completed work stays in its evidence record. The live executor must honor the cancellation."
+        description="Completed work stays in its record. The running task must still honor the cancellation."
       >
         <p className="mb-3 break-words text-sm text-fg-secondary">
-          {cancelTask?.label} · Task version {cancelReview?.review.childVersion ?? "unavailable"} · Watcher revision{" "}
+          {cancelTask?.label} · Task version {cancelReview?.review.childVersion ?? "unavailable"} · Watcher version{" "}
           {cancelReview?.review.watcherRevision}
         </p>
         {reviewError ? (

@@ -31,13 +31,13 @@ const ACTIONS: ReadonlyArray<{
     verb: "Retry",
     confirm: (n) => `Retry ${count(n)}`,
     consequence:
-      "Records one retry attempt per task. A task past its retry budget becomes blocked with a distress signal. It does not start a run.",
+      "Records one retry attempt per task. A task past its retry limit becomes blocked and is flagged for your attention. It does not start a run.",
   },
   {
     action: "close",
     verb: "Mark done",
     confirm: (n) => `Mark ${count(n)} done`,
-    consequence: "Marks each task done. The Gateway refuses the whole batch if any task has no deliverable.",
+    consequence: "Marks each task done. GoatCitadel refuses the whole batch if any task has no deliverable.",
   },
 ];
 
@@ -132,7 +132,7 @@ export function WorkTaskBulkActions({
           if (!open) close();
         }}
         title={review ? `Review: ${review.action.confirm(review.tasks.length)}` : "Review task action"}
-        description="Operator tasks in this workspace."
+        description="Tasks in this workspace."
       >
         {review ? (
           <div className="grid min-w-0 gap-3 text-sm wrap-anywhere">

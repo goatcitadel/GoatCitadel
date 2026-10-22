@@ -85,7 +85,7 @@ describe("Work signed evidence receipt", () => {
     expect(fetchEvidenceReceipt).toHaveBeenCalledWith(runId);
     expect(verifyEvidenceReceipt).toHaveBeenCalledWith(receipt);
     expect(container.textContent).toContain("Signature valid");
-    expect(container.textContent).toContain("The Gateway reported no integrity failures");
+    expect(container.textContent).toContain("GoatCitadel reported no integrity failures");
     expect(container.textContent).toContain("Download inspected receipt");
 
     const createObjectURL = vi.fn().mockReturnValue("blob:receipt");
@@ -119,7 +119,7 @@ describe("Work signed evidence receipt", () => {
     expect(container.textContent).toContain("Verification failed");
     expect(container.textContent).toContain("Untrusted");
     expect(container.textContent).toContain("Signature mismatch");
-    expect(container.textContent).not.toContain("The Gateway reported no integrity failures");
+    expect(container.textContent).not.toContain("GoatCitadel reported no integrity failures");
   });
 
   it("does not imply integrity when Gateway rejects a receipt without a reason", async () => {

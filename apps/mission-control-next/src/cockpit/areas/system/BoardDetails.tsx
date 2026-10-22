@@ -6,7 +6,7 @@ import { TimeText } from "../../ui/TimeText";
 /** The saved layout record's history, in plain language. IDs, actors and request hashes stay in Technical details. */
 export function BoardDetails({ board }: { board: OpsSavedBoardRecord }) {
   const rows: Array<[string, ReactNode]> = [
-    ["Revision", String(board.revision)],
+    ["Version", String(board.revision)],
     ["Status", board.status === "archived" ? "Archived" : "Active"],
     ["Created", <TimeText key="created" value={board.createdAt} />],
     ["Last updated", <TimeText key="updated" value={board.updatedAt} />],
@@ -26,7 +26,8 @@ export function BoardDetails({ board }: { board: OpsSavedBoardRecord }) {
         ))}
       </dl>
       <p className="mt-2 text-fg-secondary">
-        A saved board is a layout only: its widgets read their own owners, and the board never controls the runtime.
+        A saved board is a layout only: each widget reads its data from the page that manages it, and the board never
+        controls the runtime.
       </p>
       <TechnicalDetails label="Record identity">
         <p className="wrap-anywhere">Board ID {board.boardId}</p>

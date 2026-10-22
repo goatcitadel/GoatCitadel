@@ -237,7 +237,7 @@ describe("cockpit text composer", () => {
     await act(async () => root.render(<ChatTextComposer props={props} gatewayUnavailable />));
     expect(sendButton().disabled).toBe(true);
     expect(container.querySelector("textarea")?.value).toBe("Hello");
-    expect(container.textContent).toContain("Gateway unavailable");
+    expect(container.textContent).toContain("GoatCitadel is unavailable");
     await act(async () =>
       container.querySelector("textarea")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
     );

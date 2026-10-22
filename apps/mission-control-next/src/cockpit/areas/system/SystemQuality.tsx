@@ -13,7 +13,7 @@ import { QualityGates } from "./quality/QualityGates";
 import { QualityEvaluations } from "./quality/QualityEvaluations";
 import { QualityDesign } from "./quality/QualityDesign";
 import { QualityExports } from "./quality/QualityExports";
-import { QualityGlobalWarnings, QualityNotes, qualityTimestamp } from "./quality/QualityEvidence";
+import { QualityGlobalWarnings, QualityWarnings, qualityTimestamp } from "./quality/QualityEvidence";
 
 const VIEWS = [
   { id: "gates", label: "Gates" },
@@ -34,7 +34,7 @@ export function SystemQuality() {
     <section className={AREA_PAGE}>
       <AreaHeader
         title="Quality"
-        description="Installation-wide stored evidence. Refresh and exports do not run evaluations."
+        description="Stored quality results for this installation. Refresh and exports do not run evaluations."
         actions={
           <Button size="sm" disabled={proof.isFetching} onClick={() => void proof.refetch()}>
             <RefreshCw aria-hidden="true" className="size-4" /> Refresh
@@ -56,12 +56,12 @@ export function SystemQuality() {
       {snapshot ? (
         <>
           <div className="space-y-1 text-sm text-fg-secondary">
-            <p>Evidence observed {qualityTimestamp(snapshot.generatedAt)}.</p>
+            <p>Results checked {qualityTimestamp(snapshot.generatedAt)}.</p>
             <p>{snapshot.metricScope.note}</p>
-            <QualityNotes items={snapshot.warnings.filter((item) => item !== snapshot.metricScope.note)} />
+            <QualityWarnings items={snapshot.warnings.filter((item) => item !== snapshot.metricScope.note)} />
           </div>
           <Tabs value={view} onValueChange={(value) => setView(value as QualityView)}>
-            <TabsList aria-label="Quality evidence">
+            <TabsList aria-label="Quality results">
               {VIEWS.map((item) => (
                 <TabsTrigger key={item.id} value={item.id} className="min-h-11 flex-1 font-medium hover:text-fg">
                   {item.label}

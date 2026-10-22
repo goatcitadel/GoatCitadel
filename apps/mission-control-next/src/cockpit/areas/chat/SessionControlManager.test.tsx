@@ -198,7 +198,7 @@ describe("cockpit session control", () => {
     await click("Review revoke");
     await confirm();
     expect(container.textContent).toContain(
-      "The outcome is unknown. The current state was read again. Retry sends the identical request, which the Gateway applies at most once.",
+      "The outcome is unknown. The current state was read again. Retry sends the identical request, which GoatCitadel applies at most once.",
     );
     const firstKey = api.revokeSessionControl.mock.calls[0]![1].idempotencyKey;
     await click("Retry the same request");
@@ -223,7 +223,7 @@ describe("cockpit session control", () => {
     await click("Review revoke");
     await confirm();
     expect(container.textContent).toContain(
-      "The Gateway refused this because control changed, so nothing was applied. Review the current state.",
+      "GoatCitadel refused this because control changed, so nothing was applied. Review the current state.",
     );
     expect(button("Retry the same request")).toBeUndefined();
   });

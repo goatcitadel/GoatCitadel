@@ -205,7 +205,7 @@ export function FilesystemWriteRootsControl() {
       ) : null}
       {settings.data && !settings.isError && !ready ? (
         <p className="mt-3 text-sm text-status-failed">
-          The gateway did not report write roots or tool access. Update or restart the gateway, then refresh before
+          GoatCitadel did not report write roots or tool access. Update or restart GoatCitadel, then refresh before
           changing these settings.
         </p>
       ) : null}
@@ -279,7 +279,7 @@ export function FilesystemWriteRootsControl() {
           >
             <Field
               label="Add folder"
-              help="The gateway checks the folder and refuses GoatCitadel's own runtime files and system folders."
+              help="GoatCitadel checks the folder and refuses GoatCitadel's own runtime files and system folders."
               error={pathError ?? undefined}
             >
               {(props) => (
@@ -328,7 +328,7 @@ export function FilesystemWriteRootsControl() {
             </div>
             {hasTempPreset ? null : (
               <p className="text-xs text-fg-muted">
-                The gateway finds this computer's temp folder and adds it with delete off. Its path shows after saving.
+                GoatCitadel finds this computer's temp folder and adds it with delete off. Its path shows after saving.
               </p>
             )}
           </form>

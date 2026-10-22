@@ -100,6 +100,8 @@ describe("RuntimeAuthorityProjectionService", () => {
     expect(result.items.find((item) => item.id === "approval-ui-materialization")).toMatchObject({
       authorityClass: "derived_projection",
       owner: "Mission Control",
+      // The cockpit words the state from this code; the prose stays for technical details.
+      stateMessage: { code: "approval_records_available", count: 3 },
     });
   });
 
@@ -586,6 +588,32 @@ describe("RuntimeAuthorityProjectionService", () => {
     expect(result.items.some((item) => item.id === "manual-reconciliation-clear")).toBe(false);
   });
 
+  it.each([
+    { processState: "error", desiredState: "running", code: "local_runtime_failed" },
+    { processState: "stopped", desiredState: "running", code: "local_runtime_failed" },
+    { processState: "starting", desiredState: "running", code: "local_runtime_starting" },
+    { processState: "stopped", desiredState: "stopped", code: "local_runtime_not_ready" },
+  ])(
+    "codes a lease-free local runtime that is $processState as $code",
+    async ({ processState, desiredState, code }) => {
+      const service = createService({
+        getLocalRuntimeStatus: () => ({
+          enabled: true,
+          desiredState,
+          processState,
+          healthy: false,
+          updatedAt: "2026-07-13T19:59:30.000Z",
+          leaseDiagnostics: { state: "idle", activeLeaseCount: 0, ownership: "owned" },
+        }),
+      });
+      const result = await service.getProjection({ workspaceId: "workspace-a" });
+      expect(result.items.find((item) => item.id === "local-runtime-lease-health")?.stateMessage).toEqual({
+        code,
+        count: 0,
+      });
+    },
+  );
+
   it("keeps local runtime health, config recovery, and release identity classifications separate and secret-free", async () => {
     const service = createService({
       getLocalRuntimeStatus: () => ({
@@ -623,6 +651,7 @@ describe("RuntimeAuthorityProjectionService", () => {
     expect(result.items.find((item) => item.id === "local-runtime-lease-health")).toMatchObject({
       authorityClass: "derived_projection",
       posture: "critical",
+      stateMessage: { code: "local_runtime_unhealthy_leases", count: 2 },
     });
     expect(result.items.find((item) => item.id === "release-certificate")).toMatchObject({
       authorityClass: "canonical_record",

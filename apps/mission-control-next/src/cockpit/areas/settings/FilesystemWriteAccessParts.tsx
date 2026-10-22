@@ -38,7 +38,7 @@ export function WriteAccessOutcomeStatus({
           </p>
         ) : null}
         {pending?.error ? <p className="text-status-failed">{pending.error}</p> : null}
-        {pending?.blocking ? <p>Other filesystem access changes wait until the gateway confirms this one.</p> : null}
+        {pending?.blocking ? <p>Other filesystem access changes wait until GoatCitadel confirms this one.</p> : null}
         {notice ? (
           <p
             className={

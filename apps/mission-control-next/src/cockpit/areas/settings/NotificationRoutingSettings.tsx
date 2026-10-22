@@ -112,7 +112,7 @@ export function NotificationRoutingSettings({
                     Latest test for {target.label}: {s.testDelivery(target.targetId)!.status.replaceAll("_", " ")}.{" "}
                     {s.testPending(target.targetId)
                       ? "Refresh delivery status before another send."
-                      : "Confirmed by the Gateway."}
+                      : "Confirmed by GoatCitadel."}
                   </p>
                 ) : null}
                 <div className="mt-3 flex flex-wrap gap-2">

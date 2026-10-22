@@ -55,13 +55,13 @@ export function QualityDefinitions({
               )}
               {!present && !supportsBuiltinFirstImport(item) ? (
                 <p className="text-xs text-fg-muted">
-                  This Gateway has not advertised a safe first import for this definition.
+                  GoatCitadel does not offer a safe first import for this definition.
                 </p>
               ) : null}
               {present && item.status !== "imported" && state?.phase !== "confirmed" ? (
                 <p className="text-xs text-fg-muted">
-                  An existing pack uses this definition key. Its contents are preserved; occupancy does not establish
-                  defensive evaluation evidence.
+                  An existing pack uses this definition key. Its contents are preserved; this does not mean the pack has
+                  been evaluated.
                 </p>
               ) : null}
               {state?.message ? (
@@ -82,7 +82,7 @@ export function QualityDefinitions({
           );
         })}
       </ul>
-      <p className="text-xs text-fg-muted">Definitions do not establish executed or scored quality evidence.</p>
+      <p className="text-xs text-fg-muted">Definitions are not run or scored quality checks.</p>
       {action.notice && !items.some((item) => action.stateFor(item.packKey)?.message === action.notice) ? (
         <p role="status" className="text-sm text-fg-secondary">
           {action.notice}

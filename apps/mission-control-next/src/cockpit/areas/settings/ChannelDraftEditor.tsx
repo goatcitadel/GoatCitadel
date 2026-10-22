@@ -30,7 +30,7 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
   ]);
   const { activeStep: step, anyBusy } = wizard;
   const blocked = wizard.actionsBlocked;
-  if (!step) return <p>No setup steps were supplied by the Gateway.</p>;
+  if (!step) return <p>This channel has no setup steps.</p>;
   return (
     <section aria-label={`${props.definition.catalog.label} guided setup`} aria-busy={anyBusy} className="space-y-4">
       <header>
@@ -221,12 +221,12 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
       </div>
       <p className="text-xs text-fg-muted">
         {finalizeDisabledReason(props.dirty, props.feedback) ??
-          "Finalization still requires exact confirmation through the Gateway Change Plan."}
+          "Finalization still requires your exact confirmation in the change plan."}
       </p>
       <Dialog
         open={reviewTest !== null}
         title="Run a live channel test?"
-        description="This Gateway test checks credentials and may send a sandbox message to the configured destination. It does not finalize the connection."
+        description="This test checks credentials and may send a sandbox message to the configured destination. It does not finalize the connection."
         onOpenChange={(open) => {
           if (!open) setReviewTest(null);
         }}

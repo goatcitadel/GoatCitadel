@@ -381,7 +381,7 @@ export function BrowserSessionGrants({
               </Button>
               {canReplay ? (
                 <Button disabled={busy} onClick={() => void confirm(true)}>
-                  Replay exact request
+                  Send the same request again
                 </Button>
               ) : (
                 <Button

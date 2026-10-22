@@ -63,7 +63,7 @@ describe("provider profile fields", () => {
     const markup = renderBedrock("aws-sigv4");
     expect(markup).toContain("AWS credentials JSON environment variable name");
     expect(markup).toContain(
-      "Name of an environment variable whose value is the AWS credentials JSON. Leave empty to use AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from the gateway environment.",
+      "Name of an environment variable whose value is the AWS credentials JSON. Leave empty to use AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from the GoatCitadel environment.",
     );
     expect(markup).not.toContain("accessKeyId");
     expect(renderBedrock("aws-bedrock-api-key")).not.toContain("AWS credentials JSON");

@@ -134,7 +134,7 @@ it("creates an inert session with a request ID and replays only that ID after a 
   expect(button("Create session")).toBeUndefined();
   expect(container.textContent).toContain("Pending request: a session labelled “Research” in this workspace.");
   expect(input.readOnly).toBe(true);
-  await click("Replay exact session request");
+  await click("Send the same session request again");
   const calls = vi.mocked(createBrowserSession).mock.calls;
   expect(calls).toHaveLength(2);
   expect(calls[0]![0]).toMatchObject({ workspaceId: "one", label: "Research" });

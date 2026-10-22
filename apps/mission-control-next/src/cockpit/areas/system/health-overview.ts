@@ -57,7 +57,7 @@ export function backupHealthCheck(trust: BackupTrustState | undefined, hasRecord
         notSetUp: true,
         status: { label: "No backup yet", tone: "neutral" },
         detail:
-          "No backup has been published yet. Back up now creates a host-wide snapshot through the Gateway. Scheduling and offline restore remain separate operator workflows.",
+          "No backup has been published yet. Back up now creates a host-wide backup. Scheduling and offline restore remain separate operator workflows.",
       };
     default:
       return hasRecord
@@ -108,7 +108,7 @@ export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: 
   return [
     {
       id: "gateway",
-      title: "Gateway",
+      title: "GoatCitadel server",
       detail: "The health summary is responding.",
       status: { label: "Responding", tone: "done" },
       inspectPath: RUNTIME_INSPECT_PATH,

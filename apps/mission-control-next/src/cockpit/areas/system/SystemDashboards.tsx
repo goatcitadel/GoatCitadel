@@ -94,9 +94,7 @@ function BoardIndex({
           </>
         }
       >
-        <p className="mt-1 text-xs text-fg-muted">
-          Open a board for live Gateway-backed widgets or create a saved layout.
-        </p>
+        <p className="mt-1 text-xs text-fg-muted">Open a board for live widgets or create a saved layout.</p>
       </AreaHeader>
       <label className="flex min-h-11 items-center gap-2 text-sm text-fg-secondary">
         <input
@@ -261,9 +259,8 @@ function BoardDetail({
       >
         {record && !board.isError ? (
           <p className="mt-1 text-xs text-fg-muted">
-            Saved layout revision {record.revision} · {record.status === "archived" ? "archived" : "active"}. Desktop
-            follows saved positions; phone stacks widgets. Values read current owner APIs and are not historical
-            snapshots.
+            Saved layout version {record.revision} · {record.status === "archived" ? "archived" : "active"}. Desktop
+            follows saved positions; phone stacks widgets. Values are read just now and are not saved copies.
           </p>
         ) : null}
       </AreaHeader>
@@ -300,7 +297,7 @@ function BoardDetail({
           onSaved={() => setEditing(false)}
           onConfirmed={(saved) => {
             client.setQueryData(["surface", "saved-board", workspaceId, boardId], saved);
-            setSavedMessage(`Board saved and confirmed at revision ${saved.revision}.`);
+            setSavedMessage(`Board saved and checked at version ${saved.revision}.`);
             setEditing(false);
           }}
         />
@@ -357,7 +354,7 @@ function BoardReadRecovery({
           navigate("/settings/access#device-access");
         }}
       >
-        Review Gateway access
+        Review access in Settings
       </a>
     );
   return description.retryable === false ? null : <Button onClick={retry}>Try again</Button>;

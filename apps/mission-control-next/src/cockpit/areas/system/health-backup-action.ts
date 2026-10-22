@@ -91,7 +91,7 @@ export async function commitBackup(review: BackupReview, current: () => boolean)
     publish(review.base, {
       phase: "creating",
       accessRevision: review.accessRevision,
-      message: "Creating backup on the Gateway host… Progress details are not supplied by this API.",
+      message: "Creating backup on the GoatCitadel host… Progress details are not supplied by this API.",
     });
     dispatched = true;
     receipt = await createBackup();
@@ -111,7 +111,7 @@ export async function commitBackup(review: BackupReview, current: () => boolean)
       accessRevision: review.accessRevision,
       receipt,
       message:
-        "Backup created and its manifest confirmed by the Gateway. Stored bytes, hashes and restore contract have not been verified by this action.",
+        "Backup created and its manifest confirmed by GoatCitadel. Stored bytes, hashes and restore contract have not been verified by this action.",
     });
   } catch (cause) {
     const description = describeApiError(cause);

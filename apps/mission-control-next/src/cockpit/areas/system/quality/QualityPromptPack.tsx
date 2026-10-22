@@ -24,7 +24,7 @@ export function QualityPromptPack({ pack, observedAt }: { pack: PromptPackRecord
     <section aria-label="Selected prompt pack" className="space-y-3 rounded-md border border-line bg-sunken p-3">
       {!pack ? (
         <p role="status" className="text-sm text-fg-secondary">
-          The selected prompt pack is no longer in the current evidence.
+          The selected prompt pack is no longer in the current results.
         </p>
       ) : (
         <>

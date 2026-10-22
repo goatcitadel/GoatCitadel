@@ -121,7 +121,7 @@ function LibraryFileTemplatesContent({
       draft.acceptSaved(EMPTY, undefined, submitted.draft);
       setResult({
         error: false,
-        message: `Gateway accepted ${receipt.relativePath} (${formatBytes(receipt.bytes)}).`,
+        message: `GoatCitadel accepted ${receipt.relativePath} (${formatBytes(receipt.bytes)}).`,
       });
       await client.invalidateQueries({ queryKey: ["library", "resources", "files"] });
     } catch (cause) {
@@ -143,7 +143,7 @@ function LibraryFileTemplatesContent({
       {open ? (
         <section aria-label="File from template" className="grid gap-3 border-t border-line-subtle pt-4">
           <p className="text-sm text-fg-secondary">
-            Create a text file in the installation shared file root. All workspaces share this destination. Gateway
+            Create a text file in the installation shared file root. All workspaces share this destination. GoatCitadel
             access and path restrictions apply.
           </p>
           {templates.isPending ? <p role="status">Loading file templates…</p> : null}
@@ -185,7 +185,7 @@ function LibraryFileTemplatesContent({
           </Field>
           {selected ? (
             <p className="text-xs text-fg-secondary">
-              Leave the path empty to use the Gateway's current template path: {selected.defaultPath}.
+              Leave the path empty to use the current template path: {selected.defaultPath}.
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">

@@ -55,7 +55,7 @@ export function ProviderConnectionSettings({
             Provider connection
           </h4>
           <p className="mt-1 text-sm text-fg-secondary">
-            The endpoint and API credential this provider uses. The Gateway checks and applies each change.
+            The endpoint and API credential this provider uses. GoatCitadel checks and applies each change.
           </p>
         </div>
         <Button size="sm" disabled={catalog.loading} onClick={() => void catalog.reload()}>
@@ -239,7 +239,7 @@ function ProviderConnectionEditor({
               </p>
               <Field
                 label="Environment variable name"
-                help="The Gateway owns this registered variable and checks reserved names and shared ownership before saving."
+                help="GoatCitadel manages this registered variable and checks reserved names and shared ownership before saving."
               >
                 {(fieldProps) => (
                   <input
@@ -307,7 +307,7 @@ function ProviderConnectionEditor({
               <p className="break-words">{plan.summary}</p>
               <p className="break-words">Impact: {plan.impact}</p>
               {plan.result?.summary && plan.result.summary !== plan.summary ? (
-                <p className="break-words">Owner result: {plan.result.summary}</p>
+                <p className="break-words">Result: {plan.result.summary}</p>
               ) : null}
               <p className="flex flex-wrap items-center gap-2 text-xs">
                 <RiskBadge risk={plan.risk} />

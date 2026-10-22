@@ -127,7 +127,7 @@ export async function runUxBudgetWork(environment) {
           const editShot = path.join(screenshotDir, `ux-budgets-cockpit-work-edit-${variant}.png`);
           await page.screenshot({ path: editShot, fullPage: false });
           await editDialog.getByRole("button", { name: "Confirm details" }).click();
-          await page.getByText("Gateway recorded the task details", { exact: false }).waitFor();
+          await page.getByText("Task details saved", { exact: false }).waitFor();
           const edited = await requestJson(
             stack.gatewayUrl,
             `/api/v1/tasks/${encodeURIComponent(taskId)}?workspaceId=${encodeURIComponent(fixture.workspaceId)}`,
@@ -190,7 +190,7 @@ export async function runUxBudgetWork(environment) {
             .getByRole("dialog", { name: "Confirm task assignment" })
             .getByRole("button", { name: "Confirm assignment" })
             .click();
-          await page.getByText("Gateway recorded the task assignment", { exact: false }).waitFor();
+          await page.getByText("Task assignment saved", { exact: false }).waitFor();
           const assigned = await requestJson(
             stack.gatewayUrl,
             `/api/v1/tasks/${encodeURIComponent(taskId)}?workspaceId=${encodeURIComponent(fixture.workspaceId)}`,

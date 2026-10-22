@@ -4,7 +4,9 @@ import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useRuntimeAuthorityProjection } from "@goatcitadel/mission-control-shared/hooks/useRuntimeAuthorityProjection";
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
+import { presentAuthorityMessage } from "./runtime-authority-copy";
 import { SystemOwnerLink } from "./SystemOwnerLink";
 import { AUTHORITY_CLASS_LABELS, AUTHORITY_DOMAIN, AUTHORITY_FRESHNESS, AUTHORITY_POSTURE } from "./system-vocabulary";
 
@@ -29,6 +31,8 @@ function observed(value?: string) {
 }
 
 function AuthorityRecord({ item, workspaceId }: { item: RuntimeAuthorityItem; workspaceId: string }) {
+  // A coded state is worded here; the server's own prose is kept for technical details.
+  const worded = item.stateMessage ? presentAuthorityMessage(item.stateMessage) : undefined;
   return (
     <li className="space-y-2 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -44,18 +48,18 @@ function AuthorityRecord({ item, workspaceId }: { item: RuntimeAuthorityItem; wo
           <StatusBadge status={AUTHORITY_POSTURE[item.posture]} />
         </div>
       </div>
-      <p className="break-words">{item.state}</p>
+      <p className="break-words">{worded ?? item.state}</p>
       <ul className="space-y-1">
         <li className="break-words">Managed by: {item.owner}</li>
         <li className="break-words">Source: {item.source}</li>
         <li>Scope: {item.scope.kind === "workspace" ? "Current workspace" : "Citadel runtime"}</li>
         <li>Observed: {observed(item.observedAt)}</li>
       </ul>
-      <details>
-        <summary className="min-h-11 cursor-pointer font-medium text-fg">Classification basis</summary>
+      <TechnicalDetails label="Classification basis">
+        {worded ? <p className="break-words">{item.state}</p> : null}
         <p className="break-words">{item.basis}</p>
         {item.caveat ? <p className="break-words text-status-waiting">{item.caveat}</p> : null}
-      </details>
+      </TechnicalDetails>
       {item.canonicalRef ? (
         <SystemOwnerLink href={hrefFor(item.canonicalRef)} scope={[workspaceId, item.id]}>
           {item.canonicalRef.label}
@@ -66,7 +70,7 @@ function AuthorityRecord({ item, workspaceId }: { item: RuntimeAuthorityItem; wo
 }
 
 /**
- * Read-only runtime authority map: how the Gateway classifies each runtime record (canonical, projection, signal,
+ * Read-only runtime authority map: how GoatCitadel classifies each runtime record (canonical, projection, signal,
  * inferred or unavailable), with freshness, posture, owner, source and scope. Nothing here is inferred by the client.
  */
 export function RuntimeAuthorityMap({ workspaceId }: { workspaceId: string }) {
@@ -89,7 +93,7 @@ export function RuntimeAuthorityMap({ workspaceId }: { workspaceId: string }) {
             Runtime authority map
           </h2>
           <p className="mt-1 text-sm text-fg-secondary">
-            How the Gateway classifies each runtime record, and how current it is.
+            How GoatCitadel classifies each runtime record, and how current it is.
           </p>
         </div>
         <Button size="sm" disabled={busy} onClick={reload}>
@@ -106,9 +110,7 @@ export function RuntimeAuthorityMap({ workspaceId }: { workspaceId: string }) {
           {reloading ? "Reloading runtime authority…" : "Loading runtime authority…"}
         </p>
       ) : projection.data && !items.length ? (
-        <p className="text-sm text-fg-muted">
-          The Gateway returned no authority records. Nothing is inferred in their place.
-        </p>
+        <p className="text-sm text-fg-muted">No authority records came back. Nothing is shown in their place.</p>
       ) : items.length ? (
         <>
           <p className="text-xs text-fg-muted">

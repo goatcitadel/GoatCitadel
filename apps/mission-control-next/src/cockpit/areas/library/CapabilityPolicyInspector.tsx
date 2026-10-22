@@ -1,3 +1,4 @@
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { RiskBadge } from "../../ui/RiskBadge";
 import { useEffect, useRef, useState } from "react";
 import { freeText, wardEffectLabel } from "./capability-vocabulary";
@@ -25,15 +26,13 @@ const TRUST: { value: NonNullable<PolicyInspectionInput["trustLevel"]>; label: s
 export function CapabilityPolicyInspector({ workspaceId, toolName }: { workspaceId: string; toolName?: string }) {
   const [open, setOpen] = useState(false);
   if (!toolName)
-    return (
-      <p className="text-xs text-fg-muted">Context evaluation is available for entries with a Gateway tool identity.</p>
-    );
+    return <p className="text-xs text-fg-muted">Context evaluation is available for entries with a tool identity.</p>;
   return (
     <section aria-label="Tool policy inspector" className="mt-3 space-y-3 rounded-md border border-line-subtle p-3">
       <h3 className="font-medium text-fg">Evaluate a selected tool context</h3>
       <p className="text-xs text-fg-muted">
-        Gateway records an advisory decision for your selected context and arguments. This does not run the tool, create
-        an approval, or grant access.
+        GoatCitadel records an advisory decision for your selected context and arguments. This does not run the tool,
+        create an approval, or grant access.
       </p>
       <Button size="sm" onClick={() => setOpen((value) => !value)}>
         {open ? "Close access rules" : "Inspect access rules"}
@@ -233,8 +232,8 @@ function PolicyForm({ workspaceId, toolName }: { workspaceId: string; toolName: 
             </label>
           </details>
           <p className="text-xs text-fg-muted">
-            Checks as you, with the Gateway's selected profile and override. No task, run, or source is attached. The
-            chosen agent is only proposed for this check.
+            Checks as you, with the selected profile and override. No task, run, or source is attached. The chosen agent
+            is only proposed for this check.
           </p>
           <label className="block text-xs text-fg-muted">
             Arguments to evaluate
@@ -308,9 +307,9 @@ function ArgumentSummary({ args }: { args: Record<string, unknown> }) {
               {typeof value === "string"
                 ? bounded(value)
                 : Array.isArray(value)
-                  ? `${value.length} array items`
+                  ? plural(value.length, "array item")
                   : value && typeof value === "object"
-                    ? `${Object.keys(value).length} nested fields`
+                    ? plural(Object.keys(value).length, "nested field")
                     : String(value)}
             </dd>
           </div>
@@ -368,8 +367,8 @@ function PolicyResult({ value }: { value: PolicyInspectionResult }) {
         still apply when it runs.
       </p>
       <p className="text-xs text-fg-muted">
-        Recorded advisory snapshot at <time dateTime={value.checkedAt}>{value.checkedAt}</time>. Re-evaluate after
-        context or policy changes.
+        Advisory result saved at <time dateTime={value.checkedAt}>{value.checkedAt}</time>. Re-evaluate after context or
+        policy changes.
       </p>
     </section>
   );

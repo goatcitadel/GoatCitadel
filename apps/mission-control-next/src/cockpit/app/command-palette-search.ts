@@ -3,6 +3,7 @@ import { fetchChatSessionSearch } from "@goatcitadel/mission-control-shared/api/
 import { fetchWorkspaces } from "@goatcitadel/mission-control-shared/api/workspaces";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { presentCapabilityTitle } from "@goatcitadel/mission-control-shared/content/capability-rows";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { inboxMatchesWorkspace, inboxKnownCount, inboxItemKindLabel } from "../areas/inbox/inbox-presentation";
 import { filterCapabilities, type CapabilityCatalogView } from "../areas/library/capability-catalog";
 import { catalogHref } from "../areas/library/capability-catalog-route";
@@ -81,7 +82,7 @@ export async function searchThreads(
       description: `${session.lifecycleStatus === "archived" ? "Archived" : "Workspace conversation"}${hits.length ? " · Matching conversation content" : ""}`,
       target: { href: `/chat?${new URLSearchParams({ shell: "cockpit", sessionId: session.sessionId })}` },
     })),
-    coverage: `Up to 10 Gateway search matches, including archived conversations.${result.nextCursor ? " More matches are available in Chat." : ""}${scoped.length !== result.items.length ? " Records outside this workspace were withheld." : ""}`,
+    coverage: `Up to 10 search matches, including archived conversations.${result.nextCursor ? " More matches are available in Chat." : ""}${scoped.length !== result.items.length ? " Records outside this workspace were withheld." : ""}`,
   };
 }
 
@@ -98,12 +99,12 @@ export function searchInbox(result: OperatorInboxResponse, scope: PaletteScope, 
       .map((item) => ({
         id: item.id,
         label: item.title,
-        description: `${inboxItemKindLabel(item.kind)} · Open it to check the latest state before acting`,
+        description: `${inboxItemKindLabel(item.kind)} · Open to see its current state`,
         target: {
           href: `/inbox?${new URLSearchParams({ shell: "cockpit", workspaceId: scope.workspaceId, item: item.id })}`,
         },
       })),
-    coverage: `${count.known} known workspace items. ${
+    coverage: `${plural(count.known, "known workspace item")}. ${
       count.complete
         ? "Current list; resolved items may disappear."
         : hasReadGap || !hasDefinedLimit

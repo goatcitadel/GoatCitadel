@@ -19,7 +19,7 @@ export function LibraryImportProvenance({
     <section className="grid min-w-0 max-w-full grid-cols-1 gap-3 wrap-anywhere" aria-label="Import provenance">
       <h3 className="font-semibold">Import provenance</h3>
       <p>
-        Canonical import settlement:{" "}
+        Saved import result:{" "}
         {detail.settlement ? importDispositionLabel(detail.settlement.disposition) : "Not recorded"}.{" "}
         {plural(detail.items.length, "immutable item record")}.
       </p>

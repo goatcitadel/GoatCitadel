@@ -342,7 +342,7 @@ export function SourceOperations({ detail, workspaceId, available }: SourceOpera
           }
         }}
         title="Review external source action"
-        description="The Gateway checks the source's identity, versions and hashes, and whether it is allowed."
+        description="GoatCitadel checks the source's identity, versions and hashes, and whether it is allowed."
       >
         <div className="grid min-w-0 grid-cols-1 gap-3 wrap-anywhere">
           <p>
@@ -351,7 +351,7 @@ export function SourceOperations({ detail, workspaceId, available }: SourceOpera
           <p className="break-words">Root: {review?.source.canonicalRootPath}</p>
           <p>
             {review?.selected.length ?? 0} selected. Planning does not import; applying copies exactly the sealed
-            selection into immutable imported evidence.
+            selection into immutable imported records.
           </p>
           <ul>
             {review?.selected.map((id) => (
@@ -377,7 +377,7 @@ export function SourceOperations({ detail, workspaceId, available }: SourceOpera
           {outcome ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
           {review?.action === "apply" && review.plan && operation.attempt?.phase === "uncertain" ? (
             <Button disabled={busy || !available} onClick={() => void submit(true)}>
-              Replay exact import request
+              Retry the exact import request
             </Button>
           ) : null}
           <Button disabled={busy || operation.locked || Boolean(outcome) || !available} onClick={() => void submit()}>

@@ -9,7 +9,7 @@ it("labels every schedule with the zone the Gateway actually uses", () => {
   expect(scheduleTimezoneSummary("0 0 * * * UTC")).toContain("Runs in UTC");
   expect(scheduleTimezoneSummary("0 9 * * * America/Los_Angeles")).toContain("Runs in America/Los_Angeles");
   expect(scheduleTimezoneSummary("0 0 * * *")).toBe(
-    "Runs in UTC (the Gateway default when the expression names no timezone).",
+    "Runs in UTC (the GoatCitadel default when the expression names no timezone).",
   );
   expect(scheduleTimezoneSummary("0 0 * * * Unrecognized/Zone")).toContain("not recognized");
   expect(scheduleCadence("0 0 * * * Unrecognized/Zone")).toBe("Custom schedule");

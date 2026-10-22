@@ -229,8 +229,8 @@ export function LocalAiJobs({ readiness }: { readiness: LocalAiReadinessResponse
   return (
     <div className="space-y-4 text-sm text-fg-secondary">
       <p>
-        These job and endpoint records live in Gateway memory and are lost when the Gateway restarts. They are not a run
-        history. Download and serve requests currently record approval intent only.
+        These job and endpoint records live in GoatCitadel memory and are lost when GoatCitadel restarts. They are not a
+        run history. Download and serve requests currently record approval intent only.
       </p>
       {(
         [

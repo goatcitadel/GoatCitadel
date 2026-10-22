@@ -171,7 +171,7 @@ describe("Work delegation lineage", () => {
     expect(container.textContent).toContain("Focused checks passed.");
     expect(container.textContent).toContain("The parent cited the verified checks.");
     expect(container.textContent).toContain("22 B · SHA-256");
-    expect(container.textContent).toContain("Run status is current; output references describe recorded evidence");
+    expect(container.textContent).toContain("Run status is current; output references describe saved records");
     expect(container.querySelector('a[href="/work/runs/child%2Fa?shell=cockpit"]')).not.toBeNull();
     expect(container.querySelector('a[href="/chat?sessionId=child-session&shell=cockpit"]')).not.toBeNull();
     expect(api.controlDurableBackgroundTask).not.toHaveBeenCalled();
@@ -209,7 +209,7 @@ describe("Work delegation lineage", () => {
     api.fetchDurableBackgroundTaskRail.mockResolvedValue(value);
     await render();
     await click("Inspect lineage");
-    expect(container.textContent).toContain("no matching run and workspace evidence");
+    expect(container.textContent).toContain("Lineage doesn't match this run and workspace");
     expect(container.textContent).not.toContain("Verify changes");
     expect(container.querySelector("a")).toBeNull();
   });

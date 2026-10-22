@@ -97,12 +97,12 @@ export function WorkRunDetail({ runId }: { runId: string }) {
       </AreaHeader>
       {trace.isLoading ? (
         <p role="status" className="text-sm text-fg-muted">
-          Loading run evidence…
+          Loading run details…
         </p>
       ) : null}
       {trace.isError ? (
         <EmptyState
-          title="Run evidence unavailable"
+          title="Run details unavailable"
           description={describeApiError(trace.error).summary}
           action={
             describeApiError(trace.error).retryable === false ? null : (
@@ -114,11 +114,11 @@ export function WorkRunDetail({ runId }: { runId: string }) {
       {data?.run && !run ? (
         <EmptyState
           title="Run outside this workspace"
-          description="This run has no matching workspace evidence. Choose its workspace or return to Work."
+          description="This run belongs to another workspace. Choose its workspace or return to Work."
         />
       ) : null}
       {!trace.isLoading && !trace.isError && data && !data.run ? (
-        <EmptyState title="Run not found" description="The Gateway returned no run record for this link." />
+        <EmptyState title="Run not found" description="No run was found for this link." />
       ) : null}
       {run && data ? (
         <>
@@ -157,7 +157,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
               Checkpoints and tool calls saved for this run, and the provider cost recorded so far.
             </p>
             <MetricList
-              label="Saved run evidence"
+              label="Saved run records"
               items={[
                 {
                   term: "Checkpoints",
@@ -191,12 +191,12 @@ export function WorkRunDetail({ runId }: { runId: string }) {
               )
             ) : (
               <p className="mt-2 text-sm text-fg-muted">
-                Timeline evidence is {EVIDENCE_STATE_WORDS[data.durable.timeline.state] ?? "unknown"}.
+                Timeline details are {EVIDENCE_STATE_WORDS[data.durable.timeline.state] ?? "unknown"}.
               </p>
             )}
           </section>
           <details className="border-t border-line-subtle pt-4">
-            <summary className="cursor-pointer font-semibold text-fg">Plan, delegation and tool evidence</summary>
+            <summary className="cursor-pointer font-semibold text-fg">Plan, delegation and tool records</summary>
             <div className="mt-3 grid gap-3">
               <RunEvidenceSections trace={data} />
             </div>
@@ -215,7 +215,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
             </div>
             {data.approvals.state !== "available" || data.approvals.missingIds?.length ? (
               <p className="mt-2 text-sm text-fg-muted">
-                Approval evidence is{" "}
+                Approval details are{" "}
                 {data.approvals.state === "available"
                   ? "incomplete"
                   : (EVIDENCE_STATE_WORDS[data.approvals.state] ?? "unknown")}

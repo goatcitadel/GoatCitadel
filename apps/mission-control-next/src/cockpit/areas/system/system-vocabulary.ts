@@ -113,7 +113,7 @@ const DIAGNOSTIC_CATEGORY: Readonly<Record<DevDiagnosticsCategory, string>> = {
   refresh: "Refresh",
   chat: "Chat",
   orchestration: "Orchestration",
-  gateway: "Gateway",
+  gateway: "GoatCitadel server",
   tools: "Tools",
   model: "Model",
   runtime: "Runtime",

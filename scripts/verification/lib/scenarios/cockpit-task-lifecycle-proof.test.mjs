@@ -52,7 +52,7 @@ describe("task detail browser settlement", () => {
     const calls = [];
     const details = {
       getByText(text, options) {
-        assert.match(text, /^Gateway recorded the task details\./);
+        assert.match(text, /^Task details saved\./);
         assert.deepEqual(options, { exact: true });
         return { waitFor: async () => { calls.push("acknowledgement"); await acknowledgement; } };
       },

@@ -259,7 +259,7 @@ export async function runCockpitCommandPaletteProof({ context, browser, stack, c
           await openPalette("model");
           await palette()
             .getByText(
-              `Default model: ${defaultModelLabel}. Opens reviewed Settings. Conversation overrides stay in Chat.`,
+              `Default model: ${defaultModelLabel}. Opens Settings to change it. Conversation overrides stay in Chat.`,
               { exact: true },
             )
             .waitFor();

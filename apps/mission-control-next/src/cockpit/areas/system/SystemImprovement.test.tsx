@@ -192,14 +192,14 @@ it("shows report findings, proposals and harness evidence visibly, and links to 
     "Lower threshold · Applied · medium risk",
   ])
     expect(container.textContent).toContain(text);
-  await act(async () => button("Open the replay run for this report")!.click());
+  await act(async () => button("Open the test run for this report")!.click());
   await vi.waitFor(() => expect(new URLSearchParams(window.location.search).get("replayRunId")).toBe("run-1"));
 });
 
-it("says reports and replay runs are Gateway-wide, not filtered to the workspace", async () => {
+it("says reports and test runs cover the whole installation, not just the workspace", async () => {
   await open("/system/improvement");
   await vi.waitFor(() => expect(container.textContent).toContain("Prefer cached lookups"));
-  expect(container.textContent).toContain("Gateway-wide, not filtered to this workspace");
+  expect(container.textContent).toContain("cover the whole installation, not just this workspace");
 });
 
 it("reports a copy failure when no clipboard is available instead of throwing", async () => {

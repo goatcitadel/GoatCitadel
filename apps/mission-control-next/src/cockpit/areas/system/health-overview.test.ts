@@ -169,7 +169,7 @@ import { healthOverviewState } from "./health-overview";
 it("separates actionable problems, missing proof and verified available evidence", () => {
   const done = {
     id: "gateway",
-    title: "Gateway",
+    title: "GoatCitadel server",
     detail: "Responding",
     inspectPath: "/ops/runtime",
     status: { tone: "done", label: "Responding" },

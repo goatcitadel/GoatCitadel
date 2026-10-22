@@ -140,7 +140,7 @@ export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSe
         />
       )}
       <p className="text-xs text-fg-muted">
-        Configuration belongs to this Gateway installation. Redacted saved credentials are preserved by the Gateway;
+        Configuration belongs to this GoatCitadel installation. Redacted saved credentials are preserved by GoatCitadel;
         they are never shown in the review.
       </p>
       <div className="flex flex-wrap gap-2">
@@ -158,7 +158,7 @@ export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSe
           if (!open) setReview(null);
         }}
         title={creating ? "Create this integration connection?" : "Apply integration connection changes?"}
-        description="This saves Gateway configuration and requests runtime synchronization. It does not run an advertised operator action or test external connectivity."
+        description="This saves the GoatCitadel configuration and requests runtime synchronization. It does not run an advertised operator action or test external connectivity."
       >
         <p className="break-words text-sm">
           {creating ? s.createLabel || s.selectedCatalog?.label : s.detailForm.label} ·{" "}

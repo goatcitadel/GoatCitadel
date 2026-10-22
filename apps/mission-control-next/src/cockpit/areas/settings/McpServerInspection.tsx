@@ -142,7 +142,7 @@ export function McpServerInspection({
               </p>
             ))}
             {data.remote ? (
-              <section className="space-y-2" aria-label="Saved remote transport evidence">
+              <section className="space-y-2" aria-label="Remote transport details">
                 <h5 className="font-semibold text-fg">Remote transport details</h5>
                 <p>
                   {readable(data.remote.posture)} · {readable(data.remote.invocationState)}
@@ -154,7 +154,7 @@ export function McpServerInspection({
                   ))}
                 </ul>
                 <p className="text-xs text-fg-muted">
-                  Showing up to 30 recorded transport notes. Tool permission is evaluated by the Gateway for each actual
+                  Showing up to 30 recorded transport notes. Tool permission is evaluated by GoatCitadel for each actual
                   request.
                 </p>
               </section>

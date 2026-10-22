@@ -54,7 +54,8 @@ export function ProviderTransportFields({
       <summary className="cursor-pointer text-sm font-medium text-fg">Advanced request transport</summary>
       <p className="my-3 text-xs text-fg-muted">
         Transport sign-in accepts environment variable names only; inline tokens and credentials are rejected. File
-        paths refer to the Gateway host. Saving stops if someone else changed these settings since you opened them.
+        paths refer to the machine running GoatCitadel. Saving stops if someone else changed these settings since you
+        opened them.
       </p>
       <p className="my-3 text-xs text-fg-muted">
         Header values are write-only: after saving you see header names, never their values. Save profile edits first,

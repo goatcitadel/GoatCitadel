@@ -80,13 +80,13 @@ function deriveCurrentSystemHealthChecks(
           unknown(
             "database",
             "Database",
-            "Database health could not be checked without the Gateway summary.",
+            "Database health could not be checked because the runtime summary is unavailable.",
             RUNTIME_INSPECT_PATH,
           ),
           unknown(
             "service",
             "Runtime service",
-            "Service status could not be checked without the Gateway summary.",
+            "Service status could not be checked because the runtime summary is unavailable.",
             RUNTIME_INSPECT_PATH,
           ),
           backupTrust && backupTrust !== "unknown"

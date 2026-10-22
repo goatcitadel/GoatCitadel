@@ -215,9 +215,7 @@ export function LocalOperatorOverrides({ workspaceId }: { workspaceId: string })
           ))}
         </ul>
       ) : null}
-      {snapshot.data?.overrides.length === 0 ? (
-        <p className="text-sm text-fg-muted">No active overrides returned by the Gateway.</p>
-      ) : null}
+      {snapshot.data?.overrides.length === 0 ? <p className="text-sm text-fg-muted">No active overrides.</p> : null}
       {(snapshot.data?.overrides.length ?? 0) > limit ? (
         <Button size="sm" onClick={() => setLimit((value) => value + 30)}>
           Show more temporary overrides

@@ -166,9 +166,9 @@ export async function runUxBudgetBoards(environment) {
             if (actual !== String(expected))
               throw new Error(`${title} ${variant}: ${label} showed ${actual}, owner reported ${expected}.`);
           }
-          await metric("Runtime truth", "Gateway host").waitFor();
+          await metric("Runtime truth", "Host").waitFor();
           if (
-            (await metric("Runtime truth", "Gateway host").innerText()) !==
+            (await metric("Runtime truth", "Host").innerText()) !==
             (health.body.systemVitals.hostname || "Unknown")
           ) {
             throw new Error(`Runtime truth ${variant}: host did not match the Gateway owner.`);
@@ -226,7 +226,7 @@ export async function runUxBudgetBoards(environment) {
           }
           await page.screenshot({ path: editShot, fullPage: false });
           await edit.getByRole("button", { name: "Confirm save" }).click();
-          await page.getByText("Saved layout revision 2", { exact: false }).waitFor();
+          await page.getByText("Saved layout version 2", { exact: false }).waitFor();
           const updated = await requestJson(
             stack.gatewayUrl,
             `/api/v1/ops/boards/${encodeURIComponent(created.boardId)}?workspaceId=${encodeURIComponent(fixture.workspaceId)}`,

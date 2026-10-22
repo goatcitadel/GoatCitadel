@@ -128,7 +128,7 @@ export function ProjectImport({
           )}
         </Field>
         <p className="text-sm text-fg-secondary">
-          The Gateway copies local folders outside the managed workspace, may initialize Git, or clones the chosen
+          GoatCitadel copies local folders outside the managed workspace, may initialize Git, or clones the chosen
           repository. Existing path and network policy apply.
         </p>
         <div className="flex flex-wrap gap-2">
@@ -149,7 +149,7 @@ export function ProjectImport({
         {result ? (
           <section aria-label="Project import receipt" className="grid gap-2">
             <p>
-              Gateway returned {result.project.name}. {result.imported ? "Source imported." : "Existing source reused."}{" "}
+              Saved project {result.project.name}. {result.imported ? "Source imported." : "Existing source reused."}{" "}
               Repository readiness: {result.repoReady ? "ready" : "not ready"}.
             </p>
             <p className="break-all">Materialized path: {result.materializedPath}</p>
@@ -178,7 +178,7 @@ export function ProjectImport({
               {review?.value.name || "Derived from source"}
             </p>
             <Callout tone="warning">
-              This can copy or clone files and initialize a repository under Gateway policy. Importing does not run
+              This can copy or clone files and initialize a repository under GoatCitadel policy. Importing does not run
               project code.
             </Callout>
             <div className="flex flex-wrap gap-2">

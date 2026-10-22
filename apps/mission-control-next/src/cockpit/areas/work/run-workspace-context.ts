@@ -46,9 +46,7 @@ async function verifySession(scope: WorkspaceInspectionScope) {
   const session = await fetchChatSessionStatus(scope.sessionId);
   assertCurrent(scope);
   if (session.sessionId !== scope.sessionId || session.workspaceId !== scope.workspaceId) {
-    throw new Error(
-      "The conversation no longer has matching workspace evidence. Refresh the run before inspecting it.",
-    );
+    throw new Error("The conversation no longer matches this run's workspace. Refresh the run before inspecting it.");
   }
 }
 

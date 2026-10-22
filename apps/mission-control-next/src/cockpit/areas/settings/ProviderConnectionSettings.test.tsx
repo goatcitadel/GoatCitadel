@@ -321,7 +321,7 @@ describe("cockpit provider connection editing", () => {
     await render();
     expect(container.querySelector("legend")?.textContent).toBe("AWS credentials JSON");
     expect(container.textContent).toContain(
-      "If no credential is stored, the gateway uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from its environment.",
+      "If no credential is stored, GoatCitadel uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN) from its environment.",
     );
     expect(container.textContent).not.toContain("Use its existing authentication setup below");
     await click("Replace AWS credentials JSON");
@@ -441,7 +441,7 @@ describe("cockpit provider connection editing", () => {
       },
     });
     await act(async () => dialog.onSubmitSecureInput(dialog.plan!, { credential: "synthetic-test-credential" }));
-    expect(container.textContent).toContain("Owner result: Registered environment owner is reserved");
+    expect(container.textContent).toContain("Result: Registered environment owner is reserved");
     expect(container.textContent).toContain("Caution risk");
     expect(container.textContent).not.toContain("Risk: ");
     expect(container.textContent).not.toContain("The saved provider settings match it");

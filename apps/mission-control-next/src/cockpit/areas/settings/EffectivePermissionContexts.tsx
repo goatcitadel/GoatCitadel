@@ -59,7 +59,7 @@ export function EffectivePermissionContexts({
     <section aria-label="Effective policy contexts" className="space-y-3 border-t border-line pt-4">
       <h4 className="text-base font-semibold">Effective policy contexts</h4>
       <p className="text-sm text-fg-secondary">
-        Workspace context from the Gateway. Session, task or run overrides may produce a different decision; this view
+        Workspace context from GoatCitadel. Session, task or run overrides may produce a different decision; this view
         grants no execution authority.
       </p>
       {refreshing ? <p role="status">Refreshing effective permissions…</p> : null}

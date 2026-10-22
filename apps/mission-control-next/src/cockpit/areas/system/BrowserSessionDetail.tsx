@@ -334,7 +334,7 @@ function SessionPosture({
             </Button>
             {canReplay ? (
               <Button disabled={busy} onClick={() => void confirmClose(true)}>
-                Replay exact close request
+                Send the same close request again
               </Button>
             ) : (
               <Button variant="danger" disabled={busy || operation.locked} onClick={() => void confirmClose()}>

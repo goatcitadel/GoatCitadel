@@ -534,7 +534,7 @@ it("preserves sealed selection and replays only the exact idempotent import afte
   await render(<div />);
   vi.mocked(fetchExternalSourceDetail).mockResolvedValue({ ...detail, source: { ...detail.source, revision: 4 } });
   await render(<LibraryExternalSources workspaceId="one" />);
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Replay exact import request"));
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Retry the exact import request"));
   vi.mocked(applyExternalSourceImport).mockResolvedValue({
     intent: {
       workspaceId: "one",
@@ -552,11 +552,11 @@ it("preserves sealed selection and replays only the exact idempotent import afte
   await vi.waitFor(() =>
     expect(
       [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent === "Replay exact import request",
+        (button) => button.textContent === "Retry the exact import request",
       )?.disabled,
     ).toBe(false),
   );
-  await click("Replay exact import request");
+  await click("Retry the exact import request");
   await vi.waitFor(() => expect(applyExternalSourceImport).toHaveBeenCalledTimes(2));
   expect(vi.mocked(applyExternalSourceImport).mock.calls[1]).toEqual(
     vi.mocked(applyExternalSourceImport).mock.calls[0],
@@ -730,7 +730,7 @@ it.each([
     expect(namedButton("Confirm source action")?.disabled).toBe(true);
     await click("Confirm source action");
     expect(applyExternalSourceImport).toHaveBeenCalledTimes(1);
-    await click("Replay exact import request");
+    await click("Retry the exact import request");
     await vi.waitFor(() => expect(applyExternalSourceImport).toHaveBeenCalledTimes(2));
     expect(vi.mocked(applyExternalSourceImport).mock.calls[1]).toEqual(
       vi.mocked(applyExternalSourceImport).mock.calls[0],
@@ -743,7 +743,7 @@ it.each([
     });
     await vi.waitFor(() => expect(document.body.textContent).toContain("An existing import was returned"));
     expect(materializations()).toBe(1);
-    expect(namedButton("Replay exact import request")).toBeUndefined();
+    expect(namedButton("Retry the exact import request")).toBeUndefined();
     await click("Close dialog");
     expect(namedButton("Review import apply")).toBeUndefined();
   },
@@ -768,7 +768,7 @@ it.each(["caller", "Gateway", "workspace", "source"])(
       await client.invalidateQueries();
     });
     expect(namedButton("Review import apply")).toBeUndefined();
-    expect(namedButton("Replay exact import request")).toBeUndefined();
+    expect(namedButton("Retry the exact import request")).toBeUndefined();
     expect(document.body.textContent).not.toContain("Original import request retained");
     expect(applyExternalSourceImport).toHaveBeenCalledTimes(1);
   },
@@ -792,7 +792,7 @@ it.each(["plan", "hash", "key", "source"])(
               : { sourceId: "foreign" }),
       },
     });
-    await click("Replay exact import request");
+    await click("Retry the exact import request");
     expect(document.body.textContent).toContain("Import receipt does not match");
     expect(namedButton("Confirm source action")?.disabled).toBe(true);
     await click("Close dialog");
@@ -800,7 +800,7 @@ it.each(["plan", "hash", "key", "source"])(
     await render(<LibraryExternalSources workspaceId="one" />);
     await vi.waitFor(() => expect(namedButton("Review import apply")?.disabled).toBe(false));
     await click("Review import apply");
-    expect(namedButton("Replay exact import request")).toBeTruthy();
+    expect(namedButton("Retry the exact import request")).toBeTruthy();
     expect(applyExternalSourceImport).toHaveBeenCalledTimes(2);
   },
 );
@@ -814,11 +814,11 @@ it("fences exact replay during an awaited caller switch", async () => {
       finish = resolve;
     }),
   );
-  await click("Replay exact import request");
+  await click("Retry the exact import request");
   await act(async () => setGatewayCallerScope("operator-b"));
   await act(async () => finish(recoveryDetail));
   expect(applyExternalSourceImport).toHaveBeenCalledTimes(1);
-  expect(namedButton("Replay exact import request")).toBeUndefined();
+  expect(namedButton("Retry the exact import request")).toBeUndefined();
 });
 it("settles a late matching replay only in its original presentation scope", async () => {
   await prepareLostImport();
@@ -830,7 +830,7 @@ it("settles a late matching replay only in its original presentation scope", asy
       finish = resolve;
     }),
   );
-  await click("Replay exact import request");
+  await click("Retry the exact import request");
   await act(async () => setGatewayCallerScope("operator-b"));
   await act(async () => finish(recoveryReceipt));
   expect(document.body.textContent).not.toContain("Import provenance");
@@ -840,7 +840,7 @@ it("settles a late matching replay only in its original presentation scope", asy
   await act(async () => {
     await client.invalidateQueries();
   });
-  expect(namedButton("Replay exact import request")).toBeUndefined();
+  expect(namedButton("Retry the exact import request")).toBeUndefined();
   if (namedButton("Close dialog")) await click("Close dialog");
   expect(namedButton("Review import apply")).toBeUndefined();
   expect(applyExternalSourceImport).toHaveBeenCalledTimes(2);

@@ -105,7 +105,7 @@ export function CitadelMetadataEditor({
         />
       </div>
       <p className="text-xs text-fg-muted">
-        Blank slug uses the name. The Gateway normalizes slugs and enforces uniqueness. Drafts stay in this app session.
+        Blank slug uses the name. GoatCitadel normalizes slugs and enforces uniqueness. Drafts stay in this app session.
       </p>
       <div className="flex flex-wrap gap-2">
         <Button

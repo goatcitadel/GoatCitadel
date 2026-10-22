@@ -83,7 +83,7 @@ export function QualityGates({
               </>
             ) : (
               <p role="status" className="text-sm text-fg-secondary">
-                The selected gate is no longer in the current evidence. Select a gate to inspect.
+                The selected gate is no longer in the current results. Select a gate to inspect.
               </p>
             )}
           </section>
@@ -149,7 +149,7 @@ export function QualityGates({
             ))}
           </ul>
         ) : (
-          <p className="text-sm text-fg-muted">No security execution evidence was returned.</p>
+          <p className="text-sm text-fg-muted">No security run records were returned.</p>
         )}
       </QualitySource>
       <QualitySource title="Defensive security definitions" {...snapshot.securityEvalPacks}>

@@ -73,7 +73,7 @@ it("reviews, cancels, then verifies canonical deletion before success", async ()
   await click("Apply reviewed channel change");
   expect(api.discardChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("draft-1", 3);
   expect(reload).toHaveBeenCalledOnce();
-  expect(container.textContent).toContain("Deleted. The Gateway confirmed it.");
+  expect(container.textContent).toContain("Deleted. GoatCitadel confirmed it.");
 });
 it("rejects a changed revision before dispatch", async () => {
   api.fetchChannelSetupDraft.mockResolvedValue({ ...draft, revision: 4 });

@@ -106,7 +106,7 @@ export function CapabilityPolicyEvidence({
       ) : null}
       <p>
         Effective policy depends on the workspace, actor, session, and current grants. Evaluate a specific tool context
-        below when a Gateway tool identity is available.
+        below when a GoatCitadel tool identity is available.
       </p>
     </>
   );

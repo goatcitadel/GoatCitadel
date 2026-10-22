@@ -134,7 +134,7 @@ function BrowserSessionsWorkspace({ workspaceId }: { workspaceId: string }) {
             <div className="flex flex-wrap gap-2">
               {operation.locked && pending && operation.attempt?.phase === "uncertain" ? (
                 <Button disabled={busy} onClick={() => void create(true)}>
-                  Replay exact session request
+                  Send the same session request again
                 </Button>
               ) : (
                 <Button

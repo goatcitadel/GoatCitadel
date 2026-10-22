@@ -71,7 +71,7 @@ export async function runMemoryPolicyRevisionScenario(context, stack, deps) {
       assert.equal(await model.inputValue(), "operator-draft-model");
       await page.getByRole("button", { name: "Refresh memory diagnostics", exact: true }).click();
       await page.getByText("The policy changed. Your draft remains separate. Review current policy before rebasing.", { exact: false }).waitFor();
-      await page.getByRole("button", { name: "Use current policy revision and keep draft", exact: true }).click();
+      await page.getByRole("button", { name: "Use current policy version and keep draft", exact: true }).click();
       assert.equal(await model.inputValue(), "operator-draft-model");
       logCursor = browserLog.mark();
       await page.getByRole("button", { name: "Review policy changes", exact: true }).click();

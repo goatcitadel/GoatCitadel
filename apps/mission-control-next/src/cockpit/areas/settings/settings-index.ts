@@ -52,7 +52,8 @@ const CONTROL_TERMS: Record<string, string> = {
   "citadel-blueprint": "blueprint export import validate secret scan apply",
   "workspace-capabilities": "workspace skills plugins mcp selection reset inheritance",
   "citadel-capabilities": "citadel skills plugins mcp selection reset inheritance",
-  access: "gateway authentication auth token basic password loopback install token device revoke",
+  // copy-guard: not copy (search keywords; operators search the word they know from the CLI and docs)
+  access: "gateway sign-in signin authentication auth token basic password loopback install token device revoke",
   runtime: "managed command path alias enabled auto start daemon voice transcription install runtime",
 };
 

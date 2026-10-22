@@ -36,7 +36,7 @@ export function CockpitAccessGate({
             title={
               access.status === "access-blocked" ? "This browser can't open the cockpit yet" : "Sign in to continue"
             }
-            subtitle="Connect to your GoatCitadel gateway to load your workspace."
+            subtitle="Connect to GoatCitadel to load your workspace."
             footer={
               <p className="text-sm text-fg-secondary">Unsaved drafts stay in this app session while you sign in.</p>
             }
@@ -47,12 +47,12 @@ export function CockpitAccessGate({
   const title = checking
     ? "Connecting to GoatCitadel"
     : misconfigured
-      ? "Gateway setup needs attention"
-      : "Can't reach the GoatCitadel gateway";
+      ? "Setup needs attention"
+      : "Can't reach GoatCitadel";
   const description = misconfigured
     ? access.message
     : checking
-      ? "Checking gateway access."
+      ? "Checking access."
       : `It may not be running. ${gatewayStartHint(currentGatewayHost())} This page retries automatically.`;
   return (
     <main className="flex h-dvh items-center justify-center bg-canvas">

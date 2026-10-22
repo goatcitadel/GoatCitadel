@@ -210,7 +210,7 @@ describe("Run current workspace inspection", () => {
     await render();
     await click("Inspect current worktree");
     expect(api.fetchChatSessionWorkbench).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("no longer has matching workspace evidence");
+    expect(container.textContent).toContain("no longer matches this run's workspace");
   });
 
   it("withholds a mismatched workbench record and a workspace change during the read", async () => {

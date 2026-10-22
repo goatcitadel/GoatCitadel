@@ -227,7 +227,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
               supplementaryActions={<ChannelEntryControls owner={owner} />}
             />
           ) : (
-            <p>The selected draft or its setup definition is unavailable. Refresh the Gateway catalog.</p>
+            <p>The selected draft or its setup definition is unavailable. Refresh the channel catalog.</p>
           )}
         </>
       ) : (

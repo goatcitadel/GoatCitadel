@@ -135,7 +135,7 @@ function assertDecision(value: ToolAccessEvaluateResponse, input: PolicyInspecti
     (value.permissionProfileId !== undefined && typeof value.permissionProfileId !== "string") ||
     (value.localOperatorOverrideId !== undefined && typeof value.localOperatorOverrideId !== "string")
   ) {
-    throw new Error("The policy evaluation returned incomplete or mismatched evidence.");
+    throw new Error("The policy evaluation returned incomplete or mismatched results.");
   }
 }
 
@@ -162,7 +162,7 @@ export async function inspectSelectedToolPolicy(
   if (agent.agentId !== input.agentId || agent.lifecycleStatus !== "active")
     throw new Error("The selected agent is no longer active. Refresh the inspection.");
   if (session.sessionId !== input.sessionId || session.workspaceId !== input.workspaceId)
-    throw new Error("The conversation has no matching workspace evidence.");
+    throw new Error("The conversation does not match this workspace.");
   const before = profileIdentity(effective, input);
   const decision = await evaluateToolAccess(input);
   current();

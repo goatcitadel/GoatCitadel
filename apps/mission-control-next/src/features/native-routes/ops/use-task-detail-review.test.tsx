@@ -239,11 +239,11 @@ describe("task review acknowledgement across owner refreshes", () => {
     expect(updateTask).toHaveBeenCalledTimes(1);
     await renderEditor(saved);
     expect(container.textContent).toContain("The task changed while this editor was open");
-    expect(container.textContent).not.toContain("Gateway recorded the task details");
+    expect(container.textContent).not.toContain("Task details saved");
     await act(async () => {
       patch.resolve(saved);
     });
-    expect(container.textContent).toContain("Gateway recorded the task details");
+    expect(container.textContent).toContain("Task details saved");
     expect(container.textContent).not.toContain("The task changed while this editor was open");
     expect(container.querySelector("input")?.value).toBe("Edited");
     expect(container.querySelector("input")?.disabled).toBe(false);

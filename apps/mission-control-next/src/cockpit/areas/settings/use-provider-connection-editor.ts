@@ -43,7 +43,7 @@ const CONNECTION_ROUTE_PATTERNS = [
   "/api/v1/change-plans/:planId/confirmations",
   "/api/v1/change-plans/:planId/provider-secret",
 ] as const;
-const CHECKABLE_MESSAGE = " Check its outcome to settle it from the Gateway's record of this attempt.";
+const CHECKABLE_MESSAGE = " Check its outcome to settle it from GoatCitadel's record of this attempt.";
 
 export function useProviderConnectionEditor(
   provider: ProviderModelCatalogOption,
@@ -73,7 +73,7 @@ export function useProviderConnectionEditor(
   ): Promise<void> {
     if (!connectionPlanCompleted(next.plan)) return;
     const current = await confirmSavedProviderConnection(id, next);
-    if (!stillConnected()) throw new Error("The Gateway connection changed while checking the saved result.");
+    if (!stillConnected()) throw new Error("The connection to GoatCitadel changed while checking the saved result.");
     if (next.request.profile?.baseUrl)
       draft.acceptSaved(next.request.profile.baseUrl, current.revision, next.request.profile.baseUrl);
     await reload();
@@ -138,7 +138,7 @@ export function useProviderConnectionEditor(
       const next = {
         ...pending,
         plan,
-        message: "Change prepared. Review the Gateway instructions before applying it.",
+        message: "Change prepared. Review the instructions before applying it.",
       };
       setProviderConnectionAttempt(id, next);
       await verifySaved(next);
@@ -177,7 +177,7 @@ export function useProviderConnectionEditor(
         plan.revision < current.plan.revision ||
         !matchesConnectionAttempt(plan, current)
       ) {
-        throw new Error("The Gateway returned a different change than the one you reviewed.");
+        throw new Error("GoatCitadel returned a different change than the one you reviewed.");
       }
       const next = {
         ...current,
@@ -307,7 +307,7 @@ export function useProviderConnectionEditor(
         setProviderConnectionAttempt(id, undefined);
         await reload();
         setError(
-          "The Gateway released this change after an error, so it was not replayed. Your draft is kept; review it against the current settings before preparing it again.",
+          "GoatCitadel released this change after an error, so it did not run again. Your draft is kept; review it against the current settings before preparing it again.",
         );
         return;
       }
@@ -330,10 +330,10 @@ export function useProviderConnectionEditor(
           : undefined;
       if (readProviderConnectionAttempt(id) !== checking || switched()) return;
       if (!plan || !matchesConnectionAttempt(plan, current))
-        throw new Error("The Gateway returned a different change than the one you reviewed.");
+        throw new Error("GoatCitadel returned a different change than the one you reviewed.");
       const message =
         current.plan && verdict === "failed_confirm_by_readback"
-          ? "The Gateway released this action after an error and the plan was re-read. Review its current step before acting again."
+          ? "GoatCitadel released this action after an error and the plan was re-read. Review its current step before acting again."
           : plan.summary;
       const next = { ...current, plan, transport: undefined, uncertain: false, busy: true, verified: false, message };
       setProviderConnectionAttempt(id, next);

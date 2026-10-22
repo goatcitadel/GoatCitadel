@@ -85,7 +85,7 @@ export function RunArtifacts({ trace, workspaceId }: { trace: ObserveRunTraceRes
       if (!current.current.artifacts.some((artifact) => artifactBinding(artifact) === binding)) return;
       if (!item || artifactBinding(item) !== binding) {
         throw new Error(
-          "The artifact no longer matches this run's recorded version and scope. Refresh run evidence before opening it again.",
+          "The artifact no longer matches this run's recorded version and scope. Check again before opening it again.",
         );
       }
       if (typeof item.content !== "string" || new TextEncoder().encode(item.content).byteLength > MAX_PREVIEW_BYTES) {
@@ -107,10 +107,10 @@ export function RunArtifacts({ trace, workspaceId }: { trace: ObserveRunTraceRes
     <section aria-label="Run artifacts" className="border-t border-line-subtle pt-4">
       <h2 className="text-base font-semibold text-fg">Artifacts</h2>
       {!scopedRun ? (
-        <p className="mt-2 text-sm text-fg-muted">Artifact evidence has no matching run workspace.</p>
+        <p className="mt-2 text-sm text-fg-muted">Artifacts aren't shown because this run's workspace doesn't match.</p>
       ) : trace.artifacts.state !== "available" ? (
         <p className="mt-2 text-sm text-fg-muted">
-          Artifact evidence is {EVIDENCE_STATE_WORDS[trace.artifacts.state] ?? "unknown"}.
+          Artifact records are {EVIDENCE_STATE_WORDS[trace.artifacts.state] ?? "unknown"}.
         </p>
       ) : artifacts.length ? (
         <ul className="mt-3 grid gap-2">
@@ -136,9 +136,7 @@ export function RunArtifacts({ trace, workspaceId }: { trace: ObserveRunTraceRes
           ))}
         </ul>
       ) : (
-        <p className="mt-2 text-sm text-fg-muted">
-          No artifacts with explicit workspace evidence were returned for this run.
-        </p>
+        <p className="mt-2 text-sm text-fg-muted">No artifacts with a recorded workspace were returned for this run.</p>
       )}
       <Sheet
         open={Boolean(active)}
@@ -152,7 +150,7 @@ export function RunArtifacts({ trace, workspaceId }: { trace: ObserveRunTraceRes
           <div className="cockpit-chat-documents grid min-w-0 gap-3">
             {!unchanged ? (
               <p role="alert" className="text-sm text-status-failed">
-                Run evidence changed. Refresh it before opening this artifact again.
+                The run changed. Check again before opening this artifact again.
               </p>
             ) : active.state === "loading" ? (
               <p role="status" className="text-sm text-fg-muted">
@@ -166,7 +164,7 @@ export function RunArtifacts({ trace, workspaceId }: { trace: ObserveRunTraceRes
               <>
                 {active.artifact.publicProjection?.contentRedacted ? (
                   <p className="text-sm text-fg-muted">
-                    The Gateway redacted content in this preview. The recorded hash identifies the stored artifact.
+                    GoatCitadel redacted content in this preview. The recorded hash identifies the stored artifact.
                   </p>
                 ) : null}
                 <GeneratedArtifactViewer artifact={active.artifact} compact />
@@ -174,7 +172,7 @@ export function RunArtifacts({ trace, workspaceId }: { trace: ObserveRunTraceRes
             ) : null}
             {!unchanged || active.state === "error" ? (
               <Button size="sm" onClick={refresh}>
-                Refresh run evidence
+                Check again
               </Button>
             ) : null}
             {unchanged ? (

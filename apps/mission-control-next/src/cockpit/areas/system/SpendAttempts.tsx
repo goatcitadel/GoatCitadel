@@ -19,7 +19,7 @@ export function attemptCostLabel(record: Pick<ModelUsageEventRecord, "costSource
     record.costUsd < 0
   )
     return "Price unavailable";
-  return `${formatCostUsd(record.costUsd)} · ${record.costSource === "provider_reported" ? "Provider reported" : "Gateway estimate"}`;
+  return `${formatCostUsd(record.costUsd)} · ${record.costSource === "provider_reported" ? "Provider reported" : "Estimated"}`;
 }
 const tokens = (value: number | undefined) =>
   typeof value === "number" && Number.isFinite(value) ? plural(value, "token") : "Unavailable";
@@ -31,11 +31,11 @@ export function SpendAttempts({ workspaceId, from, to }: { workspaceId: string; 
   });
   return (
     <Section
-      title="Cost provenance by call attempt"
+      title="Recent model calls"
       description={
         <>
           {workspaceLabel} · same period · latest 50 attempts. These scoped records are separate from installation
-          totals. Estimates are priced by the Gateway; provider-reported amounts are accounted usage, not a billing
+          totals. Estimates are priced by GoatCitadel; provider-reported amounts are accounted usage, not a billing
           invoice.
         </>
       }

@@ -9,6 +9,7 @@ import { GatewayAuthEditor } from "../../../features/native-routes/settings/Gate
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import { Button } from "../../ui/Button";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { Callout } from "../../ui/Callout";
 import { CALLER_SOURCE_LABELS } from "./settings-vocabulary";
 
 export function GatewayAuthSettings() {
@@ -25,7 +26,7 @@ export function GatewayAuthSettings() {
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h3 id="gateway-auth-title" className="text-base font-semibold text-fg">
-          Gateway authentication
+          Sign-in
         </h3>
         <Button
           size="sm"
@@ -38,8 +39,14 @@ export function GatewayAuthSettings() {
           Refresh authentication
         </Button>
       </div>
-      {settings.isLoading ? <p role="status">Loading Gateway authentication…</p> : null}
+      {settings.isLoading ? <p role="status">Loading sign-in settings…</p> : null}
       {settings.isError ? <p role="alert">{describeApiError(settings.error).summary}</p> : null}
+      {settings.data?.auth?.mode === "none" ? (
+        // The "Configure access" button below this section's status opens the sign-in editor.
+        <Callout tone="warning" announce={false}>
+          Anyone who can reach this app can change settings. Set up sign-in. Use Configure access below.
+        </Callout>
+      ) : null}
       <p role="status">
         {caller.isPending
           ? "Checking what you can change…"
@@ -47,7 +54,7 @@ export function GatewayAuthSettings() {
             ? "Your access could not be checked. Configured sign-in settings do not show what you can change."
             : caller.data?.actorId
               ? `Signed in as: ${signedInAs}. ${canChangeSettings ? "You can change operator settings; individual policy checks still apply." : "You cannot change operator settings."}`
-              : "No identified operator. This Gateway permits anonymous configuration access."}
+              : "Not signed in. This app allows configuration changes without sign-in."}
       </p>
       {caller.data?.actorId ? (
         <TechnicalDetails label="Sign-in details">
@@ -65,7 +72,7 @@ export function GatewayAuthSettings() {
         open={logoutReview}
         onOpenChange={setLogoutReview}
         title="Sign out of this browser?"
-        description="Remove this browser’s Gateway access credentials. Drafts stay in this app session, but protected work pauses until you sign in again. This does not revoke other approved devices."
+        description="Remove this browser’s access credentials. Drafts stay in this app session, but protected work pauses until you sign in again. This does not revoke other approved devices."
       >
         <div className="flex flex-wrap gap-2">
           <Button

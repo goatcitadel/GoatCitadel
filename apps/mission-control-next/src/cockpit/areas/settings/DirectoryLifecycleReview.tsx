@@ -41,10 +41,10 @@ export function DirectoryLifecycleReview({ lifecycle }: { lifecycle: ReturnType<
           </dl>
           <p>
             {review.action === "archive"
-              ? "The record stays in the archived directory. Stored work is retained; any retained edit draft for this record will be discarded after the Gateway confirms the change."
+              ? "The record stays in the archived directory. Stored work is retained; any retained edit draft for this record will be discarded after GoatCitadel confirms the change."
               : "Restore the record to the active directory. Your active Citadel and workspace selection will stay as saved."}
           </p>
-          {lifecycle.pending ? <p role="status">Waiting for the Gateway to confirm…</p> : null}
+          {lifecycle.pending ? <p role="status">Waiting for GoatCitadel to confirm…</p> : null}
           <div className="flex flex-wrap gap-2">
             <Button
               variant="primary"

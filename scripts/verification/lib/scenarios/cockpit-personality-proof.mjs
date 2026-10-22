@@ -61,7 +61,7 @@ export async function runCockpitPersonalityProof({ context, browser, stack, cita
         await select.waitFor();
         await panel.getByText(`Current global default: ${original.label}`, { exact: true }).waitFor();
         await panel.getByText("Catalog details", { exact: true }).click();
-        await panel.getByText(`Catalog revision: ${before.revision}`, { exact: true }).waitFor();
+        await panel.getByText(`Catalog version: ${before.revision}`, { exact: true }).waitFor();
         assert.equal(await select.inputValue(), original.id);
         const screenshotDir = path.join(context.artifactRoot, "screenshots"); await mkdir(screenshotDir, { recursive: true });
         await page.addScriptTag({ path: axeSourcePath });
@@ -108,7 +108,7 @@ export async function runCockpitPersonalityProof({ context, browser, stack, cita
         assert.equal(writes.length, 1, "Changing a personality issued an unrelated or duplicate mutation.");
         assert.equal(writes[0].pathname, "/api/v1/personalities/default");
         assertPersonalityDefaultSaved({ before, after: saved, selectedId: selected.id, request: writes[0].body, response: await committed.json() });
-        await panel.getByText(`Catalog revision: ${saved.revision}`, { exact: true }).waitFor();
+        await panel.getByText(`Catalog version: ${saved.revision}`, { exact: true }).waitFor();
         await panel.scrollIntoViewIfNeeded(); await audit("saved");
 
         // Restore using the real owner while a reviewed UI choice still holds the previous revision.
@@ -121,7 +121,7 @@ export async function runCockpitPersonalityProof({ context, browser, stack, cita
         await dialog.getByRole("button", { name: "Apply reviewed default", exact: true }).click();
         await panel.getByText("The personality catalog changed. Review the current saved personality before applying it.", { exact: true }).waitFor();
         await panel.getByText(`Current global default: ${original.label}`, { exact: true }).waitFor();
-        await panel.getByText(`Catalog revision: ${restored.revision}`, { exact: true }).waitFor();
+        await panel.getByText(`Catalog version: ${restored.revision}`, { exact: true }).waitFor();
         assert.equal(writes.length, 1, "A stale reviewed personality sent a second mutation.");
         const final = await readCatalog();
         assert.equal(final.defaultPersonalityId, original.id, "The isolated proof did not restore the original default.");

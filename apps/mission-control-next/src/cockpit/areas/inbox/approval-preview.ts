@@ -44,8 +44,10 @@ export function approvalExpiryLabel(expiresAt: string | undefined, now = Date.no
   const expiry = Date.parse(expiresAt);
   if (!Number.isFinite(expiry)) return null;
   const remainingMinutes = Math.ceil((expiry - now) / 60_000);
-  if (remainingMinutes <= 0) return "Expiry passed; verify its current status";
+  if (remainingMinutes <= 0) return "Expired";
   if (remainingMinutes < 60) return `Expires in ${plural(remainingMinutes, "minute")}`;
-  const hours = Math.ceil(remainingMinutes / 60);
-  return `Expires in about ${plural(hours, "hour")}`;
+  // Hours round to the nearest hour; past two days the label reads in days (IN-N09).
+  const hours = Math.round(remainingMinutes / 60);
+  if (hours < 48) return `Expires in about ${plural(hours, "hour")}`;
+  return `Expires in about ${plural(Math.round(hours / 24), "day")}`;
 }

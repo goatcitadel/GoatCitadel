@@ -21,7 +21,7 @@ export function scheduleTimezoneSummary(value: string): string {
   const zone = scheduleTimezone(value);
   if (zone) return `Runs in ${zone} (named in the expression).`;
   if (hasZoneSuffix(value)) return "Timezone not recognized in this expression.";
-  return `Runs in ${GATEWAY_DEFAULT_SCHEDULE_ZONE} (the Gateway default when the expression names no timezone).`;
+  return `Runs in ${GATEWAY_DEFAULT_SCHEDULE_ZONE} (the GoatCitadel default when the expression names no timezone).`;
 }
 /** Cron fields are whitespace-separated; extra spaces around or between them do not change the schedule. */
 function normalizedExpression(value: string): string {

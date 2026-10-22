@@ -51,7 +51,7 @@ export function QualityDesign({ source }: { source: OpsQualitySnapshotResponse["
             </>
           ) : (
             <p role="status" className="text-sm text-fg-secondary">
-              The selected check is no longer in the current evidence. Select a check to inspect.
+              The selected check is no longer in the current results. Select a check to inspect.
             </p>
           )}
         </section>

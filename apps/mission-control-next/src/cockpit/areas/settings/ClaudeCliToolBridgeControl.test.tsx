@@ -165,7 +165,7 @@ describe("cockpit Claude Code CLI tool setting", () => {
     api.fetchSettings.mockResolvedValue(settingsAt(2));
     const { container, unmount } = await mount();
     try {
-      await vi.waitFor(() => expect(container.textContent).toContain("Gateway did not report this setting"));
+      await vi.waitFor(() => expect(container.textContent).toContain("GoatCitadel did not report this setting"));
       expect(container.textContent).not.toContain("Current: Off");
       expect(container.querySelector('input[type="checkbox"]')).toBeNull();
       expect(api.patchSettings).not.toHaveBeenCalled();

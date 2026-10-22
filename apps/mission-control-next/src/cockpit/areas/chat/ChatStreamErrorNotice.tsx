@@ -5,7 +5,7 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 
 const GENERIC = "The request failed. Check this conversation’s status before trying again.";
 const INTERRUPTED =
-  "The response was interrupted. Check the Gateway connection and conversation status before retrying.";
+  "The response was interrupted. Check the connection to GoatCitadel and the conversation status before retrying.";
 
 /**
  * The one notice for Chat errors, in the transcript and above the build editor. It maps a raw controller error to

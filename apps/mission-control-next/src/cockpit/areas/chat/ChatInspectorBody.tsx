@@ -10,6 +10,7 @@ import {
 } from "./chat-inspector-evidence";
 import { useEffect, useState } from "react";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import {
   presentMemoryMode,
@@ -147,25 +148,25 @@ export function ChatInspector({
                     <DetailRow label="Memory mode" value={presentMemoryMode(selectedTurn.trace.memoryMode)} />
                     <DetailRow label="Web mode" value={presentWebMode(selectedTurn.trace.webMode)} />
                     <DetailRow
-                      label="Prompt estimate"
+                      label="Estimated prompt size"
                       value={
                         selectedTurn.trace.routing?.promptContextBudget
-                          ? `${selectedTurn.trace.routing.promptContextBudget.tokenEstimates.total.toLocaleString()} tokens (estimated)`
+                          ? `${plural(selectedTurn.trace.routing.promptContextBudget.tokenEstimates.total, "token")} (estimated)`
                           : "Not recorded"
                       }
                     />
                     <DetailRow
-                      label="Guidance files"
+                      label="Instruction files"
                       value={
                         selectedTurn.trace.guidance
                           ? `${selectedTurn.trace.guidance.globalFilesUsed.length} global, ${selectedTurn.trace.guidance.workspaceFilesUsed.length} workspace${selectedTurn.trace.guidance.truncated ? " (truncated)" : ""}`
                           : "Not recorded"
                       }
                     />
-                    <DetailRow label="Routed snapshot" value={routedContext ? "Recorded" : "Not recorded"} />
+                    <DetailRow label="Routed context" value={routedContext ? "Recorded" : "Not recorded"} />
                   </dl>
                   {routedContext ? (
-                    <TechnicalDetails label="Routed snapshot details">
+                    <TechnicalDetails label="Routed context details">
                       <p className="font-mono text-xs wrap-anywhere">Snapshot hash: {routedContext.snapshotHash}</p>
                     </TechnicalDetails>
                   ) : null}
@@ -199,7 +200,7 @@ export function ChatInspector({
                     </div>
                   ) : routedContext ? (
                     <p className="text-fg-muted">
-                      A routed snapshot was recorded. Scoped source details are unavailable for this selection.
+                      A routed context was recorded. Scoped source details are unavailable for this selection.
                     </p>
                   ) : null}
                 </>

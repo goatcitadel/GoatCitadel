@@ -124,7 +124,7 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
       {Object.values(groups).some((group) => group.phase === "uncertain") ? (
         <p role="alert">
           A Chat context mutation has an unknown outcome. Its original lock is retained; inspection and layout switching
-          do not settle or replay it.
+          do not settle or run it again.
         </p>
       ) : null}
       {review && !reviewCurrent() ? (
@@ -135,7 +135,7 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
       <ContextDisclosure summary="Specialists">
         <p className="text-sm text-fg-muted">
           Draft candidates for review or activate a catalog specialist for this conversation. Activation remains
-          manual-only and Gateway-governed.
+          manual-only and governed by GoatCitadel.
         </p>
         <ul className="space-y-3">
           {dock.specialistSuggestions.map((suggestion) => {
@@ -176,7 +176,7 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
                       openReview(
                         "specialists",
                         "Activate this catalog specialist?",
-                        `Activate ${suggestion.title} for ${dock.selectedSession.title ?? "this conversation"} as manual-only. Gateway provenance, permissions and activation policy remain authoritative.`,
+                        `Activate ${suggestion.title} for ${dock.selectedSession.title ?? "this conversation"} as manual-only. GoatCitadel provenance, permissions and activation policy remain authoritative.`,
                         "Activate manual-only",
                         () => dock.onActivateCatalogSpecialist(suggestion),
                         fingerprint,
@@ -240,7 +240,7 @@ export function ChatContextActions({ dock }: { dock: MissionThreadedContextDockP
                       openReview(
                         "learnedMemory",
                         "Keep this memory active?",
-                        "Mark this recorded item active for the current conversation. Gateway memory policy remains authoritative.",
+                        "Mark this recorded item active for the current conversation. GoatCitadel memory policy remains authoritative.",
                         "Keep active",
                         () => dock.onUpdateMemoryStatus(item.itemId, "active"),
                         fingerprint,

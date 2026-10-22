@@ -117,13 +117,11 @@ describe("cockpit saved board detail", () => {
     await act(async () => button("Edit layout").click());
     await act(async () => button("Review changes").click());
     await act(async () => button("Confirm save").click());
-    await vi.waitFor(() => expect(container.textContent).toContain("Board saved and confirmed at revision 3."));
+    await vi.waitFor(() => expect(container.textContent).toContain("Board saved and checked at version 3."));
     expect(api.updateOpsSavedBoard).toHaveBeenCalledOnce();
     expect(container.querySelector('[aria-label="Edit board"]')).toBeNull();
     await act(async () => client.invalidateQueries({ queryKey: ["surface", "saved-board", "default", "board-1"] }));
-    expect(container.querySelector('[role="status"]')?.textContent).toContain(
-      "Board saved and confirmed at revision 3.",
-    );
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("Board saved and checked at version 3.");
   });
   it("renders current owner widgets and keeps missing cost coverage unknown", async () => {
     await act(async () =>
@@ -285,7 +283,7 @@ describe("saved board details", () => {
       expect(node).toBeDefined();
       return node!;
     });
-    for (const text of ["Revision", "3", "Status", "Archived", "Created", "Last updated"])
+    for (const text of ["Version", "3", "Status", "Archived", "Created", "Last updated"])
       expect(details.textContent).toContain(text);
     // Board and actor IDs stay in technical details, which are off by default.
     expect(details.textContent).not.toContain("board-1");
@@ -311,7 +309,7 @@ describe("background refetch", () => {
     await act(async () => {
       void client.refetchQueries({ queryKey: ["surface", "saved-board"] });
     });
-    expect(container.textContent).toContain("Saved layout revision");
+    expect(container.textContent).toContain("Saved layout version");
     expect(client.isFetching({ queryKey: ["surface", "saved-board"] })).toBeGreaterThan(0);
     // React Query batches observer notifications on a timer; let the fetching state reach the component.
     await act(async () => {
@@ -358,7 +356,7 @@ describe("saved board lifecycle", () => {
     await render();
     await vi.waitFor(() => expect(button("Archive board…")?.disabled).toBe(false));
     await act(async () => button("Archive board…")!.click());
-    expect(dialog()?.textContent).toContain("revision 2");
+    expect(dialog()?.textContent).toContain("version 2");
     expect(dialog()?.textContent).toContain("Widgets and the data they read are untouched");
     await act(async () => button("Cancel")!.click());
     expect(dialog()).toBeNull();
@@ -366,7 +364,7 @@ describe("saved board lifecycle", () => {
     await act(async () => button("Archive board…")!.click());
     expect(button("Archive board")!.className).toContain("bg-accent");
     await act(async () => button("Archive board")!.click());
-    await vi.waitFor(() => expect(container.textContent).toContain("Board archived and confirmed at revision 3."));
+    await vi.waitFor(() => expect(container.textContent).toContain("Board archived and checked at version 3."));
     expect(api.archiveOpsSavedBoard).toHaveBeenCalledExactlyOnceWith("board-1", {
       workspaceId: "default",
       expectedRevision: 2,
@@ -388,7 +386,7 @@ describe("saved board lifecycle", () => {
     await act(async () => button("Restore board…")!.click());
     expect(dialog()?.textContent).toContain("returns this saved layout to the active list");
     await act(async () => button("Restore board")!.click());
-    await vi.waitFor(() => expect(container.textContent).toContain("Board restored and confirmed at revision 4."));
+    await vi.waitFor(() => expect(container.textContent).toContain("Board restored and checked at version 4."));
     expect(api.restoreOpsSavedBoard).toHaveBeenCalledExactlyOnceWith("board-1", {
       workspaceId: "default",
       expectedRevision: 3,
@@ -436,7 +434,7 @@ describe("saved board lifecycle", () => {
     await vi.waitFor(() => expect(button("Archive board…")?.disabled).toBe(false));
     await act(async () => button("Archive board…")!.click());
     await act(async () => button("Archive board")!.click());
-    await vi.waitFor(() => expect(container.textContent).toContain("Board archived and confirmed at revision 3."));
+    await vi.waitFor(() => expect(container.textContent).toContain("Board archived and checked at version 3."));
     expect(api.archiveOpsSavedBoard).toHaveBeenCalledOnce();
   });
 
@@ -460,7 +458,7 @@ describe("saved board lifecycle", () => {
     await act(async () => button("Archive board…")!.click());
     const reads = api.fetchOpsSavedBoard.mock.calls.length;
     await act(async () => button("Archive board")!.click());
-    await vi.waitFor(() => expect(dialog()?.textContent).toContain("no longer at revision 2"));
+    await vi.waitFor(() => expect(dialog()?.textContent).toContain("changed since you opened this review"));
     expect(dialog()?.textContent).not.toContain("The save outcome is unconfirmed");
     await vi.waitFor(() => expect(api.fetchOpsSavedBoard.mock.calls.length).toBeGreaterThan(reads + 1));
     await act(async () => button("Close")!.click());

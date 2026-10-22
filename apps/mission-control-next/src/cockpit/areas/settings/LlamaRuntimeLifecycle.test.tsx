@@ -89,7 +89,9 @@ describe("cockpit llama.cpp lifecycle", () => {
 
   it("says when the Gateway does not report lifecycle diagnostics", async () => {
     await render({ status: status({ leaseDiagnostics: undefined }) });
-    expect(container.textContent).toContain("This Gateway does not report llama.cpp lifecycle diagnostics.");
+    expect(container.textContent).toContain(
+      "This GoatCitadel version does not report llama.cpp lifecycle diagnostics.",
+    );
     expect(button("Review stop")).toBeUndefined();
   });
 
@@ -116,7 +118,7 @@ describe("cockpit llama.cpp lifecycle", () => {
       api.stopLlamaCppRuntime.mock.invocationCallOrder[0]!,
     );
     expect(onChanged).toHaveBeenCalled();
-    expect(container.textContent).toContain("Stop requested. The status shown is read back from the Gateway.");
+    expect(container.textContent).toContain("Stop requested. The status shown is what GoatCitadel reports now.");
   });
 
   it("does not stop when more work started after the review", async () => {

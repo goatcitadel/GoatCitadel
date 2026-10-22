@@ -32,7 +32,7 @@ export function scheduleSettingsInput(
         );
       if (!preservedConfig || canonicalJsonString(preservedConfig) !== canonicalJsonString(parsed))
         throw new Error(
-          "This native editor preserves existing no_agent/agent_turn configuration. Changed configuration requires its full governed action owner; no request has been sent.",
+          "This native editor preserves existing no_agent/agent_turn configuration. Changed configuration must be made where that action is managed; no request has been sent.",
         );
     } else {
       const config = parsed as Record<string, unknown>;

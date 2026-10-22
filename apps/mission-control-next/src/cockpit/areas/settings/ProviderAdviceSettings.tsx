@@ -7,7 +7,7 @@ export function ProviderAdviceSettings() {
     <details className="mt-4 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0">
       <summary className="cursor-pointer text-md font-semibold text-fg">Provider advice</summary>
       <p className="my-3 text-sm text-fg-secondary">
-        Compare Gateway recommendations. Advice does not change saved routing or prove provider availability.
+        Compare GoatCitadel recommendations. Advice does not change saved routing or prove provider availability.
       </p>
       <Button disabled={state.loading} onClick={() => void load()}>
         {state.loading ? "Loading advice…" : "Load provider advice"}

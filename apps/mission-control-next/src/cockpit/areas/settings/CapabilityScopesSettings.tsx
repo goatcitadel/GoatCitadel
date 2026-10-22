@@ -98,7 +98,7 @@ function ScopeSelection({
       ) : null}
       {view && !scope.supported ? (
         <p role="status" className="text-sm text-status-waiting">
-          Reviewed editing is unavailable for this Gateway or selection. An exact scope review and at most 1,000
+          Reviewed editing is unavailable for this installation or selection. An exact scope review and at most 1,000
           references are required.
         </p>
       ) : null}

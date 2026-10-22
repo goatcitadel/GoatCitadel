@@ -52,7 +52,7 @@ describe("cockpit Spend", () => {
           </QueryClientProvider>,
         ),
       );
-      await vi.waitFor(() => expect(container.textContent).toContain("Gateway budget preference: Balanced"));
+      await vi.waitFor(() => expect(container.textContent).toContain("Budget preference: Balanced"));
       const continuation = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
         (link) => link.textContent === "Open spend details",
       );

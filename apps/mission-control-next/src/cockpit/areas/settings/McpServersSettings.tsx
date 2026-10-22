@@ -161,7 +161,7 @@ export function McpServersSettings({ workspaceId }: { workspaceId: string }) {
         onCancel={action.cancel}
         message={
           review
-            ? `${review.server.label}: ${review.server.enabled ? "Enabled" : "Disabled"} → ${review.enabled ? "Enabled" : "Disabled"}. This changes the saved configuration for the whole installation and closes current connections owned by this server. Future use remains subject to Gateway policy, approvals, authentication, and transport checks. ${review.server.packChange ? "Saving also clears this server's existing pack ownership marker. " : ""}Connectivity and tool-call permission are not established by this change.`
+            ? `${review.server.label}: ${review.server.enabled ? "Enabled" : "Disabled"} → ${review.enabled ? "Enabled" : "Disabled"}. This changes the saved configuration for the whole installation and closes current connections owned by this server. Future use remains subject to GoatCitadel policy, approvals, authentication, and transport checks. ${review.server.packChange ? "Saving also clears this server's existing pack ownership marker. " : ""}Connectivity and tool-call permission are not established by this change.`
             : ""
         }
       />
@@ -251,7 +251,7 @@ function McpServerRow({
       {blocked ? <p className="mt-2 text-xs text-fg-muted">{blocked}</p> : null}
       {attempt.locked ? (
         <p role="status" className="mt-2 text-sm text-status-waiting">
-          {attempt.message ?? "Waiting for the Gateway to confirm…"}
+          {attempt.message ?? "Waiting for GoatCitadel to confirm…"}
         </p>
       ) : null}
       <McpOutcomeCheck target={{ kind: "server", serverId: server.serverId }} buttonComponent={Button} />
