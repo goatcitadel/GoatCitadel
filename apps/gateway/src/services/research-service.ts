@@ -105,6 +105,7 @@ export class ResearchService {
     localOperatorOverrideId?: string;
     surface?: ToolPolicyActorContext["surface"];
   }): Promise<ResearchSummaryRecord> {
+    const storage = this.deps.storage;
     const runId = randomUUID();
     const policyRunId = input.policyRunId ?? runId;
     const policyTaskId = input.policyTaskId ?? runId;
@@ -120,7 +121,7 @@ export class ResearchService {
       permissionProfileId: input.permissionProfileId,
       localOperatorOverrideId: input.localOperatorOverrideId,
     });
-    await this.deps.storage.researchRuns.create({
+    await storage.researchRuns.create({
       runId,
       sessionId: input.sessionId,
       query: input.query,
@@ -156,12 +157,12 @@ export class ResearchService {
         }))
         .filter((item) => item.url.length > 0);
 
-      const persistedSources = await this.deps.storage.researchSources.replaceForRun(runId, sources);
+      const persistedSources = await storage.researchSources.replaceForRun(runId, sources);
       const opened: OpenedSources =
         input.mode === "deep"
           ? await this.openTopSources(toolContext, persistedSources)
           : { excerpts: new Map<string, string>(), needsApprovalCount: 0 };
-      const sessionMeta = await this.deps.storage.chatSessionMeta.get(input.sessionId);
+      const sessionMeta = await storage.chatSessionMeta.get(input.sessionId);
       const summaryText = await this.summarize(
         {
           ...input,
@@ -180,7 +181,7 @@ export class ResearchService {
 Note: ${opened.needsApprovalCount} of the top sources need approval before they can be opened, so this summary uses their search snippets.`
           : summaryText;
       const finishedAt = new Date().toISOString();
-      await this.deps.storage.researchRuns.patch(runId, {
+      await storage.researchRuns.patch(runId, {
         status: "completed",
         summary,
         finishedAt,
@@ -193,7 +194,7 @@ Note: ${opened.needsApprovalCount} of the top sources need approval before they 
         sources: persistedSources,
       };
     } catch (error) {
-      await this.deps.storage.researchRuns.patch(runId, {
+      await storage.researchRuns.patch(runId, {
         status: "failed",
         error: (error as Error).message,
         finishedAt: new Date().toISOString(),
@@ -209,13 +210,14 @@ Note: ${opened.needsApprovalCount} of the top sources need approval before they 
     run: ResearchRunRecord;
     sources: ResearchSourceRecord[];
   }> {
-    const run = await this.deps.storage.researchRuns.get(runId);
+    const storage = this.deps.storage;
+    const run = await storage.researchRuns.get(runId);
     if (run.sessionId !== sessionId) {
       throw new Error(`Research run ${runId} does not belong to session ${sessionId}`);
     }
     return {
       run,
-      sources: await this.deps.storage.researchSources.listByRun(runId),
+      sources: await storage.researchSources.listByRun(runId),
     };
   }
 
