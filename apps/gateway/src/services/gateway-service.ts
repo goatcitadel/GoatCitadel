@@ -425,7 +425,11 @@ import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
 import { getRequestAttribution, runWithIsolatedRequestAttribution } from "@goatcitadel/storage";
 import { LlmService } from "./llm-service.js";
-import { resolveJudgeModelDefaults, resolveUtilityModelOverride } from "./utility-model-routing.js";
+import {
+  resolveBackgroundJobModel,
+  resolveJudgeModelDefaults,
+  resolveUtilityModelOverride,
+} from "./utility-model-routing.js";
 import { AssemblyService, bindAssemblyChatCompletion } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
@@ -2253,7 +2257,7 @@ export class GatewayService {
       requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       // P1-F5 de-novo origination: cheap read-only planner + eligibility guard.
       createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
-      resolveModelDefaults: async () => await this.getPromptJudgeModelDefaults(),
+      resolveModelDefaults: async () => await this.getBackgroundJobModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
       isProactiveDeNovoEligibleSession: (sessionId) =>
         isHeartbeatEligibleSession(this.chatAutonomousTurnDeps(), sessionId),
@@ -2981,7 +2985,7 @@ export class GatewayService {
     const chatPostCommitRuntime = createChatPostCommitRuntime({
       storage: this.storage,
       createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
-      resolveModelDefaults: async () => await this.getPromptJudgeModelDefaults(),
+      resolveModelDefaults: async () => await this.getBackgroundJobModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
       proposeTraceMemoryCandidate: (input, actorId, authority) =>
         this.memoryLifecycleService.proposeTraceMemoryCandidate(input, actorId, authority),
@@ -6435,6 +6439,17 @@ export class GatewayService {
       providerId: fallbackActive?.providerId ?? runtime.activeProviderId,
       model: runtime.activeModel || fallbackActive?.defaultModel,
     };
+  }
+
+  /** Background jobs run on the ready active provider or an explicit utility override; `undefined` = skip. */
+  private async getBackgroundJobModelDefaults(): Promise<{ providerId: string; model: string } | undefined> {
+    return await resolveBackgroundJobModel({
+      getUtilityModelOverride: () => this.getUtilityModelOverride(),
+      ensureActiveProviderReadiness: () =>
+        this.llmService.ensureProviderReadiness(this.llmService.getRuntimeConfig({ useCache: true }).activeProviderId),
+      getRuntimeConfig: () =>
+        this.llmService.getRuntimeConfig({ includeKeychainForActiveProvider: true, useCache: true }),
+    });
   }
 
   private async getPromptJudgeModelDefaults(): Promise<{ providerId?: string; model?: string }> {

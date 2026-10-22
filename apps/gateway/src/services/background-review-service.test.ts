@@ -178,6 +178,23 @@ describe("BackgroundReviewService evidence-only contract", () => {
     ).toBeUndefined();
   });
 
+  it("makes no model call when the background model resolver skips", async () => {
+    const createChatCompletion = vi.fn();
+    const service = new BackgroundReviewService({
+      createChatCompletion,
+      resolveModelDefaults: () => undefined,
+      resolveApiStyle: () => "openai-chat-completions",
+    });
+
+    await expect(service.runBackgroundReview(ELIGIBLE)).resolves.toEqual({
+      ran: true,
+      memoryFacts: [],
+      memoryEvidenceFingerprints: [],
+      skillProposed: false,
+    });
+    expect(createChatCompletion).not.toHaveBeenCalled();
+  });
+
   it("remains best-effort when a provider read fails", async () => {
     const createChatCompletion = vi.fn(async () => {
       throw new Error("provider unavailable");

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@goatcitadel/storage", async () => ({
-  resolveHourInTimeZone: (await vi.importActual<typeof import("@goatcitadel/storage")>("@goatcitadel/storage")).resolveHourInTimeZone,
+  resolveHourInTimeZone: (await vi.importActual<typeof import("@goatcitadel/storage")>("@goatcitadel/storage"))
+    .resolveHourInTimeZone,
   DEFAULT_SESSION_AUTONOMY_PREFS: {
     proactiveMode: "auto_full",
     maxActionsPerHour: 10,
@@ -188,6 +189,8 @@ interface HarnessOptions {
   wirePlanner?: boolean;
   plannerResponse?: string;
   now?: string;
+  /** Simulates the background model resolver skipping because the active provider is not ready. */
+  plannerModelUnavailable?: boolean;
 }
 
 function createHarness(options: HarnessOptions = {}) {
@@ -260,7 +263,8 @@ function createHarness(options: HarnessOptions = {}) {
       ? {}
       : {
           createChatCompletion: (request) => createChatCompletion(request),
-          resolveModelDefaults: () => ({ providerId: "test", model: "cheap" }),
+          resolveModelDefaults: () =>
+            options.plannerModelUnavailable ? undefined : { providerId: "test", model: "cheap" },
           resolveApiStyle: () => "anthropic-messages" as const,
         }),
     isProactiveDeNovoEligibleSession: () => options.eligible ?? true,
@@ -355,6 +359,17 @@ describe("ChatProactiveService de-novo origination (P1-F5)", () => {
     const result = await callPlan(service, "s1", "de_novo");
     expect(createChatCompletion).toHaveBeenCalledTimes(1);
     expect(result.actions).toEqual([{ kind: "tool", toolName: "browser.search", args: { query: "x" } }]);
+  });
+
+  it("de_novo plans nothing and makes no model call when the background model resolver skips", async () => {
+    const { service, createChatCompletion } = createHarness({
+      messages: [{ role: "assistant", content: "Earlier context." }],
+      commitments: [commitment()],
+      plannerModelUnavailable: true,
+    });
+    const result = await callPlan(service, "s1", "de_novo");
+    expect(createChatCompletion).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ actions: [], reasoningSummary: "De-novo planner is not available." });
   });
 
   it("reactive mode is unchanged with no last-user message (regression — never calls the model)", async () => {

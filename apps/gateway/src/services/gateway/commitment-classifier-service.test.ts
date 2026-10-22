@@ -1,13 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  AgentCommitmentRecord,
-  ChatCompletionRequest,
-  ChatCompletionResponse,
-} from "@goatcitadel/contracts";
-import {
-  CommitmentClassifierService,
-  type CommitmentClassifierServiceDeps,
-} from "./commitment-classifier-service.js";
+import type { AgentCommitmentRecord, ChatCompletionRequest, ChatCompletionResponse } from "@goatcitadel/contracts";
+import { CommitmentClassifierService, type CommitmentClassifierServiceDeps } from "./commitment-classifier-service.js";
 
 function modelResponse(content: string): ChatCompletionResponse {
   return { choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }] };
@@ -22,6 +15,8 @@ interface HarnessOptions {
   reject?: boolean;
   apiStyle?: ReturnType<CommitmentClassifierServiceDeps["resolveApiStyle"]>;
   now?: string;
+  /** `null` simulates the background resolver skipping because the active provider is not ready. */
+  modelDefaults?: { providerId: string; model: string } | null;
 }
 
 function createHarness(options: HarnessOptions = {}) {
@@ -70,7 +65,10 @@ function createHarness(options: HarnessOptions = {}) {
   const deps: CommitmentClassifierServiceDeps = {
     storage: { agentCommitments: { upsertByDedupe } as never },
     createChatCompletion,
-    resolveModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+    resolveModelDefaults: () =>
+      options.modelDefaults === null
+        ? undefined
+        : (options.modelDefaults ?? { providerId: "openai", model: "gpt-5.4" }),
     resolveApiStyle: () => options.apiStyle ?? "openai-chat-completions",
     now: () => new Date(options.now ?? "2026-06-22T00:00:00.000Z"),
     uuid: () => `commit-${++uuidCounter}`,
@@ -90,6 +88,13 @@ const ELIGIBLE_INPUT = {
 };
 
 describe("CommitmentClassifierService.classifyTurnForCommitments", () => {
+  it("makes no model call when the background model resolver skips", async () => {
+    const { service, createChatCompletion } = createHarness({ modelDefaults: null });
+
+    await expect(service.classifyTurnForCommitments(ELIGIBLE_INPUT)).resolves.toEqual([]);
+    expect(createChatCompletion).not.toHaveBeenCalled();
+  });
+
   it("returns parsed structured output from the (mocked) model", async () => {
     const { service, createChatCompletion } = createHarness({
       response: modelResponse(
@@ -144,9 +149,21 @@ describe("CommitmentClassifierService.classifyTurnForCommitments", () => {
     const { service } = createHarness({
       response: modelResponse(
         commitmentsPayload([
-          { kind: "follow_up", dueAt: "2020-01-01T00:00:00.000Z", confidence: 0.9, dedupeKey: "past", suggestedText: "old" },
+          {
+            kind: "follow_up",
+            dueAt: "2020-01-01T00:00:00.000Z",
+            confidence: 0.9,
+            dedupeKey: "past",
+            suggestedText: "old",
+          },
           { kind: "follow_up", dueAt: "not-a-date", confidence: 0.9, dedupeKey: "bad", suggestedText: "bad" },
-          { kind: "follow_up", dueAt: "2026-12-31T00:00:00.000Z", confidence: 0.9, dedupeKey: "future", suggestedText: "ok" },
+          {
+            kind: "follow_up",
+            dueAt: "2026-12-31T00:00:00.000Z",
+            confidence: 0.9,
+            dedupeKey: "future",
+            suggestedText: "ok",
+          },
         ]),
       ),
     });
@@ -186,9 +203,27 @@ describe("CommitmentClassifierService.recordTurnCommitments", () => {
     const { service, upserts } = createHarness({
       response: modelResponse(
         commitmentsPayload([
-          { kind: "follow_up", dueAt: "2026-06-23T18:00:00.000Z", confidence: 0.95, dedupeKey: "keep-high", suggestedText: "keep" },
-          { kind: "follow_up", dueAt: "2026-06-23T18:00:00.000Z", confidence: 0.7, dedupeKey: "keep-exact", suggestedText: "keep too" },
-          { kind: "follow_up", dueAt: "2026-06-23T18:00:00.000Z", confidence: 0.5, dedupeKey: "drop-low", suggestedText: "drop" },
+          {
+            kind: "follow_up",
+            dueAt: "2026-06-23T18:00:00.000Z",
+            confidence: 0.95,
+            dedupeKey: "keep-high",
+            suggestedText: "keep",
+          },
+          {
+            kind: "follow_up",
+            dueAt: "2026-06-23T18:00:00.000Z",
+            confidence: 0.7,
+            dedupeKey: "keep-exact",
+            suggestedText: "keep too",
+          },
+          {
+            kind: "follow_up",
+            dueAt: "2026-06-23T18:00:00.000Z",
+            confidence: 0.5,
+            dedupeKey: "drop-low",
+            suggestedText: "drop",
+          },
         ]),
       ),
     });
@@ -210,7 +245,13 @@ describe("CommitmentClassifierService.recordTurnCommitments", () => {
             dedupeKey: "rotate-key",
             suggestedText: "remember the api_key sk-abcdef1234567890",
           },
-          { kind: "follow_up", dueAt: "2026-06-23T18:00:00.000Z", confidence: 0.99, dedupeKey: "safe", suggestedText: "clean text" },
+          {
+            kind: "follow_up",
+            dueAt: "2026-06-23T18:00:00.000Z",
+            confidence: 0.99,
+            dedupeKey: "safe",
+            suggestedText: "clean text",
+          },
         ]),
       ),
     });
@@ -224,7 +265,13 @@ describe("CommitmentClassifierService.recordTurnCommitments", () => {
     const { service, createChatCompletion, upserts } = createHarness({
       response: modelResponse(
         commitmentsPayload([
-          { kind: "follow_up", dueAt: "2026-06-23T18:00:00.000Z", confidence: 0.99, dedupeKey: "x", suggestedText: "y" },
+          {
+            kind: "follow_up",
+            dueAt: "2026-06-23T18:00:00.000Z",
+            confidence: 0.99,
+            dedupeKey: "x",
+            suggestedText: "y",
+          },
         ]),
       ),
     });
@@ -238,7 +285,13 @@ describe("CommitmentClassifierService.recordTurnCommitments", () => {
     const { service, createChatCompletion } = createHarness({
       response: modelResponse(
         commitmentsPayload([
-          { kind: "follow_up", dueAt: "2026-06-23T18:00:00.000Z", confidence: 0.99, dedupeKey: "x", suggestedText: "y" },
+          {
+            kind: "follow_up",
+            dueAt: "2026-06-23T18:00:00.000Z",
+            confidence: 0.99,
+            dedupeKey: "x",
+            suggestedText: "y",
+          },
         ]),
       ),
     });
@@ -251,7 +304,13 @@ describe("CommitmentClassifierService.recordTurnCommitments", () => {
     const { service, createChatCompletion } = createHarness({
       response: modelResponse(
         commitmentsPayload([
-          { kind: "follow_up", dueAt: "2026-06-23T18:00:00.000Z", confidence: 0.99, dedupeKey: "x", suggestedText: "y" },
+          {
+            kind: "follow_up",
+            dueAt: "2026-06-23T18:00:00.000Z",
+            confidence: 0.99,
+            dedupeKey: "x",
+            suggestedText: "y",
+          },
         ]),
       ),
     });

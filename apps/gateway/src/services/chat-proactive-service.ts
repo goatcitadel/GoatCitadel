@@ -188,8 +188,8 @@ export interface ChatProactiveServiceCallbacks {
     request: ChatCompletionRequest,
     attribution: ModelUsageAttributionContext,
   ): Promise<ChatCompletionResponse>;
-  /** Cheap-model defaults for the de-novo planner (mirrors the F3 classifier). */
-  resolveModelDefaults?(): Promise<{ providerId?: string; model?: string }>;
+  /** Background-job model for the de-novo planner; `undefined` means skip (the active provider is not ready). */
+  resolveModelDefaults?(): Promise<{ providerId?: string; model?: string } | undefined>;
   /** Resolve api-style so the de-novo planner can gate `response_format`/`temperature`. */
   resolveApiStyle?(providerId?: string, model?: string): LlmApiStyle;
   /**
@@ -802,6 +802,9 @@ export class ChatProactiveService {
       return undefined;
     }
     const modelDefaults = await resolveModelDefaults();
+    if (!modelDefaults) {
+      return undefined;
+    }
     const operationRef = usageLineage?.proactiveRunId ?? context.openTask?.taskId ?? sessionId;
     return {
       createChatCompletion: (request, attribution) => createChatCompletion(request, attribution),

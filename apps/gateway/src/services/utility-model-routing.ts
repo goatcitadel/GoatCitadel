@@ -44,8 +44,9 @@ export interface JudgeModelDefaults {
   model?: string;
 }
 
-// Keyed fallbacks tried in order when the active provider is not ready. Each
-// uses its own configured default model; the literal is only a last resort.
+// Keyed fallbacks for operator-started Prompt Lab judging, tried in order when
+// the active provider is not ready. Each uses its own configured default model;
+// the literal is only a last resort. Background jobs never use this list.
 const JUDGE_FALLBACK_PROVIDERS: ReadonlyArray<{ providerId: string; fallbackModel?: string }> = [
   { providerId: "openai-codex" },
   { providerId: "openai", fallbackModel: "gpt-5.4" },
@@ -53,25 +54,77 @@ const JUDGE_FALLBACK_PROVIDERS: ReadonlyArray<{ providerId: string; fallbackMode
   { providerId: "moonshot" },
 ];
 
+type ModelRoutingRuntime = Pick<LlmRuntimeConfig, "activeProviderId" | "activeModel"> & {
+  providers: ReadonlyArray<Pick<LlmProviderSummary, "providerId" | "baseUrl" | "hasApiKey" | "defaultModel">>;
+};
+
 /**
- * Picks the model for background judge-style calls (post-turn commitment
- * classification, background review, proactive planning) when no utility
- * override applies. The operator's active provider wins whenever it is ready,
- * so background work follows the provider they chose for Chat. A keyless
- * provider on a loopback endpoint (Ollama, LM Studio, llama.cpp) counts as
- * ready, so a local choice never leaks post-turn transcripts to a remote
- * fallback.
+ * The operator's active provider and model when that provider is ready, else
+ * `undefined`. A keyless provider on a loopback endpoint (Ollama, LM Studio,
+ * llama.cpp) counts as ready.
  */
-export function resolveJudgeModelDefaults(
-  runtime: Pick<LlmRuntimeConfig, "activeProviderId" | "activeModel"> & {
-    providers: ReadonlyArray<Pick<LlmProviderSummary, "providerId" | "baseUrl" | "hasApiKey" | "defaultModel">>;
-  },
-): JudgeModelDefaults {
+function resolveReadyActiveProvider(runtime: ModelRoutingRuntime): UtilityModelOverride | undefined {
   const active = runtime.providers.find((provider) => provider.providerId === runtime.activeProviderId);
   const activeModel = runtime.activeModel || active?.defaultModel;
   if (active && (active.hasApiKey || isRouteLocalProvider(active)) && activeModel) {
     return { providerId: active.providerId, model: activeModel };
   }
+  return undefined;
+}
+
+/**
+ * Picks the model for background jobs (post-turn commitment classification,
+ * background review, proactive planning) when no utility override applies:
+ * the active provider when it is ready, otherwise `undefined`, meaning skip
+ * the job. Background jobs never fall back to another provider, so post-turn
+ * transcripts only reach the provider the operator chose for Chat (or an
+ * explicit utility-model override).
+ */
+export function resolveBackgroundJobModelDefaults(runtime: ModelRoutingRuntime): UtilityModelOverride | undefined {
+  return resolveReadyActiveProvider(runtime);
+}
+
+export interface BackgroundJobModelResolverDeps {
+  getUtilityModelOverride(): Promise<UtilityModelOverride | undefined>;
+  /** Runs any probe-backed readiness check (the Claude Code CLI login) so "not checked yet" is not read as "not ready". */
+  ensureActiveProviderReadiness(): Promise<void>;
+  getRuntimeConfig(): ModelRoutingRuntime;
+}
+
+/**
+ * Resolves the background-job model: an explicit utility-model override wins;
+ * otherwise the active provider's readiness is checked first, then
+ * `resolveBackgroundJobModelDefaults` decides. `undefined` means skip the job.
+ */
+export async function resolveBackgroundJobModel(
+  deps: BackgroundJobModelResolverDeps,
+): Promise<UtilityModelOverride | undefined> {
+  const override = await deps.getUtilityModelOverride();
+  if (override) {
+    return override;
+  }
+  try {
+    await deps.ensureActiveProviderReadiness();
+  } catch {
+    // A failed probe leaves the provider not ready; the job is skipped below.
+  }
+  return resolveBackgroundJobModelDefaults(deps.getRuntimeConfig());
+}
+
+/**
+ * Picks the judge model for operator-started Prompt Lab scoring when no
+ * utility override applies. The active provider wins whenever it is ready;
+ * otherwise a signed-in fallback provider is used so a run the operator
+ * started still gets scored. Background jobs use
+ * `resolveBackgroundJobModel` instead, which never falls back.
+ */
+export function resolveJudgeModelDefaults(runtime: ModelRoutingRuntime): JudgeModelDefaults {
+  const ready = resolveReadyActiveProvider(runtime);
+  if (ready) {
+    return ready;
+  }
+  const active = runtime.providers.find((provider) => provider.providerId === runtime.activeProviderId);
+  const activeModel = runtime.activeModel || active?.defaultModel;
   for (const candidate of JUDGE_FALLBACK_PROVIDERS) {
     const provider = runtime.providers.find((item) => item.providerId === candidate.providerId && item.hasApiKey);
     const model = provider?.defaultModel || candidate.fallbackModel;

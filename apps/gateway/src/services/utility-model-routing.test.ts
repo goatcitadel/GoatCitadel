@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { resolveJudgeModelDefaults, resolveUtilityModelOverride } from "./utility-model-routing.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  resolveBackgroundJobModel,
+  resolveBackgroundJobModelDefaults,
+  resolveJudgeModelDefaults,
+  resolveUtilityModelOverride,
+} from "./utility-model-routing.js";
 
 const provider = { providerId: "glm", hasApiKey: true, defaultModel: "glm-5" };
 
@@ -138,5 +143,139 @@ describe("resolveJudgeModelDefaults", () => {
         providers: [codex, { ...ollama, baseUrl: "https://ollama.example.com/v1" }],
       }),
     ).toEqual({ providerId: "openai-codex", model: "gpt-6-sol" });
+  });
+});
+
+describe("resolveBackgroundJobModelDefaults", () => {
+  const codex = {
+    providerId: "openai-codex",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    hasApiKey: true,
+    defaultModel: "gpt-6-sol",
+  };
+  const cli = { providerId: "claude-code-cli", baseUrl: "", hasApiKey: true, defaultModel: "claude-sonnet-5-5" };
+  const ollama = {
+    providerId: "ollama",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    hasApiKey: false,
+    defaultModel: "llama3",
+  };
+
+  it("uses the ready active provider", () => {
+    expect(
+      resolveBackgroundJobModelDefaults({
+        activeProviderId: "claude-code-cli",
+        activeModel: "claude-opus-5-5",
+        providers: [codex, cli],
+      }),
+    ).toEqual({ providerId: "claude-code-cli", model: "claude-opus-5-5" });
+  });
+
+  it("skips instead of falling back to a signed-in Codex account when the active provider is not ready", () => {
+    expect(
+      resolveBackgroundJobModelDefaults({
+        activeProviderId: "claude-code-cli",
+        activeModel: "claude-opus-5-5",
+        providers: [codex, { ...cli, hasApiKey: false }],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps a keyless active provider on this machine", () => {
+    expect(
+      resolveBackgroundJobModelDefaults({
+        activeProviderId: "ollama",
+        activeModel: "qwen3",
+        providers: [codex, ollama],
+      }),
+    ).toEqual({ providerId: "ollama", model: "qwen3" });
+  });
+
+  it("skips a keyless remote active provider", () => {
+    expect(
+      resolveBackgroundJobModelDefaults({
+        activeProviderId: "ollama",
+        activeModel: "qwen3",
+        providers: [codex, { ...ollama, baseUrl: "https://ollama.example.com/v1" }],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("skips when the active provider has no model or is not configured", () => {
+    expect(
+      resolveBackgroundJobModelDefaults({
+        activeProviderId: "claude-code-cli",
+        activeModel: "",
+        providers: [codex, { ...cli, defaultModel: "" }],
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveBackgroundJobModelDefaults({ activeProviderId: "missing", activeModel: "x", providers: [codex] }),
+    ).toBeUndefined();
+  });
+});
+
+describe("resolveBackgroundJobModel", () => {
+  const notReadyCli = {
+    activeProviderId: "claude-code-cli",
+    activeModel: "claude-opus-5-5",
+    providers: [
+      {
+        providerId: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        hasApiKey: true,
+        defaultModel: "gpt-6-sol",
+      },
+      { providerId: "claude-code-cli", baseUrl: "", hasApiKey: false, defaultModel: "claude-sonnet-5-5" },
+    ],
+  };
+
+  it("lets an explicit utility-model override win without probing the active provider", async () => {
+    const ensureActiveProviderReadiness = vi.fn(async () => undefined);
+    await expect(
+      resolveBackgroundJobModel({
+        getUtilityModelOverride: async () => ({ providerId: "openai-codex", model: "gpt-6-mini" }),
+        ensureActiveProviderReadiness,
+        getRuntimeConfig: () => notReadyCli,
+      }),
+    ).resolves.toEqual({ providerId: "openai-codex", model: "gpt-6-mini" });
+    expect(ensureActiveProviderReadiness).not.toHaveBeenCalled();
+  });
+
+  it("probes the active provider before deciding, so a not-yet-checked CLI login is used", async () => {
+    let probed = false;
+    const result = await resolveBackgroundJobModel({
+      getUtilityModelOverride: async () => undefined,
+      ensureActiveProviderReadiness: async () => {
+        probed = true;
+      },
+      getRuntimeConfig: () =>
+        probed
+          ? { ...notReadyCli, providers: notReadyCli.providers.map((item) => ({ ...item, hasApiKey: true })) }
+          : notReadyCli,
+    });
+    expect(result).toEqual({ providerId: "claude-code-cli", model: "claude-opus-5-5" });
+  });
+
+  it("skips when the active provider is still not ready after the probe", async () => {
+    await expect(
+      resolveBackgroundJobModel({
+        getUtilityModelOverride: async () => undefined,
+        ensureActiveProviderReadiness: async () => undefined,
+        getRuntimeConfig: () => notReadyCli,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("skips rather than failing when the readiness probe itself throws", async () => {
+    await expect(
+      resolveBackgroundJobModel({
+        getUtilityModelOverride: async () => undefined,
+        ensureActiveProviderReadiness: async () => {
+          throw new Error("spawn claude ENOENT");
+        },
+        getRuntimeConfig: () => notReadyCli,
+      }),
+    ).resolves.toBeUndefined();
   });
 });

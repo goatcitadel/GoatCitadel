@@ -26,7 +26,8 @@ export interface ChatPostCommitRuntimeCompositionInput {
     request: ChatCompletionRequest,
     attribution: ModelUsageAttributionContext,
   ): Promise<ChatCompletionResponse>;
-  resolveModelDefaults(): Promise<{ providerId?: string; model?: string }>;
+  /** Background-job model; `undefined` means skip (the active provider is not ready). */
+  resolveModelDefaults(): Promise<{ providerId?: string; model?: string } | undefined>;
   resolveApiStyle(providerId?: string, model?: string): LlmApiStyle;
   proposeTraceMemoryCandidate: ChatPostCommitEffectServiceDeps["proposeTraceMemoryCandidate"];
   /** Required in production composition: post-commit children must never run unfenced. */
