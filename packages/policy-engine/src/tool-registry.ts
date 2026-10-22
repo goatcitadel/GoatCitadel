@@ -1469,7 +1469,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     preferredForIntents: ["live_data", "web_lookup", "research"],
     usageHints: [
       "Use to discover candidate sources before navigating to a page.",
-      "Use backend=official for bounded Brave/Parallel API search; external request accounting is response-local only.",
+      "Set backend=official to search with Brave or Parallel (needs a configured key); otherwise native search or Firecrawl is used.",
     ],
     argSchema: {
       type: "object",
