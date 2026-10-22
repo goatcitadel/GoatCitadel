@@ -93,13 +93,12 @@ export const COPY_RATCHETS = [
  * routes and shared components ratchet down as the copy sweep reaches them (cockpit follow-up plan, Task 4.3).
  */
 export const ROOT_BUDGETS = {
-  // The one cockpit hit is not copy: RunSignedReceipt matches the server's keychain error text with startsWith.
-  cockpit: { "glossary-terms": 1 },
+  cockpit: { "glossary-terms": 0 },
   "native-routes": {
-    "internal-terms": 274,
+    "internal-terms": 275,
     "dead-end-pointer": 1,
     "aria-label-id": 10,
-    "glossary-terms": 970,
+    "glossary-terms": 971,
     "plural-template": 37,
   },
   "shared-components": { "internal-terms": 21, "aria-label-id": 11, "glossary-terms": 45, "plural-template": 2 },
@@ -119,6 +118,10 @@ function stripHiddenText(contents) {
     })
     .replace(/className=(?:"[^"]*"|\{`[^`]*`\})/g, "");
 }
+
+/** JSX props whose value an operator reads. */
+const COPY_PROP =
+  /\b(?:label|title|placeholder|aria-label|description|heading|summary|hint|helper|emptyTitle|emptyMessage)=(["'])([^"']+)\1/g;
 
 /** A line after `// copy-guard: not copy (…)` holds text an operator never reads, such as search keywords. */
 const NOT_COPY_MARKER = /\/\/\s*copy-guard: not copy\b/;
@@ -143,6 +146,8 @@ export function visibleText(contents) {
       if (!/^\s*(?:&&|\|\||[=!]==?|\?\?|[?:+,)])|(?:&&|\|\||[=!]==?|\()\s*$|=\{|=>/.test(match[2]))
         parts.push(match[2]);
     for (const match of line.matchAll(/>([^<>{}=]*[A-Za-z][^<>{}=]*)</g)) parts.push(match[1]);
+    // One-word values of copy-bearing props (label="Gateway") are read too; other one-word literals are code values.
+    for (const match of line.matchAll(COPY_PROP)) if (!/\s/.test(match[2])) parts.push(match[2]);
     const trimmed = line.trim();
     // A text-only line is JSX text; parameter lists ("projection: Inbox,"), continued conditions and property
     // access ("projection.items") are code.
