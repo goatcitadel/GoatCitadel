@@ -206,21 +206,17 @@ export async function runUxBudgetInboxChanges(environment) {
               `Inbox document ${variant}: accessibility ${blockingAxe.map((violation) => violation.id).join(", ") || "clear"}; overflow ${overflow.overflow}px`,
             );
           }
-          await detail
-            .getByRole("button", { name: decision === "apply" ? "Review apply" : "Review rejection" })
-            .click();
-          await page
-            .getByRole("dialog", { name: decision === "apply" ? "Apply document patch" : "Reject document patch" })
-            .waitFor();
+          const decisionButton = detail.getByRole("button", {
+            name: decision === "apply" ? "Apply change" : "Reject change",
+          });
+          await decisionButton.waitFor();
           await page.screenshot({ path: confirmShot, fullPage: false });
           const before = await requestJson(stack.gatewayUrl, proposalUrl);
           assertOk(before, `read ${variant} unmodified document proposal`);
           if (before.body?.items?.find((entry) => entry.proposalId === proposal.proposalId)?.state !== "pending") {
-            throw new Error("Reviewing the Inbox document decision changed its canonical owner state.");
+            throw new Error("Opening the Inbox document decision changed its canonical owner state.");
           }
-          await page
-            .getByRole("button", { name: decision === "apply" ? "Confirm apply" : "Confirm rejection" })
-            .click();
+          await decisionButton.click();
           await detail
             .getByText(`Proposal ${decision === "apply" ? "applied" : "rejected"}.`, {
               exact: false,

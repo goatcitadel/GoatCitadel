@@ -163,17 +163,14 @@ describe("Inbox Chat question", () => {
     expect(container.textContent).toContain("Safe path");
   });
 
-  it("reviews a choice, re-reads both owners, then submits the exact answer once", async () => {
+  it("sends a choice in place, re-reads both owners, then submits the exact answer once", async () => {
     await renderDetail();
     // Opening checks the cached Inbox; only the answer re-reads it.
     expect(api.fetchOperatorInbox).not.toHaveBeenCalled();
     const radio = container.querySelector<HTMLInputElement>('input[type="radio"]');
     if (!radio) throw new Error("Missing option");
     await act(async () => radio.click());
-    await act(async () => button("Review answer").click());
-    expect(document.body.textContent).toContain("Safe path");
-    expect(api.answerChatUserInputPrompt).not.toHaveBeenCalled();
-    await act(async () => button("Confirm answer").click());
+    await act(async () => button("Send answer").click());
     expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(1);
     expect(api.fetchChatThread).toHaveBeenCalledTimes(2);
     expect(api.answerChatUserInputPrompt).toHaveBeenCalledOnce();
@@ -193,8 +190,7 @@ describe("Inbox Chat question", () => {
       setValue?.call(input, "  Use the safe route  ");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await act(async () => button("Review answer").click());
-    await act(async () => button("Confirm answer").click());
+    await act(async () => button("Send answer").click());
     expect(api.answerChatUserInputPrompt).toHaveBeenCalledWith("session-a", "turn-a", "prompt-a", {
       response: { kind: "text", text: "Use the safe route" },
     });
@@ -208,8 +204,7 @@ describe("Inbox Chat question", () => {
     const radio = container.querySelector<HTMLInputElement>('input[type="radio"]');
     if (!radio) throw new Error("Missing option");
     await act(async () => radio.click());
-    await act(async () => button("Review answer").click());
-    await act(async () => button("Confirm answer").click());
+    await act(async () => button("Send answer").click());
     expect(api.answerChatUserInputPrompt).not.toHaveBeenCalled();
     expect(container.textContent).toContain("The question changed or is no longer waiting");
   });
@@ -219,9 +214,7 @@ describe("Inbox Chat question", () => {
     await renderDetail();
     expect(api.fetchChatThread).not.toHaveBeenCalled();
     expect(container.textContent).toContain("no longer waiting in the selected workspace");
-    expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Review answer")).toBe(
-      false,
-    );
+    expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Send answer")).toBe(false);
   });
 
   it("does not offer an expired question as a current action", async () => {
@@ -230,9 +223,7 @@ describe("Inbox Chat question", () => {
     api.fetchChatThread.mockResolvedValue(threadWith({ ...prompt, expiresAt: expiredAt }));
     await renderDetail({ ...item, expiresAt: expiredAt });
     expect(container.textContent).toContain("no longer waiting in the selected workspace");
-    expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Review answer")).toBe(
-      false,
-    );
+    expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Send answer")).toBe(false);
   });
 
   it("keeps secure configuration in Chat", async () => {
@@ -254,9 +245,7 @@ describe("Inbox Chat question", () => {
     await renderDetail();
     expect(container.textContent).toContain("Use Open source conversation to enter it securely");
     expect(container.querySelector('input[type="password"]')).toBeNull();
-    expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Review answer")).toBe(
-      false,
-    );
+    expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Send answer")).toBe(false);
   });
 
   it("locks another answer after an uncertain request outcome", async () => {
@@ -265,13 +254,10 @@ describe("Inbox Chat question", () => {
     const radio = container.querySelector<HTMLInputElement>('input[type="radio"]');
     if (!radio) throw new Error("Missing option");
     await act(async () => radio.click());
-    await act(async () => button("Review answer").click());
-    await act(async () => button("Confirm answer").click());
+    await act(async () => button("Send answer").click());
     expect(api.answerChatUserInputPrompt).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("Answer outcome is uncertain");
-    expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Review answer")).toBe(
-      false,
-    );
+    expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Send answer")).toBe(false);
   });
 
   it("keeps the answer form available after the owner refuses an answer", async () => {
@@ -288,13 +274,11 @@ describe("Inbox Chat question", () => {
     const radio = container.querySelector<HTMLInputElement>('input[type="radio"]');
     if (!radio) throw new Error("Missing option");
     await act(async () => radio.click());
-    await act(async () => button("Review answer").click());
-    await act(async () => button("Confirm answer").click());
+    await act(async () => button("Send answer").click());
     expect(container.textContent).toContain("Choose one of the offered options.");
     expect(container.textContent).not.toContain("uncertain");
-    expect(button("Review answer").disabled).toBe(false);
-    await act(async () => button("Review answer").click());
-    await act(async () => button("Confirm answer").click());
+    expect(button("Send answer").disabled).toBe(false);
+    await act(async () => button("Send answer").click());
     expect(api.answerChatUserInputPrompt).toHaveBeenCalledTimes(2);
     expect(container.textContent).toContain("Answer sent");
   });
@@ -327,7 +311,7 @@ describe("Inbox Chat question", () => {
     expect(container.textContent).toContain("Checking for changes…");
     expect(container.querySelector('input[type="radio"]')).not.toBeNull();
     expect(container.querySelector<HTMLInputElement>('input[type="radio"]')!.disabled).toBe(true);
-    expect(button("Review answer").disabled).toBe(true);
+    expect(button("Send answer").disabled).toBe(true);
     await act(async () => release());
     await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
     expect(container.querySelector<HTMLInputElement>('input[type="radio"]')!.disabled).toBe(false);
@@ -347,8 +331,7 @@ describe("Inbox Chat question", () => {
     );
     await vi.waitFor(() => expect(container.querySelector('input[type="radio"]')).not.toBeNull());
     await act(async () => container.querySelector<HTMLInputElement>('input[type="radio"]')!.click());
-    await act(async () => button("Review answer").click());
-    expect(button("Confirm answer").disabled).toBe(false);
+    expect(button("Send answer").disabled).toBe(false);
     let release!: () => void;
     api.fetchChatThread.mockImplementationOnce(
       () =>
@@ -361,10 +344,10 @@ describe("Inbox Chat question", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(container.textContent).toContain("Checking for changes…");
-    expect(button("Confirm answer").disabled).toBe(true);
+    expect(button("Send answer").disabled).toBe(true);
     await act(async () => release());
     await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
-    expect(button("Confirm answer").disabled).toBe(false);
+    expect(button("Send answer").disabled).toBe(false);
   });
 
   it("keeps the question beside a failed recheck", async () => {

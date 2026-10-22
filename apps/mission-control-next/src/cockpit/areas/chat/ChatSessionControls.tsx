@@ -2,7 +2,6 @@ import { useState, type FormEvent } from "react";
 import { MoreHorizontal, Pencil } from "lucide-react";
 import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surface-core";
 import { Button } from "../../ui/Button";
-import { Dialog } from "../../ui/Dialog";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../../ui/Menu";
 
 export function ChatSessionTitle({ title, dock }: { title: string; dock: MissionThreadedContextDockProps | null }) {
@@ -85,10 +84,8 @@ export function ChatSessionOverflow({
   /** On a phone the header keeps one row, so Projects and New conversation move into this menu. */
   phoneActions?: { onOpenProjects: () => void; onNewConversation: () => void; newConversationDisabled?: boolean };
 }) {
-  const [archiveOpen, setArchiveOpen] = useState(false);
   if (!dock && !onOpenBuildEditor && !phoneActions) return null;
-  const archived = Boolean(dock?.selectedSession.archivedAt);
-  const archivePending = dock?.sessionControlPending === "archive";
+  // Archive acts at once (CH-R08): the conversation stays recoverable in Archived.
   // Radix gives the menu Escape, arrow keys and focus return; the bare <details> it replaces had none.
   return (
     <>
@@ -124,34 +121,15 @@ export function ChatSessionOverflow({
               Inspect conversation
             </MenuItem>
           ) : null}
-          {dock ? <ChatSessionMenuItems dock={dock} onFork={onFork} onArchive={() => setArchiveOpen(true)} /> : null}
+          {dock ? (
+            <ChatSessionMenuItems
+              dock={dock}
+              onFork={onFork}
+              onArchive={() => void dock.onToggleArchiveSession().catch(() => undefined)}
+            />
+          ) : null}
         </MenuContent>
       </Menu>
-      {dock ? (
-        <Dialog
-          open={archiveOpen}
-          onOpenChange={setArchiveOpen}
-          title={archived ? "Restore conversation?" : "Archive conversation?"}
-          description={
-            archived
-              ? "The conversation will return to recent history."
-              : "The conversation will leave recent history and remain recoverable in Archived."
-          }
-        >
-          <div className="flex justify-end gap-2">
-            <Button onClick={() => setArchiveOpen(false)} disabled={archivePending}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              disabled={archivePending}
-              onClick={() => void dock.onToggleArchiveSession().then(() => setArchiveOpen(false))}
-            >
-              {archivePending ? "Working…" : archived ? "Restore" : "Archive"}
-            </Button>
-          </div>
-        </Dialog>
-      ) : null}
     </>
   );
 }

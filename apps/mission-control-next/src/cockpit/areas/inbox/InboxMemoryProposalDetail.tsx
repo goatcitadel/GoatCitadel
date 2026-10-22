@@ -12,7 +12,6 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { queryKeys } from "../../data/query-keys";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
-import { Dialog } from "../../ui/Dialog";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { classifyOperationFailure } from "./approval-operation-attempts";
 import { canResolveInboxMemoryProposal } from "./memory-proposal-guard";
@@ -36,9 +35,6 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
   const scopeRef = useRef(activeWorkspaceId ?? "default");
   scopeRef.current = activeWorkspaceId ?? "default";
   const locked = useRef(false);
-  const [review, setReview] = useState<{ candidate: TraceMemoryCandidateRecord; action: "promote" | "reject" } | null>(
-    null,
-  );
   const [pending, setPending] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [outcomeUncertain, setOutcomeUncertain] = useState(false);
@@ -62,16 +58,8 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
     candidate && !scopeChanged && canResolveInboxMemoryProposal(item, candidate, candidate, workspaceId),
   );
 
-  async function resolve() {
-    if (
-      !review ||
-      !candidateId ||
-      locked.current ||
-      pending ||
-      completed ||
-      outcomeUncertain ||
-      scopeRef.current !== workspaceId
-    )
+  async function resolve(review: { candidate: TraceMemoryCandidateRecord; action: "promote" | "reject" }) {
+    if (!candidateId || locked.current || pending || completed || outcomeUncertain || scopeRef.current !== workspaceId)
       return;
     locked.current = true;
     setPending(true);
@@ -83,7 +71,6 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
         scopeRef.current !== workspaceId ||
         !canResolveInboxMemoryProposal(item, review.candidate, latest ?? undefined, workspaceId)
       ) {
-        setReview(null);
         setError("The proposal changed or left the pending queue. Refresh its current record before deciding.");
         rereadSuperseded();
         return;
@@ -111,12 +98,10 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
         }
         setNotice("Proposal rejected.");
       }
-      setReview(null);
       setCompleted(true);
       rereadSuperseded();
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
     } catch (cause) {
-      setReview(null);
       if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
         // Gateway answered and recorded nothing: the decisions stay available.
         setError(`The decision was not accepted. ${describeApiError(cause).summary}`);
@@ -142,7 +127,6 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
           size="sm"
           disabled={query.isFetching || pending || !candidateId}
           onClick={() => {
-            setReview(null);
             setError("");
             void query.refetch();
           }}
@@ -210,14 +194,14 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
             size="sm"
             variant="primary"
             disabled={pending || checking}
-            onClick={() => setReview({ candidate: candidate!, action: "promote" })}
+            onClick={() => void resolve({ candidate: candidate!, action: "promote" })}
           >
             Promote to memory
           </Button>
           <Button
             size="sm"
             disabled={pending || checking}
-            onClick={() => setReview({ candidate: candidate!, action: "reject" })}
+            onClick={() => void resolve({ candidate: candidate!, action: "reject" })}
           >
             Reject proposal
           </Button>
@@ -245,32 +229,6 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
       >
         Open Memory
       </NativeOwnerLink>
-      <Dialog
-        open={Boolean(review)}
-        onOpenChange={(open) => {
-          if (!open && !pending) setReview(null);
-        }}
-        title={review?.action === "promote" ? "Promote this proposal" : "Reject this proposal"}
-        description={
-          review?.action === "promote"
-            ? "This saves the reviewed insight to this workspace's long-term memory."
-            : "This records a rejection of the reviewed proposal."
-        }
-      >
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="primary"
-            disabled={pending || scopeChanged || checking}
-            onClick={() => void resolve()}
-          >
-            Confirm {review?.action === "promote" ? "promotion" : "rejection"}
-          </Button>
-          <Button size="sm" disabled={pending} onClick={() => setReview(null)}>
-            Cancel
-          </Button>
-        </div>
-      </Dialog>
     </section>
   );
 }

@@ -135,7 +135,7 @@ describe("Inbox memory proposal review", () => {
     ).toBe(false);
   });
 
-  it("shows the current proposal and confirms promotion after a fresh owner read", async () => {
+  it("shows the current proposal and promotes in place after a fresh owner read", async () => {
     await render();
     expect(container.textContent).toContain("Proposed insight: Use the project style guide.");
     expect(api.fetchTraceMemoryCandidate).toHaveBeenCalledWith("candidate-a", {
@@ -144,8 +144,7 @@ describe("Inbox memory proposal review", () => {
     });
     expect(api.fetchTraceMemoryCandidates).not.toHaveBeenCalled();
     await act(async () => button("Promote to memory").click());
-    expect(api.promoteTraceMemoryCandidate).not.toHaveBeenCalled();
-    await act(async () => button("Confirm promotion").click());
+    expect(document.body.querySelector("[role=dialog]")).toBeNull();
     await settle();
     // Open, the decision's re-read, then the decided record is reset and read once more.
     expect(api.fetchTraceMemoryCandidate).toHaveBeenCalledTimes(3);
@@ -167,24 +166,10 @@ describe("Inbox memory proposal review", () => {
     expect(button("Promote to memory").disabled).toBe(false);
   });
 
-  it("keeps an open decision review open while the proposal is rechecked", async () => {
-    const client = await render();
-    await act(async () => button("Promote to memory").click());
-    const finish = await startRecheck(client);
-    expect(button("Confirm promotion").disabled).toBe(true);
-    await finish();
-    expect(button("Confirm promotion").disabled).toBe(false);
-  });
-
   it("promotes with a primary button and rejects with a secondary one, never in the danger style", async () => {
     await render();
     expect(button("Promote to memory").className).toContain("bg-accent");
     expect(button("Reject proposal").className).toContain("bg-raised");
-    await act(async () => button("Promote to memory").click());
-    expect(button("Confirm promotion").className).toContain("bg-accent");
-    await act(async () => button("Cancel").click());
-    await act(async () => button("Reject proposal").click());
-    expect(button("Confirm rejection").className).toContain("bg-accent");
     expect(document.body.innerHTML).not.toContain("text-status-failed hover:bg-sunken");
   });
 
@@ -204,17 +189,15 @@ describe("Inbox memory proposal review", () => {
     await render();
     api.fetchTraceMemoryCandidate.mockResolvedValueOnce({ ...candidate, proposedInsight: "Changed" });
     await act(async () => button("Reject proposal").click());
-    await act(async () => button("Confirm rejection").click());
     await settle();
     expect(api.rejectTraceMemoryCandidate).not.toHaveBeenCalled();
     expect(container.textContent).toContain("The proposal changed or left the pending queue");
   });
 
-  it("confirms rejection and checks the owner response", async () => {
+  it("rejects a memory proposal in place and checks the owner response", async () => {
     await render();
     await act(async () => button("Reject proposal").click());
-    expect(api.rejectTraceMemoryCandidate).not.toHaveBeenCalled();
-    await act(async () => button("Confirm rejection").click());
+    expect(document.body.querySelector("[role=dialog]")).toBeNull();
     await settle();
     expect(api.rejectTraceMemoryCandidate).toHaveBeenCalledWith("candidate-a");
     expect(container.textContent).toContain("Proposal rejected.");
@@ -230,7 +213,6 @@ describe("Inbox memory proposal review", () => {
       sourceRefs: candidate.sourceRefs,
     });
     await act(async () => button("Promote to memory").click());
-    await act(async () => button("Confirm promotion").click());
     await settle();
     expect(container.textContent).toContain("Decision outcome is uncertain");
     expect(container.textContent).not.toContain("Promoted to workspace memory");
@@ -240,7 +222,6 @@ describe("Inbox memory proposal review", () => {
     await render();
     api.promoteTraceMemoryCandidate.mockRejectedValueOnce(new Error("Network lost"));
     await act(async () => button("Promote to memory").click());
-    await act(async () => button("Confirm promotion").click());
     await settle();
     expect(container.textContent).toContain("Decision outcome is uncertain");
     expect(container.textContent).not.toContain("Promote to memory");
@@ -259,13 +240,11 @@ describe("Inbox memory proposal review", () => {
       }),
     );
     await act(async () => button("Promote to memory").click());
-    await act(async () => button("Confirm promotion").click());
     await settle();
     expect(container.textContent).toContain("Insight is required.");
     expect(container.textContent).not.toContain("uncertain");
     expect(button("Promote to memory").disabled).toBe(false);
     await act(async () => button("Promote to memory").click());
-    await act(async () => button("Confirm promotion").click());
     await settle();
     expect(api.promoteTraceMemoryCandidate).toHaveBeenCalledTimes(2);
     expect(container.textContent).toContain("Promoted to workspace memory");
