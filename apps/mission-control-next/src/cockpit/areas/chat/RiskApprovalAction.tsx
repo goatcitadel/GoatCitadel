@@ -49,11 +49,18 @@ export function RiskApprovalAction({
       evidence?.supporting.some((detail) => /^(?:Url|Uri|Selector|Field|Input):/.test(detail)),
     );
 
+  // These sentences name the controls beside them (the approval summary and Deny), not a page they can't link to.
   if (!approval.riskLevel)
-    return <p className="text-xs text-fg-muted">Risk is unavailable. Review the persisted approval before deciding.</p>;
+    return (
+      <p className="text-xs text-fg-muted">
+        Risk is unavailable, so Approve once is off. Check the approval summary above, or use Deny.
+      </p>
+    );
   if (approval.kind === "remote_worker.native_runtime" && !specialistReview)
     return (
-      <p className="text-xs text-fg-muted">This runtime request needs the native review shown in current approvals.</p>
+      <p className="text-xs text-fg-muted">
+        This runtime request can be approved only after its runtime review loads. Use Deny to refuse it now.
+      </p>
     );
   // Only the two lowest tiers approve in one click. Danger opens the evidence review, and nuclear
   // or any risk level this build doesn't know also needs the typed confirmation.
@@ -174,7 +181,8 @@ export function RiskApprovalAction({
             ) : null}
             {!hasActionPreview ? (
               <p role="alert">
-                The current action preview is unavailable here. Open the persisted approval before deciding.
+                The current action preview is unavailable, so Approve once is off. Cancel, then use Deny or wait for the
+                preview.
               </p>
             ) : null}
           </div>

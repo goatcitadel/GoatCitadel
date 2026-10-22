@@ -120,4 +120,17 @@ describe("native Council review", () => {
     expect(dialog?.textContent).toContain("b".repeat(64));
     expect(api.unassignCitadelCouncilAgent).not.toHaveBeenCalled();
   });
+  it("renders rows as hairline-separated items, not bordered cards", async () => {
+    owner = {
+      ...owner,
+      revision: "b".repeat(64),
+      council: [{ agentId: "research", assignmentId: "seat", citadelId: "one", createdAt: "now" }],
+    };
+    await click("Refresh rules");
+    const list = container.querySelector('ul[aria-label="Seated agents"]')!;
+    expect(list.className).toContain("divide-y");
+    const rows = [...list.querySelectorAll(":scope > li")];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row.className).not.toMatch(/\brounded-md\b|\bborder\b|\bp-3\b/);
+  });
 });

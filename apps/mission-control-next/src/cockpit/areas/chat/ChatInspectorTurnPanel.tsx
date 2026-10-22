@@ -7,6 +7,8 @@ import { StatusBadge } from "../../ui/StatusBadge";
 import { DetailRow, FallbackDetailRow, ModelDetailRow, ModelTechnicalDetails } from "./chat-inspector-evidence";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { recordedCostLabel } from "./recorded-cost";
+import { presentErrorText } from "../../lib/present-error";
+import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 
 /** The inspector Message tab: status, model, fallback, counts, duration, cost and tool calls for one turn. */
 export function ChatInspectorTurnPanel({ selectedTurn }: { selectedTurn: ChatThreadTurnRecord | undefined }) {
@@ -44,9 +46,10 @@ export function ChatInspectorTurnPanel({ selectedTurn }: { selectedTurn: ChatThr
         modelId={selectedTurn.trace.routing?.effectiveModel ?? selectedTurn.trace.model}
       />
       {selectedTurn.trace.failure?.message ? (
-        <p className="rounded-md border border-status-failed p-2 text-sm text-fg-secondary">
-          {selectedTurn.trace.failure.message}
-        </p>
+        <div className="space-y-2 rounded-md border border-status-failed p-2 text-sm text-fg-secondary">
+          <p>{presentErrorText(selectedTurn.trace.failure.message).summary}</p>
+          <RecordedErrorDetails error={selectedTurn.trace.failure.message} />
+        </div>
       ) : null}
       {selectedTurn.toolRuns.length ? (
         <ol className="space-y-1">

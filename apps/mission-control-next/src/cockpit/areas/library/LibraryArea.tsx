@@ -17,6 +17,7 @@ import {
 } from "../../../app/route-model";
 import { readCatalogLocation } from "./capability-catalog-route";
 import { EmptyState } from "../../ui/EmptyState";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { LibraryAgentsWorkspace } from "./LibraryAgentsWorkspace";
 import { LibraryKnowledgeWorkspace } from "./LibraryKnowledgeWorkspace";
 import { LibraryCommunications } from "./LibraryCommunications";
@@ -81,10 +82,16 @@ export function LibraryArea() {
         ) : null}
         {invalid ? (
           <div className={AREA_PAGE}>
-            <AreaHeader title="Library" />
+            {/* LB-N10: an unknown Library link says plainly that the page wasn't found and offers the way back. */}
+            <AreaHeader title="Page not found" />
             <EmptyState
-              title="Library destination unavailable"
-              description="This link does not identify a supported Library destination. Check the link or open Library."
+              title="No Library page at this link"
+              description="This link does not open a Library page. Check the link, or open Library to choose a section."
+              action={
+                <NativeOwnerLink href="/library" scope="library-not-found" className="font-medium">
+                  Open Library
+                </NativeOwnerLink>
+              }
             />
           </div>
         ) : nativeSection === "agents" ? (

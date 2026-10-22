@@ -84,7 +84,7 @@ export function MemoryQualityView({
       >
         Review quality scan
       </Button>
-      <ul className="grid min-w-0 max-w-full grid-cols-1 gap-3">
+      <ul className="grid min-w-0 max-w-full grid-cols-1 divide-y divide-line-subtle">
         {data?.memoryQualityIssues
           .filter((item) => item.workspaceId === workspaceId)
           .map((item) => (
@@ -161,7 +161,7 @@ function QualityIssueItem({
   request: RequestReview;
 }) {
   return (
-    <li className="rounded-md border border-line p-3">
+    <li className="py-3">
       <h4>{item.summary}</h4>
       <div className="flex flex-wrap items-center gap-1">
         <StatusBadge status={presentIssueSeverity(item.severity)} />
@@ -231,6 +231,7 @@ function RecallProbeResult({ benchmark }: { benchmark: MemoryRetrievalBenchmarkR
       </p>
       <p>{benchmark.semanticCoverageNote}</p>
       {benchmark.warnings.map((warning) => (
+        // The result of the operator's own recall probe, so the warnings announce.
         <Callout key={warning} tone="warning">
           {warning}
         </Callout>

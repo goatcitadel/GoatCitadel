@@ -115,6 +115,37 @@ describe("schedule summary rendering", () => {
     expect(container.textContent).not.toContain("memory_consolidation");
   });
 
+  it("shows the cadence in words and keeps the cron expression out of the default view", () => {
+    const job = buildJob();
+    act(() =>
+      root.render(
+        <ul>
+          <WorkScheduleListItem job={job} onReview={() => {}} />
+        </ul>,
+      ),
+    );
+    expect(container.textContent).toContain("Every week on Sunday at 02:00");
+    expect(container.innerHTML).not.toContain("0 2 * * 0");
+    act(() => root.render(<WorkScheduleRecordDetails selected={job} />));
+    expect(container.textContent).toContain("Every week on Sunday at 02:00");
+    expect(container.textContent).not.toContain("0 2 * * 0");
+  });
+
+  it("shows an expression it cannot word, with the expression as the list title", () => {
+    const job = buildJob({ schedule: "*/15 * * * *" });
+    act(() =>
+      root.render(
+        <ul>
+          <WorkScheduleListItem job={job} onReview={() => {}} />
+        </ul>,
+      ),
+    );
+    expect(container.textContent).toContain("Custom schedule: */15 * * * *");
+    expect(container.querySelector('[title="*/15 * * * *"]')).not.toBeNull();
+    act(() => root.render(<WorkScheduleRecordDetails selected={job} />));
+    expect(container.textContent).toContain("Custom schedule: */15 * * * *");
+  });
+
   it("shows a skipped last run and its reason instead of success", () => {
     const job = buildJob({
       lastRunStatus: "skipped",

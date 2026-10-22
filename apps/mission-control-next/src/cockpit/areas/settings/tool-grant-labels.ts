@@ -1,4 +1,4 @@
-import type { ToolGrantDecision, ToolGrantRecord, ToolGrantScope } from "@goatcitadel/contracts";
+import type { ToolGrantDecision, ToolGrantRecord, ToolGrantScope, ToolGrantType } from "@goatcitadel/contracts";
 
 /** Operator words for a recorded grant's decision and scope; the raw values stay in the grant's details. */
 export const TOOL_GRANT_DECISION_LABELS: Record<ToolGrantDecision, string> = { allow: "Allow", deny: "Deny" };
@@ -21,3 +21,9 @@ export function describeToolGrant(grant: Pick<ToolGrantRecord, "toolPattern" | "
     TOOL_GRANT_SCOPE_LABELS[grant.scope] ?? "Unknown scope",
   ].join(" · ");
 }
+
+export const TOOL_GRANT_TYPE_LABELS: Record<ToolGrantType, string> = {
+  persistent: "Until revoked",
+  ttl: "Expires at a time",
+  one_time: "One use",
+};

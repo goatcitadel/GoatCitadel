@@ -6,7 +6,7 @@ import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-su
 import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { expect, it, vi } from "vitest";
 import { ChatAreaView } from "./ChatArea";
-import { InspectorProvider, InspectorPanel } from "../../app/inspector";
+import { InspectorProvider, InspectorPanel, useInspector } from "../../app/inspector";
 
 vi.mock("./ThreadList", () => ({ ThreadList: () => null }));
 vi.mock("./SelectedThreadActivity", () => ({ SelectedThreadActivity: () => null }));
@@ -46,7 +46,7 @@ function Scope() {
   return null;
 }
 // Minimal rendering-only controller fixture; every runtime/mutation leaf is replaced above.
-function input(id: string): MissionThreadedRenderSurfaceInput {
+function input(id: string, extra: Record<string, unknown> = {}): MissionThreadedRenderSurfaceInput {
   return {
     sessionRail: { selectedSessionId: id, missionSessions: [], onCreateSession: vi.fn(), creatingSession: false },
     activeSessionSurfaceProps: {
@@ -55,6 +55,7 @@ function input(id: string): MissionThreadedRenderSurfaceInput {
       sessionTitle: id,
       onSelectTurn: vi.fn(),
       thread: { turns: [] },
+      ...extra,
     },
   } as unknown as MissionThreadedRenderSurfaceInput;
 }
@@ -95,7 +96,7 @@ it("registers B/latest after inspecting A/turn and drops the target again on sam
     await act(async () => {
       key();
     });
-    expect(document.body.textContent).toContain("b:latest:run");
+    expect(document.body.textContent).toContain("b:latest:turn");
     expect(document.body.textContent).not.toContain("a-turn");
     await act(async () => {
       inspect().click();
@@ -108,8 +109,65 @@ it("registers B/latest after inspecting A/turn and drops the target again on sam
     await act(async () => {
       key();
     });
-    expect(document.body.textContent).toContain("b:latest:run");
+    expect(document.body.textContent).toContain("b:latest:turn");
     expect(document.body.textContent).not.toContain("b-turn");
+  } finally {
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+    client.clear();
+  }
+});
+
+it("opens the Inspect panel on Message for an ordinary turn", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(["system", "onboarding"], { completed: true });
+  let inspector: ReturnType<typeof useInspector> | undefined;
+  function Probe() {
+    inspector = useInspector();
+    return null;
+  }
+  const ordinary = { turnId: "plain", branch: { isSelectedPath: true } };
+  const withRun = { turnId: "delegated", branch: { isSelectedPath: true } };
+  const render = (surface: MissionThreadedRenderSurfaceInput) => (
+    <QueryClientProvider client={client}>
+      <UiPreferencesProvider>
+        <InspectorProvider>
+          <Probe />
+          <ChatAreaView input={surface} />
+          <InspectorPanel />
+        </InspectorProvider>
+      </UiPreferencesProvider>
+    </QueryClientProvider>
+  );
+  const inspectButton = () => container.querySelector<HTMLButtonElement>('button[aria-label="Inspect"]')!;
+  try {
+    await act(async () => {
+      root.render(render(input("a", { thread: { turns: [ordinary] } })));
+    });
+    await act(async () => {
+      inspectButton().click();
+    });
+    // The header's Inspect opens the Chat inspector on the Message tab for an ordinary latest turn.
+    expect(inspector?.content?.source).toBe("chat");
+    expect(document.body.textContent).toContain("a:latest:turn");
+    await act(async () => {
+      inspectButton().click();
+    });
+    // Only a turn with an attached run opens on Run.
+    await act(async () => {
+      root.render(
+        render(input("a", { thread: { turns: [ordinary, withRun] }, delegationRun: { attachedTurnId: "delegated" } })),
+      );
+    });
+    await act(async () => {
+      inspectButton().click();
+    });
+    expect(document.body.textContent).toContain("a:latest:run");
   } finally {
     await act(async () => {
       root.unmount();

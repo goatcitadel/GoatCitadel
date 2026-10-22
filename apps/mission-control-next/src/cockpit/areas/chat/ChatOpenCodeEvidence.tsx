@@ -1,5 +1,7 @@
 import { readOpenCodeRunSummary, type ChatToolRunRecord } from "@goatcitadel/contracts";
 import { AssistantMessageRenderer } from "@goatcitadel/mission-control-shared/components/chat/AssistantMessageRenderer";
+import { presentErrorText } from "../../lib/present-error";
+import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 
 /** External agent output is a bounded report, not proof that a file changed. */
 export function ChatOpenCodeEvidence({
@@ -37,11 +39,7 @@ export function ChatOpenCodeEvidence({
             These are external agent reports. Review the run and the reported files before treating them as applied
             changes.
           </p>
-          {report.error ? (
-            <p role="alert" className="rounded-md border border-status-failed p-2 text-fg">
-              OpenCode reported a problem: {report.error}
-            </p>
-          ) : null}
+          {report.error ? <OpenCodeReportError error={report.error} /> : null}
           {report.text ? (
             <div className="max-h-60 overflow-y-auto rounded-md border border-line-subtle bg-raised p-2 text-sm text-fg">
               <AssistantMessageRenderer role="assistant" content={report.text} />
@@ -82,7 +80,7 @@ export function ChatOpenCodeEvidence({
                   <li key={step.id} className="flex flex-wrap justify-between gap-2 py-2">
                     <span className="text-fg">{step.title}</span>
                     <span>{step.status === "error" ? "Failed" : "Reported done"}</span>
-                    {step.error ? <span className="w-full">{step.error}</span> : null}
+                    {step.error ? <OpenCodeStepError error={step.error} /> : null}
                   </li>
                 ))}
               </ol>
@@ -95,5 +93,23 @@ export function ChatOpenCodeEvidence({
         </article>
       ))}
     </section>
+  );
+}
+
+function OpenCodeReportError({ error }: { error: string }) {
+  return (
+    <div role="alert" className="space-y-2 rounded-md border border-status-failed p-2 text-fg">
+      <p>OpenCode reported a problem: {presentErrorText(error).summary}</p>
+      <RecordedErrorDetails error={error} />
+    </div>
+  );
+}
+
+function OpenCodeStepError({ error }: { error: string }) {
+  return (
+    <div className="w-full">
+      <p>{presentErrorText(error).summary}</p>
+      <RecordedErrorDetails error={error} />
+    </div>
   );
 }

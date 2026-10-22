@@ -191,9 +191,9 @@ export function LocalOperatorOverrides({ workspaceId }: { workspaceId: string })
       />
       <h4 className="font-semibold">Active overrides for this operator</h4>
       {!snapshot.isError ? (
-        <ul className="space-y-3">
+        <ul className="divide-y divide-line-subtle">
           {snapshot.data?.overrides.slice(0, limit).map((item) => (
-            <li key={item.overrideId} className="rounded-md border border-line p-3 text-sm">
+            <li key={item.overrideId} className="py-3 text-sm">
               <p>{item.reason}</p>
               <p>
                 {OVERRIDE_SCOPE_LABELS[item.scope] ?? "Unknown scope"} ·{" "}

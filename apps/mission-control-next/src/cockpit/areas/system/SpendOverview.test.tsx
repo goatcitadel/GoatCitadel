@@ -14,6 +14,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/settings", () => ({ fetchSettin
 vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
   fetchWorkspaces: vi.fn().mockResolvedValue({ items: [] }),
 }));
+// The catalog names one of the two observed models; the other has no label (VR-04).
+vi.mock("@goatcitadel/mission-control-shared/api/platform", () => ({
+  fetchLlmConfig: vi.fn().mockResolvedValue({ providerConfigs: [] }),
+  fetchLlmModels: vi.fn().mockResolvedValue({ items: [{ id: "model-a", label: "Model A" }, { id: "model-b" }] }),
+}));
 
 describe("cockpit Spend", () => {
   it("shows provider evidence as a lower bound and does not imply the routing mode is a cap", async () => {
@@ -67,13 +72,14 @@ describe("cockpit Spend", () => {
       expect(destination.hash).toBe("#cost-evidence");
       expect(api.fetchCostSummary).toHaveBeenCalledWith("day");
       expect(container.textContent).toContain("Alpha");
-      expect(container.textContent).toContain("$3.00+");
-      expect(container.textContent).toContain("Models observed: model-a, model-b");
+      expect(container.textContent).toContain("At least $3.00");
+      await vi.waitFor(() => expect(container.textContent).toContain("Models observed: Model A, Unnamed model"));
+      expect(container.textContent).not.toContain("model-b");
       expect(container.textContent).toContain("The mode is not a spend limit");
       expect(container.textContent).toContain("does not supply per-model cost totals");
       expect(container.textContent).toContain("Mon 28 Sep");
-      expect(container.querySelector('time[datetime="2026-09-28"]')?.getAttribute("title")).toBe("2026-09-28 UTC");
-      expect(container.textContent).toContain("Scale $0 to $5.00 · highest day $3.00");
+      expect(container.querySelector('time[datetime="2026-09-28"]')?.getAttribute("title")).toBe("Mon 28 Sep (UTC)");
+      expect(container.textContent).toContain("Scale $0 to $5.00 · highest day At least $3.00");
       expect(container.textContent).not.toContain("Recorded groups");
       expect(container.textContent).toContain("Grouped by day (UTC) ·");
       expect(container.textContent).toContain("currency USD");

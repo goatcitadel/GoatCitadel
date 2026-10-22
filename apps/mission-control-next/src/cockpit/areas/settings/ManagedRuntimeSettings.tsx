@@ -177,7 +177,7 @@ export function ManagedRuntimeSettings() {
         </>
       ) : null}
       {change.change ? (
-        <div className="space-y-2 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
+        <div className="space-y-2 border-t border-line-subtle pt-3 text-sm text-fg-secondary">
           <p role="status">
             {presentChangeStatusLabel(change.change.receipt.status)} · {change.change.message}
           </p>

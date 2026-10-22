@@ -57,7 +57,7 @@ describe("projectUsageCostSummary", () => {
       }),
     );
 
-    expect(projection.costLabel).toBe("$0.25+");
+    expect(projection.costLabel).toBe("At least $0.25");
     expect(projection.coverageDescription).toContain("lower bound");
   });
 

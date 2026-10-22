@@ -77,10 +77,7 @@ function BoardEditorView({
     owner.requestReview();
   }
   return (
-    <section
-      aria-label={base ? "Edit board" : "Create board"}
-      className="grid gap-4 rounded-lg border border-line-strong bg-raised p-4"
-    >
+    <section aria-label={base ? "Edit board" : "Create board"} className="grid gap-4 border-t border-line-subtle pt-4">
       <div>
         <h2 className="font-display text-lg font-semibold text-fg">{base ? "Edit board" : "Create board"}</h2>
         <p className="text-sm text-fg-secondary">
@@ -186,7 +183,7 @@ function BoardEditorView({
             className="rounded-md border border-line-control bg-canvas p-2 text-fg"
           />
         </label>
-        <div className="grid gap-2 rounded-md border border-line p-3">
+        <div className="grid gap-2 border-t border-line-subtle pt-3">
           <h3 className="text-sm font-semibold text-fg">
             Widgets ({draft.placements.length}/{OPS_SAVED_BOARD_LIMITS.placementsPerBoard})
           </h3>
@@ -217,12 +214,9 @@ function BoardEditorView({
               Add
             </Button>
           </div>
-          <ol className="grid gap-2">
+          <ol className="divide-y divide-line-subtle">
             {draft.placements.map((placement) => (
-              <li
-                key={placement.widgetId}
-                className="flex flex-wrap items-end gap-2 rounded-md border border-line-subtle bg-sunken p-2"
-              >
+              <li key={placement.widgetId} className="flex flex-wrap items-end gap-2 py-2">
                 <div className="min-w-32 flex-1">
                   <p className="text-sm font-medium text-fg">{formatOpsSavedBoardsWidgetLabel(placement.kind)}</p>
                   <p className="text-xs text-fg-muted">
@@ -241,7 +235,7 @@ function BoardEditorView({
                         [placement.widgetId]: event.target.value as OpsSavedBoardsPlacementAdjustment,
                       })
                     }
-                    className="rounded-md border border-line-control bg-canvas p-2 text-sm text-fg"
+                    className="rounded-md border border-line-control bg-canvas p-2 text-md sm:text-sm text-fg"
                   >
                     {ADJUSTMENTS.map((option) => (
                       <option key={option.value} value={option.value}>

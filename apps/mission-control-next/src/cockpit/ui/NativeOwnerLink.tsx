@@ -5,13 +5,21 @@ import { useShellHandoff } from "../../app/use-shell-handoff";
 import { CockpitNavigationContext } from "../app/cockpit-navigation-context";
 import { cockpitHref, commitCockpitNavigation } from "../app/cockpit-history";
 import { ShellSwitchFeedback } from "../app/use-cockpit-shell-switch";
+import { cn } from "../lib/cn";
 import { isModifiedClick } from "../lib/modified-click";
 
-/** Same-shell navigation uses the existing draft/scope/lifetime owner without remounting the application. */
+/** An owner link reads as a link at its natural width (WK-N04); callers' classes merge on top. */
+const LINK_CLASS = "w-fit text-accent underline-offset-2 hover:underline";
+
+/**
+ * Same-shell navigation uses the existing draft/scope/lifetime owner without remounting the application. A link with
+ * no cockpit destination renders nothing (GL-N08): text that looks like a link but goes nowhere is worse than none.
+ */
 export function NativeOwnerLink({
   href,
   scope,
   children,
+  className,
   ...attributes
 }: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href" | "onClick"> & {
   href: string;
@@ -21,11 +29,12 @@ export function NativeOwnerLink({
   const navigation = useContext(CockpitNavigationContext);
   const destination = cockpitHref(href);
   const handoff = useShellHandoff([getGatewayApiBaseUrl(), activeCitadelId, activeWorkspaceId, scope, destination]);
-  if (!destination) return <span className={attributes.className}>{children}</span>;
+  if (!destination) return null;
   return (
     <>
       <a
         {...attributes}
+        className={cn(LINK_CLASS, className)}
         href={destination}
         aria-disabled={handoff.opening || undefined}
         onClick={(event) => {

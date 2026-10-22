@@ -131,7 +131,7 @@ function WorkspaceInspector({ sessionId, workspaceId }: { sessionId: string; wor
       ) : null}
       {workbench ? (
         <>
-          <dl className="grid min-w-0 gap-3 rounded-md border border-line-subtle p-3 text-sm sm:grid-cols-2">
+          <dl className="grid min-w-0 gap-3 text-sm sm:grid-cols-2">
             <div>
               <dt className="text-xs text-fg-muted">Worktree status</dt>
               <dd className="text-fg">{WORKTREE_STATUS_LABELS[workbench.worktreeStatus] ?? "Unknown"}</dd>

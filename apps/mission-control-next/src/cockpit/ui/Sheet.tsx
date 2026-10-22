@@ -292,6 +292,8 @@ export function Sheet({
           <Drawer.Portal>
             <Drawer.Overlay className="fixed inset-0 z-40 bg-scrim" />
             <Drawer.Content
+              // A sheet has a title and no description; say so rather than point at a missing description.
+              aria-describedby={undefined}
               onOpenAutoFocus={handoffFocus}
               onCloseAutoFocus={
                 onCloseAutoFocus ??
@@ -305,7 +307,7 @@ export function Sheet({
               className={
                 side
                   ? "fixed inset-y-0 right-0 z-50 h-full w-full max-w-2xl overflow-hidden border-l border-line bg-overlay"
-                  : "cockpit-sheet fixed inset-x-0 bottom-0 z-50 overflow-hidden rounded-t-lg border border-line bg-overlay"
+                  : "cockpit-sheet cockpit-safe-bottom fixed inset-x-0 bottom-0 z-50 overflow-hidden rounded-t-lg border border-line bg-overlay"
               }
             >
               <div className={side ? "h-full overflow-y-auto p-4" : "cockpit-sheet-scroll overflow-y-auto p-4"}>

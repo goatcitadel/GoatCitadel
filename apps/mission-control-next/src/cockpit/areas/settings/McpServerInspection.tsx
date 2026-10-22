@@ -168,9 +168,9 @@ export function McpServerInspection({
                     Showing {Math.min(limit, data.tools.length)} of {data.tools.length} cached descriptors.
                   </p>
                   {!data.tools.length ? <p>No cached tools are recorded for this server.</p> : null}
-                  <ul className="space-y-2">
+                  <ul className="divide-y divide-line-subtle">
                     {data.tools.slice(0, limit).map((tool) => (
-                      <li key={tool.toolName} className="rounded-md border border-line p-3">
+                      <li key={tool.toolName} className="py-3">
                         <code className="break-all font-mono text-fg">{tool.toolName}</code>
                         <p>{tool.enabled ? "Descriptor enabled" : "Descriptor disabled"}</p>
                         <p className="break-words">{tool.description?.slice(0, 2000) || "Description not recorded."}</p>

@@ -6,6 +6,7 @@ import { WindowedRecordList } from "../../ui/WindowedRecordList";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TimeText } from "../../ui/TimeText";
 import { workRunTitle } from "./work-board";
+import { presentErrorText } from "../../lib/present-error";
 
 // The scanned item keeps its own hairline card; the column around it is flat.
 const CARD = "block rounded-md border border-line bg-raised p-3 hover:border-line-strong";
@@ -118,7 +119,9 @@ function RunCard({
         <TimeText value={run.updatedAt} className="text-xs text-fg-muted" />
       </span>
       {run.lastError || run.recoverySummary ? (
-        <span className="mt-2 block text-xs text-status-failed">{run.lastError ?? run.recoverySummary}</span>
+        <span className="mt-2 block text-xs text-status-failed">
+          {run.lastError ? presentErrorText(run.lastError).summary : run.recoverySummary}
+        </span>
       ) : null}
     </a>
   );

@@ -8,6 +8,8 @@ import type {
   LocalAiModelCatalogItem,
 } from "@goatcitadel/contracts";
 import { formatLocalAiBytes, formatLocalAiFit } from "../../../features/native-routes/settings/local-ai-model";
+import { TimeText } from "../../ui/TimeText";
+import { presentHostOs } from "./settings-vocabulary";
 
 const LIMIT = 40;
 const text = (value: string) => value.slice(0, 1600);
@@ -93,13 +95,14 @@ export function LocalAiHardware({ readiness }: { readiness: LocalAiReadinessResp
     runtimePage = pageFor(runtimePageIndex, hardware.runtimes.length);
   return (
     <div className="space-y-4 text-sm text-fg-secondary">
-      <p>Read-only host scan observed {hardware.checkedAt}. Detection does not prove successful inference.</p>
+      <p>
+        <TimeText prefix="Read-only host scan observed" value={hardware.checkedAt} />. Detection does not prove
+        successful inference.
+      </p>
       <dl className="grid gap-3 sm:grid-cols-2">
         <div>
           <dt className="font-medium text-fg">Operating system</dt>
-          <dd>
-            {hardware.os.platform} · {hardware.os.arch}
-          </dd>
+          <dd>{presentHostOs(hardware.os)}</dd>
         </div>
         <div>
           <dt className="font-medium text-fg">Processor</dt>
@@ -177,9 +180,9 @@ export function LocalAiHardware({ readiness }: { readiness: LocalAiReadinessResp
           ? ` Records ${runtimePage * LIMIT + 1}–${Math.min((runtimePage + 1) * LIMIT, hardware.runtimes.length)}.`
           : ""}
       </p>
-      <ul className="space-y-3">
+      <ul className="divide-y divide-line-subtle">
         {hardware.runtimes.slice(runtimePage * LIMIT, (runtimePage + 1) * LIMIT).map((runtime, index) => (
-          <li key={`${runtime.backend}:${runtimePage * LIMIT + index}`} className="rounded-md border border-line p-3">
+          <li key={`${runtime.backend}:${runtimePage * LIMIT + index}`} className="py-3">
             <strong className="text-fg">{formatLocalAiFit(runtime.backend)}</strong> ·{" "}
             {runtime.detected ? "Detected" : "Not detected"} · {formatLocalAiFit(runtime.platformSupport)}
             {runtime.version ? <p>Version {text(runtime.version)}</p> : null}
@@ -249,9 +252,9 @@ export function LocalAiJobs({ readiness }: { readiness: LocalAiReadinessResponse
             {!jobs.length ? (
               <p>No retained {label.toLowerCase()}.</p>
             ) : (
-              <ul className="space-y-2">
+              <ul className="divide-y divide-line-subtle">
                 {jobs.slice(page * LIMIT, (page + 1) * LIMIT).map((job) => (
-                  <li key={job.jobId} className="space-y-1 rounded-md border border-line p-3">
+                  <li key={job.jobId} className="space-y-1 py-3">
                     <p className="break-words font-medium text-fg">
                       {job.modelId} · {formatLocalAiFit(job.backend)}
                     </p>
@@ -326,9 +329,9 @@ export function LocalAiJobs({ readiness }: { readiness: LocalAiReadinessResponse
         {!readiness.endpoints.length ? (
           <p>No Local AI job endpoint is registered here.</p>
         ) : (
-          <ul className="space-y-2">
+          <ul className="divide-y divide-line-subtle">
             {readiness.endpoints.slice(endpointPage * LIMIT, (endpointPage + 1) * LIMIT).map((endpoint) => (
-              <li key={endpoint.endpointId} className="rounded-md border border-line p-3">
+              <li key={endpoint.endpointId} className="py-3">
                 <strong className="text-fg">{endpoint.label}</strong>
                 <p>
                   {endpoint.model} · {formatLocalAiFit(endpoint.backend)}

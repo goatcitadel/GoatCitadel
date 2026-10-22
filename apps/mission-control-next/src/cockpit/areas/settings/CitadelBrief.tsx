@@ -12,7 +12,7 @@ export function CitadelBrief({ citadelId }: { citadelId: string }) {
   const workspaceName = (workspaceId: string) =>
     brief?.workspaces.find((item) => item.workspaceId === workspaceId)?.name ?? "Another workspace";
   return (
-    <article aria-label="Daily Citadel brief" className="space-y-3 rounded-md border border-line-subtle bg-sunken p-3">
+    <article aria-label="Daily Citadel brief" className="space-y-3">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="text-sm font-medium text-fg">Daily brief</h4>
         <div className="flex flex-wrap gap-2">
@@ -66,9 +66,9 @@ export function CitadelBrief({ citadelId }: { citadelId: string }) {
           <p className="text-xs text-fg-muted">
             Spend and token totals cover the installation; they are not filtered to this Citadel.
           </p>
-          <ul aria-label="Approvals waiting on you" className="max-h-64 space-y-2 overflow-y-auto">
+          <ul aria-label="Approvals waiting on you" className="max-h-64 divide-y divide-line-subtle overflow-y-auto">
             {brief.approvals.pending.slice(0, 100).map((item) => (
-              <li key={item.approvalId} className="rounded-md border border-line-subtle bg-raised p-3">
+              <li key={item.approvalId} className="py-3">
                 <p className="text-sm font-medium text-fg">{presentApprovalAction(null, item.kind)}</p>
                 <p className="mt-1 break-words text-xs text-fg-secondary">
                   {presentRiskLevel(item.riskLevel).label} risk · waiting {formatDuration(item.ageMs)} ·{" "}

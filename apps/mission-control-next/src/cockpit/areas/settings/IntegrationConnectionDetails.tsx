@@ -22,7 +22,7 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
   if (!connection) return <p role="status">Choose a saved connection.</p>;
   const blocked = s.connectionMutation.locked || s.review.required;
   return (
-    <section aria-label="Integration connection details" className="space-y-4 rounded-md border border-line p-4">
+    <section aria-label="Integration connection details" className="space-y-4 border-t border-line-subtle pt-4">
       <h3 className="break-words font-semibold">{connection.label}</h3>
       <p className="text-sm text-fg-secondary">
         {connection.enabled ? "Enabled" : "Disabled"} · Configured status:{" "}

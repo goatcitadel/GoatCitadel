@@ -109,7 +109,9 @@ export function ProjectEditor({
       <UnattributedDraftRecovery editor={draft} />
       {error ? <Callout tone="error">{error}</Callout> : null}
       {!available ? (
-        <Callout tone="warning">Current project access is unavailable. Your draft is retained.</Callout>
+        <Callout tone="warning" announce={false}>
+          Current project access is unavailable. Your draft is retained.
+        </Callout>
       ) : null}
       {draft.hasRemoteChanges ? (
         <Callout tone="warning">

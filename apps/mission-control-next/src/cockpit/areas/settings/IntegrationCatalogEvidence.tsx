@@ -76,10 +76,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
           </label>
           {!services.length ? <p className="text-sm text-fg-muted">No imported connectors match this view.</p> : null}
           {services.slice(0, limit).map((service) => (
-            <details
-              key={`${service.sourceId}:${service.serviceId}`}
-              className="rounded-md border border-line-subtle p-3"
-            >
+            <details key={`${service.sourceId}:${service.serviceId}`} className="border-t border-line-subtle py-3">
               <summary className="cursor-pointer font-medium">
                 {service.label} · {service.reviewState.status}
               </summary>
@@ -161,7 +158,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
             <p className="text-sm text-fg-muted">No integration plugins are installed.</p>
           ) : null}
           {s.data?.plugins.slice(0, 50).map((plugin) => (
-            <article key={plugin.pluginId} className="space-y-2 rounded-md border border-line-subtle p-3">
+            <article key={plugin.pluginId} className="space-y-2 border-t border-line-subtle py-3">
               <h5 className="font-medium">
                 {plugin.label} · {plugin.enabled ? "Enabled" : "Disabled"}
               </h5>
@@ -201,7 +198,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
             <p className="text-sm text-fg-muted">No side-effect records are present in this exact view.</p>
           ) : null}
           {runs.slice(0, 25).map((run) => (
-            <article key={run.runId} className="space-y-2 rounded-md border border-line-subtle p-3">
+            <article key={run.runId} className="space-y-2 border-t border-line-subtle py-3">
               <p className="break-all text-sm font-medium">
                 {run.actionId ?? run.boundary} · {SIDE_EFFECT_STATUS_LABELS[run.status] ?? "Unknown"}
               </p>

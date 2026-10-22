@@ -584,6 +584,14 @@ it("says what a response without an approval means for each action (LB-11)", asy
   await click("Request edit approval");
   expect(document.body.textContent).toContain("No approval request came back for these changes");
   expect(document.body.textContent).not.toContain("already forgotten");
+  // "check Inbox" links Inbox in the same sentence (LB-N08).
+  const outcome = [...document.querySelectorAll('[role="alert"]')].find((node) =>
+    node.textContent?.includes("No approval request came back"),
+  );
+  expect(outcome?.textContent).toContain("Refresh the item and check Inbox before trying again.");
+  const inbox = outcome?.querySelector("a");
+  expect(inbox?.textContent).toBe("Inbox");
+  expect(new URL(inbox!.href).pathname).toBe("/inbox");
 });
 it("summarises which fields each history event changed (LB-11)", async () => {
   vi.mocked(fetchMemoryItemHistory).mockResolvedValue({

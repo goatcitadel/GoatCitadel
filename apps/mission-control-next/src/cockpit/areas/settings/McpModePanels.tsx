@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { McpModeEvidence } from "../../../features/native-routes/settings/mcp-mode-evidence";
 import { Button } from "../../ui/Button";
+import { TimeText } from "../../ui/TimeText";
 
 const PAGE_SIZE = 20;
 const readable = (value: string) => value.replaceAll("_", " ");
@@ -35,12 +36,12 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
           {issue}
         </p>
       ))}
-      <section aria-label="MCP server mode" className="space-y-3 rounded-md border border-line p-3">
+      <section aria-label="MCP server mode" className="space-y-3 border-t border-line-subtle pt-4">
         <h4 className="text-md font-semibold text-fg">Server mode preview</h4>
         {serverMode ? (
           <>
             <p className="text-xs text-fg-muted">
-              Last read: <time dateTime={serverMode.generatedAt}>{serverMode.generatedAt}</time>
+              <TimeText prefix="Last read" value={serverMode.generatedAt} />
             </p>
             <dl className="cockpit-definition-grid grid gap-x-3 gap-y-2">
               <dt>Runtime support</dt>
@@ -76,9 +77,9 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
               Showing {Math.min(descriptorLimit, serverMode.tools.length)} of {serverMode.tools.length} loaded
               descriptors.
             </p>
-            <ul aria-label="MCP server-mode descriptors" className="space-y-2">
+            <ul aria-label="MCP server-mode descriptors" className="divide-y divide-line-subtle">
               {serverMode.tools.slice(0, descriptorLimit).map((item) => (
-                <li key={item.name} className="rounded-md border border-line-subtle p-3">
+                <li key={item.name} className="py-3">
                   <h5 className="break-words font-semibold text-fg">{item.title}</h5>
                   <code className="block break-all font-mono text-xs">{item.name}</code>
                   <p className="mt-1">
@@ -101,12 +102,12 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
           <p>Server mode could not load.</p>
         )}
       </section>
-      <section aria-label="Remote MCP preview" className="space-y-3 rounded-md border border-line p-3">
+      <section aria-label="Remote MCP preview" className="space-y-3 border-t border-line-subtle pt-4">
         <h4 className="text-md font-semibold text-fg">Remote MCP preview</h4>
         {remotePreview ? (
           <>
             <p className="text-xs text-fg-muted">
-              Last read: <time dateTime={remotePreview.generatedAt}>{remotePreview.generatedAt}</time>
+              <TimeText prefix="Last read" value={remotePreview.generatedAt} />
             </p>
             <p>
               {remotePreview.summary.remoteServers} saved remote servers · {remotePreview.summary.remoteTemplates}{" "}
@@ -135,9 +136,9 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
             <p className="text-xs text-fg-muted">
               Showing {Math.min(remoteLimit, remotes.length)} of {remotes.length} loaded records.
             </p>
-            <ul aria-label="Remote MCP preview records" className="space-y-2">
+            <ul aria-label="Remote MCP preview records" className="divide-y divide-line-subtle">
               {remotes.slice(0, remoteLimit).map((item) => (
-                <li key={`${item.source}:${item.id}`} className="rounded-md border border-line-subtle p-3">
+                <li key={`${item.source}:${item.id}`} className="py-3">
                   <h5 className="break-words font-semibold text-fg">{item.label}</h5>
                   <p>
                     {item.source === "server" ? "Saved server" : "Catalog template"} · {item.transport} ·{" "}

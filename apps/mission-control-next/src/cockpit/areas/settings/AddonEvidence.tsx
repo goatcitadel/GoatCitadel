@@ -1,4 +1,7 @@
 import type { AddonCatalogEntry, AddonStatusRecord } from "@goatcitadel/contracts";
+import { presentErrorText } from "../../lib/present-error";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
 
 export function AddonCommands({ addon }: { addon: AddonCatalogEntry }) {
   return (
@@ -52,12 +55,16 @@ export function AddonEvidence({ status }: { status: AddonStatusRecord }) {
             <dt>Installed version</dt>
             <dd className="break-all">{record.installRef ?? "Not reported"}</dd>
             <dt>Installed</dt>
-            <dd className="break-words">{record.installedAt}</dd>
+            <dd className="break-words">
+              <TimeText value={record.installedAt} />
+            </dd>
             <dt>Updated</dt>
-            <dd className="break-words">{record.updatedAt}</dd>
+            <dd className="break-words">
+              <TimeText value={record.updatedAt} />
+            </dd>
             <dt>Consent</dt>
             <dd className="break-words">
-              {record.consentedBy} · {record.consentedAt}
+              {record.consentedBy} · <TimeText value={record.consentedAt} />
             </dd>
             {record.pid ? (
               <>
@@ -68,11 +75,7 @@ export function AddonEvidence({ status }: { status: AddonStatusRecord }) {
           </>
         ) : null}
       </dl>
-      {record?.lastError ? (
-        <p role="status" className="break-words text-sm text-status-failed">
-          Recorded error: {record.lastError}
-        </p>
-      ) : null}
+      {record?.lastError ? <AddonRecordedError error={record.lastError} /> : null}
       <section aria-label="Add-on health checks" className="space-y-2">
         <h4 className="text-sm font-semibold">Health checks</h4>
         <ul className="space-y-2 text-sm">
@@ -87,6 +90,23 @@ export function AddonEvidence({ status }: { status: AddonStatusRecord }) {
         </ul>
         {!status.healthChecks.length ? <p className="text-sm text-fg-muted">No health checks returned.</p> : null}
       </section>
+    </div>
+  );
+}
+
+/** The add-on's recorded error: one plain line, with the recorded text in technical details. */
+function AddonRecordedError({ error }: { error: string }) {
+  const { summary, detail } = presentErrorText(error);
+  return (
+    <div className="space-y-1">
+      <p role="status" className="break-words text-sm text-status-failed">
+        Recorded error: {summary}
+      </p>
+      {detail ? (
+        <TechnicalDetails label="Recorded error">
+          <p className="break-all font-mono text-xs">{detail}</p>
+        </TechnicalDetails>
+      ) : null}
     </div>
   );
 }

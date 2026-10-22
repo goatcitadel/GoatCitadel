@@ -86,7 +86,10 @@ export function MobileTabBar({
               // The canonical cockpit URL, so a new tab opens Cockpit even when the saved shell is Classic.
               href={cockpitHref(path) ?? path}
               aria-current={current === area ? "page" : undefined}
-              aria-label={area === "inbox" && inboxCount ? inboxNavigationLabel(inboxCount) : undefined}
+              // The running count is described by cockpit-work-running-summary, so Work keeps its visible name.
+              aria-label={
+                area === "inbox" && inboxCount ? inboxNavigationLabel(inboxCount) : area === "work" ? "Work" : undefined
+              }
               aria-describedby={area === "work" && phone ? "cockpit-work-running-summary" : undefined}
               onClick={(event) => {
                 // SH-28: a real link, so a modified click or long-press menu can open the area in a new tab.
@@ -153,7 +156,7 @@ export function MobileTabBar({
             onOpenHealth={() => openArea("/system/health")}
           />
         ) : null}
-        <p aria-label="Current operating scope" className="truncate px-3 text-sm text-fg-secondary">
+        <p data-cockpit-scope-line="" className="truncate px-3 text-sm text-fg-secondary">
           {scopeLine}
         </p>
         <TechnicalDetails label="Operating scope identifiers">

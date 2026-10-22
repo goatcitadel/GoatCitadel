@@ -710,10 +710,14 @@ describe("ChatTranscript", () => {
   });
 
   it("shows only the selected branch and opens recorded turn details", async () => {
+    const onInspectTurn = vi.fn();
     await act(async () =>
       renderWithProviders(
         <InspectorProvider>
-          <ChatTranscript props={sessionProps([turn("visible", true), turn("hidden", false)])} />
+          <ChatTranscript
+            props={sessionProps([turn("visible", true), turn("hidden", false)])}
+            onInspectTurn={onInspectTurn}
+          />
           <InspectorPanel />
         </InspectorProvider>,
       ),
@@ -727,7 +731,23 @@ describe("ChatTranscript", () => {
     expect(receipt?.hasAttribute("aria-label")).toBe(false);
     expect(receipt?.textContent).toMatch(/^.+ · Cost .+ · Open message details$/);
     await act(async () => receipt?.click());
-    expect(document.body.textContent).toContain("Cost: $0.01");
+    // The receipt opens the Chat inspector's Message tab for this turn.
+    expect(onInspectTurn).toHaveBeenCalledWith("visible");
+  });
+
+  it("each turn has an sr-only heading", async () => {
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript props={sessionProps([turn("one", true), turn("two", true)])} />
+        </InspectorProvider>,
+      ),
+    );
+    for (const article of container.querySelectorAll("article[data-turn-id]")) {
+      const headings = [...article.querySelectorAll("h2")];
+      expect(headings.map((heading) => heading.textContent)).toEqual(["You said", "Assistant reply"]);
+      expect(headings.every((heading) => heading.classList.contains("sr-only"))).toBe(true);
+    }
   });
 
   it("keeps failed turns visible with a recovery handoff", async () => {
@@ -739,7 +759,8 @@ describe("ChatTranscript", () => {
       ),
     );
     expect(container.textContent).toContain("User failed");
-    expect(container.textContent).toContain("Review run details or retry when available");
+    // The recovery sentence names only the controls that exist below the message (no Retry here).
+    expect(container.textContent).toContain("Use Run details under More, below this message.");
     expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
   });
 

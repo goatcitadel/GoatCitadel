@@ -41,7 +41,7 @@ function ReviewItem({ item, scheduleName }: { item: CronReviewItem; scheduleName
       humanizeToken(childStatus))
     : "Accepted";
   return (
-    <li className="grid min-w-0 gap-1 rounded-md border border-line p-3 text-sm wrap-anywhere">
+    <li className="grid min-w-0 gap-1 py-3 text-sm wrap-anywhere">
       <strong className="text-fg">
         {scheduleName ?? "A scheduled job"}
         {trigger ? ` · ${humanizeToken(trigger)}` : ""}
@@ -118,7 +118,7 @@ export function SchedulerReviewQueue({
         </Callout>
       ) : null}
       {settings.isSuccess && !enabled ? (
-        <Callout tone="warning">
+        <Callout announce={false} tone="warning">
           Scheduler review is switched off in runtime settings on this installation. No review items can be shown.
         </Callout>
       ) : null}
@@ -138,7 +138,7 @@ export function SchedulerReviewQueue({
         <p className="text-sm text-fg-muted">No scheduler review items.</p>
       ) : null}
       {items.length ? (
-        <ul className="grid min-w-0 gap-2">
+        <ul className="grid min-w-0 divide-y divide-line-subtle">
           {items.map((item) => (
             <ReviewItem key={item.itemId} item={item} scheduleName={scheduleName?.(item.jobId)} />
           ))}

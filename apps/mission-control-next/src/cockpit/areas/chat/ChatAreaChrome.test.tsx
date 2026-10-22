@@ -128,6 +128,16 @@ describe("ChatSessionHeader", () => {
     expect(onOpenConversations).toHaveBeenCalledOnce();
   });
 
+  it("accessible name starts with the visible text", () => {
+    const { header, rail } = renderHeader();
+    const create = header.querySelector<HTMLButtonElement>('button[aria-label="New conversation"]')!;
+    expect(create.getAttribute("aria-label")).toMatch(new RegExp(`^${create.textContent!.trim()}`));
+    act(() => create.click());
+    expect(rail.onCreateSession).toHaveBeenCalledOnce();
+    // Projects opens from the conversation list's project filter, not from the header.
+    expect([...header.querySelectorAll("button")].some((button) => button.textContent === "Projects")).toBe(false);
+  });
+
   it("keeps the phone header to one row: title, Conversations and the actions menu", async () => {
     media.phone = true;
     const { header, onOpenProjects, onOpenConversations, onToggle } = renderHeader(true);

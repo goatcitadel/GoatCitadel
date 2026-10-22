@@ -94,7 +94,8 @@ export function ScopeSwitcher({
         <button
           ref={trigger}
           type="button"
-          aria-label="Change Citadel and workspace"
+          // WCAG 2.5.3: the name starts with the visible scope name, then says what the button does.
+          aria-label={`${scopeName}, change Citadel and workspace`}
           title={owner.busy ? `${scopeName}. ${busyText}` : `Change Citadel and workspace: ${scopeName}`}
           aria-busy={owner.busy || undefined}
           disabled={owner.busy}
@@ -142,10 +143,10 @@ export function ScopeSwitcher({
           <label className="block text-sm text-fg-secondary">
             Citadel
             <select
-              aria-label="Scope Citadel"
+              name="scope-citadel"
               value={target.citadelId}
               onChange={(event) => setTarget({ citadelId: event.target.value, workspaceId: "" })}
-              className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg"
+              className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-md sm:text-sm text-fg"
             >
               <option value="">Choose Citadel</option>
               {!owner.citadels.some((item) => item.citadelId === target.citadelId) && target.citadelId ? (
@@ -163,10 +164,10 @@ export function ScopeSwitcher({
           <label className="block text-sm text-fg-secondary">
             Workspace
             <select
-              aria-label="Scope Workspace"
+              name="scope-workspace"
               value={target.workspaceId}
               onChange={(event) => setTarget((current) => ({ ...current, workspaceId: event.target.value }))}
-              className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg"
+              className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-md sm:text-sm text-fg"
             >
               <option value="">Choose workspace</option>
               {!owner.workspaces.some((item) => item.workspaceId === target.workspaceId) && target.workspaceId ? (

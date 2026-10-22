@@ -5,8 +5,9 @@ import { fetchApprovals } from "@goatcitadel/mission-control-shared/api/approval
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { formatAbsoluteTime } from "@goatcitadel/mission-control-shared/content/format";
 import { hasRecoveryLinkage } from "@goatcitadel/mission-control-shared/content/approval-helpers";
-// Approval kinds are open strings (tool ids, "code_mode.run"), so they keep the generic humanizer.
-import { humanizeToken, presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+// Tool names and approval kinds are open strings; the chat presenter names the known ones.
+import { presentApprovalAction } from "../chat/chat-vocabulary";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { approvalOutcomeLabel, approvalResolutionLine } from "./approval-settlement";
@@ -176,10 +177,12 @@ function ScopedHistory({ workspaceId, identity }: { workspaceId: string; identit
             threshold={50}
           >
             {(record) => (
-              <article className="mb-2 grid gap-2 rounded-lg border border-line p-3">
-                <h3 className="font-medium">{record.explanation?.summary || humanizeToken(record.kind)}</h3>
+              <article className="grid gap-2 border-b border-line-subtle pb-3">
+                <h3 className="font-medium">
+                  {record.explanation?.summary || presentApprovalAction(record.linkage?.toolName, record.kind)}
+                </h3>
                 <p className="text-sm text-fg-secondary">
-                  {humanizeToken(record.kind)}
+                  {presentApprovalAction(record.linkage?.toolName, record.kind)}
                   {" · "}
                   {approvalOutcomeLabel(record)}
                   {" · "}
@@ -191,7 +194,7 @@ function ScopedHistory({ workspaceId, identity }: { workspaceId: string; identit
                 <Button
                   className="justify-self-start"
                   // Starts with the visible text; the summary and time keep each row's name distinct (IN-13).
-                  aria-label={`Inspect decision: ${record.explanation?.summary || humanizeToken(record.kind)}, ${formatAbsoluteTime(record.createdAt)}`}
+                  aria-label={`Inspect decision: ${record.explanation?.summary || presentApprovalAction(record.linkage?.toolName, record.kind)}, ${formatAbsoluteTime(record.createdAt)}`}
                   onClick={() => inspect(record.approvalId)}
                 >
                   Inspect decision

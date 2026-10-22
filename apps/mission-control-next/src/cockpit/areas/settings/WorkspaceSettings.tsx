@@ -150,7 +150,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
         </p>
       ) : null}
       {mode ? (
-        <div className="space-y-3 rounded-md border border-line bg-sunken p-3">
+        <div className="space-y-3 border-t border-line-subtle pt-4">
           <h4 className="font-medium text-fg">{mode === "create" ? "New workspace" : "Edit workspace metadata"}</h4>
           {mode === "edit" ? (
             <details className="text-xs text-fg-muted">
@@ -252,7 +252,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
             Showing {Math.min(limit, filtered.length)} of {filtered.length} loaded workspaces
             {items.length === 500 ? " · Directory limited to 500 records" : ""}.
           </p>
-          <ul className="space-y-2">
+          <ul className="divide-y divide-line-subtle">
             {filtered.slice(0, limit).map((item) => {
               const target: LifecycleReview = {
                 kind: "workspace",
@@ -263,7 +263,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
               const locked = lifecycle.locked(target),
                 attempt = lifecycle.attempt(target);
               return (
-                <li key={item.workspaceId} className="rounded-md border border-line-subtle bg-sunken p-3">
+                <li key={item.workspaceId} className="py-3">
                   <div className="flex flex-col items-start justify-between gap-2 sm:flex-row">
                     <div className="min-w-0 flex-1">
                       <h4 className="break-words text-sm font-semibold text-fg">{item.name}</h4>

@@ -76,7 +76,7 @@ export function ScheduleAdvancedFields({
     actionConfig: "Action configuration (JSON object)",
   };
   return (
-    <details className="rounded-md border border-line p-3">
+    <details className="border-t border-line-subtle pt-3">
       <summary className="cursor-pointer text-sm font-medium text-accent">Advanced job settings</summary>
       <p className="mt-2 text-sm text-fg-secondary">
         Optional. Never put credentials here. Path, capability and approval rules still apply. Task and the other basic

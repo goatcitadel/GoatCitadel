@@ -10,6 +10,8 @@ import { Button } from "../../ui/Button";
 import { Sheet } from "../../ui/Sheet";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { LocalAiHardware, LocalAiJobs, LocalAiFitEvidence } from "./LocalAiEvidence";
+import { TimeText } from "../../ui/TimeText";
+import { presentHostOs } from "./settings-vocabulary";
 
 /** Installation-scoped owner reads; explicit requests record approval intent, not successful model work. */
 export function LocalAiSettings() {
@@ -92,9 +94,7 @@ export function LocalAiSettings() {
           <dl className="grid gap-3 text-sm sm:grid-cols-3">
             <div>
               <dt className="text-fg-muted">Platform</dt>
-              <dd className="text-fg">
-                {readiness.hardware.os.platform} · {readiness.hardware.os.arch}
-              </dd>
+              <dd className="text-fg">{presentHostOs(readiness.hardware.os)}</dd>
             </div>
             <div>
               <dt className="text-fg-muted">CPU cores</dt>
@@ -105,7 +105,9 @@ export function LocalAiSettings() {
               <dd className="text-fg">{formatLocalAiBytes(readiness.hardware.memory.totalBytes)}</dd>
             </div>
           </dl>
-          <p className="text-xs text-fg-muted">Observed {readiness.hardware.checkedAt}</p>
+          <p className="text-xs text-fg-muted">
+            <TimeText prefix="Observed" value={readiness.hardware.checkedAt} />
+          </p>
           {!control.hasRegisteredEndpoint ? (
             <p className="text-sm text-fg-secondary">
               Local AI is not set up yet.{" "}
@@ -181,7 +183,7 @@ export function LocalAiSettings() {
             </nav>
           ) : null}
           {selected ? (
-            <div className="space-y-3 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
+            <div className="space-y-3 border-t border-line-subtle pt-3 text-sm text-fg-secondary">
               <p>
                 <strong className="text-fg">Fit: {formatLocalAiFit(selected.fit)}</strong> · {selected.confidence}{" "}
                 confidence

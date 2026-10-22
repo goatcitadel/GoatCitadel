@@ -50,7 +50,7 @@ export function ProviderTransportFields({
     </Field>
   );
   return (
-    <details ref={details} open={defaultOpen || undefined} className="rounded-md border border-line-subtle p-3">
+    <details ref={details} open={defaultOpen || undefined} className="border-t border-line-subtle pt-3">
       <summary className="cursor-pointer text-sm font-medium text-fg">Advanced request transport</summary>
       <p className="my-3 text-xs text-fg-muted">
         Transport sign-in accepts environment variable names only; inline tokens and credentials are rejected. File

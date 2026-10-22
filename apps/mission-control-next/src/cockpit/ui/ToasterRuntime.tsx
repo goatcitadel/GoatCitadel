@@ -5,7 +5,7 @@ import { attachCockpitToastHost } from "./toast-runtime";
 export function CockpitToastRuntime() {
   const { theme } = useUiPreferences();
   useEffect(() => attachCockpitToastHost(toast), []);
-  // Below the 48px area and inspector header rows, so a persistent error toast never covers their actions.
+  // Below the 48px area and inspector header rows, so an error toast never covers their actions.
   return (
     <Toaster
       position="top-right"

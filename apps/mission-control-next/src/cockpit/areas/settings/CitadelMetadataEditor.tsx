@@ -26,7 +26,7 @@ export function CitadelMetadataEditor({
   const id = useId(),
     draft = mode === "create" ? editor.createDraft : editor.editDraft;
   return (
-    <section aria-label="Citadel metadata editor" className="space-y-3 rounded-md border border-line bg-sunken p-3">
+    <section aria-label="Citadel metadata editor" className="space-y-3 border-t border-line-subtle pt-4">
       <h4 className="text-sm font-semibold text-fg">{mode === "create" ? "New Citadel" : "Edit Citadel metadata"}</h4>
       {mode === "edit" ? (
         <dl className="space-y-1 text-xs text-fg-muted">

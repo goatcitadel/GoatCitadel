@@ -21,6 +21,7 @@ import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { MetricList } from "../../ui/MetricList";
 import { Section } from "../../ui/Section";
+import { SpendObservedModels } from "./SpendObservedModels";
 
 export function SpendOverview() {
   const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
@@ -101,7 +102,7 @@ export function SpendOverview() {
 
           <Section
             title="Cost by day (UTC)"
-            description="Bars show cost in USD recorded in UTC day buckets. The period above uses local time; these aggregates cannot be rebucketed into local days. A plus sign marks a lower bound."
+            description="Bars show cost in USD recorded in UTC day buckets. The period above uses local time; these aggregates cannot be rebucketed into local days. “At least” marks a lower bound."
           >
             <SpendDailyChart summary={summary} />
           </Section>
@@ -128,11 +129,7 @@ export function SpendOverview() {
                       </div>
                       <strong className="text-sm tabular-nums text-fg">{provider.costLabel}</strong>
                     </div>
-                    <p className="mt-1 break-words text-xs text-fg-muted">
-                      {"Models observed: "}
-                      {provider.models.length ? provider.models.slice(0, 3).join(", ") : "Not reported"}
-                      {provider.models.length > 3 ? `, +${provider.models.length - 3} more` : ""}
-                    </p>
+                    <SpendObservedModels providerKey={provider.providerKey} models={provider.models} />
                   </li>
                 ))}
               </ul>

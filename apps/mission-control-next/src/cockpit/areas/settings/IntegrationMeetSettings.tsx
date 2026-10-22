@@ -14,7 +14,7 @@ export function IntegrationMeetSettings({ owner: s }: { owner: IntegrationSettin
   const available = Boolean(s.data && !s.data.issues.some((item) => item.label === "Google Meet sessions"));
   const sessions = available ? (s.data?.meetSessions ?? []) : [];
   return (
-    <section aria-label="Google Meet preparation" className="space-y-4 rounded-md border border-line-subtle p-3">
+    <section aria-label="Google Meet preparation" className="space-y-4 border-t border-line-subtle pt-4">
       <h4 className="text-md font-semibold">Google Meet preparation</h4>
       <p className="text-sm text-fg-secondary">{MEET_OWNER_BOUNDARY}</p>
       <p className="text-xs text-fg-muted">
@@ -88,9 +88,9 @@ export function IntegrationMeetSettings({ owner: s }: { owner: IntegrationSettin
       ) : !sessions.length ? (
         <p className="text-sm text-fg-muted">No meeting records returned.</p>
       ) : (
-        <ul className="space-y-3">
+        <ul className="divide-y divide-line-subtle">
           {sessions.slice(0, limit).map((session) => (
-            <li key={session.sessionId} className="rounded-md border border-line-subtle p-3">
+            <li key={session.sessionId} className="py-3">
               <h5 className="break-words text-sm font-semibold">{session.displayName || session.meetingUrl}</h5>
               <p className="text-sm text-fg-secondary">
                 Recorded state: {MEET_SESSION_STATE_LABELS[session.state] ?? "Unknown"} ·{" "}

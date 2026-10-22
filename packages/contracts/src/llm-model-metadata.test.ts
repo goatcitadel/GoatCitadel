@@ -56,7 +56,11 @@ describe("shipped manifest at config/llm-model-metadata.json", () => {
   it("includes the critical entries called out in the plan", () => {
     expect(parsedManifest.entries["openai-codex/*"]).toEqual({ contextWindow: 272000, outputTokenLimit: 32000 });
     expect(parsedManifest.entries["openai/gpt-6-astra"]?.reasoning?.supportedEfforts).toEqual([
-      "low", "medium", "high", "xhigh", "max",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
     ]);
     expect(parsedManifest.entries["openai/gpt-6-sol"]?.reasoning?.supportedEfforts).toContain("none");
     expect(parsedManifest.entries["openai-codex/gpt-5.6-sol"]?.reasoning?.supportedEfforts).toContain("max");

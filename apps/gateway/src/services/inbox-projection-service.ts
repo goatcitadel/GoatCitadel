@@ -37,11 +37,38 @@ function approvalKindWords(value: string): string {
   return words.length ? words.join(" ") : value;
 }
 
+/** The knowledge tools whose previews (policy-engine knowledgeApprovalPreview) name one target and a title. */
+const KNOWLEDGE_ACTIONS: Record<string, string> = {
+  "memory.write": "Writes memory",
+  "memory.upsert": "Writes memory",
+  "docs.ingest": "Ingests a document",
+  "embeddings.index": "Indexes documents",
+  "embeddings.query": "Searches documents",
+};
+
+/**
+ * "Writes memory · Operator preference: visible proof": a knowledge preview's action and its title, or its namespace
+ * target when the title only repeats the tool name. Other previews' titles describe the request, so they get nothing.
+ */
+function knowledgeTargetSummary(record: Record<string, unknown>): string | undefined {
+  const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+  const toolName = text(record.toolName);
+  const action = toolName ? KNOWLEDGE_ACTIONS[toolName] : undefined;
+  if (!action) return undefined;
+  const title = text(record.title);
+  const subject = title && title !== toolName ? title : text(record.target);
+  return subject ? `${action} · ${subject}` : undefined;
+}
+
 function approvalTargetSummary(preview: unknown): string {
-  const value = preview && typeof preview === "object" ? (preview as Record<string, unknown>).targets : undefined;
+  const record = preview && typeof preview === "object" ? (preview as Record<string, unknown>) : {};
+  const value = record.targets;
   const targets = Array.isArray(value) ? value.filter((target): target is string => typeof target === "string") : [];
-  return targets.length
-    ? bounded(`Targets: ${targets.slice(0, 3).join(", ")}${targets.length > 3 ? "; more in review" : ""}`)
+  if (targets.length)
+    return bounded(`Targets: ${targets.slice(0, 3).join(", ")}${targets.length > 3 ? "; more in review" : ""}`);
+  const knowledge = knowledgeTargetSummary(record);
+  return knowledge
+    ? bounded(knowledge)
     : "Review the requested action and its policy reason. Target details are available in the approval record.";
 }
 

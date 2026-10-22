@@ -202,3 +202,50 @@ it("reports an unavailable timeline without claiming there are no events", async
   await vi.waitFor(() => expect(container.textContent).toContain("Journey timeline service is unavailable."));
   expect(container.textContent).not.toContain("No Journey events match");
 });
+
+it("shows exactly one EmptyState and no filters when there is nothing to show", async () => {
+  vi.mocked(fetchJourneyTimeline).mockResolvedValue(page([]));
+  await open("/library/journey");
+  await vi.waitFor(() => expect(container.textContent).toContain("No Journey events yet"));
+  expect(container.querySelectorAll("section.py-12")).toHaveLength(1);
+  expect(container.querySelector("[aria-label='Journey filters']")).toBeNull();
+  expect(container.querySelector("[aria-label='Journey events']")).toBeNull();
+  expect(container.querySelectorAll("select, input")).toHaveLength(0);
+  expect(button("Apply session")).toBeUndefined();
+  expect(container.textContent).not.toContain("No Journey events match these filters");
+});
+
+it("keeps the filters and says nothing matches when a filtered read is empty", async () => {
+  vi.mocked(fetchJourneyTimeline).mockResolvedValue(page([]));
+  await open("/library/journey?category=memory");
+  await vi.waitFor(() => expect(container.textContent).toContain("No Journey events match these filters"));
+  expect(container.querySelector("[aria-label='Journey filters']")).not.toBeNull();
+  expect(container.textContent).not.toContain("No Journey events yet");
+});
+
+it("renders events as hairline-separated rows, not bordered cards", async () => {
+  vi.mocked(fetchJourneyTimeline).mockResolvedValue(page([item("e-2"), item("e-1")]));
+  await open("/library/journey?eventId=e-1");
+  await vi.waitFor(() => expect(container.querySelectorAll("[data-journey-event]")).toHaveLength(2));
+  const list = container.querySelector("[data-journey-event]")!.parentElement!;
+  expect(list.classList.contains("divide-y")).toBe(true);
+  for (const row of container.querySelectorAll("[data-journey-event] button")) {
+    expect(row.classList.contains("border")).toBe(false);
+  }
+  expect(container.querySelector("[data-journey-event='e-1'] button")?.getAttribute("aria-current")).toBe("true");
+  // The selected row carries an accent marker as well as a fill, so it does not read as a hovered row.
+  const selectedRow = container.querySelector("[data-journey-event='e-1'] button")!;
+  expect(selectedRow.className).toContain("aria-[current=true]:border-l");
+  expect(selectedRow.className).toContain("aria-[current=true]:border-accent");
+  expect(selectedRow.className).toContain("aria-[current=true]:text-accent");
+});
+
+it("keeps global records reachable from the empty state when the filters are hidden", async () => {
+  vi.mocked(fetchJourneyTimeline).mockResolvedValue(page([]));
+  await open("/library/journey");
+  await vi.waitFor(() => expect(container.textContent).toContain("No Journey events yet"));
+  expect(button("Include global records")).toBeDefined();
+  await act(async () => button("Include global records")!.click());
+  await vi.waitFor(() => expect(new URLSearchParams(window.location.search).get("includeGlobal")).toBe("true"));
+  await vi.waitFor(() => expect(lastQuery().includeGlobal).toBe(true));
+});

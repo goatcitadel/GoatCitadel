@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { MemoryChangeEvent } from "@goatcitadel/contracts";
 import { formatSeconds } from "@goatcitadel/mission-control-shared/content/format";
 import { Field } from "../../ui/Field";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { MEMORY_CHANGE } from "./library-vocabulary";
@@ -130,9 +131,9 @@ export function MemoryHistoryList({ events }: { events: MemoryChangeEvent[] }) {
         History records which fields changed and when. It does not keep earlier text, so it can't show a word-level
         difference.
       </p>
-      <ul className="grid gap-2">
+      <ul className="divide-y divide-line-subtle">
         {events.map((event) => (
-          <li key={event.changeId} className="rounded-md border border-line p-2">
+          <li key={event.changeId} className="py-2">
             <h3>{MEMORY_CHANGE[event.changeType]}</h3>
             {memoryChangeSummary(event) ? (
               <p className="text-sm text-fg-secondary">{memoryChangeSummary(event)}</p>
@@ -162,4 +163,28 @@ export function noApprovalNeededMessage(action: "save" | "forget"): string {
   return action === "forget"
     ? "This item was already forgotten. Nothing changed."
     : "No approval request came back for these changes, so nothing is waiting for approval. Refresh the item and check Inbox before trying again. Your draft is kept.";
+}
+
+/**
+ * An outcome sentence that says "check Inbox" links "Inbox" in place (LB-N08), so the pointer and the way there are
+ * one element. Outcomes stay plain strings in session view state; the link is added only when rendering.
+ */
+export function TextWithInboxLink({ text, workspaceId }: { text: string; workspaceId: string }) {
+  const match = /\b[Cc]heck Inbox\b/.exec(text);
+  if (!match) return <>{text}</>;
+  const word = "Inbox";
+  const start = match.index + match[0].length - word.length;
+  return (
+    <>
+      {text.slice(0, start)}
+      <NativeOwnerLink
+        href={`/inbox?workspaceId=${encodeURIComponent(workspaceId)}`}
+        scope={[workspaceId, "memory-outcome"]}
+        className="font-medium"
+      >
+        Inbox
+      </NativeOwnerLink>
+      {text.slice(start + word.length)}
+    </>
+  );
 }

@@ -7,7 +7,7 @@ import type { ApprovalRequest, ChangePlanRecord, OperatorInboxResponse } from "@
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
-import { InspectorProvider } from "../../app/inspector";
+import { InspectorPanel, InspectorProvider } from "../../app/inspector";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { InboxArea } from "../inbox/InboxArea";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
@@ -119,6 +119,8 @@ async function render() {
           <CockpitNavigationProvider>
             <InspectorProvider>
               <Destination />
+              {/* A linked approval opens in the inspector (IN-N07), so the panel renders here too. */}
+              <InspectorPanel />
             </InspectorProvider>
           </CockpitNavigationProvider>
         </UiPreferencesProvider>

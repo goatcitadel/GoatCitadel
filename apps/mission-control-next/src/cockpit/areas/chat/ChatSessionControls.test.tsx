@@ -36,14 +36,22 @@ describe("Chat session controls", () => {
   it("uses the existing controller to rename the current conversation", async () => {
     const context = dock();
     await act(async () => root.render(<ChatSessionTitle title="Original title" dock={context} />));
-    const rename = container.querySelector("h1 button") as HTMLButtonElement;
-    // The name starts with the visible title and says what the button does; no tooltip-only affordance.
-    expect(rename.textContent).toBe("Original title · Rename conversation");
+    const rename = container.querySelector('button[aria-label="Rename conversation"]') as HTMLButtonElement;
+    // An icon button with a plain name; no tooltip-only affordance.
     expect(rename.hasAttribute("title")).toBe(false);
     await act(async () => rename.click());
     expect(context.onRenameTitleChange).toHaveBeenCalledWith("Original title");
     await act(async () => (container.querySelector('button[type="submit"]') as HTMLButtonElement).click());
     expect(context.onRenameSession).toHaveBeenCalledOnce();
+  });
+
+  it("the conversation h1 contains only the title", async () => {
+    await act(async () => root.render(<ChatSessionTitle title="Original title" dock={dock()} />));
+    const heading = container.querySelector("h1")!;
+    expect(heading.textContent).toBe("Original title");
+    expect(heading.querySelector("button")).toBeNull();
+    // The rename button sits beside the heading, not inside it.
+    expect(heading.parentElement?.querySelector('button[aria-label="Rename conversation"]')).not.toBeNull();
   });
 
   const trigger = () => container.querySelector('button[aria-label="Conversation actions"]') as HTMLButtonElement;

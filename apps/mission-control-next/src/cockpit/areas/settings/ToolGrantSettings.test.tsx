@@ -21,6 +21,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOrig
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeCitadelId: "citadel-a", activeWorkspaceId: "workspace-a" }),
 }));
+vi.mock("../../data/use-workspace-name", () => ({
+  useWorkspaceNameLookup: () => (workspaceId?: string) => (workspaceId === "workspace-b" ? "Research" : undefined),
+}));
 import { __resetToolGrantActionsForTests } from "../../../features/native-routes/settings/use-tool-grant-actions";
 
 const api = vi.hoisted(() => ({
@@ -98,10 +101,21 @@ it("shows exact editable labels and reviews a global scope without sending a gra
   expect(input("Scope ID").props.disabled).toBe(true);
   await act(async () => button("Review new grant").props.onClick());
   const dialog = view!.root.findByProps({ role: "dialog", "aria-label": "Review new tool grant" });
-  expect(dialog.findAllByType("dd").map((item) => item.children.join(""))).toContain("global · all contexts");
+  expect(dialog.findAllByType("dd").map((item) => item.children.join(""))).toContain("Global · all contexts");
   await act(async () => button("Cancel").props.onClick());
   expect(api.createToolGrant).not.toHaveBeenCalled();
   expect(input("Tool pattern").props.value).toBe("session.status");
+});
+it("shows the exact scope reference it will save, so a mistyped target is visible before saving", async () => {
+  await render();
+  await act(async () => input("Tool pattern").props.onChange({ target: { value: "session.status" } }));
+  await act(async () => input("Scope").props.onChange({ target: { value: "session" } }));
+  await act(async () => input("Scope ID").props.onChange({ target: { value: "sesion-typo" } }));
+  await act(async () => button("Review new grant").props.onClick());
+  const dialog = view!.root.findByProps({ role: "dialog", "aria-label": "Review new tool grant" });
+  expect(dialog.findAllByType("code").map((item) => item.children.join(""))).toEqual(["sesion-typo"]);
+  await act(async () => button("Cancel").props.onClick());
+  expect(api.createToolGrant).not.toHaveBeenCalled();
 });
 it("does not show zero grants or allow a write when the bounded grant owner is unavailable", async () => {
   api.fetchToolGrants.mockRejectedValue(new Error("owner unavailable"));
@@ -144,6 +158,36 @@ it("names each grant's actions by its tool, decision and scope, never its ID", a
   expect(rowText.some((row) => row.includes("workspace-a"))).toBe(false);
   const links = view!.root.findAllByType("a");
   expect(links.some((link) => link.props.href === "/settings/safety#permission-profile")).toBe(true);
+});
+
+it("reviews a revocation in operator words: decision label, workspace name, no grant or scope ID", async () => {
+  api.fetchToolGrants.mockResolvedValue({
+    items: [
+      {
+        grantId: "grant-secret-id",
+        toolPattern: "fs.write",
+        decision: "deny",
+        scope: "workspace",
+        scopeRef: "workspace-b",
+        grantType: "persistent",
+        createdBy: "operator",
+        createdAt: "2026-10-01T00:00:00.000Z",
+      },
+    ],
+  });
+  await render();
+  const row = view!.root.findAllByType("li").flatMap((item) => item.findAllByType("p"));
+  expect(row.map((item) => item.children.join(""))).toContain("Workspace: Research · available");
+  const revoke = view!.root
+    .findAllByType("button")
+    .find((item) => item.props["aria-label"] === "Revoke grant: fs.write · Deny · Workspace")!;
+  await act(async () => revoke.props.onClick());
+  const dialog = view!.root.findByProps({ role: "dialog", "aria-label": "Revoke tool grant" });
+  const shown = dialog.findAllByType("p").map((item) => item.children.join(""));
+  expect(shown).toContain("fs.write · Deny");
+  expect(shown).toContain("Workspace: Research");
+  expect(shown.some((line) => line.includes("grant-secret-id") || line.includes("workspace-b"))).toBe(false);
+  expect(api.revokeToolGrant).not.toHaveBeenCalled();
 });
 
 it("keeps separate unsent drafts for the same workspace/tool across installations", async () => {

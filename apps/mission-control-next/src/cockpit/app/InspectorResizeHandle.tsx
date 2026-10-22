@@ -28,8 +28,9 @@ export function InspectorResizeHandle({ width, onChange }: { width: number; onCh
       aria-valuemax={INSPECTOR_MAX_WIDTH}
       aria-valuenow={width}
       aria-valuetext={`Inspector width: ${inspectorWidthName(width)}`}
-      // 16px hit area centred on the border, with a grip that appears on hover and keyboard focus.
-      className="group absolute inset-y-0 left-0 z-10 flex w-4 -translate-x-1/2 cursor-col-resize touch-none items-center justify-center rounded-sm focus-visible:outline-2 focus-visible:outline-accent"
+      // A 24px hit area on the border, three quarters over the inspector so it covers less of the main pane (and its
+      // scrollbar); the grip appears on hover and keyboard focus.
+      className="group absolute inset-y-0 left-0 z-10 flex w-6 -translate-x-1/4 cursor-col-resize touch-none items-center justify-center rounded-sm focus-visible:outline-2 focus-visible:outline-accent"
       onPointerDown={(event) => {
         if (event.button !== 0 || drag.current) return;
         event.preventDefault();

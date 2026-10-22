@@ -35,7 +35,11 @@ function Probe({ scope = "record-a", target = href }: { scope?: string; target?:
 }
 async function render(scope = "record-a", target = href) {
   await act(async () => {
-    root.render(<CockpitNavigationProvider><Probe scope={scope} target={target} /></CockpitNavigationProvider>);
+    root.render(
+      <CockpitNavigationProvider>
+        <Probe scope={scope} target={target} />
+      </CockpitNavigationProvider>,
+    );
   });
 }
 async function clickKeep() {
@@ -70,8 +74,12 @@ afterEach(async () => {
 describe("native owner navigation", () => {
   it("withholds same-document navigation if the central owner is absent", async () => {
     const push = vi.spyOn(window.history, "pushState");
-    await act(async () => { root.render(<Probe />); });
-    await act(async () => { container.querySelector("a")!.click(); });
+    await act(async () => {
+      root.render(<Probe />);
+    });
+    await act(async () => {
+      container.querySelector("a")!.click();
+    });
     expect(push).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe("/work");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -127,7 +135,9 @@ describe("native owner navigation", () => {
       await act(async () => {
         container.querySelector("a")!.click();
       });
-      const oldKeep = [...document.querySelectorAll("button")].find((button) => button.textContent === "Keep draft and close");
+      const oldKeep = [...document.querySelectorAll("button")].find(
+        (button) => button.textContent === "Keep draft and close",
+      );
       expect(oldKeep).toBeDefined();
       if (change === "scope") {
         await render("record-b");
@@ -146,7 +156,9 @@ describe("native owner navigation", () => {
         });
       }
       expect(document.querySelector('[role="dialog"]')).toBeNull();
-      await act(async () => { oldKeep!.click(); });
+      await act(async () => {
+        oldKeep!.click();
+      });
       expect(window.location.pathname).toBe("/work");
       expect(draft.value.name).toBe("Unsaved input");
       expect(draft.isDirty).toBe(true);
@@ -170,8 +182,36 @@ describe("native owner navigation", () => {
     ]) {
       await render("record-a", target);
       expect(container.querySelector("a")).toBeNull();
-      expect(container.textContent).toContain("Open evidence");
+      // GL-N08: no cockpit destination means no link at all, not link text that does nothing.
+      expect(container.textContent).not.toContain("Open evidence");
     }
     expect(switchShell).not.toHaveBeenCalled();
+  });
+
+  it("defaults to accent link styling at its natural width (WK-N04)", async () => {
+    await act(async () => {
+      root.render(
+        <CockpitNavigationProvider>
+          <NativeOwnerLink href="/work" scope="plain">
+            Open Work
+          </NativeOwnerLink>
+        </CockpitNavigationProvider>,
+      );
+    });
+    const link = container.querySelector("a")!;
+    expect(link.className).toContain("text-accent");
+    expect(link.className).toContain("w-fit");
+  });
+
+  it("merges the caller's classes with the default link styling", async () => {
+    await render();
+    const link = container.querySelector("a")!;
+    expect(link.className).toContain("evidence-link");
+    expect(link.className).toContain("text-accent");
+  });
+
+  it("renders nothing, not a bare span, when no cockpit href resolves (GL-N08)", async () => {
+    await render("record-a", "https://foreign.invalid/chat");
+    expect(container.innerHTML).toBe("");
   });
 });

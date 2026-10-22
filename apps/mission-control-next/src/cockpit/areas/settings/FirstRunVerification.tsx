@@ -83,7 +83,7 @@ export function FirstRunVerification() {
             . Neither sample records nor configured credentials certify execution.
           </p>
           <EvidenceList title="Setup Center" items={presentSetupCenterItems(state)} />
-          <details className="rounded-md border border-line p-3">
+          <details className="border-t border-line-subtle py-3">
             <summary className="cursor-pointer font-medium text-fg">Provider test results</summary>
             <EvidenceList title="Provider checks" items={deriveOnboardingProviderSmokeEvidenceItems(state)} />
             <p className="mt-3 text-sm text-fg-secondary">
@@ -91,7 +91,7 @@ export function FirstRunVerification() {
               it.
             </p>
           </details>
-          <details className="rounded-md border border-line p-3">
+          <details className="border-t border-line-subtle py-3">
             <summary className="cursor-pointer font-medium text-fg">Sign-in and remote readiness</summary>
             {state.setupReadiness ? (
               <div className="mt-3 grid gap-3 text-sm text-fg-secondary">
@@ -123,7 +123,7 @@ export function FirstRunVerification() {
               <p className="mt-3 text-sm text-fg-muted">Remote readiness could not load.</p>
             )}
           </details>
-          <details className="rounded-md border border-line p-3">
+          <details className="border-t border-line-subtle py-3">
             <summary className="cursor-pointer font-medium text-fg">First-run checklist and proof references</summary>
             <ul className="mt-3 grid gap-3 text-sm text-fg-secondary">
               {state.firstRunChecklist?.map((item) => (
@@ -145,7 +145,7 @@ export function FirstRunVerification() {
               <p className="mt-3 text-sm text-fg-muted">No first-run checklist references were returned.</p>
             ) : null}
           </details>
-          <details className="rounded-md border border-line p-3">
+          <details className="border-t border-line-subtle py-3">
             <summary className="cursor-pointer font-medium text-fg">Recent installation records</summary>
             <p className="mt-3 text-sm text-fg-secondary">
               Up to ten recent installation records from each source. These are not bound to this workspace or to your
@@ -181,7 +181,7 @@ export function FirstRunVerification() {
               </ul>
             )}
           </details>
-          <details className="rounded-md border border-line p-3">
+          <details className="border-t border-line-subtle py-3">
             <summary className="cursor-pointer font-medium text-fg">Ecosystem proof lanes</summary>
             <ul className="mt-3 grid gap-3 text-sm text-fg-secondary">
               {deriveEcosystemProofLaneItems().map((item) => (

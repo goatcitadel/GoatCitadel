@@ -44,6 +44,14 @@ import { showBrowserNotification } from "../../app/browser-notification";
  */
 export const UNMAPPED_TOPIC_INTERVAL_MS = 5_000;
 
+/**
+ * No toast stays up forever. Errors last 10 seconds (the Inbox keeps the record, and the Toaster shows at
+ * most 3 at once, so a burst cannot bury the page); everything else lasts 6 seconds.
+ */
+export function inboxToastDuration(tone: string): number {
+  return tone === "error" ? 10_000 : 6_000;
+}
+
 export interface RealtimeSink {
   invalidate: (queryKey: QueryKey) => void;
   refresh: (topic: RefreshTopic, event: RealtimeEvent) => void;
@@ -325,18 +333,36 @@ export function useCockpitRealtime(input: {
             };
             const id = `inbox:${scopeWorkspaceId}:${item.id}`;
             if (preferences.toastsEnabled)
-              requestCockpitToast((toast) => {
-                const show = notification.tone === "error" ? toast.error : notification.tone === "warning" ? toast.warning : toast;
-                show(item.title, { id, description: item.summary, duration: notification.tone === "error" ? Infinity : 6_000,
-                  action: { label: "Open Inbox item", onClick: open } });
-              }, () => {
-                const currentPreferences = preferencesRef.current;
-                return isCurrentWorkspace() && currentPreferences.toastsEnabled &&
-                  !(currentPreferences.onlyWhenUnfocused && pageFocused()) && decideNotificationDelivery(notification, {
-                    replayed: delivery.replayed, eventSessionId: item.source.sessionId,
-                    visibleSessionId: visibleSessionIdRef.current, pageFocused: pageFocused(),
-                  }).toast;
-              });
+              requestCockpitToast(
+                (toast) => {
+                  const show =
+                    notification.tone === "error"
+                      ? toast.error
+                      : notification.tone === "warning"
+                        ? toast.warning
+                        : toast;
+                  show(item.title, {
+                    id,
+                    description: item.summary,
+                    duration: inboxToastDuration(notification.tone),
+                    action: { label: "Open Inbox item", onClick: open },
+                  });
+                },
+                () => {
+                  const currentPreferences = preferencesRef.current;
+                  return (
+                    isCurrentWorkspace() &&
+                    currentPreferences.toastsEnabled &&
+                    !(currentPreferences.onlyWhenUnfocused && pageFocused()) &&
+                    decideNotificationDelivery(notification, {
+                      replayed: delivery.replayed,
+                      eventSessionId: item.source.sessionId,
+                      visibleSessionId: visibleSessionIdRef.current,
+                      pageFocused: pageFocused(),
+                    }).toast
+                  );
+                },
+              );
             if (deliveryDecision.sound) void playOperatorAttentionSound(notification.soundCue, preferences.soundMode);
             if (deliveryDecision.desktop && preferences.desktopEnabled && document.visibilityState === "hidden") {
               showBrowserNotification(item.title, notification.tone, { tag: id, onClick: open });

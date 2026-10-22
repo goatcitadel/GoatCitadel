@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
-import { approvalExpiryLabel, approvalExplanationLine, approvalPreview } from "./approval-preview";
+import {
+  approvalExpiryLabel,
+  approvalExplanationLine,
+  approvalPreview,
+  splitApprovalSupport,
+} from "./approval-preview";
 
 const approval = {
   approvalId: "approval/one?two",
@@ -54,5 +59,31 @@ describe("approval explanation line", () => {
     expect(approvalExplanationLine(undefined, "failed")).toContain("could not be generated");
     expect(approvalExplanationLine("", "pending")).toContain("still being prepared");
     expect(approvalExplanationLine(undefined, "not_requested")).toContain("No explanation was requested");
+  });
+});
+
+describe("approval card and preview presentation", () => {
+  it("moves hashes and byte counts out of the visible preview but keeps consequences (IN-L01)", () => {
+    const hash = `Content Summary: Exact original content: 136 UTF-8 bytes; SHA-256 ${"a".repeat(64)}.`;
+    const consequence = "Summary: Approval permits this request. Admission is not proof of a saved document.";
+    expect(splitApprovalSupport(["Title: Operator preference", hash, consequence])).toEqual({
+      visible: ["Title: Operator preference", "Content size: 136 B", consequence],
+      technical: [`SHA-256 ${"a".repeat(64)}.`],
+    });
+  });
+
+  it("keeps decision inputs that share a line with a hash visible, and moves only the hash clause", () => {
+    const mixed = `Content Summary: Exact original content: 136 UTF-8 bytes; SHA-256 ${"b".repeat(64)}. Redaction does not change approved executable arguments.`;
+    expect(splitApprovalSupport([mixed])).toEqual({
+      visible: ["Content size: 136 B", "Redaction does not change approved executable arguments."],
+      technical: [`SHA-256 ${"b".repeat(64)}.`],
+    });
+  });
+
+  it("keeps 'before redaction' on a plain content size (memory-lifecycle previews)", () => {
+    expect(splitApprovalSupport(["Content Summary: Requested content: 41 UTF-8 bytes before redaction."])).toEqual({
+      visible: ["Content size before redaction: 41 B"],
+      technical: [],
+    });
   });
 });

@@ -171,9 +171,9 @@ function LibraryRemindersContent({ workspaceId, note }: { workspaceId: string; n
       <Button disabled={busy || operation.locked || query.isFetching} onClick={() => void query.refetch()}>
         Refresh reminders
       </Button>
-      <ul className="grid gap-2">
+      <ul className="divide-y divide-line-subtle">
         {items.slice(0, 100).map((item) => (
-          <li key={item.reminderId} className="rounded-md border border-line p-3">
+          <li key={item.reminderId} className="py-3">
             <h3>{item.title}</h3>
             <p className="text-sm text-fg-secondary">
               {presentReminderStatus(item.status).label} · <TimeText prefix="Due" value={item.dueAt} absolute /> ·{" "}

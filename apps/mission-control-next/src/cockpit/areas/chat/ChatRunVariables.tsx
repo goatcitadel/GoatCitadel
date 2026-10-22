@@ -41,7 +41,7 @@ export function ChatRunVariables({ panel }: { panel: Panel | undefined }) {
                   value={typeof value === "string" ? value : ""}
                   onChange={(event) => panel.onValueChange(field.id, event.target.value || undefined)}
                   aria-describedby={help}
-                  className="mt-1 block min-h-9 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg"
+                  className="mt-1 block min-h-9 w-full rounded-md border border-line-control bg-canvas px-2 text-md sm:text-sm text-fg"
                 >
                   <option value="">Choose</option>
                   {field.options.map((option) => (
@@ -56,7 +56,7 @@ export function ChatRunVariables({ panel }: { panel: Panel | undefined }) {
                   value={typeof value === "string" ? value : ""}
                   onChange={(event) => panel.onValueChange(field.id, event.target.value || undefined)}
                   aria-describedby={help}
-                  className="mt-1 block min-h-16 w-full rounded-md border border-line-control bg-canvas p-2 text-sm text-fg"
+                  className="mt-1 block min-h-16 w-full rounded-md border border-line-control bg-canvas p-2 text-md sm:text-sm text-fg"
                 />
               ) : (
                 <input
@@ -84,7 +84,7 @@ export function ChatRunVariables({ panel }: { panel: Panel | undefined }) {
                     )
                   }
                   aria-describedby={help}
-                  className="mt-1 block min-h-9 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg"
+                  className="mt-1 block min-h-9 w-full rounded-md border border-line-control bg-canvas px-2 text-md sm:text-sm text-fg"
                 />
               )}
               {field.description ? (

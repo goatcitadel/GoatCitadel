@@ -96,7 +96,7 @@ export function CapabilityPolicyEvidence({
       {workspacePolicyState === "loading" ? <p>Checking this workspace's tools policy…</p> : null}
       {workspacePolicyState === "unavailable" ? <p>Current workspace policy could not be verified.</p> : null}
       {workspacePolicyState === "ready" && workspacePolicy ? (
-        <div className="rounded-md border border-line-subtle bg-sunken p-2">
+        <div className="border-t border-line-subtle pt-2">
           <p>Current workspace tools profile: {workspacePolicy.profileLabel}</p>
           <p>
             Approval setting: {approvalModeLabel(workspacePolicy.approvalMode)}
@@ -120,7 +120,7 @@ export function CapabilitySourceEvidence({ item }: { item: CapabilityCatalogEntr
         Source reference: {item.sourceRef ? <code className="text-xs text-fg">{item.sourceRef}</code> : "Not recorded"}
       </p>
       {item.mesh ? (
-        <div className="space-y-1 rounded-md border border-line-subtle bg-sunken p-2">
+        <div className="space-y-1 border-t border-line-subtle pt-2">
           <p>
             Publisher: <code className="wrap-anywhere text-xs text-fg">{item.mesh.nodeId}</code>
           </p>

@@ -43,6 +43,8 @@ it("uses actual runtime and backup owners, retaining owner context and missing o
     expect(links[3]?.getAttribute("href")).toBe("/system/runtime?shell=cockpit&workspaceId=w#backups");
     expect(links[3]?.textContent).toBe("Legacy runtime continuation");
     expect(container.textContent).toContain("This page is not available here");
+    // The unavailable note is static text: it is neither a live region nor given another role.
+    expect(container.querySelector("[role]")).toBeNull();
   } finally {
     act(() => root.unmount());
     window.history.replaceState(null, "", originalLocation);

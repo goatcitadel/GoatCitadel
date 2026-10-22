@@ -157,7 +157,7 @@ export function MeshCapabilityPublications({ workspaceId }: { workspaceId: strin
           <div
             aria-label="Activation request receipt"
             role="group"
-            className="space-y-1 rounded-md border border-line bg-raised p-3"
+            className="space-y-1 border-t border-line-subtle pt-3"
           >
             <p className="font-medium text-fg">
               {receipt.name}: approval is {meshApprovalStatus(receipt.response.approvalStatus).label.toLowerCase()}
@@ -212,12 +212,9 @@ export function MeshCapabilityPublications({ workspaceId }: { workspaceId: strin
         ) : ops.inspection && !manifests.length ? (
           <p className="text-fg-muted">No accepted node has published a capability manifest into this workspace.</p>
         ) : manifests.length ? (
-          <ul aria-label="Published mesh capability manifests" className="space-y-3">
+          <ul aria-label="Published mesh capability manifests" className="divide-y divide-line-subtle">
             {manifests.map((manifest) => (
-              <li
-                key={`${manifest.manifestSha256}:${manifest.publisherGeneration}`}
-                className="space-y-2 rounded-md border border-line bg-raised p-3"
-              >
+              <li key={`${manifest.manifestSha256}:${manifest.publisherGeneration}`} className="space-y-2 py-3">
                 <h3 className="font-medium text-fg">
                   Capabilities from a mesh node{manifest.supersededByManifestSha256 ? " · Superseded" : ""}
                 </h3>
@@ -243,7 +240,7 @@ export function MeshCapabilityPublications({ workspaceId }: { workspaceId: strin
                     <li>Publication key: {manifest.publicationKey}</li>
                   </ul>
                 </TechnicalDetails>
-                <ul aria-label="Capabilities in this manifest" className="space-y-2">
+                <ul aria-label="Capabilities in this manifest" className="divide-y divide-line-subtle">
                   {manifest.entries.map((entry) => (
                     <MeshCapabilityEntryRow
                       key={entry.entrySha256}

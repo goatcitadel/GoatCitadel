@@ -66,9 +66,9 @@ export function CitadelBlueprintSettings({ citadelId }: { citadelId: string }) {
           ) : null}
           {control.exportState.json ? (
             <>
-              <dl className="grid gap-3 sm:grid-cols-2">
+              <dl className="divide-y divide-line-subtle">
                 {proof.map((item) => (
-                  <div key={item.title} className="rounded-md border border-line-subtle bg-sunken p-3">
+                  <div key={item.title} className="py-3">
                     <dt className="text-sm font-medium text-fg">{item.title}</dt>
                     <dd className="mt-1 break-words text-xs text-fg-secondary">{item.meta}</dd>
                     <dd className="mt-1 text-xs text-fg-muted">{item.body}</dd>
@@ -241,6 +241,7 @@ export function CitadelBlueprintSettings({ citadelId }: { citadelId: string }) {
 function BlueprintSummary({ blueprint }: { blueprint: CitadelBlueprint }) {
   return (
     <div
+      role="group"
       aria-label="Validated Blueprint summary"
       className="space-y-2 rounded-md border border-line bg-sunken p-3 text-sm text-fg-secondary"
     >

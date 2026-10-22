@@ -8,7 +8,7 @@ export function SelectedThreadActivity({ session }: { session?: ChatSessionRecor
   const compact = useMediaQuery(RESPONSIVE_QUERIES.belowDesktop);
   if (!compact || !session) return null;
   return (
-    <p className="text-xs text-fg-muted md:hidden" aria-label="Selected conversation activity">
+    <p role="note" className="text-xs text-fg-muted md:hidden" aria-label="Selected conversation activity">
       {threadActivityLabel(projectSessionActivity(session))}
     </p>
   );

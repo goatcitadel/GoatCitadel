@@ -21,12 +21,12 @@ export function QualityDefinitions({
   const action = useBuiltinPromptPackImport({ reload });
   return (
     <>
-      <ul className="space-y-3">
+      <ul className="divide-y divide-line-subtle">
         {items.map((item) => {
           const state = action.stateFor(item.packKey);
           const present = item.importCapability?.targetState === "present" || state?.phase === "confirmed";
           return (
-            <li key={item.packKey} className="space-y-2 rounded-md border border-line-subtle p-3">
+            <li key={item.packKey} className="space-y-2 py-3">
               <h3 className="text-sm font-medium text-fg">{item.title}</h3>
               <p className="text-sm text-fg-secondary">
                 {EVAL_PACK_STATUS[item.status] ?? "Unknown status"} · {plural(item.testCount, "defined test")}

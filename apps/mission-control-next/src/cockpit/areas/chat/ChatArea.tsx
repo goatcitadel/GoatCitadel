@@ -15,6 +15,7 @@ import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatTextComposer } from "./ChatTextComposer";
 import { ChatInspector } from "./ChatInspector";
 import { chatSelectionHref } from "./chat-selection-evidence";
+import type { ChatInspectorTab } from "./chat-inspector-evidence";
 import { readCockpitHistory } from "../../app/cockpit-history";
 import { ThreadList } from "./ThreadList";
 import { useInspector } from "../../app/inspector";
@@ -33,6 +34,15 @@ const LazyChatBuildEditor = lazy(async () => ({ default: (await import("./ChatBu
 export function buildEditorTurnId(active: MissionThreadedActiveSessionSurfaceProps | null): string | undefined {
   const selectedPath = active?.thread?.turns.filter((turn) => turn.branch.isSelectedPath) ?? [];
   return selectedPath.find((turn) => turn.turnId === active?.selectedTurnId)?.turnId ?? selectedPath.at(-1)?.turnId;
+}
+
+/** An ordinary turn opens the inspector on Message; only a turn with an attached run opens on Run. */
+export function inspectorTabFor(
+  active: MissionThreadedActiveSessionSurfaceProps | null,
+  turnId: string | null,
+): ChatInspectorTab {
+  const target = turnId ?? active?.selectedTurnId ?? buildEditorTurnId(active);
+  return target && active?.delegationRun?.attachedTurnId === target ? "run" : "turn";
 }
 
 /** Only the one canonical artifact URL publication may complete this read. */
@@ -71,20 +81,20 @@ export function ChatArea({
         onOpenApprovals={(approvalId) =>
           navigate(
             approvalId
-              ? `/inbox?item=approval:${encodeURIComponent(approvalId)}&workspaceId=${encodeURIComponent(activeWorkspaceId ?? "default")}&shell=cockpit`
-              : "/inbox?shell=cockpit",
+              ? `/inbox?item=approval:${encodeURIComponent(approvalId)}&workspaceId=${encodeURIComponent(activeWorkspaceId ?? "default")}`
+              : "/inbox",
           )
         }
-        onOpenTasks={() => navigate("/work?shell=cockpit")}
-        onOpenStartHere={() => navigate("/settings/first-run?shell=cockpit")}
-        onOpenPersonalitiesSettings={() => navigate("/settings/general?shell=cockpit#work-personality")}
-        onOpenProviderSettings={() => navigate("/settings/models?shell=cockpit#providers")}
+        onOpenTasks={() => navigate("/work")}
+        onOpenStartHere={() => navigate("/settings/first-run")}
+        onOpenPersonalitiesSettings={() => navigate("/settings/general#work-personality")}
+        onOpenProviderSettings={() => navigate("/settings/models#providers")}
         onReturnToChannels={(href) => navigate(href)}
-        onOpenLocalAiSettings={() => navigate("/settings/models?shell=cockpit#local-ai")}
-        onOpenLibraryArtifacts={() => navigate("/library/artifacts?shell=cockpit")}
-        onOpenLibraryImports={() => navigate("/library/knowledge?shell=cockpit#external-sources")}
+        onOpenLocalAiSettings={() => navigate("/settings/models#local-ai")}
+        onOpenLibraryArtifacts={() => navigate("/library/artifacts")}
+        onOpenLibraryImports={() => navigate("/library/knowledge#external-sources")}
         // System › Health owns runtime status natively, so Chat no longer needs a Classic handoff here.
-        onOpenOpsRuntime={() => navigate("/system?shell=cockpit")}
+        onOpenOpsRuntime={() => navigate("/system")}
         renderSurface={(input: MissionThreadedRenderSurfaceInput) => (
           <ChatOwnerNavigationBoundary input={input} owner={conversationNavigation}>
             {(reviewedInput) => (
@@ -115,7 +125,8 @@ export function ChatAreaView({
   const onboarding = useQuery({ queryKey: ["system", "onboarding"], queryFn: fetchOnboardingState, staleTime: 60_000 });
   const { open, close, content: inspectorContent, register, closeIfOpen, getDismissalGeneration } = useInspector();
   const inspectorTurnId = useRef<string | null>(null);
-  const inspectorTab = useRef<"run" | "turn" | "files">("run");
+  // null opens the tab that fits the target turn: Run when a run is attached to it, Message otherwise.
+  const inspectorTab = useRef<ChatInspectorTab | null>(null);
   const [buildOpen, setBuildOpen] = useState(false);
   const [conversationsOpen, setConversationsOpen] = useState(false);
   const active = input.activeSessionSurfaceProps;
@@ -130,7 +141,7 @@ export function ChatAreaView({
   if (inspectorView.current.identity !== inspectorIdentity) {
     inspectorView.current = { identity: inspectorIdentity };
     inspectorTurnId.current = null;
-    inspectorTab.current = "run";
+    inspectorTab.current = null;
   }
   const renderedInspectorView = inspectorView.current;
   const pendingArtifact = useRef<{
@@ -194,17 +205,24 @@ export function ChatAreaView({
   const latestLocalNotice = active?.notices.find((notice) => notice.id.startsWith("notice-"));
   const session = input.sessionRail.missionSessions.find((item) => item.sessionId === selectedSessionId);
   const latestTurnId = active?.thread?.turns.filter((turn) => turn.branch.isSelectedPath).at(-1)?.turnId;
-  const openInspector = (turnId?: string, tab: "run" | "turn" | "files" = "run") => {
+  const openInspector = (turnId?: string, tab?: ChatInspectorTab) => {
     if (inspectorView.current !== renderedInspectorView) return;
     inspectorTurnId.current = turnId ?? null;
-    inspectorTab.current = tab;
+    inspectorTab.current = tab ?? null;
     if (turnId) active?.onSelectTurn(turnId);
     open({
       source: "chat",
       title: "Conversation",
-      body: <ChatInspector input={input} targetTurnId={inspectorTurnId.current} initialTab={inspectorTab.current} />,
+      body: (
+        <ChatInspector
+          input={input}
+          targetTurnId={inspectorTurnId.current}
+          initialTab={inspectorTab.current ?? inspectorTabFor(active, inspectorTurnId.current)}
+        />
+      ),
     });
   };
+  const openProjects = () => navigate("/chat/projects");
   useEffect(() => {
     onVisibleSessionChange?.(selectedSessionId);
   }, [onVisibleSessionChange, selectedSessionId]);
@@ -225,19 +243,30 @@ export function ChatAreaView({
       register("chat", {
         source: "chat",
         title: "Conversation",
-        body: <ChatInspector input={input} targetTurnId={inspectorTurnId.current} initialTab={inspectorTab.current} />,
+        body: (
+          <ChatInspector
+            input={input}
+            targetTurnId={inspectorTurnId.current}
+            initialTab={inspectorTab.current ?? inspectorTabFor(active, inspectorTurnId.current)}
+          />
+        ),
       });
     else closeIfOpen("chat");
   }, [input, active, selectedSessionId, register, closeIfOpen]);
   useEffect(() => () => closeIfOpen("chat"), [closeIfOpen]);
   return (
     <section aria-label="Chat" className="flex min-h-0 min-w-0 flex-1">
-      <ThreadList rail={input.sessionRail} projectOptions={input.contextDockProps?.projectOptions} />
+      <ThreadList
+        rail={input.sessionRail}
+        projectOptions={input.contextDockProps?.projectOptions}
+        onOpenProjects={openProjects}
+      />
       <ChatConversationsSheet
         open={conversationsOpen}
         onOpenChange={setConversationsOpen}
         rail={input.sessionRail}
         projectOptions={input.contextDockProps?.projectOptions}
+        onOpenProjects={openProjects}
       />
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <ChatSessionHeader
@@ -259,7 +288,7 @@ export function ChatAreaView({
                 }
               : null
           }
-          onOpenProjects={() => navigate("/chat/projects")}
+          onOpenProjects={openProjects}
           onOpenConversations={() => setConversationsOpen(true)}
           conversationsOpen={conversationsOpen}
           inspecting={inspectorContent?.source === "chat"}

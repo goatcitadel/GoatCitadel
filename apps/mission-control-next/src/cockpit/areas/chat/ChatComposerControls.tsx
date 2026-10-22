@@ -8,7 +8,7 @@ import { ChatAttachmentChips } from "./ChatAttachmentChips";
 import type { ChatCompletionReasoningEffort, ChatWebMode, RoutingPreflightRuntimeClass } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { useModelLabel } from "../../data/use-model-label";
-import { presentThinkingLevel } from "./chat-vocabulary";
+import { PLAN_HELP, REVIEW_HELP, presentThinkingLevel } from "./chat-vocabulary";
 
 type Controls = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -73,8 +73,6 @@ const RUNTIME_CLASS_LABELS: Record<RoutingPreflightRuntimeClass, string> = {
 
 type ModelPopover = typeof import("./ChatModelOptionsPopover");
 let modelPopoverLoad: Promise<ModelPopover> | undefined;
-const PLAN_HELP = "Plan before acting. GoatCitadel still governs every tool and approval.";
-const REVIEW_HELP = "Request review of the answer before completion; availability follows the runtime.";
 
 const loadModelPopover = () =>
   (modelPopoverLoad ??= import("./ChatModelOptionsPopover").catch((cause) => {
@@ -122,7 +120,7 @@ export function ChatComposerControls({
         aria-describedby={`${modeHelpId}-plan`}
         disabled={disabled}
         onClick={props.onTogglePlanningMode}
-        className="rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
+        className="inline-flex min-h-8 items-center rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
       >
         Plan first
       </button>
@@ -150,11 +148,11 @@ export function ChatComposerControls({
         aria-describedby={`${modeHelpId}-review`}
         disabled={disabled}
         onClick={props.onToggleReviewMode}
-        className="rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
+        className="inline-flex min-h-8 items-center rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
       >
         Review answer
       </button>
-      {/* Hover keeps the tooltip; screen readers and touch get the same explanation through aria-describedby. */}
+      {/* Hover keeps the tooltip, the options popover shows the same help as text, and screen readers get it here. */}
       <span id={`${modeHelpId}-plan`} className="sr-only">
         {PLAN_HELP}
       </span>
@@ -167,6 +165,7 @@ export function ChatComposerControls({
     <>
       {notices ? <ChatComposerNotices props={props} onChooseModel={() => options.request(true)} /> : null}
       <div
+        role="group"
         aria-label="Composer controls"
         className="cockpit-chat-controls flex min-w-0 flex-wrap items-center gap-2 pb-1 text-xs text-fg-muted"
       >
@@ -186,7 +185,7 @@ export function ChatComposerControls({
             options.trigger.current = element;
           }}
           type="button"
-          aria-label="Model and reasoning options"
+          aria-label={`${optionsSummary} · Model and reasoning options`}
           aria-haspopup="dialog"
           aria-expanded={options.open}
           aria-controls={options.open ? contentId : undefined}

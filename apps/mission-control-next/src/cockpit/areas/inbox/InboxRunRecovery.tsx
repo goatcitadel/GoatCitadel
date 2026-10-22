@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -41,8 +41,21 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
   const [pending, setPending] = useState(false);
   const [outcomeUncertain, setOutcomeUncertain] = useState(false);
   const [completed, setCompleted] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
+  // A sentence that sends the operator to the run carries its own link (IN-04), so the notice and error are nodes.
+  const [notice, setNotice] = useState<ReactNode>("");
+  const [error, setError] = useState<ReactNode>("");
+  const openRun = (runId: string, purpose: string) => (
+    <>
+      <NativeOwnerLink
+        href={`/work/runs/${encodeURIComponent(runId)}`}
+        scope={[workspaceId, item.id, runId]}
+        className="font-medium"
+      >
+        Open the run
+      </NativeOwnerLink>{" "}
+      {purpose}
+    </>
+  );
   const queryKey = ["tasks", "inbox-recovery", workspaceId, item.id];
   const query = useQuery({
     queryKey,
@@ -87,7 +100,10 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
       setReviewed(null);
       setCompleted(true);
       setNotice(
-        `Recovery requested. Run status: ${presentRunStatus(result.status).label}. Use Open run to check what it did.`,
+        <>
+          Recovery requested. Run status: {presentRunStatus(result.status).label}.{" "}
+          {openRun(result.runId, "to check what it did.")}
+        </>,
       );
       rereadSuperseded();
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
@@ -101,7 +117,10 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
       } else if (mutationAttempted) {
         setOutcomeUncertain(true);
         setError(
-          `Recovery outcome is uncertain. Use Open run to check its status before taking another action. ${describeApiError(cause).summary}`,
+          <>
+            Recovery outcome is uncertain. {describeApiError(cause).summary}{" "}
+            {openRun(item.source.runId!, "to check its status before taking another action.")}
+          </>,
         );
       } else {
         setError(`Could not check the current run. ${describeApiError(cause).summary}`);
@@ -169,7 +188,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
           </TechnicalDetails>
           {item.kind === "dead_letter" && !evidence.deadLetter ? (
             <p className="text-fg-muted">
-              This stopped run is no longer waiting for recovery. Use Open run to see its current status.
+              This stopped run is no longer waiting for recovery. Its current status is shown above.
             </p>
           ) : null}
           {!eligible ? (

@@ -48,7 +48,7 @@ export function WebSearchKeys({ settings }: { settings: UseQueryResult<RuntimeSe
         <Callout tone="error">Could not load key status. {describeApiError(credentials.error).summary}</Callout>
       ) : null}
       {credentials.data ? (
-        <ul className="mt-3 grid max-w-3xl gap-3">
+        <ul className="mt-3 max-w-3xl divide-y divide-line-subtle">
           {credentials.data.items.map((status) => (
             <WebSearchKeyRow key={status.targetId} status={status} settings={settings} />
           ))}
@@ -112,7 +112,7 @@ function WebSearchKeyRow({
   }
 
   return (
-    <li className="min-w-0 rounded-md border border-line-subtle bg-sunken p-3">
+    <li className="min-w-0 py-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h5 className="text-sm font-semibold text-fg">{status.label}</h5>
         <StatusBadge status={sourceBadge(status)} />

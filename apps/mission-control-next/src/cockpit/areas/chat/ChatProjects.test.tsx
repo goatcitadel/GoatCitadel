@@ -323,7 +323,7 @@ it("opens the exact conversation for the existing reviewed assignment owner", as
 it("names the workspace in the Projects intro and keeps its id only as a technical title", async () => {
   workspaceNames.byId = { "workspace-a": "Alpha workspace" };
   await render();
-  const intro = () => document.querySelector<HTMLElement>('p[title="workspace-a"]');
+  const intro = () => document.querySelector<HTMLElement>('[data-area-header] [title="workspace-a"]');
   expect(intro()?.textContent).toBe("Organize Chat context for Alpha workspace.");
   workspaceNames.byId = {};
   await render();
@@ -338,5 +338,42 @@ it("renders the recents and import siblings without a duplicate React key", asyn
     expect(messages.filter((message) => message.includes("same key"))).toEqual([]);
   } finally {
     errors.mockRestore();
+  }
+});
+
+it("titles the page with AreaHeader: New project leads, then Refresh, with no governance link row", async () => {
+  await render();
+  const header = host.querySelector<HTMLElement>("[data-area-header]");
+  expect(header?.querySelector("h1")?.textContent).toBe("Projects");
+  const actions = [...header!.querySelectorAll("button")].map((button) => button.textContent);
+  expect(actions.slice(0, 2)).toEqual(["New project", "Refresh projects"]);
+  expect(host.querySelectorAll("h1")).toHaveLength(1);
+  expect(host.querySelector('[aria-label="Project governance"]')).toBeNull();
+  expect(host.querySelector('[aria-label="Projects in Chat"]')?.className).toContain("max-w-5xl");
+});
+
+it("shows one empty state and no search, views or list when the workspace has no projects", async () => {
+  records = [];
+  await render();
+  expect(host.textContent).toContain("No projects yet");
+  expect([...host.querySelectorAll("h2")].filter((heading) => heading.textContent === "No projects yet")).toHaveLength(
+    1,
+  );
+  expect(host.querySelector('input[aria-label="Search projects"]')).toBeNull();
+  expect(host.querySelector('[aria-label="Project views"]')).toBeNull();
+  expect(host.querySelector('[aria-label="Projects"]')).toBeNull();
+  expect(host.textContent).not.toContain("No projects match this view.");
+});
+
+it("renders rows as hairline-separated items, not bordered cards", async () => {
+  records = [project(), project({ projectId: "project-b", name: "Project Beta" })];
+  await render();
+  const rows = [...host.querySelectorAll('[aria-label="Projects"] article')];
+  expect(rows).toHaveLength(2);
+  for (const row of rows) {
+    expect(row.className).toContain("border-b border-line-subtle");
+    expect(row.className).not.toMatch(/\brounded-(?:md|lg|xl)\b/);
+    // The last row drops its hairline so the list has no trailing rule.
+    expect(row.className).toContain("[li:last-child_&]:border-b-0");
   }
 });

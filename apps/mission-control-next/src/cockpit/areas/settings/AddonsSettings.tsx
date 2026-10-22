@@ -118,7 +118,7 @@ export function AddonsSettings() {
         </>
       ) : null}
       {owner.selectedAddonId ? (
-        <section aria-label="Selected add-on" className="space-y-4 rounded-md border border-line-subtle p-3">
+        <section aria-label="Selected add-on" className="space-y-4 border-t border-line-subtle pt-4">
           {owner.statusLoading ? (
             <p role="status" className="text-sm">
               Loading selected add-on status…
@@ -134,7 +134,7 @@ export function AddonsSettings() {
               <h4 className="break-words text-md font-semibold">{selected.addon.label}</h4>
               <p className="break-words text-sm text-fg-secondary">{selected.addon.description}</p>
               <AddonEvidence status={selected} />
-              <div aria-label="Add-on lifecycle actions" className="flex flex-wrap gap-2">
+              <div role="group" aria-label="Add-on lifecycle actions" className="flex flex-wrap gap-2">
                 {ADDON_ACTIONS.map((action) => (
                   <Button
                     key={action}

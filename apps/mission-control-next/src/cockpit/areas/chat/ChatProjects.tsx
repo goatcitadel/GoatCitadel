@@ -1,4 +1,3 @@
-import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { ProjectRecents } from "./ProjectRecents";
 import { ProjectImport } from "./ProjectImport";
 import { useEffect, useState } from "react";
@@ -17,8 +16,11 @@ import { useDraftLeave } from "../../../features/native-routes/library/DraftLeav
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useWorkspaceName } from "../../data/use-workspace-name";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { AreaHeader } from "../../ui/AreaHeader";
+import { AREA_COLUMN } from "../../ui/area-layout";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
+import { EmptyState } from "../../ui/EmptyState";
 import { WindowedRecordList } from "../../ui/WindowedRecordList";
 import { ProjectEditor } from "./ProjectEditor";
 import { ProjectDetail } from "./ProjectDetail";
@@ -66,36 +68,29 @@ function ProjectsWorkspace({ workspaceId, citadelId }: { workspaceId: string; ci
         .toLocaleLowerCase()
         .includes(query.trim().toLocaleLowerCase()),
   );
+  const noProjects = !projects.isPending && !projects.error && !scoped.length;
+  const startCreate = () => leave.request(() => setCreating(true));
   const refresh = () => projects.refetch();
   const href = (id?: string) => `/chat/projects${id ? `/${encodeURIComponent(id)}` : ""}`;
   return (
-    <section aria-label="Projects in Chat" className="mx-auto grid w-full max-w-6xl min-w-0 gap-4 p-4 md:p-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-display text-2xl">Projects</h1>
-          <p className="text-sm text-fg-secondary" title={workspaceId}>
-            Organize Chat context for {workspaceName ?? `workspace ${workspaceId}`}.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button onClick={() => route.navigate("/chat")}>Conversations</Button>
-          <Button onClick={() => leave.request(() => setCreating(true))}>New project</Button>
-          <Button disabled={projects.isFetching} onClick={() => void refresh()}>
-            Refresh projects
-          </Button>
-        </div>
-      </header>
-      <nav aria-label="Project governance" className="flex flex-wrap gap-3">
-        <NativeOwnerLink href="/library/citadel-overview" scope={access.identity}>
-          Open Citadels
-        </NativeOwnerLink>
-        <NativeOwnerLink href="/library/citadel" scope={access.identity}>
-          Use Mason
-        </NativeOwnerLink>
-        <NativeOwnerLink href="/settings/onboarding" scope={access.identity}>
-          Start here
-        </NativeOwnerLink>
-      </nav>
+    <section aria-label="Projects in Chat" className={`${AREA_COLUMN} grid min-w-0 gap-4 p-4 md:p-6`}>
+      <AreaHeader
+        title="Projects"
+        description={
+          <span title={workspaceId}>Organize Chat context for {workspaceName ?? `workspace ${workspaceId}`}.</span>
+        }
+        actions={
+          <>
+            <Button variant="primary" onClick={startCreate}>
+              New project
+            </Button>
+            <Button disabled={projects.isFetching} onClick={() => void refresh()}>
+              Refresh projects
+            </Button>
+            <Button onClick={() => route.navigate("/chat")}>Conversations</Button>
+          </>
+        }
+      />
       <ProjectRecents key={`recents:${access.identity}`} workspaceId={workspaceId} />
       <ProjectImport
         key={`import:${access.identity}`}
@@ -140,12 +135,17 @@ function ProjectsWorkspace({ workspaceId, citadelId }: { workspaceId: string; ci
               togglePin={() => pins.togglePinned(selected.projectId)}
             />
           ) : !projects.isPending && !projects.error ? (
-            <Callout tone="warning">
+            <Callout tone="warning" announce={false}>
               Project unavailable in this scope. It may be missing, unauthorized, or outside the loaded list. Refresh or
               return to all projects; the requested URL is preserved.
             </Callout>
           ) : null}
         </>
+      ) : noProjects ? (
+        <EmptyState
+          title="No projects yet"
+          description="Projects you create with New project or import above appear here with their conversations and context."
+        />
       ) : (
         <>
           <label className="grid gap-1 text-sm">
@@ -157,7 +157,7 @@ function ProjectsWorkspace({ workspaceId, citadelId }: { workspaceId: string; ci
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
-          <div aria-label="Project views" className="flex flex-wrap gap-2">
+          <div role="group" aria-label="Project views" className="flex flex-wrap gap-2">
             {PROJECT_FILTER_VIEWS.map((view) => (
               <Button
                 key={view.id}
@@ -172,7 +172,7 @@ function ProjectsWorkspace({ workspaceId, citadelId }: { workspaceId: string; ci
           {!projects.isPending && !projects.error && !visible.length ? <p>No projects match this view.</p> : null}
           <WindowedRecordList items={visible} itemKey={(project) => project.projectId} label="Projects" threshold={50}>
             {(project) => (
-              <article className="mb-2 grid min-w-0 gap-2 rounded-lg border border-line bg-raised p-3">
+              <article className="grid min-w-0 gap-2 border-b border-line-subtle py-3 [li:last-child_&]:border-b-0">
                 <button
                   type="button"
                   className="w-full min-w-0 rounded-md p-2 text-left hover:bg-sunken"

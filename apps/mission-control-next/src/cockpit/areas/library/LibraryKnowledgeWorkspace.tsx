@@ -18,6 +18,7 @@ import { LIBRARY_SECTION_LABELS } from "./library-sections";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { Section } from "../../ui/Section";
+import { resourceTitle } from "./resource-title";
 
 export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string }) {
   const access = useLibraryOperation(JSON.stringify(["knowledge", workspaceId]));
@@ -35,27 +36,33 @@ export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string
         description="Source material, governed imports, retrieval history and Engineering learnings."
       />
       <LibraryKnowledgeActions workspaceId={workspaceId} />
-      <Field label="Filter Knowledge files">
-        {(props) => (
-          <input
-            {...props}
-            className="rounded-md border border-line bg-canvas p-2"
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-          />
-        )}
-      </Field>
       <Section title="Memory files" description="Installation memory files, not a workspace-only directory.">
         {files.error ? <Callout tone="error">{describeApiError(files.error).summary}</Callout> : null}
         {files.isPending ? <p role="status">Reading memory files…</p> : null}
+        {/* The filter sits in the list it filters and appears once there is something to filter (LB-N04). */}
+        {files.data?.items.length ? (
+          <Field label="Filter Knowledge files">
+            {(props) => (
+              <input
+                {...props}
+                className="rounded-md border border-line bg-canvas p-2"
+                value={filter}
+                onChange={(event) => setFilter(event.target.value)}
+              />
+            )}
+          </Field>
+        ) : null}
         <ul className="divide-y divide-line-subtle">
           {files.data?.items
             .filter((file) => file.relativePath.toLowerCase().includes(filter.toLowerCase()))
             .map((file) => (
               <li key={file.relativePath} className="space-y-1 py-3">
-                <h3 className="break-words">{file.relativePath}</h3>
+                <h3 className="break-words">{resourceTitle({ kind: "files", item: file })}</h3>
+                <p className="break-words text-sm text-fg-muted">{file.relativePath}</p>
                 <p>{formatBytes(file.size)}</p>
-                <Button onClick={() => setSelectedPath(file.relativePath)}>Preview {file.relativePath}</Button>
+                <Button aria-label={`Preview ${file.relativePath}`} onClick={() => setSelectedPath(file.relativePath)}>
+                  Preview
+                </Button>
                 <p>
                   <TimeText prefix="Modified" value={file.modifiedAt} />
                 </p>

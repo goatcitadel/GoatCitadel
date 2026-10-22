@@ -29,9 +29,9 @@ export function MeshInvocationOutcomes({
         </p>
       ) : null}
       {activity.length ? (
-        <ul aria-label="Recent mesh invocation outcomes" className="space-y-2">
+        <ul aria-label="Recent mesh invocation outcomes" className="divide-y divide-line-subtle">
           {activity.map((item) => (
-            <li key={item.invocationId} className="space-y-1 rounded-md border border-line p-2">
+            <li key={item.invocationId} className="space-y-1 py-2">
               <div className="flex flex-wrap gap-1">
                 <StatusBadge status={invocationState(item)} />
                 {item.settlementAuthority ? (

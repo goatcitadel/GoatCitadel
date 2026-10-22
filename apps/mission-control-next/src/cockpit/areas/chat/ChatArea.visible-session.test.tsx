@@ -215,7 +215,7 @@ describe("visible Chat session", () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => conversationsButton().click());
     const sheet = document.querySelector('[role="dialog"][aria-label="Conversations"]')!;
-    const projects = sheet.querySelector<HTMLSelectElement>('select[aria-label="Filter by project"]')!;
+    const projects = sheet.querySelector<HTMLSelectElement>('select[aria-label="Project"]')!;
     await act(async () => {
       projects.value = "project-a";
       projects.dispatchEvent(new Event("change", { bubbles: true }));

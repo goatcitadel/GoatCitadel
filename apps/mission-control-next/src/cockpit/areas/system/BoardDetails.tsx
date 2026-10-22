@@ -15,7 +15,7 @@ export function BoardDetails({ board }: { board: OpsSavedBoardRecord }) {
       : []),
   ];
   return (
-    <details className="rounded-md border border-line p-3 text-sm">
+    <details className="border-t border-line-subtle pt-3 text-sm">
       <summary className="min-h-11 cursor-pointer content-center font-medium text-fg">Board details</summary>
       <dl className="mt-2 grid min-w-0 grid-cols-1 gap-1">
         {rows.map(([label, value]) => (

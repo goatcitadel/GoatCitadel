@@ -26,7 +26,7 @@ export function PackPlanControls({
   const owner = usePackPlanAction(plan, workspaceId, onUpdated);
   const required = plan.requiredAction;
   return (
-    <article className="space-y-3 rounded-md border border-line p-3">
+    <article className="space-y-3 border-t border-line-subtle pt-3">
       <header>
         <h5 className="text-sm font-semibold text-fg">{plan.title.slice(0, 240)}</h5>
         <p className="text-xs text-fg-muted">{presentChangeStatusLabel(plan.status)}</p>

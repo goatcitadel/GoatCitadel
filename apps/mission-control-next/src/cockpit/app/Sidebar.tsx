@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { isModifiedClick } from "../lib/modified-click";
 import { cockpitHref } from "./cockpit-history";
-import { shortcutLabel } from "./platform-keys";
+import { shortcutKeys, shortcutLabel } from "./platform-keys";
 import { fetchWorkspaces } from "@goatcitadel/mission-control-shared/api/workspaces";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -95,6 +95,7 @@ export function Sidebar({
       <button
         type="button"
         aria-label="Search commands and records"
+        aria-keyshortcuts={shortcutKeys("k")}
         title={`Search (${shortcutLabel("k")})`}
         onClick={onOpenPalette}
         className="mb-2 flex h-8 items-center gap-2 rounded-md border border-line-control px-2 text-sm text-fg-muted hover:border-fg"
@@ -176,7 +177,6 @@ export function Sidebar({
       )}
       <div
         data-stream-state={streamState}
-        aria-label={stream.ariaLabel}
         className={`flex items-center gap-2 py-1.5 text-xs text-fg-muted ${collapsed ? "flex-col" : "px-2"}`}
       >
         {collapsed ? (

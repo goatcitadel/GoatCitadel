@@ -9,3 +9,8 @@ export function isApplePlatform(): boolean {
 export function shortcutLabel(key: string): string {
   return isApplePlatform() ? `⌘${key.toUpperCase()}` : `Ctrl ${key.toUpperCase()}`;
 }
+
+/** The same shortcut in aria-keyshortcuts syntax, for example "Meta+K" on macOS and "Control+K" elsewhere. */
+export function shortcutKeys(key: string): string {
+  return `${isApplePlatform() ? "Meta" : "Control"}+${key.toUpperCase()}`;
+}

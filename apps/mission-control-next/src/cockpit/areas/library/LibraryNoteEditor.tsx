@@ -221,11 +221,11 @@ function LibraryNoteEditorContent({
         <section aria-label="Note history">
           {history.isFetching ? <p role="status">Reading history…</p> : null}
           {history.error ? <Callout tone="error">{describeApiError(history.error).summary}</Callout> : null}
-          <ul className="grid gap-2">
+          <ul className="divide-y divide-line-subtle">
             {history.data?.items
               .filter((item) => item.workspaceId === workspaceId && item.noteId === note?.noteId)
               .map((item) => (
-                <li key={item.revision} className="rounded-md border border-line p-3">
+                <li key={item.revision} className="py-3">
                   <h3>
                     Version {item.revision}: {item.title}
                   </h3>

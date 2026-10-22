@@ -77,29 +77,32 @@ export function presentTime(
   };
 }
 
-/** Two-decimal dollars, or the measured amount to two significant digits when it is under a cent. */
-function moneyAmount(usd: number, keepSubCent: boolean): string {
-  const subCent = keepSubCent && usd > 0 && usd < 0.005;
+/** Two-decimal dollars; a positive amount under a cent reads "<$0.01" (DESIGN › Copy). */
+function moneyAmount(usd: number): string {
+  if (usd > 0 && usd < 0.005) return "<$0.01";
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    ...(subCent ? { maximumSignificantDigits: 2 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(usd);
 }
 
-/**
- * US dollars at two decimals; positive amounts under a cent read "<$0.01"; unknown never becomes $0.00. A lower bound
- * ("at least") keeps its measured sub-cent amount, since "at least <$0.01" would also claim an upper bound.
- */
-export function formatMoney(usd: number | null | undefined, options: { atLeast?: boolean } = {}): string {
-  if (usd === null || usd === undefined || !Number.isFinite(usd)) return "Unknown";
-  if (options.atLeast) return `at least ${moneyAmount(usd, true)}`;
-  return usd > 0 && usd < 0.005 ? "<$0.01" : moneyAmount(usd, false);
+/** A lower bound rounds down to the cent, so it never claims more than was recorded; under a cent stays "<$0.01". */
+function lowerBoundAmount(usd: number): string {
+  if (usd > 0 && usd < 0.01) return "<$0.01";
+  return moneyAmount(Math.floor(usd * 100 + 1e-9) / 100);
 }
 
-/** A known lower bound in compact form, for example "$3.00+" or "$0.0012+". */
+/** US dollars at two decimals; positive amounts under a cent read "<$0.01"; unknown never becomes $0.00. */
+export function formatMoney(usd: number | null | undefined, options: { atLeast?: boolean } = {}): string {
+  if (usd === null || usd === undefined || !Number.isFinite(usd)) return "Unknown";
+  return options.atLeast ? `at least ${lowerBoundAmount(usd)}` : moneyAmount(usd);
+}
+
+/** A known lower bound standing on its own, for example "At least $3.00" or "At least <$0.01" (SY-N03). */
 export function formatMoneyLowerBound(usd: number): string {
-  return `${moneyAmount(usd, true)}+`;
+  return `At least ${lowerBoundAmount(usd)}`;
 }
 
 const BYTE_UNITS = ["KB", "MB", "GB", "TB"] as const;

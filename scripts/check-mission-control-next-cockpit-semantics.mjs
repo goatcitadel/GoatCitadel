@@ -17,7 +17,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "cockpit");
 
-export const LIVE_REGION_BUDGET = 740;
+// 892: Web & Search settings (#464) added five outcome and error callouts (allowlist, connection check, key actions,
+// key status load), which announce.
+export const LIVE_REGION_BUDGET = 892;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;
@@ -50,8 +52,72 @@ export const MODIFIED_CLICK_BASELINE = new Set([
   "ui/ClassicOwnerLink.tsx",
 ]);
 
+/** Live regions, including a Callout left announcing (it is role=status/alert unless announce={false}). */
 export function countLiveRegions(contents) {
-  return (contents.match(/role="(?:status|alert)"|role=\{[^}]*["'](?:status|alert)["']|aria-live=/g) ?? []).length;
+  const explicit = (contents.match(/role="(?:status|alert)"|role=\{[^}]*["'](?:status|alert)["']|aria-live=/g) ?? [])
+    .length;
+  const callouts = [...contents.matchAll(/<Callout\b([^>]*)>/g)].filter(
+    (match) => !/\bannounce=\{false\}/.test(match[1]),
+  ).length;
+  return explicit + callouts;
+}
+
+/*
+ * Exact ratchets (a count above the budget fails, below it asks for a lower budget):
+ * - label-in-name: an aria-label that doesn't start with the element's literal visible text, or with the text of the
+ *   <label> wrapping the control (WCAG 2.5.3; DESIGN: accessible names start with the visible text).
+ * - aria-label-no-role: aria-label on a div, span or p with no role; screen readers ignore it.
+ * - phone-input-size: a text input without cockpitInputClass whose base text is under 16px, so iOS zooms on focus.
+ */
+export const SEMANTIC_RATCHETS = {
+  "label-in-name": { budget: 0, help: "start the aria-label with the visible text, or drop it" },
+  "aria-label-no-role": { budget: 0, help: "give the element a role (group, region…) or drop the aria-label" },
+  "phone-input-size": { budget: 0, help: "use cockpitInputClass, or text-md with sm:text-sm" },
+};
+
+const starts = (label, text) => label.trim().toLowerCase().startsWith(text.trim().toLowerCase());
+
+export function countSemanticRatchets(relativePath, contents) {
+  if (!relativePath.endsWith(".tsx")) return {};
+  const counts = {};
+  const add = (id, hits) => {
+    if (hits) counts[id] = (counts[id] ?? 0) + hits;
+  };
+  // A control (button, link, summary, or the shared Button) with an aria-label and literal text as its first child.
+  add(
+    "label-in-name",
+    [
+      ...contents.matchAll(
+        // (?:=>|[^>]) lets an arrow handler (`onClick={() => …}`) sit inside the tag without ending it.
+        /<(?:button|a|summary|Button|NativeOwnerLink)\b(?:=>|[^>])*?\baria-label="([^"]+)"(?:=>|[^>])*>\s*([^<{}\s][^<{}]*)/g,
+      ),
+    ].filter((match) => !starts(match[1], match[2])).length,
+  );
+  // A control inside a <label> whose literal text comes first.
+  add(
+    "label-in-name",
+    [
+      ...contents.matchAll(
+        /<label\b[^>]*>\s*([^<{}\s][^<{}]*?)\s*<(?:select|input|textarea)\b[^>]*?\baria-label="([^"]+)"/g,
+      ),
+    ].filter((match) => !starts(match[2], match[1])).length,
+  );
+  add(
+    "aria-label-no-role",
+    contents.match(/<(?:div|span|p)\b(?!(?:=>|[^>])*\brole=)(?:=>|[^>])*\baria-label=/g)?.length ?? 0,
+  );
+  add(
+    "phone-input-size",
+    // iOS zooms any focused text field under 16px: inputs, selects and text areas.
+    [...contents.matchAll(/<(?:input|select|textarea)\b((?:=>|[^>])*)>/g)].filter((match) => {
+      const attributes = match[1];
+      if (/type=["'](?:checkbox|radio|hidden|file|range|color)["']/.test(attributes)) return false;
+      if (/cockpitInputClass/.test(attributes)) return false;
+      const classes = /className=(?:"([^"]*)"|\{`([^`]*)`\})/.exec(attributes);
+      return Boolean(classes && /(?:^|\s)text-(?:xs|sm)(?=\s|$)/.test(classes[1] ?? classes[2] ?? ""));
+    }).length,
+  );
+  return counts;
 }
 
 export function checkFile(relativePath, contents) {
@@ -135,12 +201,24 @@ async function main() {
   const findings = [];
   let liveRegions = 0;
   const stale = [];
+  const ratchets = {};
+  const ratchetFiles = {};
   for (const file of files) {
     const relative = path.relative(cockpitRoot, file).split(path.sep).join("/");
     const contents = await fs.readFile(file, "utf8");
     liveRegions += countLiveRegions(contents);
     findings.push(...checkFile(relative, contents));
     if (MODIFIED_CLICK_BASELINE.has(relative) && findUnguardedLinkHandlers(contents).length === 0) stale.push(relative);
+    for (const [id, count] of Object.entries(countSemanticRatchets(relative, contents))) {
+      ratchets[id] = (ratchets[id] ?? 0) + count;
+      (ratchetFiles[id] ??= []).push(`${relative} (${count})`);
+    }
+  }
+  for (const [id, rule] of Object.entries(SEMANTIC_RATCHETS)) {
+    const count = ratchets[id] ?? 0;
+    if (count > rule.budget)
+      findings.push(`${id}: ${count} uses, budget ${rule.budget}; ${rule.help}: ${ratchetFiles[id].join(", ")}`);
+    else if (count < rule.budget) findings.push(`${id}: ${count} uses is below the budget of ${rule.budget}; lower it`);
   }
   if (liveRegions > LIVE_REGION_BUDGET)
     findings.push(

@@ -6,6 +6,12 @@ import type { ChatThreadTurnRecord, ChatToolRunRecord } from "@goatcitadel/contr
 import { ChatTurnDetails } from "./ChatTurnDetails";
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
+const preferences = vi.hoisted(() => ({ showTechnicalDetails: false }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const useUiPreferences = actual.useUiPreferences as () => Record<string, unknown>;
+  return { ...actual, useUiPreferences: () => ({ ...useUiPreferences(), ...preferences }) };
+});
 
 let root: Root;
 let container: HTMLDivElement;
@@ -92,6 +98,22 @@ describe("ChatTurnDetails design advisories", () => {
 
     expect(container.textContent).toContain("line 2 of the patch text");
     expect(container.textContent).not.toContain("(line 2)");
+  });
+
+  it("keeps a technical tool error reachable under Technical details, with only the summary in the row", () => {
+    const failed = {
+      ...toolRun({}),
+      status: "failed",
+      error: "ECONNRESET at Socket.onread (node:net:1137:14)",
+    } as unknown as ChatToolRunRecord;
+    preferences.showTechnicalDetails = false;
+    render(turnWith([failed]));
+    expect(container.textContent).not.toContain("ECONNRESET");
+    preferences.showTechnicalDetails = true;
+    render(turnWith([{ ...failed }]));
+    expect(container.textContent).toContain("Recorded error");
+    expect(container.textContent).toContain("ECONNRESET at Socket.onread");
+    preferences.showTechnicalDetails = false;
   });
 
   it("renders no advisory list when the tool result carries none", () => {

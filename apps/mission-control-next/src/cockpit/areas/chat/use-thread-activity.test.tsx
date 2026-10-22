@@ -78,10 +78,9 @@ it("shows each conversation's status from the sessions list without a status rea
   const rows = [...host.querySelectorAll("li")].map((row) => row.textContent);
   expect(rows[0]).toContain("Working");
   expect(rows[1]).toContain("Waiting on you");
-  expect(rows[2]).toContain("Status unavailable");
-  expect(host.querySelectorAll("li")[2]?.querySelector("[title]")?.getAttribute("title")).toBe(
-    "The current status could not be read.",
-  );
+  // Rows show a status only while running, waiting or failed; an unreadable one says nothing.
+  expect(rows[2]).not.toContain("Status unavailable");
+  expect(host.querySelectorAll("li")[2]?.querySelector('[title="The current status could not be read."]')).toBeNull();
   expect(mocks.status).not.toHaveBeenCalled();
 });
 

@@ -309,7 +309,7 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
               ? `Source (${review.draft.sourceType}): ${review.draft.source}`
               : review?.draft.query}
           </p>
-          <Callout tone="warning">
+          <Callout announce={false} tone="warning">
             Ingest persists source material. Indexing can invoke an embedding provider. Retrieval returns only content
             allowed for this conversation.
           </Callout>

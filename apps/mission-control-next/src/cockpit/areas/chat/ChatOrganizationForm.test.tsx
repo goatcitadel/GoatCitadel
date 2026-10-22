@@ -62,3 +62,36 @@ it("reports a save that did not land and clears the outcome when the draft chang
   });
   expect(status()).toBe("");
 });
+
+it("reports a save outcome from the save result, not a draft comparison", async () => {
+  // The saved conversation already matches the draft, yet the save itself failed: the form says so.
+  const matching = { sessionId: "s", folderName: "Research", tags: ["alpha", "beta"] } as never;
+  const failed = dock({ selectedSession: matching, onSaveOrganization: vi.fn().mockResolvedValue(false) });
+  await render(failed);
+  await act(async () => save().click());
+  expect(status()).toBe("Folder and tags weren’t saved. The reason is shown in the conversation; try again.");
+  // The saved conversation does not match the draft yet (the list has not refreshed), but the save succeeded.
+  const saved = dock({ onSaveOrganization: vi.fn().mockResolvedValue(true) });
+  await render(saved);
+  await act(async () => save().click());
+  expect(status()).toBe("Folder and tags saved.");
+  // A rejected save is a failure whatever the draft holds.
+  const rejected = dock({ selectedSession: matching, onSaveOrganization: vi.fn().mockRejectedValue(new Error("no")) });
+  await render(rejected);
+  await act(async () => save().click());
+  expect(status()).toBe("Folder and tags weren’t saved. The reason is shown in the conversation; try again.");
+});
+
+it("keeps both fields read-only while the save is pending, so the outcome matches what was saved", async () => {
+  await render(dock({ sessionControlPending: "organization" }));
+  const inputs = [...container.querySelectorAll("input")];
+  expect(inputs).toHaveLength(2);
+  for (const input of inputs) expect(input.readOnly).toBe(true);
+  await render(dock());
+  for (const input of container.querySelectorAll("input")) expect(input.readOnly).toBe(false);
+});
+
+it("uses 16px text on phones so iOS does not zoom the fields", async () => {
+  await render(dock());
+  for (const input of container.querySelectorAll("input")) expect(input.className).toMatch(/(?:^|\s)text-md(?:\s|$)/);
+});

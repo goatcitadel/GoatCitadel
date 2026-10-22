@@ -1,5 +1,6 @@
 import { ChatConversationStarters } from "./ChatConversationStarters";
 import { lazy, Suspense, type RefObject } from "react";
+import { canRetryTurn } from "@goatcitadel/mission-control-shared/components/chat/chat-display-helpers";
 import {
   getChatTurnRecoveryActionSummary,
   isChatTurnTerminalStatus,
@@ -15,7 +16,7 @@ import {
 import { presentChatTurnStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
 import { CircleAlert, OctagonAlert, TriangleAlert } from "lucide-react";
-import { presentFailureClass, presentFileType } from "./chat-vocabulary";
+import { presentAttachmentType, presentFailureClass } from "./chat-vocabulary";
 import { useChatStreamingPreviewSnapshot } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 import type {
   MissionThreadedActiveSessionSurfaceProps,
@@ -79,6 +80,8 @@ export function Turn({
       aria-label={turnAccessibleName(capture?.summary ?? turn.userMessage.content, position)}
       data-turn-id={turn.turnId}
     >
+      {/* Heading navigation moves message by message; the visible "You" and "Assistant" labels stay as they are. */}
+      <h2 className="sr-only">You said</h2>
       <div className="cockpit-chat-user-bubble ml-auto rounded-lg border border-line-subtle bg-raised p-3">
         <p className="mb-1 text-xs font-medium text-fg-muted">
           You · <ActorTimestamp timestamp={turn.userMessage.timestamp ?? ""} />
@@ -95,7 +98,7 @@ export function Turn({
           <ul aria-label="Sent attachments">
             {turn.userMessage.attachments.map((file) => (
               <li key={file.attachmentId}>
-                {file.fileName} · {presentFileType(file.mimeType)} · {formatBytes(file.sizeBytes)}
+                {file.fileName} · {presentAttachmentType(file)} · {formatBytes(file.sizeBytes)}
               </li>
             ))}
           </ul>
@@ -103,6 +106,7 @@ export function Turn({
       </div>
       {assistantText || streaming ? (
         <div className="max-w-full">
+          <h2 className="sr-only">Assistant reply</h2>
           <div className="mb-2 flex items-center gap-2">
             <p className="text-xs font-medium text-fg-muted">
               Assistant{" "}
@@ -123,7 +127,7 @@ export function Turn({
           ) : (
             <p className="text-sm text-fg-muted">Preparing response…</p>
           )}
-          {turn.assistantMessage && !streaming ? <TurnReceipt turn={turn} /> : null}
+          {turn.assistantMessage && !streaming ? <TurnReceipt turn={turn} onInspectTurn={onInspectTurn} /> : null}
         </div>
       ) : !failed && !partial ? (
         <p className="text-xs text-fg-muted">{presentChatTurnStatus(turn.trace.status).label}</p>
@@ -146,7 +150,9 @@ export function Turn({
               : ""}{" "}
             {turn.trace.failure?.recommendedAction
               ? getChatTurnRecoveryActionSummary(turn.trace.failure.recommendedAction)
-              : "Review run details or retry when available."}
+              : canRetryTurn(turn)
+                ? "Use Retry, or Run details under More, below this message."
+                : "Use Run details under More, below this message."}
           </p>
         </div>
       ) : null}
@@ -257,9 +263,15 @@ export function ChatTranscriptFooter({ context }: { context?: TranscriptFooterCo
         !renderedTurns.some(
           (turn) => turn.userMessage.messageId === props.optimisticUserMessage?.canonicalMessageId,
         ) ? (
-          <p className="rounded-lg border border-line bg-raised p-3 text-sm text-fg-secondary">
-            {props.optimisticUserMessage.content} · Sending…
-          </p>
+          // The message being sent looks like the user bubble it becomes, with a Sending badge until it is saved.
+          <div className="cockpit-chat-user-bubble ml-auto rounded-lg border border-line-subtle bg-raised p-3">
+            <h2 className="sr-only">You said</h2>
+            <div className="mb-1 flex items-center gap-2">
+              <p className="text-xs font-medium text-fg-muted">You</p>
+              <StatusBadge status={{ label: "Sending", tone: "running" }} />
+            </div>
+            <AssistantMessageRenderer role="user" content={props.optimisticUserMessage.content} />
+          </div>
         ) : null}
         {pendingTurnId && !hasRenderedPreviewTurn && preview?.visibleText ? (
           <div className="py-4">

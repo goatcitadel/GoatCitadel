@@ -343,7 +343,13 @@ export function WorkSchedules() {
                 />
               ))}
             </ul>
-            <div ref={reveal.detail} tabIndex={-1} aria-label="Schedule detail" className="min-w-0 scroll-mt-4">
+            <div
+              ref={reveal.detail}
+              tabIndex={-1}
+              role="region"
+              aria-label="Schedule detail"
+              className="min-w-0 scroll-mt-4"
+            >
               {!selectedId ? (
                 <EmptyState
                   title="Select a schedule"

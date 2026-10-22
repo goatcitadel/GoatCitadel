@@ -11,6 +11,8 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
+import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
+import { presentErrorText } from "../../lib/present-error";
 import { presentApprovalEffectKind, presentApprovalEffectStatus, presentApprovalEvent } from "./inbox-vocabulary";
 
 export function ApprovalSettlement({
@@ -111,10 +113,13 @@ export function ApprovalSettlement({
         </p>
       ) : null}
       {run ? (
-        <p role={run.status === "failed" || run.status === "dead_lettered" ? "alert" : "status"}>
-          Original linked work: {run.status === "running" ? "Resumed" : presentRunStatus(run.status).label}.{" "}
-          {run.lastError}
-        </p>
+        <>
+          <p role={run.status === "failed" || run.status === "dead_lettered" ? "alert" : "status"}>
+            Original linked work: {run.status === "running" ? "Resumed" : presentRunStatus(run.status).label}.{" "}
+            {run.lastError ? presentErrorText(run.lastError).summary : null}
+          </p>
+          <RecordedErrorDetails error={run.lastError} />
+        </>
       ) : state ? (
         <p>No original run was found. A recorded decision does not show the work ran.</p>
       ) : (
