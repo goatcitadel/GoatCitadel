@@ -14,7 +14,21 @@ describe("chat turn agent runner has no eval-prompt-specific rewrites", () => {
     "robot vacuum pet hair",
     "shouldProactivelyOpenCoworkResearchResult",
     "derivePromptSpecificWebQuery",
+    "travelportland.com",
+    "hoytarboretum.org",
+    "ready.gov/kit",
+    "nyc.gov/site/dsny",
+    "weather.gov/sew",
+    "AirNow parks outdoor activity",
+    "choose Seattle",
+    "buildTopicalCoworkWebEvidenceFallback",
+    "buildOutdoorActivityCoworkFallback",
+    "buildEverydayCoworkContractFallback",
   ])("does not contain %s", (needle) => {
     expect(RUNNER_SOURCE.includes(needle), `runner source still contains "${needle}"`).toBe(false);
+  });
+
+  it("keeps hard-coded third-party URLs out of the Chat runner", () => {
+    expect(RUNNER_SOURCE).not.toMatch(/https?:\/\//);
   });
 });

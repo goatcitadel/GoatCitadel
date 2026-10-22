@@ -173,6 +173,79 @@ describe("ChatTurnAgentRunner Cowork repair behavior", () => {
     expect(result.assistantContent).toContain("Risk Review");
   });
 
+  it("keeps a live topical cowork answer as the model wrote it when no role contract was requested", async () => {
+    // A topical everyday prompt with no requested roles must not be swapped
+    // for a canned answer that cites sources nothing in this turn fetched.
+    const livePrompt =
+      "Should I pick a museum, a nature walk, or live music in Portland, Oregon this weekend? Give me a quick take.";
+    const modelAnswer = "A museum is the safest pick if the weather looks wet; otherwise try a short nature walk.";
+    const result = await runLiveCoworkTurn("sess-live-cowork-topical-passthrough-1", livePrompt, modelAnswer);
+
+    expect(result.assistantContent).toBe(modelAnswer);
+    expect(result.assistantContent).not.toMatch(/https?:\/\//);
+  });
+
+  it("keeps a live volunteer-orientation answer as the model wrote it when no role contract was requested", async () => {
+    // Without an explicit role contract, a volunteer-orientation prompt is a
+    // normal live Cowork turn: the model's plan is not forced into a fallback.
+    const livePrompt =
+      "Create a three-phase plan for organizing a small volunteer orientation and pause at the approval checkpoint.";
+    const modelAnswer = [
+      "## Planner",
+      "- Phase 1: confirm the role, audience size, and trainer.",
+      "- Phase 2: draft the agenda and welcome note.",
+      "- Phase 3: run the session after approval only.",
+      "",
+      "## Operator Handoff",
+      "- Approval checkpoint: stop here until the organizer approves the agenda and date.",
+    ].join("\n");
+    const result = await runLiveCoworkTurn("sess-live-cowork-volunteer-passthrough-1", livePrompt, modelAnswer);
+
+    expect(result.assistantContent).toBe(modelAnswer);
+  });
+
+  it.each([
+    {
+      name: "household severe storm",
+      task: "Find two practical tips for preparing a household for a severe storm.",
+      cannedNeedles: ["ready.gov", "Ready.gov/FEMA"],
+    },
+    {
+      name: "city service holiday",
+      task: "Check whether a city service is available on a holiday and preserve any conflict between sources.",
+      cannedNeedles: ["nyc.gov", "DSNY", "New Year's Day"],
+    },
+    {
+      name: "public outdoor activity",
+      task: "Decide whether a public outdoor activity is a good idea this weekend.",
+      cannedNeedles: ["weather.gov", "choose Seattle"],
+    },
+  ])(
+    "keeps a live $name cowork answer honest when it misses the requested roles",
+    async ({ name, task, cannedNeedles }) => {
+      // With no tool evidence in the turn, the role-contract repair may only
+      // use the generic evidence scaffold: no canned facts, no hard-coded URLs.
+      const livePrompt = [
+        task,
+        "Use role-labeled sections in this exact order: Researcher, Risk Review, Operator Handoff.",
+      ].join("\n");
+      const degradedAnswer = "Here are some loose thoughts without any structure.";
+      const result = await runLiveCoworkTurn(
+        `sess-live-cowork-honest-${name.replace(/\s+/g, "-")}-1`,
+        livePrompt,
+        degradedAnswer,
+      );
+
+      expect(result.assistantContent).toContain("## Researcher");
+      expect(result.assistantContent).toContain("## Risk Review");
+      expect(result.assistantContent).toContain("## Operator Handoff");
+      expect(result.assistantContent).not.toMatch(/https?:\/\//);
+      for (const needle of cannedNeedles) {
+        expect(result.assistantContent).not.toContain(needle);
+      }
+    },
+  );
+
   it("does not run forced repo prefetch for prompt-lab implicit cowork inspections", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
@@ -1321,3 +1394,34 @@ describe("ChatTurnAgentRunner Cowork repair behavior", () => {
     expect(createChatCompletion).toHaveBeenCalledTimes(2);
   });
 });
+
+async function runLiveCoworkTurn(
+  sessionId: string,
+  prompt: string,
+  modelAnswer: string,
+): Promise<{ assistantContent: string }> {
+  const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+    model: "gpt-5.4",
+    choices: [{ index: 0, message: { role: "assistant", content: modelAnswer } }],
+  });
+  const orchestrator = new ChatTurnAgentRunner({
+    storage: createMockStorage() as never,
+    listToolCatalog: () => createToolCatalog([]),
+    createChatCompletion,
+    invokeTool: vi.fn(),
+  });
+  return orchestrator.run({
+    sessionId,
+    turnId: randomUUID(),
+    userMessageId: `msg-${sessionId}`,
+    content: prompt,
+    mode: "cowork",
+    providerId: "openai",
+    model: "gpt-5.4",
+    webMode: "off",
+    memoryMode: "off",
+    thinkingLevel: "extended",
+    toolAutonomy: "manual",
+    historyMessages: [{ role: "user", content: prompt }],
+  });
+}
