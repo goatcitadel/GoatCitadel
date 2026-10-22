@@ -379,6 +379,23 @@ describe("ApprovalsRoutePage", () => {
     expect(errorText).not.toContain("Loading current route data");
   });
 
+  it("shows an unknown pending count when the queue failed and the host has no count", () => {
+    approvalHarness.overrides = {
+      pendingItems: [],
+      visibleItems: [],
+      selectedApproval: null,
+      hasPendingApprovals: false,
+      loading: false,
+      error: "approval queue failed",
+    };
+    const text = renderText(renderPage({ pendingApprovals: undefined }));
+
+    expect(text).toContain("Pending (Unknown)");
+    expect(text).not.toContain("Pending (0)");
+    expect(text).toContain("The approval queue could not be loaded, so pending approvals are unknown.");
+    expect(text).not.toContain("No approvals in this view.");
+  });
+
   it("loads more approvals from the active queue view", async () => {
     approvalHarness.overrides = {
       hasMoreVisibleApprovals: true,

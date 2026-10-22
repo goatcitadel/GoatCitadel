@@ -33,7 +33,7 @@ export function ApprovalsRoutePage({
   route,
   activeWorkspaceId,
   activeWorkspaceName,
-  pendingApprovals = 0,
+  pendingApprovals,
   navigate,
 }: NativeRoutePagesProps) {
   const [pendingConfirmation, setPendingConfirmation] = useState<ApprovalConfirmation | null>(null);
@@ -85,18 +85,22 @@ export function ApprovalsRoutePage({
     }),
     [approvals.historyItems.length, approvals.pendingItems.length, approvals.recoveryItems.length],
   );
+  // Undefined when neither the queue nor the host gives a reliable count; shown as Unknown, never as 0.
   const displayedPendingCount = approvals.pendingLaneFailed
-    ? Math.max(queueCounts.pending, pendingApprovals)
+    ? pendingApprovals === undefined
+      ? queueCounts.pending || undefined
+      : Math.max(queueCounts.pending, pendingApprovals)
     : (approvals.loading || approvals.error) && queueCounts.pending === 0
       ? pendingApprovals
       : queueCounts.pending;
+  const pendingCountLabel = displayedPendingCount === undefined ? "Unknown" : String(displayedPendingCount);
 
   const pendingApprovalIds = useMemo(
     () => approvals.pendingItems.map((item) => item.approvalId),
     [approvals.pendingItems],
   );
   const seenPendingIdsRef = useRef<Set<string>>(new Set());
-  const previousPendingCountRef = useRef<number>(displayedPendingCount);
+  const previousPendingCountRef = useRef<number | undefined>(displayedPendingCount);
   const [newApprovalIds, setNewApprovalIds] = useState<ReadonlySet<string>>(() => new Set());
   const [countFlashKey, setCountFlashKey] = useState<number>(0);
   const [liveAnnouncement, setLiveAnnouncement] = useState<string>("");
@@ -126,7 +130,8 @@ export function ApprovalsRoutePage({
 
   useEffect(() => {
     const previousCount = previousPendingCountRef.current;
-    if (displayedPendingCount > previousCount) {
+    if (displayedPendingCount === undefined) return;
+    if (previousCount !== undefined && displayedPendingCount > previousCount) {
       const arrived = displayedPendingCount - previousCount;
       setCountFlashKey((value) => value + 1);
       setLiveAnnouncement(
@@ -148,9 +153,11 @@ export function ApprovalsRoutePage({
 
   const isCountFlashing = countFlashKey > 0;
   const emptyApprovalsLabel =
-    approvals.view === "pending" && displayedPendingCount > 0 && approvals.error
-      ? "Pending approvals exist, but the queue details could not be loaded."
-      : "No approvals in this view.";
+    approvals.view === "pending" && approvals.error && displayedPendingCount === undefined
+      ? "The approval queue could not be loaded, so pending approvals are unknown."
+      : approvals.view === "pending" && approvals.error && displayedPendingCount
+        ? "Pending approvals exist, but the queue details could not be loaded."
+        : "No approvals in this view.";
   const confirmationCopy = pendingConfirmation ? buildApprovalConfirmationCopy(pendingConfirmation) : null;
   const confirmationPending =
     pendingConfirmation?.kind === "bulk-reject"
@@ -195,7 +202,7 @@ export function ApprovalsRoutePage({
         // shows as an inline banner above it instead.
         error={null}
         metrics={[
-          { label: "Pending", value: String(displayedPendingCount), flash: isCountFlashing },
+          { label: "Pending", value: pendingCountLabel, flash: isCountFlashing },
           { label: "History", value: String(queueCounts.history) },
           { label: "Recovery", value: String(queueCounts.recovery) },
           { label: "Replay trails", value: String(approvals.replayCount) },
@@ -224,7 +231,7 @@ export function ApprovalsRoutePage({
             title="Approval queue"
             subtitle="Work the pending queue, audit history, or jump straight to recovery-linked approvals."
             stats={[
-              { label: "Pending", value: String(displayedPendingCount) },
+              { label: "Pending", value: pendingCountLabel },
               { label: "Workspace", value: activeWorkspaceName },
               { label: "Replay trails", value: String(approvals.replayCount) },
             ]}
@@ -233,7 +240,7 @@ export function ApprovalsRoutePage({
               <div className="mc-next-approvals-view-switch" role="tablist" aria-label="Approval views">
                 <ApprovalViewButton
                   active={approvals.view === "pending"}
-                  label={`Pending (${displayedPendingCount})`}
+                  label={`Pending (${pendingCountLabel})`}
                   onClick={() => approvals.setView("pending")}
                   flash={isCountFlashing}
                 />
@@ -283,7 +290,7 @@ export function ApprovalsRoutePage({
               aria-atomic="false"
               aria-label={`Approvals queue, ${
                 approvals.view === "pending"
-                  ? `${displayedPendingCount} pending`
+                  ? `${pendingCountLabel} pending`
                   : approvals.view === "history"
                     ? `${queueCounts.history} in history`
                     : `${queueCounts.recovery} in recovery`

@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Paths are relative to `apps/mission-control-next/src/` unless they start with `scripts/`, `packages/` or `apps/gateway/`. `cockpit/` = `apps/mission-control-next/src/cockpit/`; `features/` = `apps/mission-control-next/src/features/`.
+- Paths are relative to `apps/mission-control-next/src/` unless they start with `scripts/`, `packages/`, `config/` or `apps/` (for example `apps/gateway/` or `apps/mission-control-next/index.html`), or are the repo-root `DESIGN.md` and `PRODUCT.md`. `cockpit/` = `apps/mission-control-next/src/cockpit/`; `features/` = `apps/mission-control-next/src/features/`.
 - Work in a fresh worktree off latest `origin/main`, one branch per PR (`fix/cockpit-followup-<n>-<slug>`). Never edit `C:\personal-ai` itself, which holds foreign WIP. Never `git stash`.
 - Ask the user before every commit, push and PR. The user merges.
 - PC load limits: one heavy job at a time on the whole machine. Before any vitest, tsc or build, check `Get-CimInstance Win32_Process` for node.exe running vitest, tsx or tsc, and wait. Run vitest only as single files at low priority with `--maxWorkers=2`, never `vitest --changed`, a full suite or a `verify:*` lane locally. Never wrap commands in a timeout. Long jobs run in the background. Full suites run in CI.
@@ -47,10 +47,11 @@ Closes SY-R02, SY-R03, WK-R01, WK-R02, LB-R02, SY-R05, SY-L01, SY-N01 (workspace
 - Test: `cockpit/ui/EmbeddedClassicPage.test.tsx`
 
 **Interfaces:**
-- Produces: `export function EmbeddedClassicPage({ children }: { children: ReactNode }): JSX.Element`. It renders `<div className={cn(AREA_PAGE, "cockpit-embedded-classic pt-0")}>`. Tasks 1.2 and 1.3 use it.
+- Produces: `export function EmbeddedClassicPage({ children, inColumn = false }: { children: ReactNode; inColumn?: boolean }): JSX.Element`. It renders `<div className={cn(AREA_PAGE, "cockpit-embedded-classic pt-0")}>`. With `inColumn`, the caller already renders inside `AREA_PAGE`, so the wrapper keeps only the containment class and a flex column, without the column padding twice. Tasks 1.2 and 1.3 use it.
 
 - [ ] **Step 1: Write the failing tests.**
   - `it("renders children inside the cockpit column with the containment class")`: the wrapper's className contains `max-w-5xl` and `cockpit-embedded-classic`.
+  - `it("skips the column padding when the caller already owns the column")`: with `inColumn`, the className keeps `cockpit-embedded-classic` and drops `max-w-5xl`.
   - `it("scopes the containment rules")`: read `../styles/embedded-classic.css` with `fs.readFileSync`. Assert that it contains `.cockpit-embedded-classic .mc-next-visually-hidden`, `.cockpit-embedded-classic .mc-next-button` with `display: inline-flex`, and `.cockpit-embedded-classic .mc-pp-kicker`, and no bare `#` color literals. Vitest doesn't apply CSS to happy-dom, so the computed styles are checked live in the Wave 1 close crawl.
 - [ ] **Step 2: Run it and confirm it fails** (module not found).
 - [ ] **Step 3: Implement.** In `embedded-classic.css`, every rule is scoped under `.cockpit-embedded-classic`:
@@ -75,7 +76,7 @@ Closes SY-R02, SY-R03, WK-R01, WK-R02, LB-R02, SY-R05, SY-L01, SY-N01 (workspace
   - SystemRuntime: `it("renders the runtime page inside the cockpit column")` asserts the mocked `RuntimeRoutePage` element's closest `.cockpit-embedded-classic` exists.
   - SystemSessions: `it("passes the workspace name, never the id")` asserts `fixture.props.activeWorkspaceName === "Workspace A"`, with the workspace lookup mocked to return "Workspace A" for "workspace-a". Also `it("titles a run detail with Run, not the raw id")` asserts the h1 text is "Run".
   - WorkKanban: `it("wraps the Kanban in the cockpit column")` and `it("titles a run detail with Run, not the raw id")`.
-  - For Review Focus line 1, `it("keeps the column when the embedded page throws a load error")`: the mocked page renders its error text, and the error stays inside `.cockpit-embedded-classic`.
+  - For Review Focus line 1, `it("keeps the column when the embedded worker page renders its load error")`: the mocked page renders its in-component error state (`registry.error`), and the error text stays inside `.cockpit-embedded-classic`. A page that throws during render is caught by the outer `AreaErrorBoundary`, not by the wrapper, so this test covers the rendered error state only.
 - [ ] **Step 2: Run each file and confirm the new tests fail.**
 - [ ] **Step 3: Implement.**
   - Wrap each embedded page element in `<EmbeddedClassicPage>`.

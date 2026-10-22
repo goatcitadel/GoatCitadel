@@ -17,6 +17,16 @@ it("renders children inside the cockpit column with the containment class", () =
   expect(html).toContain("<p>Classic body</p>");
 });
 
+it("skips the column padding when the caller already owns the column", () => {
+  const html = renderToStaticMarkup(
+    <EmbeddedClassicPage inColumn>
+      <p>Classic body</p>
+    </EmbeddedClassicPage>,
+  );
+  expect(html).toMatch(/^<div class="[^"]*\bcockpit-embedded-classic\b/);
+  expect(html).not.toContain("max-w-5xl");
+});
+
 it("scopes the containment rules", () => {
   expect(css).toContain(".cockpit-embedded-classic .mc-next-visually-hidden");
   expect(css).toMatch(/\.cockpit-embedded-classic \.mc-next-button[^{]*\{[^}]*display:\s*inline-flex/);
