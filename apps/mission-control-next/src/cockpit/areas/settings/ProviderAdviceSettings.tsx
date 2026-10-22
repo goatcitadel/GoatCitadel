@@ -1,5 +1,6 @@
 import { useProviderAdvice } from "../../../features/native-routes/settings/sections/use-provider-advice";
 import { Button } from "../../ui/Button";
+import { TimeText } from "../../ui/TimeText";
 
 export function ProviderAdviceSettings() {
   const { state, load } = useProviderAdvice();
@@ -20,7 +21,7 @@ export function ProviderAdviceSettings() {
       {state.data ? (
         <div className="mt-3 space-y-3 text-sm text-fg-secondary">
           <p>
-            Observed {state.data.generatedAt}.{" "}
+            <TimeText prefix="Observed" value={state.data.generatedAt} />.{" "}
             {state.data.advisoryOnly && !state.data.mutationPerformed
               ? "Advisory only; no settings mutation."
               : "The response did not confirm advisory-only execution."}

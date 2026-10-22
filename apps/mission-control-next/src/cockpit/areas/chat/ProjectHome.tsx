@@ -18,6 +18,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { TimeText } from "../../ui/TimeText";
 
 export function ProjectHome({
   project,
@@ -191,7 +192,7 @@ export function ProjectHome({
                   {session.title || "Untitled conversation"}
                 </NativeOwnerLink>
                 <p className="text-xs text-fg-muted">
-                  {session.lifecycleStatus} · {session.lastActivityAt}
+                  {session.lifecycleStatus} · <TimeText value={session.lastActivityAt} prefix="Last active" />
                 </p>
               </li>
             ))}

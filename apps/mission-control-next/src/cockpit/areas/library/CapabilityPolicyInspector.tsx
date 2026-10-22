@@ -3,6 +3,7 @@ import { RiskBadge } from "../../ui/RiskBadge";
 import { useEffect, useRef, useState } from "react";
 import { freeText, wardEffectLabel } from "./capability-vocabulary";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { Button } from "../../ui/Button";
 import {
@@ -367,8 +368,8 @@ function PolicyResult({ value }: { value: PolicyInspectionResult }) {
         still apply when it runs.
       </p>
       <p className="text-xs text-fg-muted">
-        Advisory result saved at <time dateTime={value.checkedAt}>{value.checkedAt}</time>. Re-evaluate after context or
-        policy changes.
+        <TimeText prefix="Advisory result saved" value={value.checkedAt} />. Re-evaluate after context or policy
+        changes.
       </p>
     </section>
   );

@@ -22,13 +22,16 @@ describe("cockpit document title", () => {
     expect(cockpitDocumentTitle("Library", "citadel", "library")).toBe("GoatCitadel Library · Guided setup · Mason");
   });
 
-  it("maps cockpit system and work views onto their ops labels and humanises unknown slugs", () => {
-    expect(cockpitDocumentTitle("System", "spend", "system")).toBe("GoatCitadel System · Costs");
-    expect(cockpitDocumentTitle("System", "dashboards", "system")).toBe("GoatCitadel System · Saved boards");
-    expect(cockpitDocumentTitle("System", "browser-sessions", "system")).toBe("GoatCitadel System · Sessions");
+  it("names cockpit system and work views by their tab labels and humanises unknown slugs (SH-N04)", () => {
+    expect(cockpitDocumentTitle("System", "spend", "system")).toBe("GoatCitadel System · Spend");
+    expect(cockpitDocumentTitle("System", "dashboards", "system")).toBe("GoatCitadel System · Dashboards");
+    expect(cockpitDocumentTitle("System", "browser-sessions", "system")).toBe("GoatCitadel System · Browser sessions");
+    expect(cockpitDocumentTitle("System", "sessions", "system")).toBe("GoatCitadel System · Sessions");
     expect(cockpitDocumentTitle("System", "health", "system")).toBe("GoatCitadel System · Health");
     expect(cockpitDocumentTitle("Work", "kanban", "work")).toBe("GoatCitadel Work · Kanban");
     expect(cockpitDocumentTitle("Work", "schedules", "work")).toBe("GoatCitadel Work · Schedules");
+    expect(cockpitDocumentTitle("Work", "archive", "work")).toBe("GoatCitadel Work · Archived tasks");
+    expect(cockpitDocumentTitle("System", "constructor", "system")).toBe("GoatCitadel System · Constructor");
     expect(cockpitDocumentTitle("Work", "mystery-slug", "work")).toBe("GoatCitadel Work · Mystery slug");
     expect(cockpitDocumentTitle("Inbox", "approval%3A1", "inbox")).toBe("GoatCitadel Inbox · Approval:1");
   });

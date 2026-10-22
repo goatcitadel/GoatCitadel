@@ -38,9 +38,15 @@ describe("format", () => {
     expect(formatMoney(0)).toBe("$0.00");
     expect(formatMoney(undefined)).toBe("Unknown");
     expect(formatMoney(3, { atLeast: true })).toBe("at least $3.00");
-    expect(formatMoney(0.0012, { atLeast: true })).toBe("at least $0.0012");
-    expect(formatMoneyLowerBound(0.0012)).toBe("$0.0012+");
-    expect(formatMoneyLowerBound(3)).toBe("$3.00+");
+    // A lower bound under a cent reads "<$0.01" like any other tiny amount (SY-N03), never "$0.0012".
+    expect(formatMoney(0.0012, { atLeast: true })).toBe("at least <$0.01");
+    expect(formatMoneyLowerBound(0.0026)).toBe("At least <$0.01");
+    expect(formatMoneyLowerBound(12.344)).toBe("At least $12.34");
+    expect(formatMoneyLowerBound(3)).toBe("At least $3.00");
+    // A lower bound rounds down, so it never claims more than was recorded.
+    expect(formatMoneyLowerBound(12.346)).toBe("At least $12.34");
+    expect(formatMoneyLowerBound(0.0051)).toBe("At least <$0.01");
+    expect(formatMoney(12.349, { atLeast: true })).toBe("at least $12.34");
   });
 
   it("formats sizes, durations and counts", () => {

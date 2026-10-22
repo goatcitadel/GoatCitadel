@@ -7,6 +7,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { CitadelAccessReview } from "./CitadelAccessReview";
 import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
+import { TimeText } from "../../ui/TimeText";
 
 export function CitadelCouncilSettings({ citadelId }: { citadelId: string }) {
   const c = useCitadelCouncil(citadelId),
@@ -171,7 +172,9 @@ export function CitadelCouncilSettings({ citadelId }: { citadelId: string }) {
             <dt>Seat</dt>
             <dd className="font-mono text-xs">{c.selectedSeat?.assignmentId}</dd>
             <dt>Created</dt>
-            <dd>{c.selectedSeat?.createdAt}</dd>
+            <dd>
+              <TimeText value={c.selectedSeat?.createdAt} />
+            </dd>
           </dl>
           <Button
             variant="danger"

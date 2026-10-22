@@ -385,6 +385,57 @@ describe("Inbox approval detail states (IN-05, IN-07, IN-16)", () => {
     expect(container.textContent).not.toContain("upstream 502");
   });
 
+  it("prints one failure line when no explanation loaded, and none when one did (IN-L01)", async () => {
+    api.fetchApproval.mockResolvedValue({ ...approval, explanationStatus: "failed", explanationError: "timeout" });
+    await render();
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+    expect(container.textContent?.split("Approval summary unavailable")).toHaveLength(2);
+    expect(container.textContent).not.toContain("could not be generated");
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    client.clear();
+    api.fetchApproval.mockResolvedValue({
+      ...approval,
+      explanationStatus: "failed",
+      explanationError: "timeout",
+      explanation: { summary: "Writes one memory note.", riskExplanation: "", generatedAt: approval.createdAt },
+    });
+    await render();
+    await settleUntil(() => Boolean(container.textContent?.includes("Writes one memory note.")));
+    expect(container.textContent).not.toContain("Approval summary unavailable");
+    expect(container.textContent).not.toContain("could not be generated");
+  });
+
+  it("presents a memory-write preview without hashes, byte counts or mid-word breaks (IN-L01)", async () => {
+    api.fetchApproval.mockResolvedValue({
+      ...approval,
+      kind: "tool_invoke",
+      linkage: { workspaceId: "default", toolName: "memory.write" },
+      preview: {
+        toolName: "memory.write",
+        target: "Memory namespace: demo.goatcitadel",
+        title: "Operator preference: visible proof",
+        summary:
+          "Approval permits this exact request to persist a memory document and indexed content. Admission is not proof of a saved document; execution and lifecycle policy still apply.",
+        content: "The demo operator wants model choice visible.",
+        contentSummary: `Exact original content: 136 UTF-8 bytes; SHA-256 ${"a".repeat(64)}. Redaction does not change approved executable arguments.`,
+      },
+    });
+    await render();
+    await settleUntil(() => Boolean(container.querySelector('[aria-label="Action preview"]')));
+    const preview = container.querySelector('[aria-label="Action preview"]')!;
+    expect(preview.textContent).toContain("demo.goatcitadel");
+    expect(preview.textContent).toContain("Content size: 136 B");
+    // A decision input that shares the hash's line stays visible; only the hash clause moves.
+    expect(preview.textContent).toContain("Redaction does not change approved executable arguments.");
+    expect(preview.textContent).not.toContain("SHA-256");
+    expect(preview.textContent).not.toContain("bytes");
+    // The consequence of approving stays visible; only hashes and byte counts move to technical details.
+    expect(preview.textContent).toContain("Approval permits this exact request to persist a memory document");
+    expect(preview.querySelector(".break-all")).toBeNull();
+  });
+
   it("says specialist evidence is loading before raising an alert, and alerts only when the read fails", async () => {
     let fail!: (cause: Error) => void;
     specialist.read.mockReset().mockReturnValue(

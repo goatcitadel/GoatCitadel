@@ -4,6 +4,7 @@ import type { useProviderCodexSetup } from "../../../features/native-routes/sett
 import { Button } from "../../ui/Button";
 import { ProviderChangeStatus } from "./ProviderChangeStatus";
 import { presentChangeStatusLabel } from "./settings-vocabulary";
+import { TimeText } from "../../ui/TimeText";
 
 export function ProviderOAuthSettings({
   oauth,
@@ -67,7 +68,9 @@ export function ProviderOAuthSettings({
       </div>
       {flow ? (
         <div className="space-y-2 rounded-md border border-line p-3 text-sm text-fg-secondary">
-          <p>Current login expires {flow.expiresAt}.</p>
+          <p>
+            <TimeText prefix="Current login expires" absolute value={flow.expiresAt} />.
+          </p>
           {flow.userCode ? (
             <p>
               OpenAI code: <strong className="font-mono text-fg">{flow.userCode}</strong>

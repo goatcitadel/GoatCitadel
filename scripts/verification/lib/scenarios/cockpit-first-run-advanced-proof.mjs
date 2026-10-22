@@ -280,7 +280,9 @@ export async function runCockpitFirstRunAdvancedProof({ context, browser, stack,
               subagentPolicy: demoPrefs.subagentPolicy ?? "off",
             },
           };
-          await demo.getByText(`Last acknowledged preparation: ${demoReceipt.status}.`, { exact: true }).waitFor();
+          // The cockpit presents the demo status in words (FirstRunDemo presentDemoStatus).
+          const demoStatusLabel = { ready: "Ready", partial: "Partly prepared", not_started: "Not prepared" }[demoReceipt.status];
+          await demo.getByText(`Last preparation: ${demoStatusLabel}.`, { exact: true }).waitFor();
           for (const note of demoReceipt.notes) assert.ok((await demo.innerText()).includes(note));
           stage = "retain unknown demo preparation";
           await demo.getByRole("button", { name: "Review demo preparation", exact: true }).click();

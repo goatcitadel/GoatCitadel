@@ -14,18 +14,26 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "cockpit");
+const nativeRoutes = path.join(repoRoot, "apps", "mission-control-next", "src", "features", "native-routes");
+
+/** The cockpit's own areas, plus the Classic settings and ops panels it still mounts until Phase 3 ports them. */
+export const RAW_VALUE_ROOTS = [
+  { id: "cockpit", dir: cockpitRoot },
+  { id: "native-settings", dir: path.join(nativeRoutes, "settings") },
+  { id: "native-ops", dir: path.join(nativeRoutes, "ops") },
+];
 
 export const RULES = [
   {
     id: "humanize-token",
     pattern: /\bhumanizeToken\(/g,
-    budget: 30,
+    budget: 27,
     help: "use a typed presenter from status-vocabulary (or an area *-vocabulary.ts); humanizeToken is for free-form text only",
   },
   {
     id: "manual-humanize",
     pattern: /\.replace(?:All)?\(\s*(?:["'`]_["'`]|\/_\/g)\s*,\s*["'`] ["'`]\s*\)/g,
-    budget: 14,
+    budget: 13,
     help: "underscore-stripping is humanizeToken by hand; use a typed presenter",
   },
   {
@@ -50,22 +58,83 @@ export const RULES = [
   {
     id: "jsx-raw-id",
     // Only rendered text counts: attribute values such as key={run.runId} are never shown.
-    pattern: /(?<!=)\{\s*[\w?.!]+\.(?:workspaceId|providerId|actorId|runId|taskId|sessionId|approvalId)\s*\}/g,
-    // 55 includes the two "Run <id>" run-detail headers (Sessions, classic Kanban): a run has no other name there.
-    budget: 55,
+    pattern:
+      /(?<!=)\{\s*[\w?.!]+\.(?:workspaceId|providerId|actorId|runId|taskId|sessionId|approvalId|grantId|localOperatorOverrideId)\s*\}/g,
+    // IDs inside TechnicalDetails and key/href templates don't count. The budget includes the two "Run <id>"
+    // run-detail headers (Sessions, classic Kanban): a run has no other name there. It rose from 22 to 28 when the
+    // rule learned grantId: Project fan-out, autonomous and browser grants still show grant IDs (a later PR names them).
+    budget: 28,
     help: "show a name or plain label; put the ID in TechnicalDetails",
   },
+  {
+    id: "raw-iso-time",
+    // A timestamp field rendered as text shows an ISO string; value={…At} props (TimeText) are excluded.
+    pattern: /(?<!=)\{\s*[\w?.!]+At\s*\}/g,
+    budget: 0,
+    help: "show times with <TimeText value={…} /> or put them in TechnicalDetails",
+  },
+  {
+    id: "raw-error-text",
+    // Server-recorded error text on a record (run.lastError, step.error). Hook state such as owner.error is already
+    // presented by describeApiError, so it is not counted.
+    pattern: /(?<!=)\{\s*(?:[\w?.!]+\.lastError|(?:[\w?!]+\.)*(?:step|report|run|effect|record|item|data|tool)\??\.error)\s*\}/g,
+    budget: 0,
+    help: "render presentErrorText(…).summary and put the raw text in TechnicalDetails",
+  },
 ];
+
+/** Rules that only read rendered JSX, so plain .ts files never count toward them. */
+const JSX_ONLY = new Set(["jsx-raw-id", "raw-iso-time", "raw-error-text"]);
+
+/*
+ * Budgets per root, overriding the rule budget. The Classic settings and ops panels are pinned at their counts on
+ * the day this guard reached them and ratchet down as Phase 3 ports them.
+ */
+export const ROOT_BUDGETS = {
+  cockpit: {},
+  "native-settings": {
+    "humanize-token": 4,
+    "manual-humanize": 35,
+    "local-date-format": 10,
+    "optional-plural": 3,
+    "inline-plural": 11,
+    "jsx-raw-id": 16,
+    "raw-iso-time": 8,
+    "raw-error-text": 7,
+  },
+  "native-ops": {
+    "humanize-token": 0,
+    "manual-humanize": 10,
+    "local-date-format": 10,
+    "inline-plural": 7,
+    "jsx-raw-id": 15,
+    "raw-iso-time": 4,
+    "raw-error-text": 1,
+  },
+};
 
 // TimeText is the cockpit's date primitive; schedule-cadence only validates a time zone name and shows nothing.
 const EXEMPT = { "local-date-format": new Set(["ui/TimeText.tsx", "areas/work/schedule-cadence.ts"]) };
 
+/*
+ * TechnicalDetails children are where IDs, raw times and raw errors belong, and key/href/to/data-* templates are never
+ * rendered; blank both, keeping line breaks.
+ */
+function stripTechnicalDetails(contents) {
+  return contents
+    .replace(/(<TechnicalDetails\b[^>]*>)([\s\S]*?)(<\/TechnicalDetails>)/g, (_, open, body, close) => {
+      return `${open}${body.replace(/[^\n]/g, "")}${close}`;
+    })
+    .replace(/\b(?:key|href|to|data-[\w-]+)=\{`[^`]*`\}/g, "");
+}
+
 export function countFile(relativePath, contents) {
   const counts = {};
+  const visible = stripTechnicalDetails(contents);
   for (const rule of RULES) {
     if (EXEMPT[rule.id]?.has(relativePath)) continue;
-    const hits = contents.match(rule.pattern)?.length ?? 0;
-    if (rule.id === "jsx-raw-id" && !relativePath.endsWith(".tsx")) continue;
+    if (JSX_ONLY.has(rule.id) && !relativePath.endsWith(".tsx")) continue;
+    const hits = (JSX_ONLY.has(rule.id) ? visible : contents).match(rule.pattern)?.length ?? 0;
     if (hits) counts[rule.id] = hits;
   }
   return counts;
@@ -96,30 +165,40 @@ async function walk(dir) {
   return groups.flat();
 }
 
-async function main() {
-  const files = await walk(cockpitRoot);
+async function scanRoot(root) {
+  const files = await walk(root.dir);
   const totals = {};
   const byFile = {};
   for (const file of files) {
-    const relative = path.relative(cockpitRoot, file).split(path.sep).join("/");
+    const relative = path.relative(root.dir, file).split(path.sep).join("/");
     const counts = countFile(relative, await fs.readFile(file, "utf8"));
     for (const [id, count] of Object.entries(counts)) {
       totals[id] = (totals[id] ?? 0) + count;
       (byFile[id] ??= []).push(`${relative} (${count})`);
     }
   }
-  const failures = evaluate(totals);
-  if (failures.length) {
-    console.error("[raw-values] violations (see DESIGN.md › Copy):");
+  const budgets = ROOT_BUDGETS[root.id] ?? {};
+  const rules = RULES.map((rule) => ({ ...rule, budget: budgets[rule.id] ?? rule.budget }));
+  return { files, totals, byFile, failures: evaluate(totals, rules) };
+}
+
+async function main() {
+  let fileCount = 0;
+  const summary = {};
+  for (const root of RAW_VALUE_ROOTS) {
+    const { files, totals, byFile, failures } = await scanRoot(root);
+    fileCount += files.length;
+    summary[root.id] = totals;
+    if (!failures.length) continue;
+    console.error(`[raw-values] ${root.id}: violations (see DESIGN.md › Copy):`);
     for (const failure of failures) {
       console.error(`- ${failure}`);
       const id = failure.split(":")[0];
       if (process.env.RAW_VALUES_VERBOSE && byFile[id]) console.error(`  ${byFile[id].join(", ")}`);
     }
     process.exitCode = 1;
-    return;
   }
-  console.log(`[raw-values] ${files.length} cockpit files within budget (${JSON.stringify(totals)})`);
+  if (!process.exitCode) console.log(`[raw-values] ${fileCount} files within budget (${JSON.stringify(summary)})`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

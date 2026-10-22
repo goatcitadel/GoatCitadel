@@ -11,6 +11,7 @@ import { LibraryReminders } from "./LibraryReminders";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { LIBRARY_SECTION_LABELS } from "./library-sections";
+import { TimeText } from "../../ui/TimeText";
 
 export function LibraryNotesWorkspace({ workspaceId }: { workspaceId: string }) {
   const route = useCockpitRoute();
@@ -128,7 +129,7 @@ export function LibraryNotesWorkspace({ workspaceId }: { workspaceId: string }) 
           <li key={note.noteId} className="space-y-1 py-3">
             <h2 className="font-semibold text-fg">{note.title}</h2>
             <p className="text-sm text-fg-secondary">
-              {note.lifecycleStatus} · Version {note.revision} · {note.updatedAt}
+              {note.lifecycleStatus} · Version {note.revision} · <TimeText prefix="Updated" value={note.updatedAt} />
             </p>
             <Button size="sm" onClick={() => select(note.noteId)}>
               Open {note.title}

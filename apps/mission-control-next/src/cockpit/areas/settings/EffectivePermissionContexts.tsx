@@ -4,6 +4,26 @@ import {
   isLegacyPermissionContext,
 } from "../../../features/native-routes/settings/sections/PermissionProfileDraftFields";
 import { describeToolApprovalMode } from "../../../features/native-routes/settings/helpers/permission-helpers";
+import { presentErrorText } from "../../lib/present-error";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
+
+/** Why a context could not be read: one plain line, with the recorded text in technical details. */
+function ContextUnavailable({ error }: { error: string }) {
+  const { summary, detail } = presentErrorText(error);
+  return (
+    <>
+      <p role="status" className="text-status-waiting">
+        Unavailable: {summary}
+      </p>
+      {detail ? (
+        <TechnicalDetails label="Recorded error">
+          <p className="break-all font-mono text-xs">{detail}</p>
+        </TechnicalDetails>
+      ) : null}
+    </>
+  );
+}
 
 export function EffectivePermissionContexts({
   contexts,
@@ -21,9 +41,7 @@ export function EffectivePermissionContexts({
             <h5 className="font-semibold">{PERMISSION_CONTEXT_PRESENTATION[item.surface].label}</h5>
             <p className="text-fg-secondary">{PERMISSION_CONTEXT_PRESENTATION[item.surface].description}</p>
             {item.error ? (
-              <p role="status" className="text-status-waiting">
-                Unavailable: {item.error}
-              </p>
+              <ContextUnavailable error={item.error} />
             ) : (
               <>
                 <p>Profile: {item.profileLabel ?? item.profileId ?? "Unavailable"}</p>
@@ -37,17 +55,29 @@ export function EffectivePermissionContexts({
                 </p>
                 {item.localOperatorOverrideId ? (
                   <p className="break-words">
-                    Override {item.localOperatorOverrideId} · Expires{" "}
-                    {item.localOperatorOverride?.expiresAt ?? "unavailable"}
+                    Local override ·{" "}
+                    <TimeText prefix="Expires" absolute value={item.localOperatorOverride?.expiresAt} />
                   </p>
                 ) : (
                   <p>No effective override returned.</p>
                 )}
-                {item.profileId ? (
-                  <details>
-                    <summary>Profile identity</summary>
-                    <p className="break-all font-mono text-xs">{item.profileId}</p>
-                  </details>
+                {item.profileId || item.localOperatorOverrideId ? (
+                  <TechnicalDetails label="Policy identity">
+                    <dl className="cockpit-definition-grid grid gap-x-3 gap-y-2">
+                      {item.profileId ? (
+                        <>
+                          <dt>Profile ID</dt>
+                          <dd className="break-all font-mono text-xs">{item.profileId}</dd>
+                        </>
+                      ) : null}
+                      {item.localOperatorOverrideId ? (
+                        <>
+                          <dt>Override ID</dt>
+                          <dd className="break-all font-mono text-xs">{item.localOperatorOverrideId}</dd>
+                        </>
+                      ) : null}
+                    </dl>
+                  </TechnicalDetails>
                 ) : null}
               </>
             )}

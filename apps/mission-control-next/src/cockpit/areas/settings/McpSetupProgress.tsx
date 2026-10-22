@@ -9,6 +9,7 @@ import {
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { isGatewayMcpServer } from "../../../features/native-routes/settings/mcp-server-mutation";
+import { TimeText } from "../../ui/TimeText";
 
 /** A readable projection of the existing inspection, never a second readiness owner. */
 export function McpSetupProgress({
@@ -88,7 +89,7 @@ export function McpSetupProgress({
           {verified ? (
             <>
               A completed, approved Chat tool result matches this saved configuration, connection and cached tool
-              schema. Recorded {verified.finishedAt}.
+              schema. <TimeText prefix="Recorded" value={verified.finishedAt} />.
               <div className="mt-2">
                 <Button size="sm" onClick={() => navigate(verified.chatHref)}>
                   View tested Chat turn

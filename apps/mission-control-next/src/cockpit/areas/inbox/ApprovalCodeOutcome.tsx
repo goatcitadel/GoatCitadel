@@ -4,6 +4,8 @@ import { fetchCodeModeRun } from "@goatcitadel/mission-control-shared/api/capabi
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
+import { presentErrorText } from "../../lib/present-error";
 import { Button } from "../../ui/Button";
 import { presentCodeRunStatus } from "./inbox-vocabulary";
 export function ApprovalCodeOutcome({ approval, workspaceId }: { approval: ApprovalRequest; workspaceId: string }) {
@@ -43,8 +45,10 @@ export function ApprovalCodeOutcome({ approval, workspaceId }: { approval: Appro
       ) : query.data ? (
         <>
           <p role="status">
-            Code work: {presentCodeRunStatus(query.data.status).label}. {query.data.error}
+            Code work: {presentCodeRunStatus(query.data.status).label}.{" "}
+            {query.data.error ? presentErrorText(query.data.error).summary : null}
           </p>
+          <RecordedErrorDetails error={query.data.error} />
           <p>Approval does not by itself confirm completion.</p>
           {query.data.stdoutPreview ? (
             <pre className="overflow-auto whitespace-pre-wrap break-all">{query.data.stdoutPreview}</pre>

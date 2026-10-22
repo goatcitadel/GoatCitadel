@@ -236,15 +236,15 @@ function SessionPosture({
         remaining = undefined;
       }
       if (!operation.current()) return;
-      const closedAt = formatTime(receipt.closedAt) ?? "";
+      const closedTime = formatTime(receipt.closedAt) ?? "";
       setOutcome({
         error: remaining !== 0,
         text:
           remaining === undefined
-            ? `Session closed ${closedAt}, but GoatCitadel could not confirm whether any grant is still active. Refresh the session to check.`
+            ? `Session closed ${closedTime}, but GoatCitadel could not confirm whether any grant is still active. Refresh the session to check.`
             : remaining
-              ? `Session closed ${closedAt}, but an active grant is still recorded. Review closing again to finish revoking it.`
-              : `Session closed ${closedAt}. No active grant remains.`,
+              ? `Session closed ${closedTime}, but an active grant is still recorded. Review closing again to finish revoking it.`
+              : `Session closed ${closedTime}. No active grant remains.`,
       });
       await onChanged();
     } catch (cause) {

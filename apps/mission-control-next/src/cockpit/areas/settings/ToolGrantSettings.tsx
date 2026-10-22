@@ -18,10 +18,14 @@ import { cockpitInputClass } from "../../ui/input-class";
 import { ToolGrantDetails } from "./ToolGrantDetails";
 import { ToolGrantFields } from "./ToolGrantFields";
 import { RulesPrecedenceLink } from "./RulesPrecedence";
-import { describeToolGrant, TOOL_GRANT_SCOPE_LABELS } from "./tool-grant-labels";
+import { describeToolGrant, TOOL_GRANT_DECISION_LABELS, TOOL_GRANT_TYPE_LABELS } from "./tool-grant-labels";
+import { useToolGrantScopeLabel } from "./use-tool-grant-scope";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { TimeText } from "../../ui/TimeText";
 
 const PAGE_SIZE = 30;
 export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
+  const scopeLabel = useToolGrantScopeLabel();
   const [search, setSearch] = useState(""),
     [selectedTool, setSelectedTool] = useState("");
   const [grantSearch, setGrantSearch] = useState(""),
@@ -220,7 +224,7 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
               <li key={grant.grantId} className="min-w-0 space-y-2 rounded-md border border-line bg-raised p-3">
                 <p className="break-words text-sm font-semibold text-fg">{name}</p>
                 <p className="break-words text-xs text-fg-secondary">
-                  {TOOL_GRANT_SCOPE_LABELS[grant.scope] ?? "Unknown scope"} · {describeToolGrantAvailability(grant)}
+                  {scopeLabel(grant)} · {describeToolGrantAvailability(grant)}
                 </p>
                 {attempt?.phase === "uncertain" ? (
                   <p role="status" className="text-xs text-status-waiting">
@@ -264,15 +268,27 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
             <dt>Pattern</dt>
             <dd>{review.input.toolPattern}</dd>
             <dt>Decision</dt>
-            <dd>{review.input.decision}</dd>
+            <dd>{TOOL_GRANT_DECISION_LABELS[review.input.decision] ?? "Unknown decision"}</dd>
             <dt>Scope</dt>
-            <dd>
-              {review.input.scope} · {review.input.scopeRef ?? "all contexts"}
-            </dd>
+            <dd>{review.input.scope === "global" ? "Global · all contexts" : scopeLabel(review.input)}</dd>
             <dt>Lifetime</dt>
             <dd>
-              {review.input.grantType}
-              {review.input.expiresAt ? ` · ${review.input.expiresAt}` : ""}
+              {review.input.grantType === "ttl" && review.input.expiresAt ? (
+                // "Expires at a time · Expires …" said it twice; the dated expiry is the whole lifetime.
+                <TimeText prefix="Expires" absolute value={review.input.expiresAt} />
+              ) : (
+                <>
+                  {review.input.grantType
+                    ? (TOOL_GRANT_TYPE_LABELS[review.input.grantType] ?? "Unknown type")
+                    : "Not set"}
+                  {review.input.expiresAt ? (
+                    <>
+                      {" · "}
+                      <TimeText prefix="Expires" absolute value={review.input.expiresAt} />
+                    </>
+                  ) : null}
+                </>
+              )}
             </dd>
           </dl>
         ) : null}
@@ -282,8 +298,8 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
           review.input.toolPattern.includes("*") ||
           review.input.grantType === "persistent") ? (
           <p role="alert" className="my-3 text-status-waiting">
-            This grant widens access: {review.input.toolPattern} in {review.input.scope}{" "}
-            {review.input.scopeRef ?? "across all contexts"}.{" "}
+            This grant widens access: {review.input.toolPattern} in{" "}
+            {review.input.scope === "global" ? "every context" : scopeLabel(review.input)}.{" "}
             {review.input.grantType === "persistent"
               ? "It remains available until explicitly revoked."
               : "Matching actions can use it until its recorded expiry."}{" "}
@@ -293,13 +309,18 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
         {record ? (
           <div className="space-y-2 break-words text-sm text-fg">
             <p>
-              {record.toolPattern} · {record.decision}
+              {record.toolPattern} · {TOOL_GRANT_DECISION_LABELS[record.decision] ?? "Unknown decision"}
             </p>
-            <p>
-              {record.scope} · {record.scopeRef}
-            </p>
-            <p>Grant ID: {record.grantId}</p>
+            <p>{scopeLabel(record)}</p>
             <p>Revocation cannot be undone.</p>
+            <TechnicalDetails label="Grant identity">
+              <dl className="cockpit-definition-grid grid gap-x-3 gap-y-2">
+                <dt>Grant ID</dt>
+                <dd className="break-all font-mono text-xs">{record.grantId}</dd>
+                <dt>Scope reference</dt>
+                <dd className="break-all font-mono text-xs">{record.scopeRef}</dd>
+              </dl>
+            </TechnicalDetails>
           </div>
         ) : null}
         <p className="my-3 text-sm text-fg-secondary">

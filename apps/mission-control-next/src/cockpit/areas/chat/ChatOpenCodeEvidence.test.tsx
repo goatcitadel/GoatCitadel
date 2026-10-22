@@ -38,6 +38,23 @@ describe("ChatOpenCodeEvidence", () => {
     expect(html).not.toContain("<script>");
   });
 
+  it("presents technical failure text as a plain line and keeps the recorded text out of the default view", () => {
+    const report = {
+      engine: "opencode",
+      version: 1,
+      error: "connect ECONNREFUSED 127.0.0.1:4096",
+      files: [],
+      steps: [{ id: "step-1", tool: "edit", title: "Edit file", status: "error", error: "TypeError: x is undefined" }],
+    };
+    const html = renderToStaticMarkup(
+      <ChatOpenCodeEvidence toolRuns={[toolRun(report)]} onOpenRunDetails={() => undefined} />,
+    );
+    expect(html).toContain("OpenCode reported a problem:");
+    expect(html).not.toContain("ECONNREFUSED");
+    expect(html).not.toContain("127.0.0.1");
+    expect(html).not.toContain("TypeError");
+  });
+
   it("does not turn malformed results into an agent report", () => {
     expect(
       renderToStaticMarkup(

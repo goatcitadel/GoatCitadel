@@ -39,6 +39,8 @@ function timedCadence(expression: string): { day: string; time: string } | null 
   if (!timed || Number(timed[1]) >= 60 || Number(timed[2]) >= 24) return null;
   return { day: timed[3]!, time: `${timed[2]!.padStart(2, "0")}:${timed[1]!.padStart(2, "0")}` };
 }
+/** What `scheduleCadence` says when it cannot word an expression; callers then show the expression itself. */
+export const CUSTOM_SCHEDULE = "Custom schedule";
 export function scheduleCadence(value: string): string {
   const zone = effectiveScheduleZone(value);
   const suffix = zone ? ` ${zone}` : "";
@@ -54,7 +56,7 @@ export function scheduleCadence(value: string): string {
           : `Every week on ${WEEKDAY_NAMES[Number(timed.day)]}`;
     return `${when} at ${timed.time}${suffix}`;
   }
-  return intervalCadence(expression, suffix) ?? "Custom schedule";
+  return intervalCadence(expression, suffix) ?? CUSTOM_SCHEDULE;
 }
 /**
  * Hourly offsets and hour steps, the interval forms the Gateway parser accepts ("M *\/N * * *"); a minute step such

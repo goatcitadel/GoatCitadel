@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { McpModeEvidence } from "../../../features/native-routes/settings/mcp-mode-evidence";
 import { Button } from "../../ui/Button";
+import { TimeText } from "../../ui/TimeText";
 
 const PAGE_SIZE = 20;
 const readable = (value: string) => value.replaceAll("_", " ");
@@ -40,7 +41,7 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
         {serverMode ? (
           <>
             <p className="text-xs text-fg-muted">
-              Last read: <time dateTime={serverMode.generatedAt}>{serverMode.generatedAt}</time>
+              <TimeText prefix="Last read" value={serverMode.generatedAt} />
             </p>
             <dl className="cockpit-definition-grid grid gap-x-3 gap-y-2">
               <dt>Runtime support</dt>
@@ -106,7 +107,7 @@ export function McpModePanels({ evidence }: { evidence: McpModeEvidence }) {
         {remotePreview ? (
           <>
             <p className="text-xs text-fg-muted">
-              Last read: <time dateTime={remotePreview.generatedAt}>{remotePreview.generatedAt}</time>
+              <TimeText prefix="Last read" value={remotePreview.generatedAt} />
             </p>
             <p>
               {remotePreview.summary.remoteServers} saved remote servers · {remotePreview.summary.remoteTemplates}{" "}

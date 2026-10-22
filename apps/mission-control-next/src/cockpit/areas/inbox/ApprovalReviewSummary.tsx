@@ -6,6 +6,7 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
+import { splitApprovalSupport } from "./approval-preview";
 export function ApprovalReviewSummary({ approval, workspaceId }: { approval: ApprovalRequest; workspaceId: string }) {
   const evidence = buildApprovalRequestReviewEvidenceModel(approval);
   const { activeCitadelId } = useUiPreferences();
@@ -14,6 +15,7 @@ export function ApprovalReviewSummary({ approval, workspaceId }: { approval: App
   const sessionId = approval.linkage?.sessionId;
   const workspaceLabel =
     workspaceName(scopeWorkspaceId) ?? (scopeWorkspaceId === workspaceId ? "This workspace" : "Another workspace");
+  const support = splitApprovalSupport(evidence?.supporting ?? []);
   const scope = evidence?.scopeSummary ?? `${workspaceLabel}${sessionId ? " · one linked conversation" : ""}.`;
   return (
     <section
@@ -45,9 +47,18 @@ export function ApprovalReviewSummary({ approval, workspaceId }: { approval: App
           {command}
         </pre>
       ))}
-      {evidence?.supporting.map((detail) => (
+      {support.visible.map((detail) => (
         <p key={detail}>{detail}</p>
       ))}
+      {support.technical.length ? (
+        <TechnicalDetails label="Recorded request details">
+          {support.technical.map((detail) => (
+            <p key={detail} className="break-all font-mono text-xs">
+              {detail}
+            </p>
+          ))}
+        </TechnicalDetails>
+      ) : null}
       {evidence?.changes.map((change) => (
         <details
           key={change.label + change.content}

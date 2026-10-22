@@ -5,12 +5,37 @@ import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
-import { scheduleCadence, scheduleTimezoneSummary } from "./schedule-cadence";
+import { CUSTOM_SCHEDULE, scheduleCadence, scheduleTimezoneSummary } from "./schedule-cadence";
 import { presentScheduleAction, presentScheduleReason } from "./work-vocabulary";
 
 /** A Gateway-reported schedule time, or a plain gap when the Gateway sent none. */
 export function ScheduleTime({ value }: { value: string | undefined }) {
   return value ? <TimeText value={value} /> : <>Not reported</>;
+}
+
+/**
+ * The schedule in words. An expression the cockpit cannot word is the only description there is, so it stays
+ * visible ("Custom schedule: *\/15 * * * *") instead of moving into technical details.
+ */
+function ScheduleWording({ expression, detail }: { expression: string; detail?: boolean }) {
+  const cadence = scheduleCadence(expression);
+  if (cadence !== CUSTOM_SCHEDULE) {
+    return detail ? (
+      <>
+        {cadence}
+        <TechnicalDetails label="Schedule expression">
+          <p className="break-all font-mono text-xs">{expression}</p>
+        </TechnicalDetails>
+      </>
+    ) : (
+      <>{cadence}</>
+    );
+  }
+  return (
+    <span title={expression}>
+      {CUSTOM_SCHEDULE}: <span className="break-all font-mono">{expression}</span>
+    </span>
+  );
 }
 
 const FAILED_FALLBACK = "The last run failed.";
@@ -119,7 +144,7 @@ export function WorkScheduleListItem({
         </span>
       </div>
       <p className="mt-2 text-sm text-fg-secondary">
-        <span title={job.schedule}>{scheduleCadence(job.schedule)}</span> · {scheduleTimezoneSummary(job.schedule)}
+        <ScheduleWording expression={job.schedule} /> · {scheduleTimezoneSummary(job.schedule)}
         <br />
         Next run: {job.enabled ? <ScheduleTime value={job.nextRunAt} /> : "Paused"}
       </p>
@@ -151,8 +176,8 @@ export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecor
       <dl className="grid gap-2 text-sm">
         <div>
           <dt className="text-fg-muted">Schedule</dt>
-          <dd className="break-all text-fg">
-            {scheduleCadence(selected.schedule)} · <span className="font-mono">{selected.schedule}</span>
+          <dd className="text-fg">
+            <ScheduleWording expression={selected.schedule} detail />
           </dd>
         </div>
         <div>

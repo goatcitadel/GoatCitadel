@@ -123,6 +123,12 @@ describe("native Mason", () => {
     await click("Review answers");
     const dialog = container.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain("Run the team");
+    // ST-N07: answer keys and enum values read in plain words.
+    const terms = [...dialog.querySelectorAll("dt")].map((item) => item.textContent);
+    expect(terms).toContain("Kind");
+    expect(terms).toContain("Purpose");
+    expect(terms.some((term) => /[a-z][A-Z]/u.test(term ?? "") || term === "kind")).toBe(false);
+    expect([...dialog.querySelectorAll("dd")].map((item) => item.textContent)).toContain("Team");
     await click("Cancel", dialog);
     expect(api.updateMasonSessionAnswers).not.toHaveBeenCalled();
     await click("Review answers");
@@ -137,6 +143,12 @@ describe("native Mason", () => {
     await click("Review answers");
     await click("Save reviewed answers");
     await click("Draft & review Blueprint");
+    const drafted = container.querySelector('[aria-label="Drafted Blueprint"]')!;
+    expect([...drafted.querySelectorAll("dt")].map((item) => item.textContent)).toEqual([
+      "Goals",
+      "Boundaries",
+      "What success looks like",
+    ]);
     await click("Review staging");
     const dialog = container.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain("One");

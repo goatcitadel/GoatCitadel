@@ -20,7 +20,7 @@ import {
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
-import { approvalExpiryLabel, approvalExplanationLine } from "./approval-preview";
+import { approvalExpiryLabel, approvalExplanationLine, splitApprovalSupport } from "./approval-preview";
 import { InboxApprovalActions } from "./InboxApprovalActions";
 import { queryKeys } from "../../data/query-keys";
 import { nullWhenMissing } from "./inbox-record-read";
@@ -98,6 +98,11 @@ export function InboxApprovalDetail({
       : undefined;
   // Still reading: say so, and raise an alert only once the read has failed or returned something else (IN-16).
   const specialistChecking = !specialistQuery.isError && (specialistQuery.isPending || specialistQuery.isFetching);
+  const support = splitApprovalSupport(evidence?.supporting ?? []);
+  // One failure line, and only when no explanation loaded (IN-L01).
+  const explanationLoaded = Boolean(approval?.explanation?.summary?.trim());
+  const explanationFailed =
+    !explanationLoaded && (Boolean(approval?.explanationError) || approval?.explanationStatus === "failed");
   const now = useMinuteClock(approval?.expiresAt);
   const expired = hasExpired(approval?.expiresAt, now);
 
@@ -181,19 +186,20 @@ export function InboxApprovalDetail({
             />
           </div>
           {approval.expiresAt ? <p className="text-fg-muted">{approvalExpiryLabel(approval.expiresAt, now)}</p> : null}
-          <p className="text-fg-secondary">
-            {approvalExplanationLine(approval.explanation?.summary, approval.explanationStatus)}
-          </p>
+          {explanationFailed ? (
+            <p role="alert">Approval summary unavailable. Review the action preview before deciding.</p>
+          ) : (
+            <p className="text-fg-secondary">
+              {approvalExplanationLine(approval.explanation?.summary, approval.explanationStatus)}
+            </p>
+          )}
           {approval.explanation?.riskExplanation ? (
             <p className="text-fg-secondary">{approval.explanation.riskExplanation}</p>
           ) : null}
           {approval.explanationError ? (
-            <>
-              <p role="alert">Approval summary unavailable. Review the action preview before deciding.</p>
-              <TechnicalDetails>
-                <p>{approval.explanationError}</p>
-              </TechnicalDetails>
-            </>
+            <TechnicalDetails>
+              <p>{approval.explanationError}</p>
+            </TechnicalDetails>
           ) : null}
           {approval.explanation?.saferAlternative ? (
             <p className="text-fg-secondary">Safer option: {approval.explanation.saferAlternative}</p>
@@ -204,7 +210,7 @@ export function InboxApprovalDetail({
               {evidence.targets.length ? (
                 <ul className="list-disc space-y-1 pl-5 text-fg-secondary">
                   {evidence.targets.map((target) => (
-                    <li className="break-all" key={target}>
+                    <li className="wrap-anywhere" key={target}>
                       {target}
                     </li>
                   ))}
@@ -224,14 +230,23 @@ export function InboxApprovalDetail({
               {evidence.commands.length ? (
                 <ApprovalShellExplanations commands={evidence.commands} explanations={approval.shellExplanations} />
               ) : null}
-              {evidence.supporting.length ? (
+              {support.visible.length ? (
                 <ul className="list-disc space-y-1 pl-5 text-fg-secondary">
-                  {evidence.supporting.map((support) => (
-                    <li className="break-all" key={support}>
-                      {support}
+                  {support.visible.map((line) => (
+                    <li className="wrap-anywhere" key={line}>
+                      {line}
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {support.technical.length ? (
+                <TechnicalDetails label="Recorded request details">
+                  {support.technical.map((line) => (
+                    <p key={line} className="break-all font-mono text-xs">
+                      {line}
+                    </p>
+                  ))}
+                </TechnicalDetails>
               ) : null}
               {evidence.changes.map((change) => (
                 <details key={change.label} className="text-fg-secondary">

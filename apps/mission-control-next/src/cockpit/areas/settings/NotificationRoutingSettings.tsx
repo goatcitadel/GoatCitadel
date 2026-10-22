@@ -15,6 +15,7 @@ import {
   NOTIFICATION_LIFECYCLE_LABELS,
   NOTIFICATION_TARGET_KIND_LABELS,
 } from "./notification-vocabulary";
+import { presentErrorText } from "../../lib/present-error";
 
 export function NotificationRoutingSettings({
   workspaceId,
@@ -193,7 +194,7 @@ export function NotificationRoutingSettings({
                   <p className="text-xs text-fg-muted">
                     <TimeText value={delivery.updatedAt} />
                   </p>
-                  {delivery.lastError ? <p>{delivery.lastError}</p> : null}
+                  {delivery.lastError ? <DeliveryError error={delivery.lastError} /> : null}
                 </li>
               ))}
             </ul>
@@ -244,4 +245,19 @@ function notificationReviewLabel(review: NotificationReview): string {
 
 function lifecycleVerb(state: string | undefined): string {
   return state === "disabled" || state === "archived" ? LIFECYCLE_VERB[state] : "Restore";
+}
+
+/** A delivery's recorded error: one plain line, with the recorded text in technical details. */
+function DeliveryError({ error }: { error: string }) {
+  const { summary, detail } = presentErrorText(error);
+  return (
+    <>
+      <p>{summary}</p>
+      {detail ? (
+        <TechnicalDetails label="Recorded error">
+          <p className="break-all font-mono text-xs">{detail}</p>
+        </TechnicalDetails>
+      ) : null}
+    </>
+  );
 }

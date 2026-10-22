@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { CapabilityPackPreview } from "@goatcitadel/contracts";
 import type { PortablePacksOwner } from "../../../features/native-routes/settings/sections/use-portable-packs";
 import { Button } from "../../ui/Button";
+import { TimeText } from "../../ui/TimeText";
 
 const human = (value: string) => value.replaceAll("_", " ");
 export function PortablePackPreview({ preview }: { preview: CapabilityPackPreview }) {
@@ -90,12 +91,17 @@ export function PortablePackStagedEvidence({ owner }: { owner: PortablePacksOwne
           >
             <p className="break-words font-semibold text-fg">{item.name}</p>
             <p>
-              {item.version} · Staged {item.stagedAt} · {item.stagedAssets.length} assets
+              {item.version} · <TimeText prefix="Staged" value={item.stagedAt} /> · {item.stagedAssets.length} assets
             </p>
             <p>
-              {item.latestMaterialization
-                ? `Review recorded ${item.latestMaterialization.materializedAt}; availability unchanged.`
-                : "Staged for review; no activation is established."}
+              {item.latestMaterialization ? (
+                <>
+                  <TimeText prefix="Review recorded" value={item.latestMaterialization.materializedAt} />; availability
+                  unchanged.
+                </>
+              ) : (
+                "Staged for review; no activation is established."
+              )}
             </p>
             <details>
               <summary className="cursor-pointer">Record identity</summary>

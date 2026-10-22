@@ -18,6 +18,8 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useLibraryOperation } from "../library/use-library-operation";
 import { ReportEvidence } from "./ImprovementReportEvidence";
 import { TimeText } from "../../ui/TimeText";
+import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
+import { presentErrorText } from "../../lib/present-error";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
@@ -332,8 +334,9 @@ function ReplayDetail({ runId, identity }: { runId: string; identity: string }) 
             ) : (
               " · not finished"
             )}
-            {run.error ? ` · error: ${run.error}` : ""}
+            {run.error ? ` · failed: ${presentErrorText(run.error).summary}` : ""}
           </p>
+          <RecordedErrorDetails error={run.error} />
           <p className="text-sm">
             {plural(replay.data.findings.length, "finding")} · {plural(replay.data.items.length, "scored item")} ·{" "}
             {plural(replay.data.autoTunes.length, "auto-tune")}

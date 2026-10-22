@@ -8,6 +8,8 @@ import type {
   LocalAiModelCatalogItem,
 } from "@goatcitadel/contracts";
 import { formatLocalAiBytes, formatLocalAiFit } from "../../../features/native-routes/settings/local-ai-model";
+import { TimeText } from "../../ui/TimeText";
+import { presentHostOs } from "./settings-vocabulary";
 
 const LIMIT = 40;
 const text = (value: string) => value.slice(0, 1600);
@@ -93,13 +95,14 @@ export function LocalAiHardware({ readiness }: { readiness: LocalAiReadinessResp
     runtimePage = pageFor(runtimePageIndex, hardware.runtimes.length);
   return (
     <div className="space-y-4 text-sm text-fg-secondary">
-      <p>Read-only host scan observed {hardware.checkedAt}. Detection does not prove successful inference.</p>
+      <p>
+        <TimeText prefix="Read-only host scan observed" value={hardware.checkedAt} />. Detection does not prove
+        successful inference.
+      </p>
       <dl className="grid gap-3 sm:grid-cols-2">
         <div>
           <dt className="font-medium text-fg">Operating system</dt>
-          <dd>
-            {hardware.os.platform} · {hardware.os.arch}
-          </dd>
+          <dd>{presentHostOs(hardware.os)}</dd>
         </div>
         <div>
           <dt className="font-medium text-fg">Processor</dt>

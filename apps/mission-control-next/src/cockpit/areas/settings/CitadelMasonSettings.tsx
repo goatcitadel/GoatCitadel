@@ -7,6 +7,13 @@ import { Dialog } from "../../ui/Dialog";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
+import {
+  presentChamberSensitivity,
+  presentMasonAnswerKey,
+  presentMasonAnswerValue,
+  presentModelPolicy,
+  presentRiskPosture,
+} from "./citadel-vocabulary";
 
 export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
   const control = useMasonEditor(citadelId),
@@ -152,21 +159,22 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
           <h4 className="text-sm font-semibold text-fg">{control.review.summary.name}</h4>
           <p className="text-sm text-fg-secondary">{control.review.blueprint.charter.purpose}</p>
           <p className="text-sm text-fg-secondary">
-            Risk setting: {control.review.blueprint.charter.riskPosture}. Model policy:{" "}
-            {control.review.blueprint.charter.modelPolicyDefault}.
+            Risk setting: {presentRiskPosture(control.review.blueprint.charter.riskPosture)}. Model policy:{" "}
+            {presentModelPolicy(control.review.blueprint.charter.modelPolicyDefault)}.
           </p>
           <dl className="space-y-2 text-sm text-fg-secondary">
             {(["goals", "boundaries", "successDefinition"] as const).map((key) => (
               <div key={key}>
-                <dt>{key}</dt>
-                <dd className="break-words">{control.review?.blueprint.charter[key].join("; ") || "None specified"}</dd>
+                <dt>{presentMasonAnswerKey(key)}</dt>
+                <dd className="break-words">{presentMasonAnswerValue(key, control.review?.blueprint.charter[key])}</dd>
               </div>
             ))}
           </dl>
           <ul className="space-y-1 text-sm text-fg-secondary" aria-label="Reviewed Chambers">
             {control.review.blueprint.chambers.map((chamber, index) => (
               <li key={index}>
-                {chamber.name} · {chamber.sensitivity} · {chamber.sealed ? "Sealed" : "Not sealed"}
+                {chamber.name} · {presentChamberSensitivity(chamber.sensitivity)} ·{" "}
+                {chamber.sealed ? "Sealed" : "Not sealed"}
               </li>
             ))}
           </ul>
@@ -202,8 +210,8 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
         <dl className="mt-3 space-y-2 text-sm text-fg-secondary">
           {Object.entries(control.answerPatch).map(([key, value]) => (
             <div key={key}>
-              <dt>{key}</dt>
-              <dd className="break-words">{Array.isArray(value) ? value.join("; ") : String(value)}</dd>
+              <dt>{presentMasonAnswerKey(key)}</dt>
+              <dd className="break-words">{presentMasonAnswerValue(key, value)}</dd>
             </div>
           ))}
         </dl>

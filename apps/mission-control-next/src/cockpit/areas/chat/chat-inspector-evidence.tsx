@@ -5,6 +5,8 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useModelLabel } from "../../data/use-model-label";
 import { presentDelegationRunStatus, presentDelegationStepStatus, presentSourceType } from "./chat-vocabulary";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { presentErrorText } from "../../lib/present-error";
+import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 export function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-3 border-b border-line-subtle py-2 text-sm">
@@ -54,6 +56,16 @@ export function SourcesPanel({ turn }: { turn: ChatThreadTurnRecord | undefined 
   );
 }
 
+/** A delegated step's recorded error: one plain line, with the recorded text in technical details. */
+function RecordedStepError({ error }: { error: string }) {
+  return (
+    <>
+      <p className="mt-1 text-sm text-status-failed">{presentErrorText(error).summary}</p>
+      <RecordedErrorDetails error={error} />
+    </>
+  );
+}
+
 export function renderInspectorRunEvidence(
   run: NonNullable<MissionThreadedRenderSurfaceInput["activeSessionSurfaceProps"]>["delegationRun"] | null,
   selectedTurn: ChatThreadTurnRecord | undefined,
@@ -73,7 +85,7 @@ export function renderInspectorRunEvidence(
               <StatusBadge status={presentDelegationStepStatus(step.status)} />
             </div>
             {step.summary ? <p className="mt-1 text-sm text-fg-secondary">{step.summary}</p> : null}
-            {step.error ? <p className="mt-1 text-sm text-status-failed">{step.error}</p> : null}
+            {step.error ? <RecordedStepError error={step.error} /> : null}
             {step.output ? (
               <details className="mt-2 text-sm text-fg-secondary">
                 <summary className="cursor-pointer text-accent">Recorded output</summary>

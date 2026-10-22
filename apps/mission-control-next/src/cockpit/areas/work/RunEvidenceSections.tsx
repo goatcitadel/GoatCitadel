@@ -3,6 +3,8 @@ import type { ObserveRunTraceResponse } from "@goatcitadel/mission-control-share
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
+import { presentErrorText } from "../../lib/present-error";
 import { useModelLabel } from "../../data/use-model-label";
 import { recordedCostLabel } from "../chat/recorded-cost";
 import {
@@ -119,7 +121,12 @@ export function RunEvidenceSections({ trace }: { trace: ObserveRunTraceResponse 
                             <StatusBadge status={presentFrom(DELEGATION_STEP_STATUSES, step.status)} />
                           </div>
                           {step.summary ? <p className="mt-1 text-fg-secondary">{step.summary}</p> : null}
-                          {step.error ? <p className="mt-1 text-status-failed">{step.error}</p> : null}
+                          {step.error ? (
+                            <>
+                              <p className="mt-1 text-status-failed">{presentErrorText(step.error).summary}</p>
+                              <RecordedErrorDetails error={step.error} />
+                            </>
+                          ) : null}
                           {step.durableRunId ? (
                             <NativeOwnerLink
                               scope={[trace.runId, step.stepId, step.durableRunId]}

@@ -56,6 +56,13 @@ it("keeps canonical failed code execution separate from approval success", async
   expect(host.textContent).toContain("Policy blocked execution");
   expect(host.textContent).toContain("Approval does not by itself confirm completion");
 });
+it("presents a technical code failure as a plain line, not the recorded text", async () => {
+  read.mockResolvedValue({ ...run, error: "Error: spawn ENOENT C:\\tools\\node.exe" });
+  await render();
+  await vi.waitFor(() => expect(host.textContent).toContain("Code work: Failed"));
+  expect(host.textContent).toContain("The recorded error isn't in a readable form.");
+  expect(host.textContent).not.toContain("ENOENT");
+});
 it("withholds a mismatched code artifact outcome", async () => {
   read.mockResolvedValue({ ...run, codeHash: "changed", status: "completed" });
   await render();
