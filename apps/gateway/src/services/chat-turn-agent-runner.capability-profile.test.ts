@@ -713,6 +713,26 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       expect(createChatCompletion).toHaveBeenCalled();
       expect(invokeTool).not.toHaveBeenCalled();
     });
+
+    it("does not seed a Deep web search with secret text and still calls the model", async () => {
+      const { createChatCompletion, invokeTool } = await runFrozenTurn({
+        content: "Why does my deploy fail? OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
+        webMode: "deep",
+      });
+
+      expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
+      expect(createChatCompletion).toHaveBeenCalled();
+    });
+
+    it("does not seed a detected web search with private-network text in Auto mode", async () => {
+      const { createChatCompletion, invokeTool } = await runFrozenTurn({
+        content: "Search the web for the latest news on why my router at 192.168.1.20 drops connections",
+        webMode: "auto",
+      });
+
+      expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
+      expect(createChatCompletion).toHaveBeenCalled();
+    });
   });
 
   it("lets current deny-wins policy narrow a frozen allow before invocation", async () => {

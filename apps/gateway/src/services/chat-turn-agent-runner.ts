@@ -254,6 +254,7 @@ import {
   type MeshToolPolicyBinding,
   type ArtifactBrandInput,
   MESH_TOOL_POLICY_DEFINITION,
+  isSensitiveOfficialSearchQuery,
 } from "@goatcitadel/policy-engine";
 import { MAX_PARALLEL_TOOL_CALLS, decideToolBatchParallelism } from "./chat-tool-parallelism.js";
 import {
@@ -3746,7 +3747,7 @@ export class ChatTurnAgentRunner {
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       const quickWebQuery = inferQueryFromPrompt(input.content) ?? deriveLiveDataQuery(input.content);
-      if (quickWebQuery.trim().length > 0) {
+      if (quickWebQuery.trim().length > 0 && !isSensitiveOfficialSearchQuery(quickWebQuery)) {
         throwIfChatTurnCancelled(input);
         await this.patchTurnTrace(input, input.turnId, {
           status: "waiting_for_tool",
@@ -3916,7 +3917,7 @@ export class ChatTurnAgentRunner {
       (detectDirectUrlIntent(input.content) &&
         /\b(?:help me|increase|improve|audit|compare|research|analy[sz]e)\b/i.test(input.content)) ||
       (input.webMode === "deep" && controllerWebLookupIntent);
-    if (
+    const controllerSeedGateOpen =
       !assistantContent &&
       !approvalPayload &&
       !pendingUserInput &&
@@ -3932,24 +3933,28 @@ export class ChatTurnAgentRunner {
       !intents.time &&
       canUseSearchTool &&
       !hasPersistedExecutedSearchEvidence &&
-      toolRunCount < executionBudget.maxToolRunsPerTurn
-    ) {
+      toolRunCount < executionBudget.maxToolRunsPerTurn;
+    const liveDataQuerySourceContent = promptLabHarnessTurn
+      ? (extractPromptLabQuotedUserAsk(promptLabTaskForInspection) ?? promptLabTaskForInspection)
+      : (localResearchContinuation ?? input.content);
+    let liveDataQuery = "";
+    if (controllerSeedGateOpen) {
+      const derivedLiveDataQuery = deriveLiveDataQuery(liveDataQuerySourceContent);
+      const inferredLiveDataQuery = inferQueryFromPrompt(liveDataQuerySourceContent);
+      const explicitResearchSubject = extractExternalResearchSubject(liveDataQuerySourceContent);
+      liveDataQuery =
+        explicitResearchSubject ??
+        (shouldPreferInferredLiveDataQuery(inferredLiveDataQuery, derivedLiveDataQuery)
+          ? (inferredLiveDataQuery ?? derivedLiveDataQuery)
+          : derivedLiveDataQuery);
+    }
+    // A seed is never the model's choice, so it must not carry secret or private-network text to a search backend.
+    if (controllerSeedGateOpen && !isSensitiveOfficialSearchQuery(liveDataQuery)) {
       throwIfChatTurnCancelled(input);
       await this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
       ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
-      const liveDataQuerySourceContent = promptLabHarnessTurn
-        ? (extractPromptLabQuotedUserAsk(promptLabTaskForInspection) ?? promptLabTaskForInspection)
-        : (localResearchContinuation ?? input.content);
-      const derivedLiveDataQuery = deriveLiveDataQuery(liveDataQuerySourceContent);
-      const inferredLiveDataQuery = inferQueryFromPrompt(liveDataQuerySourceContent);
-      const explicitResearchSubject = extractExternalResearchSubject(liveDataQuerySourceContent);
-      const liveDataQuery =
-        explicitResearchSubject ??
-        (shouldPreferInferredLiveDataQuery(inferredLiveDataQuery, derivedLiveDataQuery)
-          ? (inferredLiveDataQuery ?? derivedLiveDataQuery)
-          : derivedLiveDataQuery);
       const syntheticRun = await this.executeToolCall({
         input,
         turnId: input.turnId,
