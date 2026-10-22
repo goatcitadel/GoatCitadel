@@ -700,6 +700,30 @@ describe("chat command runtime dispatch", () => {
     );
   });
 
+  it("runs /run research in deep mode only when the session web mode is deep", async () => {
+    const deps = createDeps();
+
+    await parseChatCommand(deps, "session-1", "/run research foo");
+    expect(deps.runChatResearch).toHaveBeenLastCalledWith(
+      "session-1",
+      expect.objectContaining({ query: "foo", mode: "quick" }),
+    );
+
+    await parseChatCommand(deps, "session-1", "/web deep");
+    await parseChatCommand(deps, "session-1", "/run research foo");
+    expect(deps.runChatResearch).toHaveBeenLastCalledWith(
+      "session-1",
+      expect.objectContaining({ query: "foo", mode: "deep" }),
+    );
+  });
+
+  it("describes /research truthfully in the command catalog", () => {
+    const research = listChatCommandCatalog().find((item) => item.command === "/research");
+    expect(research?.description).toBe(
+      "Run research for the current session; with Deep on, it also opens the top sources.",
+    );
+  });
+
   it("creates review-only skill bundle receipts without activating imports", async () => {
     const deps = createDeps();
     vi.mocked(deps.validateSkillImport).mockResolvedValueOnce({
