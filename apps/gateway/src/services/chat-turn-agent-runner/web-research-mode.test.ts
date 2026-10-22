@@ -59,4 +59,12 @@ describe("hasSubstantiveSeedQuery", () => {
     expect(hasSubstantiveSeedQuery("Hello, please  a b c")).toBe(false);
     expect(hasSubstantiveSeedQuery("")).toBe(false);
   });
+
+  it("counts words in scripts without whitespace separators", () => {
+    expect(hasSubstantiveSeedQuery("比较一下这两种数据库复制方案的优缺点")).toBe(true);
+  });
+
+  it("rejects a short CJK greeting", () => {
+    expect(hasSubstantiveSeedQuery("你好")).toBe(false);
+  });
 });

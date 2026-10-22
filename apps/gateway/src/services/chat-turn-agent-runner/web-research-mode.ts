@@ -35,17 +35,25 @@ const SEED_QUERY_STOPWORDS = new Set([
   "thanks",
 ]);
 const MIN_SEED_QUERY_CONTENT_WORDS = 3;
+const MIN_LATIN_WORD_LENGTH = 2;
+const LATIN_OR_DIGIT_WORD = /^[\p{Script=Latin}\p{N}]+$/u;
 
 /**
- * True when a derived search query has at least three content words: whitespace-split tokens,
- * trimmed of edge punctuation, at least two characters long, and not a stopword. Deep mode uses
- * it so a greeting or a short follow-up does not open with a web search on its own.
+ * True when a derived search query has at least three content words. Words come from
+ * `Intl.Segmenter`, so scripts written without spaces (Chinese, Japanese, Thai) count word by
+ * word. Latin/digit words must be at least two characters long and not a stopword; words in
+ * other scripts are often a single character, so they count regardless of length. Deep mode
+ * uses it so a greeting or a short follow-up does not open with a web search on its own.
  */
 export function hasSubstantiveSeedQuery(query: string): boolean {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "word" });
   let contentWords = 0;
-  for (const rawToken of query.split(/\s+/)) {
-    const token = trimEdgePunctuation(rawToken).toLowerCase();
-    if (token.length < 2 || SEED_QUERY_STOPWORDS.has(token)) {
+  for (const segment of segmenter.segment(query)) {
+    if (!segment.isWordLike) {
+      continue;
+    }
+    const word = segment.segment.toLowerCase();
+    if (LATIN_OR_DIGIT_WORD.test(word) && (word.length < MIN_LATIN_WORD_LENGTH || SEED_QUERY_STOPWORDS.has(word))) {
       continue;
     }
     contentWords += 1;
@@ -54,19 +62,4 @@ export function hasSubstantiveSeedQuery(query: string): boolean {
     }
   }
   return false;
-}
-
-const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
-
-function trimEdgePunctuation(token: string): string {
-  const chars = Array.from(token);
-  let start = 0;
-  let end = chars.length;
-  while (start < end && !LETTER_OR_DIGIT.test(chars[start]!)) {
-    start += 1;
-  }
-  while (end > start && !LETTER_OR_DIGIT.test(chars[end - 1]!)) {
-    end -= 1;
-  }
-  return chars.slice(start, end).join("");
 }
