@@ -25,7 +25,41 @@ function toolRun(
   };
 }
 
+function landedRun(argsUrl: string, result: Record<string, unknown>): ChatToolRunRecord {
+  return { ...toolRun("browser.navigate", argsUrl), result };
+}
+
 describe("assessDeepResearchEvidence", () => {
+  it("counts the host a page landed on, not the requested URL, when they differ", () => {
+    const sameLanding = assessDeepResearchEvidence([
+      landedRun("https://a.com/go", { finalUrl: "https://shared.example/one" }),
+      landedRun("https://b.com/go", { finalUrl: "https://www.shared.example/two" }),
+    ]);
+    expect(sameLanding).toEqual({ openedHosts: ["shared.example"], thin: true });
+
+    const differentLanding = assessDeepResearchEvidence([
+      landedRun("https://redirect.example/r?1", { finalUrl: "https://a.com/page" }),
+      landedRun("https://redirect.example/r?2", { url: "https://b.org/page" }),
+    ]);
+    expect(differentLanding).toEqual({ openedHosts: ["a.com", "b.org"], thin: false });
+  });
+
+  it("falls back to the requested URL when the result carries no string landing URL", () => {
+    const result = assessDeepResearchEvidence([
+      landedRun("https://a.com/page", { finalUrl: 42 }),
+      landedRun("https://b.org/page", { finalUrl: "  ", url: null }),
+    ]);
+    expect(result).toEqual({ openedHosts: ["a.com", "b.org"], thin: false });
+  });
+
+  it("ignores a page that landed on a non-http(s) URL", () => {
+    const result = assessDeepResearchEvidence([
+      landedRun("https://a.com/page", { finalUrl: "file:///etc/hosts" }),
+      landedRun("https://b.org/page", {}),
+    ]);
+    expect(result).toEqual({ openedHosts: ["b.org"], thin: true });
+  });
+
   it("treats www. and the bare domain as one source", () => {
     const result = assessDeepResearchEvidence([
       toolRun("browser.navigate", "https://www.a.com/one"),

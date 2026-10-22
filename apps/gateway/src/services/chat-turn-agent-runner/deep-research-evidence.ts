@@ -10,18 +10,31 @@ export const DEEP_RESEARCH_THIN_EVIDENCE_FOOTER =
   "Note: Deep research opened fewer than two independent sources for this answer, so treat it as preliminary.";
 
 export interface DeepResearchEvidenceAssessment {
-  /** Distinct hostnames opened this turn, lowercased, without a leading `www.`, in first-seen order. */
+  /** Distinct hostnames the pages opened this turn landed on, lowercased, without a leading `www.`, in first-seen order. */
   openedHosts: string[];
   /** True when fewer than two distinct hostnames were opened. */
   thin: boolean;
+}
+
+/**
+ * Where the page ended up: the post-redirect URL the tool reported, else the requested URL. A
+ * redirector or a shortener would otherwise count as the source instead of the site it led to.
+ */
+function landedUrl(run: ChatToolRunRecord): string | undefined {
+  for (const value of [run.result?.finalUrl, run.result?.url, run.args?.url]) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function openedHostname(run: ChatToolRunRecord): string | undefined {
   if (run.status !== "executed" || !PAGE_OPENING_TOOL_NAMES.has(run.toolName)) {
     return undefined;
   }
-  const rawUrl = run.args?.url;
-  if (typeof rawUrl !== "string" || rawUrl.trim().length === 0) {
+  const rawUrl = landedUrl(run);
+  if (rawUrl === undefined) {
     return undefined;
   }
   let parsed: URL;
@@ -38,8 +51,8 @@ function openedHostname(run: ChatToolRunRecord): string | undefined {
 }
 
 /**
- * Counts the distinct sites a turn actually opened. Only executed page-opening runs with an
- * http(s) URL count; failed, blocked, or approval-gated runs and plain searches do not.
+ * Counts the distinct sites a turn actually opened, by the host each page landed on. Only executed
+ * page-opening runs with an http(s) URL count; failed, blocked, or approval-gated runs and plain searches do not.
  */
 export function assessDeepResearchEvidence(toolRuns: readonly ChatToolRunRecord[]): DeepResearchEvidenceAssessment {
   const openedHosts: string[] = [];
