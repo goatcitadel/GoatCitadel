@@ -43,11 +43,17 @@ const button = (label: string) =>
     (entry) => !entry.closest('[aria-hidden="true"]') && entry.textContent === label,
   )!;
 
-const renderBar = async (record: ApprovalRequest) =>
+const renderBar = async (record: ApprovalRequest, expiryShownNearby = false) =>
   act(async () =>
     root.render(
       <QueryClientProvider client={client}>
-        <ApprovalDecisionBar approval={record} workspaceId="default" onResolved={vi.fn()} onInvalidated={vi.fn()} />
+        <ApprovalDecisionBar
+          approval={record}
+          workspaceId="default"
+          expiryShownNearby={expiryShownNearby}
+          onResolved={vi.fn()}
+          onInvalidated={vi.fn()}
+        />
       </QueryClientProvider>,
     ),
   );
@@ -82,9 +88,14 @@ it("treats a malformed expiresAt as not expired, as the list does", async () => 
   expect(document.body.textContent).not.toContain("has expired");
 });
 
-it("leaves the expiry to the surrounding view and states the disclaimer once", async () => {
-  await renderBar({ ...approval, expiresAt: "2099-01-01T00:00:00Z" });
+it("leaves the expiry to a surrounding view that states it, and states the disclaimer once", async () => {
+  await renderBar({ ...approval, expiresAt: "2099-01-01T00:00:00Z" }, true);
   const text = document.body.textContent ?? "";
   expect(text).not.toContain("Expiry:");
   expect(text.split(/does not prove the action ran/).length - 1).toBe(1);
+});
+
+it("shows the expiry itself where nothing around it does (Library, Chat)", async () => {
+  await renderBar({ ...approval, expiresAt: "2099-01-01T00:00:00Z" });
+  expect(document.body.textContent).toContain("Expiry:");
 });

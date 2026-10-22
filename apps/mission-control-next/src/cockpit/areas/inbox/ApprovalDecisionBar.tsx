@@ -49,6 +49,8 @@ interface ApprovalDecisionBarProps {
    * Owners may keep passing it; it no longer disables the controls.
    */
   checking?: boolean;
+  /** The surrounding view already states the expiry (Inbox approval detail), so the review summary leaves it out. */
+  expiryShownNearby?: boolean;
   onResolved: (message: string) => void;
   onInvalidated: (message?: string) => void;
 }
@@ -81,6 +83,7 @@ function ApprovalDecisionReview({
   approval,
   workspaceId,
   focusAction,
+  expiryShownNearby = false,
   onResolved,
   onInvalidated,
   activeWorkspaceId,
@@ -262,7 +265,7 @@ function ApprovalDecisionReview({
     const resolution = approvalResolutionLine(approval);
     return (
       <section aria-label="Recorded approval decision" className="space-y-2">
-        <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={false} />
+        <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
         <p role="status">{approvalDecisionMessage(approval)}</p>
         {resolution ? <p className="text-fg-secondary">{resolution}</p> : null}
       </section>
@@ -271,7 +274,7 @@ function ApprovalDecisionReview({
   if (approval.mcpElicitation)
     return (
       <>
-        <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={false} />
+        <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
         <p className="text-fg-muted">
           This request carries an MCP server question, which can&apos;t be decided here. Pending MCP server requests are
           listed in Settings.{" "}
@@ -295,7 +298,7 @@ function ApprovalDecisionReview({
 
   return (
     <div className="space-y-2 border-t border-line-subtle pt-3">
-      <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={false} />
+      <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
       <div aria-label="Approval decisions" className="flex flex-wrap gap-2">
         <span ref={approveRef} className="inline-flex">
           <RiskApprovalAction
