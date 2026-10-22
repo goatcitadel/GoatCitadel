@@ -6247,7 +6247,12 @@ export class ChatTurnAgentRunner {
       if (mutationsFooter && !assistantContent.includes("did not complete:")) {
         footerParts.push(mutationsFooter);
       }
-      const deepResearchFooter = buildDeepResearchThinEvidenceFooter({ webMode: input.webMode, toolRuns });
+      const deepResearchFooter = buildDeepResearchThinEvidenceFooter({
+        webMode: input.webMode,
+        toolRuns,
+        delegatedResultContract: Boolean(delegatedResultContract),
+        paused: Boolean(approvalPayload || pendingUserInput),
+      });
       if (deepResearchFooter && !assistantContent.includes(deepResearchFooter)) {
         footerParts.push(deepResearchFooter);
       }

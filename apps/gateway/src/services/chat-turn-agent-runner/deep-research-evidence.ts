@@ -1,8 +1,9 @@
 import type { ChatToolRunRecord, ChatWebMode } from "@goatcitadel/contracts";
-import { WEB_TOOL_NAMES } from "../chat-tool-families.js";
 
 /** Tools that open a page. A search result list does not count as an opened source. */
 const PAGE_OPENING_TOOL_NAMES = new Set(["browser.navigate", "browser.extract", "http.get"]);
+/** Runs that count as web research: a search or a page open. Posts and page interactions do not. */
+const WEB_RESEARCH_TOOL_NAMES = new Set(["browser.search", ...PAGE_OPENING_TOOL_NAMES]);
 const MIN_INDEPENDENT_SOURCES = 2;
 
 export const DEEP_RESEARCH_THIN_EVIDENCE_FOOTER =
@@ -52,19 +53,24 @@ export function assessDeepResearchEvidence(toolRuns: readonly ChatToolRunRecord[
 }
 
 /**
- * Returns the thin-evidence footer for a Deep research turn in which at least one web tool ran
- * (executed or failed) but fewer than two independent sites were opened. A Deep turn that ran no
- * web tool, such as a greeting that skipped the seed search, gets no footer.
+ * Returns the thin-evidence footer for a Deep research turn in which at least one search or page
+ * open ran (executed or failed) but fewer than two independent sites were opened. A Deep turn that
+ * ran no such tool, such as a greeting that skipped the seed search, gets no footer. Neither does a
+ * delegated child whose answer must match a result contract, or a turn paused for approval or input.
  */
 export function buildDeepResearchThinEvidenceFooter(input: {
   webMode: ChatWebMode;
   toolRuns: readonly ChatToolRunRecord[];
+  /** The turn's answer is a structured delegated result; appended text would break the contract. */
+  delegatedResultContract?: boolean;
+  /** The turn ends waiting for an approval or the operator's input, not with an answer. */
+  paused?: boolean;
 }): string | undefined {
-  if (input.webMode !== "deep") {
+  if (input.webMode !== "deep" || input.delegatedResultContract || input.paused) {
     return undefined;
   }
   const webToolRan = input.toolRuns.some(
-    (run) => WEB_TOOL_NAMES.has(run.toolName) && (run.status === "executed" || run.status === "failed"),
+    (run) => WEB_RESEARCH_TOOL_NAMES.has(run.toolName) && (run.status === "executed" || run.status === "failed"),
   );
   if (!webToolRan || !assessDeepResearchEvidence(input.toolRuns).thin) {
     return undefined;

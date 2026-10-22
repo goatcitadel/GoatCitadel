@@ -108,6 +108,29 @@ describe("buildDeepResearchThinEvidenceFooter", () => {
     expect(buildDeepResearchThinEvidenceFooter({ webMode: "deep", toolRuns })).toBeUndefined();
   });
 
+  it("counts only search and page-opening runs as web research", () => {
+    expect(
+      buildDeepResearchThinEvidenceFooter({
+        webMode: "deep",
+        toolRuns: [toolRun("http.post", "https://hooks.example/notify"), toolRun("browser.interact", undefined)],
+      }),
+    ).toBeUndefined();
+    expect(
+      buildDeepResearchThinEvidenceFooter({
+        webMode: "deep",
+        toolRuns: [toolRun("http.get", "https://a.com/x", "failed")],
+      }),
+    ).toBe(DEEP_RESEARCH_THIN_EVIDENCE_FOOTER);
+  });
+
+  it("stays silent for a delegated result contract or a paused turn", () => {
+    const toolRuns = [toolRun("browser.search", undefined)];
+    expect(
+      buildDeepResearchThinEvidenceFooter({ webMode: "deep", toolRuns, delegatedResultContract: true }),
+    ).toBeUndefined();
+    expect(buildDeepResearchThinEvidenceFooter({ webMode: "deep", toolRuns, paused: true })).toBeUndefined();
+  });
+
   it("stays silent outside Deep mode", () => {
     const toolRuns = [toolRun("browser.search", undefined)];
     for (const webMode of ["auto", "quick", "off"] as const) {
