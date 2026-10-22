@@ -100,6 +100,27 @@ describe("cockpit access gate", () => {
     expect(document.documentElement.dataset.density).toBe("compact");
     expect(document.documentElement.dataset.shell).toBeUndefined();
   });
+
+  it("points the browser chrome at the chosen theme, not the OS scheme", () => {
+    const light = document.createElement("meta");
+    light.name = "theme-color";
+    light.media = "(prefers-color-scheme: light)";
+    light.content = "#f0f8ff";
+    const dark = document.createElement("meta");
+    dark.name = "theme-color";
+    dark.media = "(prefers-color-scheme: dark)";
+    dark.content = "#122235";
+    document.head.append(light, dark);
+    try {
+      applyCockpitAppearance("dark", undefined);
+      expect([light.content, dark.content]).toEqual(["#122235", "#122235"]);
+      applyCockpitAppearance("light", undefined);
+      expect([light.content, dark.content]).toEqual(["#f0f8ff", "#f0f8ff"]);
+    } finally {
+      light.remove();
+      dark.remove();
+    }
+  });
 });
 
 it("restores authentication through the shared native form without requiring a Classic handoff", async () => {

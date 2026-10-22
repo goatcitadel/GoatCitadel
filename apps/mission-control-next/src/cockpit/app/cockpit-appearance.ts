@@ -8,6 +8,14 @@
  */
 export function applyCockpitAppearance(theme: string, density: string | undefined): void {
   const root = document.documentElement;
-  root.dataset.theme = theme === "light" ? "light" : "dark";
+  const resolved = theme === "light" ? "light" : "dark";
+  root.dataset.theme = resolved;
   root.dataset.density = density === "compact" ? "compact" : "comfortable";
+  // index.html's theme-color tags follow the OS scheme for the first paint; from here the browser chrome follows the
+  // chosen theme's --cockpit-canvas, so a saved, ?theme= or runtime choice wins over the OS scheme.
+  for (const chrome of document.querySelectorAll('meta[name="theme-color"]'))
+    chrome.setAttribute("content", BROWSER_CHROME[resolved]);
 }
+
+/** --cockpit-canvas per theme, as in index.html. */
+const BROWSER_CHROME = { light: "#f0f8ff", dark: "#122235" } as const;
