@@ -216,6 +216,31 @@ export async function tryAlternateBuiltinBrowserResult(
   return undefined;
 }
 
+const NATIVE_SEARCH_TOTAL_FAILURE_PREFIX = "browser.search failed:";
+const NATIVE_SEARCH_ENGINE_FAILURE_PATTERN = /(?:^|[\s|:])(duckduckgo|bing|google):/g;
+
+/**
+ * Engines a search already tried. Prefers the structured `attemptedEngines` list; otherwise parses
+ * native search's total-failure error (`browser.search failed: <engine>: <reason> | ...`).
+ */
+export function readAttemptedSearchEngines(
+  result: Record<string, unknown> | undefined,
+  error: string | undefined,
+): string[] {
+  const attempted = result?.attemptedEngines;
+  if (Array.isArray(attempted) && attempted.every((entry) => typeof entry === "string")) {
+    return [...(attempted as string[])];
+  }
+  if (typeof error !== "string" || !error.startsWith(NATIVE_SEARCH_TOTAL_FAILURE_PREFIX)) {
+    return [];
+  }
+  const engines = new Set<string>();
+  for (const match of error.matchAll(NATIVE_SEARCH_ENGINE_FAILURE_PATTERN)) {
+    engines.add(match[1]!);
+  }
+  return [...engines];
+}
+
 async function tryAlternateBuiltinSearchEngines(
   input: AlternateBuiltinBrowserFallbackInput,
   deps: BrowserFallbackExecutorDeps,
@@ -234,7 +259,16 @@ async function tryAlternateBuiltinSearchEngines(
   // already tried the configured default first, so retries start after it.
   const configuredEngines = normalizeWebSearchEngineOrder(deps.getSearchEngineOrder?.());
   const failedEngine = typeof input.args.engine === "string" ? input.args.engine : configuredEngines[0];
-  const alternateEngines = configuredEngines.filter((engine) => engine !== failedEngine);
+  // Native search walks every configured engine before it throws, so never repeat an attempted one.
+  const attemptedEngines = new Set(
+    readAttemptedSearchEngines(input.normalizedResult, input.classification.error ?? input.error),
+  );
+  const alternateEngines = configuredEngines.filter(
+    (engine) => engine !== failedEngine && !attemptedEngines.has(engine),
+  );
+  if (alternateEngines.length === 0) {
+    return undefined;
+  }
   // Each retry is a native engine search: it must not repeat the same Firecrawl or official request.
   const alternateBackend = { backend: "native" };
 
