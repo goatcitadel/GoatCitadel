@@ -131,6 +131,16 @@ describe("buildDeepResearchThinEvidenceFooter", () => {
     expect(buildDeepResearchThinEvidenceFooter({ webMode: "deep", toolRuns, paused: true })).toBeUndefined();
   });
 
+  it("stays silent for a delegated child turn so the parent turn owns the note", () => {
+    const toolRuns = [toolRun("browser.search", undefined)];
+    expect(
+      buildDeepResearchThinEvidenceFooter({ webMode: "deep", toolRuns, delegatedChildTurn: true }),
+    ).toBeUndefined();
+    expect(buildDeepResearchThinEvidenceFooter({ webMode: "deep", toolRuns, delegatedChildTurn: false })).toBe(
+      DEEP_RESEARCH_THIN_EVIDENCE_FOOTER,
+    );
+  });
+
   it("stays silent outside Deep mode", () => {
     const toolRuns = [toolRun("browser.search", undefined)];
     for (const webMode of ["auto", "quick", "off"] as const) {

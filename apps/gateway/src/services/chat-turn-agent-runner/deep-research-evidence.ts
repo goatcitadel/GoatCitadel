@@ -56,17 +56,20 @@ export function assessDeepResearchEvidence(toolRuns: readonly ChatToolRunRecord[
  * Returns the thin-evidence footer for a Deep research turn in which at least one search or page
  * open ran (executed or failed) but fewer than two independent sites were opened. A Deep turn that
  * ran no such tool, such as a greeting that skipped the seed search, gets no footer. Neither does a
- * delegated child whose answer must match a result contract, or a turn paused for approval or input.
+ * delegated child turn (the parent owns the note), a delegated child whose answer must match a
+ * result contract, or a turn paused for approval or input.
  */
 export function buildDeepResearchThinEvidenceFooter(input: {
   webMode: ChatWebMode;
   toolRuns: readonly ChatToolRunRecord[];
   /** The turn's answer is a structured delegated result; appended text would break the contract. */
   delegatedResultContract?: boolean;
+  /** The turn is a child of a delegation step; the parent turn owns the evidence note. */
+  delegatedChildTurn?: boolean;
   /** The turn ends waiting for an approval or the operator's input, not with an answer. */
   paused?: boolean;
 }): string | undefined {
-  if (input.webMode !== "deep" || input.delegatedResultContract || input.paused) {
+  if (input.webMode !== "deep" || input.delegatedResultContract || input.delegatedChildTurn || input.paused) {
     return undefined;
   }
   const webToolRan = input.toolRuns.some(
