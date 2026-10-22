@@ -772,6 +772,15 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       expect(invokeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
       expect(createChatCompletion).toHaveBeenCalled();
     });
+
+    it("seeds a Deep web search for a question that names a bare LAN address", async () => {
+      const { invokeTool } = await runFrozenTurn({
+        content: "What does the admin page at 192.168.1.1 let me change on a home router?",
+        webMode: "deep",
+      });
+
+      expect(invokeTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "browser.search" }));
+    });
   });
 
   it("lets current deny-wins policy narrow a frozen allow before invocation", async () => {
