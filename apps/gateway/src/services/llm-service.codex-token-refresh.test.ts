@@ -125,6 +125,29 @@ describe("LlmService OpenAI Codex token_expired recovery", () => {
     expect(providerFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps image attempt indexes unique and reports the expired attempt in usage lineage", async () => {
+    const secrets = createMemorySecretStore();
+    const oauthFetch = vi.fn(async () => tokenResponse("fresh-access-token"));
+    const { service, storage } = createHarness(secrets, oauthFetch);
+    const providerFetch = stubProviderFetch([unauthorized(TOKEN_EXPIRED_BODY), imageStream(), imageStream()]);
+
+    const response = await service.generateImage(
+      { providerId: "openai-codex", model: "gpt-image-2", prompt: "two goats", n: 2 },
+      attribution("codex-refresh-image"),
+    );
+
+    expect(response.data).toHaveLength(2);
+    expect(oauthFetch).toHaveBeenCalledTimes(1);
+    expect(providerFetch).toHaveBeenCalledTimes(3);
+    const records = usageRecords(storage);
+    expect(records.map((record) => [record.transportAttemptIndex, record.terminalOutcome])).toEqual([
+      [0, "failed_before_usage"],
+      [1, "succeeded"],
+      [2, "succeeded"],
+    ]);
+    expect(response.modelUsageEventIds).toEqual(records.map((record) => record.eventId));
+  });
+
   it("does not refresh on a 401 that is not token_expired", async () => {
     const secrets = createMemorySecretStore();
     const oauthFetch = vi.fn(async () => tokenResponse("fresh-access-token"));
@@ -277,6 +300,18 @@ function completedStream(text: string): Response {
       "data: [DONE]",
       "",
     ].join("\n"),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
+function imageStream(): Response {
+  return new Response(
+    [
+      'data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"aW1hZ2U="}}',
+      'data: {"type":"response.completed","response":{"model":"gpt-image-2","output":[],"usage":{"input_tokens":10,"output_tokens":2}}}',
+      "data: [DONE]",
+      "",
+    ].join("\n\n"),
     { status: 200, headers: { "content-type": "text/event-stream" } },
   );
 }

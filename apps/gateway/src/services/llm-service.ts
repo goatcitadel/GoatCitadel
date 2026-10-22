@@ -1922,6 +1922,9 @@ export class LlmService {
       })),
     ];
 
+    // A recovered dispatch (e.g. a token refresh retry) consumes extra transport
+    // indexes, so each image starts after the last index the previous one used.
+    let transportAttemptIndex = 0;
     for (let index = 0; index < count; index += 1) {
       let dispatched: LlmTrackedJsonDispatch;
       try {
@@ -1931,7 +1934,7 @@ export class LlmService {
           requestedProviderId: attribution.requestedProviderId ?? request.providerId,
           requestedModelId: attribution.requestedModelId ?? request.model,
           attribution,
-          transportAttemptIndex: index,
+          transportAttemptIndex,
           target,
           payload: buildOpenAICodexImagePayload(request, model, content, coordinatorModel),
           timeoutMs,
@@ -1940,6 +1943,8 @@ export class LlmService {
         if (error instanceof ModelUsageSettlementError) throw error;
         throw normalizeOpenAICodexImageResponseError(error);
       }
+      transportAttemptIndex = (dispatched.lastTransportAttemptIndex ?? transportAttemptIndex) + 1;
+      eventIds.push(...(dispatched.priorModelUsageEventIds ?? []));
       if (dispatched.usage) eventIds.push(dispatched.usage.eventId);
       try {
         if (isRedirect(dispatched.response.status)) {
