@@ -214,8 +214,10 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(result.turnTrace.routing.fallbackReason).toContain("repeated_tool_loop");
   });
 
-  async function runSaturationScript(webMode: ChatWebMode) {
-    const prompt = "Research how the James Webb Space Telescope mirror segments are aligned and cite your sources.";
+  async function runSaturationScript(
+    webMode: ChatWebMode,
+    prompt = "Research how the James Webb Space Telescope mirror segments are aligned and cite your sources.",
+  ) {
     const answer: ChatCompletionResponse = {
       model: "glm-5",
       choices: [{ index: 0, message: { role: "assistant", content: "Mirror alignment answer from the sources." } }],
@@ -288,6 +290,93 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(countInstruction(requestMessages[2])).toBe(1);
     for (const messages of requestMessages.slice(3)) {
       expect(countInstruction(messages)).toBe(1);
+    }
+  });
+
+  it("nudges a research-list turn in Auto mode once repeated searches add no new sites", async () => {
+    const { requestMessages, countInstruction } = await runSaturationScript(
+      "auto",
+      "Best reviewed clowns in Los Angeles, CA",
+    );
+
+    expect(requestMessages.length).toBeGreaterThanOrEqual(3);
+    const totals = requestMessages.map((messages) => countInstruction(messages));
+    expect(Math.max(...totals)).toBe(1);
+    expect(totals[0]).toBe(0);
+  });
+
+  it("does not nudge a research-list turn that opens listed pages on new sites", async () => {
+    const prompt = "Best reviewed clowns in Los Angeles, CA";
+    const answer: ChatCompletionResponse = {
+      model: "glm-5",
+      choices: [{ index: 0, message: { role: "assistant", content: "Clown comparison from the opened pages." } }],
+    };
+    const script = [
+      toolCallCompletion("best reviewed clowns los angeles"),
+      namedToolCallCompletion("browser.navigate", { url: "https://clowns-c.example/profile" }),
+      namedToolCallCompletion("browser.navigate", { url: "https://clowns-d.example/profile" }),
+      namedToolCallCompletion("browser.navigate", { url: "https://clowns-e.example/profile" }),
+      answer,
+    ];
+    const requestMessages: Array<Array<{ role: string; content?: unknown }>> = [];
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest) => {
+      requestMessages.push(structuredClone(request.messages) as Array<{ role: string; content?: unknown }>);
+      return script[Math.min(requestMessages.length - 1, script.length - 1)]!;
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockImplementation(async (request) => {
+        if (request.toolName === "browser.search") {
+          return {
+            outcome: "executed",
+            policyReason: "allowed",
+            auditEventId: "audit-list-open-search",
+            result: {
+              results: ["a", "b", "c", "d", "e"].map((letter) => ({
+                title: `Clown ${letter}`,
+                url: `https://clowns-${letter}.example/profile`,
+                snippet: "Clown profile.",
+              })),
+            },
+          };
+        }
+        const url = String(request.args?.url ?? "");
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: `audit-list-open-${url}`,
+          result: { url, finalUrl: url, title: "Clown profile", contentText: "Clown profile page." },
+        };
+      });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion: createChatCompletion as never,
+      invokeTool,
+    });
+    await orchestrator.run({
+      sessionId: "sess-saturation-list-open",
+      turnId: randomUUID(),
+      userMessageId: "msg-saturation-list-open",
+      content: prompt,
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+
+    expect(
+      invokeTool.mock.calls.filter(([request]) => request.toolName === "browser.navigate").length,
+    ).toBeGreaterThanOrEqual(3);
+    for (const messages of requestMessages) {
+      const nudges = messages.filter(
+        (message) => message.role === "system" && message.content === RESEARCH_SATURATION_INSTRUCTION,
+      );
+      expect(nudges).toHaveLength(0);
     }
   });
 

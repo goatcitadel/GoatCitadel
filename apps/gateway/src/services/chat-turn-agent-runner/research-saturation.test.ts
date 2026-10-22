@@ -43,42 +43,44 @@ describe("RESEARCH_SATURATION_INSTRUCTION", () => {
 });
 
 describe("collectResearchHosts", () => {
-  it("collects search result hosts and dedupes them without a leading www.", () => {
-    const hosts = collectResearchHosts([
+  it("collects search result hosts as listed and dedupes them without a leading www.", () => {
+    const { listed, opened } = collectResearchHosts([
       searchRun(["https://www.Example.com/a", "https://example.com/b", "https://news.example.org/c"]),
     ]);
-    expect([...hosts]).toEqual(["example.com", "news.example.org"]);
+    expect([...listed]).toEqual(["example.com", "news.example.org"]);
+    expect(opened.size).toBe(0);
   });
 
   it("uses the landed URL of an opened page, not the requested URL", () => {
-    const hosts = collectResearchHosts([
+    const { listed, opened } = collectResearchHosts([
       run("browser.navigate", {
         args: { url: "https://redirect.example/r?1" },
         result: { finalUrl: "https://www.landed.example/page" },
       }),
       run("http.get", { args: { url: "https://plain.example/page" } }),
     ]);
-    expect([...hosts]).toEqual(["landed.example", "plain.example"]);
+    expect([...opened]).toEqual(["landed.example", "plain.example"]);
+    expect(listed.size).toBe(0);
   });
 
   it("ignores failed and blocked runs", () => {
-    const hosts = collectResearchHosts([
+    const { listed, opened } = collectResearchHosts([
       searchRun(["https://failed-search.example/a"], "failed"),
       run("browser.navigate", { status: "failed", args: { url: "https://failed-open.example/" } }),
       run("browser.extract", { status: "blocked", args: { url: "https://blocked.example/" } }),
     ]);
-    expect(hosts.size).toBe(0);
+    expect(listed.size + opened.size).toBe(0);
   });
 
   it("ignores non-research tools, non-http(s) URLs, and malformed search results", () => {
-    const hosts = collectResearchHosts([
+    const { listed, opened } = collectResearchHosts([
       run("http.post", { args: { url: "https://post.example/" } }),
       searchRun(["ftp://files.example/a", "not a url"]),
       run("browser.search", { result: { results: [{ title: "no url" }, null, { url: 42 }] } }),
       run("browser.search", { result: { results: "nope" } }),
       run("browser.search"),
     ]);
-    expect(hosts.size).toBe(0);
+    expect(listed.size + opened.size).toBe(0);
   });
 });
 
@@ -182,6 +184,41 @@ describe("recordResearchIteration", () => {
       state = step.state;
     }
     expect(nudges).toEqual([false, false, true]);
+  });
+
+  it("counts opening a page on an already listed site as progress, and nudges only once nothing new is added", () => {
+    const toolRuns: ChatToolRunRecord[] = [searchRun(sameTwo)];
+    let state = startResearchSaturation(toolRuns);
+    const iterations: ChatToolRunRecord[][] = [
+      [run("browser.navigate", { args: { url: "https://a.example/1" }, result: { finalUrl: "https://a.example/1" } })],
+      [run("browser.navigate", { args: { url: "https://b.example/2" }, result: { finalUrl: "https://b.example/2" } })],
+      [searchRun(sameTwo)],
+      [searchRun(sameTwo)],
+    ];
+    const nudges: boolean[] = [];
+    for (const iterationRuns of iterations) {
+      toolRuns.push(...iterationRuns);
+      const step = recordResearchIteration(state, { toolRuns, iterationRuns });
+      nudges.push(step.nudge);
+      state = step.state;
+    }
+    expect(nudges).toEqual([false, false, false, true]);
+  });
+
+  it("nudges when passes keep re-opening a site that was already opened and list nothing new", () => {
+    const toolRuns: ChatToolRunRecord[] = [searchRun(sameTwo)];
+    let state = startResearchSaturation(toolRuns);
+    const open = () =>
+      run("browser.navigate", { args: { url: "https://a.example/1" }, result: { finalUrl: "https://a.example/1" } });
+    const nudges: boolean[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const iterationRuns = [open()];
+      toolRuns.push(...iterationRuns);
+      const step = recordResearchIteration(state, { toolRuns, iterationRuns });
+      nudges.push(step.nudge);
+      state = step.state;
+    }
+    expect(nudges).toEqual([false, false, true, false]);
   });
 
   it("does not mutate the state it was given", () => {
