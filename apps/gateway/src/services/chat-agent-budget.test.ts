@@ -80,9 +80,9 @@ describe("chat-agent-budget", () => {
       expect.objectContaining({
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.deep,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deep,
-        maxToolLoops: 6,
-        loopLimitBehavior: "terminal",
-        maxToolRunsPerTurn: 12,
+        maxToolLoops: 8,
+        loopLimitBehavior: "checkpoint_continue",
+        maxToolRunsPerTurn: 16,
         searchMaxResults: 8,
         maxTokens: 2600,
       }),
@@ -279,7 +279,35 @@ describe("chat-agent-budget", () => {
         webMode: "deep",
         thinkingLevel: "standard",
       }),
-    ).toEqual(expect.objectContaining({ maxToolLoops: 6, loopLimitBehavior: "terminal" }));
+    ).toEqual(expect.objectContaining({ maxToolLoops: 8, loopLimitBehavior: "checkpoint_continue" }));
+  });
+
+  it("never gives Deep fewer tool runs than Auto for the same research list", () => {
+    const base = { mode: "chat", thinkingLevel: "standard", researchListIntent: true } as const;
+    const auto = resolveChatExecutionBudget({ ...base, webMode: "auto" });
+    const deep = resolveChatExecutionBudget({ ...base, webMode: "deep" });
+    expect(auto.maxToolRunsPerTurn).toBe(48);
+    expect(deep.maxToolRunsPerTurn).toBeGreaterThanOrEqual(auto.maxToolRunsPerTurn);
+    expect(deep.maxToolRunsPerTurn).toBe(48);
+  });
+
+  it("relaxes the constrained-local clamp for Deep", () => {
+    expect(
+      resolveChatExecutionBudget({
+        mode: "chat",
+        webMode: "deep",
+        thinkingLevel: "deep",
+        providerId: "llamacpp",
+      }),
+    ).toEqual(expect.objectContaining({ maxToolLoops: 4, maxToolRunsPerTurn: 8 }));
+    expect(
+      resolveChatExecutionBudget({
+        mode: "chat",
+        webMode: "auto",
+        thinkingLevel: "standard",
+        providerId: "llamacpp",
+      }),
+    ).toEqual(expect.objectContaining({ maxToolLoops: 3, maxToolRunsPerTurn: 5 }));
   });
 
   it("uses generous-but-bounded per-web-mode turn and completion budgets", () => {
