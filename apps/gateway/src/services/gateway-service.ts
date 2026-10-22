@@ -425,7 +425,7 @@ import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
 import { getRequestAttribution, runWithIsolatedRequestAttribution } from "@goatcitadel/storage";
 import { LlmService } from "./llm-service.js";
-import { resolveUtilityModelOverride } from "./utility-model-routing.js";
+import { resolveJudgeModelDefaults, resolveUtilityModelOverride } from "./utility-model-routing.js";
 import { AssemblyService, bindAssemblyChatCompletion } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
@@ -6441,45 +6441,12 @@ export class GatewayService {
     if (utilityOverride) {
       return utilityOverride;
     }
-    const runtime = this.llmService.getRuntimeConfig({
-      includeKeychainForActiveProvider: true,
-      useCache: true,
-    });
-    const openaiCodex = runtime.providers.find(
-      (provider) => provider.providerId === "openai-codex" && provider.hasApiKey,
+    return resolveJudgeModelDefaults(
+      this.llmService.getRuntimeConfig({
+        includeKeychainForActiveProvider: true,
+        useCache: true,
+      }),
     );
-    if (openaiCodex) {
-      return {
-        providerId: openaiCodex.providerId,
-        model: "gpt-5.5",
-      };
-    }
-    const openai = runtime.providers.find((provider) => provider.providerId === "openai" && provider.hasApiKey);
-    if (openai) {
-      return {
-        providerId: openai.providerId,
-        model: "gpt-5.4",
-      };
-    }
-    const glm = runtime.providers.find((provider) => provider.providerId === "glm" && provider.hasApiKey);
-    if (glm) {
-      return {
-        providerId: glm.providerId,
-        model: glm.defaultModel || "glm-5",
-      };
-    }
-    const kimi = runtime.providers.find((provider) => provider.providerId === "moonshot" && provider.hasApiKey);
-    if (kimi) {
-      return {
-        providerId: kimi.providerId,
-        model: kimi.defaultModel,
-      };
-    }
-    const active = runtime.providers.find((provider) => provider.providerId === runtime.activeProviderId);
-    return {
-      providerId: active?.providerId ?? runtime.activeProviderId,
-      model: runtime.activeModel || active?.defaultModel,
-    };
   }
 
   public async ensureChatSessionRuntimeGrants(sessionId: string): Promise<void> {
