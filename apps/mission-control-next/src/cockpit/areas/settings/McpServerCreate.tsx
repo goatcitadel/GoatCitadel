@@ -15,7 +15,15 @@ import { McpCreateFields } from "./McpCreateFields";
 import { McpCreateReview } from "./McpCreateReview";
 import { McpOutcomeCheck } from "../../../features/native-routes/settings/McpOutcomeCheck";
 
-export function McpServerCreate({ workspaceId, onClose, onInspect }: { workspaceId: string; onClose: () => void; onInspect?: (serverId: string) => void }) {
+export function McpServerCreate({
+  workspaceId,
+  onClose,
+  onInspect,
+}: {
+  workspaceId: string;
+  onClose: () => void;
+  onInspect?: (serverId: string) => void;
+}) {
   const client = useQueryClient(),
     leave = useDraftLeave();
   const [reviewed, setReviewed] = useState<McpCreateInput | null>(null),
@@ -36,12 +44,18 @@ export function McpServerCreate({ workspaceId, onClose, onInspect }: { workspace
   });
   const close = () => leave.request(onClose, [control.draft.key]);
   const templateItems = !templates.isError && Array.isArray(templates.data?.items) ? templates.data.items : [];
-  const replacement = useMcpTemplateReplacement({ workspaceId, draft: control.draft, templates: templateItems,
+  const replacement = useMcpTemplateReplacement({
+    workspaceId,
+    draft: control.draft,
+    templates: templateItems,
     available: !control.mutation.locked && !templates.isFetching && !templates.isError,
     isTemplateCurrent: (template) => {
       const state = client.getQueryState<{ items: McpServerTemplateRecord[] }>(["settings", "mcp-templates"]);
-      return state?.status === "success" && state.fetchStatus === "idle"
-        && Boolean(state.data?.items.some(item => canonicalJsonString(item) === canonicalJsonString(template)));
+      return (
+        state?.status === "success" &&
+        state.fetchStatus === "idle" &&
+        Boolean(state.data?.items.some((item) => canonicalJsonString(item) === canonicalJsonString(template)))
+      );
     },
   });
   return (
@@ -67,8 +81,14 @@ export function McpServerCreate({ workspaceId, onClose, onInspect }: { workspace
           <McpOutcomeCheck target={{ kind: "create" }} buttonComponent={Button} />
           {created ? (
             <div className="space-y-2">
-              <p role="status">Saved server ID: <code className="break-all font-mono">{created.serverId}</code></p>
-              {onInspect ? <Button size="sm" onClick={() => leave.request(() => onInspect(created.serverId), [control.draft.key])}>Continue to connection review</Button> : null}
+              <p role="status">
+                Saved server ID: <code className="break-all font-mono">{created.serverId}</code>
+              </p>
+              {onInspect ? (
+                <Button size="sm" onClick={() => leave.request(() => onInspect(created.serverId), [control.draft.key])}>
+                  Continue to connection review
+                </Button>
+              ) : null}
             </div>
           ) : null}
           {!reviewed ? (
@@ -141,13 +161,20 @@ export function McpServerCreate({ workspaceId, onClose, onInspect }: { workspace
           <Button onClick={close}>Close registration</Button>
         </div>
       </Dialog>
-      <Dialog open={Boolean(replacement.replacement)} onOpenChange={(open) => { if (!open) replacement.cancel(); }}
+      <Dialog
+        open={Boolean(replacement.replacement)}
+        onOpenChange={(open) => {
+          if (!open) replacement.cancel();
+        }}
         title="Replace MCP registration draft?"
-        description="Replacing discards the current input and copies the advertised template. Keeping the draft preserves every field.">
+        description="Replacing discards the current input and copies the advertised template. Keeping the draft preserves every field."
+      >
         <p className="text-sm text-fg-secondary">Template: {replacement.replacement?.label}</p>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button onClick={replacement.cancel}>Keep current draft</Button>
-          <Button variant="primary" onClick={replacement.confirm}>Replace draft with template</Button>
+          <Button variant="primary" onClick={replacement.confirm}>
+            Replace draft with template
+          </Button>
         </div>
       </Dialog>
       <McpDraftLeave {...leave.dialogProps} />

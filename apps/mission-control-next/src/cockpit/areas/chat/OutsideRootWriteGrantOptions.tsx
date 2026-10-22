@@ -175,11 +175,7 @@ export function OutsideRootWriteGrantOptions({
         Approve and open folder
       </Button>
       {/* The decision bar's uncertain-outcome alert announces this; the detail stays readable here. */}
-      {error ? (
-        <p className="text-status-failed">
-          {error}
-        </p>
-      ) : null}
+      {error ? <p className="text-status-failed">{error}</p> : null}
     </section>
   );
 }

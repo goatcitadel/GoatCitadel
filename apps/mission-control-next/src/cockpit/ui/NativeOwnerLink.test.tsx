@@ -35,7 +35,11 @@ function Probe({ scope = "record-a", target = href }: { scope?: string; target?:
 }
 async function render(scope = "record-a", target = href) {
   await act(async () => {
-    root.render(<CockpitNavigationProvider><Probe scope={scope} target={target} /></CockpitNavigationProvider>);
+    root.render(
+      <CockpitNavigationProvider>
+        <Probe scope={scope} target={target} />
+      </CockpitNavigationProvider>,
+    );
   });
 }
 async function clickKeep() {
@@ -70,8 +74,12 @@ afterEach(async () => {
 describe("native owner navigation", () => {
   it("withholds same-document navigation if the central owner is absent", async () => {
     const push = vi.spyOn(window.history, "pushState");
-    await act(async () => { root.render(<Probe />); });
-    await act(async () => { container.querySelector("a")!.click(); });
+    await act(async () => {
+      root.render(<Probe />);
+    });
+    await act(async () => {
+      container.querySelector("a")!.click();
+    });
     expect(push).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe("/work");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -127,7 +135,9 @@ describe("native owner navigation", () => {
       await act(async () => {
         container.querySelector("a")!.click();
       });
-      const oldKeep = [...document.querySelectorAll("button")].find((button) => button.textContent === "Keep draft and close");
+      const oldKeep = [...document.querySelectorAll("button")].find(
+        (button) => button.textContent === "Keep draft and close",
+      );
       expect(oldKeep).toBeDefined();
       if (change === "scope") {
         await render("record-b");
@@ -146,7 +156,9 @@ describe("native owner navigation", () => {
         });
       }
       expect(document.querySelector('[role="dialog"]')).toBeNull();
-      await act(async () => { oldKeep!.click(); });
+      await act(async () => {
+        oldKeep!.click();
+      });
       expect(window.location.pathname).toBe("/work");
       expect(draft.value.name).toBe("Unsaved input");
       expect(draft.isDirty).toBe(true);
