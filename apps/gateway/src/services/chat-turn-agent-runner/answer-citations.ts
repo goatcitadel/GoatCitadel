@@ -4,25 +4,45 @@ import type { ChatCitationRecord, ChatToolRunRecord } from "@goatcitadel/contrac
 const PAGE_OPENING_TOOL_NAMES = new Set(["browser.navigate", "browser.extract", "http.get"]);
 const URL_IN_TEXT_PATTERN = /https?:\/\/[^\s<>"'`]+/gi;
 const TRAILING_PUNCTUATION_PATTERN = /[.,;:!?)\]}*_>]$/;
+/** Separators that join two URLs in one token: a markdown link's `](`, a comma, or a table pipe. */
+const JOINED_URL_SEPARATOR_PATTERN = /\]\(|[,|]/;
+const SCHEME_AND_HOST_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i;
 
-/** Compares URLs ignoring a trailing `/`, a `#fragment`, and a leading `www.` on the host. */
+/**
+ * Compares URLs ignoring a trailing `/`, a `#fragment`, a leading `www.` on the host, and the case
+ * of the scheme and host. The path keeps its case.
+ */
 function normalizeUrl(rawUrl: string): string {
   return rawUrl
     .trim()
+    .replace(SCHEME_AND_HOST_PATTERN, (schemeAndHost) => schemeAndHost.toLowerCase())
     .replace(/#.*$/, "")
     .replace(/^(https?:\/\/)www\./i, "$1")
     .replace(/\/+$/, "");
 }
 
-/** Every URL the answer text mentions, plus each form with trailing prose or markdown punctuation removed. */
+/** Adds a candidate URL and each form of it with trailing prose or markdown punctuation removed. */
+function addUrlCandidate(urls: Set<string>, rawCandidate: string): void {
+  let candidate = rawCandidate;
+  urls.add(normalizeUrl(candidate));
+  while (TRAILING_PUNCTUATION_PATTERN.test(candidate)) {
+    candidate = candidate.slice(0, -1);
+    urls.add(normalizeUrl(candidate));
+  }
+}
+
+/**
+ * Every URL the answer text mentions. A token such as `https://a.com/x](https://a.com/x)` or
+ * `https://a.com/x,https://b.com/y` is also split on `](`, `,` and `|`, and each piece is a candidate.
+ */
 function collectUrlsFromText(text: string): Set<string> {
   const urls = new Set<string>();
   for (const match of text.matchAll(URL_IN_TEXT_PATTERN)) {
-    let candidate = match[0];
-    urls.add(normalizeUrl(candidate));
-    while (TRAILING_PUNCTUATION_PATTERN.test(candidate)) {
-      candidate = candidate.slice(0, -1);
-      urls.add(normalizeUrl(candidate));
+    addUrlCandidate(urls, match[0]);
+    for (const piece of match[0].split(JOINED_URL_SEPARATOR_PATTERN)) {
+      if (piece.length > 0) {
+        addUrlCandidate(urls, piece);
+      }
     }
   }
   return urls;

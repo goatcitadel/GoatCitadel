@@ -120,4 +120,50 @@ describe("selectAnswerCitations", () => {
     });
     expect(result).toEqual([opened]);
   });
+
+  it("recognizes a URL used as both the text and the target of a markdown link", () => {
+    const result = selectAnswerCitations({
+      citations: [
+        webCitation("a", "https://a.com/x"),
+        webCitation("b", "https://b.com/y"),
+        webCitation("c", "https://c.com/z"),
+      ],
+      assistantContent: "See [https://a.com/x](https://a.com/x) and https://b.com/y.",
+      toolRuns: [],
+    });
+    expect(ids(result)).toEqual(["a", "b"]);
+  });
+
+  it("recognizes URLs joined by a comma or a pipe", () => {
+    const citations = [
+      webCitation("a", "https://a.com/x"),
+      webCitation("b", "https://b.com/y"),
+      webCitation("c", "https://c.com/z"),
+    ];
+    expect(
+      ids(
+        selectAnswerCitations({
+          citations,
+          assistantContent: "Sources: https://a.com/x,https://b.com/y",
+          toolRuns: [],
+        }),
+      ),
+    ).toEqual(["a", "b"]);
+    expect(
+      ids(selectAnswerCitations({ citations, assistantContent: "| https://a.com/x|https://b.com/y |", toolRuns: [] })),
+    ).toEqual(["a", "b"]);
+  });
+
+  it("matches the scheme and host case-insensitively but keeps the path case", () => {
+    const result = selectAnswerCitations({
+      citations: [
+        webCitation("host", "https://a.com/x"),
+        webCitation("path", "https://b.com/Docs"),
+        webCitation("other", "https://c.com/z"),
+      ],
+      assistantContent: "See HTTPS://A.COM/x and https://b.com/docs.",
+      toolRuns: [],
+    });
+    expect(ids(result)).toEqual(["host"]);
+  });
 });
