@@ -1508,7 +1508,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: {
         url: { type: "string", format: "uri" },
-        maxChars: { type: "integer", minimum: 200, maximum: 50000 },
+        maxChars: { type: "integer", minimum: 200, maximum: 20000 },
         backend: { type: "string", enum: ["native", "firecrawl"] },
       },
       required: ["url"],
@@ -1535,7 +1535,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       properties: {
         url: { type: "string", format: "uri" },
         selector: { type: "string" },
-        maxChars: { type: "integer", minimum: 200, maximum: 50000 },
+        maxChars: { type: "integer", minimum: 200, maximum: 20000 },
         backend: { type: "string", enum: ["native", "firecrawl"] },
       },
       required: ["url", "selector"],

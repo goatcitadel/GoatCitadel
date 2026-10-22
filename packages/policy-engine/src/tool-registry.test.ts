@@ -357,6 +357,19 @@ describe("tool registry", () => {
   });
 });
 
+describe("browser maxChars schema", () => {
+  it("advertises the 20000-char ceiling the runtime clamps to for navigate and extract", () => {
+    const catalog = createDefaultToolRegistry().toCatalog();
+    for (const name of ["browser.navigate", "browser.extract"]) {
+      const tool = catalog.find((item) => item.toolName === name);
+      expect(tool, `${name} should be registered`).toBeDefined();
+      const properties = (tool?.argSchema as { properties?: { maxChars?: { maximum?: number } } } | undefined)
+        ?.properties;
+      expect(properties?.maxChars?.maximum, `${name} maxChars maximum`).toBe(20000);
+    }
+  });
+});
+
 describe("listReadOnlyBuiltinToolNames", () => {
   it("contains only safe, approval-free, read-only tools", () => {
     const names = listReadOnlyBuiltinToolNames();
